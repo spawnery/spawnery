@@ -1,4 +1,4 @@
-# Design: Kubernetes-natives Cloud-System für Minecraft-Netzwerke
+# Design: Spawnery — Kubernetes-natives Cloud-System für Minecraft-Netzwerke
 
 **Datum:** 2026-08-07
 **Status:** Entwurf zur Freigabe
@@ -28,6 +28,14 @@ MinecraftServerFleets sind ausdrücklich ephemer ohne persistenten Storage, es g
 kein Konzept für Survival-Welten oder Lobbys mit Daten; das Projekt ist seit
 Release v0.13.0 (2025-04-05) feature-stagnant mit einem einzigen Maintainer; und es
 steht unter AGPL-3.0.
+
+Daneben existiert
+[kubernetes-minecraft-operator](https://github.com/JamesLaverack/kubernetes-minecraft-operator),
+der einzelne Minecraft-Java-Server als `MinecraftServer`-Objekte verwaltet. Er
+adressiert eine andere Aufgabe — kein Proxy, keine Servergruppen, kein Scaling —
+und ist deshalb kein Prior Art für ein Netzwerk-Cloud-System, wohl aber ein Beleg
+dafür, dass die Operator-Herangehensweise für einzelne Server bereits als
+naheliegend gilt.
 
 Die Differenzierung dieses Projekts ist damit konkret:
 
@@ -77,7 +85,7 @@ Der Gesamtumfang zerfällt in vier Projekte mit je eigener Spec:
 | 1 | Operator-Kern | CRDs, Reconciliation, Pod-Lifecycle, Ready-Gates, spielerbewusstes Drain, Expose-Strategien |
 | 2 | Proxy-Integration | Velocity-Agent, Paper-Agent, gRPC-Kanal, Modern Forwarding, Fallback-Routing |
 | 3 | Templates & Provisioning | Geschichtete Datei-Overlays, OCI-/S3-Quellen, Plugin-Downloads mit gepinnten Checksums, Backups, Image-Build-Pipeline |
-| 4 | CLI & Dashboard | `mcctl`, Web-UI, Metrik-Pfad |
+| 4 | CLI & Dashboard | `spawnery`-CLI, Web-UI, Metrik-Pfad |
 
 **Dieses Dokument spezifiziert Projekt 1 und 2 gemeinsam.** Sie sind nicht sinnvoll
 trennbar: ohne Proxy-Integration ist der Operator nicht spielbar, ohne Operator hat
@@ -137,12 +145,11 @@ Operators und werden nur gedrosselt in den CR-Status geschrieben.
 
 ## 4. API-Modell
 
-**Arbeitsname:** `cloudsystem`. **API-Gruppe:** `minecraft.cloudsystem.dev`,
+**Projektname:** Spawnery. **API-Gruppe:** `spawnery.cloud`,
 **Version:** `v1alpha1`. Alle Ressourcen sind namespaced.
 
 Die Gruppenbezeichnung ist bewusst früh festgelegt, weil eine spätere Änderung
-Konvertierungs-Webhooks erfordert. Eine Umbenennung des Projekts ist bis zum ersten
-`v1alpha1`-Release möglich und zieht dann die Gruppe mit.
+Konvertierungs-Webhooks erfordert.
 
 **Ein Namespace, ein Netzwerk.** Staging und Produktion gehören in getrennte
 Namespaces. Der Grund ist die Netz-Isolation: NetworkPolicies selektieren über
@@ -157,7 +164,7 @@ Die Wurzel-Ressource. Trägt das Forwarding-Secret und die Defaults, die
 untergeordnete Ressourcen erben.
 
 ```yaml
-apiVersion: minecraft.cloudsystem.dev/v1alpha1
+apiVersion: spawnery.cloud/v1alpha1
 kind: Network
 metadata:
   name: production
@@ -193,7 +200,7 @@ Condition.
 Die Velocity-Schicht und der einzige von außen erreichbare Teil des Systems.
 
 ```yaml
-apiVersion: minecraft.cloudsystem.dev/v1alpha1
+apiVersion: spawnery.cloud/v1alpha1
 kind: ProxyGroup
 metadata:
   name: edge
@@ -268,7 +275,7 @@ beiden Betriebsarten.
 **Ephemer** — Minigames und Lobbys, Zustand geht beim Stopp verloren:
 
 ```yaml
-apiVersion: minecraft.cloudsystem.dev/v1alpha1
+apiVersion: spawnery.cloud/v1alpha1
 kind: ServerGroup
 metadata:
   name: lobby
@@ -342,7 +349,7 @@ an der richtigen Stelle, und CLI und Dashboard brauchen später keine eigene
 Datenquelle.
 
 ```yaml
-apiVersion: minecraft.cloudsystem.dev/v1alpha1
+apiVersion: spawnery.cloud/v1alpha1
 kind: Server
 metadata:
   name: lobby-x7k2
@@ -468,7 +475,7 @@ Vorstellungen anzukämpfen ist teurer, als Ordinale und PVCs selbst zu verwalten
 Ein Codepfad statt zwei.
 
 **Schutz belegter Pods vor Eviction.** Der Operator pflegt auf Pods mit Spielern
-das Label `minecraft.cloudsystem.dev/occupied="true"` und hält pro Gruppe ein
+das Label `spawnery.cloud/occupied="true"` und hält pro Gruppe ein
 PodDisruptionBudget, dessen Selector auf dieses Label zeigt und dessen
 `minAvailable` als **absolute Zahl** der aktuell belegten Pods nachgeführt wird.
 Für Pods ohne Controller mit Scale-Subresource lässt Kubernetes weder
@@ -548,7 +555,7 @@ Operator per `TokenReview` prüft. Drei Festlegungen machen daraus eine echte
 Identität:
 
 1. **Dedizierte Audience.** Der Token wird mit der Audience
-   `cloudsystem-operator` und kurzer Lebensdauer (`expirationSeconds: 600`, das
+   `spawnery-operator` und kurzer Lebensdauer (`expirationSeconds: 600`, das
    Kubelet rotiert automatisch) ausgestellt; der Operator setzt genau diese
    Audience in `spec.audiences` des TokenReview. Standard-API-Server-Tokens sind
    beim Operator damit wertlos, und das Replay-Fenster eines abgefangenen Tokens
@@ -788,7 +795,7 @@ Sprungbrett zu jeder SA im Namespace.
 **NetworkPolicies.** Die Helm-Chart liefert die netzwerkunabhängigen Policies:
 Default-Deny-Ingress für alle verwalteten Pods und Agent → Operator auf dem
 gRPC-Port. Die Policy Proxy → Server auf 25565 erzeugt der **Operator** pro
-`Network`, mit dem Label `minecraft.cloudsystem.dev/network=<name>` in `podSelector`
+`Network`, mit dem Label `spawnery.cloud/network=<name>` in `podSelector`
 und Ingress-Regel. Auf einem gehärteten Cluster ohne diese Policies bricht die
 interne Kommunikation; ohne sie wären die offline-mode-Backends offen.
 
@@ -884,5 +891,3 @@ Bewusst offengelassen, mit Auswirkung auf spätere Specs:
   generationsbewusste Registrierung (siehe 6.5).
 - Ein `/play <gruppe>`-Befehl mit Gruppen-Policy im Velocity-Agent
   (`ServerPreConnectEvent`).
-- Die endgültige Projektbenennung zieht die API-Gruppe mit und sollte vor dem
-  ersten öffentlichen `v1alpha1`-Release feststehen.
