@@ -23,9 +23,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -83,6 +85,64 @@ func (f *fixture) groupPDB(t *testing.T) *policyv1.PodDisruptionBudget {
 		t.Fatalf("get PDB: %v", err)
 	}
 	return pdb
+}
+
+// publishPDBStatus computes and writes the PodDisruptionBudget status that
+// kube-controller-manager's disruption controller would produce. envtest runs
+// no controller manager, and the API server's eviction handler reads only that
+// status: a budget whose observedGeneration lags its generation is refused
+// outright, so without this every eviction below would be refused for a reason
+// that has nothing to do with our labels.
+//
+// The arithmetic is the disruption controller's. Healthy means selected by the
+// budget and Ready; the allowed disruptions are the surplus over minAvailable,
+// floored at zero. Nothing here is hand-picked — it is all derived from what
+// the controllers actually put in the cluster, so the numbers move when the
+// occupancy rule moves.
+func (f *fixture) publishPDBStatus(t *testing.T) {
+	t.Helper()
+	pdb := f.groupPDB(t)
+
+	pods := &corev1.PodList{}
+	if err := f.c.List(f.ctx, pods, ctrlclientInNamespace(f.ns),
+		client.MatchingLabels(pdb.Spec.Selector.MatchLabels)); err != nil {
+		t.Fatalf("list the pods the budget selects: %v", err)
+	}
+	var expected, healthy int32
+	for i := range pods.Items {
+		expected++
+		for _, c := range pods.Items[i].Status.Conditions {
+			if c.Type == corev1.PodReady && c.Status == corev1.ConditionTrue {
+				healthy++
+			}
+		}
+	}
+
+	desired := int32(pdb.Spec.MinAvailable.IntValue())
+	allowed := healthy - desired
+	if allowed < 0 {
+		allowed = 0
+	}
+	pdb.Status = policyv1.PodDisruptionBudgetStatus{
+		ObservedGeneration: pdb.Generation,
+		CurrentHealthy:     healthy,
+		DesiredHealthy:     desired,
+		ExpectedPods:       expected,
+		DisruptionsAllowed: allowed,
+	}
+	if err := f.c.Status().Update(f.ctx, pdb); err != nil {
+		t.Fatalf("publish PDB status: %v", err)
+	}
+}
+
+// evict makes the call kubectl drain makes: create an Eviction against the
+// pod's eviction subresource and let the API server decide.
+func (f *fixture) evict(t *testing.T, name string) error {
+	t.Helper()
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns}}
+	return f.c.SubResource("eviction").Create(f.ctx, pod, &policyv1.Eviction{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+	})
 }
 
 func TestGroupCreatesItsFloor(t *testing.T) {
@@ -616,6 +676,112 @@ func TestRetainedFailedPodDoesNotWedgeTheBudget(t *testing.T) {
 			t.Fatalf("pass %d: minAvailable = %d for a group with no live server, want 0", i, got)
 		}
 		f.clock.Advance(resyncInterval)
+	}
+}
+
+// TestPodThatCrashedWithPlayersOnItDoesNotWedgeTheBudget is the budget half of
+// the same regression as
+// TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel.
+//
+// TestRetainedFailedPodDoesNotWedgeTheBudget above builds a server whose last
+// reported count was zero, so it only ever exercised the stale branch of the
+// occupancy rule — which was the only branch the terminal-pod exemption sat in.
+// A server that dies with players on it takes the other branch: the registry is
+// never told to forget a pod, so its count stays at seven, seven > 0 wins
+// before staleness is even looked at, and minAvailable stayed at 1 against a
+// currentHealthy of 0 for the whole retention window.
+func TestPodThatCrashedWithPlayersOnItDoesNotWedgeTheBudget(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// No floor: this is about the retained failure alone, not the replacement.
+	f.setMinReplicas(t, 0)
+
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 7, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	f.reconcileGroup(t, r)
+	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
+		t.Fatalf("minAvailable = %d for a live server with 7 players, want 1", got)
+	}
+
+	f.setPodFailed("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q, want Failed", got)
+	}
+
+	for i := 0; i < 60; i++ {
+		if err := f.agents.ReportPlayers(uid, 7, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+		f.reconcileGroup(t, r)
+
+		p, ok := f.pod("lobby-x7k2")
+		if !ok {
+			t.Fatalf("pass %d: the retained pod disappeared before its retention elapsed", i)
+		}
+		if v, set := p.Labels[podspec.LabelOccupied]; set {
+			t.Fatalf("pass %d: the pod of a server that crashed with 7 players carries %s=%q",
+				i, podspec.LabelOccupied, v)
+		}
+		if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 0 {
+			t.Fatalf("pass %d: minAvailable = %d with no live server left, want 0", i, got)
+		}
+		f.clock.Advance(resyncInterval)
+	}
+}
+
+// TestTheBudgetRefusesToEvictAPlayedOnPodAndReleasesADeadOne drives the promise
+// through the API server itself rather than through our own arithmetic: it
+// creates an Eviction, the same call kubectl drain makes.
+//
+// The dead pod here is crash-looping rather than PodFailed on purpose. The
+// eviction handler skips every PodDisruptionBudget for a pod in phase Failed or
+// Succeeded, so an eviction test built on those would succeed whatever we
+// labelled the pod — passing for the wrong reason, which is the trap this whole
+// review round is about. A crash-looping pod is still in phase Running, so its
+// eviction really does depend on whether we released it from the budget.
+func TestTheBudgetRefusesToEvictAPlayedOnPodAndReleasesADeadOne(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 0)
+
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 7, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	f.reconcileGroup(t, r)
+	f.publishPDBStatus(t)
+
+	err := f.evict(t, "lobby-x7k2")
+	if err == nil {
+		t.Fatal("the API server evicted a pod with 7 players on it — the core promise is broken")
+	}
+	if !apierrors.IsTooManyRequests(err) {
+		t.Fatalf("eviction of an occupied pod failed with %v, want a disruption-budget refusal", err)
+	}
+
+	// The Minecraft container now dies over and over. The seven sessions went
+	// down with the first crash; the registry just has not been told.
+	f.setPodCrashLooping("lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 7, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q for a crash-looping server, want Failed", got)
+	}
+	f.reconcileGroup(t, r)
+	f.publishPDBStatus(t)
+
+	if err := f.evict(t, "lobby-x7k2"); err != nil {
+		t.Fatalf("the eviction of a crash-looping pod was refused: %v — "+
+			"kubectl drain on that node would never finish and a cluster upgrade wedges", err)
 	}
 }
 

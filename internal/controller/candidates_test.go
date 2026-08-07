@@ -282,6 +282,16 @@ func TestOccupiedPodsReleasesPodsThatCarryNobody(t *testing.T) {
 			v:    sessionsGone(registered(view("dead", phase.Failed, 0, 100, true, 1, 0))),
 		},
 		{
+			// The same dead pod, but the registry still holds the count it
+			// reported just before it died. Nothing ever tells the registry to
+			// forget a pod, so that seven survives for the whole retention
+			// window. Sessions that went down with the process are gone whatever
+			// the last count said — otherwise this one pod pins minAvailable at
+			// 1 against a currentHealthy of 0 and wedges an operator's drain.
+			name: "failed with a terminal pod and seven players last seen on it",
+			v:    sessionsGone(registered(view("dead-busy", phase.Failed, 7, 100, false, 1, 0))),
+		},
+		{
 			// Never registered, so the proxies never routed anybody to it, so
 			// an unreadable count hides nothing.
 			name: "starting and never registered",

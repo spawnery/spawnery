@@ -61,6 +61,50 @@ func driveToFailed(t *testing.T, f *fixture, name string) {
 	}
 }
 
+// setPodFailed fakes the other thing a kubelet does: the process is down for
+// good and the pod will not run again. The readiness condition is left exactly
+// as it was, because a kubelet does not tidy it up either — the occupied label
+// must not depend on that.
+func (f *fixture) setPodFailed(name string) {
+	f.t.Helper()
+	pod, ok := f.pod(name)
+	if !ok {
+		f.t.Fatalf("pod %s not found", name)
+	}
+	pod.Status.Phase = corev1.PodFailed
+	if err := f.c.Status().Update(f.ctx, pod); err != nil {
+		f.t.Fatalf("update pod status: %v", err)
+	}
+}
+
+// setPodCrashLooping fakes a pod whose Minecraft container cannot stay up.
+// The pod phase stays Running, which is what separates this case from
+// PodFailed: the API server waves an eviction of a Failed or Succeeded pod
+// through without consulting any PodDisruptionBudget, so only a crash-looping
+// pod can show what the budget actually does to a drain.
+func (f *fixture) setPodCrashLooping(name string) {
+	f.t.Helper()
+	pod, ok := f.pod(name)
+	if !ok {
+		f.t.Fatalf("pod %s not found", name)
+	}
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodReady, Status: corev1.ConditionFalse,
+		LastTransitionTime: metav1.NewTime(f.clock.Now()),
+	}}
+	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name:         podspec.ContainerName,
+		RestartCount: MaxContainerRestarts,
+		State: corev1.ContainerState{
+			Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+		},
+	}}
+	if err := f.c.Status().Update(f.ctx, pod); err != nil {
+		f.t.Fatalf("update pod status: %v", err)
+	}
+}
+
 // pods lists every pod in the fixture namespace that still exists.
 func (f *fixture) pods() []corev1.Pod {
 	f.t.Helper()
@@ -829,6 +873,117 @@ func TestStalePlayerCountKeepsThePodOccupied(t *testing.T) {
 	if pod.Labels[podspec.LabelOccupied] != "true" {
 		t.Errorf("occupied label = %q on a stale count, want true — stale means occupied",
 			pod.Labels[podspec.LabelOccupied])
+	}
+}
+
+// TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel is the regression test
+// for the half of the terminal-pod exemption that was missing. The exemption
+// only ever sat inside the stale disjunct, and snap.Players > 0 is evaluated
+// first and wins — so it only helped a pod whose last reported count was zero,
+// which is exactly the case the original test happened to build.
+//
+// Nothing tells the agent registry to forget a pod, so a server that crashed
+// with seven players on it goes on reporting seven for as long as the Server
+// object is retained. The dead pod therefore kept spawnery.cloud/occupied=true,
+// the group's PodDisruptionBudget kept minAvailable at 1 with currentHealthy at
+// 0, and kubectl drain on that node never finished — for the whole failed
+// retention, an hour by default.
+//
+// The count is deliberately re-reported fresh on every pass here: staleness is
+// not what this is about. A terminal pod has no sessions, whatever the last
+// count said, because they went down with the process.
+func TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 7, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	pod, ok := f.pod("lobby-x7k2")
+	if !ok {
+		t.Fatal("no pod for lobby-x7k2")
+	}
+	if pod.Labels[podspec.LabelOccupied] != "true" {
+		t.Fatalf("occupied label = %q on a live server with 7 players, want true",
+			pod.Labels[podspec.LabelOccupied])
+	}
+
+	// The pod dies with all seven still on it.
+	f.setPodFailed("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q after the pod reached PodFailed, want Failed", got)
+	}
+
+	// It is retained for diagnosis, and for that whole window the label must
+	// stay off however often the registry repeats its last count.
+	for i := 0; i < 60; i++ {
+		if err := f.agents.ReportPlayers(uid, 7, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+
+		p, ok := f.pod("lobby-x7k2")
+		if !ok {
+			t.Fatalf("pass %d: the retained pod disappeared before its retention elapsed", i)
+		}
+		if v, set := p.Labels[podspec.LabelOccupied]; set {
+			t.Fatalf("pass %d: the pod of a server that crashed with 7 players carries %s=%q; "+
+				"the eviction API will refuse to release it for the whole retention window",
+				i, podspec.LabelOccupied, v)
+		}
+		f.clock.Advance(resyncInterval)
+	}
+}
+
+// TestOccupiedLabelNeedsTheServerToHaveBeenRegistered pins the half of the
+// label rule that had no test of its own. A count we cannot trust hides players
+// only on a server the proxies actually route to; a server that never got that
+// far has nobody on it, unreadable count or not.
+//
+// Without this, dropping status.wasRegistered from the rule left the whole
+// suite green on the label side — every server that failed to come up would
+// have been labelled occupied and pinned the group's budget, and the mirror
+// check in ServerView.Occupied was the only thing catching the same mistake.
+func TestOccupiedLabelNeedsTheServerToHaveBeenRegistered(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	// The pod runs but the probe never turns green and no agent ever connects,
+	// so the registry knows nothing about it: unknown means stale.
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Starting) {
+		t.Fatalf("phase = %q, want Starting", srv.Status.Phase)
+	}
+	if srv.Status.WasRegistered {
+		t.Fatal("status.wasRegistered = true on a server that never reached Ready")
+	}
+
+	pod, ok := f.pod("lobby-x7k2")
+	if !ok {
+		t.Fatal("no pod for lobby-x7k2")
+	}
+	uid := string(pod.UID)
+	if !f.agents.Lookup(uid).PlayersStale {
+		t.Fatal("the count of a server with no agent must read as stale, or this test proves nothing")
+	}
+
+	for i := 0; i < 3; i++ {
+		f.clock.Advance(resyncInterval)
+		f.reconcile("lobby-x7k2")
+		p, ok := f.pod("lobby-x7k2")
+		if !ok {
+			t.Fatalf("pass %d: pod disappeared", i)
+		}
+		if v, set := p.Labels[podspec.LabelOccupied]; set {
+			t.Fatalf("pass %d: a server that was never registered carries %s=%q; "+
+				"nobody was ever routed to it, and its group can now never shrink", i, podspec.LabelOccupied, v)
+		}
 	}
 }
 

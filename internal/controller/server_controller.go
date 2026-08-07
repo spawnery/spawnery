@@ -548,29 +548,22 @@ func (r *ServerReconciler) mirrorPlayerCount(
 }
 
 // syncOccupiedLabel keeps the label the group's PodDisruptionBudget selects on
-// in step with reality. The label means "this pod may be carrying players", and
-// that is a narrower question than "is the count stale".
+// in step with reality. The label means "this pod may be carrying players",
+// which is a narrower question than "is the count stale".
 //
-// A count we cannot trust hides players only where players could be. It takes
-// two more things for that: the server has to have been registered with the
-// proxies at some point in the life of this pod, because nobody is ever routed
-// to one that was not, and its pod has to still be alive. A terminal pod is
-// finished — the state machine refuses to drain one for exactly that reason —
-// so labelling it protects nobody, while the PodDisruptionBudget built from
-// this label would then refuse to release it: with currentHealthy below
-// desiredHealthy the eviction API will not touch an unhealthy pod either, and
-// an operator's kubectl drain never finishes on that node.
-//
-// Outside those two exceptions the stale-means-occupied rule stands unchanged.
-// It is what keeps a live server whose agent went quiet protected.
+// The rule itself is isOccupied, shared with the ServerGroup controller, which
+// sizes minAvailable from the same answer. This function only supplies the four
+// facts from the Kubernetes side: the reported count, whether it is stale,
+// whether the proxies ever routed to this server, and whether its pod is
+// finished. A terminal pod counts as sessions gone — the state machine refuses
+// to drain one for exactly that reason.
 func (r *ServerReconciler) syncOccupiedLabel(
 	ctx context.Context,
 	srv *spawneryv1alpha1.Server,
 	pod *corev1.Pod,
 	snap agent.Snapshot,
 ) error {
-	occupied := snap.Players > 0 ||
-		(snap.PlayersStale && srv.Status.WasRegistered && !podTerminal(pod))
+	occupied := isOccupied(snap.Players, snap.PlayersStale, srv.Status.WasRegistered, podTerminal(pod))
 	_, labelled := pod.Labels[podspec.LabelOccupied]
 	if occupied == labelled {
 		return nil

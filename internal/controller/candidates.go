@@ -52,17 +52,44 @@ type ServerView struct {
 	CreatedAt time.Time
 }
 
-// Occupied reports whether the pod of this server must be treated as carrying
-// players, and the group's PodDisruptionBudget is sized from it.
+// isOccupied is the single occupancy rule of the system. Both sides of the
+// PodDisruptionBudget are computed from it: the Server controller labels pods
+// with it (syncOccupiedLabel) and the ServerGroup controller sizes the budget's
+// minAvailable from it (ServerView.Occupied). The two have to agree pod for
+// pod. Counting fewer pods than carry the label hands the eviction API a
+// disruption to spend on a pod that still has players; counting a pod the label
+// has released pins minAvailable above a budget that can never be met, and
+// kubectl drain then wedges on a pod nobody is on. They used to be two
+// implementations kept in step by a comment, and they drifted.
 //
-// It has to mirror the rule the Server controller labels pods with
-// (syncOccupiedLabel) exactly. Counting fewer pods than carry the label hands
-// the eviction API a disruption to spend on a pod that still has players;
-// counting a pod the label has released pins minAvailable above a budget that
-// can never be met, and kubectl drain then wedges on a pod nobody is on.
-// Change one of the two and you must change the other.
+// players > 0 is the plain case. A count we cannot trust hides players only
+// where players could be, and that takes the server having been registered with
+// the proxies at some point in the life of this pod, because nobody is ever
+// routed to one that was not. That is what keeps a live server whose agent went
+// quiet protected.
+//
+// sessionsGone overrides all of it, including a non-zero count. A pod that
+// reached a terminal state, or disappeared, took every session it held down
+// with it — the same reasoning the state machine uses when it refuses to drain
+// a terminal pod. The last count the registry saw is no evidence to the
+// contrary: nothing tells the registry to forget a pod, so a server that
+// crashed with seven players on it goes on reporting seven for as long as the
+// object is retained. Treating that as occupied protects nobody, while the
+// budget built from it refuses to release the pod: with currentHealthy below
+// desiredHealthy the eviction API will not touch an unhealthy pod either, and
+// an operator's kubectl drain never finishes on that node — for the whole
+// failed-retention window, an hour by default.
+func isOccupied(players int32, stale, wasRegistered, sessionsGone bool) bool {
+	if sessionsGone {
+		return false
+	}
+	return players > 0 || (stale && wasRegistered)
+}
+
+// Occupied reports whether the pod of this server must be treated as carrying
+// players. The group's PodDisruptionBudget is sized from it.
 func (v ServerView) Occupied() bool {
-	return v.Players > 0 || (v.Stale && v.WasRegistered && !v.SessionsGone)
+	return isOccupied(v.Players, v.Stale, v.WasRegistered, v.SessionsGone)
 }
 
 // mayHavePlayers is the question the deletion candidate selection asks: could
