@@ -73,6 +73,33 @@ echten Cluster läuft (Ebene B des E2E-Entwurfs).
 **Kein `--leader-election-namespace`.** Mit Default-Flags scheitert ein lokaler
 Lauf außerhalb des Clusters; nötig ist `--leader-elect=false`.
 
+## Zum RBAC-Audit (`internal/rbacaudit`)
+
+Der Audit prüft die ClusterRole in zwei Richtungen: eine dateibasiert gegen die
+handgepflegte Tabelle, eine über `SubjectAccessReview` gegen den echten
+Authorizer in envtest. Die Redundanz ist Absicht — die folgenden Punkte betreffen
+jeweils nur eine der beiden Hälften.
+
+- **Die SAR-Richtung kann stillschweigend bedeutungslos werden.** Ein zweites
+  ClusterRoleBinding auf dasselbe Subjekt lässt `SubjectAccessReview` die
+  Vereinigung beider Bindungen beantworten; kein Test behauptet, dass der
+  Authorizer je etwas verweigert. Die dateibasierte Richtung trägt die Zusage
+  der Spec dann allein weiter. Abhilfe: eine Probe, die ein bekannt verbotenes
+  Recht abfragt und auf Ablehnung besteht.
+- **`apply()` verschleiert Fehlerquellen.** Es toleriert `AlreadyExists`, damit
+  sich die Tests die clusterweiten Objekte teilen können. Dadurch ist der
+  Aufruf im Manifest-Test faktisch wirkungslos, weil der Rechte-Test zuerst
+  läuft und die Objekte anlegt. Wer eine *geänderte* ClusterRole anwendet,
+  bekommt still die alte.
+- **`ExpandRules` ignoriert `rule.ResourceNames`.** Eine namensbeschränkte Regel
+  faltet zu einem unbeschränkten Recht auf. controller-gen erzeugt so etwas nie,
+  und die SAR-Richtung finge es ab — deshalb bewusst offengelassen.
+- **Die Flags im Deployment sind ungeprüft.** `sigs.k8s.io/yaml` ist nicht
+  strikt, ein vertippter Schlüssel verschwindet lautlos. Die Spec verlangt
+  `--startup-deadline=20s` für Ebene B; kein Test bewacht das bisher.
+- **Nichts erzwingt, dass `Why` gefüllt und `Required` duplikatfrei ist.**
+  `Compare` sammelt Duplikate ein, der letzte gewinnt.
+
 ## Kleinigkeiten
 
 - `ObjectRef` ist ein Nicht-Pointer-Struct ohne `omitempty`, deshalb greift ein
