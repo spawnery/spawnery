@@ -266,14 +266,24 @@ func RepoPath(t *testing.T, rel string) string {
 
 - [ ] **Step 4: RBAC-Marker für Leases ergänzen**
 
-In `internal/controller/setup.go`, direkt über `func SetupAll`:
+In `internal/controller/setup.go` über `func SetupAll` — **mit einer Leerzeile
+zwischen Marker und dem Doc-Kommentar von `SetupAll`**:
 
 ```go
 // Leader election locks on a Lease in the operator's own namespace. It is not
 // tied to any single controller, which is why the marker lives here on the
 // wiring rather than on a reconciler.
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=create;get;update
+
+// SetupAll registers every controller and the orphan sweep with the manager.
+func SetupAll(mgr ctrl.Manager, opts Options) error {
 ```
+
+Die Leerzeile ist nicht Kosmetik. Ohne sie zieht Gos Parser den Marker in den
+`Doc`-Kommentar von `SetupAll` hinein, und controller-gen findet ihn dort nicht
+mehr — `make manifests` erzeugt dann **keine Änderung und keine Fehlermeldung**.
+Ein stiller Fehlschlag. Dieselbe Trennung durch Leerzeilen findet sich bereits
+bei dem Marker in `orphan.go`.
 
 Dann neu generieren:
 
