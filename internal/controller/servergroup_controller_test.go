@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -558,5 +559,206 @@ func TestGroupWithoutItsNetworkStillProtectsItsPlayers(t *testing.T) {
 	}
 	if group.Status.OnlinePlayers != 6 {
 		t.Errorf("onlinePlayers = %d, want 6 — the status must keep reporting", group.Status.OnlinePlayers)
+	}
+}
+
+// TestRetainedFailedPodDoesNotWedgeTheBudget covers the pod of a server that
+// failed with its pod already dead. The state machine calls such a pod terminal
+// and refuses to drain it, precisely because the process is down and its
+// sessions went with it — so there is nobody left to protect. The pod is still
+// kept for the retention window, and across that window its player count goes
+// stale. A rule that reads "stale means occupied" whatever the phase then
+// labels a dead pod as occupied and counts it into minAvailable, and the
+// eviction API answers "cannot evict pod as it would violate the pod's
+// disruption budget" — with currentHealthy below desiredHealthy, the default
+// IfHealthyBudget policy will not release it either. An operator's kubectl
+// drain never finishes on that node and a cluster upgrade wedges.
+//
+// The staleness only shows up after two report intervals, so this has to run
+// as a loop at the resync cadence; a single reconcile sees a count that is
+// still fresh and proves nothing.
+func TestRetainedFailedPodDoesNotWedgeTheBudget(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// No floor: this test is about the retained failure alone, not about the
+	// replacement the group would otherwise create for it.
+	f.setMinReplicas(t, 0)
+
+	bringUpReady(t, f, "lobby-x7k2")
+
+	pod, ok := f.pod("lobby-x7k2")
+	if !ok {
+		t.Fatal("no pod for lobby-x7k2")
+	}
+	pod.Status.Phase = corev1.PodFailed
+	if err := f.c.Status().Update(f.ctx, pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q, want Failed", got)
+	}
+
+	for i := 0; i < 60; i++ {
+		f.reconcile("lobby-x7k2")
+		f.reconcileGroup(t, r)
+
+		p, ok := f.pod("lobby-x7k2")
+		if !ok {
+			t.Fatalf("pass %d: the retained pod disappeared before its retention elapsed", i)
+		}
+		if v, set := p.Labels[podspec.LabelOccupied]; set {
+			t.Fatalf("pass %d: the pod of a terminally failed server carries %s=%q, so the eviction API will refuse to release it",
+				i, podspec.LabelOccupied, v)
+		}
+		if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 0 {
+			t.Fatalf("pass %d: minAvailable = %d for a group with no live server, want 0", i, got)
+		}
+		f.clock.Advance(resyncInterval)
+	}
+}
+
+// TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated covers the
+// server the phase cannot describe. A server that loses its probe falls back to
+// Starting, and deregistering it only stops new joins — nobody is moved off, so
+// its players are still connected. If its player count then becomes
+// unreadable, a rule that asks "is the phase Ready?" as its proxy for "was this
+// registered?" reads Starting, decides the server is empty and nominates it,
+// while its genuinely empty peer survives. Task 8 drains it so nobody is
+// kicked, but the players get a visible move that the empty server should have
+// absorbed. status.wasRegistered exists to answer that question properly.
+//
+// Loop-driven: the nomination is made afresh on every pass, so the invariant
+// has to hold on every pass and the group still has to converge.
+func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.setMinReplicas(t, 2)
+	f.reconcileGroup(t, r)
+
+	uids := map[string]string{}
+	for _, s := range f.listServers(t) {
+		uids[s.Name] = bringUpNamed(t, f, s.Name)
+	}
+	if len(uids) != 2 {
+		t.Fatalf("got %d servers, want 2", len(uids))
+	}
+	var victim, peer string
+	for name := range uids {
+		if victim == "" || name < victim {
+			victim = name
+		}
+	}
+	for name := range uids {
+		if name != victim {
+			peer = name
+		}
+	}
+
+	// Seven players are on the victim when its probe goes red.
+	if err := f.agents.ReportPlayers(uids[victim], 7, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile(victim)
+	f.setPodRunning(victim, false)
+	f.reconcile(victim)
+	if got := f.server(victim).Status.Phase; got != string(phase.Starting) {
+		t.Fatalf("phase of %s = %q, want Starting after the readiness loss", victim, got)
+	}
+	if !f.server(victim).Status.WasRegistered {
+		t.Fatal("wasRegistered must survive the readiness loss, or the fixture proves nothing")
+	}
+
+	// The operator restarts, or the pod UID can no longer be resolved: the
+	// registry no longer knows this pod, so its count reads zero and stale.
+	f.agents.Forget(uids[victim])
+
+	f.setMinReplicas(t, 1)
+
+	for i := 0; i < 30; i++ {
+		_ = f.agents.ReportPlayers(uids[peer], 0, 100)
+		for _, s := range f.listServers(t) {
+			f.reconcile(s.Name)
+		}
+		f.reconcileGroup(t, r)
+
+		found := false
+		for _, s := range f.listServers(t) {
+			if s.Name != victim {
+				continue
+			}
+			found = true
+			if !s.DeletionTimestamp.IsZero() {
+				t.Fatalf("pass %d nominated %q, which lost its probe but kept its seven players, while the empty %q was available",
+					i, victim, peer)
+			}
+		}
+		if !found {
+			t.Fatalf("pass %d removed %q outright", i, victim)
+		}
+		f.clock.Advance(resyncInterval)
+	}
+
+	final := f.listServers(t)
+	if len(final) != 1 || final[0].Name != victim {
+		names := make([]string, 0, len(final))
+		for _, s := range final {
+			names = append(names, s.Name)
+		}
+		t.Fatalf("group settled on %v, want only %q — the empty peer was the one to remove", names, victim)
+	}
+}
+
+// TestGroupKeepsOnlyOneRetainedFailure bounds what a broken image costs. A
+// Failed server holds its pod and its full resource request for the whole
+// retention window, and it does not take that window to fail — the restart cap
+// plus kubelet backoff gets there in a minute or two, and the group replaces it
+// on the next five-second pass. Uncapped, one floor replica piles up dozens of
+// retained servers before the first one expires. One is enough to diagnose
+// from.
+func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// No floor, so the replacements the group would otherwise create do not
+	// blur what is being counted.
+	f.setMinReplicas(t, 0)
+
+	names := []string{"lobby-aaaa", "lobby-bbbb", "lobby-cccc"}
+	for _, name := range names {
+		bringUpReady(t, f, name)
+		driveToFailed(t, f, name)
+	}
+	for _, name := range names {
+		if got := f.server(name).Status.Phase; got != string(phase.Failed) {
+			t.Fatalf("phase of %s = %q, want Failed", name, got)
+		}
+	}
+
+	// Let the pruning run its course: a failed server that still has players is
+	// drained before it goes, so it takes a drain timeout to disappear.
+	for i := 0; i < 40; i++ {
+		for _, s := range f.listServers(t) {
+			f.reconcile(s.Name)
+		}
+		f.reconcileGroup(t, r)
+		f.clock.Advance(resyncInterval)
+	}
+
+	final := f.listServers(t)
+	if len(final) != 1 {
+		remaining := make([]string, 0, len(final))
+		for _, s := range final {
+			remaining = append(remaining, s.Name)
+		}
+		t.Fatalf("group retained %v, want exactly one failure kept for diagnosis", remaining)
+	}
+	if !final[0].DeletionTimestamp.IsZero() {
+		t.Errorf("the retained failure %q is being removed; one must be kept", final[0].Name)
+	}
+	if got := final[0].Status.Phase; got != string(phase.Failed) {
+		t.Errorf("phase of the retained server = %q, want Failed", got)
 	}
 }

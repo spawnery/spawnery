@@ -150,6 +150,12 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
+	if group.IsEphemeral() {
+		if err := r.pruneFailed(ctx, group, views, servers); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	if err := r.reconcilePDB(ctx, group, views); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -198,7 +204,8 @@ func (r *ServerGroupReconciler) size(
 				"group", group.Name, "surplus", surplus, "free", len(names))
 		}
 		for _, name := range names {
-			if err := r.deleteServer(ctx, group, servers, name); err != nil {
+			if err := r.deleteServer(ctx, group, servers, name,
+				"ServerRemoved", "removing server %s"); err != nil {
 				return err
 			}
 		}
@@ -239,15 +246,22 @@ func (r *ServerGroupReconciler) collectViews(
 
 		// The live count comes from the registry, not from the throttled
 		// status: the control loop must decide on fresh data.
-		snap := r.Agents.Lookup(r.podUIDFor(ctx, srv))
+		pod, podFound := r.podFor(ctx, srv)
+		snap := r.Agents.Lookup(podUID(pod, podFound))
 		v := ServerView{
-			Name:       srv.Name,
-			Phase:      phase.Phase(srv.Status.Phase),
-			Players:    snap.Players,
-			Slots:      snap.Slots,
-			Stale:      snap.PlayersStale,
-			Generation: srv.Spec.GroupGeneration,
-			CreatedAt:  srv.CreationTimestamp.Time,
+			Name:    srv.Name,
+			Phase:   phase.Phase(srv.Status.Phase),
+			Players: snap.Players,
+			Slots:   snap.Slots,
+			Stale:   snap.PlayersStale,
+			// Read from the status, never guessed from the phase: a server that
+			// lost its probe is in Starting with its players still connected.
+			WasRegistered: srv.Status.WasRegistered,
+			// A pod that once existed and is now gone took its sessions with it,
+			// exactly like one that reached a terminal state.
+			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),
+			Generation:   srv.Spec.GroupGeneration,
+			CreatedAt:    srv.CreationTimestamp.Time,
 		}
 		if v.Phase == "" {
 			v.Phase = phase.Pending
@@ -257,19 +271,23 @@ func (r *ServerGroupReconciler) collectViews(
 	return views, byName, nil
 }
 
-// podUIDFor resolves the registry key of a server. An unresolvable pod yields
-// the empty key, whose snapshot is "unknown, therefore stale" — the
-// conservative answer.
-func (r *ServerGroupReconciler) podUIDFor(ctx context.Context, srv *spawneryv1alpha1.Server) string {
+// podFor resolves the pod of a server. An unresolvable pod yields found=false,
+// whose registry key is empty and whose snapshot is "unknown, therefore stale"
+// — the conservative answer. A pod already carrying a deletion timestamp counts
+// as gone, the same rule the Server controller applies.
+func (r *ServerGroupReconciler) podFor(ctx context.Context, srv *spawneryv1alpha1.Server) (*corev1.Pod, bool) {
 	if srv.Status.PodName == "" {
-		return ""
+		return nil, false
 	}
 	pod := &corev1.Pod{}
 	key := types.NamespacedName{Name: srv.Status.PodName, Namespace: srv.Namespace}
 	if err := r.Get(ctx, key, pod); err != nil {
-		return ""
+		return nil, false
 	}
-	return string(pod.UID)
+	if !pod.DeletionTimestamp.IsZero() {
+		return pod, false
+	}
+	return pod, true
 }
 
 func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) error {
@@ -302,10 +320,16 @@ func (r *ServerGroupReconciler) deleteServer(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	servers map[string]*spawneryv1alpha1.Server,
-	name string,
+	name, reason, message string,
 ) error {
 	srv, ok := servers[name]
 	if !ok {
+		return nil
+	}
+	// Already asked for. A Server keeps its phase while it drains, so it can be
+	// nominated again on the next pass; repeating the call would emit the same
+	// event every resync for the whole drain.
+	if !srv.DeletionTimestamp.IsZero() {
 		return nil
 	}
 	// Deleting the object is the request; the Server controller's finalizer
@@ -313,7 +337,34 @@ func (r *ServerGroupReconciler) deleteServer(
 	if err := r.Delete(ctx, srv); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
-	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerRemoved", "removing server %s", name)
+	r.Recorder.Eventf(group, corev1.EventTypeNormal, reason, message, name)
+	return nil
+}
+
+// pruneFailed keeps the number of retained failures per group at
+// maxRetainedFailures. It does not depend on the Network, so it runs even when
+// that cannot be resolved: a group whose Network was deleted is exactly the one
+// that will pile failures up.
+func (r *ServerGroupReconciler) pruneFailed(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	views []ServerView,
+	servers map[string]*spawneryv1alpha1.Server,
+) error {
+	names := selectFailedForPruning(views, maxRetainedFailures)
+	if len(names) == 0 {
+		return nil
+	}
+	log.FromContext(ctx).Info("pruning retained failures past the cap",
+		"group", group.Name, "pruned", len(names), "kept", maxRetainedFailures)
+	for _, name := range names {
+		// The Server controller still drains it first if it turns out to have
+		// players on it; this only asks for the removal.
+		if err := r.deleteServer(ctx, group, servers, name, "FailedServerPruned",
+			"removing failed server %s, only the oldest failure is kept for diagnosis"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

@@ -5512,6 +5512,35 @@ git commit -m "Server-Controller mit Zustandsmaschine, Drain und Occupied-Label"
 
 Das Statusfeld `wasRegistered` samt neu generiertem CRD gehört in einen eigenen, vorangehenden Commit — es ist eine API-Änderung und keine Controller-Änderung.
 
+**Nachtrag aus Task 9: `syncOccupiedLabel` bekommt eine engere Regel.**
+
+Der Block oben setzt `occupied := snap.PlayersStale || snap.Players > 0`. Das
+Label bedeutet aber „auf diesem Pod können Spieler sein", und das ist enger als
+„der Zählerstand ist veraltet". Ein Failed-Server behält seinen Pod die ganze
+Retention über; sein Zählerstand veraltet dabei zwangsläufig, und die alte Regel
+markiert damit einen toten Pod als belegt. Das daraus gebaute
+PodDisruptionBudget gibt ihn nicht mehr frei — bei `currentHealthy <
+desiredHealthy` rührt die Eviction-API auch einen unhealthy Pod nicht an —, und
+ein `kubectl drain` läuft auf diesem Knoten nie zu Ende.
+
+Umgesetzt ist deshalb:
+
+```go
+occupied := snap.Players > 0 ||
+	(snap.PlayersStale && srv.Status.WasRegistered && !podTerminal(pod))
+```
+
+Zwei Ausnahmen, sonst nichts: der Server muss im Leben dieses Pods einmal bei
+den Proxies registriert gewesen sein — zu einem anderen wird niemand geroutet —,
+und sein Pod muss noch leben. Für jeden anderen Fall gilt „veraltet heisst
+belegt" unverändert weiter; genau das schützt einen laufenden Server, dessen
+Agent verstummt ist. Die Terminal-Prüfung liegt jetzt in `podTerminal(pod)`, das
+sich `collectInputs` und `syncOccupiedLabel` teilen, damit es die Frage nur
+einmal gibt. `syncOccupiedLabel` nimmt dafür zusätzlich den `srv` entgegen.
+
+`ServerView.Occupied()` in Task 9 spiegelt diese Regel eins zu eins — wer eine
+der beiden ändert, muss die andere mitändern.
+
 ---
 
 ### Task 9: ServerGroup-Controller
@@ -6523,6 +6552,27 @@ git commit -m "ServerGroup-Controller mit Kandidatenauswahl und PodDisruptionBud
    passiert das Ready-Gate. Mit der Fassung oben endete der Server in `Starting`,
    und `TestGroupAggregatesStatus` (`readyReplicas = 1`) hätte nie bestehen
    können.
+5b. **`ServerView` trägt `WasRegistered` und `SessionsGone`.** Beides kommt aus
+   dem Server-Status bzw. dem Pod und ersetzt die Phase als Behelfsantwort.
+   `tookPlayers()` liest `WasRegistered` statt `Phase == Ready`: ein Server, der
+   seine Bereitschaft verloren hat, steht in `Starting` und hat seine Spieler
+   noch, weil das Abmelden nur neue Verbindungen stoppt. `mayHavePlayers()` ist
+   `Players > 0 || (Stale && WasRegistered)`, `Occupied()` zusätzlich
+   `&& !SessionsGone` — Letzteres spiegelt die Label-Regel aus dem Nachtrag zu
+   Task 8 und gibt einen toten Pod aus dem Budget frei.
+5c. **Obergrenze für aufgehobene Fehlschläge.** `maxRetainedFailures = 1` plus
+   `selectFailedForPruning()`: die Gruppe behält den **ältesten** Fehlschlag —
+   der erste nach einer Änderung ist der aussagekräftige — und löscht die
+   übrigen. Ohne das erreicht ein kaputtes Image über `MaxContainerRestarts` und
+   Kubelet-Backoff in ein bis zwei Minuten `Failed`, die Gruppe legt beim
+   nächsten Fünf-Sekunden-Durchlauf Ersatz an, und über eine Retention-Stunde
+   sammeln sich pro Sockel-Replika Dutzende Server samt Pods an. Exponentielles
+   Backoff, eine `Degraded`-Bedingung mit `CrashLoopBackoff` und das Aufgeben
+   nach wiederholten Fehlschlägen bleiben Meilenstein 4. `pruneFailed()` hängt
+   nicht an der Network und läuft deshalb auch ohne sie.
+5d. **`deleteServer` löscht nicht zweimal.** Ein Server behält seine Phase,
+   während er abfliesst, kann also erneut nominiert werden; ohne die Prüfung auf
+   den Deletion-Timestamp käme dasselbe Event jeden Resync neu.
 7. **Zusätzliche Tests.** `TestOccupiedServerSurvivesAContinuousScaleDown` und
    `TestGroupHoldsItsFloorWithoutChurn` fahren die Invariante über 60 Durchläufe
    im `resyncInterval`-Takt statt in einem einzelnen Durchlauf;

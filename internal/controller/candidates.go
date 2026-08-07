@@ -36,6 +36,16 @@ type ServerView struct {
 	Slots int32
 	// Stale is true if the count cannot be trusted. Stale counts as occupied.
 	Stale bool
+	// WasRegistered is true if this server was registered with the proxies at
+	// some point in the life of its current pod. It is read from
+	// status.wasRegistered, never derived from the phase: a server that lost
+	// its probe is back in Starting with its players still connected, because
+	// deregistering stops new joins without moving anyone off.
+	WasRegistered bool
+	// SessionsGone is true if the pod reached a terminal state or disappeared.
+	// Either way the process is down and its players went with it — the same
+	// reasoning the state machine uses when it refuses to drain a terminal pod.
+	SessionsGone bool
 	// Generation is the group generation this server was created from.
 	Generation int64
 	// CreatedAt is the creation timestamp of the Server object.
@@ -43,26 +53,33 @@ type ServerView struct {
 }
 
 // Occupied reports whether the pod of this server must be treated as carrying
-// players. It is the exact rule the Server controller labels pods with
-// (podspec.LabelOccupied), and the group's PodDisruptionBudget is sized from
-// it: a stale count counts as occupied, whatever the phase. Counting fewer
-// pods than carry the label would hand the eviction API a disruption to spend
-// on a pod that still has players on it.
+// players, and the group's PodDisruptionBudget is sized from it.
+//
+// It has to mirror the rule the Server controller labels pods with
+// (syncOccupiedLabel) exactly. Counting fewer pods than carry the label hands
+// the eviction API a disruption to spend on a pod that still has players;
+// counting a pod the label has released pins minAvailable above a budget that
+// can never be met, and kubectl drain then wedges on a pod nobody is on.
+// Change one of the two and you must change the other.
 func (v ServerView) Occupied() bool {
-	return v.Stale || v.Players > 0
+	return v.Players > 0 || (v.Stale && v.WasRegistered && !v.SessionsGone)
 }
 
-// mayHavePlayers is the narrower question the deletion candidate selection
-// asks: could this particular server be carrying players right now?
+// mayHavePlayers is the question the deletion candidate selection asks: could
+// this particular server be carrying players right now?
 //
 // A count we cannot trust hides players only on a server the proxies actually
-// route to. A Pending or Starting server has no agent stream yet, so its count
-// is stale by construction; treating that as "occupied" would make every
-// server that never came up permanently undeletable and leave a group unable
-// to ever shrink. It stays conservative where it matters: any server that is
-// registered with the proxies, or reports players at all, is off limits.
+// route to, which is what status.wasRegistered records. Applying staleness to
+// a server that was never registered would make every server that failed to
+// come up permanently undeletable and leave a group unable to ever shrink.
+//
+// Unlike Occupied it does not exempt a server whose sessions are gone. That
+// exemption exists to release a dead pod from the budget; here it would only
+// buy the right to nominate a server that countsTowardSize already excludes,
+// so leaving it out costs nothing and keeps the nomination the conservative
+// one of the two.
 func (v ServerView) mayHavePlayers() bool {
-	return v.Players > 0 || (v.Stale && v.tookPlayers())
+	return v.Players > 0 || (v.Stale && v.WasRegistered)
 }
 
 // leaving reports whether the server is already on its way out, so the group
@@ -83,10 +100,12 @@ func (v ServerView) countsTowardSize() bool {
 	return !v.leaving() && v.Phase != phase.Failed
 }
 
-// tookPlayers reports whether the server was ever able to hold players. Only a
-// Ready server is registered with the proxies.
+// tookPlayers reports whether the server was ever able to hold players. That
+// is status.wasRegistered and not the phase: a server sitting in Starting
+// after a readiness loss took players for as long as it was Ready, and
+// removing it disturbs sessions that a never-registered server does not have.
 func (v ServerView) tookPlayers() bool {
-	return v.Phase == phase.Ready
+	return v.WasRegistered
 }
 
 // SelectDeletionCandidates nominates up to count servers for removal.
@@ -129,6 +148,53 @@ func SelectDeletionCandidates(views []ServerView, count int) []string {
 
 	names := make([]string, 0, count)
 	for _, v := range eligible[:count] {
+		names = append(names, v.Name)
+	}
+	return names
+}
+
+// maxRetainedFailures is how many Failed servers a group keeps for diagnosis.
+//
+// A Failed server holds its pod, and its full resource request, for the whole
+// of spec.failedRetentionSeconds — an hour by default. A broken image does not
+// take that hour to fail: MaxContainerRestarts plus the kubelet's backoff gets
+// there in a minute or two, and the group creates a replacement on the next
+// five-second pass. Left uncapped that is dozens of retained servers and pods
+// per floor replica before the first one expires.
+//
+// One retained failure is enough to diagnose from, and it is the retention
+// window that then bounds the footprint rather than the failure rate. Proper
+// backoff, a Degraded condition and giving up on repeated failures belong to
+// milestone 4; this is only the bound that keeps the cluster usable until then.
+const maxRetainedFailures = 1
+
+// selectFailedForPruning names the Failed servers beyond the retention cap.
+//
+// The oldest failure is the one kept. The first failure after a change is the
+// one that says what broke; every later one is the same story again, told by a
+// server that started against an already-broken world. Servers already on
+// their way out are left alone — they are being removed anyway, and counting
+// them would let a second failure through while the first drains.
+func selectFailedForPruning(views []ServerView, keep int) []string {
+	failed := make([]ServerView, 0, len(views))
+	for _, v := range views {
+		if v.Phase == phase.Failed {
+			failed = append(failed, v)
+		}
+	}
+	if len(failed) <= keep {
+		return nil
+	}
+
+	sort.SliceStable(failed, func(i, j int) bool {
+		if !failed[i].CreatedAt.Equal(failed[j].CreatedAt) {
+			return failed[i].CreatedAt.Before(failed[j].CreatedAt)
+		}
+		return failed[i].Name < failed[j].Name
+	})
+
+	names := make([]string, 0, len(failed)-keep)
+	for _, v := range failed[keep:] {
 		names = append(names, v.Name)
 	}
 	return names

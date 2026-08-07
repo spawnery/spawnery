@@ -311,9 +311,7 @@ func (r *ServerReconciler) collectInputs(
 
 	if podFound {
 		in.PodRunning = pod.Status.Phase == corev1.PodRunning
-		in.PodTerminal = pod.Status.Phase == corev1.PodFailed ||
-			pod.Status.Phase == corev1.PodSucceeded ||
-			crashLooping(pod)
+		in.PodTerminal = podTerminal(pod)
 		for _, c := range pod.Status.Conditions {
 			if c.Type == corev1.PodReady {
 				in.PodReady = c.Status == corev1.ConditionTrue
@@ -379,6 +377,16 @@ func podUID(pod *corev1.Pod, found bool) string {
 		return ""
 	}
 	return string(pod.UID)
+}
+
+// podTerminal reports whether the pod is finished for good: the process is
+// down and every session it held went with it. It is the single definition of
+// that question — the state machine reads it to refuse a pointless drain, and
+// the occupied label reads it to stop protecting a pod that has nobody on it.
+func podTerminal(pod *corev1.Pod) bool {
+	return pod.Status.Phase == corev1.PodFailed ||
+		pod.Status.Phase == corev1.PodSucceeded ||
+		crashLooping(pod)
 }
 
 // crashLooping reports whether the Minecraft container is stuck restarting.
@@ -495,7 +503,7 @@ func (r *ServerReconciler) applyDecision(
 	r.mirrorPlayerCount(srv, snap, now)
 
 	if podFound {
-		if err := r.syncOccupiedLabel(ctx, pod, snap); err != nil {
+		if err := r.syncOccupiedLabel(ctx, srv, pod, snap); err != nil {
 			return err
 		}
 	}
@@ -540,9 +548,29 @@ func (r *ServerReconciler) mirrorPlayerCount(
 }
 
 // syncOccupiedLabel keeps the label the group's PodDisruptionBudget selects on
-// in step with reality. A stale count counts as occupied.
-func (r *ServerReconciler) syncOccupiedLabel(ctx context.Context, pod *corev1.Pod, snap agent.Snapshot) error {
-	occupied := snap.PlayersStale || snap.Players > 0
+// in step with reality. The label means "this pod may be carrying players", and
+// that is a narrower question than "is the count stale".
+//
+// A count we cannot trust hides players only where players could be. It takes
+// two more things for that: the server has to have been registered with the
+// proxies at some point in the life of this pod, because nobody is ever routed
+// to one that was not, and its pod has to still be alive. A terminal pod is
+// finished — the state machine refuses to drain one for exactly that reason —
+// so labelling it protects nobody, while the PodDisruptionBudget built from
+// this label would then refuse to release it: with currentHealthy below
+// desiredHealthy the eviction API will not touch an unhealthy pod either, and
+// an operator's kubectl drain never finishes on that node.
+//
+// Outside those two exceptions the stale-means-occupied rule stands unchanged.
+// It is what keeps a live server whose agent went quiet protected.
+func (r *ServerReconciler) syncOccupiedLabel(
+	ctx context.Context,
+	srv *spawneryv1alpha1.Server,
+	pod *corev1.Pod,
+	snap agent.Snapshot,
+) error {
+	occupied := snap.Players > 0 ||
+		(snap.PlayersStale && srv.Status.WasRegistered && !podTerminal(pod))
 	_, labelled := pod.Labels[podspec.LabelOccupied]
 	if occupied == labelled {
 		return nil

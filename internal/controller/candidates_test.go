@@ -26,14 +26,33 @@ import (
 func view(name string, p phase.Phase, players, slots int32, stale bool, gen int64, ageSeconds int) ServerView {
 	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	return ServerView{
-		Name:       name,
-		Phase:      p,
-		Players:    players,
-		Slots:      slots,
-		Stale:      stale,
-		Generation: gen,
-		CreatedAt:  base.Add(time.Duration(ageSeconds) * time.Second),
+		Name:    name,
+		Phase:   p,
+		Players: players,
+		Slots:   slots,
+		Stale:   stale,
+		// A server that walked the normal path was registered once it reached
+		// Ready and never before. The cases where the two come apart — a server
+		// that fell back out of Ready with its players still on it — are built
+		// with registered() below.
+		WasRegistered: p == phase.Ready,
+		Generation:    gen,
+		CreatedAt:     base.Add(time.Duration(ageSeconds) * time.Second),
 	}
+}
+
+// registered marks a view as one the proxies routed to at some point in the
+// life of its pod, whatever phase it is in now.
+func registered(v ServerView) ServerView {
+	v.WasRegistered = true
+	return v
+}
+
+// sessionsGone marks a view whose pod is terminal or has disappeared, so
+// whatever it was carrying is already gone.
+func sessionsGone(v ServerView) ServerView {
+	v.SessionsGone = true
+	return v
 }
 
 func TestSelectDeletionCandidates(t *testing.T) {
@@ -99,6 +118,19 @@ func TestSelectDeletionCandidates(t *testing.T) {
 			want:  []string{"ready"},
 		},
 		{
+			// The phase says Starting, but the server was Ready until its probe
+			// went red and its players are still connected — deregistering only
+			// stopped new joins. Its count is unreadable, so it must be left
+			// alone even though the empty peer is older.
+			name: "never picks a server that kept its players after a readiness loss",
+			views: []ServerView{
+				registered(view("recovering", phase.Starting, 0, 100, true, 1, 60)),
+				view("empty", phase.Ready, 0, 100, false, 1, 0),
+			},
+			count: 1,
+			want:  []string{"empty"},
+		},
+		{
 			// A Failed server is not part of the group's size, so removing it
 			// does nothing for the size — and it is being kept on purpose so
 			// somebody can look at it. Its cleanup is the Server controller's
@@ -137,8 +169,9 @@ func TestSelectNeverReturnsAnOccupiedServer(t *testing.T) {
 		view("b", phase.Ready, 0, 100, true, 1, 10),
 		view("c", phase.Starting, 0, 100, true, 1, 20),
 		view("d", phase.Ready, 99, 100, false, 1, 30),
+		registered(view("e", phase.Starting, 0, 100, true, 1, 40)),
 	}
-	occupied := map[string]bool{"a": true, "b": true, "d": true}
+	occupied := map[string]bool{"a": true, "b": true, "d": true, "e": true}
 
 	for count := 0; count <= len(views)+2; count++ {
 		for _, name := range SelectDeletionCandidates(views, count) {
@@ -214,20 +247,122 @@ func TestCountsTowardSize(t *testing.T) {
 
 // TestOccupiedPodsCountsEveryProtectedPod pins the number the group's
 // PodDisruptionBudget is built from. It has to match the rule the Server
-// controller labels pods with — spawnery.cloud/occupied is set whenever the
-// count is stale or above zero, whatever the phase. Counting fewer than that
-// would leave the eviction API with a disruption to spend on a pod that still
-// carries players.
+// controller labels pods with, pod for pod. Counting fewer leaves the eviction
+// API with a disruption to spend on a pod that still carries players; counting
+// more pins minAvailable above a budget that can never be met.
 func TestOccupiedPodsCountsEveryProtectedPod(t *testing.T) {
 	views := []ServerView{
 		view("ready-busy", phase.Ready, 4, 100, false, 1, 0),
 		view("ready-empty", phase.Ready, 0, 100, false, 1, 10),
 		view("ready-stale", phase.Ready, 0, 100, true, 1, 20),
 		view("draining-busy", phase.Draining, 2, 100, false, 1, 30),
-		view("starting-stale", phase.Starting, 0, 100, true, 1, 40),
+		// Registered, so its players outlived the readiness loss that put it
+		// back in Starting.
+		registered(view("starting-stale", phase.Starting, 0, 100, true, 1, 40)),
 		view("terminating-empty", phase.Terminating, 0, 100, false, 1, 50),
 	}
 	if got := occupiedPods(views); got != 4 {
 		t.Errorf("occupiedPods = %d, want 4 — the draining and starting pods stay labelled and must stay protected", got)
+	}
+}
+
+// TestOccupiedPodsReleasesPodsThatCarryNobody is the other direction of the
+// same rule. A pod the label has released must not be counted, or minAvailable
+// sits above a budget that can never be met and the eviction API refuses to
+// release the pod for a kubectl drain that then never finishes.
+func TestOccupiedPodsReleasesPodsThatCarryNobody(t *testing.T) {
+	cases := []struct {
+		name string
+		v    ServerView
+	}{
+		{
+			// Failed with a dead pod: the state machine refuses to drain it
+			// because its sessions went down with the process.
+			name: "failed with a terminal pod",
+			v:    sessionsGone(registered(view("dead", phase.Failed, 0, 100, true, 1, 0))),
+		},
+		{
+			// Never registered, so the proxies never routed anybody to it, so
+			// an unreadable count hides nothing.
+			name: "starting and never registered",
+			v:    view("cold", phase.Starting, 0, 100, true, 1, 0),
+		},
+		{
+			name: "pending without a pod",
+			v:    view("waiting", phase.Pending, 0, 0, true, 1, 0),
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := occupiedPods([]ServerView{tc.v}); got != 0 {
+				t.Errorf("occupiedPods = %d, want 0 — this pod carries nobody and must not hold the budget", got)
+			}
+		})
+	}
+}
+
+// TestSelectFailedForPruning pins the retention cap and, above all, which
+// failure survives it: the oldest, because the first failure after a change is
+// the one that says what broke.
+func TestSelectFailedForPruning(t *testing.T) {
+	cases := []struct {
+		name  string
+		views []ServerView
+		keep  int
+		want  []string
+	}{
+		{
+			name: "keeps a lone failure",
+			views: []ServerView{
+				view("failed", phase.Failed, 0, 100, false, 1, 0),
+				view("ready", phase.Ready, 0, 100, false, 1, 10),
+			},
+			keep: 1,
+			want: nil,
+		},
+		{
+			name: "keeps the oldest failure and prunes the rest",
+			views: []ServerView{
+				view("second", phase.Failed, 0, 100, false, 1, 60),
+				view("first", phase.Failed, 0, 100, false, 1, 0),
+				view("third", phase.Failed, 0, 100, false, 1, 120),
+			},
+			keep: 1,
+			want: []string{"second", "third"},
+		},
+		{
+			name: "never prunes a server that is not failed",
+			views: []ServerView{
+				view("failed", phase.Failed, 0, 100, false, 1, 0),
+				view("ready-a", phase.Ready, 0, 100, false, 1, 10),
+				view("ready-b", phase.Ready, 0, 100, false, 1, 20),
+				view("draining", phase.Draining, 0, 100, false, 1, 30),
+			},
+			keep: 1,
+			want: nil,
+		},
+		{
+			name: "falls back to the name when two failed in the same second",
+			views: []ServerView{
+				view("b", phase.Failed, 0, 100, false, 1, 0),
+				view("a", phase.Failed, 0, 100, false, 1, 0),
+			},
+			keep: 1,
+			want: []string{"b"},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := selectFailedForPruning(tc.views, tc.keep)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
 	}
 }
