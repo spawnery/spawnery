@@ -7655,6 +7655,29 @@ kill %1
 nix develop -c k3d cluster delete spawnery-dev
 ```
 
+**Abweichung bei der Ausführung (Task 12, tatsächlich umgesetzt):** Die
+Entwicklungsumgebung, in der Task 12 umgesetzt wurde, hatte keine
+Container-Laufzeit (kein Docker, kein Podman), also konnte k3d hier nicht
+laufen. Step 8 wurde deshalb nicht wie oben beschrieben ausgeführt. Ersatzweise
+beweist `internal/controller/setup_test.go::TestManagerReconcilesEndToEnd`
+dasselbe gegen die envtest-Kontrollebene: ein echter, laufender Manager mit
+Leader-Election an — nicht ein manuell aufgerufenes `Reconcile` — erzeugt aus
+einem `Network` und einer `ServerGroup` ein `Server`-Objekt und einen Pod, und
+`mgr.Elected()` schließt für eine Einzel-Instanz prompt. Zusätzlich prüft
+`TestSampleManifestIsAcceptedByTheAPIServer`, dass `config/samples/network.yaml`
+serverseitig (Strukturschema und CEL) angenommen wird. Beides zusammen deckt
+nicht ab, was nur mit einem echten Kubelet sichtbar wird: dass der Pod mangels
+Basis-Image mit `ErrImagePull` hängen bleibt. Der k3d-Ablauf oben steht
+unverändert als Anleitung im README, klar als in dieser Umgebung nicht
+ausgeführt gekennzeichnet.
+
+Die zweite Manager-Instanz in `TestManagerReconcilesEndToEnd` setzt
+`Controller.SkipNameValidation: true`: controller-runtime führt eine
+prozessweite Registry von Controller-Namen, und `network`/`servergroup`/`server`
+sind durch `TestSetupAllRegistersEveryController` im selben Testbinary bereits
+vergeben. Das ist ein reines Testartefakt (zwei unabhängige Manager-Instanzen
+im selben Prozess) ohne Auswirkung auf den Produktionscode.
+
 - [ ] **Step 9: README aktualisieren**
 
 Den Status-Abschnitt in `README.md` ersetzen:

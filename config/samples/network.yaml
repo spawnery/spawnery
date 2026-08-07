@@ -1,0 +1,53 @@
+# A minimal Spawnery network: one lobby group of ephemeral Paper servers.
+# The proxy layer arrives in milestone 3 — until then the servers come up and
+# reach phase Starting, and the ready gate closes once the agent of milestone 2
+# reports in.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minecraft
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: velocity-forwarding-secret
+  namespace: minecraft
+stringData:
+  # Replace this before you expose anything: it authenticates the proxy to the
+  # backends. Generate one with: head -c 32 /dev/urandom | base64
+  secret: change-me
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: Network
+metadata:
+  name: production
+  namespace: minecraft
+spec:
+  forwardingSecretRef:
+    name: velocity-forwarding-secret
+  defaults:
+    minecraftVersion: "1.21.4"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        memory: 2Gi
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: lobby
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  type: Ephemeral
+  image: ghcr.io/spawnery/paper:1.21.4-0.1.0
+  maxPlayers: 100
+  drain:
+    timeoutSeconds: 60
+  scaling:
+    minReplicas: 1
+    maxReplicas: 10
+    spareSlots: 40
