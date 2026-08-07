@@ -474,6 +474,20 @@ func keys(perms []Permission) []string {
 	return out
 }
 
+// sameKeys compares two key lists element by element, so callers can assert
+// exact order rather than just set membership.
+func sameKeys(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func TestKeyIgnoresWhy(t *testing.T) {
 	a := Permission{Group: "", Resource: "pods", Verb: "get", Why: "eine Stelle"}
 	b := Permission{Group: "", Resource: "pods", Verb: "get", Why: "eine andere"}
@@ -533,6 +547,23 @@ func TestExpandRules(t *testing.T) {
 			rules: nil,
 			want:  nil,
 		},
+		{
+			// The input order here is deliberately not alphabetical, so that
+			// this case only passes if the result is actually sorted rather
+			// than merely reflecting iteration order by coincidence.
+			name: "results come back sorted by key regardless of input order",
+			rules: []rbacv1.PolicyRule{{
+				APIGroups: []string{"spawnery.cloud", ""},
+				Resources: []string{"servers"},
+				Verbs:     []string{"update", "get"},
+			}},
+			want: []string{
+				"/servers:get",
+				"/servers:update",
+				"spawnery.cloud/servers:get",
+				"spawnery.cloud/servers:update",
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -554,6 +585,29 @@ func TestExpandRules(t *testing.T) {
 	}
 }
 
+// TestExpandRulesSplitsSubresourceFields checks the Resource and Subresource
+// fields directly. Key() renders an unsplit "servers/status" identically to a
+// split Resource="servers"/Subresource="status", so a test that only checks
+// Key() (as TestExpandRules's own subresource case does) cannot tell the
+// split apart from a no-op strings.Cut.
+func TestExpandRulesSplitsSubresourceFields(t *testing.T) {
+	got, err := ExpandRules([]rbacv1.PolicyRule{{
+		APIGroups: []string{"spawnery.cloud"},
+		Resources: []string{"servers/status"},
+		Verbs:     []string{"update"},
+	}})
+	if err != nil {
+		t.Fatalf("ExpandRules: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d permissions, want 1: %v", len(got), got)
+	}
+	if got[0].Resource != "servers" || got[0].Subresource != "status" {
+		t.Fatalf("got Resource=%q Subresource=%q, want Resource=%q Subresource=%q",
+			got[0].Resource, got[0].Subresource, "servers", "status")
+	}
+}
+
 // TestExpandRulesRejectsWildcards is the point of this function: a wildcard
 // grants everything in its position, so it can never be matched against a
 // finite table. Treating it as an over-grant is the only honest answer.
@@ -568,6 +622,10 @@ func TestExpandRulesRejectsWildcards(t *testing.T) {
 			APIGroups: []string{""}, Resources: []string{"*"}, Verbs: []string{"get"}}},
 		{"wildcard verb", rbacv1.PolicyRule{
 			APIGroups: []string{""}, Resources: []string{"pods"}, Verbs: []string{"*"}}},
+		{"wildcard subresource", rbacv1.PolicyRule{
+			APIGroups: []string{""}, Resources: []string{"pods/*"}, Verbs: []string{"get"}}},
+		{"wildcard resource name with a concrete subresource", rbacv1.PolicyRule{
+			APIGroups: []string{""}, Resources: []string{"*/status"}, Verbs: []string{"get"}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -575,6 +633,23 @@ func TestExpandRulesRejectsWildcards(t *testing.T) {
 				t.Fatal("wildcard accepted, want an error")
 			}
 		})
+	}
+}
+
+// TestExpandRulesRejectsNonResourceURLs guards against the same failure mode
+// as the wildcard rejection above, from a different angle: a rule using
+// NonResourceURLs has empty APIGroups and Resources, so the group/resource
+// loops in ExpandRules simply do not run for it. Without an explicit check,
+// such a rule would silently expand to zero permissions instead of erroring,
+// and the audit would report a role granting non-resource access as if it
+// granted nothing at all.
+func TestExpandRulesRejectsNonResourceURLs(t *testing.T) {
+	rule := rbacv1.PolicyRule{
+		NonResourceURLs: []string{"/healthz"},
+		Verbs:           []string{"get"},
+	}
+	if _, err := ExpandRules([]rbacv1.PolicyRule{rule}); err == nil {
+		t.Fatal("non-resource URL rule accepted, want an error")
 	}
 }
 
@@ -633,6 +708,57 @@ func TestCompare(t *testing.T) {
 		d := Compare([]Permission{perm("", "pods", "", "get")}, granted)
 		if len(d.Extra) != 0 {
 			t.Errorf("extra = %v, want none", keys(d.Extra))
+		}
+	})
+
+	// In real use, Required entries always carry a Why and ExpandRules output
+	// never does — so if Compare ever matched on the whole struct instead of
+	// Key(), every single permission would come back both missing and extra
+	// at once, no matter how well the role matches the table.
+	t.Run("Why does not affect matching", func(t *testing.T) {
+		withWhy := []Permission{
+			{Group: "", Resource: "pods", Verb: "get", Why: "watch loop"},
+			{Group: "", Resource: "pods", Verb: "delete", Why: "cleanup on scale-down"},
+			{Group: "spawnery.cloud", Resource: "servers", Subresource: "status", Verb: "update", Why: "status writer"},
+		}
+		withoutWhy := []Permission{
+			perm("", "pods", "", "get"),
+			perm("", "pods", "", "delete"),
+			perm("spawnery.cloud", "servers", "status", "update"),
+		}
+		d := Compare(withWhy, withoutWhy)
+		if len(d.Missing) != 0 || len(d.Extra) != 0 {
+			t.Errorf("diff = %+v, want empty — Why must not affect matching", d)
+		}
+	})
+
+	// Compare's output feeds directly into failure messages; a random order
+	// makes those messages jump around between runs. Enough entries here
+	// that a would-be regression to unsorted output has only a 1-in-120
+	// chance of coincidentally landing in sorted order via map iteration.
+	t.Run("missing and extra are each returned in sorted order", func(t *testing.T) {
+		manyRequired := []Permission{
+			perm("", "secrets", "", "get"),
+			perm("", "configmaps", "", "get"),
+			perm("", "pods", "", "get"),
+			perm("", "namespaces", "", "get"),
+			perm("", "events", "", "get"),
+		}
+		manyGranted := []Permission{
+			perm("", "zzz", "", "get"),
+			perm("", "aaa", "", "get"),
+			perm("", "mmm", "", "get"),
+			perm("", "bbb", "", "get"),
+			perm("", "ccc", "", "get"),
+		}
+		d := Compare(manyRequired, manyGranted)
+		wantMissing := []string{"/configmaps:get", "/events:get", "/namespaces:get", "/pods:get", "/secrets:get"}
+		wantExtra := []string{"/aaa:get", "/bbb:get", "/ccc:get", "/mmm:get", "/zzz:get"}
+		if !sameKeys(keys(d.Missing), wantMissing) {
+			t.Errorf("missing = %v, want %v in that exact order", keys(d.Missing), wantMissing)
+		}
+		if !sameKeys(keys(d.Extra), wantExtra) {
+			t.Errorf("extra = %v, want %v in that exact order", keys(d.Extra), wantExtra)
 		}
 	})
 }
@@ -703,18 +829,29 @@ func (p Permission) String() string {
 // A wildcard in any position is an error rather than an expansion: it grants
 // everything in that position, so it can never be reconciled against a finite
 // table, and an operator that needs a wildcard has outgrown this audit.
+//
+// A rule using NonResourceURLs is an error for the same reason this package
+// exists in the first place: it grants access this audit has no way to
+// represent, so letting it fall through the group/resource loops and expand
+// to nothing would make the audit silently ignore what the role grants.
 func ExpandRules(rules []rbacv1.PolicyRule) ([]Permission, error) {
 	var out []Permission
 	for i, rule := range rules {
+		if len(rule.NonResourceURLs) > 0 {
+			return nil, fmt.Errorf("rule %d uses non-resource URLs, which this audit cannot model", i)
+		}
 		for _, group := range rule.APIGroups {
 			if group == rbacv1.APIGroupAll {
 				return nil, fmt.Errorf("rule %d grants every API group", i)
 			}
 			for _, resource := range rule.Resources {
-				if resource == rbacv1.ResourceAll {
+				name, sub, hasSub := strings.Cut(resource, "/")
+				if name == rbacv1.ResourceAll {
 					return nil, fmt.Errorf("rule %d grants every resource in group %q", i, group)
 				}
-				name, sub, _ := strings.Cut(resource, "/")
+				if hasSub && sub == rbacv1.ResourceAll {
+					return nil, fmt.Errorf("rule %d grants every subresource of %q", i, name)
+				}
 				for _, verb := range rule.Verbs {
 					if verb == rbacv1.VerbAll {
 						return nil, fmt.Errorf("rule %d grants every verb on %q", i, resource)

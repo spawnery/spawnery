@@ -69,18 +69,29 @@ func (p Permission) String() string {
 // A wildcard in any position is an error rather than an expansion: it grants
 // everything in that position, so it can never be reconciled against a finite
 // table, and an operator that needs a wildcard has outgrown this audit.
+//
+// A rule using NonResourceURLs is an error for the same reason this package
+// exists in the first place: it grants access this audit has no way to
+// represent, so letting it fall through the group/resource loops and expand
+// to nothing would make the audit silently ignore what the role grants.
 func ExpandRules(rules []rbacv1.PolicyRule) ([]Permission, error) {
 	var out []Permission
 	for i, rule := range rules {
+		if len(rule.NonResourceURLs) > 0 {
+			return nil, fmt.Errorf("rule %d uses non-resource URLs, which this audit cannot model", i)
+		}
 		for _, group := range rule.APIGroups {
 			if group == rbacv1.APIGroupAll {
 				return nil, fmt.Errorf("rule %d grants every API group", i)
 			}
 			for _, resource := range rule.Resources {
-				if resource == rbacv1.ResourceAll {
+				name, sub, hasSub := strings.Cut(resource, "/")
+				if name == rbacv1.ResourceAll {
 					return nil, fmt.Errorf("rule %d grants every resource in group %q", i, group)
 				}
-				name, sub, _ := strings.Cut(resource, "/")
+				if hasSub && sub == rbacv1.ResourceAll {
+					return nil, fmt.Errorf("rule %d grants every subresource of %q", i, name)
+				}
 				for _, verb := range rule.Verbs {
 					if verb == rbacv1.VerbAll {
 						return nil, fmt.Errorf("rule %d grants every verb on %q", i, resource)
