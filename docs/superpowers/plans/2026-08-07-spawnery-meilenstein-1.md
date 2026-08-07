@@ -6867,6 +6867,15 @@ git add internal/controller config
 git commit -m "Network-Controller mit Ein-Netzwerk-pro-Namespace-Regel"
 ```
 
+**Abweichung vom obigen Code, wie umgesetzt:**
+
+1. **Der Test-Helfer `func (f *fixture) network(...)` heisst `getNetwork`.** Die
+   Fixture aus Task 8/9 trägt bereits ein Feld `network *spawneryv1alpha1.Network`
+   (das Bootstrap-Network der Fixture); ein Feld und eine Methode können in Go
+   nicht denselben Namen tragen, der Block oben kompiliert deshalb nicht
+   unverändert. Alle Aufrufstellen innerhalb von `network_controller_test.go`
+   wurden entsprechend umbenannt; sonst nichts am Testinhalt geändert.
+
 ---
 
 ### Task 11: Verwaisten-Abgleich

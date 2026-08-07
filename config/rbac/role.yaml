@@ -39,13 +39,6 @@ rules:
   - spawnery.cloud
   resources:
   - networks
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - spawnery.cloud
-  resources:
   - servergroups
   verbs:
   - get
@@ -56,12 +49,21 @@ rules:
 - apiGroups:
   - spawnery.cloud
   resources:
+  - networks/status
   - servergroups/status
   - servers/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - spawnery.cloud
+  resources:
+  - proxygroups
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - spawnery.cloud
   resources:
