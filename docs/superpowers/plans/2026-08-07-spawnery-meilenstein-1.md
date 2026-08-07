@@ -5541,6 +5541,53 @@ einmal gibt. `syncOccupiedLabel` nimmt dafür zusätzlich den `srv` entgegen.
 `ServerView.Occupied()` in Task 9 spiegelt diese Regel eins zu eins — wer eine
 der beiden ändert, muss die andere mitändern.
 
+**Nachtrag aus der Schlussdurchsicht: die Terminal-Ausnahme galt nur zur
+Hälfte, und aus dem Kommentar wurde eine gemeinsame Funktion.**
+
+Der Ausdruck oben prüft `!podTerminal(pod)` nur innerhalb des
+Stale-Zweigs. `snap.Players > 0` wird davor ausgewertet und gewinnt, und die
+Registry vergisst einen Pod nie von selbst — niemand sagt ihr, dass er weg
+ist. Ein Server, der mit sieben Spielern abstürzt, meldet also weiter sieben.
+Sein toter Pod behielt damit `spawnery.cloud/occupied=true`, das
+PodDisruptionBudget der Gruppe blieb bei `minAvailable=1` gegen
+`currentHealthy=0`, und zwar die volle `failedRetentionSeconds` lang — eine
+Stunde nach Vorgabe. Genau der Fall, den die Ausnahme verhindern sollte. Der
+alte Test traf ihn nicht, weil er einen Server mit Zählerstand null aufbaute
+und damit nur den Stale-Zweig durchlief.
+
+Die Regel gilt jetzt für den ganzen Ausdruck: ein Pod, der terminal ist oder
+verschwunden, hat keine Sitzungen mehr, egal was zuletzt gezählt wurde. Und sie
+steht nur noch einmal da, als `isOccupied(players, stale, wasRegistered,
+sessionsGone)` in `candidates.go`:
+
+```go
+func isOccupied(players int32, stale, wasRegistered, sessionsGone bool) bool {
+	if sessionsGone {
+		return false
+	}
+	return players > 0 || (stale && wasRegistered)
+}
+```
+
+`syncOccupiedLabel` und `ServerView.Occupied()` rufen beide diese Funktion auf
+und liefern nur noch die vier Tatsachen von ihrer Seite; für den Controller ist
+`sessionsGone` gleich `podTerminal(pod)`. Der Kommentar „wer eine ändert, muss
+die andere mitändern" entfällt damit — er hatte die beiden nicht
+zusammengehalten. Beide Seiten haben jetzt einen eigenen Test: der Label-Seite
+fehlte einer für `status.wasRegistered`, das Weglassen blieb dort unbemerkt.
+
+**Nachtrag aus der Schlussdurchsicht: der Finalizer wird zu einem eigenen
+Schritt.**
+
+Dass der Finalizer vor dem ersten Schreiben auf `srv.Status` gesetzt werden
+muss, stand als Kommentar über einem Inline-Block — die Reihenfolge hing daran,
+in welcher Zeile die Anweisungen zufällig standen. Das hat eine Reviewrunde
+gekostet. Der Block ist jetzt `ensureFinalizer(ctx, srv)`, eine Methode, die
+`srv.Status` nicht anfasst und deren Aufruf in `Reconcile` an genau der Stelle
+steht, an der die Statusschreiberei beginnt. Das Verhalten ist unverändert;
+`TestFinalizerIsWrittenBeforeTheFirstStatusWrite` schlägt fehl, sobald ein
+Statusschreibvorgang davor rutscht.
+
 ---
 
 ### Task 9: ServerGroup-Controller
@@ -6911,6 +6958,31 @@ git commit -m "Network-Controller mit Ein-Netzwerk-pro-Namespace-Regel"
    ereignisgetriebenes Refresh einen Mapping-Handler bräuchte und das Task 12
    entscheiden kann.
 
+**Nachtrag aus der Schlussdurchsicht: die Altersregel hatte keinen wirksamen
+Test.**
+
+`namespaceOwner` von `CreationTimestamp.Before(...)` auf `After(...)`
+umzustellen — ältestes gewinnt wird jüngstes gewinnt — liess die Suite grün.
+`TestSecondNetworkInTheSameNamespaceIsRejected` legt seine beiden Networks
+direkt hintereinander an; ein echter API-Server stempelt `creationTimestamp`
+sekundengenau, beide landen in derselben Sekunde, `Equal` greift, und dann
+entscheidet allein der Name — dasselbe Urteil in beide Richtungen. Die Uhr der
+Fixture hilft nicht, sie stellt nur die Testzeit, nicht den Zeitstempel des
+API-Servers. Kippt der Vergleich, lehnt ein einziges versehentliches
+`kubectl apply` eines Networks das laufende ab, und jede ServerGroup im
+Namespace hört auf zu skalieren.
+
+Der Vergleich war richtig, also wurde der Test repariert und nicht der Code. Die
+reine Auswahl steht jetzt als `pickNamespaceOwner(networks
+[]spawneryv1alpha1.Network) string` daneben; `namespaceOwner` listet und ruft
+sie auf. Nur so lässt sich die Regel über eine handgebaute Liste mit gesetzten,
+verschiedenen `creationTimestamp`-Werten prüfen. Vier Fälle plus zwei leere:
+Älteres gewinnt unabhängig von der Namensreihenfolge, gleiche Zeitstempel fallen
+auf den Namen zurück, das Löschen des Gewinners geht an das nächstälteste und
+nicht an den kleinsten Namen, und über alle Permutationen der Liste kippt der
+Gewinner nie. Der bestehende envtest-Test bleibt unverändert daneben stehen; er
+deckt weiterhin den Weg über den Namespace ab.
+
 ---
 
 ### Task 11: Verwaisten-Abgleich
@@ -7638,9 +7710,16 @@ nix develop -c k3d cluster create spawnery-dev --agents 1
 nix develop -c kubectl apply -f config/crd/bases
 nix develop -c kubectl apply -f config/samples/network.yaml
 nix develop -c go run ./cmd/spawnery-operator --leader-elect=false &
-sleep 20
+sleep 45
 nix develop -c kubectl get networks,servergroups,servers,pods -n minecraft
 ```
+
+**Korrektur aus der Schlussdurchsicht:** hier standen `sleep 20`, und damit
+konnte der Ablauf nicht aufgehen. Trifft die ServerGroup ihr Network an, bevor
+der Network-Controller es angenommen hat, wartet sie `networkRetryInterval` —
+30 Sekunden — bis zum nächsten Versuch. Der erste Server kann also gut eine
+halbe Minute brauchen. README und Plan stehen jetzt beide auf 45 Sekunden und
+sagen den Grund dazu.
 
 Expected:
 - `network production` mit `Accepted=True`,

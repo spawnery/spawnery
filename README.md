@@ -63,9 +63,14 @@ nix develop -c k3d cluster create spawnery-dev --agents 1
 nix develop -c kubectl apply -f config/crd/bases
 nix develop -c kubectl apply -f config/samples/network.yaml
 nix develop -c go run ./cmd/spawnery-operator --leader-elect=false &
-sleep 20
+sleep 45
 nix develop -c kubectl get networks,servergroups,servers,pods -n minecraft
 ```
+
+Der erste Server kann gut eine halbe Minute auf sich warten lassen: Trifft die
+ServerGroup ihr Netzwerk an, bevor der Network-Controller es angenommen hat,
+versucht sie es erst nach `networkRetryInterval` (30 Sekunden) wieder. Deshalb
+die 45 Sekunden oben.
 
 Erwartet:
 
