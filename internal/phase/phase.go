@@ -101,6 +101,10 @@ type Inputs struct {
 	// AgentReady is true if the in-game agent reported readiness on a live
 	// stream.
 	AgentReady bool
+	// AgentConnected is true while the agent stream is up. It separates "the
+	// agent is telling us it is not ready" from "we cannot hear the agent" —
+	// the first is immediate, the second is tolerated for StreamDownGrace.
+	AgentConnected bool
 	// AgentStreamDownFor is how long the agent stream has been broken. Zero
 	// while the stream is up.
 	AgentStreamDownFor time.Duration
@@ -287,7 +291,19 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 
 	default: // Ready
-		if !in.PodReady || !in.AgentReady || in.AgentStreamDownFor >= StreamDownGrace {
+		lost := !in.PodReady
+		if !lost {
+			if in.AgentConnected {
+				// A live stream that reports not-ready is an immediate loss.
+				lost = !in.AgentReady
+			} else {
+				// A broken stream is tolerated until the grace expires; the
+				// player count goes stale meanwhile, so the server counts as
+				// occupied and is protected from deletion either way.
+				lost = in.AgentStreamDownFor >= StreamDownGrace
+			}
+		}
+		if lost {
 			return Decision{
 				Next: Starting, Deregister: true, CountReadinessLoss: true,
 				Reason: ReasonReadinessLost, Message: "server lost a ready signal",

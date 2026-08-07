@@ -24,11 +24,12 @@ import (
 // healthyReady is the input set of a server that is fine in phase Ready.
 func healthyReady() Inputs {
 	return Inputs{
-		PodExists:  true,
-		PodRunning: true,
-		PodReady:   true,
-		AgentReady: true,
-		Slots:      100,
+		PodExists:      true,
+		PodRunning:     true,
+		PodReady:       true,
+		AgentReady:     true,
+		AgentConnected: true,
+		Slots:          100,
 	}
 }
 
@@ -96,10 +97,23 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
 		},
 		{
+			// A live stream that reports not-ready is the agent telling us
+			// something, not us failing to hear it: no grace period applies.
+			name:    "ready falls back to starting at once when a live agent reports not ready",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.AgentReady = false
+				return in
+			}(),
+			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
+		},
+		{
 			name:    "ready falls back to starting when the agent stream is down too long",
 			current: Ready,
 			in: func() Inputs {
 				in := healthyReady()
+				in.AgentConnected = false
 				in.AgentStreamDownFor = StreamDownGrace
 				return in
 			}(),
@@ -110,6 +124,24 @@ func TestDecide(t *testing.T) {
 			current: Ready,
 			in: func() Inputs {
 				in := healthyReady()
+				in.AgentConnected = false
+				in.AgentStreamDownFor = StreamDownGrace - time.Millisecond
+				return in
+			}(),
+			want: Decision{Next: Ready, Reason: ReasonReadyGatePassed},
+		},
+		{
+			// The exact shape the agent registry emits after Disconnect: it
+			// clears ready and starts the clock, so a Ready server inside the
+			// grace window arrives here as neither ready nor connected. This is
+			// the composition that made the StreamDownGrace clause unreachable
+			// before — inside the grace only the timer may decide.
+			name:    "ready tolerates a dropped stream whose agent has not reported ready since",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.AgentReady = false
+				in.AgentConnected = false
 				in.AgentStreamDownFor = StreamDownGrace - time.Millisecond
 				return in
 			}(),
