@@ -2,24 +2,50 @@
 
 **Datum:** 2026-08-07
 **Status:** Entwurf zur Freigabe
-**Umfang:** Testinfrastruktur für Spawnery — ein NixOS-VM-Test mit RKE2, der die
-Rechte des Operators im Cluster nachweist.
+**Umfang:** Testinfrastruktur für Spawnery in zwei Ebenen — eine Rechtetabelle
+in envtest, die bei jedem Commit läuft, und ein NixOS-VM-Test mit RKE2, der den
+Operator unter seinem ServiceAccount arbeiten sieht. Jede Ebene bekommt einen
+eigenen Implementierungsplan; Ebene A zuerst.
 
 ## 1. Zweck
 
-Nach Meilenstein 1 gibt es eine Lücke, die keine der vorhandenen Testebenen
-schließen kann: **envtest läuft mit Adminrechten.** Ein fehlendes Verb in der
-generierten ClusterRole fällt dort strukturell nie auf — es zeigt sich erst,
-wenn der Operator zum ersten Mal unter seinem eigenen ServiceAccount in einem
-echten Cluster läuft. Die Schlussdurchsicht von Meilenstein 1 hat das
-ausdrücklich als unprüfbar markiert und zugleich sieben überflüssig gewährte
-Verben gefunden, die niemand bemerkt hätte.
+Nach Meilenstein 1 gibt es eine Lücke: Die Controller-Tests sprechen mit dem
+Admin-Kubeconfig von envtest, also läuft in ihnen kein Vorgang unter dem
+ServiceAccount des Operators. Ein fehlendes Verb in der generierten ClusterRole
+fällt dort nicht auf — es zeigt sich erst, wenn der Operator zum ersten Mal in
+einem echten Cluster unter seinen eigenen Rechten läuft. Die Schlussdurchsicht
+von Meilenstein 1 hat das als unprüfbar markiert und zugleich sieben überflüssig
+gewährte Verben gefunden, die niemand bemerkt hätte.
 
-Dieses Dokument beschreibt die Testinfrastruktur, die diese Lücke schließt, und
-den ersten Test, der darauf läuft.
+**Korrektur einer früheren Annahme.** Ursprünglich stand hier, envtest laufe mit
+Adminrechten und könne deshalb über Rechte gar nichts aussagen. Das gilt für den
+*Client* der Controller-Tests, nicht für den *Authorizer*: envtest startet den
+API-Server mit `--authorization-mode=RBAC`, und `SubjectAccessReview` liefert
+dort echte Antworten. Empirisch geprüft — ohne Rolle verweigert, nach Bindung
+erlaubt, ein nicht gewährtes Verb verweigert, in unter zwei Sekunden.
 
-**Erfolgskriterium:** Ein Lauf von `make e2e` beweist, dass die ClusterRole des
-Operators alles gewährt, was sein Code braucht — und nichts darüber hinaus.
+Daraus folgt der Zuschnitt dieses Dokuments in zwei Ebenen.
+
+### 1.1 Zwei Ebenen
+
+**Ebene A — Rechtetabelle in envtest.** Die Prüfung, ob die ClusterRole alles
+gewährt was der Code braucht und nichts darüber hinaus, braucht kein Cluster.
+Sie läuft in der bestehenden envtest-Suite bei **jedem Commit**, in Sekunden.
+Ein fehlendes oder überflüssiges Verb fällt damit auf, während es entsteht.
+
+**Ebene B — der Operator im echten Cluster.** Was envtest nicht kann: dass ein
+Operator-Prozess unter seinem ServiceAccount gegen einen echten API-Server
+spricht, dabei seine Codepfade durchläuft und kein `Forbidden` erzeugt. Dafür
+die VM.
+
+Die Ebenen werden getrennt geplant und umgesetzt; Ebene A zuerst, weil sie den
+Nutzen sofort liefert und Ebene B kleiner macht.
+
+**Erfolgskriterium Ebene A:** `make test` schlägt fehl, sobald ein Verb in der
+ClusterRole fehlt oder eines zu viel gewährt wird.
+
+**Erfolgskriterium Ebene B:** Ein Lauf von `make e2e` zeigt den Operator im
+Cluster arbeitend, ohne eine einzige abgelehnte Anfrage.
 
 ### Was dieser Zuschnitt nicht ist
 
@@ -45,6 +71,9 @@ CNI-Abhängigkeit der HostPort-Strategie) fallen so früher auf statt erst in
 Meilenstein 6. Der Preis ist Bootzeit und Speicher.
 
 ## 3. Bestandteile
+
+Ebene A braucht nur die Deployment-Manifeste aus 3.1 und einen gewöhnlichen
+Go-Test. Alles Übrige in diesem Abschnitt und in Abschnitt 4 gehört zu Ebene B.
 
 Drei neue Flake-Outputs:
 
@@ -103,15 +132,22 @@ flakig, und ein flakiger E2E-Test wird binnen Wochen ignoriert.
 Schlägt die Probe fehl, gibt das testScript Operator-Logs,
 `kubectl get networks,servergroups,servers,pods -A` und die Events aus.
 
-## 5. Was die Probe prüft
+## 5. Die Prüfungen
 
-Die Probe läuft **innerhalb** der VM mit Adminrechten. Sie fragt über
-`SubjectAccessReview` nach den Rechten eines *fremden* Subjekts — des
-Operator-ServiceAccounts. Damit braucht sie kein ServiceAccount-Token und kann
-zugleich Logs und Events lesen, was mit den Rechten des Operators nicht ginge.
-(`SelfSubjectAccessReview` prüft die Rechte des Aufrufers und wäre hier falsch.)
+Beide Ebenen fragen über `SubjectAccessReview` nach den Rechten eines *fremden*
+Subjekts — des Operator-ServiceAccounts. Damit braucht der Prüfer kein
+ServiceAccount-Token und kann zugleich Logs und Events lesen, was mit den
+Rechten des Operators nicht ginge. (`SelfSubjectAccessReview` prüft die Rechte
+des Aufrufers und wäre hier falsch.)
 
-### 5.1 Die Rechtetabelle, in beide Richtungen
+### 5.1 Ebene A: die Rechtetabelle, in beide Richtungen
+
+Läuft in der envtest-Suite, nicht in der VM. Der Test wendet die generierte
+ClusterRole und die Manifeste aus `config/deploy/` in envtest an und leitet das
+zu prüfende Subjekt **aus dem ClusterRoleBinding und dem Deployment** ab, statt
+es zu wiederholen. Damit deckt Ebene A auch ab, dass die Bindung auf die
+richtige Rolle zeigt und das Deployment den richtigen ServiceAccount benutzt —
+drei Fehlerquellen statt einer.
 
 ```go
 type Permission struct {
@@ -141,7 +177,7 @@ fehl.
 Wer einen Marker ergänzt, ohne die Tabelle zu pflegen, bekommt einen roten Test.
 Das ist beabsichtigt.
 
-### 5.2 Getriebene Szenarien
+### 5.2 Ebene B: getriebene Szenarien im Cluster
 
 Erreichbar ohne Paper-Image:
 
@@ -161,7 +197,7 @@ Erreichbar ohne Paper-Image:
 Danach die Operator-Logs über die API lesen und bei jedem `forbidden`
 fehlschlagen, mit der Zeile im Klartext.
 
-### 5.3 Was ungeprüft bleibt
+### 5.3 Was auch dann ungeprüft bleibt
 
 Das Patchen des Occupied-Labels. Es setzt voraus, dass ein Server einmal `Ready`
 war, und das braucht ein Image mit dem SLP-Health-Tool aus Meilenstein 2. Die
@@ -172,19 +208,22 @@ Tabellenprüfung deckt das Verb ab, das Szenario nicht.
 Das Auffalten der ClusterRole-Regeln und der Abgleich gegen die Tabelle sind
 reine Funktionen und bekommen gewöhnliche Go-Unit-Tests ohne Cluster.
 
-**Abnahmekriterium ist Mutation, nicht ein grüner Lauf.** Drei Mutationen müssen
-die Probe umwerfen:
+**Abnahmekriterium ist Mutation, nicht ein grüner Lauf.** Für Ebene A:
 
 - ein Verb aus den Markern entfernen → Fehlschlag mit genau diesem Tripel,
 - ein überflüssiges Verb ergänzen → Fehlschlag in der Gegenrichtung,
-- den Verwaisten-Abgleich brechen → Szenario 4 fällt um.
+- das ClusterRoleBinding auf einen falschen ServiceAccount zeigen lassen →
+  Fehlschlag, weil das abgeleitete Subjekt nichts mehr darf.
+
+Für Ebene B: den Verwaisten-Abgleich brechen → Szenario 4 fällt um.
 
 Ein Test, der bloß grün ist, hat in diesem Projekt dreimal nichts bewiesen.
 
 ## 7. Einbettung
 
-`make e2e` ruft `nix build .#checks.x86_64-linux.e2e-rbac -L`.
+Ebene A läuft als gewöhnlicher Go-Test in `make test` mit — sie kostet Sekunden.
 
+Ebene B: `make e2e` ruft `nix build .#checks.x86_64-linux.e2e-rbac -L`.
 Ausdrücklich **nicht** in `make test` oder `make all`: die Commit-Schleife bleibt
 bei rund 25 Sekunden. Die CI-Verdrahtung gehört zu Meilenstein 6; dieser
 Zuschnitt achtet nur darauf, sie nicht zu verbauen.
