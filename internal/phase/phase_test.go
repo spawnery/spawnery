@@ -181,6 +181,98 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Failed, Reason: ReasonStartupTimeout},
 		},
 		{
+			// status.startedAt is written once at pod creation and never
+			// refreshed, so StartupDeadlineReached stays true for the whole life
+			// of a long-lived server. Without the WasRegistered guard, one probe
+			// blip on a server that has been serving for hours would fail it —
+			// and the Failed retention would then delete its pod undrained.
+			name:    "the startup deadline does not fail a server that was already registered",
+			current: Starting,
+			in: Inputs{
+				PodExists: true, PodRunning: true, StartupDeadlineReached: true,
+				WasRegistered: true, PlayersOnline: 40, ReadinessLosses: 1,
+			},
+			want: Decision{Next: Starting, Reason: ReasonPodPending},
+		},
+		{
+			// Flapping is the bound for a server that was once playable, and it
+			// must take its players with it: the readiness-loss fallback only
+			// deregistered, it never moved anyone off.
+			name:    "failing on flapping drains a server that still has players",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.ReadinessLosses = MaxReadinessLosses
+				in.WasRegistered = true
+				in.PlayersOnline = 12
+				return in
+			}(),
+			want: Decision{Next: Failed, Deregister: true, StartDrain: true, Reason: ReasonFlapping},
+		},
+		{
+			// A terminal pod means the process is already down: there is nobody
+			// left to move, so draining would be pointless.
+			name:    "failing on a terminal pod does not try to drain",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.PodTerminal = true
+				in.WasRegistered = true
+				in.PlayersOnline = 12
+				return in
+			}(),
+			want: Decision{Next: Failed, Deregister: true, Reason: ReasonPodTerminal},
+		},
+		{
+			name:    "a failed server with players is drained instead of cleaned up at the retention",
+			current: Failed,
+			in: Inputs{
+				FailedRetentionElapsed: true, WasRegistered: true, PlayersOnline: 5,
+			},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonDrainingBeforeCleanup},
+		},
+		{
+			name:    "a failed server with a stale count is drained, not cleaned up",
+			current: Failed,
+			in: Inputs{
+				FailedRetentionElapsed: true, WasRegistered: true, PlayersStale: true,
+			},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonDrainingBeforeCleanup},
+		},
+		{
+			// The escape hatch: one stuck player must not pin a failed server
+			// forever.
+			name:    "a failed server is cleaned up once its drain deadline passes",
+			current: Failed,
+			in: Inputs{
+				FailedRetentionElapsed: true, WasRegistered: true, PlayersOnline: 5,
+				DrainDeadlineReached: true,
+			},
+			want: Decision{Next: Terminating, DeletePod: true, Reason: ReasonRetentionElapsed},
+		},
+		{
+			name:    "deleting an occupied failed server drains it",
+			current: Failed,
+			in: Inputs{
+				DeletionRequested: true, WasRegistered: true, PlayersOnline: 5,
+			},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonDrainingBeforeCleanup},
+		},
+		{
+			name:    "deleting an empty failed server terminates it",
+			current: Failed,
+			in:      Inputs{DeletionRequested: true, WasRegistered: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDeletionRequested},
+		},
+		{
+			// Never registered means no session was ever routed here, so there
+			// is nothing to move off.
+			name:    "a failed server that was never registered is cleaned up directly",
+			current: Failed,
+			in:      Inputs{FailedRetentionElapsed: true, PlayersStale: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonRetentionElapsed},
+		},
+		{
 			name:    "deleting a ready server drains it",
 			current: Ready,
 			in: func() Inputs {
@@ -312,6 +404,40 @@ func TestDecide(t *testing.T) {
 
 // TestNoPathBackFromDraining guards the rule that a draining server never
 // serves players again, no matter how healthy it looks.
+// TestStreamDownGraceIsFifteenSeconds pins the value, not just the symbol.
+// Every other test is written relative to the constant, so shrinking it to a
+// second would break nothing and silently drop the tolerance design spec 4.4
+// requires.
+func TestStreamDownGraceIsFifteenSeconds(t *testing.T) {
+	if StreamDownGrace != 15*time.Second {
+		t.Errorf("StreamDownGrace = %v, want 15s (design spec 4.4)", StreamDownGrace)
+	}
+}
+
+// TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline is the Failed
+// counterpart of TestOccupiedServerIsNeverDeletedWithoutDeadline: a failed
+// server can still hold live sessions, so neither the retention nor a deletion
+// request may remove its pod while players are on it.
+func TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		for _, deleting := range []bool{false, true} {
+			for _, retention := range []bool{false, true} {
+				in := Inputs{
+					WasRegistered:          true,
+					PlayersOnline:          7,
+					PlayersStale:           stale,
+					DeletionRequested:      deleting,
+					FailedRetentionElapsed: retention,
+				}
+				if got := Decide(Failed, in); got.DeletePod {
+					t.Errorf("Decide(Failed, stale=%v deleting=%v retention=%v) deleted an occupied pod: %+v",
+						stale, deleting, retention, got)
+				}
+			}
+		}
+	}
+}
+
 func TestNoPathBackFromDraining(t *testing.T) {
 	got := Decide(Draining, healthyReady())
 	if got.Next == Ready || got.Register {

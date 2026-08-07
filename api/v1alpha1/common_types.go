@@ -32,6 +32,7 @@ const (
 const (
 	ReasonDuplicateNetwork = "DuplicateNetwork"
 	ReasonNetworkNotFound  = "NetworkNotFound"
+	ReasonGroupNotFound    = "GroupNotFound"
 	ReasonAccepted         = "Accepted"
 	ReasonCrashLoopBackoff = "CrashLoopBackoff"
 	ReasonNoFallback       = "NoFallbackAvailable"

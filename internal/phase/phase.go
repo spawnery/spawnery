@@ -67,11 +67,14 @@ const (
 	ReasonDrainTimeout      = "DrainTimeout"
 	ReasonPodLost           = "PodLost"
 	ReasonPodTerminal       = "PodTerminal"
-	ReasonStartupTimeout    = "StartupTimeout"
-	ReasonFlapping          = "Flapping"
-	ReasonRetentionElapsed  = "RetentionElapsed"
-	ReasonTerminating       = "Terminating"
-	ReasonUnknownPhase      = "UnknownPhase"
+	// ReasonDrainingBeforeCleanup marks a Failed server whose players are being
+	// moved off before its pod is removed.
+	ReasonDrainingBeforeCleanup = "DrainingBeforeCleanup"
+	ReasonStartupTimeout        = "StartupTimeout"
+	ReasonFlapping              = "Flapping"
+	ReasonRetentionElapsed      = "RetentionElapsed"
+	ReasonTerminating           = "Terminating"
+	ReasonUnknownPhase          = "UnknownPhase"
 )
 
 // Inputs is everything the state machine may look at. The controller fills it
@@ -173,7 +176,25 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 
 	case Failed:
-		if in.FailedRetentionElapsed {
+		if in.DeletionRequested || in.FailedRetentionElapsed {
+			// A server can fail with its sessions untouched: flapping
+			// readiness deregisters to stop new joins, it does not move
+			// anyone off. Cleaning such a server up without draining first
+			// would drop every player still on it.
+			if in.Occupied() && in.WasRegistered && !in.PodLost && !in.PodTerminal &&
+				!in.DrainDeadlineReached {
+				return Decision{
+					Next: Failed, StartDrain: true,
+					Reason:  ReasonDrainingBeforeCleanup,
+					Message: "moving players off a failed server before removing it",
+				}
+			}
+			if in.DeletionRequested {
+				return Decision{
+					Next: Terminating, DeletePod: true,
+					Reason: ReasonDeletionRequested, Message: "deletion requested for a failed server",
+				}
+			}
 			return Decision{
 				Next: Terminating, DeletePod: true,
 				Reason: ReasonRetentionElapsed, Message: "failed retention elapsed",
@@ -250,21 +271,32 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 	}
 
+	// A server that failed with players still on it has to be emptied before
+	// its pod goes. A terminal or lost pod means the process is already down,
+	// so there is nobody left to move and draining would be pointless.
+	drainOnFailure := in.WasRegistered && !in.PodTerminal && !in.PodLost
+
 	if in.PodTerminal {
 		return Decision{
-			Next: Failed, Deregister: current == Ready,
+			Next: Failed, Deregister: current == Ready, StartDrain: drainOnFailure,
 			Reason: ReasonPodTerminal, Message: "pod reached a terminal phase",
 		}
 	}
 
 	if in.ReadinessLosses >= MaxReadinessLosses {
 		return Decision{
-			Next: Failed, Deregister: current == Ready,
+			Next: Failed, Deregister: current == Ready, StartDrain: drainOnFailure,
 			Reason: ReasonFlapping, Message: "too many readiness losses",
 		}
 	}
 
-	if in.StartupDeadlineReached && current != Ready {
+	// The startup deadline catches a server that never became playable. It must
+	// not apply to one that already was: a server that reached Ready and cannot
+	// recover is bounded by MaxReadinessLosses, and status.startedAt is written
+	// once at pod creation and never refreshed, so without this guard the
+	// deadline stays reached forever and one probe blip would fail a healthy
+	// server that has been serving players for hours.
+	if in.StartupDeadlineReached && current != Ready && !in.WasRegistered {
 		return Decision{
 			Next:   Failed,
 			Reason: ReasonStartupTimeout, Message: "server did not become ready in time",
