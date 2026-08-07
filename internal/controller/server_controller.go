@@ -415,17 +415,17 @@ func (r *ServerReconciler) applyDecision(
 		// drain, even if the server falls back out of Ready first.
 		srv.Status.WasRegistered = true
 	}
-	if d.StartDrain {
+	// The drain clock starts with the drain, not with phase Draining: a Failed
+	// server is drained while staying Failed, and without this its deadline
+	// would never be reached. Both the clock and the broadcast happen exactly
+	// once — the Failed branch repeats StartDrain on every pass, and re-sending
+	// the command to every proxy each resync would be pure noise. A proxy that
+	// reconnects is re-synced from the phase in the CR status.
+	if d.StartDrain && srv.Status.DrainStartedAt == nil {
 		if err := r.Registrar.Drain(ctx, srv); err != nil {
 			return fmt.Errorf("drain %s: %w", srv.Name, err)
 		}
-		// The drain clock starts with the drain, not with phase Draining: a
-		// Failed server is drained while staying Failed, and without this its
-		// deadline would never be reached. Written once, so a decision that
-		// repeats StartDrain cannot keep pushing the deadline out.
-		if srv.Status.DrainStartedAt == nil {
-			srv.Status.DrainStartedAt = &now
-		}
+		srv.Status.DrainStartedAt = &now
 	}
 
 	if d.CountReadinessLoss {
@@ -448,6 +448,17 @@ func (r *ServerReconciler) applyDecision(
 		if current != phase.Ready || srv.Status.ReadySince == nil {
 			srv.Status.ReadySince = &now
 		}
+	case phase.Starting:
+		// Re-arm the startup deadline. It bounds the current attempt to become
+		// playable, not the age of the pod: entering Starting from Pending arms
+		// it, and entering it from Ready after a readiness loss re-arms it for
+		// the recovery attempt. Without this a server older than the deadline
+		// would be failed by the first blip; with it, one that cannot recover is
+		// still failed a deadline later.
+		if current != phase.Starting {
+			srv.Status.StartedAt = &now
+		}
+		srv.Status.ReadySince = nil
 	case phase.Draining:
 		if srv.Status.DrainStartedAt == nil {
 			srv.Status.DrainStartedAt = &now
