@@ -69,6 +69,14 @@ type ServerStatus struct {
 	// +optional
 	Registered bool `json:"registered"`
 
+	// WasRegistered is true once this server has been registered with the
+	// proxies during the life of its current pod. A server that fell out of
+	// Ready is back in Starting but still has its players connected —
+	// deregistering stopped new joins, it did not move anyone — so the phase
+	// alone cannot tell us whether players are at risk.
+	// +optional
+	WasRegistered bool `json:"wasRegistered"`
+
 	// StartedAt is when the pod was created. Drives the startup deadline.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`

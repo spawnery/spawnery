@@ -211,6 +211,14 @@ spec:
                   deadline.
                 format: date-time
                 type: string
+              wasRegistered:
+                description: |-
+                  WasRegistered is true once this server has been registered with the
+                  proxies during the life of its current pod. A server that fell out of
+                  Ready is back in Starting but still has its players connected —
+                  deregistering stopped new joins, it did not move anyone — so the phase
+                  alone cannot tell us whether players are at risk.
+                type: boolean
             type: object
         type: object
     served: true
