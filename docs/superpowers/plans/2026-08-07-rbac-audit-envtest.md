@@ -61,7 +61,9 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -85,6 +87,19 @@ func readManifest[T any](t *testing.T, rel string, into *T) {
 	}
 }
 
+// apply creates objects that several tests in this package share. The cluster
+// scoped ones — ClusterRole and ClusterRoleBinding — outlive a single test in
+// the shared control plane, so creating them twice is normal and not a failure.
+func apply(t *testing.T, objs ...client.Object) {
+	t.Helper()
+	c, ctx := testenv.Client(t)
+	for _, obj := range objs {
+		if err := c.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("create %T %s: %v", obj, obj.GetName(), err)
+		}
+	}
+}
+
 // TestDeployManifestsAreAcceptedAndConsistent applies the deployment manifests
 // to a real API server and checks that they refer to each other correctly.
 // A binding that names the wrong role, or a deployment that runs under the
@@ -105,21 +120,7 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 	readManifest(t, "config/deploy/clusterrolebinding.yaml", &binding)
 	readManifest(t, "config/deploy/deployment.yaml", &deploy)
 
-	if err := c.Create(ctx, &ns); err != nil {
-		t.Fatalf("create Namespace: %v", err)
-	}
-	if err := c.Create(ctx, &sa); err != nil {
-		t.Fatalf("create ServiceAccount: %v", err)
-	}
-	if err := c.Create(ctx, &role); err != nil {
-		t.Fatalf("create ClusterRole: %v", err)
-	}
-	if err := c.Create(ctx, &binding); err != nil {
-		t.Fatalf("create ClusterRoleBinding: %v", err)
-	}
-	if err := c.Create(ctx, &deploy); err != nil {
-		t.Fatalf("create Deployment: %v", err)
-	}
+	apply(t, &ns, &sa, &role, &binding, &deploy)
 
 	if ns.Name != "spawnery-system" {
 		t.Errorf("namespace = %q, want spawnery-system", ns.Name)
@@ -803,9 +804,6 @@ import (
 	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-
 	"github.com/spawnery/spawnery/internal/rbacaudit"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
@@ -821,7 +819,6 @@ const targetNamespace = "minecraft"
 // ServiceAccount, shows up as denied permissions instead of passing silently.
 func applyDeploymentAndDeriveSubject(t *testing.T) string {
 	t.Helper()
-	c, ctx := testenv.Client(t)
 
 	var ns corev1.Namespace
 	var sa corev1.ServiceAccount
@@ -835,11 +832,7 @@ func applyDeploymentAndDeriveSubject(t *testing.T) string {
 	readManifest(t, "config/deploy/clusterrolebinding.yaml", &binding)
 	readManifest(t, "config/deploy/deployment.yaml", &deploy)
 
-	for _, obj := range []client.Object{&ns, &sa, &role, &binding, &deploy} {
-		if err := c.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
-			t.Fatalf("create %T: %v", obj, err)
-		}
-	}
+	apply(t, &ns, &sa, &role, &binding, &deploy)
 
 	return fmt.Sprintf("system:serviceaccount:%s:%s",
 		deploy.Namespace, deploy.Spec.Template.Spec.ServiceAccountName)
@@ -900,7 +893,7 @@ func TestClusterRoleGrantsNothingExtra(t *testing.T) {
 }
 ```
 
-Der Helfer `readManifest` und `TestMain` stehen bereits in `deploy_envtest_test.go` im selben Testpaket — nicht doppelt anlegen.
+Die Helfer `readManifest`, `apply` und `TestMain` stehen bereits in `deploy_envtest_test.go` im selben Testpaket — nicht doppelt anlegen. `applyDeploymentAndDeriveSubject` braucht deshalb selbst keinen Client mehr; die Variable `c` und `ctx` entfallen dort.
 
 - [ ] **Step 2: Test laufen lassen, Fehlschlag prüfen**
 
