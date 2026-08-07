@@ -4114,6 +4114,55 @@ func TestServerThatCannotRecoverIsFailedAndDrained(t *testing.T) {
 	}
 }
 
+// TestZombieIsCaughtUnderAContinuousReconcileLoop drives the reconciler the way
+// the operator actually runs it — once per resync interval — instead of jumping
+// the clock and reconciling once. That difference is the whole point: the
+// startup deadline is re-armed only on *entry* into Starting, and a re-arm on
+// every pass would push the deadline out forever under a real loop while
+// leaving a single-reconcile test perfectly green. The zombie would be back,
+// with its players still on board.
+func TestZombieIsCaughtUnderAContinuousReconcileLoop(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	// The probe goes red and never comes back.
+	f.setPodRunning("lobby-x7k2", false)
+
+	const ticks = 200 // 200 * 5s resync is far past the 5 minute deadline
+	failedAfter := -1
+	for i := 0; i < ticks; i++ {
+		f.clock.Advance(resyncInterval)
+		if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+		if f.server("lobby-x7k2").Status.Phase == string(phase.Failed) {
+			failedAfter = i
+			break
+		}
+	}
+
+	srv := f.server("lobby-x7k2")
+	if failedAfter < 0 {
+		t.Fatalf("still %q with 9 players after %d reconciles over %v — the startup deadline never fired",
+			srv.Status.Phase, ticks, time.Duration(ticks)*resyncInterval)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want exactly one drain — 9 players were left on a dead server",
+			f.registrar.drained)
+	}
+	if srv.Status.DrainStartedAt == nil {
+		t.Error("status.drainStartedAt not set, so the drain would never time out")
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted with 9 players still on it — core invariant broken")
+	}
+}
+
 // TestFailedServerDrainsBeforeItsPodIsDeleted covers the second half of the
 // same hole: a server can reach Failed with its sessions untouched, and the
 // retention path must not delete that pod without moving the players off first.
@@ -4222,6 +4271,22 @@ func TestDeletingAFailedServerDrainsThenReleasesIt(t *testing.T) {
 	}
 	if len(f.registrar.drained) == 0 {
 		t.Error("deleting a failed server issued no drain")
+	}
+
+	// This is the window where the Failed branch really does return StartDrain
+	// on every single pass: occupied, once registered, deletion pending, drain
+	// deadline not yet reached. The clock stays put so the state holds. The
+	// command must still go out exactly once — the real registrar broadcasts to
+	// every proxy, and this loop would otherwise be eleven fan-outs.
+	for i := 0; i < 10; i++ {
+		f.reconcile("lobby-x7k2")
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v after ten further reconciles of a deleted, occupied failed server, want exactly one broadcast",
+			f.registrar.drained)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while players were still online — core invariant broken")
 	}
 
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
