@@ -987,6 +987,46 @@ func TestOccupiedLabelNeedsTheServerToHaveBeenRegistered(t *testing.T) {
 	}
 }
 
+// TestFinalizerIsWrittenBeforeTheFirstStatusWrite pins the ordering that
+// ensureFinalizer exists to express. Update returns the persisted object, and
+// because status is a subresource the API server does not take the status from
+// us — controller-runtime writes the persisted, on a first reconcile empty,
+// status back over the object in memory. Any condition set before that call is
+// silently dropped, and the Status().Update at the end of applyDecision then
+// persists a Server that never had it.
+//
+// A Server whose group does not exist is the cheapest case that writes a
+// condition on its very first reconcile, which is also the only reconcile on
+// which the finalizer is added. Move a status write ahead of ensureFinalizer
+// and the Accepted condition below disappears.
+func TestFinalizerIsWrittenBeforeTheFirstStatusWrite(t *testing.T) {
+	f := newFixture(t)
+
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "ghost-1", Namespace: f.ns},
+		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "no-such-group"}},
+	}
+	if err := f.c.Create(f.ctx, srv); err != nil {
+		t.Fatalf("create Server: %v", err)
+	}
+
+	f.reconcile("ghost-1")
+
+	got := f.server("ghost-1")
+	if !containsString(got.Finalizers, ServerFinalizer) {
+		t.Fatalf("finalizers = %v, want %s on the first reconcile", got.Finalizers, ServerFinalizer)
+	}
+	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil {
+		t.Fatalf("no Accepted condition after the first reconcile, conditions = %+v — "+
+			"a status write ran before the finalizer Update and was overwritten by the persisted object",
+			got.Status.Conditions)
+	}
+	if accepted.Status != metav1.ConditionFalse || accepted.Reason != spawneryv1alpha1.ReasonGroupNotFound {
+		t.Errorf("Accepted condition = %+v, want False/%s", accepted, spawneryv1alpha1.ReasonGroupNotFound)
+	}
+}
+
 func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")

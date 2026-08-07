@@ -138,17 +138,11 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	// The finalizer must sit on the object before the pod exists, otherwise a
-	// deletion between creation and the next reconcile skips the drain. This
-	// has to happen before anything is written onto srv.Status: Update returns
-	// the persisted object, whose status the API server does not take from us
-	// because status is a subresource, so it overwrites every status change
-	// made before it. On a first reconcile that status is empty.
-	if srv.DeletionTimestamp.IsZero() && !slices.Contains(srv.Finalizers, ServerFinalizer) {
-		srv.Finalizers = append(srv.Finalizers, ServerFinalizer)
-		if err := r.Update(ctx, srv); err != nil {
-			return ctrl.Result{}, err
-		}
+	// Last step before the status is touched. Everything from here down writes
+	// to srv.Status, and nothing above this line does; see ensureFinalizer for
+	// why the boundary exists.
+	if err := r.ensureFinalizer(ctx, srv); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	switch {
@@ -258,6 +252,29 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{RequeueAfter: resyncInterval}, nil
+}
+
+// ensureFinalizer puts the drain finalizer on the object. It exists as a step
+// of its own so that the order it has to run in is visible in Reconcile's call
+// structure instead of only in a comment above an inline block.
+//
+// The finalizer must sit on the object before the pod exists, otherwise a
+// deletion between pod creation and the next reconcile skips the drain.
+//
+// It must also run before anything writes to srv.Status, and that is the part
+// worth a function: Update returns the persisted object, and the API server
+// does not take the status from us because status is a subresource, so
+// controller-runtime writes the persisted — on a first reconcile, empty —
+// status back over srv. Every condition set before this call is silently lost,
+// and the Status().Update at the end of applyDecision then persists an object
+// that never had them. Nothing here reads or writes srv.Status; keep it that
+// way, and keep the call ahead of the first status write in Reconcile.
+func (r *ServerReconciler) ensureFinalizer(ctx context.Context, srv *spawneryv1alpha1.Server) error {
+	if !srv.DeletionTimestamp.IsZero() || slices.Contains(srv.Finalizers, ServerFinalizer) {
+		return nil
+	}
+	srv.Finalizers = append(srv.Finalizers, ServerFinalizer)
+	return r.Update(ctx, srv)
 }
 
 // fetchPod returns the pod of a server. A pod carrying a deletion timestamp
