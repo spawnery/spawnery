@@ -176,6 +176,22 @@ func newFixture(t *testing.T) *fixture {
 	if err := c.Create(ctx, f.network); err != nil {
 		t.Fatalf("create Network: %v", err)
 	}
+	// The fixture's Network is the only one in this namespace at this point,
+	// so it is trivially the namespace owner; accept it once here so every
+	// test gets a usable Network without having to drive the Network
+	// controller itself. Tests that specifically exercise rejection or
+	// recovery construct their own NetworkReconciler and reconcile again.
+	netReconciler := &NetworkReconciler{
+		Client:   c,
+		Scheme:   testenv.Scheme(t),
+		Recorder: record.NewFakeRecorder(100),
+		Clock:    clock.Now,
+	}
+	if _, err := netReconciler.Reconcile(ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: f.network.Name, Namespace: ns},
+	}); err != nil {
+		t.Fatalf("accept fixture network: %v", err)
+	}
 
 	f.group = &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: ns},

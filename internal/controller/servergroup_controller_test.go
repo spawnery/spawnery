@@ -762,3 +762,249 @@ func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
 		t.Errorf("phase of the retained server = %q, want Failed", got)
 	}
 }
+
+// TestGroupPointingAtARejectedNetworkCreatesNoServers closes the gap Task 10
+// left open: a Network that loses the one-per-namespace contest only carries
+// an Accepted=False/DuplicateNetwork condition, and until a group actually
+// consults it, that condition is decoration — a ServerGroup pointing at the
+// loser would run at full strength in the same namespace as the winner's
+// groups, exactly the isolation failure the rule exists to prevent.
+func TestGroupPointingAtARejectedNetworkCreatesNoServers(t *testing.T) {
+	f := newFixture(t)
+	nr := networkReconciler(f)
+
+	// "staging" is created after the fixture's "production" and loses the
+	// contest — by creation order if the two land in different seconds, or by
+	// the name tie-break ("production" < "staging") if envtest's
+	// second-granularity timestamps put them in the same one, exactly as
+	// TestSecondNetworkInTheSameNamespaceIsRejected already relies on.
+	staging := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: f.ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "other-secret"},
+		},
+	}
+	if err := f.c.Create(f.ctx, staging); err != nil {
+		t.Fatalf("create staging network: %v", err)
+	}
+	f.reconcileNetwork(t, nr, "production")
+	f.reconcileNetwork(t, nr, "staging")
+	if !hasCondition(f.getNetwork(t, "staging").Status.Conditions,
+		spawneryv1alpha1.ConditionAccepted, metav1.ConditionFalse, spawneryv1alpha1.ReasonDuplicateNetwork) {
+		t.Fatalf("staging network = %+v, want it rejected — the rest of this test proves nothing otherwise",
+			f.getNetwork(t, "staging").Status.Conditions)
+	}
+
+	arena := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "arena", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: spawneryv1alpha1.ObjectRef{Name: "staging"},
+			Type:       spawneryv1alpha1.ServerGroupEphemeral,
+			Image:      "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers: 100,
+			Scaling:    &spawneryv1alpha1.ScalingSpec{MinReplicas: 1, MaxReplicas: 2, SpareSlots: 10},
+		},
+	}
+	if err := f.c.Create(f.ctx, arena); err != nil {
+		t.Fatalf("create arena group: %v", err)
+	}
+
+	r := groupReconciler(f)
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "arena", Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("reconcile arena: %v", err)
+	}
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "arena", Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get arena: %v", err)
+	}
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionFalse, spawneryv1alpha1.ReasonNetworkNotAccepted) {
+		t.Errorf("conditions = %+v, want Accepted=False/NetworkNotAccepted", got.Status.Conditions)
+	}
+	for _, s := range f.listServers(t) {
+		if s.Spec.GroupRef.Name == "arena" {
+			t.Errorf("arena created a server (%s) although its network lost the one-per-namespace contest", s.Name)
+		}
+	}
+}
+
+// TestGroupWithARejectedNetworkStillProtectsItsPlayers is the guard-scope
+// rule (Task 8 lesson 3) applied to the new rejection state: a group whose
+// Network loses the one-per-namespace contest after it already has servers
+// running must not delete anything and must not drop the PodDisruptionBudget
+// that protects its occupied pods — a rejected group holding players is still
+// holding players. Only creating new servers genuinely depends on the Network
+// being usable; this mirrors TestGroupWithoutItsNetworkStillProtectsItsPlayers
+// for rejection instead of deletion.
+//
+// The players arrive only after the rejection, exactly like that sibling
+// test's own comment explains: if the PDB were computed before the guard (or
+// skipped by it), it would already show minAvailable = 1 from a stale prior
+// pass, and a test that only checks the value afterwards could not tell a
+// live PodDisruptionBudget from a frozen one that happens to read the right
+// number by coincidence. Starting from 0 and asserting the rise to 1 proves
+// reconcilePDB actually ran on this pass, with this pass's views.
+func TestGroupWithARejectedNetworkStillProtectsItsPlayers(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+	srv := f.listServers(t)[0]
+	uid := bringUpNamed(t, f, srv.Name)
+	f.reconcileGroup(t, r)
+	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 0 {
+		t.Fatalf("minAvailable = %d on an empty server before the rejection, want 0", got)
+	}
+
+	rejectNetwork(t, f, "production")
+
+	// The player joins only now, with the network already rejected.
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile(srv.Name)
+	f.reconcileGroup(t, r)
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	if !hasCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionFalse, spawneryv1alpha1.ReasonNetworkNotAccepted) {
+		t.Errorf("conditions = %+v, want Accepted=False/NetworkNotAccepted", group.Status.Conditions)
+	}
+	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
+		t.Errorf("minAvailable = %d after the rejection, want 1 — the pod now carries a player", got)
+	}
+	if group.Status.OnlinePlayers != 6 {
+		t.Errorf("onlinePlayers = %d, want 6 — the status must keep reporting", group.Status.OnlinePlayers)
+	}
+	for _, s := range f.listServers(t) {
+		if !s.DeletionTimestamp.IsZero() {
+			t.Errorf("server %s was marked for deletion after its network was merely rejected, not removed", s.Name)
+		}
+	}
+}
+
+// TestGroupResumesOnceItsNetworkIsAccepted is the recovery half of the story:
+// once whatever made the Network lose the contest goes away, a frozen group
+// has to resume on its own, without an operator touching the group. Driven as
+// a loop at the real network-retry cadence rather than a single jump — Task 8
+// lesson 1 is explicit that time- and repetition-driven behaviour needs a
+// loop, because a fix that only works when tried exactly once would sail
+// through a single-reconcile test unnoticed.
+//
+// This uses a dedicated network+group pair ("staging-net"/"arena"), not the
+// fixture's own "production"/"lobby". "staging-net" is created after
+// "production" and so deterministically loses the one-per-namespace contest —
+// chronologically if the two real timestamps differ, or by the name
+// tie-break if envtest's second-granularity clock ties them, exactly the
+// guarantee TestGroupPointingAtARejectedNetworkCreatesNoServers relies on.
+// The fixture's own "production" cannot be put in the losing seat this way:
+// it is created first, inside newFixture, before this test's code runs at
+// all, so nothing this test creates can ever carry an earlier real
+// timestamp. An earlier version of this test tried anyway, by racing a
+// competitor created after several seconds of setup work (bringing a server
+// up) against "production" — that gave "production" enough real elapsed time
+// to win outright regardless of name, and the test failed intermittently on
+// its own setup assertion, before ever reaching the behaviour under test.
+func TestGroupResumesOnceItsNetworkIsAccepted(t *testing.T) {
+	f := newFixture(t)
+	nr := networkReconciler(f)
+
+	arenaNet := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "staging-net", Namespace: f.ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "staging-net-secret"},
+		},
+	}
+	if err := f.c.Create(f.ctx, arenaNet); err != nil {
+		t.Fatalf("create staging-net: %v", err)
+	}
+	f.reconcileNetwork(t, nr, "production")
+	f.reconcileNetwork(t, nr, "staging-net")
+	if !hasCondition(f.getNetwork(t, "staging-net").Status.Conditions,
+		spawneryv1alpha1.ConditionAccepted, metav1.ConditionFalse, spawneryv1alpha1.ReasonDuplicateNetwork) {
+		t.Fatalf("staging-net = %+v, want it rejected by production — the rest of this test proves nothing otherwise",
+			f.getNetwork(t, "staging-net").Status.Conditions)
+	}
+
+	arena := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "arena", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: spawneryv1alpha1.ObjectRef{Name: "staging-net"},
+			Type:       spawneryv1alpha1.ServerGroupEphemeral,
+			Image:      "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers: 100,
+			Scaling:    &spawneryv1alpha1.ScalingSpec{MinReplicas: 1, MaxReplicas: 2, SpareSlots: 10},
+		},
+	}
+	if err := f.c.Create(f.ctx, arena); err != nil {
+		t.Fatalf("create arena group: %v", err)
+	}
+
+	r := groupReconciler(f)
+	reconcileArena := func() {
+		t.Helper()
+		if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+			NamespacedName: types.NamespacedName{Name: "arena", Namespace: f.ns},
+		}); err != nil {
+			t.Fatalf("reconcile arena: %v", err)
+		}
+	}
+	arenaServers := func() []spawneryv1alpha1.Server {
+		var out []spawneryv1alpha1.Server
+		for _, s := range f.listServers(t) {
+			if s.Spec.GroupRef.Name == "arena" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+
+	reconcileArena()
+	if got := len(arenaServers()); got != 0 {
+		t.Fatalf("got %d servers while the network was rejected, want 0", got)
+	}
+
+	// The winner goes away — a namespace migration finishing, or an operator
+	// cleaning up a mistake.
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete production network: %v", err)
+	}
+
+	// Six passes at the network-retry cadence is 180s of simulated time — a
+	// real loop, well short of the 5-minute startup deadline. This test never
+	// drives the created server to Ready (bringUpNamed is a separate concern,
+	// already covered elsewhere), so a longer loop would eventually fail it
+	// for outliving its startup deadline and create a legitimate replacement,
+	// which would be a false failure of this test, not a bug.
+	for i := 0; i < 6; i++ {
+		f.reconcileNetwork(t, nr, "staging-net")
+		reconcileArena()
+		for _, s := range arenaServers() {
+			f.reconcile(s.Name)
+		}
+
+		if got := len(arenaServers()); got > 1 {
+			t.Fatalf("pass %d: got %d servers, want at most the floor of 1 — the group over-created after recovering", i, got)
+		}
+		f.clock.Advance(networkRetryInterval)
+	}
+
+	servers := arenaServers()
+	if len(servers) != 1 {
+		t.Fatalf("group settled on %d servers after 6 passes past the recovery, want its floor of 1", len(servers))
+	}
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "arena", Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get arena: %v", err)
+	}
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionTrue, spawneryv1alpha1.ReasonAccepted) {
+		t.Errorf("conditions = %+v, want Accepted=True again after recovery", got.Status.Conditions)
+	}
+}

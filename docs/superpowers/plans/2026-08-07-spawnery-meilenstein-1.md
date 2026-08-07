@@ -6580,6 +6580,34 @@ git commit -m "ServerGroup-Controller mit Kandidatenauswahl und PodDisruptionBud
    `TestGroupWithoutItsNetworkStillProtectsItsPlayers`, `TestCountsTowardSize` und
    `TestOccupiedPodsCountsEveryProtectedPod` sichern die Punkte 1 bis 4 ab.
 
+**Nachtrag aus der Review von Task 10 — die Ein-Netzwerk-Regel griff nicht.**
+Der Network-Controller (Task 10) setzte `Accepted=False/DuplicateNetwork` auf
+das unterlegene `Network`, aber `ServerGroupReconciler` prüfte bis dahin nur,
+ob sein `Network` **existiert** (`r.Get`), nie dessen `Accepted`-Bedingung. Eine
+Gruppe, die auf das unterlegene Network zeigte, legte also unverändert Server
+an — die Isolationsgarantie, für die die Ein-Netzwerk-Regel überhaupt existiert,
+griff nirgends. Behoben: `networkUsable := networkFound &&
+meta.IsStatusConditionTrue(network.Status.Conditions,
+spawneryv1alpha1.ConditionAccepted)` ersetzt `networkFound` als Torwächter fürs
+Sizing; ein neuer Grund `ReasonNetworkNotAccepted` beschreibt den Zustand
+getrennt von `NetworkNotFound`, mit einer Nachricht, die die Begründung des
+Network-Controllers zitiert, wenn eine vorliegt (`networkNotAcceptedMessage`).
+Genau wie bei einer fehlenden Network bleibt der Torwächter auf das Sizing
+beschränkt — PodDisruptionBudget, `pruneFailed` und der Status laufen
+unverändert weiter, sonst verlöre eine gerade abgelehnte Gruppe den Schutz für
+Pods, die noch Spieler halten (Task 8 Lektion 3). Die Fixture (`suite_test.go`)
+akzeptiert ihr eigenes Network jetzt einmalig beim Aufbau, damit kein
+bestehender Task-8/9-Test etwas von der neuen Kopplung merkt — keine
+Test-Assertion wurde dafür angefasst. Drei neue, mutationsgeprüfte Tests:
+`TestGroupPointingAtARejectedNetworkCreatesNoServers`,
+`TestGroupWithARejectedNetworkStillProtectsItsPlayers` (Spielerbeitritt liegt
+bewusst *nach* der Ablehnung, sonst könnte ein eingefrorenes PDB zufällig den
+richtigen Wert zeigen) und `TestGroupResumesOnceItsNetworkIsAccepted`
+(Wiederaufnahme über eine echte Schleife, mit einem eigenen Network/Gruppen-Paar,
+weil das bestehende `production`/`lobby`-Paar der Fixture wegen seines
+frühen, echten `creationTimestamp` nicht zuverlässig zum Verlierer eines
+zweiten, später erzeugten Networks gemacht werden kann).
+
 ---
 
 ### Task 10: Network-Controller
@@ -6875,6 +6903,13 @@ git commit -m "Network-Controller mit Ein-Netzwerk-pro-Namespace-Regel"
    nicht denselben Namen tragen, der Block oben kompiliert deshalb nicht
    unverändert. Alle Aufrufstellen innerhalb von `network_controller_test.go`
    wurden entsprechend umbenannt; sonst nichts am Testinhalt geändert.
+2. **`SetupWithManager` verzichtet auf `Owns(&spawneryv1alpha1.ServerGroup{})`.**
+   Nachtrag aus der Review: nichts setzt eine Owner-Reference von einer
+   ServerGroup auf ihr Network, der Watch hätte also nie ausgelöst. Der
+   aggregierte Status bleibt stattdessen über das `resyncInterval`-Polling in
+   `Reconcile` aktuell; ein Kommentar an der Stelle hält fest, dass ein
+   ereignisgetriebenes Refresh einen Mapping-Handler bräuchte und das Task 12
+   entscheiden kann.
 
 ---
 

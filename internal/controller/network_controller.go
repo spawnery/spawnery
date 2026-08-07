@@ -137,10 +137,17 @@ func (r *NetworkReconciler) namespaceOwner(ctx context.Context, namespace string
 }
 
 // SetupWithManager registers the controller.
+//
+// No Owns/Watches on ServerGroup: nothing sets an owner reference from a
+// ServerGroup to its Network, so a watch keyed on that owner reference could
+// never fire. The aggregated status is kept fresh by the resyncInterval poll
+// in Reconcile instead. An event-driven refresh would need a mapping handler
+// from a ServerGroup (or ProxyGroup) change to its Network's request, which is
+// for Task 12's manager wiring to add if the poll interval turns out to be
+// too coarse.
 func (r *NetworkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.Network{}).
-		Owns(&spawneryv1alpha1.ServerGroup{}).
 		Named("network").
 		Complete(r)
 }

@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -56,6 +57,35 @@ func (f *fixture) getNetwork(t *testing.T, name string) *spawneryv1alpha1.Networ
 		t.Fatalf("get network %s: %v", name, err)
 	}
 	return net
+}
+
+// rejectNetwork sets a Network's own Accepted condition to False/
+// DuplicateNetwork directly through the status client, standing in for
+// whatever the Network controller's real one-per-namespace verdict would
+// have produced. Reproducing that verdict for real needs a competitor whose
+// creationTimestamp beats this Network's, which the name tie-break can only
+// guarantee when the two are created back to back — exactly what
+// TestSecondNetworkInTheSameNamespaceIsRejected and
+// TestGroupPointingAtARejectedNetworkCreatesNoServers do. A test that first
+// does real work (bringing a server up, several reconciles) before creating
+// the competitor can no longer rely on that tie: by then the two
+// creationTimestamps typically fall in different seconds, and the Network
+// created first wins on real elapsed time regardless of name — the failure
+// mode this helper sidesteps. Tests using it are exercising
+// ServerGroupReconciler's reaction to a rejected Network, not the Network
+// controller's own tie-break, which is covered elsewhere.
+func rejectNetwork(t *testing.T, f *fixture, name string) {
+	t.Helper()
+	net := f.getNetwork(t, name)
+	meta.SetStatusCondition(&net.Status.Conditions, metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionAccepted,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonDuplicateNetwork,
+		Message: "rejected for the test, standing in for the Network controller's verdict",
+	})
+	if err := f.c.Status().Update(f.ctx, net); err != nil {
+		t.Fatalf("reject network %s: %v", name, err)
+	}
 }
 
 func TestFirstNetworkIsAccepted(t *testing.T) {

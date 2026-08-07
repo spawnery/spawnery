@@ -101,16 +101,17 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		networkFound = false
 	}
+	// A Network that exists is not automatically usable: it also has to have
+	// won the Network controller's one-per-namespace contest. A Network that
+	// lost that contest, or one that simply has not been reconciled yet,
+	// reads the same way here — Accepted is not set to true — and both are
+	// self-healing through the requeue below, so there is no need to tell
+	// them apart.
+	networkUsable := networkFound && meta.IsStatusConditionTrue(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
 
 	requeue := resyncInterval
-	if networkFound {
-		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
-			Type:    spawneryv1alpha1.ConditionAccepted,
-			Status:  metav1.ConditionTrue,
-			Reason:  spawneryv1alpha1.ReasonAccepted,
-			Message: fmt.Sprintf("managed as part of network %q", network.Name),
-		})
-	} else {
+	switch {
+	case !networkFound:
 		logger.Info("network not found, no servers are created for this group",
 			"group", group.Name, "network", group.Spec.NetworkRef.Name)
 		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
@@ -120,6 +121,23 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Message: fmt.Sprintf("network %q does not exist in this namespace", group.Spec.NetworkRef.Name),
 		})
 		requeue = networkRetryInterval
+	case !networkUsable:
+		logger.Info("network not accepted, no servers are created for this group",
+			"group", group.Name, "network", network.Name)
+		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+			Type:    spawneryv1alpha1.ConditionAccepted,
+			Status:  metav1.ConditionFalse,
+			Reason:  spawneryv1alpha1.ReasonNetworkNotAccepted,
+			Message: networkNotAcceptedMessage(network),
+		})
+		requeue = networkRetryInterval
+	default:
+		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+			Type:    spawneryv1alpha1.ConditionAccepted,
+			Status:  metav1.ConditionTrue,
+			Reason:  spawneryv1alpha1.ReasonAccepted,
+			Message: fmt.Sprintf("managed as part of network %q", network.Name),
+		})
 	}
 
 	if !group.IsEphemeral() {
@@ -137,14 +155,18 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// Sizing is the only step that needs the Network resolved: a Server created
+	// Sizing is the only step that needs a usable Network: a Server created
 	// without one could never get a pod, would run into its startup deadline and
-	// would be replaced over and over. Everything below this point — the
-	// PodDisruptionBudget that keeps the eviction API off the occupied pods, and
-	// the published status — has nothing to do with the Network, so a group
-	// whose Network was deleted must keep doing both. Freezing them would leave
-	// exactly the pods that still carry players unprotected.
-	if networkFound && group.IsEphemeral() {
+	// would be replaced over and over. That holds whether the Network is
+	// missing entirely or merely not accepted (lost the one-per-namespace
+	// contest, or has not been reconciled yet). Everything below this point —
+	// the PodDisruptionBudget that keeps the eviction API off the occupied
+	// pods, and the published status — has nothing to do with the Network, so
+	// a group whose Network was deleted or rejected must keep doing both.
+	// Freezing them would leave exactly the pods that still carry players
+	// unprotected, and a rejected group holding players is still holding
+	// players.
+	if networkUsable && group.IsEphemeral() {
 		if err := r.size(ctx, group, views, servers); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -169,6 +191,16 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	group.Status.Phase = derivePhase(group, totals)
 
 	return ctrl.Result{RequeueAfter: requeue}, r.Status().Update(ctx, group)
+}
+
+// networkNotAcceptedMessage explains why a Network that exists is still not
+// usable, quoting its own Accepted condition when one has been published so
+// an operator reading the group does not also have to go look at the Network.
+func networkNotAcceptedMessage(network *spawneryv1alpha1.Network) string {
+	if cond := meta.FindStatusCondition(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted); cond != nil {
+		return fmt.Sprintf("network %q is not accepted (%s): %s", network.Name, cond.Reason, cond.Message)
+	}
+	return fmt.Sprintf("network %q has not been accepted yet", network.Name)
 }
 
 // size brings the number of servers that hold the group at its floor up or
