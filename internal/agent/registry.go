@@ -162,6 +162,18 @@ func (r *Registry) Forget(key string) {
 	delete(r.entries, key)
 }
 
+// Keys returns every pod key the registry currently knows.
+func (r *Registry) Keys() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	keys := make([]string, 0, len(r.entries))
+	for k := range r.entries {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 // Lookup returns a consistent snapshot of one agent.
 func (r *Registry) Lookup(key string) Snapshot {
 	r.mu.RLock()

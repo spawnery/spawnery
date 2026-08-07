@@ -177,3 +177,15 @@ func TestForgetRemovesThePod(t *testing.T) {
 		t.Error("pod still known after Forget")
 	}
 }
+
+func TestKeysListsEveryKnownPod(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("a", RoleServer)
+	r.Connect("b", RoleProxy)
+	r.Disconnect("b")
+
+	keys := r.Keys()
+	if len(keys) != 2 {
+		t.Fatalf("Keys() = %v, want both a and b — a disconnected agent is still known", keys)
+	}
+}
