@@ -131,6 +131,151 @@ func TestSecondNetworkInTheSameNamespaceIsRejected(t *testing.T) {
 	}
 }
 
+// networkAt builds a Network with an explicit creation timestamp, which is the
+// only way to test the age rule at all. A real API server stamps
+// creationTimestamp itself, at one-second resolution, and the fixture's clock
+// does not reach it — two Networks created back to back land in the same second
+// and the name tiebreak alone decides, which gives the same verdict whichever
+// way the age comparison points.
+func networkAt(name string, offsetSeconds int, deleting bool) spawneryv1alpha1.Network {
+	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	n := spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              name,
+			Namespace:         "minecraft",
+			CreationTimestamp: metav1.NewTime(base.Add(time.Duration(offsetSeconds) * time.Second)),
+		},
+	}
+	if deleting {
+		gone := metav1.NewTime(base.Add(time.Hour))
+		n.DeletionTimestamp = &gone
+		n.Finalizers = []string{"spawnery.cloud/test"}
+	}
+	return n
+}
+
+// TestPickNamespaceOwnerLetsAgeDecide is the test the one-network-per-namespace
+// rule did not have. Every name below is chosen so that a rule going by the
+// name alone, or by the newest timestamp, picks a different winner than the
+// right one — otherwise flipping the comparison in pickNamespaceOwner would
+// leave the suite green, and one stray kubectl apply of a Network would then
+// reject the running one and stop every ServerGroup in the namespace from
+// sizing.
+func TestPickNamespaceOwnerLetsAgeDecide(t *testing.T) {
+	cases := []struct {
+		name     string
+		networks []spawneryv1alpha1.Network
+		want     string
+	}{
+		{
+			// The oldest has the largest name, so the name cannot be what wins.
+			name: "the oldest network wins",
+			networks: []spawneryv1alpha1.Network{
+				networkAt("zulu", 0, false),
+				networkAt("alpha", 600, false),
+			},
+			want: "zulu",
+		},
+		{
+			// Same list, the other way round: the answer must not depend on the
+			// order the API server happened to return them in.
+			name: "the oldest network wins whatever order it is listed in",
+			networks: []spawneryv1alpha1.Network{
+				networkAt("alpha", 600, false),
+				networkAt("zulu", 0, false),
+			},
+			want: "zulu",
+		},
+		{
+			// Only now, with nothing to choose on age, does the name decide —
+			// and it has to, or the winner would flip between reconciles.
+			name: "equal timestamps fall through to the name",
+			networks: []spawneryv1alpha1.Network{
+				networkAt("zulu", 300, false),
+				networkAt("alpha", 300, false),
+			},
+			want: "alpha",
+		},
+		{
+			// The owner is being deleted. The namespace goes to the next oldest,
+			// not to the smallest name — "alpha" is younger and must lose.
+			name: "deleting the owner hands over to the next oldest, not the smallest name",
+			networks: []spawneryv1alpha1.Network{
+				networkAt("zulu", 0, true),
+				networkAt("middle", 300, false),
+				networkAt("alpha", 600, false),
+			},
+			want: "middle",
+		},
+		{
+			name:     "an empty namespace has no owner",
+			networks: nil,
+			want:     "",
+		},
+		{
+			name: "a namespace whose only network is going away has no owner",
+			networks: []spawneryv1alpha1.Network{
+				networkAt("zulu", 0, true),
+			},
+			want: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pickNamespaceOwner(tc.networks); got != tc.want {
+				t.Errorf("pickNamespaceOwner() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestPickNamespaceOwnerNeverFlips is the property the tiebreak exists for. The
+// verdict is recomputed from scratch on every reconcile of every Network in the
+// namespace, and the API server gives no order guarantee across those calls. A
+// winner that depends on the order would hand the namespace back and forth,
+// and every ServerGroup in it would be accepted and rejected in turn.
+func TestPickNamespaceOwnerNeverFlips(t *testing.T) {
+	// Two of these share a timestamp, so both halves of the rule are in play.
+	networks := []spawneryv1alpha1.Network{
+		networkAt("zulu", 0, false),
+		networkAt("alpha", 300, false),
+		networkAt("beta", 300, false),
+		networkAt("gone", -600, true),
+	}
+
+	const want = "zulu"
+	for _, order := range permutations(len(networks)) {
+		shuffled := make([]spawneryv1alpha1.Network, 0, len(networks))
+		for _, i := range order {
+			shuffled = append(shuffled, networks[i])
+		}
+		for pass := 0; pass < 2; pass++ {
+			if got := pickNamespaceOwner(shuffled); got != want {
+				t.Fatalf("order %v pass %d: pickNamespaceOwner() = %q, want %q", order, pass, got, want)
+			}
+		}
+	}
+}
+
+// permutations returns every ordering of the indices 0..n-1.
+func permutations(n int) [][]int {
+	if n == 0 {
+		return [][]int{{}}
+	}
+	var out [][]int
+	for _, rest := range permutations(n - 1) {
+		for pos := 0; pos <= len(rest); pos++ {
+			p := make([]int, 0, n)
+			p = append(p, rest[:pos]...)
+			p = append(p, n-1)
+			p = append(p, rest[pos:]...)
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func TestNetworkCountsItsGroups(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)

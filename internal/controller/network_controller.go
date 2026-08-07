@@ -111,18 +111,34 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.Status().Update(ctx, network)
 }
 
-// namespaceOwner picks the network that owns the namespace: the oldest one,
-// with the name as the tiebreaker so the choice is stable across reconciles.
+// namespaceOwner picks the network that owns the namespace out of everything
+// that currently lives in it.
 func (r *NetworkReconciler) namespaceOwner(ctx context.Context, namespace string) (string, error) {
 	list := &spawneryv1alpha1.NetworkList{}
 	if err := r.List(ctx, list, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}
+	return pickNamespaceOwner(list.Items), nil
+}
 
+// pickNamespaceOwner is the one-network-per-namespace rule: the oldest network
+// owns the namespace, with the name as the tiebreaker so the choice is stable
+// across reconciles when two were created within the same second. Networks on
+// their way out are skipped, so deleting the owner hands the namespace to the
+// next oldest rather than leaving every group in it unsized.
+//
+// Age has to decide before the name does. The reverse — newest wins — would
+// mean one stray kubectl apply of a Network rejects the running one, and every
+// ServerGroup in the namespace stops sizing until somebody deletes the
+// newcomer. It is split out from namespaceOwner because that difference is only
+// testable over a list with hand-set creation timestamps: two Networks created
+// back to back against a real API server land in the same second, the tie-break
+// decides, and the comparison direction never comes into it.
+func pickNamespaceOwner(networks []spawneryv1alpha1.Network) string {
 	owner := ""
 	var ownerCreated metav1.Time
-	for i := range list.Items {
-		n := &list.Items[i]
+	for i := range networks {
+		n := &networks[i]
 		if !n.DeletionTimestamp.IsZero() {
 			continue
 		}
@@ -133,7 +149,7 @@ func (r *NetworkReconciler) namespaceOwner(ctx context.Context, namespace string
 			owner, ownerCreated = n.Name, n.CreationTimestamp
 		}
 	}
-	return owner, nil
+	return owner
 }
 
 // SetupWithManager registers the controller.
