@@ -177,6 +177,13 @@ fehl.
 Wer einen Marker ergänzt, ohne die Tabelle zu pflegen, bekommt einen roten Test.
 Das ist beabsichtigt.
 
+**Was Ebene A nicht kann.** Sie prüft, dass Rolle und Tabelle übereinstimmen —
+nicht, dass die Tabelle vollständig ist. Fehlt ein Recht in *beiden*, bleibt der
+Test grün und der Operator läuft trotzdem in ein `Forbidden`. Genau das ist der
+Grund, warum Ebene B nötig bleibt: Dort spricht ein echter Prozess unter seinem
+ServiceAccount, und jede Lücke meldet sich von selbst. Ebene A verhindert das
+Abdriften, Ebene B beweist die Vollständigkeit.
+
 ### 5.2 Ebene B: getriebene Szenarien im Cluster
 
 Erreichbar ohne Paper-Image:
