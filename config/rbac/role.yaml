@@ -1,0 +1,84 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: spawnery-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - policy
+  resources:
+  - poddisruptionbudgets
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - spawnery.cloud
+  resources:
+  - networks
+  - servergroups
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - spawnery.cloud
+  resources:
+  - networks/status
+  - servergroups/status
+  - servers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - spawnery.cloud
+  resources:
+  - proxygroups
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - spawnery.cloud
+  resources:
+  - servers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - spawnery.cloud
+  resources:
+  - servers/finalizers
+  verbs:
+  - update

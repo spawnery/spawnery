@@ -496,13 +496,14 @@ const (
 
 // Condition reasons.
 const (
-	ReasonDuplicateNetwork  = "DuplicateNetwork"
-	ReasonNetworkNotFound   = "NetworkNotFound"
-	ReasonAccepted          = "Accepted"
-	ReasonCrashLoopBackoff  = "CrashLoopBackoff"
-	ReasonNoFallback        = "NoFallbackAvailable"
-	ReasonNotImplemented    = "NotImplementedInThisVersion"
-	ReasonReconciling       = "Reconciling"
+	ReasonDuplicateNetwork = "DuplicateNetwork"
+	ReasonNetworkNotFound  = "NetworkNotFound"
+	ReasonGroupNotFound    = "GroupNotFound"
+	ReasonAccepted         = "Accepted"
+	ReasonCrashLoopBackoff = "CrashLoopBackoff"
+	ReasonNoFallback       = "NoFallbackAvailable"
+	ReasonNotImplemented   = "NotImplementedInThisVersion"
+	ReasonReconciling      = "Reconciling"
 )
 
 // ObjectRef names another object in the same namespace.
@@ -969,7 +970,7 @@ type StorageSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update)",message="spec.update is not allowed for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.storage)",message="spec.storage is required for type Persistent"
 // +kubebuilder:validation:XValidation:rule="!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas",message="scaling.minReplicas must not exceed scaling.maxReplicas"
-// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.storageClassName == oldSelf.storage.storageClassName",message="storage.storageClassName is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || quantity(self.storage.size).compareTo(quantity(oldSelf.storage.size)) >= 0",message="storage.size must not shrink"
 type ServerGroupSpec struct {
@@ -1170,7 +1171,7 @@ git commit -m "ServerGroup-CRD mit CEL-Validierung"
 - Consumes: `ObjectRef`, `Scheduling`, `DrainSpec`, `SchemeBuilder`.
 - Produces:
   - `v1alpha1.Server`, `ServerSpec{GroupRef ObjectRef, Ordinal *int32, GroupGeneration int64}`, `ServerStatus`.
-  - `ServerStatus`-Felder: `Phase string`, `PodName string`, `Address string`, `Players int32`, `Slots int32`, `PlayersUpdatedAt *metav1.Time`, `Registered bool`, `StartedAt *metav1.Time`, `ReadySince *metav1.Time`, `DrainStartedAt *metav1.Time`, `FailedAt *metav1.Time`, `ReadinessLosses int32`, `Conditions []metav1.Condition`.
+  - `ServerStatus`-Felder: `Phase string`, `PodName string`, `Address string`, `Players int32`, `Slots int32`, `PlayersUpdatedAt *metav1.Time`, `Registered bool`, `WasRegistered bool`, `StartedAt *metav1.Time`, `ReadySince *metav1.Time`, `DrainStartedAt *metav1.Time`, `FailedAt *metav1.Time`, `ReadinessLosses int32`, `Conditions []metav1.Condition`.
   - `v1alpha1.ProxyGroup`, `ProxyGroupSpec`, `ExposeSpec`, `ProxyGroupStatus`.
   - `ExposeType` mit `ExposeLoadBalancer`, `ExposeNodePort`, `ExposeHostPort`.
 
@@ -1412,7 +1413,20 @@ type ServerStatus struct {
 	// +optional
 	Registered bool `json:"registered"`
 
-	// StartedAt is when the pod was created. Drives the startup deadline.
+	// WasRegistered is true once this server has been registered with the
+	// proxies during the life of its current pod. A server that fell out of
+	// Ready is back in Starting but still has its players connected —
+	// deregistering stopped new joins, it did not move anyone — so the phase
+	// alone cannot tell us whether players are at risk.
+	// +optional
+	WasRegistered bool `json:"wasRegistered"`
+
+	// StartedAt is when this server last began trying to become playable: the
+	// pod creation, and then every entry into phase Starting. It drives the
+	// startup deadline, which therefore bounds the current attempt rather than
+	// the age of the pod — a long-lived server that loses readiness gets a full
+	// deadline to recover in, and is failed if it does not. Do not change this
+	// back to pod-creation time.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 
@@ -1705,7 +1719,7 @@ git commit -m "Server- und ProxyGroup-CRD"
   - `phase.StreamDownGrace = 15 * time.Second`, `phase.MaxReadinessLosses int32 = 3`, `phase.FlapResetWindow = 10 * time.Minute`.
   - `phase.Inputs` (Feldliste unten) und `phase.Decision{Next Phase, Register, Deregister, StartDrain, CountReadinessLoss, ResetReadinessLosses, DeletePod bool, Reason, Message string}`.
   - `phase.Decide(current Phase, in Inputs) Decision`.
-  - Reason-Konstanten: `ReasonPodPending`, `ReasonPodRunning`, `ReasonReadyGatePassed`, `ReasonReadinessLost`, `ReasonDeletionRequested`, `ReasonDrained`, `ReasonDrainTimeout`, `ReasonPodLost`, `ReasonPodTerminal`, `ReasonStartupTimeout`, `ReasonFlapping`, `ReasonRetentionElapsed`, `ReasonTerminating`, `ReasonUnknownPhase`.
+  - Reason-Konstanten: `ReasonPodPending`, `ReasonPodRunning`, `ReasonReadyGatePassed`, `ReasonReadinessLost`, `ReasonDeletionRequested`, `ReasonDrained`, `ReasonDrainTimeout`, `ReasonPodLost`, `ReasonPodTerminal`, `ReasonDrainingBeforeCleanup`, `ReasonStartupTimeout`, `ReasonFlapping`, `ReasonRetentionElapsed`, `ReasonTerminating`, `ReasonUnknownPhase`.
 
 Das ist das Herz von Meilenstein 1. Alles, was über Registrierung und Löschung entscheidet, steht hier und nirgends sonst; die Controller führen nur aus.
 
@@ -1724,11 +1738,12 @@ import (
 // healthyReady is the input set of a server that is fine in phase Ready.
 func healthyReady() Inputs {
 	return Inputs{
-		PodExists:  true,
-		PodRunning: true,
-		PodReady:   true,
-		AgentReady: true,
-		Slots:      100,
+		PodExists:      true,
+		PodRunning:     true,
+		PodReady:       true,
+		AgentReady:     true,
+		AgentConnected: true,
+		Slots:          100,
 	}
 }
 
@@ -1770,6 +1785,16 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Ready, Register: true, Reason: ReasonReadyGatePassed},
 		},
 		{
+			// Regression for Minor 2: the ready gate must not trust a green
+			// probe and agent alone. Task 8 should never send PodReady/AgentReady
+			// without PodExists/PodRunning, but this package must not depend on
+			// caller discipline.
+			name:    "starting does not skip to ready on contradictory inputs without the pod existing and running",
+			current: Starting,
+			in:      Inputs{PodExists: false, PodRunning: false, PodReady: true, AgentReady: true},
+			want:    Decision{Next: Starting, Reason: ReasonPodPending},
+		},
+		{
 			name:    "ready stays ready while healthy",
 			current: Ready,
 			in:      healthyReady(),
@@ -1786,10 +1811,23 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
 		},
 		{
+			// A live stream that reports not-ready is the agent telling us
+			// something, not us failing to hear it: no grace period applies.
+			name:    "ready falls back to starting at once when a live agent reports not ready",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.AgentReady = false
+				return in
+			}(),
+			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
+		},
+		{
 			name:    "ready falls back to starting when the agent stream is down too long",
 			current: Ready,
 			in: func() Inputs {
 				in := healthyReady()
+				in.AgentConnected = false
 				in.AgentStreamDownFor = StreamDownGrace
 				return in
 			}(),
@@ -1800,6 +1838,24 @@ func TestDecide(t *testing.T) {
 			current: Ready,
 			in: func() Inputs {
 				in := healthyReady()
+				in.AgentConnected = false
+				in.AgentStreamDownFor = StreamDownGrace - time.Millisecond
+				return in
+			}(),
+			want: Decision{Next: Ready, Reason: ReasonReadyGatePassed},
+		},
+		{
+			// The exact shape the agent registry emits after Disconnect: it
+			// clears ready and starts the clock, so a Ready server inside the
+			// grace window arrives here as neither ready nor connected. This is
+			// the composition that made the StreamDownGrace clause unreachable
+			// before — inside the grace only the timer may decide.
+			name:    "ready tolerates a dropped stream whose agent has not reported ready since",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.AgentReady = false
+				in.AgentConnected = false
 				in.AgentStreamDownFor = StreamDownGrace - time.Millisecond
 				return in
 			}(),
@@ -1839,6 +1895,100 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Failed, Reason: ReasonStartupTimeout},
 		},
 		{
+			// A server that fell out of Ready and cannot come back must still be
+			// failed, and must take its players with it. The flap counter can
+			// never catch this on its own: losses are only counted on a
+			// Ready -> Starting transition, which a permanently red probe never
+			// produces again. The controller re-arms status.startedAt on entry
+			// into Starting, so the deadline here is one full recovery window
+			// after the fall-back, not the age of the pod.
+			name:    "a server that cannot recover is failed and drained a deadline after falling back",
+			current: Starting,
+			in: Inputs{
+				PodExists: true, PodRunning: true, StartupDeadlineReached: true,
+				WasRegistered: true, PlayersOnline: 9, ReadinessLosses: 1,
+			},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonStartupTimeout},
+		},
+		{
+			// Flapping is the bound for a server that was once playable, and it
+			// must take its players with it: the readiness-loss fallback only
+			// deregistered, it never moved anyone off.
+			name:    "failing on flapping drains a server that still has players",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.ReadinessLosses = MaxReadinessLosses
+				in.WasRegistered = true
+				in.PlayersOnline = 12
+				return in
+			}(),
+			want: Decision{Next: Failed, Deregister: true, StartDrain: true, Reason: ReasonFlapping},
+		},
+		{
+			// A terminal pod means the process is already down: there is nobody
+			// left to move, so draining would be pointless.
+			name:    "failing on a terminal pod does not try to drain",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.PodTerminal = true
+				in.WasRegistered = true
+				in.PlayersOnline = 12
+				return in
+			}(),
+			want: Decision{Next: Failed, Deregister: true, Reason: ReasonPodTerminal},
+		},
+		{
+			name:    "a failed server with players is drained instead of cleaned up at the retention",
+			current: Failed,
+			in: Inputs{
+				FailedRetentionElapsed: true, WasRegistered: true, PlayersOnline: 5,
+			},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonDrainingBeforeCleanup},
+		},
+		{
+			name:    "a failed server with a stale count is drained, not cleaned up",
+			current: Failed,
+			in: Inputs{
+				FailedRetentionElapsed: true, WasRegistered: true, PlayersStale: true,
+			},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonDrainingBeforeCleanup},
+		},
+		{
+			// The escape hatch: one stuck player must not pin a failed server
+			// forever.
+			name:    "a failed server is cleaned up once its drain deadline passes",
+			current: Failed,
+			in: Inputs{
+				FailedRetentionElapsed: true, WasRegistered: true, PlayersOnline: 5,
+				DrainDeadlineReached: true,
+			},
+			want: Decision{Next: Terminating, DeletePod: true, Reason: ReasonRetentionElapsed},
+		},
+		{
+			name:    "deleting an occupied failed server drains it",
+			current: Failed,
+			in: Inputs{
+				DeletionRequested: true, WasRegistered: true, PlayersOnline: 5,
+			},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonDrainingBeforeCleanup},
+		},
+		{
+			name:    "deleting an empty failed server terminates it",
+			current: Failed,
+			in:      Inputs{DeletionRequested: true, WasRegistered: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDeletionRequested},
+		},
+		{
+			// Never registered means no session was ever routed here, so there
+			// is nothing to move off.
+			name:    "a failed server that was never registered is cleaned up directly",
+			current: Failed,
+			in:      Inputs{FailedRetentionElapsed: true, PlayersStale: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonRetentionElapsed},
+		},
+		{
 			name:    "deleting a ready server drains it",
 			current: Ready,
 			in: func() Inputs {
@@ -1854,6 +2004,23 @@ func TestDecide(t *testing.T) {
 			current: Starting,
 			in:      Inputs{PodExists: true, PodRunning: true, DeletionRequested: true},
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDeletionRequested},
+		},
+		{
+			// Regression for the Critical finding: a Starting server that fell
+			// out of Ready (WasRegistered) still has its players connected — the
+			// readiness-loss fallback only deregistered to stop new joins, it did
+			// not move anyone off. Deleting such a server must drain it, not
+			// terminate it out from under 20 connected players. Reproduction as
+			// confirmed by the reviewer, one tick after the Ready server lost its
+			// probe and fell back to Starting.
+			name:    "deleting a starting server that was registered before drains it instead of dropping its players",
+			current: Starting,
+			in: Inputs{
+				PodExists: true, PodRunning: true, PodReady: false, AgentReady: true,
+				PlayersOnline: 20, DeletionRequested: true, ReadinessLosses: 1,
+				WasRegistered: true,
+			},
+			want: Decision{Next: Draining, StartDrain: true, Reason: ReasonDeletionRequested},
 		},
 		{
 			name:    "deleting a pending server terminates it right away",
@@ -1884,6 +2051,16 @@ func TestDecide(t *testing.T) {
 			current: Draining,
 			in:      Inputs{PodExists: true, PodRunning: true, PlayersOnline: 3, DrainDeadlineReached: true},
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDrainTimeout},
+		},
+		{
+			// Regression for Minor 1: a crashed pod's players are already gone
+			// no matter what a stale report still claims, so draining must not
+			// burn the full drain timeout waiting for players who cannot leave
+			// a pod that no longer runs.
+			name:    "draining terminates right away when the pod goes terminal, even with players reported online",
+			current: Draining,
+			in:      Inputs{PodTerminal: true, PlayersOnline: 3, PlayersStale: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonPodTerminal},
 		},
 		{
 			name:    "a lost pod terminates a ready server and deregisters it",
@@ -1941,6 +2118,40 @@ func TestDecide(t *testing.T) {
 	}
 }
 
+// TestStreamDownGraceIsFifteenSeconds pins the value, not just the symbol.
+// Every other test is written relative to the constant, so shrinking it to a
+// second would break nothing and silently drop the tolerance design spec 4.4
+// requires.
+func TestStreamDownGraceIsFifteenSeconds(t *testing.T) {
+	if StreamDownGrace != 15*time.Second {
+		t.Errorf("StreamDownGrace = %v, want 15s (design spec 4.4)", StreamDownGrace)
+	}
+}
+
+// TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline is the Failed
+// counterpart of TestOccupiedServerIsNeverDeletedWithoutDeadline: a failed
+// server can still hold live sessions, so neither the retention nor a deletion
+// request may remove its pod while players are on it.
+func TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline(t *testing.T) {
+	for _, stale := range []bool{false, true} {
+		for _, deleting := range []bool{false, true} {
+			for _, retention := range []bool{false, true} {
+				in := Inputs{
+					WasRegistered:          true,
+					PlayersOnline:          7,
+					PlayersStale:           stale,
+					DeletionRequested:      deleting,
+					FailedRetentionElapsed: retention,
+				}
+				if got := Decide(Failed, in); got.DeletePod {
+					t.Errorf("Decide(Failed, stale=%v deleting=%v retention=%v) deleted an occupied pod: %+v",
+						stale, deleting, retention, got)
+				}
+			}
+		}
+	}
+}
+
 // TestNoPathBackFromDraining guards the rule that a draining server never
 // serves players again, no matter how healthy it looks.
 func TestNoPathBackFromDraining(t *testing.T) {
@@ -1962,23 +2173,36 @@ func TestNoPathBackFromFailed(t *testing.T) {
 // long as players are online and no deadline has passed, no decision may
 // delete the pod.
 //
-// Only Ready and Draining are checked. A server in Pending or Starting was
-// never registered with the proxies, so it cannot hold players — and treating
-// its stale, never-reported count as "occupied" would make deletion of a
-// server that never started hang until the drain deadline.
+// Ready and Draining are always checked: a Ready server is registered with
+// the proxies, and a Draining server was registered until it started
+// draining. Starting is checked only with WasRegistered: true — a Starting
+// server that fell out of Ready still has players connected from before it
+// lost readiness, even though it deregistered to stop new joins. A
+// never-registered Pending or Starting server is excluded: it was never
+// registered with the proxies, so it cannot hold players — and treating its
+// stale, never-reported count as "occupied" would make deletion of a server
+// that never started hang until the drain deadline.
 func TestOccupiedServerIsNeverDeletedWithoutDeadline(t *testing.T) {
-	phases := []Phase{Ready, Draining}
-	for _, p := range phases {
+	cases := []struct {
+		phase         Phase
+		wasRegistered bool
+	}{
+		{Ready, false},
+		{Draining, false},
+		{Starting, true},
+	}
+	for _, tc := range cases {
 		for _, stale := range []bool{false, true} {
 			for _, deleting := range []bool{false, true} {
 				in := healthyReady()
 				in.PlayersOnline = 7
 				in.PlayersStale = stale
 				in.DeletionRequested = deleting
-				got := Decide(p, in)
+				in.WasRegistered = tc.wasRegistered
+				got := Decide(tc.phase, in)
 				if got.DeletePod {
-					t.Errorf("Decide(%q, players=7 stale=%v deleting=%v) deleted the pod: %+v",
-						p, stale, deleting, got)
+					t.Errorf("Decide(%q, players=7 stale=%v deleting=%v wasRegistered=%v) deleted the pod: %+v",
+						tc.phase, stale, deleting, tc.wasRegistered, got)
 				}
 			}
 		}
@@ -2049,11 +2273,14 @@ const (
 	ReasonDrainTimeout      = "DrainTimeout"
 	ReasonPodLost           = "PodLost"
 	ReasonPodTerminal       = "PodTerminal"
-	ReasonStartupTimeout    = "StartupTimeout"
-	ReasonFlapping          = "Flapping"
-	ReasonRetentionElapsed  = "RetentionElapsed"
-	ReasonTerminating       = "Terminating"
-	ReasonUnknownPhase      = "UnknownPhase"
+	// ReasonDrainingBeforeCleanup marks a Failed server whose players are being
+	// moved off before its pod is removed.
+	ReasonDrainingBeforeCleanup = "DrainingBeforeCleanup"
+	ReasonStartupTimeout        = "StartupTimeout"
+	ReasonFlapping              = "Flapping"
+	ReasonRetentionElapsed      = "RetentionElapsed"
+	ReasonTerminating           = "Terminating"
+	ReasonUnknownPhase          = "UnknownPhase"
 )
 
 // Inputs is everything the state machine may look at. The controller fills it
@@ -2076,13 +2303,20 @@ type Inputs struct {
 	// container is in CrashLoopBackOff past the operator's tolerance.
 	PodTerminal bool
 
-	// StartupDeadlineReached is true if the server did not reach Ready within
-	// the operator's startup deadline.
+	// StartupDeadlineReached is true if the current attempt to become playable
+	// has run past the operator's startup deadline. The clock is re-armed on
+	// every entry into Starting, so this bounds the attempt and not the age of
+	// the pod: a long-lived server that loses readiness gets a full deadline to
+	// recover in, and is failed if it does not.
 	StartupDeadlineReached bool
 
 	// AgentReady is true if the in-game agent reported readiness on a live
 	// stream.
 	AgentReady bool
+	// AgentConnected is true while the agent stream is up. It separates "the
+	// agent is telling us it is not ready" from "we cannot hear the agent" —
+	// the first is immediate, the second is tolerated for StreamDownGrace.
+	AgentConnected bool
 	// AgentStreamDownFor is how long the agent stream has been broken. Zero
 	// while the stream is up.
 	AgentStreamDownFor time.Duration
@@ -2091,6 +2325,13 @@ type Inputs struct {
 	ReadinessLosses int32
 	// ReadyFor is how long the server has been continuously Ready.
 	ReadyFor time.Duration
+
+	// WasRegistered is true if this server was ever registered with the proxies
+	// during the life of its current pod. A Starting server that fell out of
+	// Ready still has its players connected — deregistering stopped new joins,
+	// it did not move anyone — so the phase alone cannot tell us whether players
+	// are at risk.
+	WasRegistered bool
 
 	// PlayersOnline is the last reported player count.
 	PlayersOnline int32
@@ -2144,14 +2385,32 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 
 	case Failed:
-		if in.FailedRetentionElapsed {
+		if in.DeletionRequested || in.FailedRetentionElapsed {
+			// A server can fail with its sessions untouched: flapping
+			// readiness deregisters to stop new joins, it does not move
+			// anyone off. Cleaning such a server up without draining first
+			// would drop every player still on it.
+			if in.Occupied() && in.WasRegistered && !in.PodLost && !in.PodTerminal &&
+				!in.DrainDeadlineReached {
+				return Decision{
+					Next: Failed, StartDrain: true,
+					Reason:  ReasonDrainingBeforeCleanup,
+					Message: "moving players off a failed server before removing it",
+				}
+			}
+			if in.DeletionRequested {
+				return Decision{
+					Next: Terminating, DeletePod: true,
+					Reason: ReasonDeletionRequested, Message: "deletion requested for a failed server",
+				}
+			}
 			return Decision{
 				Next: Terminating, DeletePod: true,
 				Reason: ReasonRetentionElapsed, Message: "failed retention elapsed",
 			}
 		}
 		return Decision{
-			Next: Failed,
+			Next:   Failed,
 			Reason: ReasonPodTerminal, Message: "kept for diagnosis",
 		}
 
@@ -2160,6 +2419,12 @@ func Decide(current Phase, in Inputs) Decision {
 			return Decision{
 				Next: Terminating, DeletePod: true,
 				Reason: ReasonPodLost, Message: "pod disappeared during drain",
+			}
+		}
+		if in.PodTerminal {
+			return Decision{
+				Next: Terminating, DeletePod: true,
+				Reason: ReasonPodTerminal, Message: "pod reached a terminal phase during drain, its players are already gone",
 			}
 		}
 		if !in.Occupied() {
@@ -2175,7 +2440,7 @@ func Decide(current Phase, in Inputs) Decision {
 			}
 		}
 		return Decision{
-			Next: Draining,
+			Next:   Draining,
 			Reason: ReasonDeletionRequested, Message: "waiting for players to leave",
 		}
 
@@ -2183,7 +2448,7 @@ func Decide(current Phase, in Inputs) Decision {
 		// handled below
 	default:
 		return Decision{
-			Next: Pending,
+			Next:   Pending,
 			Reason: ReasonUnknownPhase, Message: "unknown phase, restarting the state machine",
 		}
 	}
@@ -2198,37 +2463,54 @@ func Decide(current Phase, in Inputs) Decision {
 	}
 
 	if in.DeletionRequested {
-		// Only a Ready server can have players, because only a Ready server is
-		// registered with the proxies. Everything else can go straight away.
-		if current == Ready {
+		// A Ready server is currently registered with the proxies. A Starting
+		// server that fell out of Ready (WasRegistered) may still have players
+		// connected from before: the readiness-loss fallback deregisters to stop
+		// new joins, it does not move anyone off. Both cases must drain. Only a
+		// server that was never registered can go straight away.
+		if current == Ready || in.WasRegistered {
 			return Decision{
-				Next: Draining, Deregister: true, StartDrain: true,
+				Next: Draining, Deregister: current == Ready, StartDrain: true,
 				Reason: ReasonDeletionRequested, Message: "deletion requested, moving players off",
 			}
 		}
 		return Decision{
 			Next: Terminating, DeletePod: true,
-			Reason: ReasonDeletionRequested, Message: "deletion requested before the server took players",
+			Reason: ReasonDeletionRequested, Message: "deletion requested before the server was ever registered",
 		}
 	}
 
 	if in.PodTerminal {
+		// A terminal pod is never drained: the process is already down and its
+		// sessions went with it, so there is nobody left to move off.
 		return Decision{
 			Next: Failed, Deregister: current == Ready,
 			Reason: ReasonPodTerminal, Message: "pod reached a terminal phase",
 		}
 	}
 
+	// From here on the pod is neither lost nor terminal — both returned above.
+	// A server that failed while it was registered still has live sessions on
+	// it, so failing it has to take its players off rather than strand them.
+	drainOnFailure := in.WasRegistered
+
 	if in.ReadinessLosses >= MaxReadinessLosses {
 		return Decision{
-			Next: Failed, Deregister: current == Ready,
+			Next: Failed, Deregister: current == Ready, StartDrain: drainOnFailure,
 			Reason: ReasonFlapping, Message: "too many readiness losses",
 		}
 	}
 
+	// The startup deadline bounds the current attempt to become playable. The
+	// controller re-arms status.startedAt on every entry into Starting, so this
+	// measures the attempt and not the age of the pod: a server that has served
+	// for hours and blips once gets a fresh deadline to recover in, while one
+	// that fell out of Ready and cannot come back is still failed — the flap
+	// counter alone would never catch it, because losses are only counted on a
+	// Ready -> Starting transition that a permanently red probe never repeats.
 	if in.StartupDeadlineReached && current != Ready {
 		return Decision{
-			Next: Failed,
+			Next: Failed, StartDrain: drainOnFailure,
 			Reason: ReasonStartupTimeout, Message: "server did not become ready in time",
 		}
 	}
@@ -2241,28 +2523,40 @@ func Decide(current Phase, in Inputs) Decision {
 		return Decision{Next: Pending, Reason: ReasonPodPending, Message: "waiting for the pod"}
 
 	case Starting:
-		if in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
+		if in.PodExists && in.PodRunning && in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
 			return Decision{
 				Next: Ready, Register: true,
 				Reason: ReasonReadyGatePassed, Message: "probe green and agent ready",
 			}
 		}
 		return Decision{
-			Next: Starting,
+			Next:   Starting,
 			Reason: ReasonPodPending, Message: "waiting for both ready signals",
 		}
 
 	default: // Ready
-		if !in.PodReady || !in.AgentReady || in.AgentStreamDownFor >= StreamDownGrace {
+		lost := !in.PodReady
+		if !lost {
+			if in.AgentConnected {
+				// A live stream that reports not-ready is an immediate loss.
+				lost = !in.AgentReady
+			} else {
+				// A broken stream is tolerated until the grace expires; the
+				// player count goes stale meanwhile, so the server counts as
+				// occupied and is protected from deletion either way.
+				lost = in.AgentStreamDownFor >= StreamDownGrace
+			}
+		}
+		if lost {
 			return Decision{
 				Next: Starting, Deregister: true, CountReadinessLoss: true,
 				Reason: ReasonReadinessLost, Message: "server lost a ready signal",
 			}
 		}
 		return Decision{
-			Next: Ready,
+			Next:                 Ready,
 			ResetReadinessLosses: in.ReadinessLosses > 0 && in.ReadyFor >= FlapResetWindow,
-			Reason: ReasonReadyGatePassed, Message: "serving players",
+			Reason:               ReasonReadyGatePassed, Message: "serving players",
 		}
 	}
 }
@@ -3320,9 +3614,14 @@ git commit -m "Pod-Builder für Server-Pods"
   - `controller.NoopRegistrar` — die Meilenstein-1-Implementierung; Meilenstein 3 ersetzt sie durch den Proxy-Broadcast.
   - `controller.ServerFinalizer = "spawnery.cloud/drain"`.
   - `controller.MaxContainerRestarts int32 = 3`.
+  - `controller.ReasonPodNameConflict = "PodNameConflict"`.
   - `controller.ServerReconciler{Client, Scheme, Recorder, Agents, Clock, StartupDeadline, PlayerStatusInterval, Registrar}` mit `Reconcile` und `SetupWithManager`.
 
 Der Controller ist bewusst dünn: Eingaben sammeln, `phase.Decide` fragen, Entscheidung ausführen. Er trifft keine eigene Entscheidung darüber, ob ein Pod gelöscht werden darf.
+
+Gruppe und Netzwerk werden nur für den Podbau gebraucht. Fehlt eines von beiden, läuft die Zustandsmaschine mit den CRD-Vorgaben weiter (`fallbackGroup`), der Podbau entfällt, und der Grund steht als `Accepted`-Condition am Server — sonst hinge ein Server, dessen Gruppe gelöscht wurde, für immer mit Pod und Finalizer fest und der Verwaisten-Abgleich aus Task 11 liefe in eine Blockade.
+
+Findet der Controller einen Pod, während `status.podName` leer ist, übernimmt er ihn, sofern die Owner-Referenz auf genau diesen Server zeigt — das ist die Erholung von einem Statusschreibvorgang, der zwischen `Create(pod)` und `Status().Update` verloren ging. Gehört der Pod jemandem anders, bleibt er unangetastet.
 
 - [ ] **Step 1: Registrar-Port schreiben**
 
@@ -3383,6 +3682,7 @@ package controller
 import (
 	"context"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -3404,11 +3704,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// containsString is the test-side spelling of the finalizer check.
+func containsString(haystack []string, needle string) bool {
+	return slices.Contains(haystack, needle)
+}
+
 // testClock is a hand-cranked clock shared by the controller tests.
 type testClock struct{ now time.Time }
 
-func (c *testClock) Now() time.Time           { return c.now }
-func (c *testClock) Advance(d time.Duration)  { c.now = c.now.Add(d) }
+func (c *testClock) Now() time.Time          { return c.now }
+func (c *testClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
 // recordingRegistrar remembers the calls the controller made.
 type recordingRegistrar struct {
@@ -3598,8 +3903,14 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
@@ -3635,6 +3946,629 @@ func bringUpReady(t *testing.T, f *fixture, name string) string {
 		t.Fatalf("phase = %q, want Ready", got)
 	}
 	return uid
+}
+
+// driveToFailed flaps the server past MaxReadinessLosses so it ends up in phase
+// Failed with its players still connected, and returns once it is there.
+func driveToFailed(t *testing.T, f *fixture, name string) {
+	t.Helper()
+	for i := int32(0); i < phase.MaxReadinessLosses; i++ {
+		f.setPodRunning(name, false)
+		f.reconcile(name)
+		if i < phase.MaxReadinessLosses-1 {
+			f.setPodRunning(name, true)
+			f.reconcile(name)
+		}
+	}
+	f.reconcile(name)
+	if got := f.server(name).Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q after %d readiness losses, want Failed", got, phase.MaxReadinessLosses)
+	}
+}
+
+// pods lists every pod in the fixture namespace that still exists.
+func (f *fixture) pods() []corev1.Pod {
+	f.t.Helper()
+	list := &corev1.PodList{}
+	if err := f.c.List(f.ctx, list, client.InNamespace(f.ns)); err != nil {
+		f.t.Fatalf("list pods: %v", err)
+	}
+	return list.Items
+}
+
+// TestLongLivedReadyServerSurvivesAReadinessBlip is the regression test for the
+// stale startup deadline. status.startedAt is written once at pod creation and
+// never refreshed, so StartupDeadlineReached is true for every server older than
+// the deadline. Before the fix, one probe blip on a server that had been serving
+// for hours put it in Starting and the very next reconcile failed it — and the
+// Failed retention then deleted its pod with everyone still on board.
+func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 40, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+
+	// Far past the 5 minute startup deadline.
+	f.clock.Advance(2 * time.Hour)
+	if err := f.agents.ReportPlayers(uid, 40, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
+		t.Fatalf("phase = %q after two hours of healthy service, want Ready", got)
+	}
+
+	// One probe blip.
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+	blipped := f.server("lobby-x7k2")
+	if got := blipped.Status.Phase; got != string(phase.Starting) {
+		t.Fatalf("phase = %q after the blip, want Starting", got)
+	}
+	// The mechanism that makes this safe: entering Starting re-arms the
+	// startup deadline, so the recovery attempt gets a full window.
+	if blipped.Status.StartedAt == nil || !blipped.Status.StartedAt.Time.Equal(f.clock.Now()) {
+		var got any
+		if blipped.Status.StartedAt != nil {
+			got = blipped.Status.StartedAt.Time.UTC()
+		}
+		t.Fatalf("status.startedAt = %v, want it re-armed to %v on entry into Starting",
+			got, f.clock.Now().UTC())
+	}
+
+	// The reconcile that used to fail it: still Starting, still past the
+	// startup deadline, but this server was playable once.
+	f.reconcile("lobby-x7k2")
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase == string(phase.Failed) {
+		t.Fatal("a long-lived server was failed by its stale startup deadline")
+	}
+	if srv.Status.Phase != string(phase.Starting) {
+		t.Fatalf("phase = %q, want Starting", srv.Status.Phase)
+	}
+
+	// And it recovers.
+	f.setPodRunning("lobby-x7k2", true)
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase = %q after recovery, want Ready", got)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while 40 players were online — core invariant broken")
+	}
+}
+
+// TestServerThatNeverBecomesPlayableFailsAtTheDeadline is the other side of the
+// re-armed startup deadline: a server that was never playable must still be
+// failed when the deadline passes, exactly as before.
+func TestServerThatNeverBecomesPlayableFailsAtTheDeadline(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	// The pod runs but its probe never turns green.
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
+		t.Fatalf("phase = %q, want Starting", got)
+	}
+
+	f.clock.Advance(6 * time.Minute) // the fixture's deadline is 5 minutes
+	f.reconcile("lobby-x7k2")
+
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Failed) {
+		t.Errorf("phase = %q past the startup deadline, want Failed", got)
+	}
+	if len(f.registrar.drained) != 0 {
+		t.Errorf("drained = %v, want none — this server never took a player", f.registrar.drained)
+	}
+}
+
+// TestServerThatCannotRecoverIsFailedAndDrained is the zombie the first attempt
+// at the startup-deadline fix created. Exempting a once-registered server from
+// the deadline meant a server that fell out of Ready with a permanently red
+// probe was never failed at all: the flap counter cannot catch it either,
+// because losses are only counted on a Ready -> Starting transition that a
+// permanently red probe never produces again. Its players sat on a server that
+// fails its own health check, forever. Re-arming the clock instead of exempting
+// the server fails it one deadline after the fall-back, and drains it.
+func TestServerThatCannotRecoverIsFailedAndDrained(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.clock.Advance(2 * time.Hour)
+	if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	// The probe goes red and never comes back.
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
+		t.Fatalf("phase = %q after the fall-back, want Starting", got)
+	}
+
+	f.clock.Advance(200 * time.Minute)
+	if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Failed) {
+		t.Fatalf("phase = %q after 200 minutes with a red probe, want Failed — the server is a zombie",
+			srv.Status.Phase)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want exactly one drain — 9 players were left on a dead server",
+			f.registrar.drained)
+	}
+	if srv.Status.DrainStartedAt == nil {
+		t.Error("status.drainStartedAt not set, so the drain would never time out")
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted with 9 players still on it — core invariant broken")
+	}
+}
+
+// TestZombieIsCaughtUnderAContinuousReconcileLoop drives the reconciler the way
+// the operator actually runs it — once per resync interval — instead of jumping
+// the clock and reconciling once. That difference is the whole point: the
+// startup deadline is re-armed only on *entry* into Starting, and a re-arm on
+// every pass would push the deadline out forever under a real loop while
+// leaving a single-reconcile test perfectly green. The zombie would be back,
+// with its players still on board.
+func TestZombieIsCaughtUnderAContinuousReconcileLoop(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	// The probe goes red and never comes back.
+	f.setPodRunning("lobby-x7k2", false)
+
+	const ticks = 200 // 200 * 5s resync is far past the 5 minute deadline
+	failedAfter := -1
+	for i := 0; i < ticks; i++ {
+		f.clock.Advance(resyncInterval)
+		if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+		if f.server("lobby-x7k2").Status.Phase == string(phase.Failed) {
+			failedAfter = i
+			break
+		}
+	}
+
+	srv := f.server("lobby-x7k2")
+	if failedAfter < 0 {
+		t.Fatalf("still %q with 9 players after %d reconciles over %v — the startup deadline never fired",
+			srv.Status.Phase, ticks, time.Duration(ticks)*resyncInterval)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want exactly one drain — 9 players were left on a dead server",
+			f.registrar.drained)
+	}
+	if srv.Status.DrainStartedAt == nil {
+		t.Error("status.drainStartedAt not set, so the drain would never time out")
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted with 9 players still on it — core invariant broken")
+	}
+}
+
+// TestFailedServerDrainsBeforeItsPodIsDeleted covers the second half of the
+// same hole: a server can reach Failed with its sessions untouched, and the
+// retention path must not delete that pod without moving the players off first.
+func TestFailedServerDrainsBeforeItsPodIsDeleted(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	driveToFailed(t, f, "lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want a drain when the server failed with players on it", f.registrar.drained)
+	}
+	if srv.Status.DrainStartedAt == nil {
+		t.Error("status.drainStartedAt not set on a failed server that is being drained")
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod of a failed server deleted while players were online")
+	}
+
+	// While the drain runs the pod is kept, the drain clock is not pushed out by
+	// the repeated decisions, and the command is not re-broadcast on every pass
+	// — the Failed branch returns StartDrain each time, but the real registrar
+	// fans out to every proxy.
+	drainStarted := srv.Status.DrainStartedAt.DeepCopy()
+	for i := 0; i < 3; i++ {
+		f.clock.Advance(10 * time.Second)
+		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+		if _, ok := f.pod("lobby-x7k2"); !ok {
+			t.Fatalf("pod deleted while 6 players were still online (tick %d)", i)
+		}
+	}
+	if got := f.server("lobby-x7k2").Status.DrainStartedAt; !got.Equal(drainStarted) {
+		t.Errorf("drainStartedAt rewritten: %v, want the original %v", got, drainStarted)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v after four reconciles of a draining failed server, want exactly one broadcast",
+			f.registrar.drained)
+	}
+
+	// Once it runs empty and the retention has passed, it goes.
+	f.clock.Advance(2 * time.Hour)
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Error("pod of an empty failed server survived its retention")
+	}
+}
+
+// TestFailedServerIsCleanedUpOnceItsDrainDeadlinePasses documents the escape
+// hatch deliberately: the drain of a failed server is bounded, so one stuck
+// player cannot pin a broken server forever. The group's drain timeout is 60s
+// and its failed retention an hour, so by the time the retention elapses the
+// drain deadline has always passed — this is the intended end of that path,
+// not an accident.
+func TestFailedServerIsCleanedUpOnceItsDrainDeadlinePasses(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	driveToFailed(t, f, "lobby-x7k2")
+
+	// Past both the drain deadline and the retention, with players still on.
+	f.clock.Advance(2 * time.Hour)
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Error("a failed server pinned by players survived its drain deadline")
+	}
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Terminating) {
+		t.Errorf("phase = %q, want Terminating", got)
+	}
+}
+
+// TestDeletingAFailedServerDrainsThenReleasesIt pins that a Failed server
+// honours a deletion request: it drains first and releases its finalizer after.
+func TestDeletingAFailedServerDrainsThenReleasesIt(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 4, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	driveToFailed(t, f, "lobby-x7k2")
+
+	if err := f.c.Delete(f.ctx, f.server("lobby-x7k2")); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("deleting a failed server dropped its players")
+	}
+	if len(f.registrar.drained) == 0 {
+		t.Error("deleting a failed server issued no drain")
+	}
+
+	// This is the window where the Failed branch really does return StartDrain
+	// on every single pass: occupied, once registered, deletion pending, drain
+	// deadline not yet reached. The clock stays put so the state holds. The
+	// command must still go out exactly once — the real registrar broadcasts to
+	// every proxy, and this loop would otherwise be eleven fan-outs.
+	for i := 0; i < 10; i++ {
+		f.reconcile("lobby-x7k2")
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v after ten further reconciles of a deleted, occupied failed server, want exactly one broadcast",
+			f.registrar.drained)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while players were still online — core invariant broken")
+	}
+
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Fatal("pod still there after the failed server was emptied")
+	}
+
+	f.reconcile("lobby-x7k2")
+	err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, &spawneryv1alpha1.Server{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer not released on a deleted failed server: %v", err)
+	}
+}
+
+// TestServerOutlivingItsGroupStillDrainsAndReleasesItself pins that a missing
+// ServerGroup does not freeze the controller. Before the fix both the group and
+// the network lookup returned before the finalizer, the drain and the label
+// sync, so such a Server kept its pod and its finalizer forever and the orphan
+// sweep of Task 11 would deadlock on it.
+func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 3, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	if err := f.c.Delete(f.ctx, f.group); err != nil {
+		t.Fatalf("delete ServerGroup: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	accepted := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonGroupNotFound {
+		t.Errorf("Accepted condition = %+v, want False/GroupNotFound", accepted)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod dropped when the group disappeared")
+	}
+
+	// It must still drain and still let go.
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Draining) {
+		t.Errorf("phase = %q for a groupless server being deleted, want Draining", got)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while players were online — core invariant broken")
+	}
+
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Fatal("pod leaked: still there after the drain finished")
+	}
+
+	f.reconcile("lobby-x7k2")
+	err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, &spawneryv1alpha1.Server{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer never released on a groupless server: %v", err)
+	}
+}
+
+// TestServerInAPersistentGroupStillDrainsAndReleasesItself pins that "not
+// implemented yet" bounds the pod, not the object's lifecycle. Persistent
+// groups arrive in milestone 5, so no pod is built for them — but an early
+// return on that check would skip the finalizer, the drain and the release
+// exactly as the missing-group case used to, and such a Server could never be
+// deleted at all.
+func TestServerInAPersistentGroupStillDrainsAndReleasesItself(t *testing.T) {
+	f := newFixture(t)
+
+	persistent := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "survival", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: "production"},
+			Type:                          spawneryv1alpha1.ServerGroupPersistent,
+			Image:                         "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers:                    50,
+			Replicas:                      ptr.To(int32(1)),
+			TerminationGracePeriodSeconds: 60,
+			FailedRetentionSeconds:        3600,
+			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
+			Storage:                       &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")},
+		},
+	}
+	if err := f.c.Create(f.ctx, persistent); err != nil {
+		t.Fatalf("create persistent ServerGroup: %v", err)
+	}
+
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "survival-0",
+			Namespace: f.ns,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: spawneryv1alpha1.GroupVersion.String(),
+				Kind:       "ServerGroup",
+				Name:       persistent.Name,
+				UID:        persistent.UID,
+			}},
+		},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: persistent.Name},
+			Ordinal:  ptr.To(int32(0)),
+		},
+	}
+	if err := f.c.Create(f.ctx, srv); err != nil {
+		t.Fatalf("create Server: %v", err)
+	}
+
+	// No pod is built, but the object is managed: finalizer on, reason stated.
+	f.reconcile("survival-0")
+	srv = f.server("survival-0")
+	if _, ok := f.pod("survival-0"); ok {
+		t.Fatal("a pod was built for a persistent group")
+	}
+	if !containsString(srv.Finalizers, ServerFinalizer) {
+		t.Fatalf("finalizers = %v, want %s even for a persistent group", srv.Finalizers, ServerFinalizer)
+	}
+	accepted := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonNotImplemented {
+		t.Errorf("Accepted condition = %+v, want False/%s", accepted, spawneryv1alpha1.ReasonNotImplemented)
+	}
+
+	// Milestone 5 will create this pod; stand in for it so the drain path is
+	// exercised rather than merely the empty release.
+	built, err := podspec.BuildServerPod(f.network, persistent, srv)
+	if err != nil {
+		t.Fatalf("BuildServerPod: %v", err)
+	}
+	if err := f.c.Create(f.ctx, built); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	f.reconcile("survival-0")
+	if got := f.server("survival-0").Status.PodName; got != "survival-0" {
+		t.Fatalf("status.podName = %q, want the pod adopted", got)
+	}
+
+	pod, ok := f.pod("survival-0")
+	if !ok {
+		t.Fatal("pod vanished")
+	}
+	uid := string(pod.UID)
+	f.setPodRunning("survival-0", true)
+	f.agents.Connect(uid, agent.RoleServer)
+	f.agents.MarkReady(uid)
+	if err := f.agents.ReportPlayers(uid, 5, 50); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("survival-0") // Pending -> Starting
+	f.reconcile("survival-0") // Starting -> Ready
+	if got := f.server("survival-0").Status.Phase; got != string(phase.Ready) {
+		t.Fatalf("phase = %q, want Ready", got)
+	}
+
+	// The point of the whole test: it must still drain and still let go.
+	if err := f.c.Delete(f.ctx, f.server("survival-0")); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("survival-0")
+	if got := f.server("survival-0").Status.Phase; got != string(phase.Draining) {
+		t.Errorf("phase = %q for a deleted persistent server, want Draining", got)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want one drain command", f.registrar.drained)
+	}
+	if _, ok := f.pod("survival-0"); !ok {
+		t.Fatal("pod deleted while 5 players were online — core invariant broken")
+	}
+
+	if err := f.agents.ReportPlayers(uid, 0, 50); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("survival-0")
+	if _, ok := f.pod("survival-0"); ok {
+		t.Fatal("pod leaked: still there after the drain finished")
+	}
+
+	f.reconcile("survival-0")
+	err = f.c.Get(f.ctx, types.NamespacedName{Name: "survival-0", Namespace: f.ns}, &spawneryv1alpha1.Server{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer never released on a persistent-group server: %v", err)
+	}
+}
+
+// TestPodIsAdoptedAfterALostStatusWrite covers a crash between Create(pod) and
+// the status update. fetchPod falls back to the server name and finds the pod,
+// so without adoption the creation branch is skipped forever while podName and
+// startedAt stay empty — the startup deadline could never fire and PodLost
+// could never be detected.
+func TestPodIsAdoptedAfterALostStatusWrite(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	pod, ok := f.pod("lobby-x7k2")
+	if !ok {
+		t.Fatal("no pod created")
+	}
+	originalUID := pod.UID
+
+	// Simulate the lost write: the pod exists, the status does not know it.
+	srv := f.server("lobby-x7k2")
+	srv.Status.PodName = ""
+	srv.Status.StartedAt = nil
+	if err := f.c.Status().Update(f.ctx, srv); err != nil {
+		t.Fatalf("clear status: %v", err)
+	}
+
+	f.reconcile("lobby-x7k2")
+
+	srv = f.server("lobby-x7k2")
+	if srv.Status.PodName != "lobby-x7k2" {
+		t.Errorf("status.podName = %q, want the existing pod adopted", srv.Status.PodName)
+	}
+	if srv.Status.StartedAt == nil {
+		t.Error("status.startedAt not restored from the pod; the startup deadline needs it")
+	}
+	if got := f.pods(); len(got) != 1 {
+		t.Errorf("%d pods in the namespace, want exactly 1 — a second pod was created", len(got))
+	}
+	if again, ok := f.pod("lobby-x7k2"); !ok || again.UID != originalUID {
+		t.Error("the original pod was replaced instead of adopted")
+	}
+}
+
+// TestForeignPodWithTheSameNameIsNotAdopted is the other half of adoption: the
+// owner reference has to be verified, or a Server would take charge of a
+// workload it never created.
+func TestForeignPodWithTheSameNameIsNotAdopted(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-x7k2")
+
+	foreign := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lobby-x7k2",
+			Namespace: f.ns,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: spawneryv1alpha1.GroupVersion.String(),
+				Kind:       "ServerGroup",
+				Name:       f.group.Name,
+				UID:        f.group.UID,
+				Controller: ptr.To(true),
+			}},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "not-ours", Image: "busybox"}},
+		},
+	}
+	if err := f.c.Create(f.ctx, foreign); err != nil {
+		t.Fatalf("create foreign pod: %v", err)
+	}
+
+	f.reconcile("lobby-x7k2")
+
+	if got := f.server("lobby-x7k2").Status.PodName; got != "" {
+		t.Errorf("status.podName = %q, want empty — a foreign pod was adopted", got)
+	}
+	got, ok := f.pod("lobby-x7k2")
+	if !ok {
+		t.Fatal("the foreign pod was deleted")
+	}
+	if got.UID != foreign.UID {
+		t.Error("the foreign pod was replaced")
+	}
+	if _, labelled := got.Labels[podspec.LabelOccupied]; labelled {
+		t.Error("the controller labelled a pod it does not own")
+	}
+	if len(f.pods()) != 1 {
+		t.Errorf("%d pods, want 1 — the controller created a second pod over the conflict", len(f.pods()))
+	}
 }
 
 func TestReconcileCreatesThePod(t *testing.T) {
@@ -3856,6 +4790,70 @@ func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 	}
 }
 
+// TestDeletionAfterAReadinessLossStillDrains covers the case the phase alone
+// cannot describe: the server reached Ready, was registered, then lost a ready
+// signal and fell back to Starting — deregistered, but with its players still
+// connected, because deregistering only stops new joins. Deleting it now must
+// drain, not terminate.
+func TestDeletionAfterAReadinessLossStillDrains(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 3, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Starting) {
+		t.Fatalf("phase = %q after the readiness loss, want Starting", srv.Status.Phase)
+	}
+	if srv.Status.Registered {
+		t.Error("status.registered = true after the readiness loss, want false")
+	}
+	if !srv.Status.WasRegistered {
+		t.Fatal("status.wasRegistered = false, want true — the server was registered once")
+	}
+
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv = f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Draining) {
+		t.Errorf("phase = %q, want Draining — a once-registered server still holds its players",
+			srv.Status.Phase)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want one drain command", f.registrar.drained)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while players were online — core invariant broken")
+	}
+}
+
+func TestLostPodTerminatesTheServer(t *testing.T) {
+	f := newFixture(t)
+	bringUpReady(t, f, "lobby-x7k2")
+
+	pod, _ := f.pod("lobby-x7k2")
+	if err := f.c.Delete(f.ctx, pod); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Terminating) {
+		t.Errorf("phase = %q after the pod vanished, want Terminating", srv.Status.Phase)
+	}
+	if srv.Status.Registered {
+		t.Error("a server whose pod is gone must be deregistered")
+	}
+}
+
 func TestDrainTimeoutTerminatesLoudly(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -3883,22 +4881,32 @@ func TestDrainTimeoutTerminatesLoudly(t *testing.T) {
 	}
 }
 
-func TestLostPodTerminatesTheServer(t *testing.T) {
-	f := newFixture(t)
-	bringUpReady(t, f, "lobby-x7k2")
-
-	pod, _ := f.pod("lobby-x7k2")
-	if err := f.c.Delete(f.ctx, pod); err != nil {
-		t.Fatalf("delete pod: %v", err)
+// TestCrashLoopingOnlyLooksAtTheMinecraftContainer pins the scope of the
+// crash-loop check: PodTerminal aborts a running drain, so a crash-looping
+// sidecar must never be able to cut short the drain of a healthy server.
+func TestCrashLoopingOnlyLooksAtTheMinecraftContainer(t *testing.T) {
+	backoff := corev1.ContainerState{
+		Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
 	}
-	f.reconcile("lobby-x7k2")
 
-	srv := f.server("lobby-x7k2")
-	if srv.Status.Phase != string(phase.Terminating) {
-		t.Errorf("phase = %q after the pod vanished, want Terminating", srv.Status.Phase)
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name:         "metrics-sidecar",
+			RestartCount: MaxContainerRestarts + 5,
+			State:        backoff,
+		}},
+	}}
+	if crashLooping(pod) {
+		t.Error("a crash-looping sidecar counted as terminal; only the Minecraft container may")
 	}
-	if srv.Status.Registered {
-		t.Error("a server whose pod is gone must be deregistered")
+
+	pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, corev1.ContainerStatus{
+		Name:         podspec.ContainerName,
+		RestartCount: MaxContainerRestarts,
+		State:        backoff,
+	})
+	if !crashLooping(pod) {
+		t.Error("a crash-looping Minecraft container was not detected")
 	}
 }
 ```
@@ -3906,7 +4914,7 @@ func TestLostPodTerminatesTheServer(t *testing.T) {
 - [ ] **Step 3: Test laufen lassen, Fehlschlag prüfen**
 
 Run: `nix develop -c go test ./internal/controller/... -v`
-Expected: FAIL — `undefined: ServerReconciler`, `undefined: ServerFinalizer`, `undefined: containsString`.
+Expected: FAIL — `undefined: ServerReconciler`, `undefined: ServerFinalizer`, `undefined: MaxContainerRestarts`, `undefined: crashLooping`.
 
 - [ ] **Step 4: Server-Controller implementieren**
 
@@ -3923,6 +4931,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -3944,6 +4953,18 @@ const ServerFinalizer = "spawnery.cloud/drain"
 // MaxContainerRestarts is how often the Paper container may restart before the
 // server counts as broken rather than flaky.
 const MaxContainerRestarts int32 = 3
+
+// ReasonPodNameConflict marks a Server whose pod name is taken by a pod it does
+// not control.
+const ReasonPodNameConflict = "PodNameConflict"
+
+// defaultDrainTimeoutSeconds and defaultFailedRetentionSeconds mirror the
+// kubebuilder defaults on ServerGroupSpec. They are what a Server falls back to
+// when its group is gone, so drain and cleanup keep sane timings.
+const (
+	defaultDrainTimeoutSeconds    int32 = 60
+	defaultFailedRetentionSeconds int32 = 3600
+)
 
 // resyncInterval is how often a Server is re-examined even without an event.
 // The state machine has time-driven transitions (startup deadline, drain
@@ -3986,37 +5007,50 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Only pod creation needs the group and the network. Everything else — the
+	// finalizer, the drain, the occupied label, releasing the object — has to
+	// keep running without them, or a Server whose group was deleted would stay
+	// Ready forever with its pod alive and its finalizer held, and the orphan
+	// sweep of Task 11 would deadlock on that finalizer.
 	group := &spawneryv1alpha1.ServerGroup{}
 	groupKey := types.NamespacedName{Name: srv.Spec.GroupRef.Name, Namespace: srv.Namespace}
+	groupFound := true
 	if err := r.Get(ctx, groupKey, group); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
-		// The group is gone. The orphan reconciler removes the Server; there
-		// is nothing sensible to reconcile against in the meantime.
-		logger.Info("server group not found, waiting for the orphan sweep", "group", srv.Spec.GroupRef.Name)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		groupFound = false
 	}
 
-	if !group.IsEphemeral() {
-		// Persistent groups need a PVC and an ordered shutdown; that is
-		// milestone 5. Say so instead of building half a pod.
+	// Persistent groups need a PVC and an ordered shutdown; that is milestone 5,
+	// so no pod is built for them. That must not stop anything else: an early
+	// return here would skip the finalizer, the drain and the release, and a
+	// Server in a persistent group could then never be deleted — the same
+	// deadlock as a Server whose group is gone.
+	persistentUnsupported := groupFound && !group.IsEphemeral()
+	if persistentUnsupported {
 		logger.Info("persistent groups are not implemented yet", "group", group.Name)
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
 	network := &spawneryv1alpha1.Network{}
-	networkKey := types.NamespacedName{Name: group.Spec.NetworkRef.Name, Namespace: srv.Namespace}
-	if err := r.Get(ctx, networkKey, network); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
+	networkFound := false
+	if groupFound {
+		networkKey := types.NamespacedName{Name: group.Spec.NetworkRef.Name, Namespace: srv.Namespace}
+		if err := r.Get(ctx, networkKey, network); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+		} else {
+			networkFound = true
 		}
-		logger.Info("network not found", "network", group.Spec.NetworkRef.Name)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// The finalizer must sit on the object before the pod exists, otherwise a
-	// deletion between creation and the next reconcile skips the drain.
+	// deletion between creation and the next reconcile skips the drain. This
+	// has to happen before anything is written onto srv.Status: Update returns
+	// the persisted object, whose status the API server does not take from us
+	// because status is a subresource, so it overwrites every status change
+	// made before it. On a first reconcile that status is empty.
 	if srv.DeletionTimestamp.IsZero() && !slices.Contains(srv.Finalizers, ServerFinalizer) {
 		srv.Finalizers = append(srv.Finalizers, ServerFinalizer)
 		if err := r.Update(ctx, srv); err != nil {
@@ -4024,15 +5058,59 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	switch {
+	case !groupFound:
+		logger.Info("server group not found, running on the CRD defaults", "group", srv.Spec.GroupRef.Name)
+		setAccepted(srv, false, spawneryv1alpha1.ReasonGroupNotFound,
+			fmt.Sprintf("server group %q not found; draining and cleanup continue on the default timings", srv.Spec.GroupRef.Name))
+		group = fallbackGroup(srv)
+	case persistentUnsupported:
+		setAccepted(srv, false, spawneryv1alpha1.ReasonNotImplemented,
+			fmt.Sprintf("server group %q is persistent; persistent groups arrive in milestone 5, so no pod is created for this server", group.Name))
+	case !networkFound:
+		logger.Info("network not found, running on the CRD defaults", "network", group.Spec.NetworkRef.Name)
+		setAccepted(srv, false, spawneryv1alpha1.ReasonNetworkNotFound,
+			fmt.Sprintf("network %q not found; no pod can be created for this server", group.Spec.NetworkRef.Name))
+	default:
+		setAccepted(srv, true, spawneryv1alpha1.ReasonAccepted, "group and network resolved")
+	}
+
 	pod, podFound, err := r.fetchPod(ctx, srv)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 
+	// Recover from a status write lost between Create(pod) and Status().Update:
+	// the pod is there but status.podName is empty, so without adoption the
+	// creation branch would be skipped forever while the startup deadline could
+	// never fire and PodLost could never be detected.
+	nameConflict := false
+	if podFound && srv.Status.PodName == "" {
+		if metav1.IsControlledBy(pod, srv) {
+			srv.Status.PodName = pod.Name
+			if srv.Status.StartedAt == nil {
+				started := pod.CreationTimestamp
+				srv.Status.StartedAt = &started
+			}
+			r.Recorder.Eventf(srv, corev1.EventTypeNormal, "PodAdopted",
+				"adopted existing pod %s after a lost status write", pod.Name)
+		} else {
+			// Someone else's pod holds this name. Adopting it would put this
+			// Server in charge of a workload it never created, and deleting it
+			// is not ours to do. Stand off and say so.
+			r.Recorder.Eventf(srv, corev1.EventTypeWarning, "PodNameConflict",
+				"pod %s exists but is not controlled by this Server", pod.Name)
+			setAccepted(srv, false, ReasonPodNameConflict,
+				fmt.Sprintf("pod %q exists but is not controlled by this Server", pod.Name))
+			pod, podFound, nameConflict = nil, false, true
+		}
+	}
+
 	// Create the pod once, and only for a server that has not been asked to go
 	// away. status.podName is the record that a pod once existed; it is never
 	// reused for a different pod, which is what makes PodLost detectable.
-	if !podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
+	if groupFound && networkFound && !persistentUnsupported && !nameConflict &&
+		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
 		built, err := podspec.BuildServerPod(network, group, srv)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -4045,6 +5123,9 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		srv.Status.PodName = built.Name
 		now := metav1.NewTime(r.Clock())
 		srv.Status.StartedAt = &now
+		// A fresh pod has never been registered and carries no flap history.
+		srv.Status.WasRegistered = false
+		srv.Status.ReadinessLosses = 0
 		if srv.Status.Phase == "" {
 			srv.Status.Phase = string(phase.Pending)
 		}
@@ -4126,6 +5207,13 @@ func (r *ServerReconciler) collectInputs(
 		PodExists:         podFound,
 		PodLost:           !podFound && srv.Status.PodName != "",
 		ReadinessLosses:   srv.Status.ReadinessLosses,
+		// Whether the server was ever registered is recorded state, not
+		// something to re-derive here: a Starting server that fell out of Ready
+		// may still have players connected from before the readiness loss (the
+		// fallback deregisters to stop new joins, it does not move anyone off),
+		// and only status.wasRegistered still knows that. The controller writes
+		// it wherever it registers and resets it when it creates a fresh pod.
+		WasRegistered: srv.Status.WasRegistered,
 	}
 
 	if podFound {
@@ -4142,6 +5230,7 @@ func (r *ServerReconciler) collectInputs(
 
 	snap := r.Agents.Lookup(podUID(pod, podFound))
 	in.AgentReady = snap.Ready
+	in.AgentConnected = snap.Connected
 	in.AgentStreamDownFor = snap.StreamDownFor
 	in.PlayersOnline = snap.Players
 	in.PlayersStale = snap.PlayersStale
@@ -4163,6 +5252,35 @@ func (r *ServerReconciler) collectInputs(
 	return in
 }
 
+// fallbackGroup stands in for a ServerGroup that is gone. It carries the CRD
+// defaults, so a Server that outlives its group still drains and cleans up on
+// sane timings instead of freezing. It is never used to build a pod.
+func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      srv.Spec.GroupRef.Name,
+			Namespace: srv.Namespace,
+		},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			Type:                   spawneryv1alpha1.ServerGroupEphemeral,
+			Drain:                  &spawneryv1alpha1.DrainSpec{TimeoutSeconds: defaultDrainTimeoutSeconds},
+			FailedRetentionSeconds: defaultFailedRetentionSeconds,
+		},
+	}
+}
+
+// setAccepted records whether the operator can fully manage this Server. It is
+// written onto the object; applyDecision persists it with the rest of the
+// status in a single update.
+func setAccepted(srv *spawneryv1alpha1.Server, ok bool, reason, message string) {
+	meta.SetStatusCondition(&srv.Status.Conditions, metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionAccepted,
+		Status:  conditionStatus(ok),
+		Reason:  reason,
+		Message: message,
+	})
+}
+
 func podUID(pod *corev1.Pod, found bool) string {
 	if !found {
 		return ""
@@ -4170,8 +5288,15 @@ func podUID(pod *corev1.Pod, found bool) string {
 	return string(pod.UID)
 }
 
+// crashLooping reports whether the Minecraft container is stuck restarting.
+// The check is deliberately scoped to that one container: PodTerminal aborts a
+// running drain, so a crash-looping sidecar must never be able to cut short the
+// drain of a healthy server that still has players on it.
 func crashLooping(pod *corev1.Pod) bool {
 	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != podspec.ContainerName {
+			continue
+		}
 		if cs.RestartCount >= MaxContainerRestarts &&
 			cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
 			return true
@@ -4203,11 +5328,21 @@ func (r *ServerReconciler) applyDecision(
 			return fmt.Errorf("register %s: %w", srv.Name, err)
 		}
 		srv.Status.Registered = true
+		// Remembered for the life of this pod: from here on a deletion has to
+		// drain, even if the server falls back out of Ready first.
+		srv.Status.WasRegistered = true
 	}
-	if d.StartDrain {
+	// The drain clock starts with the drain, not with phase Draining: a Failed
+	// server is drained while staying Failed, and without this its deadline
+	// would never be reached. Both the clock and the broadcast happen exactly
+	// once — the Failed branch repeats StartDrain on every pass, and re-sending
+	// the command to every proxy each resync would be pure noise. A proxy that
+	// reconnects is re-synced from the phase in the CR status.
+	if d.StartDrain && srv.Status.DrainStartedAt == nil {
 		if err := r.Registrar.Drain(ctx, srv); err != nil {
 			return fmt.Errorf("drain %s: %w", srv.Name, err)
 		}
+		srv.Status.DrainStartedAt = &now
 	}
 
 	if d.CountReadinessLoss {
@@ -4230,6 +5365,17 @@ func (r *ServerReconciler) applyDecision(
 		if current != phase.Ready || srv.Status.ReadySince == nil {
 			srv.Status.ReadySince = &now
 		}
+	case phase.Starting:
+		// Re-arm the startup deadline. It bounds the current attempt to become
+		// playable, not the age of the pod: entering Starting from Pending arms
+		// it, and entering it from Ready after a readiness loss re-arms it for
+		// the recovery attempt. Without this a server older than the deadline
+		// would be failed by the first blip; with it, one that cannot recover is
+		// still failed a deadline later.
+		if current != phase.Starting {
+			srv.Status.StartedAt = &now
+		}
+		srv.Status.ReadySince = nil
 	case phase.Draining:
 		if srv.Status.DrainStartedAt == nil {
 			srv.Status.DrainStartedAt = &now
@@ -4340,17 +5486,13 @@ func (r *ServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 Für `meta.SetStatusCondition` gehört `"k8s.io/apimachinery/pkg/api/meta"` in die Importe.
 
-- [ ] **Step 5: Test-Hilfsfunktion ergänzen**
+- [ ] **Step 5: Abhängigkeiten aufräumen**
 
-`containsString` wird im Test verwendet. In `internal/controller/server_controller.go` steht bereits `slices.Contains`; für den Test genügt in `suite_test.go`:
+Der Controller zieht `sigs.k8s.io/controller-runtime` als Manager-Paket herein; damit kommen `fsnotify`, `golang.org/x/sync` und `gomodules.xyz/jsonpatch/v2` neu in den Modulgraphen. Keine Version ändert sich:
 
-```go
-func containsString(haystack []string, needle string) bool {
-	return slices.Contains(haystack, needle)
-}
+```bash
+nix develop -c go mod tidy
 ```
-
-mit `"slices"` in den Importen.
 
 - [ ] **Step 6: Tests laufen lassen, Erfolg prüfen**
 
@@ -4359,14 +5501,92 @@ nix develop -c make manifests generate
 nix develop -c go test ./internal/controller/... -v
 ```
 
-Expected: PASS für alle zehn Tests, insbesondere `TestDeletionDrainsBeforeThePodIsDeleted` und `TestStalePlayerCountKeepsThePodOccupied`.
+Expected: PASS für alle zwölf Tests, insbesondere `TestDeletionDrainsBeforeThePodIsDeleted`, `TestDeletionAfterAReadinessLossStillDrains` und `TestStalePlayerCountKeepsThePodOccupied`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/controller config
+git add internal/controller config go.mod go.sum
 git commit -m "Server-Controller mit Zustandsmaschine, Drain und Occupied-Label"
 ```
+
+Das Statusfeld `wasRegistered` samt neu generiertem CRD gehört in einen eigenen, vorangehenden Commit — es ist eine API-Änderung und keine Controller-Änderung.
+
+**Nachtrag aus Task 9: `syncOccupiedLabel` bekommt eine engere Regel.**
+
+Der Block oben setzt `occupied := snap.PlayersStale || snap.Players > 0`. Das
+Label bedeutet aber „auf diesem Pod können Spieler sein", und das ist enger als
+„der Zählerstand ist veraltet". Ein Failed-Server behält seinen Pod die ganze
+Retention über; sein Zählerstand veraltet dabei zwangsläufig, und die alte Regel
+markiert damit einen toten Pod als belegt. Das daraus gebaute
+PodDisruptionBudget gibt ihn nicht mehr frei — bei `currentHealthy <
+desiredHealthy` rührt die Eviction-API auch einen unhealthy Pod nicht an —, und
+ein `kubectl drain` läuft auf diesem Knoten nie zu Ende.
+
+Umgesetzt ist deshalb:
+
+```go
+occupied := snap.Players > 0 ||
+	(snap.PlayersStale && srv.Status.WasRegistered && !podTerminal(pod))
+```
+
+Zwei Ausnahmen, sonst nichts: der Server muss im Leben dieses Pods einmal bei
+den Proxies registriert gewesen sein — zu einem anderen wird niemand geroutet —,
+und sein Pod muss noch leben. Für jeden anderen Fall gilt „veraltet heisst
+belegt" unverändert weiter; genau das schützt einen laufenden Server, dessen
+Agent verstummt ist. Die Terminal-Prüfung liegt jetzt in `podTerminal(pod)`, das
+sich `collectInputs` und `syncOccupiedLabel` teilen, damit es die Frage nur
+einmal gibt. `syncOccupiedLabel` nimmt dafür zusätzlich den `srv` entgegen.
+
+`ServerView.Occupied()` in Task 9 spiegelt diese Regel eins zu eins — wer eine
+der beiden ändert, muss die andere mitändern.
+
+**Nachtrag aus der Schlussdurchsicht: die Terminal-Ausnahme galt nur zur
+Hälfte, und aus dem Kommentar wurde eine gemeinsame Funktion.**
+
+Der Ausdruck oben prüft `!podTerminal(pod)` nur innerhalb des
+Stale-Zweigs. `snap.Players > 0` wird davor ausgewertet und gewinnt, und die
+Registry vergisst einen Pod nie von selbst — niemand sagt ihr, dass er weg
+ist. Ein Server, der mit sieben Spielern abstürzt, meldet also weiter sieben.
+Sein toter Pod behielt damit `spawnery.cloud/occupied=true`, das
+PodDisruptionBudget der Gruppe blieb bei `minAvailable=1` gegen
+`currentHealthy=0`, und zwar die volle `failedRetentionSeconds` lang — eine
+Stunde nach Vorgabe. Genau der Fall, den die Ausnahme verhindern sollte. Der
+alte Test traf ihn nicht, weil er einen Server mit Zählerstand null aufbaute
+und damit nur den Stale-Zweig durchlief.
+
+Die Regel gilt jetzt für den ganzen Ausdruck: ein Pod, der terminal ist oder
+verschwunden, hat keine Sitzungen mehr, egal was zuletzt gezählt wurde. Und sie
+steht nur noch einmal da, als `isOccupied(players, stale, wasRegistered,
+sessionsGone)` in `candidates.go`:
+
+```go
+func isOccupied(players int32, stale, wasRegistered, sessionsGone bool) bool {
+	if sessionsGone {
+		return false
+	}
+	return players > 0 || (stale && wasRegistered)
+}
+```
+
+`syncOccupiedLabel` und `ServerView.Occupied()` rufen beide diese Funktion auf
+und liefern nur noch die vier Tatsachen von ihrer Seite; für den Controller ist
+`sessionsGone` gleich `podTerminal(pod)`. Der Kommentar „wer eine ändert, muss
+die andere mitändern" entfällt damit — er hatte die beiden nicht
+zusammengehalten. Beide Seiten haben jetzt einen eigenen Test: der Label-Seite
+fehlte einer für `status.wasRegistered`, das Weglassen blieb dort unbemerkt.
+
+**Nachtrag aus der Schlussdurchsicht: der Finalizer wird zu einem eigenen
+Schritt.**
+
+Dass der Finalizer vor dem ersten Schreiben auf `srv.Status` gesetzt werden
+muss, stand als Kommentar über einem Inline-Block — die Reihenfolge hing daran,
+in welcher Zeile die Anweisungen zufällig standen. Das hat eine Reviewrunde
+gekostet. Der Block ist jetzt `ensureFinalizer(ctx, srv)`, eine Methode, die
+`srv.Status` nicht anfasst und deren Aufruf in `Reconcile` an genau der Stelle
+steht, an der die Statusschreiberei beginnt. Das Verhalten ist unverändert;
+`TestFinalizerIsWrittenBeforeTheFirstStatusWrite` schlägt fehl, sobald ein
+Statusschreibvorgang davor rutscht.
 
 ---
 
@@ -5340,6 +6560,101 @@ git add internal/controller config
 git commit -m "ServerGroup-Controller mit Kandidatenauswahl und PodDisruptionBudget"
 ```
 
+**Abweichungen vom obigen Code, wie umgesetzt:**
+
+1. **Ein Failed-Server zählt nicht zur Gruppengröße.** Der Block oben zählt alles
+   ausser `Draining` und `Terminating`. Ein `Failed`-Server ist von den Proxies
+   abgemeldet und wird laut Task 8 eine Stunde lang (`failedRetentionSeconds`)
+   zur Diagnose aufgehoben — die Gruppe stünde diese Stunde ohne einen Server da,
+   den ein Spieler betreten kann. `ServerView.countsTowardSize()` schliesst
+   deshalb `Failed` mit aus, die Gruppe legt sofort Ersatz an, und der
+   Failed-Server bleibt bis zum Ablauf seiner Retention liegen.
+   `SelectDeletionCandidates` nominiert ihn ebenfalls nie: ihn zu löschen würde
+   die Gruppe nicht verkleinern.
+2. **Belegung für die Auswahl und Belegung für das PDB sind zwei Fragen.**
+   `Occupied()` bleibt die breite Regel `Stale || Players > 0` — exakt das, womit
+   der Server-Controller `spawnery.cloud/occupied` setzt, und damit die richtige
+   Zahl für `minAvailable`. Die Kandidatenauswahl fragt stattdessen
+   `mayHavePlayers()`: ein veralteter Zählerstand verbirgt nur auf einem bei den
+   Proxies registrierten Server Spieler. Sonst wäre jeder `Pending`-Server
+   dauerhaft unlöschbar, und der Testfall „prefers servers that never took
+   players over ready ones" aus Step 1 könnte nie erfüllt werden.
+3. **Das PDB zählt auch die abfliessenden Server.** Der Block oben nimmt
+   `!v.leaving()` in die Zählung auf. Ein `Draining`-Pod trägt das
+   Occupied-Label aber weiter, bis der letzte Spieler weg ist; ihn nicht zu
+   zählen setzt `minAvailable` unter die Zahl der vom Selektor getroffenen Pods,
+   und genau diese Differenz ist eine Räumung, die die Eviction-API auf einem Pod
+   mit Spielern erlauben würde. `occupiedPods()` zählt daher jede Phase.
+4. **Eine fehlende Network blockiert nur, was von ihr abhängt.** Statt früh
+   zurückzukehren setzt der Controller `Accepted=False/NetworkNotFound`,
+   überspringt ausschliesslich das Anlegen von Servern und pflegt PDB und Status
+   weiter. Sonst blieben ausgerechnet die Pods einer Gruppe, deren Network
+   gelöscht wurde, ungeschützt. Gleiches gilt für persistente Gruppen.
+5. **`FreeSlots` in `TestAggregateGroup` ist 170, nicht 150.** Die Fixture hat
+   zwei Ready-Server der aktuellen Generation mit 100 Slots und 20 bzw. 10
+   Spielern; 80 + 90 = 170. Die 150 im Block oben sind ein Rechenfehler, die
+   Implementierung stimmt mit der Feldbeschreibung im CRD überein.
+6. **`bringUpNamed` braucht drei Durchläufe, nicht zwei.** Der erste legt den Pod
+   an, der zweite sieht ihn laufen und geht nach `Starting`, erst der dritte
+   passiert das Ready-Gate. Mit der Fassung oben endete der Server in `Starting`,
+   und `TestGroupAggregatesStatus` (`readyReplicas = 1`) hätte nie bestehen
+   können.
+5b. **`ServerView` trägt `WasRegistered` und `SessionsGone`.** Beides kommt aus
+   dem Server-Status bzw. dem Pod und ersetzt die Phase als Behelfsantwort.
+   `tookPlayers()` liest `WasRegistered` statt `Phase == Ready`: ein Server, der
+   seine Bereitschaft verloren hat, steht in `Starting` und hat seine Spieler
+   noch, weil das Abmelden nur neue Verbindungen stoppt. `mayHavePlayers()` ist
+   `Players > 0 || (Stale && WasRegistered)`, `Occupied()` zusätzlich
+   `&& !SessionsGone` — Letzteres spiegelt die Label-Regel aus dem Nachtrag zu
+   Task 8 und gibt einen toten Pod aus dem Budget frei.
+5c. **Obergrenze für aufgehobene Fehlschläge.** `maxRetainedFailures = 1` plus
+   `selectFailedForPruning()`: die Gruppe behält den **ältesten** Fehlschlag —
+   der erste nach einer Änderung ist der aussagekräftige — und löscht die
+   übrigen. Ohne das erreicht ein kaputtes Image über `MaxContainerRestarts` und
+   Kubelet-Backoff in ein bis zwei Minuten `Failed`, die Gruppe legt beim
+   nächsten Fünf-Sekunden-Durchlauf Ersatz an, und über eine Retention-Stunde
+   sammeln sich pro Sockel-Replika Dutzende Server samt Pods an. Exponentielles
+   Backoff, eine `Degraded`-Bedingung mit `CrashLoopBackoff` und das Aufgeben
+   nach wiederholten Fehlschlägen bleiben Meilenstein 4. `pruneFailed()` hängt
+   nicht an der Network und läuft deshalb auch ohne sie.
+5d. **`deleteServer` löscht nicht zweimal.** Ein Server behält seine Phase,
+   während er abfliesst, kann also erneut nominiert werden; ohne die Prüfung auf
+   den Deletion-Timestamp käme dasselbe Event jeden Resync neu.
+7. **Zusätzliche Tests.** `TestOccupiedServerSurvivesAContinuousScaleDown` und
+   `TestGroupHoldsItsFloorWithoutChurn` fahren die Invariante über 60 Durchläufe
+   im `resyncInterval`-Takt statt in einem einzelnen Durchlauf;
+   `TestGroupReplacesAFailedServer`, `TestPodDisruptionBudgetTracksThePlayerCount`,
+   `TestGroupWithoutItsNetworkStillProtectsItsPlayers`, `TestCountsTowardSize` und
+   `TestOccupiedPodsCountsEveryProtectedPod` sichern die Punkte 1 bis 4 ab.
+
+**Nachtrag aus der Review von Task 10 — die Ein-Netzwerk-Regel griff nicht.**
+Der Network-Controller (Task 10) setzte `Accepted=False/DuplicateNetwork` auf
+das unterlegene `Network`, aber `ServerGroupReconciler` prüfte bis dahin nur,
+ob sein `Network` **existiert** (`r.Get`), nie dessen `Accepted`-Bedingung. Eine
+Gruppe, die auf das unterlegene Network zeigte, legte also unverändert Server
+an — die Isolationsgarantie, für die die Ein-Netzwerk-Regel überhaupt existiert,
+griff nirgends. Behoben: `networkUsable := networkFound &&
+meta.IsStatusConditionTrue(network.Status.Conditions,
+spawneryv1alpha1.ConditionAccepted)` ersetzt `networkFound` als Torwächter fürs
+Sizing; ein neuer Grund `ReasonNetworkNotAccepted` beschreibt den Zustand
+getrennt von `NetworkNotFound`, mit einer Nachricht, die die Begründung des
+Network-Controllers zitiert, wenn eine vorliegt (`networkNotAcceptedMessage`).
+Genau wie bei einer fehlenden Network bleibt der Torwächter auf das Sizing
+beschränkt — PodDisruptionBudget, `pruneFailed` und der Status laufen
+unverändert weiter, sonst verlöre eine gerade abgelehnte Gruppe den Schutz für
+Pods, die noch Spieler halten (Task 8 Lektion 3). Die Fixture (`suite_test.go`)
+akzeptiert ihr eigenes Network jetzt einmalig beim Aufbau, damit kein
+bestehender Task-8/9-Test etwas von der neuen Kopplung merkt — keine
+Test-Assertion wurde dafür angefasst. Drei neue, mutationsgeprüfte Tests:
+`TestGroupPointingAtARejectedNetworkCreatesNoServers`,
+`TestGroupWithARejectedNetworkStillProtectsItsPlayers` (Spielerbeitritt liegt
+bewusst *nach* der Ablehnung, sonst könnte ein eingefrorenes PDB zufällig den
+richtigen Wert zeigen) und `TestGroupResumesOnceItsNetworkIsAccepted`
+(Wiederaufnahme über eine echte Schleife, mit einem eigenen Network/Gruppen-Paar,
+weil das bestehende `production`/`lobby`-Paar der Fixture wegen seines
+frühen, echten `creationTimestamp` nicht zuverlässig zum Verlierer eines
+zweiten, später erzeugten Networks gemacht werden kann).
+
 ---
 
 ### Task 10: Network-Controller
@@ -5626,6 +6941,47 @@ Falls `TestSecondNetworkInTheSameNamespaceIsRejected` scheitert, weil beide Netz
 git add internal/controller config
 git commit -m "Network-Controller mit Ein-Netzwerk-pro-Namespace-Regel"
 ```
+
+**Abweichung vom obigen Code, wie umgesetzt:**
+
+1. **Der Test-Helfer `func (f *fixture) network(...)` heisst `getNetwork`.** Die
+   Fixture aus Task 8/9 trägt bereits ein Feld `network *spawneryv1alpha1.Network`
+   (das Bootstrap-Network der Fixture); ein Feld und eine Methode können in Go
+   nicht denselben Namen tragen, der Block oben kompiliert deshalb nicht
+   unverändert. Alle Aufrufstellen innerhalb von `network_controller_test.go`
+   wurden entsprechend umbenannt; sonst nichts am Testinhalt geändert.
+2. **`SetupWithManager` verzichtet auf `Owns(&spawneryv1alpha1.ServerGroup{})`.**
+   Nachtrag aus der Review: nichts setzt eine Owner-Reference von einer
+   ServerGroup auf ihr Network, der Watch hätte also nie ausgelöst. Der
+   aggregierte Status bleibt stattdessen über das `resyncInterval`-Polling in
+   `Reconcile` aktuell; ein Kommentar an der Stelle hält fest, dass ein
+   ereignisgetriebenes Refresh einen Mapping-Handler bräuchte und das Task 12
+   entscheiden kann.
+
+**Nachtrag aus der Schlussdurchsicht: die Altersregel hatte keinen wirksamen
+Test.**
+
+`namespaceOwner` von `CreationTimestamp.Before(...)` auf `After(...)`
+umzustellen — ältestes gewinnt wird jüngstes gewinnt — liess die Suite grün.
+`TestSecondNetworkInTheSameNamespaceIsRejected` legt seine beiden Networks
+direkt hintereinander an; ein echter API-Server stempelt `creationTimestamp`
+sekundengenau, beide landen in derselben Sekunde, `Equal` greift, und dann
+entscheidet allein der Name — dasselbe Urteil in beide Richtungen. Die Uhr der
+Fixture hilft nicht, sie stellt nur die Testzeit, nicht den Zeitstempel des
+API-Servers. Kippt der Vergleich, lehnt ein einziges versehentliches
+`kubectl apply` eines Networks das laufende ab, und jede ServerGroup im
+Namespace hört auf zu skalieren.
+
+Der Vergleich war richtig, also wurde der Test repariert und nicht der Code. Die
+reine Auswahl steht jetzt als `pickNamespaceOwner(networks
+[]spawneryv1alpha1.Network) string` daneben; `namespaceOwner` listet und ruft
+sie auf. Nur so lässt sich die Regel über eine handgebaute Liste mit gesetzten,
+verschiedenen `creationTimestamp`-Werten prüfen. Vier Fälle plus zwei leere:
+Älteres gewinnt unabhängig von der Namensreihenfolge, gleiche Zeitstempel fallen
+auf den Namen zurück, das Löschen des Gewinners geht an das nächstälteste und
+nicht an den kleinsten Namen, und über alle Permutationen der Liste kippt der
+Gewinner nie. Der bestehende envtest-Test bleibt unverändert daneben stehen; er
+deckt weiterhin den Weg über den Namespace ab.
 
 ---
 
@@ -6354,9 +7710,16 @@ nix develop -c k3d cluster create spawnery-dev --agents 1
 nix develop -c kubectl apply -f config/crd/bases
 nix develop -c kubectl apply -f config/samples/network.yaml
 nix develop -c go run ./cmd/spawnery-operator --leader-elect=false &
-sleep 20
+sleep 45
 nix develop -c kubectl get networks,servergroups,servers,pods -n minecraft
 ```
+
+**Korrektur aus der Schlussdurchsicht:** hier standen `sleep 20`, und damit
+konnte der Ablauf nicht aufgehen. Trifft die ServerGroup ihr Network an, bevor
+der Network-Controller es angenommen hat, wartet sie `networkRetryInterval` —
+30 Sekunden — bis zum nächsten Versuch. Der erste Server kann also gut eine
+halbe Minute brauchen. README und Plan stehen jetzt beide auf 45 Sekunden und
+sagen den Grund dazu.
 
 Expected:
 - `network production` mit `Accepted=True`,
@@ -6370,6 +7733,29 @@ Danach aufräumen:
 kill %1
 nix develop -c k3d cluster delete spawnery-dev
 ```
+
+**Abweichung bei der Ausführung (Task 12, tatsächlich umgesetzt):** Die
+Entwicklungsumgebung, in der Task 12 umgesetzt wurde, hatte keine
+Container-Laufzeit (kein Docker, kein Podman), also konnte k3d hier nicht
+laufen. Step 8 wurde deshalb nicht wie oben beschrieben ausgeführt. Ersatzweise
+beweist `internal/controller/setup_test.go::TestManagerReconcilesEndToEnd`
+dasselbe gegen die envtest-Kontrollebene: ein echter, laufender Manager mit
+Leader-Election an — nicht ein manuell aufgerufenes `Reconcile` — erzeugt aus
+einem `Network` und einer `ServerGroup` ein `Server`-Objekt und einen Pod, und
+`mgr.Elected()` schließt für eine Einzel-Instanz prompt. Zusätzlich prüft
+`TestSampleManifestIsAcceptedByTheAPIServer`, dass `config/samples/network.yaml`
+serverseitig (Strukturschema und CEL) angenommen wird. Beides zusammen deckt
+nicht ab, was nur mit einem echten Kubelet sichtbar wird: dass der Pod mangels
+Basis-Image mit `ErrImagePull` hängen bleibt. Der k3d-Ablauf oben steht
+unverändert als Anleitung im README, klar als in dieser Umgebung nicht
+ausgeführt gekennzeichnet.
+
+Die zweite Manager-Instanz in `TestManagerReconcilesEndToEnd` setzt
+`Controller.SkipNameValidation: true`: controller-runtime führt eine
+prozessweite Registry von Controller-Namen, und `network`/`servergroup`/`server`
+sind durch `TestSetupAllRegistersEveryController` im selben Testbinary bereits
+vergeben. Das ist ein reines Testartefakt (zwei unabhängige Manager-Instanzen
+im selben Prozess) ohne Auswirkung auf den Produktionscode.
 
 - [ ] **Step 9: README aktualisieren**
 

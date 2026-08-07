@@ -1,0 +1,275 @@
+/*
+Copyright The Spawnery Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1alpha1
+
+import (
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// ServerGroupType selects the operating mode of a group.
+// +kubebuilder:validation:Enum=Ephemeral;Persistent
+type ServerGroupType string
+
+const (
+	// ServerGroupEphemeral loses its state on stop: minigames and lobbies.
+	ServerGroupEphemeral ServerGroupType = "Ephemeral"
+	// ServerGroupPersistent keeps its world on a PVC: survival and creative.
+	ServerGroupPersistent ServerGroupType = "Persistent"
+)
+
+// ScalingSpec drives slot-based scaling of ephemeral groups.
+type ScalingSpec struct {
+	// MinReplicas is the number of servers kept running at all times.
+	// +kubebuilder:validation:Minimum=0
+	MinReplicas int32 `json:"minReplicas"`
+
+	// MaxReplicas caps the number of servers.
+	// +kubebuilder:validation:Minimum=1
+	MaxReplicas int32 `json:"maxReplicas"`
+
+	// SpareSlots is the number of free player slots kept available.
+	// +kubebuilder:validation:Minimum=0
+	SpareSlots int32 `json:"spareSlots"`
+
+	// ScaleDownStabilizationSeconds is how long a server must be empty before
+	// it is eligible for scale-down.
+	// +kubebuilder:default=300
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ScaleDownStabilizationSeconds int32 `json:"scaleDownStabilizationSeconds,omitempty"`
+}
+
+// UpdateSpec controls the rolling update of ephemeral groups.
+type UpdateSpec struct {
+	// MaxUnavailable is how many servers may be draining or terminating at the
+	// same time because of a generation change.
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxUnavailable int32 `json:"maxUnavailable,omitempty"`
+
+	// MaxStaleSeconds forces an active drain of stale servers after this many
+	// seconds. 0 means stale servers are never actively emptied.
+	// +kubebuilder:default=0
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxStaleSeconds int32 `json:"maxStaleSeconds,omitempty"`
+}
+
+// DrainSpec bounds how long players may be moved off a server.
+type DrainSpec struct {
+	// TimeoutSeconds is the upper bound for the drain.
+	// +kubebuilder:validation:Minimum=1
+	TimeoutSeconds int32 `json:"timeoutSeconds"`
+}
+
+// StorageSpec describes the PVC of a persistent group.
+type StorageSpec struct {
+	// Size of the volume. May grow, never shrink; actual expansion requires
+	// allowVolumeExpansion on the StorageClass.
+	Size resource.Quantity `json:"size"`
+
+	// StorageClassName is immutable once set.
+	// +optional
+	StorageClassName *string `json:"storageClassName,omitempty"`
+
+	// AccessModes are immutable once set.
+	// +kubebuilder:default={ReadWriteOnce}
+	// +optional
+	AccessModes []corev1.PersistentVolumeAccessMode `json:"accessModes,omitempty"`
+}
+
+// ServerGroupSpec describes a group of Minecraft servers.
+// +kubebuilder:validation:XValidation:rule="self.type == oldSelf.type",message="spec.type is immutable"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.storage)",message="spec.storage is not allowed for type Ephemeral"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.replicas)",message="spec.replicas is not allowed for type Ephemeral"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || has(self.scaling)",message="spec.scaling is required for type Ephemeral"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.scaling)",message="spec.scaling is not allowed for type Persistent"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update)",message="spec.update is not allowed for type Persistent"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.storage)",message="spec.storage is required for type Persistent"
+// +kubebuilder:validation:XValidation:rule="!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas",message="scaling.minReplicas must not exceed scaling.maxReplicas"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || quantity(self.storage.size).compareTo(quantity(oldSelf.storage.size)) >= 0",message="storage.size must not shrink"
+type ServerGroupSpec struct {
+	// NetworkRef names the Network this group belongs to.
+	NetworkRef ObjectRef `json:"networkRef"`
+
+	// Type selects ephemeral or persistent operation. Immutable.
+	Type ServerGroupType `json:"type"`
+
+	// Image is the Paper base image. A digest reference is recommended.
+	// +kubebuilder:validation:MinLength=1
+	Image string `json:"image"`
+
+	// MaxPlayers is the player capacity of a single server of this group.
+	// +kubebuilder:validation:Minimum=1
+	MaxPlayers int32 `json:"maxPlayers"`
+
+	// Replicas is the fixed number of persistent servers. Ephemeral groups are
+	// sized by scaling instead.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Resources overrides Network.spec.defaults.resources.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// Scheduling overrides Network.spec.defaults.scheduling.
+	// +optional
+	Scheduling *Scheduling `json:"scheduling,omitempty"`
+
+	// Mounts are extra ConfigMap and Secret mounts.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Mounts []Mount `json:"mounts,omitempty"`
+
+	// Scaling configures slot-based scaling. Ephemeral only.
+	// +optional
+	Scaling *ScalingSpec `json:"scaling,omitempty"`
+
+	// Update configures the rolling update. Ephemeral only.
+	// +optional
+	Update *UpdateSpec `json:"update,omitempty"`
+
+	// Storage configures the PVC. Persistent only.
+	// +optional
+	Storage *StorageSpec `json:"storage,omitempty"`
+
+	// Drain bounds how long players may be moved off a server.
+	// +kubebuilder:default={timeoutSeconds:60}
+	// +optional
+	Drain *DrainSpec `json:"drain,omitempty"`
+
+	// TerminationGracePeriodSeconds is the time the pod gets to save its world.
+	// +kubebuilder:default=60
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	TerminationGracePeriodSeconds int64 `json:"terminationGracePeriodSeconds,omitempty"`
+
+	// FailedRetentionSeconds is how long a Failed server is kept for diagnosis.
+	// +kubebuilder:default=3600
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	FailedRetentionSeconds int32 `json:"failedRetentionSeconds,omitempty"`
+}
+
+// ServerGroupStatus is the observed state of a ServerGroup.
+type ServerGroupStatus struct {
+	// Phase is derived from the servers and conditions of this group.
+	// +optional
+	Phase string `json:"phase,omitempty"`
+
+	// Replicas is the number of Server objects owned by this group.
+	// +optional
+	Replicas int32 `json:"replicas"`
+
+	// ReadyReplicas is the number of servers in phase Ready.
+	// +optional
+	ReadyReplicas int32 `json:"readyReplicas"`
+
+	// OnlinePlayers is the sum of players across all ready servers.
+	// +optional
+	OnlinePlayers int32 `json:"onlinePlayers"`
+
+	// FreeSlots is the sum of free slots across ready servers of the current
+	// generation. Stale servers do not count.
+	// +optional
+	FreeSlots int32 `json:"freeSlots"`
+
+	// ObservedGeneration is the spec generation this status was computed from.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions follow the standard Kubernetes condition contract.
+	// +optional
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=mcgroup
+// +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
+// +kubebuilder:printcolumn:name="Players",type=integer,JSONPath=`.status.onlinePlayers`
+// +kubebuilder:printcolumn:name="Free Slots",type=integer,JSONPath=`.status.freeSlots`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// ServerGroup is a group of interchangeable Minecraft servers.
+type ServerGroup struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   ServerGroupSpec   `json:"spec,omitempty"`
+	Status ServerGroupStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// ServerGroupList contains a list of ServerGroup.
+type ServerGroupList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ServerGroup `json:"items"`
+}
+
+// IsEphemeral reports whether this group is ephemeral.
+func (g *ServerGroup) IsEphemeral() bool {
+	return g.Spec.Type == ServerGroupEphemeral
+}
+
+// DesiredReplicas is the number of servers the group must have at minimum.
+// Milestone 1 sizes ephemeral groups at their floor; slot-based scaling on top
+// of this arrives in milestone 4.
+func (g *ServerGroup) DesiredReplicas() int32 {
+	if g.IsEphemeral() {
+		if g.Spec.Scaling == nil {
+			return 0
+		}
+		return g.Spec.Scaling.MinReplicas
+	}
+	if g.Spec.Replicas == nil {
+		return 0
+	}
+	return *g.Spec.Replicas
+}
+
+// DrainTimeout is the configured drain timeout.
+func (g *ServerGroup) DrainTimeout() time.Duration {
+	if g.Spec.Drain == nil {
+		return 60 * time.Second
+	}
+	return time.Duration(g.Spec.Drain.TimeoutSeconds) * time.Second
+}
+
+// FailedRetention is how long a Failed server is kept.
+func (g *ServerGroup) FailedRetention() time.Duration {
+	return time.Duration(g.Spec.FailedRetentionSeconds) * time.Second
+}
+
+func init() {
+	SchemeBuilder.Register(&ServerGroup{}, &ServerGroupList{})
+}

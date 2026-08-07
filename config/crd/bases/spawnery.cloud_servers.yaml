@@ -1,0 +1,232 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: servers.spawnery.cloud
+spec:
+  group: spawnery.cloud
+  names:
+    kind: Server
+    listKind: ServerList
+    plural: servers
+    shortNames:
+    - mcsrv
+    singular: server
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.groupRef.name
+      name: Group
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.players
+      name: Players
+      type: integer
+    - jsonPath: .status.slots
+      name: Slots
+      type: integer
+    - jsonPath: .status.registered
+      name: Registered
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Server is a single running Minecraft server instance.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ServerSpec describes one running Minecraft server instance. It is created
+              and owned by a ServerGroup and is not meant to be edited by hand.
+            properties:
+              groupGeneration:
+                description: |-
+                  GroupGeneration is the metadata.generation of the group at creation
+                  time. A server whose value is behind the group's is stale.
+                format: int64
+                type: integer
+              groupRef:
+                description: GroupRef names the owning ServerGroup.
+                properties:
+                  name:
+                    description: Name of the referenced object.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              ordinal:
+                description: |-
+                  Ordinal is the stable index of a persistent server. Unset for ephemeral
+                  servers, whose names carry a random suffix instead.
+                format: int32
+                minimum: 0
+                type: integer
+            required:
+            - groupRef
+            type: object
+          status:
+            description: ServerStatus is the observed state of a Server.
+            properties:
+              address:
+                description: Address is the pod IP and port the proxies connect to.
+                type: string
+              conditions:
+                description: Conditions follow the standard Kubernetes condition contract.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              drainStartedAt:
+                description: |-
+                  DrainStartedAt is when the server entered phase Draining. Drives the
+                  drain deadline.
+                format: date-time
+                type: string
+              failedAt:
+                description: FailedAt is when the server entered phase Failed. Drives
+                  the retention.
+                format: date-time
+                type: string
+              phase:
+                description: |-
+                  Phase is the state machine position: Pending, Starting, Ready, Draining,
+                  Terminating or Failed.
+                type: string
+              players:
+                description: Players is the last reported player count, throttled
+                  to protect etcd.
+                format: int32
+                type: integer
+              playersUpdatedAt:
+                description: |-
+                  PlayersUpdatedAt is when Players was last reported by the agent. Counts
+                  older than twice the report interval are treated as occupied.
+                format: date-time
+                type: string
+              podName:
+                description: |-
+                  PodName is the pod backing this server. Set once the pod was created and
+                  never reused for a different pod.
+                type: string
+              readinessLosses:
+                description: |-
+                  ReadinessLosses counts how often this server fell out of Ready. Past the
+                  threshold the server is considered broken rather than flapping.
+                format: int32
+                type: integer
+              readySince:
+                description: |-
+                  ReadySince is when the server last entered phase Ready. Drives the reset
+                  of the readiness-loss counter.
+                format: date-time
+                type: string
+              registered:
+                description: Registered reports whether the proxies currently know
+                  this server.
+                type: boolean
+              slots:
+                description: Slots is the player capacity reported by the agent.
+                format: int32
+                type: integer
+              startedAt:
+                description: |-
+                  StartedAt is when this server last began trying to become playable: the
+                  pod creation, and then every entry into phase Starting. It drives the
+                  startup deadline, which therefore bounds the current attempt rather than
+                  the age of the pod — a long-lived server that loses readiness gets a full
+                  deadline to recover in, and is failed if it does not. Do not change this
+                  back to pod-creation time.
+                format: date-time
+                type: string
+              wasRegistered:
+                description: |-
+                  WasRegistered is true once this server has been registered with the
+                  proxies during the life of its current pod. A server that fell out of
+                  Ready is back in Starting but still has its players connected —
+                  deregistering stopped new joins, it did not move anyone — so the phase
+                  alone cannot tell us whether players are at risk.
+                type: boolean
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

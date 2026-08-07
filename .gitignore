@@ -1,0 +1,6 @@
+.superpowers/
+bin/
+cover.out
+result
+result-*
+.direnv/
