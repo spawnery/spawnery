@@ -47,6 +47,18 @@ const ServerFinalizer = "spawnery.cloud/drain"
 // server counts as broken rather than flaky.
 const MaxContainerRestarts int32 = 3
 
+// ReasonPodNameConflict marks a Server whose pod name is taken by a pod it does
+// not control.
+const ReasonPodNameConflict = "PodNameConflict"
+
+// defaultDrainTimeoutSeconds and defaultFailedRetentionSeconds mirror the
+// kubebuilder defaults on ServerGroupSpec. They are what a Server falls back to
+// when its group is gone, so drain and cleanup keep sane timings.
+const (
+	defaultDrainTimeoutSeconds    int32 = 60
+	defaultFailedRetentionSeconds int32 = 3600
+)
+
 // resyncInterval is how often a Server is re-examined even without an event.
 // The state machine has time-driven transitions (startup deadline, drain
 // deadline, stream grace period) that no watch reports.
@@ -88,19 +100,22 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// Only pod creation needs the group and the network. Everything else — the
+	// finalizer, the drain, the occupied label, releasing the object — has to
+	// keep running without them, or a Server whose group was deleted would stay
+	// Ready forever with its pod alive and its finalizer held, and the orphan
+	// sweep of Task 11 would deadlock on that finalizer.
 	group := &spawneryv1alpha1.ServerGroup{}
 	groupKey := types.NamespacedName{Name: srv.Spec.GroupRef.Name, Namespace: srv.Namespace}
+	groupFound := true
 	if err := r.Get(ctx, groupKey, group); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
-		// The group is gone. The orphan reconciler removes the Server; there
-		// is nothing sensible to reconcile against in the meantime.
-		logger.Info("server group not found, waiting for the orphan sweep", "group", srv.Spec.GroupRef.Name)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		groupFound = false
 	}
 
-	if !group.IsEphemeral() {
+	if groupFound && !group.IsEphemeral() {
 		// Persistent groups need a PVC and an ordered shutdown; that is
 		// milestone 5. Say so instead of building half a pod.
 		logger.Info("persistent groups are not implemented yet", "group", group.Name)
@@ -108,13 +123,30 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	network := &spawneryv1alpha1.Network{}
-	networkKey := types.NamespacedName{Name: group.Spec.NetworkRef.Name, Namespace: srv.Namespace}
-	if err := r.Get(ctx, networkKey, network); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return ctrl.Result{}, err
+	networkFound := false
+	if groupFound {
+		networkKey := types.NamespacedName{Name: group.Spec.NetworkRef.Name, Namespace: srv.Namespace}
+		if err := r.Get(ctx, networkKey, network); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, err
+			}
+		} else {
+			networkFound = true
 		}
-		logger.Info("network not found", "network", group.Spec.NetworkRef.Name)
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	switch {
+	case !groupFound:
+		logger.Info("server group not found, running on the CRD defaults", "group", srv.Spec.GroupRef.Name)
+		setAccepted(srv, false, spawneryv1alpha1.ReasonGroupNotFound,
+			fmt.Sprintf("server group %q not found; draining and cleanup continue on the default timings", srv.Spec.GroupRef.Name))
+		group = fallbackGroup(srv)
+	case !networkFound:
+		logger.Info("network not found, running on the CRD defaults", "network", group.Spec.NetworkRef.Name)
+		setAccepted(srv, false, spawneryv1alpha1.ReasonNetworkNotFound,
+			fmt.Sprintf("network %q not found; no pod can be created for this server", group.Spec.NetworkRef.Name))
+	default:
+		setAccepted(srv, true, spawneryv1alpha1.ReasonAccepted, "group and network resolved")
 	}
 
 	// The finalizer must sit on the object before the pod exists, otherwise a
@@ -131,10 +163,37 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	// Recover from a status write lost between Create(pod) and Status().Update:
+	// the pod is there but status.podName is empty, so without adoption the
+	// creation branch would be skipped forever while the startup deadline could
+	// never fire and PodLost could never be detected.
+	nameConflict := false
+	if podFound && srv.Status.PodName == "" {
+		if metav1.IsControlledBy(pod, srv) {
+			srv.Status.PodName = pod.Name
+			if srv.Status.StartedAt == nil {
+				started := pod.CreationTimestamp
+				srv.Status.StartedAt = &started
+			}
+			r.Recorder.Eventf(srv, corev1.EventTypeNormal, "PodAdopted",
+				"adopted existing pod %s after a lost status write", pod.Name)
+		} else {
+			// Someone else's pod holds this name. Adopting it would put this
+			// Server in charge of a workload it never created, and deleting it
+			// is not ours to do. Stand off and say so.
+			r.Recorder.Eventf(srv, corev1.EventTypeWarning, "PodNameConflict",
+				"pod %s exists but is not controlled by this Server", pod.Name)
+			setAccepted(srv, false, ReasonPodNameConflict,
+				fmt.Sprintf("pod %q exists but is not controlled by this Server", pod.Name))
+			pod, podFound, nameConflict = nil, false, true
+		}
+	}
+
 	// Create the pod once, and only for a server that has not been asked to go
 	// away. status.podName is the record that a pod once existed; it is never
 	// reused for a different pod, which is what makes PodLost detectable.
-	if !podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
+	if groupFound && networkFound && !nameConflict &&
+		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
 		built, err := podspec.BuildServerPod(network, group, srv)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -276,6 +335,35 @@ func (r *ServerReconciler) collectInputs(
 	return in
 }
 
+// fallbackGroup stands in for a ServerGroup that is gone. It carries the CRD
+// defaults, so a Server that outlives its group still drains and cleans up on
+// sane timings instead of freezing. It is never used to build a pod.
+func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      srv.Spec.GroupRef.Name,
+			Namespace: srv.Namespace,
+		},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			Type:                   spawneryv1alpha1.ServerGroupEphemeral,
+			Drain:                  &spawneryv1alpha1.DrainSpec{TimeoutSeconds: defaultDrainTimeoutSeconds},
+			FailedRetentionSeconds: defaultFailedRetentionSeconds,
+		},
+	}
+}
+
+// setAccepted records whether the operator can fully manage this Server. It is
+// written onto the object; applyDecision persists it with the rest of the
+// status in a single update.
+func setAccepted(srv *spawneryv1alpha1.Server, ok bool, reason, message string) {
+	meta.SetStatusCondition(&srv.Status.Conditions, metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionAccepted,
+		Status:  conditionStatus(ok),
+		Reason:  reason,
+		Message: message,
+	})
+}
+
 func podUID(pod *corev1.Pod, found bool) string {
 	if !found {
 		return ""
@@ -330,6 +418,13 @@ func (r *ServerReconciler) applyDecision(
 	if d.StartDrain {
 		if err := r.Registrar.Drain(ctx, srv); err != nil {
 			return fmt.Errorf("drain %s: %w", srv.Name, err)
+		}
+		// The drain clock starts with the drain, not with phase Draining: a
+		// Failed server is drained while staying Failed, and without this its
+		// deadline would never be reached. Written once, so a decision that
+		// repeats StartDrain cannot keep pushing the deadline out.
+		if srv.Status.DrainStartedAt == nil {
+			srv.Status.DrainStartedAt = &now
 		}
 	}
 

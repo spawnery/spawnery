@@ -22,7 +22,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
@@ -58,6 +62,348 @@ func bringUpReady(t *testing.T, f *fixture, name string) string {
 		t.Fatalf("phase = %q, want Ready", got)
 	}
 	return uid
+}
+
+// driveToFailed flaps the server past MaxReadinessLosses so it ends up in phase
+// Failed with its players still connected, and returns once it is there.
+func driveToFailed(t *testing.T, f *fixture, name string) {
+	t.Helper()
+	for i := int32(0); i < phase.MaxReadinessLosses; i++ {
+		f.setPodRunning(name, false)
+		f.reconcile(name)
+		if i < phase.MaxReadinessLosses-1 {
+			f.setPodRunning(name, true)
+			f.reconcile(name)
+		}
+	}
+	f.reconcile(name)
+	if got := f.server(name).Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q after %d readiness losses, want Failed", got, phase.MaxReadinessLosses)
+	}
+}
+
+// pods lists every pod in the fixture namespace that still exists.
+func (f *fixture) pods() []corev1.Pod {
+	f.t.Helper()
+	list := &corev1.PodList{}
+	if err := f.c.List(f.ctx, list, client.InNamespace(f.ns)); err != nil {
+		f.t.Fatalf("list pods: %v", err)
+	}
+	return list.Items
+}
+
+// TestLongLivedReadyServerSurvivesAReadinessBlip is the regression test for the
+// stale startup deadline. status.startedAt is written once at pod creation and
+// never refreshed, so StartupDeadlineReached is true for every server older than
+// the deadline. Before the fix, one probe blip on a server that had been serving
+// for hours put it in Starting and the very next reconcile failed it — and the
+// Failed retention then deleted its pod with everyone still on board.
+func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 40, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+
+	// Far past the 5 minute startup deadline.
+	f.clock.Advance(2 * time.Hour)
+	if err := f.agents.ReportPlayers(uid, 40, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
+		t.Fatalf("phase = %q after two hours of healthy service, want Ready", got)
+	}
+
+	// One probe blip.
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
+		t.Fatalf("phase = %q after the blip, want Starting", got)
+	}
+
+	// The reconcile that used to fail it: still Starting, still past the
+	// startup deadline, but this server was playable once.
+	f.reconcile("lobby-x7k2")
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase == string(phase.Failed) {
+		t.Fatal("a long-lived server was failed by its stale startup deadline")
+	}
+	if srv.Status.Phase != string(phase.Starting) {
+		t.Fatalf("phase = %q, want Starting", srv.Status.Phase)
+	}
+
+	// And it recovers.
+	f.setPodRunning("lobby-x7k2", true)
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase = %q after recovery, want Ready", got)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while 40 players were online — core invariant broken")
+	}
+}
+
+// TestFailedServerDrainsBeforeItsPodIsDeleted covers the second half of the
+// same hole: a server can reach Failed with its sessions untouched, and the
+// retention path must not delete that pod without moving the players off first.
+func TestFailedServerDrainsBeforeItsPodIsDeleted(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	driveToFailed(t, f, "lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want a drain when the server failed with players on it", f.registrar.drained)
+	}
+	if srv.Status.DrainStartedAt == nil {
+		t.Error("status.drainStartedAt not set on a failed server that is being drained")
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod of a failed server deleted while players were online")
+	}
+
+	// While the drain runs the pod is kept, and the drain clock is not pushed
+	// out by the repeated decisions.
+	drainStarted := srv.Status.DrainStartedAt.DeepCopy()
+	for i := 0; i < 3; i++ {
+		f.clock.Advance(10 * time.Second)
+		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+		if _, ok := f.pod("lobby-x7k2"); !ok {
+			t.Fatalf("pod deleted while 6 players were still online (tick %d)", i)
+		}
+	}
+	if got := f.server("lobby-x7k2").Status.DrainStartedAt; !got.Equal(drainStarted) {
+		t.Errorf("drainStartedAt rewritten: %v, want the original %v", got, drainStarted)
+	}
+
+	// Once it runs empty and the retention has passed, it goes.
+	f.clock.Advance(2 * time.Hour)
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Error("pod of an empty failed server survived its retention")
+	}
+}
+
+// TestFailedServerIsCleanedUpOnceItsDrainDeadlinePasses documents the escape
+// hatch deliberately: the drain of a failed server is bounded, so one stuck
+// player cannot pin a broken server forever. The group's drain timeout is 60s
+// and its failed retention an hour, so by the time the retention elapses the
+// drain deadline has always passed — this is the intended end of that path,
+// not an accident.
+func TestFailedServerIsCleanedUpOnceItsDrainDeadlinePasses(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	driveToFailed(t, f, "lobby-x7k2")
+
+	// Past both the drain deadline and the retention, with players still on.
+	f.clock.Advance(2 * time.Hour)
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Error("a failed server pinned by players survived its drain deadline")
+	}
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Terminating) {
+		t.Errorf("phase = %q, want Terminating", got)
+	}
+}
+
+// TestDeletingAFailedServerDrainsThenReleasesIt pins that a Failed server
+// honours a deletion request: it drains first and releases its finalizer after.
+func TestDeletingAFailedServerDrainsThenReleasesIt(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 4, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	driveToFailed(t, f, "lobby-x7k2")
+
+	if err := f.c.Delete(f.ctx, f.server("lobby-x7k2")); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("deleting a failed server dropped its players")
+	}
+	if len(f.registrar.drained) == 0 {
+		t.Error("deleting a failed server issued no drain")
+	}
+
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Fatal("pod still there after the failed server was emptied")
+	}
+
+	f.reconcile("lobby-x7k2")
+	err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, &spawneryv1alpha1.Server{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer not released on a deleted failed server: %v", err)
+	}
+}
+
+// TestServerOutlivingItsGroupStillDrainsAndReleasesItself pins that a missing
+// ServerGroup does not freeze the controller. Before the fix both the group and
+// the network lookup returned before the finalizer, the drain and the label
+// sync, so such a Server kept its pod and its finalizer forever and the orphan
+// sweep of Task 11 would deadlock on it.
+func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 3, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	if err := f.c.Delete(f.ctx, f.group); err != nil {
+		t.Fatalf("delete ServerGroup: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	accepted := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonGroupNotFound {
+		t.Errorf("Accepted condition = %+v, want False/GroupNotFound", accepted)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod dropped when the group disappeared")
+	}
+
+	// It must still drain and still let go.
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Draining) {
+		t.Errorf("phase = %q for a groupless server being deleted, want Draining", got)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while players were online — core invariant broken")
+	}
+
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Fatal("pod leaked: still there after the drain finished")
+	}
+
+	f.reconcile("lobby-x7k2")
+	err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, &spawneryv1alpha1.Server{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer never released on a groupless server: %v", err)
+	}
+}
+
+// TestPodIsAdoptedAfterALostStatusWrite covers a crash between Create(pod) and
+// the status update. fetchPod falls back to the server name and finds the pod,
+// so without adoption the creation branch is skipped forever while podName and
+// startedAt stay empty — the startup deadline could never fire and PodLost
+// could never be detected.
+func TestPodIsAdoptedAfterALostStatusWrite(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	pod, ok := f.pod("lobby-x7k2")
+	if !ok {
+		t.Fatal("no pod created")
+	}
+	originalUID := pod.UID
+
+	// Simulate the lost write: the pod exists, the status does not know it.
+	srv := f.server("lobby-x7k2")
+	srv.Status.PodName = ""
+	srv.Status.StartedAt = nil
+	if err := f.c.Status().Update(f.ctx, srv); err != nil {
+		t.Fatalf("clear status: %v", err)
+	}
+
+	f.reconcile("lobby-x7k2")
+
+	srv = f.server("lobby-x7k2")
+	if srv.Status.PodName != "lobby-x7k2" {
+		t.Errorf("status.podName = %q, want the existing pod adopted", srv.Status.PodName)
+	}
+	if srv.Status.StartedAt == nil {
+		t.Error("status.startedAt not restored from the pod; the startup deadline needs it")
+	}
+	if got := f.pods(); len(got) != 1 {
+		t.Errorf("%d pods in the namespace, want exactly 1 — a second pod was created", len(got))
+	}
+	if again, ok := f.pod("lobby-x7k2"); !ok || again.UID != originalUID {
+		t.Error("the original pod was replaced instead of adopted")
+	}
+}
+
+// TestForeignPodWithTheSameNameIsNotAdopted is the other half of adoption: the
+// owner reference has to be verified, or a Server would take charge of a
+// workload it never created.
+func TestForeignPodWithTheSameNameIsNotAdopted(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-x7k2")
+
+	foreign := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lobby-x7k2",
+			Namespace: f.ns,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: spawneryv1alpha1.GroupVersion.String(),
+				Kind:       "ServerGroup",
+				Name:       f.group.Name,
+				UID:        f.group.UID,
+				Controller: ptr.To(true),
+			}},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "not-ours", Image: "busybox"}},
+		},
+	}
+	if err := f.c.Create(f.ctx, foreign); err != nil {
+		t.Fatalf("create foreign pod: %v", err)
+	}
+
+	f.reconcile("lobby-x7k2")
+
+	if got := f.server("lobby-x7k2").Status.PodName; got != "" {
+		t.Errorf("status.podName = %q, want empty — a foreign pod was adopted", got)
+	}
+	got, ok := f.pod("lobby-x7k2")
+	if !ok {
+		t.Fatal("the foreign pod was deleted")
+	}
+	if got.UID != foreign.UID {
+		t.Error("the foreign pod was replaced")
+	}
+	if _, labelled := got.Labels[podspec.LabelOccupied]; labelled {
+		t.Error("the controller labelled a pod it does not own")
+	}
+	if len(f.pods()) != 1 {
+		t.Errorf("%d pods, want 1 — the controller created a second pod over the conflict", len(f.pods()))
+	}
 }
 
 func TestReconcileCreatesThePod(t *testing.T) {
