@@ -35,34 +35,12 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// bringUpReady walks a fresh server all the way into phase Ready and returns
-// the pod UID the agent registry is keyed on.
+// bringUpReady creates a fresh server and walks it all the way into phase
+// Ready, returning the pod UID the agent registry is keyed on.
 func bringUpReady(t *testing.T, f *fixture, name string) string {
 	t.Helper()
 	f.createServer(name)
-	f.reconcile(name)
-
-	pod, ok := f.pod(name)
-	if !ok {
-		t.Fatalf("reconcile did not create the pod for %s", name)
-	}
-	uid := string(pod.UID)
-
-	f.setPodRunning(name, false)
-	f.reconcile(name)
-
-	f.setPodRunning(name, true)
-	f.agents.Connect(uid, agent.RoleServer)
-	f.agents.MarkReady(uid)
-	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
-		t.Fatalf("ReportPlayers: %v", err)
-	}
-	f.reconcile(name)
-
-	if got := f.server(name).Status.Phase; got != string(phase.Ready) {
-		t.Fatalf("phase = %q, want Ready", got)
-	}
-	return uid
+	return bringUpNamed(t, f, name)
 }
 
 // driveToFailed flaps the server past MaxReadinessLosses so it ends up in phase

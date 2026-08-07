@@ -26,12 +26,14 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -44,6 +46,57 @@ func TestMain(m *testing.M) {
 // containsString is the test-side spelling of the finalizer check.
 func containsString(haystack []string, needle string) bool {
 	return slices.Contains(haystack, needle)
+}
+
+// ctrlclientInNamespace is a shorthand for the list option.
+func ctrlclientInNamespace(ns string) client.ListOption { return client.InNamespace(ns) }
+
+// agentRoleServer avoids importing the agent package into every test file.
+func agentRoleServer() agent.Role { return agent.RoleServer }
+
+// intstrInt is the IntOrString kind an absolute PDB value must have.
+var intstrInt = intstr.Int
+
+// hasCondition reports whether the list carries the given condition.
+func hasCondition(conds []metav1.Condition, condType string, status metav1.ConditionStatus, reason string) bool {
+	for _, c := range conds {
+		if c.Type == condType && c.Status == status && c.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
+// bringUpNamed walks an already-created server into Ready and returns the pod
+// UID the agent registry is keyed on. Reaching Ready takes three passes: the
+// first creates the pod, the second sees it running and moves to Starting, and
+// only the third can pass the ready gate, which needs both the probe and the
+// agent.
+func bringUpNamed(t *testing.T, f *fixture, name string) string {
+	t.Helper()
+	f.reconcile(name)
+
+	pod, ok := f.pod(name)
+	if !ok {
+		t.Fatalf("reconcile did not create the pod for %s", name)
+	}
+	uid := string(pod.UID)
+
+	f.setPodRunning(name, false)
+	f.reconcile(name)
+
+	f.setPodRunning(name, true)
+	f.agents.Connect(uid, agentRoleServer())
+	f.agents.MarkReady(uid)
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile(name)
+
+	if got := f.server(name).Status.Phase; got != string(phase.Ready) {
+		t.Fatalf("phase of %s = %q, want Ready", name, got)
+	}
+	return uid
 }
 
 // testClock is a hand-cranked clock shared by the controller tests.

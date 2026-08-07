@@ -6484,6 +6484,52 @@ git add internal/controller config
 git commit -m "ServerGroup-Controller mit Kandidatenauswahl und PodDisruptionBudget"
 ```
 
+**Abweichungen vom obigen Code, wie umgesetzt:**
+
+1. **Ein Failed-Server zählt nicht zur Gruppengröße.** Der Block oben zählt alles
+   ausser `Draining` und `Terminating`. Ein `Failed`-Server ist von den Proxies
+   abgemeldet und wird laut Task 8 eine Stunde lang (`failedRetentionSeconds`)
+   zur Diagnose aufgehoben — die Gruppe stünde diese Stunde ohne einen Server da,
+   den ein Spieler betreten kann. `ServerView.countsTowardSize()` schliesst
+   deshalb `Failed` mit aus, die Gruppe legt sofort Ersatz an, und der
+   Failed-Server bleibt bis zum Ablauf seiner Retention liegen.
+   `SelectDeletionCandidates` nominiert ihn ebenfalls nie: ihn zu löschen würde
+   die Gruppe nicht verkleinern.
+2. **Belegung für die Auswahl und Belegung für das PDB sind zwei Fragen.**
+   `Occupied()` bleibt die breite Regel `Stale || Players > 0` — exakt das, womit
+   der Server-Controller `spawnery.cloud/occupied` setzt, und damit die richtige
+   Zahl für `minAvailable`. Die Kandidatenauswahl fragt stattdessen
+   `mayHavePlayers()`: ein veralteter Zählerstand verbirgt nur auf einem bei den
+   Proxies registrierten Server Spieler. Sonst wäre jeder `Pending`-Server
+   dauerhaft unlöschbar, und der Testfall „prefers servers that never took
+   players over ready ones" aus Step 1 könnte nie erfüllt werden.
+3. **Das PDB zählt auch die abfliessenden Server.** Der Block oben nimmt
+   `!v.leaving()` in die Zählung auf. Ein `Draining`-Pod trägt das
+   Occupied-Label aber weiter, bis der letzte Spieler weg ist; ihn nicht zu
+   zählen setzt `minAvailable` unter die Zahl der vom Selektor getroffenen Pods,
+   und genau diese Differenz ist eine Räumung, die die Eviction-API auf einem Pod
+   mit Spielern erlauben würde. `occupiedPods()` zählt daher jede Phase.
+4. **Eine fehlende Network blockiert nur, was von ihr abhängt.** Statt früh
+   zurückzukehren setzt der Controller `Accepted=False/NetworkNotFound`,
+   überspringt ausschliesslich das Anlegen von Servern und pflegt PDB und Status
+   weiter. Sonst blieben ausgerechnet die Pods einer Gruppe, deren Network
+   gelöscht wurde, ungeschützt. Gleiches gilt für persistente Gruppen.
+5. **`FreeSlots` in `TestAggregateGroup` ist 170, nicht 150.** Die Fixture hat
+   zwei Ready-Server der aktuellen Generation mit 100 Slots und 20 bzw. 10
+   Spielern; 80 + 90 = 170. Die 150 im Block oben sind ein Rechenfehler, die
+   Implementierung stimmt mit der Feldbeschreibung im CRD überein.
+6. **`bringUpNamed` braucht drei Durchläufe, nicht zwei.** Der erste legt den Pod
+   an, der zweite sieht ihn laufen und geht nach `Starting`, erst der dritte
+   passiert das Ready-Gate. Mit der Fassung oben endete der Server in `Starting`,
+   und `TestGroupAggregatesStatus` (`readyReplicas = 1`) hätte nie bestehen
+   können.
+7. **Zusätzliche Tests.** `TestOccupiedServerSurvivesAContinuousScaleDown` und
+   `TestGroupHoldsItsFloorWithoutChurn` fahren die Invariante über 60 Durchläufe
+   im `resyncInterval`-Takt statt in einem einzelnen Durchlauf;
+   `TestGroupReplacesAFailedServer`, `TestPodDisruptionBudgetTracksThePlayerCount`,
+   `TestGroupWithoutItsNetworkStillProtectsItsPlayers`, `TestCountsTowardSize` und
+   `TestOccupiedPodsCountsEveryProtectedPod` sichern die Punkte 1 bis 4 ab.
+
 ---
 
 ### Task 10: Network-Controller
