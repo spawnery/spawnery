@@ -77,7 +77,12 @@ type ServerStatus struct {
 	// +optional
 	WasRegistered bool `json:"wasRegistered"`
 
-	// StartedAt is when the pod was created. Drives the startup deadline.
+	// StartedAt is when this server last began trying to become playable: the
+	// pod creation, and then every entry into phase Starting. It drives the
+	// startup deadline, which therefore bounds the current attempt rather than
+	// the age of the pod — a long-lived server that loses readiness gets a full
+	// deadline to recover in, and is failed if it does not. Do not change this
+	// back to pod-creation time.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 

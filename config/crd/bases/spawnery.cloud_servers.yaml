@@ -207,8 +207,13 @@ spec:
                 format: int32
                 type: integer
               startedAt:
-                description: StartedAt is when the pod was created. Drives the startup
-                  deadline.
+                description: |-
+                  StartedAt is when this server last began trying to become playable: the
+                  pod creation, and then every entry into phase Starting. It drives the
+                  startup deadline, which therefore bounds the current attempt rather than
+                  the age of the pod — a long-lived server that loses readiness gets a full
+                  deadline to recover in, and is failed if it does not. Do not change this
+                  back to pod-creation time.
                 format: date-time
                 type: string
               wasRegistered:

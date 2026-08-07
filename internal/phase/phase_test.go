@@ -181,18 +181,20 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Failed, Reason: ReasonStartupTimeout},
 		},
 		{
-			// status.startedAt is written once at pod creation and never
-			// refreshed, so StartupDeadlineReached stays true for the whole life
-			// of a long-lived server. Without the WasRegistered guard, one probe
-			// blip on a server that has been serving for hours would fail it —
-			// and the Failed retention would then delete its pod undrained.
-			name:    "the startup deadline does not fail a server that was already registered",
+			// A server that fell out of Ready and cannot come back must still be
+			// failed, and must take its players with it. The flap counter can
+			// never catch this on its own: losses are only counted on a
+			// Ready -> Starting transition, which a permanently red probe never
+			// produces again. The controller re-arms status.startedAt on entry
+			// into Starting, so the deadline here is one full recovery window
+			// after the fall-back, not the age of the pod.
+			name:    "a server that cannot recover is failed and drained a deadline after falling back",
 			current: Starting,
 			in: Inputs{
 				PodExists: true, PodRunning: true, StartupDeadlineReached: true,
-				WasRegistered: true, PlayersOnline: 40, ReadinessLosses: 1,
+				WasRegistered: true, PlayersOnline: 9, ReadinessLosses: 1,
 			},
-			want: Decision{Next: Starting, Reason: ReasonPodPending},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonStartupTimeout},
 		},
 		{
 			// Flapping is the bound for a server that was once playable, and it
@@ -402,8 +404,6 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-// TestNoPathBackFromDraining guards the rule that a draining server never
-// serves players again, no matter how healthy it looks.
 // TestStreamDownGraceIsFifteenSeconds pins the value, not just the symbol.
 // Every other test is written relative to the constant, so shrinking it to a
 // second would break nothing and silently drop the tolerance design spec 4.4
@@ -438,6 +438,8 @@ func TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline(t *testing.T) 
 	}
 }
 
+// TestNoPathBackFromDraining guards the rule that a draining server never
+// serves players again, no matter how healthy it looks.
 func TestNoPathBackFromDraining(t *testing.T) {
 	got := Decide(Draining, healthyReady())
 	if got.Next == Ready || got.Register {

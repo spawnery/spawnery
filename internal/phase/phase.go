@@ -97,8 +97,11 @@ type Inputs struct {
 	// container is in CrashLoopBackOff past the operator's tolerance.
 	PodTerminal bool
 
-	// StartupDeadlineReached is true if the server did not reach Ready within
-	// the operator's startup deadline.
+	// StartupDeadlineReached is true if the current attempt to become playable
+	// has run past the operator's startup deadline. The clock is re-armed on
+	// every entry into Starting, so this bounds the attempt and not the age of
+	// the pod: a long-lived server that loses readiness gets a full deadline to
+	// recover in, and is failed if it does not.
 	StartupDeadlineReached bool
 
 	// AgentReady is true if the in-game agent reported readiness on a live
@@ -271,17 +274,19 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 	}
 
-	// A server that failed with players still on it has to be emptied before
-	// its pod goes. A terminal or lost pod means the process is already down,
-	// so there is nobody left to move and draining would be pointless.
-	drainOnFailure := in.WasRegistered && !in.PodTerminal && !in.PodLost
-
 	if in.PodTerminal {
+		// A terminal pod is never drained: the process is already down and its
+		// sessions went with it, so there is nobody left to move off.
 		return Decision{
-			Next: Failed, Deregister: current == Ready, StartDrain: drainOnFailure,
+			Next: Failed, Deregister: current == Ready,
 			Reason: ReasonPodTerminal, Message: "pod reached a terminal phase",
 		}
 	}
+
+	// From here on the pod is neither lost nor terminal — both returned above.
+	// A server that failed while it was registered still has live sessions on
+	// it, so failing it has to take its players off rather than strand them.
+	drainOnFailure := in.WasRegistered
 
 	if in.ReadinessLosses >= MaxReadinessLosses {
 		return Decision{
@@ -290,15 +295,16 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 	}
 
-	// The startup deadline catches a server that never became playable. It must
-	// not apply to one that already was: a server that reached Ready and cannot
-	// recover is bounded by MaxReadinessLosses, and status.startedAt is written
-	// once at pod creation and never refreshed, so without this guard the
-	// deadline stays reached forever and one probe blip would fail a healthy
-	// server that has been serving players for hours.
-	if in.StartupDeadlineReached && current != Ready && !in.WasRegistered {
+	// The startup deadline bounds the current attempt to become playable. The
+	// controller re-arms status.startedAt on every entry into Starting, so this
+	// measures the attempt and not the age of the pod: a server that has served
+	// for hours and blips once gets a fresh deadline to recover in, while one
+	// that fell out of Ready and cannot come back is still failed — the flap
+	// counter alone would never catch it, because losses are only counted on a
+	// Ready -> Starting transition that a permanently red probe never repeats.
+	if in.StartupDeadlineReached && current != Ready {
 		return Decision{
-			Next:   Failed,
+			Next: Failed, StartDrain: drainOnFailure,
 			Reason: ReasonStartupTimeout, Message: "server did not become ready in time",
 		}
 	}
