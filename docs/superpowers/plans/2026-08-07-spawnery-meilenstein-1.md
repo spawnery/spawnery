@@ -1421,7 +1421,12 @@ type ServerStatus struct {
 	// +optional
 	WasRegistered bool `json:"wasRegistered"`
 
-	// StartedAt is when the pod was created. Drives the startup deadline.
+	// StartedAt is when this server last began trying to become playable: the
+	// pod creation, and then every entry into phase Starting. It drives the
+	// startup deadline, which therefore bounds the current attempt rather than
+	// the age of the pod — a long-lived server that loses readiness gets a full
+	// deadline to recover in, and is failed if it does not. Do not change this
+	// back to pod-creation time.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 
@@ -1890,18 +1895,20 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Failed, Reason: ReasonStartupTimeout},
 		},
 		{
-			// status.startedAt is written once at pod creation and never
-			// refreshed, so StartupDeadlineReached stays true for the whole life
-			// of a long-lived server. Without the WasRegistered guard, one probe
-			// blip on a server that has been serving for hours would fail it —
-			// and the Failed retention would then delete its pod undrained.
-			name:    "the startup deadline does not fail a server that was already registered",
+			// A server that fell out of Ready and cannot come back must still be
+			// failed, and must take its players with it. The flap counter can
+			// never catch this on its own: losses are only counted on a
+			// Ready -> Starting transition, which a permanently red probe never
+			// produces again. The controller re-arms status.startedAt on entry
+			// into Starting, so the deadline here is one full recovery window
+			// after the fall-back, not the age of the pod.
+			name:    "a server that cannot recover is failed and drained a deadline after falling back",
 			current: Starting,
 			in: Inputs{
 				PodExists: true, PodRunning: true, StartupDeadlineReached: true,
-				WasRegistered: true, PlayersOnline: 40, ReadinessLosses: 1,
+				WasRegistered: true, PlayersOnline: 9, ReadinessLosses: 1,
 			},
-			want: Decision{Next: Starting, Reason: ReasonPodPending},
+			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonStartupTimeout},
 		},
 		{
 			// Flapping is the bound for a server that was once playable, and it
@@ -2111,8 +2118,6 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-// TestNoPathBackFromDraining guards the rule that a draining server never
-// serves players again, no matter how healthy it looks.
 // TestStreamDownGraceIsFifteenSeconds pins the value, not just the symbol.
 // Every other test is written relative to the constant, so shrinking it to a
 // second would break nothing and silently drop the tolerance design spec 4.4
@@ -2147,6 +2152,8 @@ func TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline(t *testing.T) 
 	}
 }
 
+// TestNoPathBackFromDraining guards the rule that a draining server never
+// serves players again, no matter how healthy it looks.
 func TestNoPathBackFromDraining(t *testing.T) {
 	got := Decide(Draining, healthyReady())
 	if got.Next == Ready || got.Register {
@@ -2296,8 +2303,11 @@ type Inputs struct {
 	// container is in CrashLoopBackOff past the operator's tolerance.
 	PodTerminal bool
 
-	// StartupDeadlineReached is true if the server did not reach Ready within
-	// the operator's startup deadline.
+	// StartupDeadlineReached is true if the current attempt to become playable
+	// has run past the operator's startup deadline. The clock is re-armed on
+	// every entry into Starting, so this bounds the attempt and not the age of
+	// the pod: a long-lived server that loses readiness gets a full deadline to
+	// recover in, and is failed if it does not.
 	StartupDeadlineReached bool
 
 	// AgentReady is true if the in-game agent reported readiness on a live
@@ -2470,17 +2480,19 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 	}
 
-	// A server that failed with players still on it has to be emptied before
-	// its pod goes. A terminal or lost pod means the process is already down,
-	// so there is nobody left to move and draining would be pointless.
-	drainOnFailure := in.WasRegistered && !in.PodTerminal && !in.PodLost
-
 	if in.PodTerminal {
+		// A terminal pod is never drained: the process is already down and its
+		// sessions went with it, so there is nobody left to move off.
 		return Decision{
-			Next: Failed, Deregister: current == Ready, StartDrain: drainOnFailure,
+			Next: Failed, Deregister: current == Ready,
 			Reason: ReasonPodTerminal, Message: "pod reached a terminal phase",
 		}
 	}
+
+	// From here on the pod is neither lost nor terminal — both returned above.
+	// A server that failed while it was registered still has live sessions on
+	// it, so failing it has to take its players off rather than strand them.
+	drainOnFailure := in.WasRegistered
 
 	if in.ReadinessLosses >= MaxReadinessLosses {
 		return Decision{
@@ -2489,15 +2501,16 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 	}
 
-	// The startup deadline catches a server that never became playable. It must
-	// not apply to one that already was: a server that reached Ready and cannot
-	// recover is bounded by MaxReadinessLosses, and status.startedAt is written
-	// once at pod creation and never refreshed, so without this guard the
-	// deadline stays reached forever and one probe blip would fail a healthy
-	// server that has been serving players for hours.
-	if in.StartupDeadlineReached && current != Ready && !in.WasRegistered {
+	// The startup deadline bounds the current attempt to become playable. The
+	// controller re-arms status.startedAt on every entry into Starting, so this
+	// measures the attempt and not the age of the pod: a server that has served
+	// for hours and blips once gets a fresh deadline to recover in, while one
+	// that fell out of Ready and cannot come back is still failed — the flap
+	// counter alone would never catch it, because losses are only counted on a
+	// Ready -> Starting transition that a permanently red probe never repeats.
+	if in.StartupDeadlineReached && current != Ready {
 		return Decision{
-			Next:   Failed,
+			Next: Failed, StartDrain: drainOnFailure,
 			Reason: ReasonStartupTimeout, Message: "server did not become ready in time",
 		}
 	}
@@ -3988,8 +4001,19 @@ func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 	// One probe blip.
 	f.setPodRunning("lobby-x7k2", false)
 	f.reconcile("lobby-x7k2")
-	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
+	blipped := f.server("lobby-x7k2")
+	if got := blipped.Status.Phase; got != string(phase.Starting) {
 		t.Fatalf("phase = %q after the blip, want Starting", got)
+	}
+	// The mechanism that makes this safe: entering Starting re-arms the
+	// startup deadline, so the recovery attempt gets a full window.
+	if blipped.Status.StartedAt == nil || !blipped.Status.StartedAt.Time.Equal(f.clock.Now()) {
+		var got any
+		if blipped.Status.StartedAt != nil {
+			got = blipped.Status.StartedAt.Time.UTC()
+		}
+		t.Fatalf("status.startedAt = %v, want it re-armed to %v on entry into Starting",
+			got, f.clock.Now().UTC())
 	}
 
 	// The reconcile that used to fail it: still Starting, still past the
@@ -4011,6 +4035,82 @@ func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 	}
 	if _, ok := f.pod("lobby-x7k2"); !ok {
 		t.Fatal("pod deleted while 40 players were online — core invariant broken")
+	}
+}
+
+// TestServerThatNeverBecomesPlayableFailsAtTheDeadline is the other side of the
+// re-armed startup deadline: a server that was never playable must still be
+// failed when the deadline passes, exactly as before.
+func TestServerThatNeverBecomesPlayableFailsAtTheDeadline(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	// The pod runs but its probe never turns green.
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
+		t.Fatalf("phase = %q, want Starting", got)
+	}
+
+	f.clock.Advance(6 * time.Minute) // the fixture's deadline is 5 minutes
+	f.reconcile("lobby-x7k2")
+
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Failed) {
+		t.Errorf("phase = %q past the startup deadline, want Failed", got)
+	}
+	if len(f.registrar.drained) != 0 {
+		t.Errorf("drained = %v, want none — this server never took a player", f.registrar.drained)
+	}
+}
+
+// TestServerThatCannotRecoverIsFailedAndDrained is the zombie the first attempt
+// at the startup-deadline fix created. Exempting a once-registered server from
+// the deadline meant a server that fell out of Ready with a permanently red
+// probe was never failed at all: the flap counter cannot catch it either,
+// because losses are only counted on a Ready -> Starting transition that a
+// permanently red probe never produces again. Its players sat on a server that
+// fails its own health check, forever. Re-arming the clock instead of exempting
+// the server fails it one deadline after the fall-back, and drains it.
+func TestServerThatCannotRecoverIsFailedAndDrained(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.clock.Advance(2 * time.Hour)
+	if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	// The probe goes red and never comes back.
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
+		t.Fatalf("phase = %q after the fall-back, want Starting", got)
+	}
+
+	f.clock.Advance(200 * time.Minute)
+	if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Failed) {
+		t.Fatalf("phase = %q after 200 minutes with a red probe, want Failed — the server is a zombie",
+			srv.Status.Phase)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want exactly one drain — 9 players were left on a dead server",
+			f.registrar.drained)
+	}
+	if srv.Status.DrainStartedAt == nil {
+		t.Error("status.drainStartedAt not set, so the drain would never time out")
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted with 9 players still on it — core invariant broken")
 	}
 }
 
@@ -4038,8 +4138,10 @@ func TestFailedServerDrainsBeforeItsPodIsDeleted(t *testing.T) {
 		t.Fatal("pod of a failed server deleted while players were online")
 	}
 
-	// While the drain runs the pod is kept, and the drain clock is not pushed
-	// out by the repeated decisions.
+	// While the drain runs the pod is kept, the drain clock is not pushed out by
+	// the repeated decisions, and the command is not re-broadcast on every pass
+	// — the Failed branch returns StartDrain each time, but the real registrar
+	// fans out to every proxy.
 	drainStarted := srv.Status.DrainStartedAt.DeepCopy()
 	for i := 0; i < 3; i++ {
 		f.clock.Advance(10 * time.Second)
@@ -4053,6 +4155,10 @@ func TestFailedServerDrainsBeforeItsPodIsDeleted(t *testing.T) {
 	}
 	if got := f.server("lobby-x7k2").Status.DrainStartedAt; !got.Equal(drainStarted) {
 		t.Errorf("drainStartedAt rewritten: %v, want the original %v", got, drainStarted)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v after four reconciles of a draining failed server, want exactly one broadcast",
+			f.registrar.drained)
 	}
 
 	// Once it runs empty and the retention has passed, it goes.
@@ -5027,17 +5133,17 @@ func (r *ServerReconciler) applyDecision(
 		// drain, even if the server falls back out of Ready first.
 		srv.Status.WasRegistered = true
 	}
-	if d.StartDrain {
+	// The drain clock starts with the drain, not with phase Draining: a Failed
+	// server is drained while staying Failed, and without this its deadline
+	// would never be reached. Both the clock and the broadcast happen exactly
+	// once — the Failed branch repeats StartDrain on every pass, and re-sending
+	// the command to every proxy each resync would be pure noise. A proxy that
+	// reconnects is re-synced from the phase in the CR status.
+	if d.StartDrain && srv.Status.DrainStartedAt == nil {
 		if err := r.Registrar.Drain(ctx, srv); err != nil {
 			return fmt.Errorf("drain %s: %w", srv.Name, err)
 		}
-		// The drain clock starts with the drain, not with phase Draining: a
-		// Failed server is drained while staying Failed, and without this its
-		// deadline would never be reached. Written once, so a decision that
-		// repeats StartDrain cannot keep pushing the deadline out.
-		if srv.Status.DrainStartedAt == nil {
-			srv.Status.DrainStartedAt = &now
-		}
+		srv.Status.DrainStartedAt = &now
 	}
 
 	if d.CountReadinessLoss {
@@ -5060,6 +5166,17 @@ func (r *ServerReconciler) applyDecision(
 		if current != phase.Ready || srv.Status.ReadySince == nil {
 			srv.Status.ReadySince = &now
 		}
+	case phase.Starting:
+		// Re-arm the startup deadline. It bounds the current attempt to become
+		// playable, not the age of the pod: entering Starting from Pending arms
+		// it, and entering it from Ready after a readiness loss re-arms it for
+		// the recovery attempt. Without this a server older than the deadline
+		// would be failed by the first blip; with it, one that cannot recover is
+		// still failed a deadline later.
+		if current != phase.Starting {
+			srv.Status.StartedAt = &now
+		}
+		srv.Status.ReadySince = nil
 	case phase.Draining:
 		if srv.Status.DrainStartedAt == nil {
 			srv.Status.DrainStartedAt = &now
