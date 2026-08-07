@@ -1170,7 +1170,7 @@ git commit -m "ServerGroup-CRD mit CEL-Validierung"
 - Consumes: `ObjectRef`, `Scheduling`, `DrainSpec`, `SchemeBuilder`.
 - Produces:
   - `v1alpha1.Server`, `ServerSpec{GroupRef ObjectRef, Ordinal *int32, GroupGeneration int64}`, `ServerStatus`.
-  - `ServerStatus`-Felder: `Phase string`, `PodName string`, `Address string`, `Players int32`, `Slots int32`, `PlayersUpdatedAt *metav1.Time`, `Registered bool`, `StartedAt *metav1.Time`, `ReadySince *metav1.Time`, `DrainStartedAt *metav1.Time`, `FailedAt *metav1.Time`, `ReadinessLosses int32`, `Conditions []metav1.Condition`.
+  - `ServerStatus`-Felder: `Phase string`, `PodName string`, `Address string`, `Players int32`, `Slots int32`, `PlayersUpdatedAt *metav1.Time`, `Registered bool`, `WasRegistered bool`, `StartedAt *metav1.Time`, `ReadySince *metav1.Time`, `DrainStartedAt *metav1.Time`, `FailedAt *metav1.Time`, `ReadinessLosses int32`, `Conditions []metav1.Condition`.
   - `v1alpha1.ProxyGroup`, `ProxyGroupSpec`, `ExposeSpec`, `ProxyGroupStatus`.
   - `ExposeType` mit `ExposeLoadBalancer`, `ExposeNodePort`, `ExposeHostPort`.
 
@@ -1411,6 +1411,14 @@ type ServerStatus struct {
 	// Registered reports whether the proxies currently know this server.
 	// +optional
 	Registered bool `json:"registered"`
+
+	// WasRegistered is true once this server has been registered with the
+	// proxies during the life of its current pod. A server that fell out of
+	// Ready is back in Starting but still has its players connected —
+	// deregistering stopped new joins, it did not move anyone — so the phase
+	// alone cannot tell us whether players are at risk.
+	// +optional
+	WasRegistered bool `json:"wasRegistered"`
 
 	// StartedAt is when the pod was created. Drives the startup deadline.
 	// +optional
@@ -1724,11 +1732,12 @@ import (
 // healthyReady is the input set of a server that is fine in phase Ready.
 func healthyReady() Inputs {
 	return Inputs{
-		PodExists:  true,
-		PodRunning: true,
-		PodReady:   true,
-		AgentReady: true,
-		Slots:      100,
+		PodExists:      true,
+		PodRunning:     true,
+		PodReady:       true,
+		AgentReady:     true,
+		AgentConnected: true,
+		Slots:          100,
 	}
 }
 
@@ -1796,10 +1805,23 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
 		},
 		{
+			// A live stream that reports not-ready is the agent telling us
+			// something, not us failing to hear it: no grace period applies.
+			name:    "ready falls back to starting at once when a live agent reports not ready",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.AgentReady = false
+				return in
+			}(),
+			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
+		},
+		{
 			name:    "ready falls back to starting when the agent stream is down too long",
 			current: Ready,
 			in: func() Inputs {
 				in := healthyReady()
+				in.AgentConnected = false
 				in.AgentStreamDownFor = StreamDownGrace
 				return in
 			}(),
@@ -1810,6 +1832,25 @@ func TestDecide(t *testing.T) {
 			current: Ready,
 			in: func() Inputs {
 				in := healthyReady()
+				in.AgentConnected = false
+				in.AgentStreamDownFor = StreamDownGrace - time.Millisecond
+				return in
+			}(),
+			want: Decision{Next: Ready, Reason: ReasonReadyGatePassed},
+		},
+		{
+			// The exact shape the agent registry emits after Disconnect: it
+			// clears ready and starts the clock, so a Ready server inside the
+			// grace window arrives here as neither ready nor connected. This is
+			// the composition that made the StreamDownGrace clause unreachable
+			// before — inside the grace only the timer may decide. This is the
+			// only case in this table that distinguishes the two readings.
+			name:    "ready tolerates a dropped stream whose agent has not reported ready since",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.AgentReady = false
+				in.AgentConnected = false
 				in.AgentStreamDownFor = StreamDownGrace - time.Millisecond
 				return in
 			}(),
@@ -2133,6 +2174,10 @@ type Inputs struct {
 	// AgentReady is true if the in-game agent reported readiness on a live
 	// stream.
 	AgentReady bool
+	// AgentConnected is true while the agent stream is up. It separates "the
+	// agent is telling us it is not ready" from "we cannot hear the agent" —
+	// the first is immediate, the second is tolerated for StreamDownGrace.
+	AgentConnected bool
 	// AgentStreamDownFor is how long the agent stream has been broken. Zero
 	// while the stream is up.
 	AgentStreamDownFor time.Duration
@@ -2319,7 +2364,19 @@ func Decide(current Phase, in Inputs) Decision {
 		}
 
 	default: // Ready
-		if !in.PodReady || !in.AgentReady || in.AgentStreamDownFor >= StreamDownGrace {
+		lost := !in.PodReady
+		if !lost {
+			if in.AgentConnected {
+				// A live stream that reports not-ready is an immediate loss.
+				lost = !in.AgentReady
+			} else {
+				// A broken stream is tolerated until the grace expires; the
+				// player count goes stale meanwhile, so the server counts as
+				// occupied and is protected from deletion either way.
+				lost = in.AgentStreamDownFor >= StreamDownGrace
+			}
+		}
+		if lost {
 			return Decision{
 				Next: Starting, Deregister: true, CountReadinessLoss: true,
 				Reason: ReasonReadinessLost, Message: "server lost a ready signal",
@@ -3449,6 +3506,7 @@ package controller
 import (
 	"context"
 	"os"
+	"slices"
 	"testing"
 	"time"
 
@@ -3470,11 +3528,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// containsString is the test-side spelling of the finalizer check.
+func containsString(haystack []string, needle string) bool {
+	return slices.Contains(haystack, needle)
+}
+
 // testClock is a hand-cranked clock shared by the controller tests.
 type testClock struct{ now time.Time }
 
-func (c *testClock) Now() time.Time           { return c.now }
-func (c *testClock) Advance(d time.Duration)  { c.now = c.now.Add(d) }
+func (c *testClock) Now() time.Time          { return c.now }
+func (c *testClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
 // recordingRegistrar remembers the calls the controller made.
 type recordingRegistrar struct {
@@ -3664,6 +3727,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -3922,6 +3986,70 @@ func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 	}
 }
 
+// TestDeletionAfterAReadinessLossStillDrains covers the case the phase alone
+// cannot describe: the server reached Ready, was registered, then lost a ready
+// signal and fell back to Starting — deregistered, but with its players still
+// connected, because deregistering only stops new joins. Deleting it now must
+// drain, not terminate.
+func TestDeletionAfterAReadinessLossStillDrains(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 3, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	f.setPodRunning("lobby-x7k2", false)
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Starting) {
+		t.Fatalf("phase = %q after the readiness loss, want Starting", srv.Status.Phase)
+	}
+	if srv.Status.Registered {
+		t.Error("status.registered = true after the readiness loss, want false")
+	}
+	if !srv.Status.WasRegistered {
+		t.Fatal("status.wasRegistered = false, want true — the server was registered once")
+	}
+
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv = f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Draining) {
+		t.Errorf("phase = %q, want Draining — a once-registered server still holds its players",
+			srv.Status.Phase)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want one drain command", f.registrar.drained)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while players were online — core invariant broken")
+	}
+}
+
+func TestLostPodTerminatesTheServer(t *testing.T) {
+	f := newFixture(t)
+	bringUpReady(t, f, "lobby-x7k2")
+
+	pod, _ := f.pod("lobby-x7k2")
+	if err := f.c.Delete(f.ctx, pod); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Terminating) {
+		t.Errorf("phase = %q after the pod vanished, want Terminating", srv.Status.Phase)
+	}
+	if srv.Status.Registered {
+		t.Error("a server whose pod is gone must be deregistered")
+	}
+}
+
 func TestDrainTimeoutTerminatesLoudly(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -3949,22 +4077,32 @@ func TestDrainTimeoutTerminatesLoudly(t *testing.T) {
 	}
 }
 
-func TestLostPodTerminatesTheServer(t *testing.T) {
-	f := newFixture(t)
-	bringUpReady(t, f, "lobby-x7k2")
-
-	pod, _ := f.pod("lobby-x7k2")
-	if err := f.c.Delete(f.ctx, pod); err != nil {
-		t.Fatalf("delete pod: %v", err)
+// TestCrashLoopingOnlyLooksAtTheMinecraftContainer pins the scope of the
+// crash-loop check: PodTerminal aborts a running drain, so a crash-looping
+// sidecar must never be able to cut short the drain of a healthy server.
+func TestCrashLoopingOnlyLooksAtTheMinecraftContainer(t *testing.T) {
+	backoff := corev1.ContainerState{
+		Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
 	}
-	f.reconcile("lobby-x7k2")
 
-	srv := f.server("lobby-x7k2")
-	if srv.Status.Phase != string(phase.Terminating) {
-		t.Errorf("phase = %q after the pod vanished, want Terminating", srv.Status.Phase)
+	pod := &corev1.Pod{Status: corev1.PodStatus{
+		ContainerStatuses: []corev1.ContainerStatus{{
+			Name:         "metrics-sidecar",
+			RestartCount: MaxContainerRestarts + 5,
+			State:        backoff,
+		}},
+	}}
+	if crashLooping(pod) {
+		t.Error("a crash-looping sidecar counted as terminal; only the Minecraft container may")
 	}
-	if srv.Status.Registered {
-		t.Error("a server whose pod is gone must be deregistered")
+
+	pod.Status.ContainerStatuses = append(pod.Status.ContainerStatuses, corev1.ContainerStatus{
+		Name:         podspec.ContainerName,
+		RestartCount: MaxContainerRestarts,
+		State:        backoff,
+	})
+	if !crashLooping(pod) {
+		t.Error("a crash-looping Minecraft container was not detected")
 	}
 }
 ```
@@ -3972,7 +4110,7 @@ func TestLostPodTerminatesTheServer(t *testing.T) {
 - [ ] **Step 3: Test laufen lassen, Fehlschlag prüfen**
 
 Run: `nix develop -c go test ./internal/controller/... -v`
-Expected: FAIL — `undefined: ServerReconciler`, `undefined: ServerFinalizer`, `undefined: containsString`.
+Expected: FAIL — `undefined: ServerReconciler`, `undefined: ServerFinalizer`, `undefined: MaxContainerRestarts`, `undefined: crashLooping`.
 
 - [ ] **Step 4: Server-Controller implementieren**
 
@@ -4111,6 +4249,9 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		srv.Status.PodName = built.Name
 		now := metav1.NewTime(r.Clock())
 		srv.Status.StartedAt = &now
+		// A fresh pod has never been registered and carries no flap history.
+		srv.Status.WasRegistered = false
+		srv.Status.ReadinessLosses = 0
 		if srv.Status.Phase == "" {
 			srv.Status.Phase = string(phase.Pending)
 		}
@@ -4192,15 +4333,13 @@ func (r *ServerReconciler) collectInputs(
 		PodExists:         podFound,
 		PodLost:           !podFound && srv.Status.PodName != "",
 		ReadinessLosses:   srv.Status.ReadinessLosses,
-		// WasRegistered must not be derived from the current phase alone: a
-		// Starting server that fell out of Ready is still Starting, but it may
-		// still have players connected from before the readiness loss (the
-		// fallback deregisters to stop new joins, it does not move anyone off).
-		// A server is either registered right now, or it was and lost readiness
-		// at least once since — both mean phase.Decide has to drain it, not
-		// terminate it, on a deletion request. Do not simplify this back to
-		// `srv.Status.Phase == string(phase.Ready)`.
-		WasRegistered: srv.Status.Registered || srv.Status.ReadinessLosses > 0,
+		// Whether the server was ever registered is recorded state, not
+		// something to re-derive here: a Starting server that fell out of Ready
+		// may still have players connected from before the readiness loss (the
+		// fallback deregisters to stop new joins, it does not move anyone off),
+		// and only status.wasRegistered still knows that. The controller writes
+		// it wherever it registers and resets it when it creates a fresh pod.
+		WasRegistered: srv.Status.WasRegistered,
 	}
 
 	if podFound {
@@ -4217,6 +4356,7 @@ func (r *ServerReconciler) collectInputs(
 
 	snap := r.Agents.Lookup(podUID(pod, podFound))
 	in.AgentReady = snap.Ready
+	in.AgentConnected = snap.Connected
 	in.AgentStreamDownFor = snap.StreamDownFor
 	in.PlayersOnline = snap.Players
 	in.PlayersStale = snap.PlayersStale
@@ -4245,8 +4385,15 @@ func podUID(pod *corev1.Pod, found bool) string {
 	return string(pod.UID)
 }
 
+// crashLooping reports whether the Minecraft container is stuck restarting.
+// The check is deliberately scoped to that one container: PodTerminal aborts a
+// running drain, so a crash-looping sidecar must never be able to cut short the
+// drain of a healthy server that still has players on it.
 func crashLooping(pod *corev1.Pod) bool {
 	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.Name != podspec.ContainerName {
+			continue
+		}
 		if cs.RestartCount >= MaxContainerRestarts &&
 			cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {
 			return true
@@ -4278,6 +4425,9 @@ func (r *ServerReconciler) applyDecision(
 			return fmt.Errorf("register %s: %w", srv.Name, err)
 		}
 		srv.Status.Registered = true
+		// Remembered for the life of this pod: from here on a deletion has to
+		// drain, even if the server falls back out of Ready first.
+		srv.Status.WasRegistered = true
 	}
 	if d.StartDrain {
 		if err := r.Registrar.Drain(ctx, srv); err != nil {
@@ -4415,17 +4565,13 @@ func (r *ServerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 Für `meta.SetStatusCondition` gehört `"k8s.io/apimachinery/pkg/api/meta"` in die Importe.
 
-- [ ] **Step 5: Test-Hilfsfunktion ergänzen**
+- [ ] **Step 5: Abhängigkeiten aufräumen**
 
-`containsString` wird im Test verwendet. In `internal/controller/server_controller.go` steht bereits `slices.Contains`; für den Test genügt in `suite_test.go`:
+Der Controller zieht `sigs.k8s.io/controller-runtime` als Manager-Paket herein; damit kommen `fsnotify`, `golang.org/x/sync` und `gomodules.xyz/jsonpatch/v2` neu in den Modulgraphen. Keine Version ändert sich:
 
-```go
-func containsString(haystack []string, needle string) bool {
-	return slices.Contains(haystack, needle)
-}
+```bash
+nix develop -c go mod tidy
 ```
-
-mit `"slices"` in den Importen.
 
 - [ ] **Step 6: Tests laufen lassen, Erfolg prüfen**
 
@@ -4434,14 +4580,16 @@ nix develop -c make manifests generate
 nix develop -c go test ./internal/controller/... -v
 ```
 
-Expected: PASS für alle zehn Tests, insbesondere `TestDeletionDrainsBeforeThePodIsDeleted` und `TestStalePlayerCountKeepsThePodOccupied`.
+Expected: PASS für alle zwölf Tests, insbesondere `TestDeletionDrainsBeforeThePodIsDeleted`, `TestDeletionAfterAReadinessLossStillDrains` und `TestStalePlayerCountKeepsThePodOccupied`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add internal/controller config
+git add internal/controller config go.mod go.sum
 git commit -m "Server-Controller mit Zustandsmaschine, Drain und Occupied-Label"
 ```
+
+Das Statusfeld `wasRegistered` samt neu generiertem CRD gehört in einen eigenen, vorangehenden Commit — es ist eine API-Änderung und keine Controller-Änderung.
 
 ---
 
