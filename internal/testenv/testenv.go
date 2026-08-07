@@ -64,6 +64,28 @@ func crdPath(t *testing.T) string {
 	}
 }
 
+// RepoPath resolves a repository-relative path by walking up from the test's
+// working directory until it finds go.mod. Tests run with their package
+// directory as the working directory, so a plain relative path would break as
+// soon as a test moves to another package.
+func RepoPath(t *testing.T, rel string) string {
+	t.Helper()
+	dir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	for {
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return filepath.Join(dir, rel)
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			t.Fatal("go.mod not found above the working directory")
+		}
+		dir = parent
+	}
+}
+
 // Config starts the shared control plane on first use and returns its config.
 func Config(t *testing.T) *rest.Config {
 	t.Helper()

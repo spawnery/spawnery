@@ -41,6 +41,11 @@ type Options struct {
 	Registrar Registrar
 }
 
+// Leader election locks on a Lease in the operator's own namespace. It is not
+// tied to any single controller, which is why the marker lives here on the
+// wiring rather than on a reconciler.
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=create;get;update
+
 // SetupAll registers every controller and the orphan sweep with the manager.
 func SetupAll(mgr ctrl.Manager, opts Options) error {
 	if err := (&NetworkReconciler{
