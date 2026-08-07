@@ -1770,6 +1770,16 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Ready, Register: true, Reason: ReasonReadyGatePassed},
 		},
 		{
+			// Regression for Minor 2: the ready gate must not trust a green
+			// probe and agent alone. Task 8 should never send PodReady/AgentReady
+			// without PodExists/PodRunning, but this package must not depend on
+			// caller discipline.
+			name:    "starting does not skip to ready on contradictory inputs without the pod existing and running",
+			current: Starting,
+			in:      Inputs{PodExists: false, PodRunning: false, PodReady: true, AgentReady: true},
+			want:    Decision{Next: Starting, Reason: ReasonPodPending},
+		},
+		{
 			name:    "ready stays ready while healthy",
 			current: Ready,
 			in:      healthyReady(),
@@ -1856,6 +1866,23 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDeletionRequested},
 		},
 		{
+			// Regression for the Critical finding: a Starting server that fell
+			// out of Ready (WasRegistered) still has its players connected — the
+			// readiness-loss fallback only deregistered to stop new joins, it did
+			// not move anyone off. Deleting such a server must drain it, not
+			// terminate it out from under 20 connected players. Reproduction as
+			// confirmed by the reviewer, one tick after the Ready server lost its
+			// probe and fell back to Starting.
+			name:    "deleting a starting server that was registered before drains it instead of dropping its players",
+			current: Starting,
+			in: Inputs{
+				PodExists: true, PodRunning: true, PodReady: false, AgentReady: true,
+				PlayersOnline: 20, DeletionRequested: true, ReadinessLosses: 1,
+				WasRegistered: true,
+			},
+			want: Decision{Next: Draining, StartDrain: true, Reason: ReasonDeletionRequested},
+		},
+		{
 			name:    "deleting a pending server terminates it right away",
 			current: Pending,
 			in:      Inputs{DeletionRequested: true},
@@ -1884,6 +1911,16 @@ func TestDecide(t *testing.T) {
 			current: Draining,
 			in:      Inputs{PodExists: true, PodRunning: true, PlayersOnline: 3, DrainDeadlineReached: true},
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDrainTimeout},
+		},
+		{
+			// Regression for Minor 1: a crashed pod's players are already gone
+			// no matter what a stale report still claims, so draining must not
+			// burn the full drain timeout waiting for players who cannot leave
+			// a pod that no longer runs.
+			name:    "draining terminates right away when the pod goes terminal, even with players reported online",
+			current: Draining,
+			in:      Inputs{PodTerminal: true, PlayersOnline: 3, PlayersStale: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonPodTerminal},
 		},
 		{
 			name:    "a lost pod terminates a ready server and deregisters it",
@@ -1962,23 +1999,36 @@ func TestNoPathBackFromFailed(t *testing.T) {
 // long as players are online and no deadline has passed, no decision may
 // delete the pod.
 //
-// Only Ready and Draining are checked. A server in Pending or Starting was
-// never registered with the proxies, so it cannot hold players — and treating
-// its stale, never-reported count as "occupied" would make deletion of a
-// server that never started hang until the drain deadline.
+// Ready and Draining are always checked: a Ready server is registered with
+// the proxies, and a Draining server was registered until it started
+// draining. Starting is checked only with WasRegistered: true — a Starting
+// server that fell out of Ready still has players connected from before it
+// lost readiness, even though it deregistered to stop new joins. A
+// never-registered Pending or Starting server is excluded: it was never
+// registered with the proxies, so it cannot hold players — and treating its
+// stale, never-reported count as "occupied" would make deletion of a server
+// that never started hang until the drain deadline.
 func TestOccupiedServerIsNeverDeletedWithoutDeadline(t *testing.T) {
-	phases := []Phase{Ready, Draining}
-	for _, p := range phases {
+	cases := []struct {
+		phase         Phase
+		wasRegistered bool
+	}{
+		{Ready, false},
+		{Draining, false},
+		{Starting, true},
+	}
+	for _, tc := range cases {
 		for _, stale := range []bool{false, true} {
 			for _, deleting := range []bool{false, true} {
 				in := healthyReady()
 				in.PlayersOnline = 7
 				in.PlayersStale = stale
 				in.DeletionRequested = deleting
-				got := Decide(p, in)
+				in.WasRegistered = tc.wasRegistered
+				got := Decide(tc.phase, in)
 				if got.DeletePod {
-					t.Errorf("Decide(%q, players=7 stale=%v deleting=%v) deleted the pod: %+v",
-						p, stale, deleting, got)
+					t.Errorf("Decide(%q, players=7 stale=%v deleting=%v wasRegistered=%v) deleted the pod: %+v",
+						tc.phase, stale, deleting, tc.wasRegistered, got)
 				}
 			}
 		}
@@ -2092,6 +2142,13 @@ type Inputs struct {
 	// ReadyFor is how long the server has been continuously Ready.
 	ReadyFor time.Duration
 
+	// WasRegistered is true if this server was ever registered with the proxies
+	// during the life of its current pod. A Starting server that fell out of
+	// Ready still has its players connected — deregistering stopped new joins,
+	// it did not move anyone — so the phase alone cannot tell us whether players
+	// are at risk.
+	WasRegistered bool
+
 	// PlayersOnline is the last reported player count.
 	PlayersOnline int32
 	// PlayersStale is true if that count is older than twice the report
@@ -2162,6 +2219,12 @@ func Decide(current Phase, in Inputs) Decision {
 				Reason: ReasonPodLost, Message: "pod disappeared during drain",
 			}
 		}
+		if in.PodTerminal {
+			return Decision{
+				Next: Terminating, DeletePod: true,
+				Reason: ReasonPodTerminal, Message: "pod reached a terminal phase during drain, its players are already gone",
+			}
+		}
 		if !in.Occupied() {
 			return Decision{
 				Next: Terminating, DeletePod: true,
@@ -2198,17 +2261,20 @@ func Decide(current Phase, in Inputs) Decision {
 	}
 
 	if in.DeletionRequested {
-		// Only a Ready server can have players, because only a Ready server is
-		// registered with the proxies. Everything else can go straight away.
-		if current == Ready {
+		// A Ready server is currently registered with the proxies. A Starting
+		// server that fell out of Ready (WasRegistered) may still have players
+		// connected from before: the readiness-loss fallback deregisters to stop
+		// new joins, it does not move anyone off. Both cases must drain. Only a
+		// server that was never registered can go straight away.
+		if current == Ready || in.WasRegistered {
 			return Decision{
-				Next: Draining, Deregister: true, StartDrain: true,
+				Next: Draining, Deregister: current == Ready, StartDrain: true,
 				Reason: ReasonDeletionRequested, Message: "deletion requested, moving players off",
 			}
 		}
 		return Decision{
 			Next: Terminating, DeletePod: true,
-			Reason: ReasonDeletionRequested, Message: "deletion requested before the server took players",
+			Reason: ReasonDeletionRequested, Message: "deletion requested before the server was ever registered",
 		}
 	}
 
@@ -2241,7 +2307,7 @@ func Decide(current Phase, in Inputs) Decision {
 		return Decision{Next: Pending, Reason: ReasonPodPending, Message: "waiting for the pod"}
 
 	case Starting:
-		if in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
+		if in.PodExists && in.PodRunning && in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
 			return Decision{
 				Next: Ready, Register: true,
 				Reason: ReasonReadyGatePassed, Message: "probe green and agent ready",
@@ -4126,6 +4192,15 @@ func (r *ServerReconciler) collectInputs(
 		PodExists:         podFound,
 		PodLost:           !podFound && srv.Status.PodName != "",
 		ReadinessLosses:   srv.Status.ReadinessLosses,
+		// WasRegistered must not be derived from the current phase alone: a
+		// Starting server that fell out of Ready is still Starting, but it may
+		// still have players connected from before the readiness loss (the
+		// fallback deregisters to stop new joins, it does not move anyone off).
+		// A server is either registered right now, or it was and lost readiness
+		// at least once since — both mean phase.Decide has to drain it, not
+		// terminate it, on a deletion request. Do not simplify this back to
+		// `srv.Status.Phase == string(phase.Ready)`.
+		WasRegistered: srv.Status.Registered || srv.Status.ReadinessLosses > 0,
 	}
 
 	if podFound {

@@ -110,6 +110,13 @@ type Inputs struct {
 	// ReadyFor is how long the server has been continuously Ready.
 	ReadyFor time.Duration
 
+	// WasRegistered is true if this server was ever registered with the proxies
+	// during the life of its current pod. A Starting server that fell out of
+	// Ready still has its players connected — deregistering stopped new joins,
+	// it did not move anyone — so the phase alone cannot tell us whether players
+	// are at risk.
+	WasRegistered bool
+
 	// PlayersOnline is the last reported player count.
 	PlayersOnline int32
 	// PlayersStale is true if that count is older than twice the report
@@ -180,6 +187,12 @@ func Decide(current Phase, in Inputs) Decision {
 				Reason: ReasonPodLost, Message: "pod disappeared during drain",
 			}
 		}
+		if in.PodTerminal {
+			return Decision{
+				Next: Terminating, DeletePod: true,
+				Reason: ReasonPodTerminal, Message: "pod reached a terminal phase during drain, its players are already gone",
+			}
+		}
 		if !in.Occupied() {
 			return Decision{
 				Next: Terminating, DeletePod: true,
@@ -216,17 +229,20 @@ func Decide(current Phase, in Inputs) Decision {
 	}
 
 	if in.DeletionRequested {
-		// Only a Ready server can have players, because only a Ready server is
-		// registered with the proxies. Everything else can go straight away.
-		if current == Ready {
+		// A Ready server is currently registered with the proxies. A Starting
+		// server that fell out of Ready (WasRegistered) may still have players
+		// connected from before: the readiness-loss fallback deregisters to stop
+		// new joins, it does not move anyone off. Both cases must drain. Only a
+		// server that was never registered can go straight away.
+		if current == Ready || in.WasRegistered {
 			return Decision{
-				Next: Draining, Deregister: true, StartDrain: true,
+				Next: Draining, Deregister: current == Ready, StartDrain: true,
 				Reason: ReasonDeletionRequested, Message: "deletion requested, moving players off",
 			}
 		}
 		return Decision{
 			Next: Terminating, DeletePod: true,
-			Reason: ReasonDeletionRequested, Message: "deletion requested before the server took players",
+			Reason: ReasonDeletionRequested, Message: "deletion requested before the server was ever registered",
 		}
 	}
 
@@ -259,7 +275,7 @@ func Decide(current Phase, in Inputs) Decision {
 		return Decision{Next: Pending, Reason: ReasonPodPending, Message: "waiting for the pod"}
 
 	case Starting:
-		if in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
+		if in.PodExists && in.PodRunning && in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
 			return Decision{
 				Next: Ready, Register: true,
 				Reason: ReasonReadyGatePassed, Message: "probe green and agent ready",
