@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -473,6 +474,129 @@ func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
 	err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, &spawneryv1alpha1.Server{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("finalizer never released on a groupless server: %v", err)
+	}
+}
+
+// TestServerInAPersistentGroupStillDrainsAndReleasesItself pins that "not
+// implemented yet" bounds the pod, not the object's lifecycle. Persistent
+// groups arrive in milestone 5, so no pod is built for them — but an early
+// return on that check would skip the finalizer, the drain and the release
+// exactly as the missing-group case used to, and such a Server could never be
+// deleted at all.
+func TestServerInAPersistentGroupStillDrainsAndReleasesItself(t *testing.T) {
+	f := newFixture(t)
+
+	persistent := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "survival", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: "production"},
+			Type:                          spawneryv1alpha1.ServerGroupPersistent,
+			Image:                         "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers:                    50,
+			Replicas:                      ptr.To(int32(1)),
+			TerminationGracePeriodSeconds: 60,
+			FailedRetentionSeconds:        3600,
+			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
+			Storage:                       &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")},
+		},
+	}
+	if err := f.c.Create(f.ctx, persistent); err != nil {
+		t.Fatalf("create persistent ServerGroup: %v", err)
+	}
+
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "survival-0",
+			Namespace: f.ns,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: spawneryv1alpha1.GroupVersion.String(),
+				Kind:       "ServerGroup",
+				Name:       persistent.Name,
+				UID:        persistent.UID,
+			}},
+		},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: persistent.Name},
+			Ordinal:  ptr.To(int32(0)),
+		},
+	}
+	if err := f.c.Create(f.ctx, srv); err != nil {
+		t.Fatalf("create Server: %v", err)
+	}
+
+	// No pod is built, but the object is managed: finalizer on, reason stated.
+	f.reconcile("survival-0")
+	srv = f.server("survival-0")
+	if _, ok := f.pod("survival-0"); ok {
+		t.Fatal("a pod was built for a persistent group")
+	}
+	if !containsString(srv.Finalizers, ServerFinalizer) {
+		t.Fatalf("finalizers = %v, want %s even for a persistent group", srv.Finalizers, ServerFinalizer)
+	}
+	accepted := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonNotImplemented {
+		t.Errorf("Accepted condition = %+v, want False/%s", accepted, spawneryv1alpha1.ReasonNotImplemented)
+	}
+
+	// Milestone 5 will create this pod; stand in for it so the drain path is
+	// exercised rather than merely the empty release.
+	built, err := podspec.BuildServerPod(f.network, persistent, srv)
+	if err != nil {
+		t.Fatalf("BuildServerPod: %v", err)
+	}
+	if err := f.c.Create(f.ctx, built); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	f.reconcile("survival-0")
+	if got := f.server("survival-0").Status.PodName; got != "survival-0" {
+		t.Fatalf("status.podName = %q, want the pod adopted", got)
+	}
+
+	pod, ok := f.pod("survival-0")
+	if !ok {
+		t.Fatal("pod vanished")
+	}
+	uid := string(pod.UID)
+	f.setPodRunning("survival-0", true)
+	f.agents.Connect(uid, agent.RoleServer)
+	f.agents.MarkReady(uid)
+	if err := f.agents.ReportPlayers(uid, 5, 50); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("survival-0") // Pending -> Starting
+	f.reconcile("survival-0") // Starting -> Ready
+	if got := f.server("survival-0").Status.Phase; got != string(phase.Ready) {
+		t.Fatalf("phase = %q, want Ready", got)
+	}
+
+	// The point of the whole test: it must still drain and still let go.
+	if err := f.c.Delete(f.ctx, f.server("survival-0")); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("survival-0")
+	if got := f.server("survival-0").Status.Phase; got != string(phase.Draining) {
+		t.Errorf("phase = %q for a deleted persistent server, want Draining", got)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want one drain command", f.registrar.drained)
+	}
+	if _, ok := f.pod("survival-0"); !ok {
+		t.Fatal("pod deleted while 5 players were online — core invariant broken")
+	}
+
+	if err := f.agents.ReportPlayers(uid, 0, 50); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("survival-0")
+	if _, ok := f.pod("survival-0"); ok {
+		t.Fatal("pod leaked: still there after the drain finished")
+	}
+
+	f.reconcile("survival-0")
+	err = f.c.Get(f.ctx, types.NamespacedName{Name: "survival-0", Namespace: f.ns}, &spawneryv1alpha1.Server{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("finalizer never released on a persistent-group server: %v", err)
 	}
 }
 

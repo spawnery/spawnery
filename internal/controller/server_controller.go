@@ -115,11 +115,14 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		groupFound = false
 	}
 
-	if groupFound && !group.IsEphemeral() {
-		// Persistent groups need a PVC and an ordered shutdown; that is
-		// milestone 5. Say so instead of building half a pod.
+	// Persistent groups need a PVC and an ordered shutdown; that is milestone 5,
+	// so no pod is built for them. That must not stop anything else: an early
+	// return here would skip the finalizer, the drain and the release, and a
+	// Server in a persistent group could then never be deleted — the same
+	// deadlock as a Server whose group is gone.
+	persistentUnsupported := groupFound && !group.IsEphemeral()
+	if persistentUnsupported {
 		logger.Info("persistent groups are not implemented yet", "group", group.Name)
-		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
 	network := &spawneryv1alpha1.Network{}
@@ -135,27 +138,34 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// The finalizer must sit on the object before the pod exists, otherwise a
+	// deletion between creation and the next reconcile skips the drain. This
+	// has to happen before anything is written onto srv.Status: Update returns
+	// the persisted object, whose status the API server does not take from us
+	// because status is a subresource, so it overwrites every status change
+	// made before it. On a first reconcile that status is empty.
+	if srv.DeletionTimestamp.IsZero() && !slices.Contains(srv.Finalizers, ServerFinalizer) {
+		srv.Finalizers = append(srv.Finalizers, ServerFinalizer)
+		if err := r.Update(ctx, srv); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	switch {
 	case !groupFound:
 		logger.Info("server group not found, running on the CRD defaults", "group", srv.Spec.GroupRef.Name)
 		setAccepted(srv, false, spawneryv1alpha1.ReasonGroupNotFound,
 			fmt.Sprintf("server group %q not found; draining and cleanup continue on the default timings", srv.Spec.GroupRef.Name))
 		group = fallbackGroup(srv)
+	case persistentUnsupported:
+		setAccepted(srv, false, spawneryv1alpha1.ReasonNotImplemented,
+			fmt.Sprintf("server group %q is persistent; persistent groups arrive in milestone 5, so no pod is created for this server", group.Name))
 	case !networkFound:
 		logger.Info("network not found, running on the CRD defaults", "network", group.Spec.NetworkRef.Name)
 		setAccepted(srv, false, spawneryv1alpha1.ReasonNetworkNotFound,
 			fmt.Sprintf("network %q not found; no pod can be created for this server", group.Spec.NetworkRef.Name))
 	default:
 		setAccepted(srv, true, spawneryv1alpha1.ReasonAccepted, "group and network resolved")
-	}
-
-	// The finalizer must sit on the object before the pod exists, otherwise a
-	// deletion between creation and the next reconcile skips the drain.
-	if srv.DeletionTimestamp.IsZero() && !slices.Contains(srv.Finalizers, ServerFinalizer) {
-		srv.Finalizers = append(srv.Finalizers, ServerFinalizer)
-		if err := r.Update(ctx, srv); err != nil {
-			return ctrl.Result{}, err
-		}
 	}
 
 	pod, podFound, err := r.fetchPod(ctx, srv)
@@ -192,7 +202,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Create the pod once, and only for a server that has not been asked to go
 	// away. status.podName is the record that a pod once existed; it is never
 	// reused for a different pod, which is what makes PodLost detectable.
-	if groupFound && networkFound && !nameConflict &&
+	if groupFound && networkFound && !persistentUnsupported && !nameConflict &&
 		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
 		built, err := podspec.BuildServerPod(network, group, srv)
 		if err != nil {
