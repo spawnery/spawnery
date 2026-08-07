@@ -63,6 +63,23 @@ func persistentGroup(ns, name string) *spawneryv1alpha1.ServerGroup {
 	}
 }
 
+func persistentGroupNoStorageClass(ns, name string) *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: spawneryv1alpha1.ObjectRef{Name: "production"},
+			Type:       spawneryv1alpha1.ServerGroupPersistent,
+			Image:      "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers: 40,
+			Replicas:   ptr.To[int32](1),
+			Storage: &spawneryv1alpha1.StorageSpec{
+				Size:        resource.MustParse("20Gi"),
+				AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			},
+		},
+	}
+}
+
 func TestServerGroupEphemeralAccepted(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -120,6 +137,20 @@ func TestServerGroupCELRejections(t *testing.T) {
 			base: persistentGroup,
 			mutate: func(g *spawneryv1alpha1.ServerGroup) {
 				g.Spec.Storage = nil
+			},
+		},
+		{
+			name: "ephemeral without scaling",
+			base: ephemeralGroup,
+			mutate: func(g *spawneryv1alpha1.ServerGroup) {
+				g.Spec.Scaling = nil
+			},
+		},
+		{
+			name: "scaling minReplicas exceeds maxReplicas",
+			base: ephemeralGroup,
+			mutate: func(g *spawneryv1alpha1.ServerGroup) {
+				g.Spec.Scaling = &spawneryv1alpha1.ScalingSpec{MinReplicas: 5, MaxReplicas: 2}
 			},
 		},
 	}
@@ -186,6 +217,42 @@ func TestServerGroupImmutableFields(t *testing.T) {
 		g.Spec.Storage.Size = resource.MustParse("10Gi")
 		if err := c.Update(ctx, g); err == nil {
 			t.Fatal("update shrank storage.size, want rejection")
+		}
+	})
+
+	t.Run("accessModes is immutable", func(t *testing.T) {
+		ns := testenv.Namespace(t, ctx, c)
+		g := persistentGroup(ns, "survival")
+		if err := c.Create(ctx, g); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		g.Spec.Storage.AccessModes = []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany}
+		if err := c.Update(ctx, g); err == nil {
+			t.Fatal("update changed accessModes, want rejection")
+		}
+	})
+
+	t.Run("storageClassName unset may still grow storage.size", func(t *testing.T) {
+		ns := testenv.Namespace(t, ctx, c)
+		g := persistentGroupNoStorageClass(ns, "survival")
+		if err := c.Create(ctx, g); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		g.Spec.Storage.Size = resource.MustParse("30Gi")
+		if err := c.Update(ctx, g); err != nil {
+			t.Fatalf("growing storage.size rejected: %v", err)
+		}
+	})
+
+	t.Run("storageClassName may not be set after creation without one", func(t *testing.T) {
+		ns := testenv.Namespace(t, ctx, c)
+		g := persistentGroupNoStorageClass(ns, "survival")
+		if err := c.Create(ctx, g); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		g.Spec.Storage.StorageClassName = ptr.To("longhorn")
+		if err := c.Update(ctx, g); err == nil {
+			t.Fatal("update set storageClassName, want rejection")
 		}
 	})
 }
