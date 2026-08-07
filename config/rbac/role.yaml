@@ -21,18 +21,23 @@ rules:
   - get
   - list
   - patch
-  - update
   - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - update
 - apiGroups:
   - policy
   resources:
   - poddisruptionbudgets
   verbs:
   - create
-  - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -43,25 +48,22 @@ rules:
   verbs:
   - get
   - list
-  - patch
-  - update
   - watch
 - apiGroups:
   - spawnery.cloud
   resources:
   - networks/status
+  - servergroups/finalizers
   - servergroups/status
+  - servers/finalizers
   - servers/status
   verbs:
-  - get
-  - patch
   - update
 - apiGroups:
   - spawnery.cloud
   resources:
   - proxygroups
   verbs:
-  - get
   - list
   - watch
 - apiGroups:
@@ -73,12 +75,5 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
-- apiGroups:
-  - spawnery.cloud
-  resources:
-  - servers/finalizers
-  verbs:
-  - update

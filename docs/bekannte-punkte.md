@@ -58,16 +58,47 @@ falschen Fristen.
 
 ## Voraussetzungen für Meilenstein 6 (Helm, RBAC, E2E)
 
-**Die generierte ClusterRole ist zu weit.** Ungenutzt sind `pods:update`,
-`update`/`patch` auf `networks` und `servergroups` statt nur auf deren `/status`,
-`servers:patch`, `poddisruptionbudgets:delete`/`patch` sowie `patch` auf den drei
-`/status`-Subresources. Heute folgenlos, weil noch kein Binding existiert. Die
-Gegenrichtung — ein **fehlendes** Verb — ist in envtest strukturell nicht
-prüfbar, weil dort mit Adminrechten gearbeitet wird; das braucht einen
-manuellen Durchlauf gegen einen echten Cluster.
+**Leases gehören in eine namespaced Role.** Das Recht auf
+`coordination.k8s.io/leases` wird derzeit clusterweit gewährt, obwohl
+Leader-Election nur im eigenen Namespace des Operators sperrt. Die Helm-Chart
+sollte es in eine `Role` in `spawnery-system` verschieben und aus der
+ClusterRole entfernen; die Rechtetabelle in `internal/rbacaudit` ist dann
+entsprechend aufzuteilen.
+
+**Vollständigkeit der Rechtetabelle.** Der Audit in `internal/rbacaudit` fängt
+Abweichungen zwischen Tabelle und Rolle. Fehlt ein Recht in beiden, bleibt er
+grün — das beweist erst der Operator, der unter seinem ServiceAccount in einem
+echten Cluster läuft (Ebene B des E2E-Entwurfs).
 
 **Kein `--leader-election-namespace`.** Mit Default-Flags scheitert ein lokaler
 Lauf außerhalb des Clusters; nötig ist `--leader-elect=false`.
+
+## Zum RBAC-Audit (`internal/rbacaudit`)
+
+Der Audit prüft die ClusterRole in zwei Richtungen: eine dateibasiert gegen die
+handgepflegte Tabelle, eine über `SubjectAccessReview` gegen den echten
+Authorizer in envtest. Die Redundanz ist Absicht — die folgenden Punkte betreffen
+jeweils nur eine der beiden Hälften.
+
+- **Die SAR-Richtung kann stillschweigend bedeutungslos werden.** Ein zweites
+  ClusterRoleBinding auf dasselbe Subjekt lässt `SubjectAccessReview` die
+  Vereinigung beider Bindungen beantworten; kein Test behauptet, dass der
+  Authorizer je etwas verweigert. Die dateibasierte Richtung trägt die Zusage
+  der Spec dann allein weiter. Abhilfe: eine Probe, die ein bekannt verbotenes
+  Recht abfragt und auf Ablehnung besteht.
+- **`apply()` verschleiert Fehlerquellen.** Es toleriert `AlreadyExists`, damit
+  sich die Tests die clusterweiten Objekte teilen können. Dadurch ist der
+  Aufruf im Manifest-Test faktisch wirkungslos, weil der Rechte-Test zuerst
+  läuft und die Objekte anlegt. Wer eine *geänderte* ClusterRole anwendet,
+  bekommt still die alte.
+- **`ExpandRules` ignoriert `rule.ResourceNames`.** Eine namensbeschränkte Regel
+  faltet zu einem unbeschränkten Recht auf. controller-gen erzeugt so etwas nie,
+  und die SAR-Richtung finge es ab — deshalb bewusst offengelassen.
+- **Die Flags im Deployment sind ungeprüft.** `sigs.k8s.io/yaml` ist nicht
+  strikt, ein vertippter Schlüssel verschwindet lautlos. Die Spec verlangt
+  `--startup-deadline=20s` für Ebene B; kein Test bewacht das bisher.
+- **Nichts erzwingt, dass `Why` gefüllt und `Required` duplikatfrei ist.**
+  `Compare` sammelt Duplikate ein, der letzte gewinnt.
 
 ## Kleinigkeiten
 

@@ -42,9 +42,9 @@ type NetworkReconciler struct {
 	Clock func() time.Time
 }
 
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=networks/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=networks/status,verbs=update
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=list;watch
 
 // Reconcile decides whether this network is the one that owns its namespace
 // and, if so, sums up its groups.
