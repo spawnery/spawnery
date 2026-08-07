@@ -82,12 +82,12 @@ type ServerReconciler struct {
 	Registrar Registrar
 }
 
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=servers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=servers/status,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile collects the inputs, asks the state machine and executes the

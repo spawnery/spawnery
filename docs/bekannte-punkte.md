@@ -58,13 +58,17 @@ falschen Fristen.
 
 ## Voraussetzungen für Meilenstein 6 (Helm, RBAC, E2E)
 
-**Die generierte ClusterRole ist zu weit.** Ungenutzt sind `pods:update`,
-`update`/`patch` auf `networks` und `servergroups` statt nur auf deren `/status`,
-`servers:patch`, `poddisruptionbudgets:delete`/`patch` sowie `patch` auf den drei
-`/status`-Subresources. Heute folgenlos, weil noch kein Binding existiert. Die
-Gegenrichtung — ein **fehlendes** Verb — ist in envtest strukturell nicht
-prüfbar, weil dort mit Adminrechten gearbeitet wird; das braucht einen
-manuellen Durchlauf gegen einen echten Cluster.
+**Leases gehören in eine namespaced Role.** Das Recht auf
+`coordination.k8s.io/leases` wird derzeit clusterweit gewährt, obwohl
+Leader-Election nur im eigenen Namespace des Operators sperrt. Die Helm-Chart
+sollte es in eine `Role` in `spawnery-system` verschieben und aus der
+ClusterRole entfernen; die Rechtetabelle in `internal/rbacaudit` ist dann
+entsprechend aufzuteilen.
+
+**Vollständigkeit der Rechtetabelle.** Der Audit in `internal/rbacaudit` fängt
+Abweichungen zwischen Tabelle und Rolle. Fehlt ein Recht in beiden, bleibt er
+grün — das beweist erst der Operator, der unter seinem ServiceAccount in einem
+echten Cluster läuft (Ebene B des E2E-Entwurfs).
 
 **Kein `--leader-election-namespace`.** Mit Default-Flags scheitert ein lokaler
 Lauf außerhalb des Clusters; nötig ist `--leader-elect=false`.

@@ -74,9 +74,10 @@ type ServerGroupReconciler struct {
 	Clock func() time.Time
 }
 
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch;update;patch
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/status,verbs=update
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/finalizers,verbs=update
+// +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
 
 // Reconcile sizes the group and updates its status.
 func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
