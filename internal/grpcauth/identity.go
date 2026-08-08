@@ -140,6 +140,10 @@ func serviceAccountFor(role agent.Role) string {
 	return podspec.ServerServiceAccountName
 }
 
+// TokenReview is cluster-scoped, so this right cannot be narrowed to a namespace
+// the way the Secret and the Lease are.
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+
 // Authenticate returns the identity behind a token, or why it is refused.
 func (a *Authenticator) Authenticate(ctx context.Context, token string, want agent.Role) (Identity, error) {
 	if token == "" {

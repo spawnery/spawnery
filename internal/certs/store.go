@@ -50,6 +50,12 @@ type Store struct {
 	Clock     func() time.Time
 }
 
+// The namespace qualifier keeps this out of the ClusterRole: the bundle lives in
+// the operator's own namespace, and a cluster-wide write on secrets would be the
+// wrong right to hand out. Note the absent list and watch — Store uses an
+// uncached client precisely so those are not needed.
+// +kubebuilder:rbac:groups="",namespace=spawnery-system,resources=secrets,verbs=get;create;update
+
 // Ensure returns a usable bundle, creating or renewing it if needed. Safe to
 // call repeatedly; only the leader ever does.
 func (s *Store) Ensure(ctx context.Context) (*Bundle, error) {

@@ -50,8 +50,10 @@ type Options struct {
 
 // Leader election locks on a Lease in the operator's own namespace. It is not
 // tied to any single controller, which is why the marker lives here on the
-// wiring rather than on a reconciler.
-// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=create;get;update
+// wiring rather than on a reconciler. The namespace qualifier puts the right in
+// a namespaced Role — granting it cluster-wide would let the operator take a
+// leader lock anywhere.
+// +kubebuilder:rbac:groups=coordination.k8s.io,namespace=spawnery-system,resources=leases,verbs=create;get;update
 
 // SetupAll registers every controller and the orphan sweep with the manager.
 func SetupAll(mgr ctrl.Manager, opts Options) error {

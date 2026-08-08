@@ -17,14 +17,20 @@ limitations under the License.
 package rbacaudit_test
 
 import (
+	"bufio"
+	"errors"
+	"io"
 	"os"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
@@ -47,6 +53,69 @@ func readManifest[T any](t *testing.T, rel string, into *T) {
 	if err := yaml.Unmarshal(raw, into); err != nil {
 		t.Fatalf("decode %s: %v", rel, err)
 	}
+}
+
+// generatedRoles is the repository-relative path of the manifest controller-gen
+// writes. It holds every role the markers ask for, in one multi-document file:
+// the cluster-wide ClusterRole and the Role scoped to the operator's own
+// namespace. Nothing in the build splits them apart, so readManifest — which
+// decodes a single document — cannot be used on it.
+const generatedRoles = "config/rbac/role.yaml"
+
+// readGeneratedRoles decodes both halves of the generated RBAC manifest. It
+// insists on finding both: a missing Role means a namespace= qualifier fell off
+// a marker and the operator would hold its Secret and Lease rights everywhere.
+func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
+	t.Helper()
+
+	f, err := os.Open(testenv.RepoPath(t, generatedRoles))
+	if err != nil {
+		t.Fatalf("read %s: %v", generatedRoles, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var cluster *rbacv1.ClusterRole
+	var namespaced *rbacv1.Role
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(f))
+	for {
+		doc, err := docs.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", generatedRoles, err)
+		}
+		if strings.TrimSpace(string(doc)) == "" {
+			continue
+		}
+		var meta metav1.TypeMeta
+		if err := yaml.Unmarshal(doc, &meta); err != nil {
+			t.Fatalf("decode %s: %v", generatedRoles, err)
+		}
+		switch meta.Kind {
+		case "ClusterRole":
+			cluster = &rbacv1.ClusterRole{}
+			if err := yaml.Unmarshal(doc, cluster); err != nil {
+				t.Fatalf("decode the ClusterRole in %s: %v", generatedRoles, err)
+			}
+		case "Role":
+			namespaced = &rbacv1.Role{}
+			if err := yaml.Unmarshal(doc, namespaced); err != nil {
+				t.Fatalf("decode the Role in %s: %v", generatedRoles, err)
+			}
+		default:
+			t.Fatalf("%s contains an unexpected %s; this audit only models roles", generatedRoles, meta.Kind)
+		}
+	}
+	if cluster == nil {
+		t.Fatalf("%s contains no ClusterRole", generatedRoles)
+	}
+	if namespaced == nil {
+		t.Fatalf("%s contains no Role — a namespace= qualifier fell off a marker, and "+
+			"the operator would hold its Secret and Lease rights in every namespace",
+			generatedRoles)
+	}
+	return cluster, namespaced
 }
 
 // apply creates objects that several tests in this package share. The cluster
@@ -72,17 +141,16 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 
 	var ns corev1.Namespace
 	var sa corev1.ServiceAccount
-	var role rbacv1.ClusterRole
 	var binding rbacv1.ClusterRoleBinding
 	var deploy appsv1.Deployment
 
 	readManifest(t, "config/deploy/namespace.yaml", &ns)
 	readManifest(t, "config/deploy/serviceaccount.yaml", &sa)
-	readManifest(t, "config/rbac/role.yaml", &role)
 	readManifest(t, "config/deploy/clusterrolebinding.yaml", &binding)
 	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	role, _ := readGeneratedRoles(t)
 
-	apply(t, &ns, &sa, &role, &binding, &deploy)
+	apply(t, &ns, &sa, role, &binding, &deploy)
 
 	if ns.Name != "spawnery-system" {
 		t.Errorf("namespace = %q, want spawnery-system", ns.Name)
@@ -117,6 +185,52 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 	key := types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}
 	if err := c.Get(ctx, key, got); err != nil {
 		t.Fatalf("get Deployment: %v", err)
+	}
+}
+
+// TestTheRoleBindingBindsTheOperatorInItsOwnNamespace is the namespaced half of
+// TestDeployManifestsAreAcceptedAndConsistent. Nothing else reads
+// rolebinding.yaml, so a RoleRef naming a ClusterRole, a subject naming the
+// wrong ServiceAccount, or a binding sitting in a namespace other than the one
+// controller-gen put the Role in would all leave certs.Store.Ensure with
+// Forbidden on the operator's own Secret while every file on its own still
+// looked plausible.
+func TestTheRoleBindingBindsTheOperatorInItsOwnNamespace(t *testing.T) {
+	var ns corev1.Namespace
+	var sa corev1.ServiceAccount
+	var binding rbacv1.RoleBinding
+
+	readManifest(t, "config/deploy/namespace.yaml", &ns)
+	readManifest(t, "config/deploy/serviceaccount.yaml", &sa)
+	readManifest(t, "config/deploy/rolebinding.yaml", &binding)
+	_, role := readGeneratedRoles(t)
+
+	apply(t, &ns, role, &binding)
+
+	// The Role's namespace comes from the markers, the binding's from the
+	// manifest. If they ever drift the binding grants nothing at all.
+	if role.Namespace != ns.Name {
+		t.Errorf("the generated Role is in %q, but the operator runs in %q — the "+
+			"namespace= qualifier on the markers names the wrong namespace",
+			role.Namespace, ns.Name)
+	}
+	if binding.Namespace != role.Namespace {
+		t.Errorf("rolebinding namespace = %q, role namespace = %q — a RoleBinding only "+
+			"grants in its own namespace", binding.Namespace, role.Namespace)
+	}
+	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != role.Name {
+		t.Errorf("roleRef = %s/%s, want Role/%s",
+			binding.RoleRef.Kind, binding.RoleRef.Name, role.Name)
+	}
+	if len(binding.Subjects) != 1 {
+		t.Fatalf("binding has %d subjects, want exactly one — a second subject would "+
+			"widen the grant and quietly make TestTheAuthorizerActuallyDenies the only "+
+			"test that could still notice", len(binding.Subjects))
+	}
+	subj := binding.Subjects[0]
+	if subj.Kind != "ServiceAccount" || subj.Name != sa.Name || subj.Namespace != sa.Namespace {
+		t.Errorf("subject = %s %s/%s, want ServiceAccount %s/%s",
+			subj.Kind, subj.Namespace, subj.Name, sa.Namespace, sa.Name)
 	}
 }
 
@@ -245,9 +359,13 @@ func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
 // leader election is on by default and locks on a Lease, but no kubebuilder
 // marker declared that permission, so the generated role never granted it and
 // the operator would have failed on startup with Forbidden.
+//
+// The right now lives in the namespaced Role, where it belongs — the lock is
+// taken in the operator's own namespace, and granting it cluster-wide would let
+// the operator lock anything anywhere. This test therefore also insists the
+// ClusterRole stays out of it.
 func TestLeaderElectionPermissionIsGranted(t *testing.T) {
-	var role rbacv1.ClusterRole
-	readManifest(t, "config/rbac/role.yaml", &role)
+	cluster, role := readGeneratedRoles(t)
 
 	want := map[string]bool{"create": false, "get": false, "update": false}
 	for _, rule := range role.Rules {
@@ -262,8 +380,15 @@ func TestLeaderElectionPermissionIsGranted(t *testing.T) {
 	}
 	for verb, found := range want {
 		if !found {
-			t.Errorf("clusterrole does not grant %q on coordination.k8s.io/leases — "+
-				"leader election would fail with Forbidden on startup", verb)
+			t.Errorf("the Role in %s does not grant %q on coordination.k8s.io/leases — "+
+				"leader election would fail with Forbidden on startup", role.Namespace, verb)
+		}
+	}
+
+	for _, rule := range cluster.Rules {
+		if contains(rule.APIGroups, "coordination.k8s.io") && contains(rule.Resources, "leases") {
+			t.Errorf("the ClusterRole still grants %v on coordination.k8s.io/leases — the "+
+				"operator could take a leader lock in any namespace", rule.Verbs)
 		}
 	}
 }

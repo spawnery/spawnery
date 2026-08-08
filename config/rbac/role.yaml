@@ -42,13 +42,11 @@ rules:
   - list
   - watch
 - apiGroups:
-  - coordination.k8s.io
+  - authentication.k8s.io
   resources:
-  - leases
+  - tokenreviews
   verbs:
   - create
-  - get
-  - update
 - apiGroups:
   - policy
   resources:
@@ -96,3 +94,26 @@ rules:
   - list
   - update
   - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: spawnery-operator
+  namespace: spawnery-system
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - update
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - update
