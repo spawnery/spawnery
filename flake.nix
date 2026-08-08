@@ -1,5 +1,5 @@
 {
-  description = "Spawnery — Kubernetes-natives Cloud-System für Minecraft-Netzwerke";
+  description = "Spawnery — a Kubernetes-native cloud system for Minecraft networks";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 

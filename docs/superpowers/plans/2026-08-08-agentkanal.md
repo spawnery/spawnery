@@ -8,7 +8,7 @@
 
 **Tech-Stack:** Go 1.26.5, controller-runtime 0.24.1, k8s.io/* 0.36, gRPC, protobuf, envtest, Nix.
 
-**Entwurf:** `docs/superpowers/specs/2026-08-08-agentkanal-design.md`. Abschnittsnummern unten verweisen dorthin.
+**Entwurf:** `docs/superpowers/specs/2026-08-08-agent-channel-design.md`. Abschnittsnummern unten verweisen dorthin.
 
 ## Globale Randbedingungen
 
@@ -3361,7 +3361,7 @@ Entwurf Abschnitt 6.6. Erstmals eine `Role` neben der `ClusterRole`.
 
 - [ ] **Schritt 1: Die Tests anpassen und einen neuen schreiben**
 
-Die bestehenden Tests in `internal/rbacaudit/audit_envtest_test.go` auf `RequiredCluster` umstellen und die namespace-lokale Hälfte spiegeln. Dazu neu — das schließt den ersten offenen Punkt aus `docs/bekannte-punkte.md`, Abschnitt „Zum RBAC-Audit":
+Die bestehenden Tests in `internal/rbacaudit/audit_envtest_test.go` auf `RequiredCluster` umstellen und die namespace-lokale Hälfte spiegeln. Dazu neu — das schließt den ersten offenen Punkt aus `docs/known-issues.md`, Abschnitt „Zum RBAC-Audit":
 
 ```go
 // Without this the SAR direction can go quietly meaningless: if a second
@@ -3494,7 +3494,7 @@ SAR-Richtung stillschweigend bedeutungslos werden."
 
 **Dateien:**
 - Ändern: `README.md` (Statusabschnitt, k3d-Ablauf)
-- Ändern: `docs/bekannte-punkte.md`
+- Ändern: `docs/known-issues.md`
 
 - [ ] **Schritt 1: README**
 
@@ -3518,7 +3518,7 @@ Ergänzen, unter einer neuen Überschrift für Meilenstein 2b beziehungsweise 3:
 
 ```bash
 nix develop -c make test
-git add README.md docs/bekannte-punkte.md
+git add README.md docs/known-issues.md
 git commit -m "Stand nach dem Agentkanal festhalten
 
 Zwei Punkte aus dem Meilenstein-1-Review sind erledigt und fliegen

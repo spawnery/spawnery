@@ -926,7 +926,7 @@ git commit -m "Reine Logik für den Rechteabgleich"
 **Files:**
 - Create: `internal/rbacaudit/required.go`
 - Test: `internal/rbacaudit/audit_envtest_test.go`
-- Modify: `docs/bekannte-punkte.md`
+- Modify: `docs/known-issues.md`
 
 **Interfaces:**
 - Consumes: `Permission`, `ExpandRules`, `Compare` aus Task 2; `testenv.Client`, `testenv.RepoPath` aus Task 1.
@@ -1156,7 +1156,7 @@ Im Bericht festhalten, welche Mutation welchen Test umgeworfen hat.
 
 - [ ] **Step 7: Bekannte Punkte aktualisieren**
 
-In `docs/bekannte-punkte.md` den Abschnitt zu Meilenstein 6 anpassen: Der Eintrag „Die generierte ClusterRole ist zu weit" ist erledigt und wird ersetzt durch:
+In `docs/known-issues.md` den Abschnitt zu Meilenstein 6 anpassen: Der Eintrag „Die generierte ClusterRole ist zu weit" ist erledigt und wird ersetzt durch:
 
 ```markdown
 **Leases gehören in eine namespaced Role.** Das Recht auf
@@ -1175,7 +1175,7 @@ echten Cluster läuft (Ebene B des E2E-Entwurfs).
 - [ ] **Step 8: Commit**
 
 ```bash
-git add internal/rbacaudit config/rbac internal/controller docs/bekannte-punkte.md
+git add internal/rbacaudit config/rbac internal/controller docs/known-issues.md
 git commit -m "Rechtetabelle und Audit gegen den echten Authorizer"
 ```
 

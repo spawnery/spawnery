@@ -33,16 +33,16 @@ package rbacaudit
 var RequiredCluster = []Permission{
 	// Events — the recorder writes them for every phase change and every
 	// warning, and patches them when it aggregates repeats.
-	{Group: "", Resource: "events", Verb: "create", Why: "Recorder.Eventf in allen Controllern"},
-	{Group: "", Resource: "events", Verb: "patch", Why: "Event-Aggregation des Recorders"},
+	{Group: "", Resource: "events", Verb: "create", Why: "Recorder.Eventf in every controller"},
+	{Group: "", Resource: "events", Verb: "patch", Why: "the recorder's event aggregation"},
 
 	// Pods — the Server controller owns their whole life cycle.
-	{Group: "", Resource: "pods", Verb: "get", Why: "ServerReconciler.fetchPod und ServerGroupReconciler.podFor"},
+	{Group: "", Resource: "pods", Verb: "get", Why: "ServerReconciler.fetchPod and ServerGroupReconciler.podFor"},
 	{Group: "", Resource: "pods", Verb: "list", Why: "OrphanReconciler.Sweep"},
 	{Group: "", Resource: "pods", Verb: "watch", Why: "ServerReconciler Owns(&corev1.Pod{})"},
-	{Group: "", Resource: "pods", Verb: "create", Why: "ServerReconciler erzeugt den Pod aus podspec"},
-	{Group: "", Resource: "pods", Verb: "delete", Why: "Terminating-Entscheidung und Verwaisten-Abgleich"},
-	{Group: "", Resource: "pods", Verb: "patch", Why: "syncOccupiedLabel patcht das Occupied-Label"},
+	{Group: "", Resource: "pods", Verb: "create", Why: "ServerReconciler creates the pod from podspec"},
+	{Group: "", Resource: "pods", Verb: "delete", Why: "the terminating decision and the orphan sweep"},
+	{Group: "", Resource: "pods", Verb: "patch", Why: "syncOccupiedLabel patches the occupied label"},
 
 	// PodDisruptionBudgets — one per group, kept in step with the occupied count.
 	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "get", Why: "CreateOrUpdate in reconcilePDB"},
@@ -53,55 +53,55 @@ var RequiredCluster = []Permission{
 
 	// Namespace bootstrap — Bootstrapper.Ensure keeps the CA ConfigMap and
 	// the server ServiceAccount current in every namespace that runs pods.
-	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure liest die CA-ConfigMap"},
-	{Group: "", Resource: "configmaps", Verb: "list", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
-	{Group: "", Resource: "configmaps", Verb: "watch", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
-	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure legt die CA-ConfigMap an"},
-	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure zieht eine geänderte CA nach"},
+	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure reads the CA ConfigMap"},
+	{Group: "", Resource: "configmaps", Verb: "list", Why: "the restricted cache over the CA ConfigMaps"},
+	{Group: "", Resource: "configmaps", Verb: "watch", Why: "the restricted cache over the CA ConfigMaps"},
+	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure creates the CA ConfigMap"},
+	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure carries a changed CA forward"},
 
-	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.Ensure prüft den Server-SA"},
-	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "eingeschränkter Cache für die Server-SAs"},
-	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "eingeschränkter Cache für die Server-SAs"},
-	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.Ensure legt den Server-SA an"},
+	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.Ensure checks the server ServiceAccount"},
+	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "the restricted cache over the server ServiceAccounts"},
+	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "the restricted cache over the server ServiceAccounts"},
+	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.Ensure creates the server ServiceAccount"},
 
 	// Every agent token is checked against the real authenticator of the API
 	// server. TokenReview is cluster-scoped, so there is no namespaced variant
 	// of this right to fall back to.
 	{Group: "authentication.k8s.io", Resource: "tokenreviews", Verb: "create",
-		Why: "grpcauth.Authenticator.Authenticate prüft jeden Agent-Token"},
+		Why: "grpcauth.Authenticator.Authenticate checks every agent token"},
 
 	// The operator's own resources.
-	{Group: "spawnery.cloud", Resource: "networks", Verb: "get", Why: "Auflösen von networkRef"},
+	{Group: "spawnery.cloud", Resource: "networks", Verb: "get", Why: "resolving networkRef"},
 	{Group: "spawnery.cloud", Resource: "networks", Verb: "list", Why: "NetworkReconciler.namespaceOwner"},
 	{Group: "spawnery.cloud", Resource: "networks", Verb: "watch", Why: "NetworkReconciler For(&Network{})"},
 	// No entry for networks/status:get. Status().Update issues a PUT against
 	// the status subresource and reads nothing first; the status itself is read
 	// off the object returned by a plain Get on the resource. The same holds for
 	// the other two /status subresources below.
-	{Group: "spawnery.cloud", Resource: "networks", Subresource: "status", Verb: "update", Why: "NetworkReconciler schreibt Conditions und Zähler"},
+	{Group: "spawnery.cloud", Resource: "networks", Subresource: "status", Verb: "update", Why: "NetworkReconciler writes conditions and counts"},
 
-	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "get", Why: "Auflösen von groupRef"},
-	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "list", Why: "NetworkReconciler zählt Gruppen"},
+	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "get", Why: "resolving groupRef"},
+	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "list", Why: "NetworkReconciler counts groups"},
 	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "watch", Why: "ServerGroupReconciler For(&ServerGroup{})"},
-	{Group: "spawnery.cloud", Resource: "servergroups", Subresource: "status", Verb: "update", Why: "ServerGroupReconciler schreibt Aggregation und Conditions"},
+	{Group: "spawnery.cloud", Resource: "servergroups", Subresource: "status", Verb: "update", Why: "ServerGroupReconciler writes the aggregate and the conditions"},
 	// Needed for the same reason as servers/finalizers below: createServer and
 	// reconcilePDB both call controllerutil.SetControllerReference with the
 	// group as owner, and that sets blockOwnerDeletion on the reference.
-	{Group: "spawnery.cloud", Resource: "servergroups", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion auf den OwnerReferences von Server und PodDisruptionBudget"},
+	{Group: "spawnery.cloud", Resource: "servergroups", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the owner references of Server and PodDisruptionBudget"},
 
 	{Group: "spawnery.cloud", Resource: "servers", Verb: "get", Why: "ServerReconciler.Reconcile"},
-	{Group: "spawnery.cloud", Resource: "servers", Verb: "list", Why: "ServerGroupReconciler.collectViews und Verwaisten-Abgleich"},
+	{Group: "spawnery.cloud", Resource: "servers", Verb: "list", Why: "ServerGroupReconciler.collectViews and the orphan sweep"},
 	{Group: "spawnery.cloud", Resource: "servers", Verb: "watch", Why: "ServerReconciler For(&Server{})"},
-	{Group: "spawnery.cloud", Resource: "servers", Verb: "create", Why: "ServerGroupReconciler erzeugt Server bis zur Untergrenze"},
-	{Group: "spawnery.cloud", Resource: "servers", Verb: "delete", Why: "Verkleinern, Kappen aufbewahrter Fehlschläge, Verwaisten-Abgleich"},
-	{Group: "spawnery.cloud", Resource: "servers", Verb: "update", Why: "Finalizer setzen und entfernen"},
-	{Group: "spawnery.cloud", Resource: "servers", Subresource: "status", Verb: "update", Why: "ServerReconciler schreibt Phase, Zeitstempel und Conditions"},
-	{Group: "spawnery.cloud", Resource: "servers", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion auf den OwnerReferences der Pods in podspec.BuildServerPod"},
+	{Group: "spawnery.cloud", Resource: "servers", Verb: "create", Why: "ServerGroupReconciler creates servers up to the lower bound"},
+	{Group: "spawnery.cloud", Resource: "servers", Verb: "delete", Why: "scaling down, capping retained failures, the orphan sweep"},
+	{Group: "spawnery.cloud", Resource: "servers", Verb: "update", Why: "setting and clearing the finalizer"},
+	{Group: "spawnery.cloud", Resource: "servers", Subresource: "status", Verb: "update", Why: "ServerReconciler writes phase, timestamps and conditions"},
+	{Group: "spawnery.cloud", Resource: "servers", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod owner references in podspec.BuildServerPod"},
 
-	// No entry for proxygroups:get — nichts holt eine einzelne ProxyGroup, der
-	// Controller zählt sie nur über eine List.
-	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "list", Why: "NetworkReconciler zählt Proxy-Gruppen"},
-	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "watch", Why: "Cache des Managers"},
+	// No entry for proxygroups:get — nothing fetches a single ProxyGroup; the
+	// controller only counts them through a list.
+	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "list", Why: "NetworkReconciler counts proxy groups"},
+	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "watch", Why: "the manager's cache"},
 }
 
 // RequiredNamespaced is what the operator does in its own namespace only, and
@@ -117,11 +117,11 @@ var RequiredCluster = []Permission{
 // make caching work would widen this beyond what the design intends;
 // TestTheAuthorizerActuallyDenies insists they stay out.
 var RequiredNamespaced = []Permission{
-	{Group: "", Resource: "secrets", Verb: "get", Why: "certs.Store.Ensure liest das TLS-Bündel"},
-	{Group: "", Resource: "secrets", Verb: "create", Why: "certs.Store.Ensure legt es beim ersten Start an"},
-	{Group: "", Resource: "secrets", Verb: "update", Why: "certs.Store.Ensure erneuert das Serving-Zertifikat"},
+	{Group: "", Resource: "secrets", Verb: "get", Why: "certs.Store.Ensure reads the TLS bundle"},
+	{Group: "", Resource: "secrets", Verb: "create", Why: "certs.Store.Ensure creates it on first start"},
+	{Group: "", Resource: "secrets", Verb: "update", Why: "certs.Store.Ensure renews the serving certificate"},
 
-	{Group: "coordination.k8s.io", Resource: "leases", Verb: "create", Why: "Leader-Election beim Start"},
-	{Group: "coordination.k8s.io", Resource: "leases", Verb: "get", Why: "Leader-Election erneuert die Sperre"},
-	{Group: "coordination.k8s.io", Resource: "leases", Verb: "update", Why: "Leader-Election erneuert die Sperre"},
+	{Group: "coordination.k8s.io", Resource: "leases", Verb: "create", Why: "leader election on startup"},
+	{Group: "coordination.k8s.io", Resource: "leases", Verb: "get", Why: "leader election renews the lock"},
+	{Group: "coordination.k8s.io", Resource: "leases", Verb: "update", Why: "leader election renews the lock"},
 }

@@ -8,12 +8,12 @@ metadata:
     app.kubernetes.io/component: operator
 spec:
   replicas: 1
-  # Ersetzen statt überlappen. Seit readyz an der Leader-Sperre hängt, wird ein
-  # neuer Pod erst bereit, nachdem er die Sperre hat — und die hält der alte,
-  # solange er läuft. Ein rollendes Update wartet bei einer Replik auf genau
-  # diese Bereitschaft (maxUnavailable 0), bevor es den alten Pod abräumt, und
-  # bliebe deshalb stehen, bis jemand von Hand nachhilft. Nicht auf
-  # RollingUpdate zurückstellen.
+  # Replace, do not overlap. Ever since readyz hangs off the leader lock, a new
+  # pod only turns ready once it holds that lock — and the old pod holds it for
+  # as long as it runs. With a single replica a rolling update waits for
+  # exactly that readiness (maxUnavailable 0) before it removes the old pod, so
+  # it would sit there until somebody intervenes by hand. Do not switch this
+  # back to RollingUpdate.
   strategy:
     type: Recreate
   selector:
@@ -34,7 +34,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: operator
-          # Ebene B ersetzt dieses Image durch das lokal gebaute.
+          # Level B replaces this image with the locally built one.
           image: ghcr.io/spawnery/spawnery-operator:dev
           args:
             - --leader-elect=true
@@ -42,9 +42,9 @@ spec:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
           env:
-            # Vorgabe für --operator-namespace. Daraus ergeben sich sowohl die
-            # SANs des Serverzertifikats als auch die Adresse, die die Agents
-            # anwählen.
+            # The default for --operator-namespace. Both the SANs of the
+            # serving certificate and the address the agents dial derive
+            # from it.
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

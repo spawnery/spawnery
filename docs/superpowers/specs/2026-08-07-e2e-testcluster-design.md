@@ -1,254 +1,251 @@
-# Design: Reproduzierbares E2E-Testcluster und RBAC-Nachweis
+# Design: A reproducible E2E test cluster and proof of RBAC
 
-**Datum:** 2026-08-07
-**Status:** Entwurf zur Freigabe
-**Umfang:** Testinfrastruktur für Spawnery in zwei Ebenen — eine Rechtetabelle
-in envtest, die bei jedem Commit läuft, und ein NixOS-VM-Test mit RKE2, der den
-Operator unter seinem ServiceAccount arbeiten sieht. Jede Ebene bekommt einen
-eigenen Implementierungsplan; Ebene A zuerst.
+**Date:** 2026-08-07
+**Status:** Draft for approval
+**Scope:** Test infrastructure for Spawnery on two levels — a permission table
+in envtest that runs on every commit, and a NixOS VM test with RKE2 that watches
+the operator work under its own ServiceAccount. Each level gets its own
+implementation plan; level A first.
 
-## 1. Zweck
+## 1. Purpose
 
-Nach Meilenstein 1 gibt es eine Lücke: Die Controller-Tests sprechen mit dem
-Admin-Kubeconfig von envtest, also läuft in ihnen kein Vorgang unter dem
-ServiceAccount des Operators. Ein fehlendes Verb in der generierten ClusterRole
-fällt dort nicht auf — es zeigt sich erst, wenn der Operator zum ersten Mal in
-einem echten Cluster unter seinen eigenen Rechten läuft. Die Schlussdurchsicht
-von Meilenstein 1 hat das als unprüfbar markiert und zugleich sieben überflüssig
-gewährte Verben gefunden, die niemand bemerkt hätte.
+Milestone 1 leaves a gap: the controller tests talk to envtest's admin
+kubeconfig, so nothing in them ever runs under the operator's ServiceAccount. A
+missing verb in the generated ClusterRole goes unnoticed there — it only shows
+up the first time the operator runs in a real cluster under its own permissions.
+The final review of milestone 1 marked this unprovable and, in the same pass,
+found seven verbs granted for no reason that nobody would have caught.
 
-**Korrektur einer früheren Annahme.** Ursprünglich stand hier, envtest laufe mit
-Adminrechten und könne deshalb über Rechte gar nichts aussagen. Das gilt für den
-*Client* der Controller-Tests, nicht für den *Authorizer*: envtest startet den
-API-Server mit `--authorization-mode=RBAC`, und `SubjectAccessReview` liefert
-dort echte Antworten. Empirisch geprüft — ohne Rolle verweigert, nach Bindung
-erlaubt, ein nicht gewährtes Verb verweigert, in unter zwei Sekunden.
+**Correcting an earlier assumption.** This document used to claim envtest runs
+with admin rights and can therefore say nothing about permissions. That holds
+for the *client* in the controller tests, not for the *authorizer*: envtest
+starts the API server with `--authorization-mode=RBAC`, and `SubjectAccessReview`
+gives real answers there. Verified empirically — denied without a role, allowed
+after binding, a verb that was never granted denied, all in under two seconds.
 
-Daraus folgt der Zuschnitt dieses Dokuments in zwei Ebenen.
+That is where this document's two-level split comes from.
 
-### 1.1 Zwei Ebenen
+### 1.1 Two levels
 
-**Ebene A — Rechtetabelle in envtest.** Die Prüfung, ob die ClusterRole alles
-gewährt was der Code braucht und nichts darüber hinaus, braucht kein Cluster.
-Sie läuft in der bestehenden envtest-Suite bei **jedem Commit**, in Sekunden.
-Ein fehlendes oder überflüssiges Verb fällt damit auf, während es entsteht.
+**Level A — the permission table in envtest.** Checking that the ClusterRole
+grants everything the code needs and nothing beyond it does not need a cluster.
+It runs inside the existing envtest suite on **every commit**, in seconds. A
+missing or superfluous verb shows up as it is introduced.
 
-**Ebene B — der Operator im echten Cluster.** Was envtest nicht kann: dass ein
-Operator-Prozess unter seinem ServiceAccount gegen einen echten API-Server
-spricht, dabei seine Codepfade durchläuft und kein `Forbidden` erzeugt. Dafür
-die VM.
+**Level B — the operator in a real cluster.** What envtest cannot do: have an
+operator process talk to a real API server under its ServiceAccount, walk its
+code paths, and produce no `Forbidden`. That is what the VM is for.
 
-Die Ebenen werden getrennt geplant und umgesetzt; Ebene A zuerst, weil sie den
-Nutzen sofort liefert und Ebene B kleiner macht.
+The levels are planned and built separately; level A first, because it pays off
+immediately and makes level B smaller.
 
-**Erfolgskriterium Ebene A:** `make test` schlägt fehl, sobald ein Verb in der
-ClusterRole fehlt oder eines zu viel gewährt wird.
+**Success criterion for level A:** `make test` fails as soon as a verb is
+missing from the ClusterRole or one is granted too many.
 
-**Erfolgskriterium Ebene B:** Ein Lauf von `make e2e` zeigt den Operator im
-Cluster arbeitend, ohne eine einzige abgelehnte Anfrage.
+**Success criterion for level B:** A run of `make e2e` shows the operator
+working in the cluster without a single denied request.
 
-### Was dieser Zuschnitt nicht ist
+### What this split is not
 
-Kein Ersatz für die E2E-Szenarien aus Spec §10 des Operator-Entwurfs. Die setzen
-alle echte Paper- und Velocity-Prozesse voraus und beginnen mit Meilenstein 3.
-Diese Infrastruktur ist der Unterbau, in den sie später hineinwachsen.
+It does not replace the end-to-end scenarios in §10 of the operator design.
+Those all assume real Paper and Velocity processes and start with milestone 3.
+This infrastructure is the foundation they grow into later.
 
-## 2. Warum eine VM und nicht ein lokales Cluster
+## 2. Why a VM and not a local cluster
 
-`kind` und `k3d` brauchen eine Container-Laufzeit. Auf der Entwicklungsmaschine
-(NixOS) gibt es keine, und eine einzurichten hieße, die Systemkonfiguration zu
-ändern und Zustand aufzubauen, der bei der nächsten Person anders aussieht.
+`kind` and `k3d` need a container runtime. The development machine (NixOS) has
+none, and setting one up would mean changing the system configuration and
+building up state that looks different for the next person.
 
-`pkgs.testers.runNixOSTest` bootet stattdessen eine VM unter QEMU/KVM, deren
-gesamter Inhalt über `flake.lock` gepinnt ist. Derselbe Aufruf erzeugt bei jedem
-Entwickler und in CI dasselbe Cluster. Kein Daemon, keine Änderung an der
-Systemkonfiguration, kein veränderlicher Zustand zwischen Läufen.
+`pkgs.testers.runNixOSTest` instead boots a VM under QEMU/KVM whose entire
+contents are pinned through `flake.lock`. The same invocation produces the same
+cluster for every developer and in CI. No daemon, no change to the system
+configuration, no mutable state between runs.
 
-**RKE2 statt k3s**, obwohl der RBAC-Nachweis auf beiden identisch wäre: RKE2 ist
-die Zielplattform aus dem Operator-Entwurf, und die dort beschriebenen
-Eigenheiten (CIS-Profil mit clusterweitem Pod-Security-`restricted`,
-CNI-Abhängigkeit der HostPort-Strategie) fallen so früher auf statt erst in
-Meilenstein 6. Der Preis ist Bootzeit und Speicher.
+**RKE2 rather than k3s**, even though the RBAC proof would be identical on
+either: RKE2 is the target platform from the operator design, and the quirks
+described there (the CIS profile forcing cluster-wide `restricted` pod security,
+the CNI dependency of the HostPort strategy) surface earlier this way instead of
+in milestone 6. The price is boot time and memory.
 
-## 3. Bestandteile
+## 3. Parts
 
-Ebene A braucht nur die Deployment-Manifeste aus 3.1 und einen gewöhnlichen
-Go-Test. Alles Übrige in diesem Abschnitt und in Abschnitt 4 gehört zu Ebene B.
+Level A needs only the deployment manifests from 3.1 and an ordinary Go test.
+Everything else in this section and in section 4 belongs to level B.
 
-Drei neue Flake-Outputs:
+Three new flake outputs:
 
-| Output | Inhalt |
+| Output | Contents |
 |---|---|
-| `packages.operator-image` | `dockerTools.buildLayeredImage` über das vorhandene Operator-Binary. Kein Daemon, bitreproduzierbar. |
-| `packages.e2e-probe` | Go-Binary mit den Assertions. Importiert dieselben Konstanten wie der Operator. |
-| `checks.e2e-rbac` | `testers.runNixOSTest` — die VM, die beides hineinreicht und ausführt. |
+| `packages.operator-image` | `dockerTools.buildLayeredImage` over the existing operator binary. No daemon, bit-reproducible. |
+| `packages.e2e-probe` | A Go binary holding the assertions. Imports the same constants the operator does. |
+| `checks.e2e-rbac` | `testers.runNixOSTest` — the VM that hands both in and runs them. |
 
-Ausgelagert nach `nix/operator-image.nix` und `nix/e2e-rbac.nix`, damit
-`flake.nix` lesbar bleibt.
+Moved out into `nix/operator-image.nix` and `nix/e2e-rbac.nix` so `flake.nix`
+stays readable.
 
-### 3.1 Deployment-Manifeste
+### 3.1 Deployment manifests
 
-Meilenstein 1 erzeugt nur die ClusterRole. ServiceAccount, ClusterRoleBinding
-und Deployment gehören zur Helm-Chart aus Meilenstein 6 und existieren noch
-nicht — ohne sie läuft der Operator gar nicht unter einem ServiceAccount, und
-RBAC ist prinzipiell nicht prüfbar.
+Milestone 1 produces the ClusterRole and nothing else. ServiceAccount,
+ClusterRoleBinding and Deployment belong to the Helm chart from milestone 6 and
+do not exist yet — without them the operator never runs under a ServiceAccount
+at all, and RBAC is unprovable in principle.
 
-Dieser Zuschnitt zieht deshalb eine dünne Scheibe aus Meilenstein 6 vor: vier
-Manifeste unter `config/deploy/` — Namespace `spawnery-system`, ServiceAccount
-`spawnery-operator` darin, ClusterRoleBinding auf die generierte ClusterRole,
-und ein Deployment mit einer Replica. Kein verlorener Aufwand — die Chart wird
-später genau diese Objekte templaten.
+This split therefore pulls a thin slice out of milestone 6: four manifests under
+`config/deploy/` — the namespace `spawnery-system`, the ServiceAccount
+`spawnery-operator` inside it, a ClusterRoleBinding onto the generated
+ClusterRole, and a Deployment with one replica. No wasted effort — the chart
+will template exactly these objects later.
 
-Das Deployment setzt `--startup-deadline=20s`, damit der Fehlerpfad innerhalb
-eines Testlaufs erreichbar ist (siehe 5.2, Szenario 6).
+The Deployment sets `--startup-deadline=20s` so the failure path is reachable
+within a single test run (see 5.2, scenario 6).
 
-### 3.2 Testmanifest statt Beispielmanifest
+### 3.2 A test manifest, not the example manifest
 
-Der Test wendet **nicht** `config/samples/network.yaml` an, sondern ein eigenes
-Manifest unter `test/e2e/manifests/`. Grund: Szenario 6 braucht
-`failedRetentionSeconds: 30`, und das Beispielmanifest soll ein realistischer
-Einstieg für Nutzer bleiben statt für einen Testlauf verbogen zu werden.
+The test deliberately does **not** apply `config/samples/network.yaml`; it uses
+its own manifest under `test/e2e/manifests/`. The reason: scenario 6 needs
+`failedRetentionSeconds: 30`, and the example manifest should stay a realistic
+starting point for users rather than being bent to fit a test run.
 
-Beide benutzen den Namespace `minecraft` und dieselbe Struktur — ein Netzwerk,
-eine ephemere Gruppe. Ein eigener Testfall prüft zusätzlich, dass
-`config/samples/network.yaml` vom API-Server angenommen wird, damit das
-Beispiel nicht unbemerkt verrottet.
+Both use the namespace `minecraft` and the same shape — one network, one
+ephemeral group. A separate test case additionally checks that
+`config/samples/network.yaml` is accepted by the API server, so the example
+cannot rot unnoticed.
 
-## 4. Ablauf des VM-Tests
+## 4. How the VM test runs
 
-Das testScript beschränkt sich auf Klempnerei; die Aussagen trifft die Probe.
+The testScript restricts itself to plumbing; the probe makes the claims.
 
-1. Auf `rke2-server.service` warten.
-2. Auf einen `Ready`-Node warten.
-3. Das Operator-Image in den containerd-Namespace `k8s.io` importieren.
-4. CRDs, Deployment-Manifeste und das Testmanifest anwenden.
-5. Warten, bis das Operator-Deployment `Available` meldet.
+1. Wait for `rke2-server.service`.
+2. Wait for a `Ready` node.
+3. Import the operator image into the containerd namespace `k8s.io`.
+4. Apply the CRDs, the deployment manifests and the test manifest.
+5. Wait until the operator deployment reports `Available`.
 6. `machine.succeed("/bin/e2e-probe")`.
 
-**Keine feste Wartezeit an irgendeiner Stelle.** Jede Wartestelle ist an eine
-Bedingung mit Frist geknüpft. Ein VM-Test, der auf `sleep` baut, wird unter Last
-flakig, und ein flakiger E2E-Test wird binnen Wochen ignoriert.
+**No fixed wait anywhere.** Every waiting point is tied to a condition with a
+deadline. A VM test built on `sleep` turns flaky under load, and a flaky E2E
+test is ignored within weeks.
 
-Schlägt die Probe fehl, gibt das testScript Operator-Logs,
-`kubectl get networks,servergroups,servers,pods -A` und die Events aus.
+If the probe fails, the testScript dumps the operator logs,
+`kubectl get networks,servergroups,servers,pods -A` and the events.
 
-## 5. Die Prüfungen
+## 5. The checks
 
-Beide Ebenen fragen über `SubjectAccessReview` nach den Rechten eines *fremden*
-Subjekts — des Operator-ServiceAccounts. Damit braucht der Prüfer kein
-ServiceAccount-Token und kann zugleich Logs und Events lesen, was mit den
-Rechten des Operators nicht ginge. (`SelfSubjectAccessReview` prüft die Rechte
-des Aufrufers und wäre hier falsch.)
+Both levels ask about the permissions of a *third-party* subject — the
+operator's ServiceAccount — through `SubjectAccessReview`. That way the checker
+needs no ServiceAccount token and can still read logs and events, which it could
+not do with the operator's own permissions. (`SelfSubjectAccessReview` checks
+the caller's permissions and would be the wrong tool here.)
 
-### 5.1 Ebene A: die Rechtetabelle, in beide Richtungen
+### 5.1 Level A: the permission table, in both directions
 
-Läuft in der envtest-Suite, nicht in der VM. Der Test wendet die generierte
-ClusterRole und die Manifeste aus `config/deploy/` in envtest an und leitet das
-zu prüfende Subjekt **aus dem ClusterRoleBinding und dem Deployment** ab, statt
-es zu wiederholen. Damit deckt Ebene A auch ab, dass die Bindung auf die
-richtige Rolle zeigt und das Deployment den richtigen ServiceAccount benutzt —
-drei Fehlerquellen statt einer.
+Runs in the envtest suite, not in the VM. The test applies the generated
+ClusterRole and the manifests from `config/deploy/` into envtest and derives the
+subject to check **from the ClusterRoleBinding and the Deployment** instead of
+restating it. Level A therefore also covers that the binding points at the right
+role and that the Deployment uses the right ServiceAccount — three sources of
+error instead of one.
 
 ```go
 type Permission struct {
     Group, Resource, Subresource, Verb string
-    Why string   // welche Codestelle das braucht
+    Why string   // which place in the code needs it
 }
 ```
 
-Die Tabelle wird **von Hand gepflegt** und nicht aus den kubebuilder-Markern
-abgeleitet. Eine abgeleitete Tabelle prüfte nur, dass die Rolle gewährt, was die
-Rolle gewährt. Von Hand gepflegt ist sie die unabhängige Aussage „das braucht
-der Code".
+The table is **maintained by hand** and not derived from the kubebuilder
+markers. A derived table would only check that the role grants what the role
+grants. Maintained by hand, it is the independent statement "this is what the
+code needs".
 
-Das Feld `Why` benennt die Aufrufstelle, damit beim Entfernen eines Codepfads
-auffällt, dass der Eintrag mitgeht.
+The `Why` field names the call site, so that removing a code path makes it
+obvious that the entry goes with it.
 
-**Nichts fehlt.** Für jeden Eintrag ein `SubjectAccessReview` auf
-`system:serviceaccount:spawnery-system:spawnery-operator`. Namespaced
-Ressourcen werden im Namespace `minecraft` geprüft, cluster-scoped ohne
-Namespace. Jede Ablehnung ist ein Fehlschlag, der das Tripel im Klartext nennt.
+**Nothing missing.** One `SubjectAccessReview` per entry against
+`system:serviceaccount:spawnery-system:spawnery-operator`. Namespaced resources
+are checked in the namespace `minecraft`, cluster-scoped ones without a
+namespace. Every denial is a failure that names the triple in plain text.
 
-**Nichts zu viel.** Die ClusterRole aus dem Cluster lesen, ihre Regeln zu
-Tripeln auffalten und prüfen, dass jedes in der Tabelle steht. Ein `*` in
-Gruppe, Ressource oder Verb gilt per Definition als Übergewährung und schlägt
-fehl.
+**Nothing extra.** Read the ClusterRole from the cluster, expand its rules into
+triples, and check that each one appears in the table. A `*` in group, resource
+or verb counts as over-granting by definition and fails.
 
-Wer einen Marker ergänzt, ohne die Tabelle zu pflegen, bekommt einen roten Test.
-Das ist beabsichtigt.
+Add a marker without maintaining the table and you get a red test. That is
+intended.
 
-**Was Ebene A nicht kann.** Sie prüft, dass Rolle und Tabelle übereinstimmen —
-nicht, dass die Tabelle vollständig ist. Fehlt ein Recht in *beiden*, bleibt der
-Test grün und der Operator läuft trotzdem in ein `Forbidden`. Genau das ist der
-Grund, warum Ebene B nötig bleibt: Dort spricht ein echter Prozess unter seinem
-ServiceAccount, und jede Lücke meldet sich von selbst. Ebene A verhindert das
-Abdriften, Ebene B beweist die Vollständigkeit.
+**What level A cannot do.** It checks that role and table agree — not that the
+table is complete. If a permission is missing from *both*, the test stays green
+and the operator still walks into a `Forbidden`. That is precisely why level B
+remains necessary: there a real process talks under its ServiceAccount, and
+every gap announces itself. Level A prevents drift, level B proves
+completeness.
 
-### 5.2 Ebene B: getriebene Szenarien im Cluster
+### 5.2 Level B: driven scenarios in the cluster
 
-Erreichbar ohne Paper-Image:
+Reachable without a Paper image:
 
-1. Testmanifest anwenden → Netzwerk akzeptiert, Gruppe akzeptiert, ein
-   `Server`, ein Pod. Der Pod bleibt in `ErrImagePull` — das ist der erwartete
-   Endstand von Meilenstein 1, kein Fehler.
-2. `minReplicas` hochsetzen → weitere `Server` und Pods entstehen.
-3. `minReplicas` senken → überzählige `Server` verschwinden.
-4. Einen Fremdpod mit den verwalteten Labels, aber ohne `Server`-Objekt
-   unterschieben → der Verwaisten-Abgleich löscht ihn.
-5. Den `Server` löschen → Finalizer wird freigegeben, Objekt verschwindet.
-6. Mit `--startup-deadline=20s` am Deployment und `failedRetentionSeconds: 30`
-   im Manifest läuft ein Server binnen einer Minute über `Failed` nach
-   `Terminating`. Damit ist auch das Löschen eines Pods durch den Operator
-   erreichbar.
+1. Apply the test manifest → network accepted, group accepted, one `Server`, one
+   pod. The pod stays in `ErrImagePull` — that is the expected end state of
+   milestone 1, not a failure.
+2. Raise `minReplicas` → further `Server`s and pods appear.
+3. Lower `minReplicas` → the surplus `Server`s disappear.
+4. Slip in a foreign pod carrying the managed labels but with no `Server` object
+   → the orphan sweep deletes it.
+5. Delete the `Server` → the finalizer is released, the object disappears.
+6. With `--startup-deadline=20s` on the Deployment and `failedRetentionSeconds:
+   30` in the manifest, a server runs from `Failed` to `Terminating` within a
+   minute. That also makes the operator deleting a pod reachable.
 
-Danach die Operator-Logs über die API lesen und bei jedem `forbidden`
-fehlschlagen, mit der Zeile im Klartext.
+Afterwards read the operator logs through the API and fail on every `forbidden`,
+quoting the line verbatim.
 
-### 5.3 Was auch dann ungeprüft bleibt
+### 5.3 What stays unproven even then
 
-Das Patchen des Occupied-Labels. Es setzt voraus, dass ein Server einmal `Ready`
-war, und das braucht ein Image mit dem SLP-Health-Tool aus Meilenstein 2. Die
-Tabellenprüfung deckt das Verb ab, das Szenario nicht.
+Patching the occupied label. It requires a server to have been `Ready` once, and
+that needs an image with the SLP health tool from milestone 2. The table check
+covers the verb, the scenario does not.
 
-## 6. Der Prüfer wird selbst geprüft
+## 6. The checker is itself checked
 
-Das Auffalten der ClusterRole-Regeln und der Abgleich gegen die Tabelle sind
-reine Funktionen und bekommen gewöhnliche Go-Unit-Tests ohne Cluster.
+Expanding the ClusterRole rules and comparing them against the table are pure
+functions and get ordinary Go unit tests without a cluster.
 
-**Abnahmekriterium ist Mutation, nicht ein grüner Lauf.** Für Ebene A:
+**The acceptance criterion is mutation, not a green run.** For level A:
 
-- ein Verb aus den Markern entfernen → Fehlschlag mit genau diesem Tripel,
-- ein überflüssiges Verb ergänzen → Fehlschlag in der Gegenrichtung,
-- das ClusterRoleBinding auf einen falschen ServiceAccount zeigen lassen →
-  Fehlschlag, weil das abgeleitete Subjekt nichts mehr darf.
+- remove a verb from the markers → failure naming exactly that triple,
+- add a superfluous verb → failure in the opposite direction,
+- point the ClusterRoleBinding at the wrong ServiceAccount → failure, because
+  the derived subject is no longer allowed anything.
 
-Für Ebene B: den Verwaisten-Abgleich brechen → Szenario 4 fällt um.
+For level B: break the orphan sweep → scenario 4 falls over.
 
-Ein Test, der bloß grün ist, hat in diesem Projekt dreimal nichts bewiesen.
+In this project, a test that is merely green has proven nothing three times
+over.
 
-## 7. Einbettung
+## 7. Where it fits
 
-Ebene A läuft als gewöhnlicher Go-Test in `make test` mit — sie kostet Sekunden.
+Level A runs as an ordinary Go test inside `make test` — it costs seconds.
 
-Ebene B: `make e2e` ruft `nix build .#checks.x86_64-linux.e2e-rbac -L`.
-Ausdrücklich **nicht** in `make test` oder `make all`: die Commit-Schleife bleibt
-bei rund 25 Sekunden. Die CI-Verdrahtung gehört zu Meilenstein 6; dieser
-Zuschnitt achtet nur darauf, sie nicht zu verbauen.
+Level B: `make e2e` calls `nix build .#checks.x86_64-linux.e2e-rbac -L`.
+Explicitly **not** part of `make test` or `make all`: the commit loop stays at
+around 25 seconds. Wiring it into CI belongs to milestone 6; this split only
+takes care not to make that harder.
 
-**Kosten:** Der erste Build lädt mehrere Gigabyte (NixOS-Image, RKE2,
-containerd). Jeder Lauf bootet eine VM mit etwa 4 GB RAM; rechne mit einigen
-Minuten. Das ist der Preis dafür, dass der Lauf bei jedem Entwickler und in CI
-derselbe ist.
+**Cost:** The first build downloads several gigabytes (NixOS image, RKE2,
+containerd). Every run boots a VM with roughly 4 GB of RAM; expect a few
+minutes. That is the price of the run being the same for every developer and in
+CI.
 
-## 8. Offene Punkte für später
+## 8. Open points for later
 
-- **CI braucht KVM.** Ohne `/dev/kvm` läuft der Test unter QEMU-Emulation und
-  wird um ein Vielfaches langsamer. Vor der CI-Verdrahtung in Meilenstein 6 ist
-  zu prüfen, ob der gewählte Runner Nested Virtualization bietet.
-- **Die Szenarien aus Spec §10** wachsen ab Meilenstein 3 in dieselbe VM hinein.
-  Der Test ist so zu schneiden, dass weitere Prüfungen danebentreten können,
-  ohne die bestehenden anzufassen.
-- **Pod Security.** RKE2 mit CIS-Profil erzwingt clusterweit `restricted`. Diese
-  Spec aktiviert das Profil nicht; sobald Meilenstein 6 die HostPort-Strategie
-  prüft, muss der Test es einschalten und die dort beschriebene
-  Namespace-Ausnahme mitprüfen.
+- **CI needs KVM.** Without `/dev/kvm` the test runs under QEMU emulation and
+  becomes many times slower. Before wiring it into CI in milestone 6, check
+  whether the chosen runner offers nested virtualization.
+- **The scenarios from spec §10** grow into this same VM from milestone 3
+  onwards. The test should be cut so that further checks can be placed beside
+  the existing ones without touching them.
+- **Pod security.** RKE2 with the CIS profile enforces `restricted`
+  cluster-wide. This spec does not enable the profile; as soon as milestone 6
+  checks the HostPort strategy, the test has to switch it on and check the
+  namespace exception described there along with it.

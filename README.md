@@ -1,13 +1,13 @@
 # Spawnery
 
-Ein Kubernetes-natives Cloud-System für Minecraft-Netzwerke.
+A Kubernetes-native cloud system for Minecraft networks.
 
-Spawnery betreibt Paper-Gameserver hinter einer Velocity-Proxy-Schicht auf
-Kubernetes — dynamisch skalierende Minigame- und Lobby-Gruppen ebenso wie
-persistente Survival-Welten. Zielplattform ist RKE2 auf Bare Metal, ohne dass
-andere Distributionen ausgeschlossen sind.
+Spawnery runs Paper game servers behind a Velocity proxy layer on Kubernetes —
+dynamically scaling minigame and lobby groups as much as persistent survival
+worlds. The target platform is RKE2 on bare metal, without ruling out other
+distributions.
 
-Server werden in Gruppen beschrieben, nicht in Pods:
+Servers are described in groups, not in pods:
 
 ```yaml
 apiVersion: spawnery.cloud/v1alpha1
@@ -21,80 +21,77 @@ spec:
   scaling:
     minReplicas: 1
     maxReplicas: 10
-    spareSlots: 40      # so viele freie Plätze hält Spawnery vor
+    spareSlots: 40      # how many free slots Spawnery keeps in reserve
 ```
 
-Skaliert wird nach freien Spielerplätzen statt nach CPU, und ein Server mit
-Spielern wird niemals gelöscht: Vor dem Stopp werden die Spieler über den Proxy
-auf einen Fallback umgezogen.
+Scaling follows free player slots rather than CPU, and a server with players is
+never deleted: before it stops, its players are moved onto a fallback through
+the proxy.
 
 ## Status
 
-In Entwicklung. Meilenstein 1 ist umgesetzt: die vier CRDs, der Operator mit
-Network-, ServerGroup- und Server-Controller, die Zustandsmaschine inklusive
-Readiness-Verlust und der Verwaisten-Abgleich.
+Under development. Milestone 1 is done: the four CRDs, the operator with the
+Network, ServerGroup and Server controllers, the state machine including
+readiness loss, and the orphan sweep.
 
-Meilenstein 2a ist umgesetzt: der Agentkanal. Ein gRPC-Dienst im
-Operator-Prozess nimmt TLS-Verbindungen von Gameserver-Pods entgegen, weist
-sie über einen pod-gebundenen ServiceAccount-Token zurück, und die Registry
-dahinter füllt das zweistufige Ready-Gate und `status.players`, die
-Meilenstein 1 unverdrahtet gelassen hatte. Der Kanal ist Ende-zu-Ende in
-envtest geprüft — ein Testagent bringt einen `Server` mit grüner
-Pod-Readiness bis in Phase `Ready` — aber es spricht noch kein echter Agent
-mit ihm: Ein Spieler kann sich weiterhin nicht verbinden, weil zwei Dinge
-fehlen: die Velocity-Proxy-Schicht (Meilenstein 3, `ProxySession` antwortet
-bis dahin nur `Unimplemented`) und die Basis-Images samt Kotlin-Agent
-(Meilenstein 2b) — ohne Image bleibt ein Pod weiter in `ErrImagePull`
-hängen, egal wie gut der Kanal geprüft ist, der auf ihn wartet.
+Milestone 2a is done: the agent channel. A gRPC service inside the operator
+process accepts TLS connections from game server pods, identifies them through a
+pod-bound ServiceAccount token, and the registry behind it feeds the two-stage
+ready gate and `status.players` that milestone 1 had left unwired. The channel
+is proven end to end in envtest — a test agent brings a `Server` with green pod
+readiness all the way to phase `Ready` — but no real agent talks to it yet: a
+player still cannot connect, because two things are missing: the Velocity proxy
+layer (milestone 3; until then `ProxySession` only answers `Unimplemented`) and
+the base images along with the Kotlin agent (milestone 2b) — without an image a
+pod stays stuck in `ErrImagePull`, however well the channel waiting for it has
+been proven.
 
-Details zu dem, was 2a bewusst offenlässt — CA-Rotation, die Pflicht des
-Kotlin-Agents zum überlappenden Neuverbinden, der fehlende
-`spawnery-proxy`-ServiceAccount — stehen in
-[`docs/bekannte-punkte.md`](docs/bekannte-punkte.md).
+Details of what 2a deliberately leaves open — CA rotation, the Kotlin agent's
+obligation to reconnect with overlap, the missing `spawnery-proxy` ServiceAccount
+— are in [`docs/known-issues.md`](docs/known-issues.md).
 
-Der Entwurf liegt unter [`docs/superpowers/specs/`](docs/superpowers/specs/),
-der Plan unter [`docs/superpowers/plans/`](docs/superpowers/plans/).
+The design lives under [`docs/superpowers/specs/`](docs/superpowers/specs/), the
+plans under [`docs/superpowers/plans/`](docs/superpowers/plans/).
 
-Wer Meilenstein 2b beginnt, fängt bei
-[`docs/uebergabe-meilenstein-2b.md`](docs/uebergabe-meilenstein-2b.md) an: dort
-steht, was der Kanal aus 2a einem Agent bereitstellt, welche Pfade und Binaries
-ein Basis-Image mitbringen muss, und was die Entwicklungsumgebung dafür
-zusätzlich braucht.
+Anyone starting milestone 2b begins at
+[`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md): it says what
+the channel from 2a provides to an agent, which paths and binaries a base image
+has to bring along, and what the development environment additionally needs for
+it.
 
-## Entwicklung
+## Development
 
 ```bash
-nix develop            # Go, controller-gen, envtest-Assets, kubectl, k3d
-make test              # Unit- und envtest-Tests
+nix develop            # Go, controller-gen, envtest assets, kubectl, k3d
+make test              # unit and envtest tests
 make build             # bin/spawnery-operator
 ```
 
-`make proto` erzeugt den Go-Code unter `internal/agentpb` aus
-`proto/spawnery/agent/v1alpha1/agent.proto` neu. Der generierte Code ist
-eingecheckt wie `zz_generated.deepcopy.go` — nach einer Änderung an der
-`.proto` `make proto` laufen lassen und den Diff mit committen, `make test`
-regeneriert ihn nicht von selbst.
+`make proto` regenerates the Go code under `internal/agentpb` from
+`proto/spawnery/agent/v1alpha1/agent.proto`. The generated code is checked in
+like `zz_generated.deepcopy.go` — after a change to the `.proto`, run `make
+proto` and commit the diff with it; `make test` does not regenerate it on its
+own.
 
-### Lokal gegen k3d ausprobieren
+### Trying it locally against k3d
 
-Diese Schritte brauchen eine Container-Laufzeit (Docker oder Podman) für k3d.
-Die Entwicklungsumgebung, in der Meilenstein 1 gebaut wurde, hatte keine —
-deshalb ist dieser Ablauf hier **nicht** in CI oder sonst irgendwo automatisiert
-ausgeführt worden. Verdrahtung und Zustandsmaschine sind stattdessen mit einem
-echten, laufenden Manager gegen die envtest-Kontrollebene geprüft (siehe
-`internal/controller/setup_test.go`); was nur mit einem echten Kubelet
-beobachtbar ist — dass der Pod mangels Basis-Image mit `ErrImagePull` hängen
-bleibt — ist ungeprüft.
+These steps need a container runtime (Docker or Podman) for k3d. The development
+environment milestone 1 was built in had none — which is why this flow has **not**
+been run automatically in CI or anywhere else. The wiring and the state machine
+were instead proven with a real, running manager against the envtest control
+plane (see `internal/controller/setup_test.go`); what is only observable with a
+real kubelet — that the pod hangs in `ErrImagePull` for want of a base image —
+is unproven.
 
-Der Operator läuft hier per `go run` außerhalb des Clusters, also ohne
-`POD_NAMESPACE` aus der Downward API. `--operator-namespace` muss deshalb
-explizit gesetzt sein — ohne das Flag verweigert der Prozess den Start (siehe
-`validateAgentFlags`), weil das Serving-Zertifikat sonst die falschen SANs
-trüge. Der Agentkanal selbst bleibt in diesem Ablauf ungenutzt: Der Operator
-bootstrappt zwar die CA-ConfigMap und den `spawnery-server`-ServiceAccount im
-Namespace, aber der Pod dialt `spawnery-operator.<ns>.svc:9443` — einen
-Service, den dieser Ablauf nie anlegt, weil der Operator-Prozess nicht im
-Cluster läuft und es keinen Endpunkt dorthin gäbe.
+The operator runs here through `go run` outside the cluster, so without
+`POD_NAMESPACE` from the downward API. `--operator-namespace` therefore has to
+be set explicitly — without the flag the process refuses to start (see
+`validateAgentFlags`), because the serving certificate would otherwise carry the
+wrong SANs. The agent channel itself stays unused in this flow: the operator does
+bootstrap the CA ConfigMap and the `spawnery-server` ServiceAccount in the
+namespace, but the pod dials `spawnery-operator.<ns>.svc:9443` — a service this
+flow never creates, because the operator process does not run in the cluster and
+there would be no endpoint pointing at it.
 
 ```bash
 nix develop -c k3d cluster create spawnery-dev --agents 1
@@ -105,23 +102,21 @@ sleep 45
 nix develop -c kubectl get networks,servergroups,servers,pods -n minecraft
 ```
 
-Der erste Server kann gut eine halbe Minute auf sich warten lassen: Trifft die
-ServerGroup ihr Netzwerk an, bevor der Network-Controller es angenommen hat,
-versucht sie es erst nach `networkRetryInterval` (30 Sekunden) wieder. Deshalb
-die 45 Sekunden oben.
+The first server can take a good half minute to appear: if the ServerGroup meets
+its network before the Network controller has accepted it, it tries again only
+after `networkRetryInterval` (30 seconds). Hence the 45 seconds above.
 
-Erwartet:
+Expected:
 
-- `network production` mit `Accepted=True`,
-- `servergroup lobby` mit `REPLICAS 1`,
-- ein `server lobby-xxxx` in Phase `Pending` oder `Starting`,
-- ein Pod `lobby-xxxx`, der das Image nicht ziehen kann (`ErrImagePull`) — das
-  Basis-Image entsteht erst in Meilenstein 2b. Das ist unverändert der
-  erwartete Endstand, auch nach Meilenstein 2a: Der Agentkanal bleibt hier
-  ungenutzt (siehe oben), also ändert er nichts daran, dass der Pod nie
-  startet.
+- `network production` with `Accepted=True`,
+- `servergroup lobby` with `REPLICAS 1`,
+- a `server lobby-xxxx` in phase `Pending` or `Starting`,
+- a pod `lobby-xxxx` that cannot pull its image (`ErrImagePull`) — the base image
+  arrives in milestone 2b. That is still the expected end state, milestone 2a
+  included: the agent channel stays unused here (see above), so it changes
+  nothing about the pod never starting.
 
-Danach aufräumen:
+Afterwards, clean up:
 
 ```bash
 kill %1

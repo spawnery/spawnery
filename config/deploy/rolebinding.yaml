@@ -2,10 +2,10 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: spawnery-operator
-  # Muss der Namespace der Role aus config/rbac/role.yaml sein: eine RoleBinding
-  # gewährt ausschließlich in ihrem eigenen Namespace. Steht sie woanders,
-  # gewährt sie gar nichts, und der Operator scheitert beim ersten
-  # certs.Store.Ensure mit Forbidden.
+  # Must be the namespace of the Role in config/rbac/role.yaml: a RoleBinding
+  # grants within its own namespace and nowhere else. Put it elsewhere and it
+  # grants nothing at all, and the operator fails at its first
+  # certs.Store.Ensure with Forbidden.
   namespace: spawnery-system
   labels:
     app.kubernetes.io/name: spawnery

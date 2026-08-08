@@ -49,8 +49,8 @@ func sameKeys(got, want []string) bool {
 }
 
 func TestKeyIgnoresWhy(t *testing.T) {
-	a := Permission{Group: "", Resource: "pods", Verb: "get", Why: "eine Stelle"}
-	b := Permission{Group: "", Resource: "pods", Verb: "get", Why: "eine andere"}
+	a := Permission{Group: "", Resource: "pods", Verb: "get", Why: "one place"}
+	b := Permission{Group: "", Resource: "pods", Verb: "get", Why: "another"}
 	if a.Key() != b.Key() {
 		t.Errorf("Key differs on Why alone: %q vs %q", a.Key(), b.Key())
 	}
