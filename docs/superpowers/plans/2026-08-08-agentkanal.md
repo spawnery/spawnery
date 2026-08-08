@@ -3098,7 +3098,9 @@ Alle gemeinsamen Namen stehen bereits in `internal/podspec/agent.go` (seit Task 
 - `ServiceAccountName: ServerServiceAccountName` in die PodSpec.
 - Env-Variable `EnvOperatorEndpoint` in den Container.
 - Mount des Volumes read-only unter `AgentMountPath`.
-- Vor dem Anhängen der Nutzer-Mounts prüfen, ob einer `AgentVolumeName`, `DataVolumeName` oder `TmpVolumeName` heißt oder auf `AgentMountPath`, `DataMountPath` oder `TmpMountPath` zeigt, und mit klarem Fehler abbrechen.
+- Vor dem Anhängen der Nutzer-Mounts prüfen, ob einer `AgentVolumeName`, `DataVolumeName` oder `TmpVolumeName` heißt oder mit einem unserer Pfade kollidiert, und mit klarem Fehler abbrechen.
+
+  **Pfade werden als Pfade verglichen, nicht als Zeichenketten.** Beide Seiten durch `path.Clean`, dann ablehnen bei Gleichheit, bei Verschachtelung unter einem unserer Pfade und bei Verschachtelung eines unserer Pfade unter dem Nutzerpfad. Zeichengenauer Vergleich ließe genau den Fall offen, um den es geht: ein Mount auf `/var/run/spawnery/token` überdeckt die Datei, aus der der Agent seinen Token liest, und Kubernetes erlaubt geschachtelte Mounts. Ein Mount auf `/var/run` deckt umgekehrt den Elternpfad ab. Verglichen wird auf Segmentgrenzen (`cleaned + "/"` als Präfix), sonst gälte `/data-extra` fälschlich als unter `/data` liegend — dafür gehört ein Positivfall in die Tabelle.
 
 - [ ] **Schritt 4: Aufrufer nachziehen und Tests laufen lassen**
 
