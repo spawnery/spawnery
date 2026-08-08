@@ -13,7 +13,7 @@
 ## Globale Randbedingungen
 
 - Jede neue Datei beginnt mit dem Apache-2.0-Kopf aus `hack/boilerplate.go.txt`.
-- Kommentare und Bezeichner im Code sind **englisch**; Commit-Nachrichten und Dokumentation sind **deutsch**. So macht es das ganze Repository.
+- Kommentare und Bezeichner im Code sind **englisch** — in Go ebenso wie in `flake.nix`, `Makefile` und den YAML-Manifesten. Commit-Nachrichten und Dokumentation unter `docs/` und im README sind **deutsch**. Wo in einer angefassten Datei noch ein deutscher Kommentar steht, wandert er bei der Gelegenheit mit ins Englische.
 - Keine neuen Testbibliotheken. Die Suite nutzt ausschließlich `testing` aus der Standardbibliothek, mit Tabellentests und `t.Errorf`-Meldungen, die den Istwert nennen.
 - Der Registry-Schlüssel ist die **Pod-UID** als String, nirgends `namespace/name`.
 - Die Audience heißt `spawnery-operator`, der ServiceAccount der Gameserver-Pods `spawnery-server`, das TLS-Secret `spawnery-agent-tls`, die CA-ConfigMap `spawnery-ca`, der gRPC-Port ist `9443`.
@@ -54,8 +54,8 @@ In `flake.nix` den `let`-Block der devShell ersetzen:
 ```nix
       devShells = forAllSystems (pkgs:
         let
-          # Linux: die nixpkgs-Pakete, wie bisher. envtest braucht genau diese
-          # drei Binaries in einem Verzeichnis.
+          # Linux: the nixpkgs packages, as before. envtest wants exactly these
+          # three binaries in one directory.
           envtestFromNixpkgs = pkgs.runCommand "envtest-assets" { } ''
             mkdir -p $out
             ln -s ${pkgs.kubernetes}/bin/kube-apiserver $out/kube-apiserver
@@ -63,12 +63,12 @@ In `flake.nix` den `let`-Block der devShell ersetzen:
             ln -s ${pkgs.kubectl}/bin/kubectl           $out/kubectl
           '';
 
-          # Darwin: nixpkgs baut kube-apiserver dort nicht. Das
-          # controller-tools-Projekt veröffentlicht fertige Binaries für
-          # darwin/arm64; der Hash ist eingecheckt, geladen wird nur beim
-          # Bauen der Ableitung. Umgekehrt gilt für Linux dasselbe nicht:
-          # die dortigen Binaries sind dynamisch gegen glibc gelinkt und
-          # bräuchten autoPatchelfHook.
+          # Darwin: nixpkgs has no kube-apiserver build there. The
+          # controller-tools project publishes prebuilt darwin/arm64 binaries;
+          # the hash is checked in, and the download happens only when the
+          # derivation is built. The reverse does not hold for Linux: those
+          # binaries are dynamically linked against glibc and would need
+          # autoPatchelfHook.
           envtestVersion = "1.36.2";
           envtestFromUpstream = pkgs.stdenvNoCC.mkDerivation {
             pname = "envtest-assets";
@@ -106,10 +106,12 @@ Erwartet: die drei Dateinamen und `Kubernetes v1.36.2`.
 - [ ] **Schritt 4: Einen bestehenden envtest-Test laufen lassen**
 
 ```bash
-nix develop -c go test ./internal/rbacaudit/ -run TestClusterRoleMatchesRequired -v
+nix develop -c go test ./internal/rbacaudit/ -v
 ```
 
-Erwartet: PASS. Das ist der Beweis, dass envtest auf dieser Plattform wirklich hochkommt und nicht nur die Binaries existieren.
+Erwartet: PASS für die envtest-gestützten Tests des Pakets. Das ist der Beweis, dass envtest auf dieser Plattform wirklich hochkommt und nicht nur die Binaries existieren.
+
+Nimm hier bewusst **kein** `-run`-Muster: trifft das Muster keinen Test, endet `go test` still mit Exit 0 und „no tests to run" — ein bestandener Lauf, der nichts geprüft hat.
 
 - [ ] **Schritt 5: Die ganze Suite**
 
