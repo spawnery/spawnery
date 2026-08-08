@@ -2812,7 +2812,11 @@ Erwartet: „undefined: Bootstrapper".
 `internal/controller/bootstrap.go` (mit Apache-Kopf). Kernpunkte:
 
 - `Ensure` bricht mit Fehler ab, wenn `b.CA()` leer ist.
-- `Ensure` nutzt `controllerutil.CreateOrUpdate` mit dem gecachten `Client`; bei `AlreadyExists` — was passiert, wenn das Objekt existiert, aber sein Label verloren hat und deshalb nicht im eingeschränkten Cache steht — liest es über `b.Reader` ungecacht nach und aktualisiert direkt.
+- `Ensure` nutzt `controllerutil.CreateOrUpdate` mit dem gecachten `Client`. Bei `AlreadyExists` — was passiert, wenn das Objekt existiert, aber sein Label verloren hat und deshalb nicht im eingeschränkten Cache steht — behandeln die beiden Objekte den Fall **unterschiedlich**:
+  - **ConfigMap:** über `b.Reader` ungecacht nachlesen und korrigieren. Eine veraltete CA bricht jeden Agent, der sie liest, und `configmaps` braucht `update` ohnehin für die Rotation.
+  - **ServiceAccount:** `AlreadyExists` gilt als Erfolg, ohne Rückschreiben. Der Pod verweist nur auf den Namen, und am Token hängt das Label nicht — es zurückzuschreiben verlangte clusterweites `update` auf ServiceAccounts, also das Recht, in jedem Namespace `secrets` und `imagePullSecrets` eines SA zu ändern. Für ein Label ist das der falsche Handel, gerade in dem Meilenstein, der Rechte einschränkt.
+
+  Bewusst in Kauf genommen: ein handbearbeiteter ServiceAccount bleibt für den eingeschränkten Cache unsichtbar, weshalb jedes `Ensure` in diesem Namespace einen vergeblichen Create versucht. Ein API-Aufruf pro Pod-Erzeugung, und nur dort, wo jemand von Hand eingegriffen hat.
 - Beide Objekte bekommen `podspec.LabelManagedBy: podspec.ManagedByValue`.
 - Keine OwnerReference: die Objekte überleben den Operator bewusst, damit ein Pod-Neustart während eines Operator-Ausfalls nicht an einer fehlenden CA scheitert.
 
