@@ -42,9 +42,19 @@ is proven end to end in envtest — a test agent brings a `Server` with green po
 readiness all the way to phase `Ready` — but no real agent talks to it yet: a
 player still cannot connect, because two things are missing: the Velocity proxy
 layer (milestone 3; until then `ProxySession` only answers `Unimplemented`) and
-the base images along with the Kotlin agent (milestone 2b) — without an image a
-pod stays stuck in `ErrImagePull`, however well the channel waiting for it has
-been proven.
+the Kotlin agent (milestone 2c) — the base image milestone 2b needed no longer
+stands in the way, but pod readiness is only half of the ready gate.
+
+Milestone 2b is done: the Paper base image. `nix build .#paper-image` produces
+a reproducible image holding Paper 26.2, a JRE 25 and `spawnery-slp`, the tool
+the readiness probe calls to speak a real server list ping. Paper is patched at
+build time, so a pod downloads nothing at startup; `make image-test` runs the
+image offline to keep that true.
+
+A pod now starts and its readiness probe turns green — and the `Server` stops
+in phase `Starting`, because the second half of the ready gate wants an agent.
+That agent is the Kotlin plugin from milestone 2c, and until it exists no
+player can join: the Velocity proxy layer (milestone 3) is missing too.
 
 Details of what 2a deliberately leaves open — CA rotation, the Kotlin agent's
 obligation to reconnect with overlap, the missing `spawnery-proxy` ServiceAccount
@@ -53,7 +63,7 @@ obligation to reconnect with overlap, the missing `spawnery-proxy` ServiceAccoun
 The design lives under [`docs/superpowers/specs/`](docs/superpowers/specs/), the
 plans under [`docs/superpowers/plans/`](docs/superpowers/plans/).
 
-Anyone starting milestone 2b begins at
+Milestone 2b started from
 [`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md): it says what
 the channel from 2a provides to an agent, which paths and binaries a base image
 has to bring along, and what the development environment additionally needs for
@@ -62,7 +72,7 @@ it.
 ## Development
 
 ```bash
-nix develop            # Go, controller-gen, envtest assets, kubectl, k3d
+nix develop            # Go, controller-gen, envtest assets, kubectl, kind, k3d
 make test              # unit and envtest tests
 make build             # bin/spawnery-operator
 ```
@@ -73,15 +83,36 @@ like `zz_generated.deepcopy.go` — after a change to the `.proto`, run `make
 proto` and commit the diff with it; `make test` does not regenerate it on its
 own.
 
-### Trying it locally against k3d
+`make image` builds the Paper base image, `make image-load` hands it to the
+local container runtime, and `make image-test` runs it offline under the same
+constraints the podspec imposes. All three need Docker or Podman and only work
+on `x86_64-linux`. Pass `CONTAINER=podman` if `docker` is not your runtime.
 
-These steps need a container runtime (Docker or Podman) for k3d. The development
-environment milestone 1 was built in had none — which is why this flow has **not**
-been run automatically in CI or anywhere else. The wiring and the state machine
-were instead proven with a real, running manager against the envtest control
-plane (see `internal/controller/setup_test.go`); what is only observable with a
-real kubelet — that the pod hangs in `ErrImagePull` for want of a base image —
-is unproven.
+Running this image accepts
+[Mojang's EULA](https://www.minecraft.net/eula) on your behalf: the entrypoint
+writes `eula=true`, because Paper does not start otherwise.
+
+### Trying it locally against kind
+
+These steps need a container runtime — Docker or Podman — for a local
+Kubernetes cluster. On the machine this was last run on, `docker` is a Podman
+5.8.4 alias with no `/var/run/docker.sock`, and only a rootless Podman socket
+is available. Under that setup `k3d` cannot bring up a cluster at all: its
+tools node always bind-mounts the runtime socket to `/var/run/docker.sock`
+inside itself, and rootless Podman refuses to create that mount point
+(`mkdir /var/run/docker.sock: permission denied`) — no `DOCKER_HOST` value
+fixes it, since the failure is in the tools node's own container creation, not
+in the client reaching the socket. `kind` under
+`KIND_EXPERIMENTAL_PROVIDER=podman` does work against the same rootless
+socket, and is what the flow below uses. Anyone with a real Docker daemon (or
+a rootful Podman socket) can use `k3d` the same way instead — the manifests
+and the operator invocation are identical either way.
+
+kind additionally needs cgroup delegation to run under systemd as a regular
+user, hence the `systemd-run --scope --user --property=Delegate=yes` wrapper
+around every kind command below: without it, kind refuses with a
+`Delegate=yes` error even when that property is already set on the user's
+systemd service — the scope is what its check actually looks for.
 
 The operator runs here through `go run` outside the cluster, so without
 `POD_NAMESPACE` from the downward API. `--operator-namespace` therefore has to
@@ -94,31 +125,41 @@ flow never creates, because the operator process does not run in the cluster and
 there would be no endpoint pointing at it.
 
 ```bash
-nix develop -c k3d cluster create spawnery-dev --agents 1
+systemd-run --scope --user --property=Delegate=yes \
+  env KIND_EXPERIMENTAL_PROVIDER=podman \
+  nix develop -c kind create cluster --name spawnery-dev
+systemd-run --scope --user --property=Delegate=yes \
+  env KIND_EXPERIMENTAL_PROVIDER=podman \
+  nix develop -c kind load docker-image ghcr.io/spawnery/paper:26.2-0.1.0 --name spawnery-dev
 nix develop -c kubectl apply -f config/crd/bases
 nix develop -c kubectl apply -f config/samples/network.yaml
 nix develop -c go run ./cmd/spawnery-operator --leader-elect=false --operator-namespace minecraft &
-sleep 45
+sleep 60
 nix develop -c kubectl get networks,servergroups,servers,pods -n minecraft
 ```
 
-The first server can take a good half minute to appear: if the ServerGroup meets
-its network before the Network controller has accepted it, it tries again only
-after `networkRetryInterval` (30 seconds). Hence the 45 seconds above.
+The first server can take a good half minute to appear: if the ServerGroup
+meets its network before the Network controller has accepted it, it tries
+again only after `networkRetryInterval` (30 seconds). The 60 seconds above
+also cover loading the 724 MB image into the cluster, which is not instant.
 
 Expected:
 
 - `network production` with `Accepted=True`,
-- `servergroup lobby` with `REPLICAS 1`,
-- a `server lobby-xxxx` in phase `Pending` or `Starting`,
-- a pod `lobby-xxxx` that cannot pull its image (`ErrImagePull`) — the base image
-  arrives in milestone 2b. That is still the expected end state, milestone 2a
-  included: the agent channel stays unused here (see above), so it changes
-  nothing about the pod never starting.
+- `servergroup lobby` in phase `Pending` with `READY 0` — that field is
+  `status.readyReplicas`, servers that reached phase `Ready`, and none do at
+  this milestone, so `Pending` is the correct end state and not a stall,
+- a pod `lobby-xxxx` in `Running` with `READY 1/1` — the readiness probe spoke
+  a real server list ping to a real Paper process,
+- a `server lobby-xxxx` in phase `Starting`, staying there. That is the
+  expected end state after milestone 2b: pod readiness is one half of the
+  gate, and the other half waits for the agent from milestone 2c.
 
 Afterwards, clean up:
 
 ```bash
 kill %1
-nix develop -c k3d cluster delete spawnery-dev
+systemd-run --scope --user --property=Delegate=yes \
+  env KIND_EXPERIMENTAL_PROVIDER=podman \
+  nix develop -c kind delete cluster --name spawnery-dev
 ```

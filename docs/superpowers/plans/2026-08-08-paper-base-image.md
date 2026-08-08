@@ -1292,6 +1292,14 @@ dockerTools.buildLayeredImage {
   # Ordered by rate of change. The JRE and the patched Paper repo are large and
   # almost static; our own two files are small and change per commit. Milestone
   # 2c adds the agent plugin as another small layer without touching either.
+  #
+  # Correction (task 7, milestone 2b evidence): this argument is wrong as
+  # written. `dockerTools.buildLayeredImage` forwards to `streamLayeredImage`,
+  # whose parameter is `contents`, not `copyToRoot` — `copyToRoot` belongs to
+  # `dockerTools.buildImage`, one function up in the same file. Passing it
+  # here throws "called with unexpected argument 'copyToRoot'" before a single
+  # layer is built. The shipped `nix/paper-image.nix` uses `contents`; this
+  # code block was not corrected in place to keep the plan's history intact.
   copyToRoot = [
     (buildEnv {
       name = "paper-tools";
