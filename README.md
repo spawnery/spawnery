@@ -64,11 +64,13 @@ ServiceAccount, and what milestone 2b leaves open — are in
 The design lives under [`docs/superpowers/specs/`](docs/superpowers/specs/), the
 plans under [`docs/superpowers/plans/`](docs/superpowers/plans/).
 
-Milestone 2b started from
-[`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md): it says what
-the channel from 2a provides to an agent, which paths and binaries a base image
-has to bring along, and what the development environment additionally needs for
-it.
+Anyone starting milestone 2c begins at
+[`docs/handover-milestone-2c.md`](docs/handover-milestone-2c.md): it says what
+the image and the pod provide to an agent, where the plugin jar cannot simply
+be put and why, and which question about building it reproducibly decides the
+shape of that milestone.
+[`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md) is its
+predecessor, kept as the record of what 2b started from.
 
 ## Development
 

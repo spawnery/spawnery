@@ -85,10 +85,18 @@ NetworkPolicy in milestone 6 has to allow both, and the Yggdrasil call
 disappears on its own once milestone 3 flips `online-mode` off.
 
 **The image is 724 MB because `jdk25_headless` has a 697 MiB closure** — a full
-headless JDK, not a JRE. Measured. `jre_minimal` exists in this nixpkgs pin and
-would cut it substantially via jlink, but it needs the list of Java modules
-Paper actually requires, and milestone 3's Velocity image would face the same
-question. Left as is; not attempted here.
+headless JDK, not a JRE. Measured. There is no cheap substitution: this pin's
+`temurin-jre-bin` stops at 21, and Paper 26.2 needs 25 or newer, while
+`jre25_minimal` is `jlink` with `modules = [ "java.base" ]` by default and
+therefore needs a module list nobody has yet.
+
+**The right time to cut it is after milestone 2c, not before.** The agent
+plugin joins the classpath there, and gRPC and Netty pull modules Paper alone
+does not, so a list determined now would have to be determined again. Derive it
+once, from the complete classpath, with `jdeps --print-module-deps` or
+`-verbose:module` against a running server — and do it in one change covering
+the Velocity image too, since milestone 3 faces the same question with the same
+answer.
 
 **`k3d` does not work on this machine, and probably not on similar ones.**
 `docker` here is a Podman 5.8.4 alias with no `/var/run/docker.sock`, only a
@@ -132,6 +140,28 @@ the entrypoint rewrites the three enforced fields afterwards" — it does not,
 once the mount is read-only, and nothing today exercises that case.
 
 ## Preconditions for milestone 3 (proxy integration)
+
+**Factor the shared image Nix while there is still exactly one consumer.**
+`nix/paper-image.nix` holds four things the Velocity image will need verbatim:
+the `passwd`/`group` pair for the numeric user, the entrypoint's shebang
+rewrite through `substitute --replace-fail`, the copy into `/usr/local/bin` at
+the literal path a pod spec names, and the layered-image configuration around
+them. The Velocity image also needs its own readiness check and the same
+non-root story. Extracting a small `nix/oci-common.nix` before the second image
+exists is much cheaper than reconciling two copies after they have drifted, and
+the drift is the kind nobody notices — an image that starts fine while its user
+or its paths quietly differ from the other one's.
+
+**Do not extend `set_property` for the forwarding mode.** It is a
+`.properties` helper and it does not generalise: the forwarding secret and
+`online-mode` live in `config/paper-global.yml`, which is YAML, and design §5.4
+already commits the entrypoint to merging rendered configuration into that
+file. Editing YAML from shell is the wrong tool. A small Go program baked into
+the image is the right one — it reuses the `buildGoModule` path `spawnery-slp`
+already establishes, it is testable the way `internal/slp` is, and it is the
+natural home for §5.4's per-group ConfigMap rendering when that arrives. It is
+also where the `/data/config` collision above has to be resolved, since that is
+the directory the rendered configuration would land in.
 
 **The orphan sweep discards proxy agents.** `OrphanReconciler.Sweep` lists pods
 with `spawnery.cloud/role=server` and then forgets every registry entry not in
