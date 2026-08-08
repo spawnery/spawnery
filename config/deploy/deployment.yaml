@@ -8,6 +8,14 @@ metadata:
     app.kubernetes.io/component: operator
 spec:
   replicas: 1
+  # Ersetzen statt überlappen. Seit readyz an der Leader-Sperre hängt, wird ein
+  # neuer Pod erst bereit, nachdem er die Sperre hat — und die hält der alte,
+  # solange er läuft. Ein rollendes Update wartet bei einer Replik auf genau
+  # diese Bereitschaft (maxUnavailable 0), bevor es den alten Pod abräumt, und
+  # bliebe deshalb stehen, bis jemand von Hand nachhilft. Nicht auf
+  # RollingUpdate zurückstellen.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: spawnery
@@ -34,8 +42,9 @@ spec:
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
           env:
-            # --operator-namespace defaults to this. It decides both the SANs
-            # of the serving certificate and the address the agents dial.
+            # Vorgabe für --operator-namespace. Daraus ergeben sich sowohl die
+            # SANs des Serverzertifikats als auch die Adresse, die die Agents
+            # anwählen.
             - name: POD_NAMESPACE
               valueFrom:
                 fieldRef:

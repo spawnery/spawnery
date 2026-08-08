@@ -184,6 +184,29 @@ func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
 	}
 }
 
+// The other end of tying readiness to the leader lock, and a deadlock rather
+// than a slowdown: with one replica the default RollingUpdate resolves to
+// maxSurge 1 and maxUnavailable 0, so the new pod has to report Ready before
+// the old one is removed. Readiness now waits for the lease, and the lease is
+// held by the pod that is waiting to be removed. The rollout stops there until
+// someone deletes the old pod by hand. Recreate is the honest shape for a
+// single-replica leader-elected operator, and this test is what stops it from
+// being "improved" back.
+func TestTheOperatorIsReplacedRatherThanRolled(t *testing.T) {
+	var deploy appsv1.Deployment
+	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+
+	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 1 {
+		t.Fatalf("replicas = %v, want 1 — this test reasons about the single-replica case",
+			deploy.Spec.Replicas)
+	}
+	if got := deploy.Spec.Strategy.Type; got != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("deployment strategy = %q, want %q — a rolling update would wait for a "+
+			"readiness the new pod cannot reach until the old one releases the leader lease",
+			got, appsv1.RecreateDeploymentStrategyType)
+	}
+}
+
 // TestOperatorPodIsRestrictedCompliant guards the design decision that the
 // operator itself runs under Pod Security "restricted" — the same profile it
 // enforces on the game servers it creates.
