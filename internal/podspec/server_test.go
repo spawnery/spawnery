@@ -469,6 +469,66 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			},
 			want: DataMountPath,
 		},
+		{
+			// The case the check exists for: a mount nested inside the agent
+			// volume can shadow the exact file the agent reads its token
+			// from, and Kubernetes permits nested mounts without complaint.
+			name: "nested inside the agent mount, shadowing the token file",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: AgentMountPath + "/" + AgentTokenPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
+		{
+			name: "a trailing slash on a reserved path is still the same path",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: DataMountPath + "/",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: DataMountPath,
+		},
+		{
+			name: "mounted over /tmp",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: TmpMountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: TmpMountPath,
+		},
+		{
+			name: "a trailing slash on /tmp is still the same path",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: TmpMountPath + "/",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: TmpMountPath,
+		},
+		{
+			// The reverse nesting: a mount over a parent directory of one of
+			// ours sits above it, not beside it.
+			name: "mounted over a parent of the agent mount",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: "/var/run",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
 	}
 
 	for _, tc := range cases {
@@ -482,6 +542,50 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error = %q, want it to name %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestNonCollidingUserMountsAreAccepted guards the two ways the collision
+// check must stay permissive: a path nested under DataMountPath or
+// TmpMountPath, which is a feature and not a collision (see the comment on
+// checkMountCollision), and a sibling path that merely shares a textual
+// prefix with a reserved one, which a naive strings.HasPrefix check would
+// wrongly reject.
+func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
+	cases := []struct {
+		name      string
+		mountPath string
+	}{
+		{
+			// Design spec 4.3's own ServerGroup example: a ConfigMap mounted
+			// at DataMountPath+"/config" to add server config files. If this
+			// case is ever removed as "redundant with TestUserMounts", it is
+			// not — this one specifically exercises checkMountCollision, the
+			// other exercises the resulting volume and mount.
+			name:      "a config file nested inside /data, the documented pattern",
+			mountPath: DataMountPath + "/config",
+		},
+		{
+			name:      "a sibling directory that only shares a prefix with /data",
+			mountPath: DataMountPath + "-extra",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			net, group := testNetwork(), testGroup()
+			group.Spec.Mounts = []spawneryv1alpha1.Mount{{
+				Name:      "eigenes",
+				MountPath: tc.mountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			}}
+
+			if _, err := BuildServerPod(net, group, testServer(), testEndpoint); err != nil {
+				t.Fatalf("BuildServerPod rejected mount path %q: %v", tc.mountPath, err)
 			}
 		})
 	}
