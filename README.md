@@ -88,6 +88,14 @@ local container runtime, and `make image-test` runs it offline under the same
 constraints the podspec imposes. All three need Docker or Podman and only work
 on `x86_64-linux`. Pass `CONTAINER=podman` if `docker` is not your runtime.
 
+`make image-repro` rebuilds the image with `nix build .#paper-image --rebuild`
+and fails if the two builds do not produce the same bytes. Design §5.3 makes
+that reproducibility an acceptance criterion, not a one-off claim, so this is
+the standing check for it — worth running again after any change to
+`nix/paper.nix` or `nix/paper-image.nix`. Like `image-test`, it is not part of
+`make test` or `make all`: it needs a build's worth of time and only runs on
+`x86_64-linux`.
+
 Running this image accepts
 [Mojang's EULA](https://www.minecraft.net/eula) on your behalf: the entrypoint
 writes `eula=true`, because Paper does not start otherwise.
