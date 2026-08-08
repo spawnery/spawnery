@@ -50,3 +50,7 @@ image:
 .PHONY: image-load
 image-load: image
 	$(CONTAINER) load < result
+
+.PHONY: image-test
+image-test: image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) hack/image-test.sh
