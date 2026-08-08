@@ -60,9 +60,11 @@ dockerTools.buildLayeredImage {
   name = "ghcr.io/spawnery/paper";
   tag = "${paper.paperVersion}-${imageVersion}";
 
-  # amd64 explicitly, not the host's architecture: milestone 2b targets
-  # linux/amd64 only, and an image that silently inherited aarch64 binaries
-  # under an amd64 label would be worse than a build that fails.
+  # amd64 explicitly, not the host's architecture: this is only a label and
+  # dockerTools.buildLayeredImage does not cross-compile, so it is only true
+  # because flake.nix exposes `packages.paper-image` exclusively on
+  # x86_64-linux (see the comment there). If this derivation is ever called
+  # from elsewhere, that guarantee has to move with it.
   architecture = "amd64";
 
   # Ordered by rate of change. The JRE and the patched Paper repo are large and
