@@ -27,11 +27,26 @@ import (
 type sessions struct {
 	mu      sync.Mutex
 	current map[string]context.CancelFunc
-	// generation counts how often a pod connected, so a superseded stream can
-	// tell it is no longer the current one. It is never decremented and its
-	// entries are never removed: a number that could be handed out twice would
-	// let a slow zombie mistake itself for the stream that reused it.
+	// generation names the stream currently registered for a pod, so a
+	// superseded one can tell it is no longer the current one.
+	//
+	// The numbers come from nextGeneration below: ONE counter for the whole
+	// process, not one per pod. Do not "simplify" it back to a counter per pod.
+	// A generation identifies a stream globally and for all time, and that is
+	// what makes an entry safe to delete — which leave does. The zero value
+	// carries that weight and is load-bearing on purpose: nextGeneration is
+	// incremented before it is read, so the first generation ever handed out is
+	// 1, a pod with no entry reads as 0, and 0 therefore matches nothing that
+	// was ever issued. A missing entry and a stale generation can never be
+	// confused.
+	//
+	// Per pod the two would be in tension by construction: deleting an entry
+	// would restart that pod's count at 1, and a slow zombie still holding
+	// generation 1 would pass every guard here and tear down the live stream
+	// that reused the number. Globally there is no number to reuse.
 	generation map[string]uint64
+	// nextGeneration is the counter. Guarded by mu, never decremented.
+	nextGeneration uint64
 }
 
 func newSessions() *sessions {
@@ -57,14 +72,21 @@ func (s *sessions) enter(parent context.Context, podUID string) (context.Context
 	if superseded {
 		previous()
 	}
-	s.generation[podUID]++
-	gen := s.generation[podUID]
+	s.nextGeneration++
+	gen := s.nextGeneration
+	s.generation[podUID] = gen
 	s.current[podUID] = cancel
 	return ctx, gen, superseded
 }
 
 // leave reports whether this stream was still the current one. Only then may
 // the caller mark the pod disconnected.
+//
+// It is also where both maps are pruned. A pod whose current stream has ended
+// leaves nothing behind: the entry is gone, and because generations are never
+// reused, its absence cannot be confused with a fresh one. Without this the
+// generation map would grow by one entry for every pod the operator ever saw
+// and only end with the process.
 func (s *sessions) leave(podUID string, gen uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,6 +94,7 @@ func (s *sessions) leave(podUID string, gen uint64) bool {
 		return false
 	}
 	delete(s.current, podUID)
+	delete(s.generation, podUID)
 	return true
 }
 
