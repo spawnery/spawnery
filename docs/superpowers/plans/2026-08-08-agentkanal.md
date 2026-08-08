@@ -855,6 +855,12 @@ func (b *Bundle) parseCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse CA key: %w", err)
 	}
+	// Both halves parsing is not enough: if they are not a pair, Reissue signs
+	// with a key the stored CA certificate does not match, Validate rejects
+	// the result, and the repair in Store.Ensure runs in circles.
+	if !key.PublicKey.Equal(cert.PublicKey) {
+		return nil, nil, fmt.Errorf("CA key does not belong to the CA certificate")
+	}
 	return cert, key, nil
 }
 
@@ -1264,12 +1270,19 @@ func (s *Store) write(ctx context.Context, existing *corev1.Secret, b *Bundle) e
 	return nil
 }
 
+// generation is the certificate and the CA it chains to, published together.
+// Two separate atomics would let a reader see a fresh certificate beside a
+// stale CA — narrow, but it breaks the one promise this type makes.
+type generation struct {
+	cert tls.Certificate
+	ca   []byte
+}
+
 // Provider hands the current certificate to the TLS stack and renews it in the
 // background.
 type Provider struct {
 	store   *Store
-	current atomic.Pointer[tls.Certificate]
-	ca      atomic.Pointer[[]byte]
+	current atomic.Pointer[generation]
 }
 
 // NewProvider wires a provider to a store.
@@ -1282,29 +1295,27 @@ func (p *Provider) Set(b *Bundle) error {
 	if err != nil {
 		return err
 	}
-	p.current.Store(&cert)
-	ca := b.CACertPEM
-	p.ca.Store(&ca)
+	p.current.Store(&generation{cert: cert, ca: b.CACertPEM})
 	return nil
 }
 
 // GetCertificate is the tls.Config callback.
 func (p *Provider) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	cert := p.current.Load()
-	if cert == nil {
+	g := p.current.Load()
+	if g == nil {
 		return nil, fmt.Errorf("no serving certificate yet")
 	}
-	return cert, nil
+	return &g.cert, nil
 }
 
 // CABundle is what the agents pin. It is a bundle, not a single certificate,
 // so a later rotation can publish old and new side by side.
 func (p *Provider) CABundle() []byte {
-	ca := p.ca.Load()
-	if ca == nil {
+	g := p.current.Load()
+	if g == nil {
 		return nil
 	}
-	return *ca
+	return g.ca
 }
 
 // Start ensures a bundle once and then checks hourly. It is a leader-bound
