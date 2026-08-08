@@ -125,6 +125,37 @@ func TestEnsureRepairsAHandEditedConfigMap(t *testing.T) {
 	}
 }
 
+// Unlike the ConfigMap, a hand-edited ServiceAccount is deliberately NOT
+// repaired: restoring the label would need Client.Update, and the
+// serviceaccounts RBAC marker grants no update verb on purpose — a
+// clusterwide write to every ServiceAccount's secrets is too big a grant for
+// a cosmetic label. Ensure must still succeed; the pod only needs the
+// ServiceAccount to exist under its name, not to carry the label.
+func TestEnsureLeavesAnUnlabelledServiceAccountAlone(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+
+	if err := b.Ensure(ctx, ns); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	sa := &corev1.ServiceAccount{}
+	if err := c.Get(ctx, types.NamespacedName{Name: podspec.ServerServiceAccountName, Namespace: ns}, sa); err != nil {
+		t.Fatalf("get ServiceAccount: %v", err)
+	}
+	delete(sa.Labels, podspec.LabelManagedBy)
+	if err := c.Update(ctx, sa); err != nil {
+		t.Fatalf("update ServiceAccount: %v", err)
+	}
+
+	if err := b.Ensure(ctx, ns); err != nil {
+		t.Fatalf("Ensure over the unlabelled ServiceAccount: %v", err)
+	}
+	if err := c.Get(ctx, types.NamespacedName{Name: podspec.ServerServiceAccountName, Namespace: ns}, sa); err != nil {
+		t.Fatalf("get ServiceAccount: %v", err)
+	}
+}
+
 // Ensure must not run before the provider has a CA — an empty ca.crt would be
 // worse than none, because the pod would start and fail the handshake.
 func TestEnsureRefusesAnEmptyCA(t *testing.T) {

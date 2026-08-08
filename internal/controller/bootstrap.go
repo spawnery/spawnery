@@ -41,9 +41,9 @@ type Bootstrapper struct {
 	// must carry it too, or Ensure would never see them as already present.
 	Client client.Client
 	// Reader is an uncached client, used only to recover from the case where
-	// the cached Client's view of an object has fallen out of sync with the
-	// cluster (see the AlreadyExists handling in ensureConfigMap and
-	// ensureServiceAccount).
+	// the cached Client's view of the CA ConfigMap has fallen out of sync
+	// with the cluster (see the AlreadyExists handling in ensureConfigMap).
+	// ensureServiceAccount has no comparable repair path — see its comment.
 	Reader client.Reader
 	// CA returns the current CA bundle. It is nil until certs.Provider has
 	// published one; Ensure refuses to run until it returns a non-empty
@@ -129,36 +129,40 @@ func (b *Bootstrapper) ensureConfigMap(ctx context.Context, namespace string, ca
 	return nil
 }
 
-// ensureServiceAccount creates or updates the agent's ServiceAccount.
+// ensureServiceAccount creates the agent's ServiceAccount if it is missing.
+//
+// Unlike ensureConfigMap, this deliberately does not repair a ServiceAccount
+// that exists but lost podspec.LabelManagedBy. Doing so would need a
+// Client.Update call, and the RBAC marker above only grants
+// get;list;watch;create on serviceaccounts — no update. Adding update purely
+// to restore a cosmetic label would hand the operator clusterwide write
+// access to every ServiceAccount's imagePullSecrets and secrets fields,
+// which is a far bigger grant than the problem it solves: nothing about the
+// agent's token or the pod that mounts it depends on the label. A
+// ConfigMap's content, by contrast, is not cosmetic — a stale ca.crt breaks
+// every agent that reads it — which is why ensureConfigMap keeps its repair
+// path and its update verb.
+//
+// The consequence: a hand-edited, unlabelled ServiceAccount stays invisible
+// to the restricted cache (Task 9), so every future Ensure for that
+// namespace will attempt a Create and get AlreadyExists back — one wasted
+// API call per pod creation, in a namespace someone edited by hand. Cheaper
+// than the permission.
 func (b *Bootstrapper) ensureServiceAccount(ctx context.Context, namespace string) error {
-	label := func(sa *corev1.ServiceAccount) {
-		if sa.Labels == nil {
-			sa.Labels = map[string]string{}
-		}
-		sa.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
-	}
-
 	sa := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{Name: podspec.ServerServiceAccountName, Namespace: namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, b.Client, sa, func() error {
-		label(sa)
+		if sa.Labels == nil {
+			sa.Labels = map[string]string{}
+		}
+		sa.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
 		return nil
 	})
-	if !apierrors.IsAlreadyExists(err) {
-		return err
+	if apierrors.IsAlreadyExists(err) {
+		// The object is there, which is all Ensure needs: the pod references
+		// it by name regardless of its labels.
+		return nil
 	}
-
-	// Same recovery as ensureConfigMap: the cache missed it, the Create the
-	// API server saw was a duplicate, so read it uncached and repair it.
-	current := &corev1.ServiceAccount{}
-	key := types.NamespacedName{Name: podspec.ServerServiceAccountName, Namespace: namespace}
-	if err := b.Reader.Get(ctx, key, current); err != nil {
-		return fmt.Errorf("re-read ServiceAccount after AlreadyExists: %w", err)
-	}
-	label(current)
-	if err := b.Client.Update(ctx, current); err != nil {
-		return fmt.Errorf("repair ServiceAccount: %w", err)
-	}
-	return nil
+	return err
 }
