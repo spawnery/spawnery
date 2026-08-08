@@ -3293,7 +3293,18 @@ spec:
       protocol: TCP
 ```
 
-In `config/deploy/deployment.yaml` den Port und die Namensvariable ergänzen:
+In `config/deploy/deployment.yaml` die Update-Strategie, den Port und die Namensvariable ergänzen.
+
+**Die Strategie muss `Recreate` sein.** Ohne `strategy` gilt RollingUpdate, bei `replicas: 1` also `maxSurge 1`/`maxUnavailable 0`: der neue Pod muss bereit sein, bevor der alte weicht. Weil `/readyz` jetzt an der Leader-Sperre hängt, wartet er auf eine Sperre, die der alte Pod bis zu seinem Ende erneuert — jedes Update verklemmt, bis jemand den alten Pod von Hand löscht. Die Zusicherung gehört in den Manifest-Test, sonst kippt sie beim nächsten Aufräumen zurück.
+
+```yaml
+spec:
+  replicas: 1
+  # Bereitschaft folgt der Leader-Sperre, deshalb kein überlappendes Update:
+  # der neue Pod würde auf eine Sperre warten, die der alte noch hält.
+  strategy:
+    type: Recreate
+```
 
 ```yaml
           env:
