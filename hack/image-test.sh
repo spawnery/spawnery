@@ -25,16 +25,33 @@ trap cleanup EXIT
 # has nothing to do with what is being tested.
 "$CONTAINER" volume create "$VOLUME" >/dev/null
 
+# No --user: internal/podspec sets RunAsNonRoot with no RunAsUser, so the
+# kubelet (and, here, the container runtime) resolves the identity entirely
+# from the image's own config.User. Passing --user would override the one
+# field this test exists to validate; the assertion below checks it instead.
+#
+# No --security-opt seccomp=... either: the podspec's PodSecurityContext sets
+# SeccompProfile: RuntimeDefault, which is exactly what a container runtime
+# applies when no seccomp option is given at all. Passing
+# --security-opt seccomp=unconfined here would be the one thing that broke
+# that parity, so the absence of the flag is the replication, not an
+# oversight.
 "$CONTAINER" run -d --name "$NAME" \
 	--network none \
 	--read-only --tmpfs /tmp:rw,exec,size=256m \
-	--user 10001:10001 \
 	--cap-drop ALL \
 	--security-opt no-new-privileges \
 	--memory 2g \
 	-v "$VOLUME:/data" \
 	-e SPAWNERY_MAX_PLAYERS=100 \
 	"$IMAGE" >/dev/null
+
+identity="$("$CONTAINER" exec "$NAME" id -u)"
+if [ "$identity" != "10001" ]; then
+	echo "container runs as uid $identity, want 10001 from the image's own config.User" >&2
+	exit 1
+fi
+echo "runs as uid 10001, from the image's own config.User"
 
 echo "waiting up to ${DEADLINE}s for a server list ping..."
 start=$SECONDS
@@ -73,18 +90,26 @@ echo "the server answered after $((SECONDS - start))s"
 # logs | grep -q pattern` can silently fail to flag a real match on a log
 # long enough to trigger the race. Capturing to a variable first removes the
 # pipe (and the race) entirely.
+check_no_download() {
+	if grep -qiE 'piston-data|Downloading mojang_|Failed to download' <<<"$1"; then
+		echo "the image tried to download the Paper/Mojang artifact at runtime:" >&2
+		echo "$1" >&2
+		exit 1
+	fi
+}
+
 container_logs="$("$CONTAINER" logs "$NAME" 2>&1)"
-if grep -qiE 'piston-data|Downloading mojang_|Failed to download' <<<"$container_logs"; then
-	echo "the image tried to download the Paper/Mojang artifact at runtime:" >&2
-	echo "$container_logs" >&2
-	exit 1
-fi
+check_no_download "$container_logs"
 echo "no download attempted"
 
 # SIGTERM reaches PID 1 and saves the world. Without exec in the entrypoint the
 # grace period would run out empty and every stop would lose world state.
 "$CONTAINER" stop -t 60 "$NAME" >/dev/null
 container_logs="$("$CONTAINER" logs "$NAME" 2>&1)"
+# A download attempted only during shutdown would go unseen by the check
+# above, which only ever saw the pre-shutdown log; re-run it against the log
+# that already exists here for the SIGTERM assertion below.
+check_no_download "$container_logs"
 if ! grep -q 'All dimensions are saved' <<<"$container_logs"; then
 	echo "SIGTERM did not produce a clean shutdown:" >&2
 	tail -30 <<<"$container_logs" >&2
