@@ -13,7 +13,7 @@
 ## Globale Randbedingungen
 
 - Jede neue Datei beginnt mit dem Apache-2.0-Kopf aus `hack/boilerplate.go.txt`.
-- Kommentare und Bezeichner im Code sind **englisch**; Commit-Nachrichten und Dokumentation sind **deutsch**. So macht es das ganze Repository.
+- Kommentare und Bezeichner im Code sind **englisch** — in Go ebenso wie in `flake.nix`, `Makefile` und den YAML-Manifesten. Commit-Nachrichten und Dokumentation unter `docs/` und im README sind **deutsch**. Wo in einer angefassten Datei noch ein deutscher Kommentar steht, wandert er bei der Gelegenheit mit ins Englische.
 - Keine neuen Testbibliotheken. Die Suite nutzt ausschließlich `testing` aus der Standardbibliothek, mit Tabellentests und `t.Errorf`-Meldungen, die den Istwert nennen.
 - Der Registry-Schlüssel ist die **Pod-UID** als String, nirgends `namespace/name`.
 - Die Audience heißt `spawnery-operator`, der ServiceAccount der Gameserver-Pods `spawnery-server`, das TLS-Secret `spawnery-agent-tls`, die CA-ConfigMap `spawnery-ca`, der gRPC-Port ist `9443`.
@@ -54,8 +54,8 @@ In `flake.nix` den `let`-Block der devShell ersetzen:
 ```nix
       devShells = forAllSystems (pkgs:
         let
-          # Linux: die nixpkgs-Pakete, wie bisher. envtest braucht genau diese
-          # drei Binaries in einem Verzeichnis.
+          # Linux: the nixpkgs packages, as before. envtest wants exactly these
+          # three binaries in one directory.
           envtestFromNixpkgs = pkgs.runCommand "envtest-assets" { } ''
             mkdir -p $out
             ln -s ${pkgs.kubernetes}/bin/kube-apiserver $out/kube-apiserver
@@ -63,12 +63,12 @@ In `flake.nix` den `let`-Block der devShell ersetzen:
             ln -s ${pkgs.kubectl}/bin/kubectl           $out/kubectl
           '';
 
-          # Darwin: nixpkgs baut kube-apiserver dort nicht. Das
-          # controller-tools-Projekt veröffentlicht fertige Binaries für
-          # darwin/arm64; der Hash ist eingecheckt, geladen wird nur beim
-          # Bauen der Ableitung. Umgekehrt gilt für Linux dasselbe nicht:
-          # die dortigen Binaries sind dynamisch gegen glibc gelinkt und
-          # bräuchten autoPatchelfHook.
+          # Darwin: nixpkgs has no kube-apiserver build there. The
+          # controller-tools project publishes prebuilt darwin/arm64 binaries;
+          # the hash is checked in, and the download happens only when the
+          # derivation is built. The reverse does not hold for Linux: those
+          # binaries are dynamically linked against glibc and would need
+          # autoPatchelfHook.
           envtestVersion = "1.36.2";
           envtestFromUpstream = pkgs.stdenvNoCC.mkDerivation {
             pname = "envtest-assets";
@@ -106,10 +106,12 @@ Erwartet: die drei Dateinamen und `Kubernetes v1.36.2`.
 - [ ] **Schritt 4: Einen bestehenden envtest-Test laufen lassen**
 
 ```bash
-nix develop -c go test ./internal/rbacaudit/ -run TestClusterRoleMatchesRequired -v
+nix develop -c go test ./internal/rbacaudit/ -v
 ```
 
-Erwartet: PASS. Das ist der Beweis, dass envtest auf dieser Plattform wirklich hochkommt und nicht nur die Binaries existieren.
+Erwartet: PASS für die envtest-gestützten Tests des Pakets. Das ist der Beweis, dass envtest auf dieser Plattform wirklich hochkommt und nicht nur die Binaries existieren.
+
+Nimm hier bewusst **kein** `-run`-Muster: trifft das Muster keinen Test, endet `go test` still mit Exit 0 und „no tests to run" — ein bestandener Lauf, der nichts geprüft hat.
 
 - [ ] **Schritt 5: Die ganze Suite**
 
@@ -821,6 +823,13 @@ func (b *Bundle) Validate(now time.Time, dnsNames []string) error {
 			return fmt.Errorf("serving certificate lacks the SAN %q", name)
 		}
 	}
+	// Tie the leaf to the CA stored next to it. Without this a bundle whose
+	// halves come from different issues — a partial write, a hand-edited
+	// secret — passes validation and fails at handshake time instead, when an
+	// agent that pinned this CA refuses the connection.
+	if err := cert.CheckSignatureFrom(caCert); err != nil {
+		return fmt.Errorf("serving certificate was not signed by the stored CA: %w", err)
+	}
 	if _, err := b.TLSCertificate(); err != nil {
 		return err
 	}
@@ -845,6 +854,12 @@ func (b *Bundle) parseCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse CA key: %w", err)
+	}
+	// Both halves parsing is not enough: if they are not a pair, Reissue signs
+	// with a key the stored CA certificate does not match, Validate rejects
+	// the result, and the repair in Store.Ensure runs in circles.
+	if !key.PublicKey.Equal(cert.PublicKey) {
+		return nil, nil, fmt.Errorf("CA key does not belong to the CA certificate")
 	}
 	return cert, key, nil
 }
@@ -1255,12 +1270,19 @@ func (s *Store) write(ctx context.Context, existing *corev1.Secret, b *Bundle) e
 	return nil
 }
 
+// generation is the certificate and the CA it chains to, published together.
+// Two separate atomics would let a reader see a fresh certificate beside a
+// stale CA — narrow, but it breaks the one promise this type makes.
+type generation struct {
+	cert tls.Certificate
+	ca   []byte
+}
+
 // Provider hands the current certificate to the TLS stack and renews it in the
 // background.
 type Provider struct {
 	store   *Store
-	current atomic.Pointer[tls.Certificate]
-	ca      atomic.Pointer[[]byte]
+	current atomic.Pointer[generation]
 }
 
 // NewProvider wires a provider to a store.
@@ -1273,29 +1295,27 @@ func (p *Provider) Set(b *Bundle) error {
 	if err != nil {
 		return err
 	}
-	p.current.Store(&cert)
-	ca := b.CACertPEM
-	p.ca.Store(&ca)
+	p.current.Store(&generation{cert: cert, ca: b.CACertPEM})
 	return nil
 }
 
 // GetCertificate is the tls.Config callback.
 func (p *Provider) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	cert := p.current.Load()
-	if cert == nil {
+	g := p.current.Load()
+	if g == nil {
 		return nil, fmt.Errorf("no serving certificate yet")
 	}
-	return cert, nil
+	return &g.cert, nil
 }
 
 // CABundle is what the agents pin. It is a bundle, not a single certificate,
 // so a later rotation can publish old and new side by side.
 func (p *Provider) CABundle() []byte {
-	ca := p.ca.Load()
-	if ca == nil {
+	g := p.current.Load()
+	if g == nil {
 		return nil
 	}
-	return *ca
+	return g.ca
 }
 
 // Start ensures a bundle once and then checks hourly. It is a leader-bound
@@ -1690,6 +1710,24 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
+// unavailableErr marks a failure to REACH the API server, as opposed to a
+// refusal of the credentials. The interceptor turns the first into
+// codes.Unavailable and the second into codes.Unauthenticated; an agent that
+// cannot tell them apart would treat an outage as a bad token and stop
+// retrying. Unexported with an Unwrap and an isUnavailable helper — only this
+// package ever classifies.
+type unavailableErr struct{ err error }
+
+func (e *unavailableErr) Error() string { return e.err.Error() }
+func (e *unavailableErr) Unwrap() error { return e.err }
+
+func wrapUnavailable(err error) error { return &unavailableErr{err} }
+
+func isUnavailable(err error) bool {
+	var u *unavailableErr
+	return errors.As(err, &u)
+}
+
 const (
 	claimPodName = "authentication.kubernetes.io/pod-name"
 	claimPodUID  = "authentication.kubernetes.io/pod-uid"
@@ -1707,17 +1745,25 @@ type Identity struct {
 	Role           agent.Role
 }
 
-// PodChecker answers whether a pod the token names is one of ours.
+// PodChecker answers whether a pod the token names is one of ours, in the
+// role the caller is asking for.
 type PodChecker interface {
-	PodExists(ctx context.Context, namespace, name, uid string) (bool, error)
+	PodExists(ctx context.Context, namespace, name, uid string, want agent.Role) (bool, error)
 }
 
 // ClientPodChecker reads through the manager's cache.
 type ClientPodChecker struct{ Client client.Client }
 
-// PodExists implements PodChecker. It insists on the role label as well, so a
-// hand-built pod with the same ServiceAccount cannot open a session.
-func (c *ClientPodChecker) PodExists(ctx context.Context, namespace, name, uid string) (bool, error) {
+// PodExists implements PodChecker. It demands the same two labels the orphan
+// sweep uses to decide what belongs to Spawnery — role AND managed-by — so a
+// hand-built pod cannot open a session, and so the two places cannot drift
+// apart on what "one of ours" means. The role must match the session being
+// opened, not merely be one of the two we know.
+func (c *ClientPodChecker) PodExists(
+	ctx context.Context,
+	namespace, name, uid string,
+	want agent.Role,
+) (bool, error) {
 	pod := &corev1.Pod{}
 	err := c.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, pod)
 	if apierrors.IsNotFound(err) {
@@ -1729,8 +1775,18 @@ func (c *ClientPodChecker) PodExists(ctx context.Context, namespace, name, uid s
 	if string(pod.UID) != uid {
 		return false, nil
 	}
-	return pod.Labels[podspec.LabelRole] == podspec.RoleServer ||
-		pod.Labels[podspec.LabelRole] == podspec.RoleProxy, nil
+	if pod.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+		return false, nil
+	}
+	return pod.Labels[podspec.LabelRole] == roleLabelFor(want), nil
+}
+
+// roleLabelFor maps a session role to the pod label that carries it.
+func roleLabelFor(role agent.Role) string {
+	if role == agent.RoleProxy {
+		return podspec.RoleProxy
+	}
+	return podspec.RoleServer
 }
 
 // Authenticator checks tokens against the real authenticator of the API
@@ -1759,7 +1815,10 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{a.Audience}},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		return Identity{}, fmt.Errorf("token review unavailable: %w", err)
+		// Marked unavailable so the interceptor can answer with
+		// codes.Unavailable. An agent must back off and retry when the API
+		// server is down, not conclude its credentials are wrong.
+		return Identity{}, wrapUnavailable(fmt.Errorf("token review: %w", err))
 	}
 	if !review.Status.Authenticated {
 		return Identity{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
@@ -1783,9 +1842,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		return Identity{}, fmt.Errorf("token is not bound to a pod")
 	}
 
-	exists, err := a.Pods.PodExists(ctx, namespace, podName, podUID)
+	exists, err := a.Pods.PodExists(ctx, namespace, podName, podUID, want)
 	if err != nil {
-		return Identity{}, fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err)
+		return Identity{}, wrapUnavailable(fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err))
 	}
 	if !exists {
 		return Identity{}, fmt.Errorf("pod %s/%s is not a Spawnery pod", namespace, podName)
@@ -1899,7 +1958,11 @@ func (a *Authenticator) StreamInterceptor() grpc.StreamServerInterceptor {
 			log.FromContext(ctx).V(1).Info("rejected an agent stream",
 				"method", info.FullMethod, "reason", err.Error())
 			AuthFailures.WithLabelValues(string(role)).Inc()
-			return status.Error(codes.Unauthenticated, err.Error())
+			code := codes.Unauthenticated
+			if isUnavailable(err) {
+				code = codes.Unavailable
+			}
+			return status.Error(code, err.Error())
 		}
 
 		return handler(srv, wrappedStream{ServerStream: ss, ctx: context.WithValue(ctx, identityKey{}, id)})
@@ -1970,7 +2033,12 @@ Interceptor jeden durchließe."
 
 Entwurf Abschnitt 7. Der Dienst selbst: Nachrichten in die Registry, ein Stream pro Pod, Frist mit Überlappung.
 
+**Verdrängung darf die Bereitschaft nicht flackern lassen.** `Registry.Connect` setzt `ready = false`, und der verdrängende Stream ruft es, bevor sein `Hello` eintrifft — `phase.go:334-336` liest „verbunden, aber nicht bereit" als sofortigen Verlust. Ohne Gegenmaßnahme fiele jeder Server im Takt der Frist aus `Ready`, sich bei den Proxies abmeldend und Verluste sammelnd: genau das, was `SessionDeadline` verhindern soll. Die Registry bekommt deshalb `Supersede` — dasselbe wie `Connect`, nur behält es die Bereitschaft.
+
+Es gehört in die Registry und nicht in den `agentserver`, weil `connected` und `ready` in **einem** kritischen Abschnitt gesetzt werden müssen; ein `Connect` gefolgt von einem Setter reißt dasselbe Fenster wieder auf, das es schließen soll. Nach einem echten Abriss gilt weiter `Connect`: der Agent-Prozess kann neu gestartet sein, und nur sein `Hello` darf das Gegenteil behaupten.
+
 **Dateien:**
+- Ändern: `internal/agent/registry.go` (`Supersede`, plus Tests)
 - Erstellen: `internal/agentserver/server.go`
 - Erstellen: `internal/agentserver/streams.go`
 - Erstellen: `internal/agentserver/metrics.go`
@@ -1979,6 +2047,7 @@ Entwurf Abschnitt 7. Der Dienst selbst: Nachrichten in die Registry, ein Stream 
 
 **Schnittstellen:**
 - Verbraucht: `agentpb` (Task 2), `certs.Provider` (Task 4), `grpcauth.Authenticator`, `grpcauth.IdentityFrom` (Task 5), `agent.Registry`.
+- Liefert zusätzlich in `internal/agent`: `func (r *Registry) Supersede(key string, role Role)` — wie `Connect`, aber ohne die Bereitschaft zurückzusetzen. `Connect`, `MarkReady` und `Disconnect` bleiben unverändert.
 - Liefert:
   - `type Options struct { Addr string; Provider *certs.Provider; Auth *grpcauth.Authenticator; Agents *agent.Registry; ReportInterval, RenewAfter, HardDeadline time.Duration; Clock func() time.Time }`
   - `func New(opts Options) *Server`
@@ -2250,6 +2319,14 @@ func TestASecondStreamSupersedesTheFirstWithoutLosingState(t *testing.T) {
 	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
 	defer closeSecond()
 	mustSend(t, second, hello(true))
+
+	// Wait for the operator's first message on the new stream before dropping
+	// the old one. Without this the test proves nothing: Send only fills a
+	// client-side buffer, so closeFirst can land before the operator has even
+	// seen the second stream — an interleaving in which Disconnect is the
+	// correct behaviour. Written the naive way it fails against correct code
+	// in most runs.
+	awaitSession(t, second)
 
 	// The superseded stream ends, and that must not tear down the new one.
 	closeFirst()
@@ -2735,7 +2812,11 @@ Erwartet: „undefined: Bootstrapper".
 `internal/controller/bootstrap.go` (mit Apache-Kopf). Kernpunkte:
 
 - `Ensure` bricht mit Fehler ab, wenn `b.CA()` leer ist.
-- `Ensure` nutzt `controllerutil.CreateOrUpdate` mit dem gecachten `Client`; bei `AlreadyExists` — was passiert, wenn das Objekt existiert, aber sein Label verloren hat und deshalb nicht im eingeschränkten Cache steht — liest es über `b.Reader` ungecacht nach und aktualisiert direkt.
+- `Ensure` nutzt `controllerutil.CreateOrUpdate` mit dem gecachten `Client`. Bei `AlreadyExists` — was passiert, wenn das Objekt existiert, aber sein Label verloren hat und deshalb nicht im eingeschränkten Cache steht — behandeln die beiden Objekte den Fall **unterschiedlich**:
+  - **ConfigMap:** über `b.Reader` ungecacht nachlesen und korrigieren. Eine veraltete CA bricht jeden Agent, der sie liest, und `configmaps` braucht `update` ohnehin für die Rotation.
+  - **ServiceAccount:** `AlreadyExists` gilt als Erfolg, ohne Rückschreiben. Der Pod verweist nur auf den Namen, und am Token hängt das Label nicht — es zurückzuschreiben verlangte clusterweites `update` auf ServiceAccounts, also das Recht, in jedem Namespace `secrets` und `imagePullSecrets` eines SA zu ändern. Für ein Label ist das der falsche Handel, gerade in dem Meilenstein, der Rechte einschränkt.
+
+  Bewusst in Kauf genommen: ein handbearbeiteter ServiceAccount bleibt für den eingeschränkten Cache unsichtbar, weshalb jedes `Ensure` in diesem Namespace einen vergeblichen Create versucht. Ein API-Aufruf pro Pod-Erzeugung, und nur dort, wo jemand von Hand eingegriffen hat.
 - Beide Objekte bekommen `podspec.LabelManagedBy: podspec.ManagedByValue`.
 - Keine OwnerReference: die Objekte überleben den Operator bewusst, damit ein Pod-Neustart während eines Operator-Ausfalls nicht an einer fehlenden CA scheitert.
 
@@ -2745,6 +2826,23 @@ Die RBAC-Marker gehören direkt über `Ensure`:
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create
 ```
+
+**Die Rechtetabelle zieht in derselben Aufgabe nach.** `make manifests` erzeugt aus diesen Markern neue Regeln in `config/rbac/role.yaml`, und der Audit meldet sofort „gewährt, aber nicht gefordert". Die neun Einträge für `configmaps` und `serviceaccounts` gehören deshalb hierher in `internal/rbacaudit.Required` und nicht erst in Task 10 — sonst bliebe `make test` über drei Aufgaben hinweg rot, und eine echte Regression versteckte sich darin:
+
+```go
+	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure liest die CA-ConfigMap"},
+	{Group: "", Resource: "configmaps", Verb: "list", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
+	{Group: "", Resource: "configmaps", Verb: "watch", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
+	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure legt die CA-ConfigMap an"},
+	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure zieht eine geänderte CA nach"},
+
+	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.Ensure prüft den Server-SA"},
+	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "eingeschränkter Cache für die Server-SAs"},
+	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "eingeschränkter Cache für die Server-SAs"},
+	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.Ensure legt den Server-SA an"},
+```
+
+Dieselbe Regel gilt für jede spätere Aufgabe, die einen Marker setzt: Marker und Tabelleneintrag gehören in denselben Commit.
 
 - [ ] **Schritt 4: Tests laufen lassen**
 
@@ -3000,7 +3098,14 @@ Alle gemeinsamen Namen stehen bereits in `internal/podspec/agent.go` (seit Task 
 - `ServiceAccountName: ServerServiceAccountName` in die PodSpec.
 - Env-Variable `EnvOperatorEndpoint` in den Container.
 - Mount des Volumes read-only unter `AgentMountPath`.
-- Vor dem Anhängen der Nutzer-Mounts prüfen, ob einer `AgentVolumeName`, `DataVolumeName` oder `TmpVolumeName` heißt oder auf `AgentMountPath`, `DataMountPath` oder `TmpMountPath` zeigt, und mit klarem Fehler abbrechen.
+- Vor dem Anhängen der Nutzer-Mounts prüfen, ob einer `AgentVolumeName`, `DataVolumeName` oder `TmpVolumeName` heißt oder mit einem unserer Pfade kollidiert, und mit klarem Fehler abbrechen.
+
+  **Pfade werden als Pfade verglichen, nicht als Zeichenketten — aber nicht überall gleich streng.** Beide Seiten laufen durch `path.Clean`, damit die Variante mit Schrägstrich am Ende nicht durchrutscht. Danach:
+
+  - `AgentMountPath` bekommt die volle Prüfung in beide Richtungen: Gleichheit, Verschachtelung darunter, und ein Nutzerpfad, unter dem *unser* Pfad läge. Er ist der einzige der drei, dessen Verdeckung jemandem etwas einbringt — dort liegt die Token-Datei. Ein Mount auf `/var/run/spawnery/token` überdeckt sie, und Kubernetes erlaubt geschachtelte Mounts; ein Mount auf `/var/run` oder `/` deckt den Elternpfad ab.
+  - `DataMountPath` und `TmpMountPath` bekommen nur Gleichheit. **Verschachtelung darunter ist ausdrücklich erlaubt**: Spec 4.3 des Hauptentwurfs zeigt `/data/config` als das kanonische Beispiel für einen Nutzer-Mount. Die Regel dort auszuweiten verböte genau das dokumentierte Muster.
+
+  Verglichen wird auf Segmentgrenzen (`cleaned + "/"` als Präfix), sonst gälte `/data-extra` fälschlich als unter `/data` liegend. Beide Positivfälle — `/data/config` und `/data-extra` — gehören in die Tabelle, sonst räumt sie jemand später weg.
 
 - [ ] **Schritt 4: Aufrufer nachziehen und Tests laufen lassen**
 
@@ -3188,7 +3293,18 @@ spec:
       protocol: TCP
 ```
 
-In `config/deploy/deployment.yaml` den Port und die Namensvariable ergänzen:
+In `config/deploy/deployment.yaml` die Update-Strategie, den Port und die Namensvariable ergänzen.
+
+**Die Strategie muss `Recreate` sein.** Ohne `strategy` gilt RollingUpdate, bei `replicas: 1` also `maxSurge 1`/`maxUnavailable 0`: der neue Pod muss bereit sein, bevor der alte weicht. Weil `/readyz` jetzt an der Leader-Sperre hängt, wartet er auf eine Sperre, die der alte Pod bis zu seinem Ende erneuert — jedes Update verklemmt, bis jemand den alten Pod von Hand löscht. Die Zusicherung gehört in den Manifest-Test, sonst kippt sie beim nächsten Aufräumen zurück.
+
+```yaml
+spec:
+  replicas: 1
+  # Bereitschaft folgt der Leader-Sperre, deshalb kein überlappendes Update:
+  # der neue Pod würde auf eine Sperre warten, die der alte noch hält.
+  strategy:
+    type: Recreate
+```
 
 ```yaml
           env:
@@ -3319,16 +3435,9 @@ In `internal/grpcauth/identity.go` über `Authenticate`:
 	{Group: "authentication.k8s.io", Resource: "tokenreviews", Verb: "create",
 		Why: "grpcauth.Authenticator.Authenticate prüft jeden Agent-Token"},
 
-	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure liest die CA-ConfigMap"},
-	{Group: "", Resource: "configmaps", Verb: "list", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
-	{Group: "", Resource: "configmaps", Verb: "watch", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
-	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure legt die CA-ConfigMap an"},
-	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure zieht eine geänderte CA nach"},
-
-	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.Ensure prüft den Server-SA"},
-	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "eingeschränkter Cache für die Server-SAs"},
-	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "eingeschränkter Cache für die Server-SAs"},
-	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.Ensure legt den Server-SA an"},
+	// Die configmaps- und serviceaccounts-Einträge kommen schon mit Task 7:
+	// dort entstehen die Marker, und ohne die Einträge wäre der Audit bis
+	// hierher rot.
 ```
 
 Und die namespace-lokale Tabelle:

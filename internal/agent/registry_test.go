@@ -68,6 +68,36 @@ func TestConnectDoesNotImplyReady(t *testing.T) {
 	}
 }
 
+// Make-before-break: the agent opens its next stream while the current one is
+// still up, and that stream is registered before its Hello arrives. Readiness
+// has to survive the handover, or every renewal would look like a readiness
+// loss to the reconciler.
+func TestSupersedeKeepsReadiness(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-uid-1", RoleServer)
+	r.MarkReady("pod-uid-1")
+
+	r.Supersede("pod-uid-1", RoleServer)
+
+	got := r.Lookup("pod-uid-1")
+	if !got.Connected {
+		t.Fatalf("after Supersede: %+v", got)
+	}
+	if !got.Ready {
+		t.Error("Supersede dropped the readiness of the stream it replaced")
+	}
+}
+
+// A stream that supersedes nothing readable must not invent readiness either.
+func TestSupersedeDoesNotInventReadiness(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Supersede("pod-uid-1", RoleServer)
+
+	if got := r.Lookup("pod-uid-1"); got.Ready {
+		t.Errorf("snapshot = %+v, want a pod that has never reported readiness to stay unready", got)
+	}
+}
+
 func TestMarkReadyAndReport(t *testing.T) {
 	r, _ := newTestRegistry()
 	r.Connect("pod-uid-1", RoleServer)

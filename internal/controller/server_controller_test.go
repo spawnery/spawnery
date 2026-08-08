@@ -17,6 +17,9 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +28,9 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -563,7 +568,7 @@ func TestServerInAPersistentGroupStillDrainsAndReleasesItself(t *testing.T) {
 
 	// Milestone 5 will create this pod; stand in for it so the drain path is
 	// exercised rather than merely the empty release.
-	built, err := podspec.BuildServerPod(f.network, persistent, srv)
+	built, err := podspec.BuildServerPod(f.network, persistent, srv, f.reconc.AgentEndpoint)
 	if err != nil {
 		t.Fatalf("BuildServerPod: %v", err)
 	}
@@ -1197,5 +1202,86 @@ func TestCrashLoopingOnlyLooksAtTheMinecraftContainer(t *testing.T) {
 	})
 	if !crashLooping(pod) {
 		t.Error("a crash-looping Minecraft container was not detected")
+	}
+}
+
+// denyingCreator refuses every create the way an admission webhook, a
+// ResourceQuota on ConfigMaps or a policy in a customer namespace refuses the
+// bootstrap's writes: permanently, and not because of anything the operator
+// could wait out.
+type denyingCreator struct {
+	client.Client
+}
+
+func (denyingCreator) Create(context.Context, client.Object, ...client.CreateOption) error {
+	return apierrors.NewForbidden(
+		schema.GroupResource{Resource: "configmaps"},
+		podspec.CAConfigMapName,
+		errors.New("denied by an admission policy"))
+}
+
+// A namespace the operator is not allowed to bootstrap is not a passing phase.
+// The waiting-for-the-first-certificate case clears itself within seconds, but
+// a refused write does not, and nothing else in this reconciler would ever say
+// so: status.startedAt is only written once a pod exists, so
+// StartupDeadlineReached can never fire and the Server can never fail out.
+// Without a condition and an event, every Server in such a namespace sits in
+// Pending forever with a log line as its only trace.
+func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
+	f := newFixture(t)
+	events := record.NewFakeRecorder(20)
+	f.reconc.Recorder = events
+	f.reconc.Bootstrap = &Bootstrapper{
+		Client: denyingCreator{Client: f.c},
+		Reader: f.c,
+		CA:     func() []byte { return []byte("test-ca") },
+	}
+
+	f.createServer("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Fatal("a pod was created although the namespace could not be bootstrapped")
+	}
+	got := f.server("lobby-x7k2")
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionFalse, ReasonNamespaceNotBootstrapped) {
+		t.Errorf("conditions = %+v, want Accepted=False with reason %s — a refusal nobody "+
+			"can see on the CR is a Server stuck in Pending with no explanation",
+			got.Status.Conditions, ReasonNamespaceNotBootstrapped)
+	}
+
+	var recorded []string
+	for done := false; !done; {
+		select {
+		case ev := <-events.Events:
+			recorded = append(recorded, ev)
+		default:
+			done = true
+		}
+	}
+	found := false
+	for _, ev := range recorded {
+		if strings.Contains(ev, ReasonNamespaceNotBootstrapped) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("events = %q, want one naming %s", recorded, ReasonNamespaceNotBootstrapped)
+	}
+
+	// The condition is a report, not a verdict: once the obstacle is gone the
+	// next resync creates the pod, with no restart and no manual step.
+	f.reconc.Bootstrap = &Bootstrapper{
+		Client: f.c, Reader: f.c,
+		CA: func() []byte { return []byte("test-ca") },
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("no pod was created after the namespace could be bootstrapped again")
+	}
+	if !hasCondition(f.server("lobby-x7k2").Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionTrue, spawneryv1alpha1.ReasonAccepted) {
+		t.Error("the Accepted condition stayed false after the namespace was bootstrapped")
 	}
 }

@@ -93,8 +93,33 @@ func New(clock func() time.Time, reportInterval time.Duration, startedAt time.Ti
 }
 
 // Connect records a new agent stream. Readiness is not implied: the agent has
-// to state it, either through MarkReady or through Hello{ready:true}.
+// to state it, either through MarkReady or through Hello{ready:true}. The
+// process behind a fresh stream may have restarted, so only its own Hello may
+// say it is ready again.
 func (r *Registry) Connect(key string, role Role) {
+	r.connect(key, role, false)
+}
+
+// Supersede records a stream that takes over from one that is still live for
+// the same pod. Unlike Connect it carries the readiness of the displaced
+// stream over.
+//
+// The difference matters because of make-before-break: an agent opens its next
+// stream before the current one ends, and the new stream is registered before
+// its Hello arrives. Were that registered as a plain Connect, readiness would
+// be false for the length of one round trip, and a reconcile landing in that
+// window reads "connected but not ready" — an immediate readiness loss that
+// deregisters the server from the proxies and counts against its flap budget,
+// once per renewal period per server. Since the old stream was still live, the
+// agent process never went away and the readiness it reported still holds.
+func (r *Registry) Supersede(key string, role Role) {
+	r.connect(key, role, true)
+}
+
+// connect is the shared body: keepReady decides whether the readiness of a
+// previous stream survives. Both callers set it in the same critical section
+// as connected, so no reader can observe the pair half-updated.
+func (r *Registry) connect(key string, role Role, keepReady bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -105,7 +130,9 @@ func (r *Registry) Connect(key string, role Role) {
 	}
 	e.role = role
 	e.connected = true
-	e.ready = false
+	if !keepReady {
+		e.ready = false
+	}
 	e.disconnectedAt = time.Time{}
 }
 

@@ -17,6 +17,7 @@ limitations under the License.
 package podspec
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +27,10 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
+
+// testEndpoint is what the operator would pass in; the tests below assert it
+// arrives in the container unchanged.
+const testEndpoint = "spawnery-operator.spawnery-system.svc:9443"
 
 func testNetwork() *spawneryv1alpha1.Network {
 	return &spawneryv1alpha1.Network{
@@ -82,7 +87,7 @@ func build(t *testing.T, mutate func(*spawneryv1alpha1.Network, *spawneryv1alpha
 	if mutate != nil {
 		mutate(net, group)
 	}
-	pod, err := BuildServerPod(net, group, testServer())
+	pod, err := BuildServerPod(net, group, testServer(), testEndpoint)
 	if err != nil {
 		t.Fatalf("BuildServerPod: %v", err)
 	}
@@ -305,7 +310,7 @@ func TestPersistentGroupMountsItsPVC(t *testing.T) {
 	srv.Spec.GroupRef.Name = "survival"
 	srv.Spec.Ordinal = ptr.To[int32](0)
 
-	pod, err := BuildServerPod(net, group, srv)
+	pod, err := BuildServerPod(net, group, srv, testEndpoint)
 	if err != nil {
 		t.Fatalf("BuildServerPod: %v", err)
 	}
@@ -327,7 +332,261 @@ func TestPersistentGroupMountsItsPVC(t *testing.T) {
 func TestBuildRejectsAnEmptyImage(t *testing.T) {
 	net, group := testNetwork(), testGroup()
 	group.Spec.Image = ""
-	if _, err := BuildServerPod(net, group, testServer()); err == nil {
+	if _, err := BuildServerPod(net, group, testServer(), testEndpoint); err == nil {
 		t.Fatal("empty image accepted, want an error")
+	}
+}
+
+func TestBuildRejectsAnEmptyAgentEndpoint(t *testing.T) {
+	net, group := testNetwork(), testGroup()
+	if _, err := BuildServerPod(net, group, testServer(), ""); err == nil {
+		t.Fatal("empty agent endpoint accepted, want an error")
+	}
+}
+
+func TestPodCarriesTheProjectedAgentToken(t *testing.T) {
+	pod := build(t, nil)
+
+	var projected *corev1.ProjectedVolumeSource
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == AgentVolumeName {
+			projected = v.Projected
+		}
+	}
+	if projected == nil {
+		t.Fatal("the pod has no projected agent volume")
+	}
+
+	var sawToken, sawCA bool
+	for _, src := range projected.Sources {
+		if sa := src.ServiceAccountToken; sa != nil {
+			sawToken = true
+			if sa.Audience != AgentTokenAudience {
+				t.Errorf("audience = %q, want %q", sa.Audience, AgentTokenAudience)
+			}
+			if sa.ExpirationSeconds == nil || *sa.ExpirationSeconds != TokenExpirationSeconds {
+				t.Errorf("expirationSeconds = %v, want %d", sa.ExpirationSeconds, TokenExpirationSeconds)
+			}
+			if sa.Path != AgentTokenPath {
+				t.Errorf("token path = %q, want %q", sa.Path, AgentTokenPath)
+			}
+		}
+		if cm := src.ConfigMap; cm != nil {
+			sawCA = true
+			if cm.Name != CAConfigMapName {
+				t.Errorf("configmap = %q, want %q", cm.Name, CAConfigMapName)
+			}
+		}
+	}
+	if !sawToken || !sawCA {
+		t.Errorf("token=%v ca=%v, want both in one volume", sawToken, sawCA)
+	}
+}
+
+func TestPodUsesTheServerServiceAccountButNoAutomount(t *testing.T) {
+	pod := build(t, nil)
+
+	if pod.Spec.ServiceAccountName != ServerServiceAccountName {
+		t.Errorf("serviceAccountName = %q, want %q",
+			pod.Spec.ServiceAccountName, ServerServiceAccountName)
+	}
+	// The claim "these pods carry no Kubernetes credentials" only holds with
+	// automount off; the projected, audience-bound token is the exception.
+	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
+		t.Error("automountServiceAccountToken is not off")
+	}
+}
+
+func TestContainerKnowsWhereToReachTheOperator(t *testing.T) {
+	pod := build(t, nil)
+	c := pod.Spec.Containers[0]
+
+	var endpoint string
+	for _, e := range c.Env {
+		if e.Name == EnvOperatorEndpoint {
+			endpoint = e.Value
+		}
+	}
+	if endpoint != testEndpoint {
+		t.Errorf("%s = %q", EnvOperatorEndpoint, endpoint)
+	}
+
+	var mounted bool
+	for _, m := range c.VolumeMounts {
+		if m.Name == AgentVolumeName {
+			mounted = true
+			if m.MountPath != AgentMountPath {
+				t.Errorf("mountPath = %q, want %q", m.MountPath, AgentMountPath)
+			}
+			if !m.ReadOnly {
+				t.Error("the agent volume is writable")
+			}
+		}
+	}
+	if !mounted {
+		t.Error("the agent volume is not mounted into the container")
+	}
+}
+
+// A user mount must never shadow the token, and the API server's generic
+// rejection is no substitute for the operator saying what is wrong.
+func TestCollidingUserMountsAreRefused(t *testing.T) {
+	cases := []struct {
+		name  string
+		mount spawneryv1alpha1.Mount
+		want  string
+	}{
+		{
+			name: "same volume name as the agent volume",
+			mount: spawneryv1alpha1.Mount{
+				Name:      AgentVolumeName,
+				MountPath: "/irgendwo",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentVolumeName,
+		},
+		{
+			name: "mounted over the agent path",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: AgentMountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
+		{
+			name: "mounted over /data",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: DataMountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: DataMountPath,
+		},
+		{
+			// The case the check exists for: a mount nested inside the agent
+			// volume can shadow the exact file the agent reads its token
+			// from, and Kubernetes permits nested mounts without complaint.
+			name: "nested inside the agent mount, shadowing the token file",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: AgentMountPath + "/" + AgentTokenPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
+		{
+			name: "a trailing slash on a reserved path is still the same path",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: DataMountPath + "/",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: DataMountPath,
+		},
+		{
+			name: "mounted over /tmp",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: TmpMountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: TmpMountPath,
+		},
+		{
+			name: "a trailing slash on /tmp is still the same path",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: TmpMountPath + "/",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: TmpMountPath,
+		},
+		{
+			// The reverse nesting: a mount over a parent directory of one of
+			// ours sits above it, not beside it.
+			name: "mounted over a parent of the agent mount",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: "/var/run",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			net, group := testNetwork(), testGroup()
+			group.Spec.Mounts = []spawneryv1alpha1.Mount{tc.mount}
+
+			_, err := BuildServerPod(net, group, testServer(), testEndpoint)
+			if err == nil {
+				t.Fatal("BuildServerPod accepted a colliding mount")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to name %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// TestNonCollidingUserMountsAreAccepted guards the two ways the collision
+// check must stay permissive: a path nested under DataMountPath or
+// TmpMountPath, which is a feature and not a collision (see the comment on
+// checkMountCollision), and a sibling path that merely shares a textual
+// prefix with a reserved one, which a naive strings.HasPrefix check would
+// wrongly reject.
+func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
+	cases := []struct {
+		name      string
+		mountPath string
+	}{
+		{
+			// Design spec 4.3's own ServerGroup example: a ConfigMap mounted
+			// at DataMountPath+"/config" to add server config files. If this
+			// case is ever removed as "redundant with TestUserMounts", it is
+			// not — this one specifically exercises checkMountCollision, the
+			// other exercises the resulting volume and mount.
+			name:      "a config file nested inside /data, the documented pattern",
+			mountPath: DataMountPath + "/config",
+		},
+		{
+			name:      "a sibling directory that only shares a prefix with /data",
+			mountPath: DataMountPath + "-extra",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			net, group := testNetwork(), testGroup()
+			group.Spec.Mounts = []spawneryv1alpha1.Mount{{
+				Name:      "eigenes",
+				MountPath: tc.mountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			}}
+
+			if _, err := BuildServerPod(net, group, testServer(), testEndpoint); err != nil {
+				t.Fatalf("BuildServerPod rejected mount path %q: %v", tc.mountPath, err)
+			}
+		})
 	}
 }

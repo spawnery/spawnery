@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -57,6 +58,11 @@ func TestSetupAllRegistersEveryController(t *testing.T) {
 		PlayerStatusInterval: 30 * time.Second,
 		OrphanInterval:       time.Minute,
 		Registrar:            NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
 	}
 	if err := SetupAll(mgr, opts); err != nil {
 		t.Fatalf("SetupAll: %v", err)
@@ -66,6 +72,42 @@ func TestSetupAllRegistersEveryController(t *testing.T) {
 	// rejects duplicate names. That proves SetupAll really registered them.
 	if err := SetupAll(mgr, opts); err == nil {
 		t.Fatal("SetupAll succeeded twice, so it registered nothing the first time")
+	}
+}
+
+// Without the Bootstrapper the Server controller would panic on the first pod
+// it creates — in a reconcile goroutine, long after start. Refusing at setup
+// turns that into a startup error nobody can miss.
+func TestSetupAllRefusesWithoutABootstrapper(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: start}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:         testenv.Scheme(t),
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		LeaderElection: false,
+		// So the only possible reason to fail is the missing Bootstrapper and
+		// not a controller name this test binary already used.
+		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	err = SetupAll(mgr, Options{
+		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Clock:                clock.Now,
+		StartupDeadline:      5 * time.Minute,
+		PlayerStatusInterval: 30 * time.Second,
+		OrphanInterval:       time.Minute,
+		Registrar:            NoopRegistrar{},
+		AgentEndpoint:        "spawnery-operator.spawnery-system.svc:9443",
+	})
+	if err == nil {
+		t.Fatal("SetupAll accepted a nil Bootstrapper")
+	}
+	if !strings.Contains(err.Error(), "bootstrapper") {
+		t.Errorf("error = %q, want it to name the missing bootstrapper", err)
 	}
 }
 
@@ -112,6 +154,11 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		PlayerStatusInterval: 30 * time.Second,
 		OrphanInterval:       time.Minute,
 		Registrar:            NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
 	}
 	if err := SetupAll(mgr, opts); err != nil {
 		t.Fatalf("SetupAll: %v", err)

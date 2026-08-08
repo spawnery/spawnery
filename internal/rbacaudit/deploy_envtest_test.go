@@ -17,17 +17,24 @@ limitations under the License.
 package rbacaudit_test
 
 import (
+	"bufio"
+	"errors"
+	"io"
 	"os"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -47,6 +54,94 @@ func readManifest[T any](t *testing.T, rel string, into *T) {
 	if err := yaml.Unmarshal(raw, into); err != nil {
 		t.Fatalf("decode %s: %v", rel, err)
 	}
+}
+
+// generatedRoles is the repository-relative path of the manifest controller-gen
+// writes. It holds every role the markers ask for, in one multi-document file:
+// the cluster-wide ClusterRole and the Role scoped to the operator's own
+// namespace. Nothing in the build splits them apart, so readManifest — which
+// decodes a single document — cannot be used on it.
+const generatedRoles = "config/rbac/role.yaml"
+
+// readGeneratedRoles decodes both halves of the generated RBAC manifest. It
+// insists on finding exactly one of each.
+//
+// A missing Role means a namespace= qualifier fell off a marker and the operator
+// would hold its Secret and Lease rights everywhere. A *second* Role is the
+// quieter failure and the reason this refuses rather than takes the last one:
+// returning one of two would leave the other unaudited in both directions while
+// every test still reported green. controller-gen emits one Role per namespace
+// named in a marker, so a second one arrives the moment a second namespace does —
+// which the Helm chart makes likely.
+func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
+	t.Helper()
+
+	f, err := os.Open(testenv.RepoPath(t, generatedRoles))
+	if err != nil {
+		t.Fatalf("read %s: %v", generatedRoles, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var cluster *rbacv1.ClusterRole
+	var namespaced *rbacv1.Role
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(f))
+	for {
+		doc, err := docs.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", generatedRoles, err)
+		}
+		if strings.TrimSpace(string(doc)) == "" {
+			continue
+		}
+		var meta metav1.TypeMeta
+		if err := yaml.Unmarshal(doc, &meta); err != nil {
+			t.Fatalf("decode %s: %v", generatedRoles, err)
+		}
+		switch meta.Kind {
+		case "ClusterRole":
+			decoded := &rbacv1.ClusterRole{}
+			if err := yaml.Unmarshal(doc, decoded); err != nil {
+				t.Fatalf("decode the ClusterRole in %s: %v", generatedRoles, err)
+			}
+			if cluster != nil {
+				t.Fatalf("%s contains more than one ClusterRole (%q and %q). This audit "+
+					"compares exactly one against rbacaudit.RequiredCluster; taking the "+
+					"last would leave the other unchecked in both directions without "+
+					"saying so. Teach it to handle several before adding one",
+					generatedRoles, cluster.Name, decoded.Name)
+			}
+			cluster = decoded
+		case "Role":
+			decoded := &rbacv1.Role{}
+			if err := yaml.Unmarshal(doc, decoded); err != nil {
+				t.Fatalf("decode the Role in %s: %v", generatedRoles, err)
+			}
+			if namespaced != nil {
+				t.Fatalf("%s contains more than one Role (%s/%s and %s/%s). This audit "+
+					"compares exactly one against rbacaudit.RequiredNamespaced; taking "+
+					"the last would leave the other unchecked in both directions without "+
+					"saying so. A second namespace= qualifier needs the namespaced table "+
+					"split per namespace first",
+					generatedRoles, namespaced.Namespace, namespaced.Name,
+					decoded.Namespace, decoded.Name)
+			}
+			namespaced = decoded
+		default:
+			t.Fatalf("%s contains an unexpected %s; this audit only models roles", generatedRoles, meta.Kind)
+		}
+	}
+	if cluster == nil {
+		t.Fatalf("%s contains no ClusterRole", generatedRoles)
+	}
+	if namespaced == nil {
+		t.Fatalf("%s contains no Role — a namespace= qualifier fell off a marker, and "+
+			"the operator would hold its Secret and Lease rights in every namespace",
+			generatedRoles)
+	}
+	return cluster, namespaced
 }
 
 // apply creates objects that several tests in this package share. The cluster
@@ -72,17 +167,16 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 
 	var ns corev1.Namespace
 	var sa corev1.ServiceAccount
-	var role rbacv1.ClusterRole
 	var binding rbacv1.ClusterRoleBinding
 	var deploy appsv1.Deployment
 
 	readManifest(t, "config/deploy/namespace.yaml", &ns)
 	readManifest(t, "config/deploy/serviceaccount.yaml", &sa)
-	readManifest(t, "config/rbac/role.yaml", &role)
 	readManifest(t, "config/deploy/clusterrolebinding.yaml", &binding)
 	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	role, _ := readGeneratedRoles(t)
 
-	apply(t, &ns, &sa, &role, &binding, &deploy)
+	apply(t, &ns, &sa, role, &binding, &deploy)
 
 	if ns.Name != "spawnery-system" {
 		t.Errorf("namespace = %q, want spawnery-system", ns.Name)
@@ -117,6 +211,150 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 	key := types.NamespacedName{Name: deploy.Name, Namespace: deploy.Namespace}
 	if err := c.Get(ctx, key, got); err != nil {
 		t.Fatalf("get Deployment: %v", err)
+	}
+}
+
+// TestTheRoleBindingBindsTheOperatorInItsOwnNamespace is the namespaced half of
+// TestDeployManifestsAreAcceptedAndConsistent. Nothing else reads
+// rolebinding.yaml, so a RoleRef naming a ClusterRole, a subject naming the
+// wrong ServiceAccount, or a binding sitting in a namespace other than the one
+// controller-gen put the Role in would all leave certs.Store.Ensure with
+// Forbidden on the operator's own Secret while every file on its own still
+// looked plausible.
+func TestTheRoleBindingBindsTheOperatorInItsOwnNamespace(t *testing.T) {
+	var ns corev1.Namespace
+	var sa corev1.ServiceAccount
+	var binding rbacv1.RoleBinding
+
+	readManifest(t, "config/deploy/namespace.yaml", &ns)
+	readManifest(t, "config/deploy/serviceaccount.yaml", &sa)
+	readManifest(t, "config/deploy/rolebinding.yaml", &binding)
+	_, role := readGeneratedRoles(t)
+
+	apply(t, &ns, role, &binding)
+
+	// The Role's namespace comes from the markers, the binding's from the
+	// manifest. If they ever drift the binding grants nothing at all.
+	if role.Namespace != ns.Name {
+		t.Errorf("the generated Role is in %q, but the operator runs in %q — the "+
+			"namespace= qualifier on the markers names the wrong namespace",
+			role.Namespace, ns.Name)
+	}
+	if binding.Namespace != role.Namespace {
+		t.Errorf("rolebinding namespace = %q, role namespace = %q — a RoleBinding only "+
+			"grants in its own namespace", binding.Namespace, role.Namespace)
+	}
+	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != role.Name {
+		t.Errorf("roleRef = %s/%s, want Role/%s",
+			binding.RoleRef.Kind, binding.RoleRef.Name, role.Name)
+	}
+	if len(binding.Subjects) != 1 {
+		t.Fatalf("binding has %d subjects, want exactly one — a second subject would "+
+			"widen the grant and quietly make TestTheAuthorizerActuallyDenies the only "+
+			"test that could still notice", len(binding.Subjects))
+	}
+	subj := binding.Subjects[0]
+	if subj.Kind != "ServiceAccount" || subj.Name != sa.Name || subj.Namespace != sa.Namespace {
+		t.Errorf("subject = %s %s/%s, want ServiceAccount %s/%s",
+			subj.Kind, subj.Namespace, subj.Name, sa.Namespace, sa.Name)
+	}
+}
+
+// TestAgentServiceReachesTheOperatorPods checks the one path nothing else
+// covers: a game server pod dials spawnery-operator.<ns>.svc:9443, and every
+// hop of that address lives in a different file. A selector that matches
+// nothing, or a targetPort naming a container port that does not exist, leaves
+// the agents with a connection refused and the operator looking healthy.
+func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
+	var ns corev1.Namespace
+	var svc corev1.Service
+	var deploy appsv1.Deployment
+	readManifest(t, "config/deploy/namespace.yaml", &ns)
+	readManifest(t, "config/deploy/service.yaml", &svc)
+	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+
+	apply(t, &ns, &svc)
+
+	// The name is the first hop, and the only one no other test touches: the
+	// operator builds both the agents' dial address and its own certificate
+	// SANs from podspec.AgentServiceName, and never compares either against
+	// the manifest. Renaming the Service here alone would leave every agent
+	// dialling a name that resolves to nothing, and the suite fully green.
+	if svc.Name != podspec.AgentServiceName {
+		t.Errorf("the Service is named %q but the operator dials and certifies %q — "+
+			"every agent would fail its TLS handshake against a name that does not resolve",
+			svc.Name, podspec.AgentServiceName)
+	}
+
+	if svc.Namespace != deploy.Namespace {
+		t.Errorf("service namespace = %q, deployment namespace = %q — a Service only "+
+			"selects pods in its own namespace", svc.Namespace, deploy.Namespace)
+	}
+
+	podLabels := deploy.Spec.Template.Labels
+	for k, v := range svc.Spec.Selector {
+		if podLabels[k] != v {
+			t.Errorf("service selects %s=%q but the operator pods carry %s=%q — "+
+				"the Service would have no endpoints at all", k, v, k, podLabels[k])
+		}
+	}
+
+	if len(deploy.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
+	}
+	container := deploy.Spec.Template.Spec.Containers[0]
+	named := map[string]int32{}
+	for _, p := range container.Ports {
+		named[p.Name] = p.ContainerPort
+	}
+	for _, p := range svc.Spec.Ports {
+		target := p.TargetPort.StrVal
+		if target == "" {
+			t.Errorf("service port %q targets a number, not a named port", p.Name)
+			continue
+		}
+		if _, ok := named[target]; !ok {
+			t.Errorf("service port %q targets the container port %q, which the operator "+
+				"container does not declare", p.Name, target)
+		}
+	}
+	if got := named["agent"]; got != 9443 {
+		t.Errorf("the agent container port = %d, want 9443", got)
+	}
+
+	// The readiness probe is what keeps a standby out of the Service: readyz
+	// only turns green once this replica holds the leader lock, and an unready
+	// pod is not an endpoint. A probe pointing anywhere else would silently
+	// undo that.
+	probe := container.ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil {
+		t.Fatal("the operator has no HTTP readiness probe; a standby would serve as an endpoint")
+	}
+	if probe.HTTPGet.Path != "/readyz" {
+		t.Errorf("readiness probe path = %q, want /readyz", probe.HTTPGet.Path)
+	}
+}
+
+// The other end of tying readiness to the leader lock, and a deadlock rather
+// than a slowdown: with one replica the default RollingUpdate resolves to
+// maxSurge 1 and maxUnavailable 0, so the new pod has to report Ready before
+// the old one is removed. Readiness now waits for the lease, and the lease is
+// held by the pod that is waiting to be removed. The rollout stops there until
+// someone deletes the old pod by hand. Recreate is the honest shape for a
+// single-replica leader-elected operator, and this test is what stops it from
+// being "improved" back.
+func TestTheOperatorIsReplacedRatherThanRolled(t *testing.T) {
+	var deploy appsv1.Deployment
+	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+
+	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 1 {
+		t.Fatalf("replicas = %v, want 1 — this test reasons about the single-replica case",
+			deploy.Spec.Replicas)
+	}
+	if got := deploy.Spec.Strategy.Type; got != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("deployment strategy = %q, want %q — a rolling update would wait for a "+
+			"readiness the new pod cannot reach until the old one releases the leader lease",
+			got, appsv1.RecreateDeploymentStrategyType)
 	}
 }
 
@@ -158,9 +396,13 @@ func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
 // leader election is on by default and locks on a Lease, but no kubebuilder
 // marker declared that permission, so the generated role never granted it and
 // the operator would have failed on startup with Forbidden.
+//
+// The right now lives in the namespaced Role, where it belongs — the lock is
+// taken in the operator's own namespace, and granting it cluster-wide would let
+// the operator lock anything anywhere. This test therefore also insists the
+// ClusterRole stays out of it.
 func TestLeaderElectionPermissionIsGranted(t *testing.T) {
-	var role rbacv1.ClusterRole
-	readManifest(t, "config/rbac/role.yaml", &role)
+	cluster, role := readGeneratedRoles(t)
 
 	want := map[string]bool{"create": false, "get": false, "update": false}
 	for _, rule := range role.Rules {
@@ -175,8 +417,15 @@ func TestLeaderElectionPermissionIsGranted(t *testing.T) {
 	}
 	for verb, found := range want {
 		if !found {
-			t.Errorf("clusterrole does not grant %q on coordination.k8s.io/leases — "+
-				"leader election would fail with Forbidden on startup", verb)
+			t.Errorf("the Role in %s does not grant %q on coordination.k8s.io/leases — "+
+				"leader election would fail with Forbidden on startup", role.Namespace, verb)
+		}
+	}
+
+	for _, rule := range cluster.Rules {
+		if contains(rule.APIGroups, "coordination.k8s.io") && contains(rule.Resources, "leases") {
+			t.Errorf("the ClusterRole still grants %v on coordination.k8s.io/leases — the "+
+				"operator could take a leader lock in any namespace", rule.Verbs)
 		}
 	}
 }

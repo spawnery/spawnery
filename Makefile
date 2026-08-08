@@ -1,7 +1,7 @@
 CONTROLLER_GEN ?= controller-gen
 
 .PHONY: all
-all: manifests generate fmt vet test build
+all: proto manifests generate fmt vet test build
 
 .PHONY: manifests
 manifests:
@@ -12,6 +12,14 @@ manifests:
 .PHONY: generate
 generate:
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./..."
+
+.PHONY: proto
+proto:
+	protoc \
+		--proto_path=proto \
+		--go_out=. --go_opt=module=github.com/spawnery/spawnery \
+		--go-grpc_out=. --go-grpc_opt=module=github.com/spawnery/spawnery \
+		proto/spawnery/agent/v1alpha1/agent.proto
 
 .PHONY: fmt
 fmt:

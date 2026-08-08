@@ -16,10 +16,11 @@ limitations under the License.
 
 package rbacaudit
 
-// Required is the hand-maintained statement of what the operator's code
-// actually does against the Kubernetes API. It is deliberately not derived
-// from the kubebuilder markers: a derived table would only prove that the
-// generated role grants what the generated role grants.
+// RequiredCluster is the hand-maintained statement of what the operator's code
+// does against the Kubernetes API in namespaces it does not know in advance —
+// wherever a Network puts its game servers. It is deliberately not derived from
+// the kubebuilder markers: a derived table would only prove that the generated
+// role grants what the generated role grants.
 //
 // Adding a marker without adding an entry here turns the audit red. That is
 // the point — it forces a moment of thought about whether the new permission
@@ -29,7 +30,7 @@ package rbacaudit
 // a permission missing from both. Only the operator actually running under
 // this ServiceAccount can prove completeness, which is what the cluster-level
 // end-to-end test is for.
-var Required = []Permission{
+var RequiredCluster = []Permission{
 	// Events — the recorder writes them for every phase change and every
 	// warning, and patches them when it aggregates repeats.
 	{Group: "", Resource: "events", Verb: "create", Why: "Recorder.Eventf in allen Controllern"},
@@ -50,10 +51,24 @@ var Required = []Permission{
 	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "create", Why: "CreateOrUpdate in reconcilePDB"},
 	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "update", Why: "CreateOrUpdate in reconcilePDB"},
 
-	// Leader election locks on a Lease in the operator's own namespace.
-	{Group: "coordination.k8s.io", Resource: "leases", Verb: "create", Why: "Leader-Election beim Start"},
-	{Group: "coordination.k8s.io", Resource: "leases", Verb: "get", Why: "Leader-Election erneuert die Sperre"},
-	{Group: "coordination.k8s.io", Resource: "leases", Verb: "update", Why: "Leader-Election erneuert die Sperre"},
+	// Namespace bootstrap — Bootstrapper.Ensure keeps the CA ConfigMap and
+	// the server ServiceAccount current in every namespace that runs pods.
+	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure liest die CA-ConfigMap"},
+	{Group: "", Resource: "configmaps", Verb: "list", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
+	{Group: "", Resource: "configmaps", Verb: "watch", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
+	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure legt die CA-ConfigMap an"},
+	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure zieht eine geänderte CA nach"},
+
+	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.Ensure prüft den Server-SA"},
+	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "eingeschränkter Cache für die Server-SAs"},
+	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "eingeschränkter Cache für die Server-SAs"},
+	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.Ensure legt den Server-SA an"},
+
+	// Every agent token is checked against the real authenticator of the API
+	// server. TokenReview is cluster-scoped, so there is no namespaced variant
+	// of this right to fall back to.
+	{Group: "authentication.k8s.io", Resource: "tokenreviews", Verb: "create",
+		Why: "grpcauth.Authenticator.Authenticate prüft jeden Agent-Token"},
 
 	// The operator's own resources.
 	{Group: "spawnery.cloud", Resource: "networks", Verb: "get", Why: "Auflösen von networkRef"},
@@ -87,4 +102,26 @@ var Required = []Permission{
 	// Controller zählt sie nur über eine List.
 	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "list", Why: "NetworkReconciler zählt Proxy-Gruppen"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "watch", Why: "Cache des Managers"},
+}
+
+// RequiredNamespaced is what the operator does in its own namespace only, and
+// is checked against the generated Role rather than the ClusterRole. Both
+// entries were cluster-wide before milestone 2a: the lease because nobody had
+// split the table yet, the secret because it did not exist yet — and granting a
+// cluster-wide write on secrets would have been the wrong signal in exactly the
+// milestone that introduces the TLS channel.
+//
+// Note which verbs are absent: no list and no watch on secrets. certs.Store
+// therefore runs on an uncached client on purpose, because a cached Secret would
+// require an informer over every Secret in the namespace. Adding those verbs to
+// make caching work would widen this beyond what the design intends;
+// TestTheAuthorizerActuallyDenies insists they stay out.
+var RequiredNamespaced = []Permission{
+	{Group: "", Resource: "secrets", Verb: "get", Why: "certs.Store.Ensure liest das TLS-Bündel"},
+	{Group: "", Resource: "secrets", Verb: "create", Why: "certs.Store.Ensure legt es beim ersten Start an"},
+	{Group: "", Resource: "secrets", Verb: "update", Why: "certs.Store.Ensure erneuert das Serving-Zertifikat"},
+
+	{Group: "coordination.k8s.io", Resource: "leases", Verb: "create", Why: "Leader-Election beim Start"},
+	{Group: "coordination.k8s.io", Resource: "leases", Verb: "get", Why: "Leader-Election erneuert die Sperre"},
+	{Group: "coordination.k8s.io", Resource: "leases", Verb: "update", Why: "Leader-Election erneuert die Sperre"},
 }

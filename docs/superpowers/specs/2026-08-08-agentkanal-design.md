@@ -200,8 +200,11 @@ einem Flag mit Default aus `POD_NAMESPACE`.
 
 Der Operator gleicht in jedem Namespace, in dem er Pods erzeugt, zwei Objekte
 ab: die ConfigMap `spawnery-ca` und den ServiceAccount `spawnery-server`. Der
-Server-Controller ruft den Abgleich, bevor er einen Pod anlegt; ändert sich das
-TLS-Secret, werden alle bekannten Namespaces nachgezogen.
+Server-Controller ruft den Abgleich, bevor er einen Pod anlegt — und nur dann.
+Einen Pfad, der eine geänderte CA von sich aus in alle bereits bekannten
+Namespaces trägt, gibt es nicht: ein Namespace, in dem gerade kein Pod entsteht,
+behält seine alte `ca.crt`, bis dort der nächste Pod angelegt wird. Das ist
+zusammen mit der fehlenden CA-Rotation in `docs/bekannte-punkte.md` festgehalten.
 
 Die CA ist öffentlich, deshalb eine ConfigMap: ein Secret verlangte dem Operator
 clusterweite Secret-Schreibrechte ab, ohne dass der Inhalt geheim wäre. Ein
@@ -327,9 +330,17 @@ aus `TokenRequest`:
 
 - angenommen: pod-gebundener Token des `spawnery-server`-SA auf `ServerSession`,
   und die Identität nennt Podname und UID des richtigen Pods;
-- abgelehnt: falsche Audience, Token ohne Pod-Bindung, Token des
-  `spawnery-proxy`-SA auf `ServerSession`, Token für einen nicht existierenden
-  Pod, abgelaufener Token, fehlender Header.
+- abgelehnt: fehlende Audience, falsche Audience, Token ohne Pod-Bindung, Token
+  des `spawnery-proxy`-SA auf `ServerSession`, Müll statt eines Tokens, leerer
+  Token — und, jeweils als eigener Test, ein Token für einen Pod, den der
+  Operator nicht verwaltet: ohne `managed-by`-Label, mit dem Label der anderen
+  Rolle, oder von Hand angelegt.
+
+Ein abgelaufener Token steht bewusst nicht auf dieser Liste: der API-Server
+erzwingt eine Mindestlaufzeit für per `TokenRequest` ausgestellte Tokens, ein
+solcher Fall wäre also nur mit Warten oder einem handgebauten Token zu
+konstruieren. Der Ablauf wird ohnehin vom API-Server geprüft, nicht von
+`internal/grpcauth` — der Test bewiese eine fremde Zusicherung.
 
 Die Ablehnungen sind der eigentliche Beweis — ein Test, der nur Annahmen prüft,
 bliebe auch dann grün, wenn der Interceptor jeden durchließe.
@@ -349,7 +360,7 @@ Die Pod-Readiness setzen die Tests weiterhin selbst; ein Kubelet gibt es nicht.
 und Ablauf, CA-Pfad, Endpunkt-Variable.
 
 **Namespace-Bootstrap, envtest.** ConfigMap und ServiceAccount entstehen; eine
-CA-Änderung wird in alle bekannten Namespaces nachgezogen; eine fremde Änderung
+CA-Änderung wird beim nächsten Abgleich dieses Namespace nachgezogen; eine fremde Änderung
 an der ConfigMap wird korrigiert.
 
 **`internal/rbacaudit`, envtest.** Die Tabelle deckt die neuen Rechte ab und ist
