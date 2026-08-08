@@ -73,7 +73,11 @@ type Options struct {
 	// HardDeadline is when the operator closes a stream regardless. It must be
 	// above RenewAfter, or a well-behaved agent would be cut off mid-renewal.
 	HardDeadline time.Duration
-	Clock        func() time.Time
+	// Clock reads the wall clock for the session duration this server logs.
+	// It does not drive HardDeadline: that runs on time.AfterFunc against the
+	// real clock, so a test cannot shorten the deadline by moving Clock
+	// forward — it has to configure a shorter HardDeadline instead.
+	Clock func() time.Time
 }
 
 // Server serves AgentService.

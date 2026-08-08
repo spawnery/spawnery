@@ -77,16 +77,6 @@ func (b *Bootstrapper) Ensure(ctx context.Context, namespace string) error {
 	return nil
 }
 
-// EnsureAll calls Ensure for every namespace, stopping at the first error.
-func (b *Bootstrapper) EnsureAll(ctx context.Context, namespaces []string) error {
-	for _, ns := range namespaces {
-		if err := b.Ensure(ctx, ns); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // ensureConfigMap creates or updates the CA ConfigMap.
 func (b *Bootstrapper) ensureConfigMap(ctx context.Context, namespace string, ca []byte) error {
 	label := func(cm *corev1.ConfigMap) {
