@@ -52,22 +52,31 @@ Hauptentwurfs für die Basis-Images vorschreibt, und eine Version, die zu den
 `k8s.io/*`-Abhängigkeiten in `go.mod` (0.36) passt.
 
 Das ist der erste Schritt des Plans, und er ist ein Tor: **solange envtest hier
-nicht läuft, ist der Rest dieses Dokuments unprüfbar.**
+nicht läuft, ist der Rest dieses Dokuments unprüfbar.** Die Binaries sind
+vorab ausprobiert — `kube-apiserver v1.36.2` und `etcd 3.6.8` starten auf
+`aarch64-darwin` nativ, das Archiv entpackt nach
+`controller-tools/envtest/{etcd,kube-apiserver,kubectl}`.
 
-### 3.1 Eine Annahme, die dieser Schritt mitprüft
+### 3.1 Die Annahme unter 6.3 ist nachgemessen
 
 Der Entwurf steht und fällt damit, dass envtest pod-gebundene ServiceAccount-
 Tokens ausstellt und der Authentifizierer daraus die Claims
-`authentication.kubernetes.io/pod-name` und `pod-uid` erzeugt. Nach Aktenlage
-trägt Kubernetes 1.36 beides ohne Feature-Gate, **nachgemessen ist es hier
-nicht** — anders als die `SubjectAccessReview`-Zusage aus dem E2E-Entwurf, die
-vor der Umsetzung geprüft wurde.
+`authentication.kubernetes.io/pod-name` und `pod-uid` erzeugt. Das ist vor dem
+Plan mit einer Wegwerf-Sonde geprüft worden, mit den envtest-Binaries aus 3 auf
+`aarch64-darwin`:
 
-Der erste Planschritt prüft es mit einer Sonde: Namespace, ServiceAccount und Pod
-anlegen, `TokenRequest` mit Audience und `BoundObjectRef` auf den Pod, dann
-`TokenReview` und die Extra-Claims ansehen. Fällt die Sonde negativ aus, ändert
-sich Abschnitt 6.3 dieses Dokuments — die Pod-Identität käme dann aus einer
-anderen Quelle, und das ist eine Entwurfsfrage, keine Umsetzungsfrage.
+- `TokenRequest` mit `audiences: [spawnery-operator]`, `expirationSeconds: 600`
+  und `boundObjectRef` auf den Pod stellt einen Token aus;
+- `TokenReview` mit derselben Audience meldet `authenticated: true`, Username
+  `system:serviceaccount:<ns>:spawnery-server`, `audiences:
+  [spawnery-operator]`;
+- die Extra-Claims enthalten `authentication.kubernetes.io/pod-name` und
+  `pod-uid` mit Namen und UID genau dieses Pods;
+- mit einer fremden Audience meldet derselbe Token `authenticated: false`.
+
+Kein Feature-Gate nötig, Laufzeit rund zwei Sekunden. Damit ruht Abschnitt 6.3
+auf einer Messung, nicht auf der Dokumentation — dieselbe Sorgfalt, mit der der
+E2E-Entwurf die `SubjectAccessReview`-Zusage vorab nachgemessen hat.
 
 ## 4. Bausteine
 
@@ -195,7 +204,8 @@ clusterweite Secret-Schreibrechte ab, ohne dass der Inhalt geheim wäre. Ein
 ServiceAccount ohne Bindung verleiht für sich genommen keine Rechte.
 
 **Der Cache bleibt eng.** Beide Objekttypen tragen
-`app.kubernetes.io/managed-by: spawnery`, und der Manager-Cache wird für
+`spawnery.cloud/managed-by: spawnery-operator` wie die Pods auch, und der
+Manager-Cache wird für
 ConfigMaps und ServiceAccounts auf dieses Label eingeschränkt. Ohne die
 Einschränkung hielte der Operator jede ConfigMap des Clusters im Speicher,
 `kube-root-ca.crt` aus jedem Namespace eingeschlossen. Verliert ein Objekt sein
