@@ -63,8 +63,15 @@ func readManifest[T any](t *testing.T, rel string, into *T) {
 const generatedRoles = "config/rbac/role.yaml"
 
 // readGeneratedRoles decodes both halves of the generated RBAC manifest. It
-// insists on finding both: a missing Role means a namespace= qualifier fell off
-// a marker and the operator would hold its Secret and Lease rights everywhere.
+// insists on finding exactly one of each.
+//
+// A missing Role means a namespace= qualifier fell off a marker and the operator
+// would hold its Secret and Lease rights everywhere. A *second* Role is the
+// quieter failure and the reason this refuses rather than takes the last one:
+// returning one of two would leave the other unaudited in both directions while
+// every test still reported green. controller-gen emits one Role per namespace
+// named in a marker, so a second one arrives the moment a second namespace does —
+// which the Helm chart makes likely.
 func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 	t.Helper()
 
@@ -94,15 +101,33 @@ func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 		}
 		switch meta.Kind {
 		case "ClusterRole":
-			cluster = &rbacv1.ClusterRole{}
-			if err := yaml.Unmarshal(doc, cluster); err != nil {
+			decoded := &rbacv1.ClusterRole{}
+			if err := yaml.Unmarshal(doc, decoded); err != nil {
 				t.Fatalf("decode the ClusterRole in %s: %v", generatedRoles, err)
 			}
+			if cluster != nil {
+				t.Fatalf("%s contains more than one ClusterRole (%q and %q). This audit "+
+					"compares exactly one against rbacaudit.RequiredCluster; taking the "+
+					"last would leave the other unchecked in both directions without "+
+					"saying so. Teach it to handle several before adding one",
+					generatedRoles, cluster.Name, decoded.Name)
+			}
+			cluster = decoded
 		case "Role":
-			namespaced = &rbacv1.Role{}
-			if err := yaml.Unmarshal(doc, namespaced); err != nil {
+			decoded := &rbacv1.Role{}
+			if err := yaml.Unmarshal(doc, decoded); err != nil {
 				t.Fatalf("decode the Role in %s: %v", generatedRoles, err)
 			}
+			if namespaced != nil {
+				t.Fatalf("%s contains more than one Role (%s/%s and %s/%s). This audit "+
+					"compares exactly one against rbacaudit.RequiredNamespaced; taking "+
+					"the last would leave the other unchecked in both directions without "+
+					"saying so. A second namespace= qualifier needs the namespaced table "+
+					"split per namespace first",
+					generatedRoles, namespaced.Namespace, namespaced.Name,
+					decoded.Namespace, decoded.Name)
+			}
+			namespaced = decoded
 		default:
 			t.Fatalf("%s contains an unexpected %s; this audit only models roles", generatedRoles, meta.Kind)
 		}
