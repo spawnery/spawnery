@@ -823,6 +823,13 @@ func (b *Bundle) Validate(now time.Time, dnsNames []string) error {
 			return fmt.Errorf("serving certificate lacks the SAN %q", name)
 		}
 	}
+	// Tie the leaf to the CA stored next to it. Without this a bundle whose
+	// halves come from different issues — a partial write, a hand-edited
+	// secret — passes validation and fails at handshake time instead, when an
+	// agent that pinned this CA refuses the connection.
+	if err := cert.CheckSignatureFrom(caCert); err != nil {
+		return fmt.Errorf("serving certificate was not signed by the stored CA: %w", err)
+	}
 	if _, err := b.TLSCertificate(); err != nil {
 		return err
 	}
