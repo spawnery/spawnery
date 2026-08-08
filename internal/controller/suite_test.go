@@ -164,7 +164,14 @@ func newFixture(t *testing.T) *fixture {
 			StartupDeadline:      5 * time.Minute,
 			PlayerStatusInterval: 30 * time.Second,
 			Registrar:            registrar,
-			AgentEndpoint:        "spawnery-operator.spawnery-system.svc:9443",
+			// A stand-in CA is enough for every test that only cares about
+			// the state machine; agentchannel_envtest_test.go replaces this
+			// with the bundle its gRPC service actually serves.
+			Bootstrap: &Bootstrapper{
+				Client: c, Reader: c,
+				CA: func() []byte { return []byte("test-ca") },
+			},
+			AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
 		},
 	}
 

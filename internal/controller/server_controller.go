@@ -80,6 +80,9 @@ type ServerReconciler struct {
 	PlayerStatusInterval time.Duration
 	// Registrar reaches the proxies.
 	Registrar Registrar
+	// Bootstrap puts the CA bundle and the agent ServiceAccount into a
+	// namespace before the first pod is created there. Required.
+	Bootstrap *Bootstrapper
 	// AgentEndpoint is the address the in-game agent dials to reach the
 	// operator's gRPC endpoint, e.g. "spawnery-operator.spawnery-system.svc:9443".
 	AgentEndpoint string
@@ -201,6 +204,19 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// reused for a different pod, which is what makes PodLost detectable.
 	if groupFound && networkFound && !persistentUnsupported && !nameConflict &&
 		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
+		// The namespace has to hold the CA and the ServiceAccount before the
+		// pod does, not after: the kubelet mounts both at container start, and
+		// a pod that comes up against a missing or empty ca.crt does not wait
+		// — it fails its TLS handshake against the operator and burns the
+		// startup deadline. Ensure fails for as long as no CA is published,
+		// which is exactly the window between process start and the leader's
+		// first certificate, so this is a retry and not an error.
+		if err := r.Bootstrap.Ensure(ctx, srv.Namespace); err != nil {
+			logger.Info("waiting to bootstrap the namespace before creating the pod",
+				"namespace", srv.Namespace, "reason", err.Error())
+			return ctrl.Result{RequeueAfter: resyncInterval}, nil
+		}
+
 		built, err := podspec.BuildServerPod(network, group, srv, r.AgentEndpoint)
 		if err != nil {
 			return ctrl.Result{}, err

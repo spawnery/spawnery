@@ -39,8 +39,12 @@ type Options struct {
 	OrphanInterval time.Duration
 	// Registrar reaches the proxies. Milestone 1 wires the no-op.
 	Registrar Registrar
+	// Bootstrapper puts the CA bundle and the agent ServiceAccount into a
+	// namespace before the first pod is created there. Required: without it
+	// every pod would mount a ConfigMap that does not exist.
+	Bootstrapper *Bootstrapper
 	// AgentEndpoint is the address the in-game agent dials to reach the
-	// operator's gRPC endpoint. Task 9 wires this from a flag.
+	// operator's gRPC endpoint.
 	AgentEndpoint string
 }
 
@@ -51,6 +55,13 @@ type Options struct {
 
 // SetupAll registers every controller and the orphan sweep with the manager.
 func SetupAll(mgr ctrl.Manager, opts Options) error {
+	// Refused here rather than at the first pod creation: a nil Bootstrapper
+	// would surface as a panic inside a reconcile, minutes after start and in
+	// a goroutine, instead of as a startup error.
+	if opts.Bootstrapper == nil {
+		return fmt.Errorf("no bootstrapper: the server controller cannot create pods without one")
+	}
+
 	if err := (&NetworkReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -79,6 +90,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		StartupDeadline:      opts.StartupDeadline,
 		PlayerStatusInterval: opts.PlayerStatusInterval,
 		Registrar:            opts.Registrar,
+		Bootstrap:            opts.Bootstrapper,
 		AgentEndpoint:        opts.AgentEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server controller: %w", err)

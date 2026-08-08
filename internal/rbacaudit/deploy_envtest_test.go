@@ -120,6 +120,70 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 	}
 }
 
+// TestAgentServiceReachesTheOperatorPods checks the one path nothing else
+// covers: a game server pod dials spawnery-operator.<ns>.svc:9443, and every
+// hop of that address lives in a different file. A selector that matches
+// nothing, or a targetPort naming a container port that does not exist, leaves
+// the agents with a connection refused and the operator looking healthy.
+func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
+	var ns corev1.Namespace
+	var svc corev1.Service
+	var deploy appsv1.Deployment
+	readManifest(t, "config/deploy/namespace.yaml", &ns)
+	readManifest(t, "config/deploy/service.yaml", &svc)
+	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+
+	apply(t, &ns, &svc)
+
+	if svc.Namespace != deploy.Namespace {
+		t.Errorf("service namespace = %q, deployment namespace = %q — a Service only "+
+			"selects pods in its own namespace", svc.Namespace, deploy.Namespace)
+	}
+
+	podLabels := deploy.Spec.Template.Labels
+	for k, v := range svc.Spec.Selector {
+		if podLabels[k] != v {
+			t.Errorf("service selects %s=%q but the operator pods carry %s=%q — "+
+				"the Service would have no endpoints at all", k, v, k, podLabels[k])
+		}
+	}
+
+	if len(deploy.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
+	}
+	container := deploy.Spec.Template.Spec.Containers[0]
+	named := map[string]int32{}
+	for _, p := range container.Ports {
+		named[p.Name] = p.ContainerPort
+	}
+	for _, p := range svc.Spec.Ports {
+		target := p.TargetPort.StrVal
+		if target == "" {
+			t.Errorf("service port %q targets a number, not a named port", p.Name)
+			continue
+		}
+		if _, ok := named[target]; !ok {
+			t.Errorf("service port %q targets the container port %q, which the operator "+
+				"container does not declare", p.Name, target)
+		}
+	}
+	if got := named["agent"]; got != 9443 {
+		t.Errorf("the agent container port = %d, want 9443", got)
+	}
+
+	// The readiness probe is what keeps a standby out of the Service: readyz
+	// only turns green once this replica holds the leader lock, and an unready
+	// pod is not an endpoint. A probe pointing anywhere else would silently
+	// undo that.
+	probe := container.ReadinessProbe
+	if probe == nil || probe.HTTPGet == nil {
+		t.Fatal("the operator has no HTTP readiness probe; a standby would serve as an endpoint")
+	}
+	if probe.HTTPGet.Path != "/readyz" {
+		t.Errorf("readiness probe path = %q, want /readyz", probe.HTTPGet.Path)
+	}
+}
+
 // TestOperatorPodIsRestrictedCompliant guards the design decision that the
 // operator itself runs under Pod Security "restricted" — the same profile it
 // enforces on the game servers it creates.

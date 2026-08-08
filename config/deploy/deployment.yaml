@@ -33,11 +33,20 @@ spec:
             - --startup-deadline=20s
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
+          env:
+            # --operator-namespace defaults to this. It decides both the SANs
+            # of the serving certificate and the address the agents dial.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           ports:
             - name: metrics
               containerPort: 8080
             - name: health
               containerPort: 8081
+            - name: agent
+              containerPort: 9443
           livenessProbe:
             httpGet:
               path: /healthz
