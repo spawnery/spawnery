@@ -1710,6 +1710,24 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
+// unavailableErr marks a failure to REACH the API server, as opposed to a
+// refusal of the credentials. The interceptor turns the first into
+// codes.Unavailable and the second into codes.Unauthenticated; an agent that
+// cannot tell them apart would treat an outage as a bad token and stop
+// retrying. Unexported with an Unwrap and an isUnavailable helper — only this
+// package ever classifies.
+type unavailableErr struct{ err error }
+
+func (e *unavailableErr) Error() string { return e.err.Error() }
+func (e *unavailableErr) Unwrap() error { return e.err }
+
+func wrapUnavailable(err error) error { return &unavailableErr{err} }
+
+func isUnavailable(err error) bool {
+	var u *unavailableErr
+	return errors.As(err, &u)
+}
+
 const (
 	claimPodName = "authentication.kubernetes.io/pod-name"
 	claimPodUID  = "authentication.kubernetes.io/pod-uid"
@@ -1727,17 +1745,25 @@ type Identity struct {
 	Role           agent.Role
 }
 
-// PodChecker answers whether a pod the token names is one of ours.
+// PodChecker answers whether a pod the token names is one of ours, in the
+// role the caller is asking for.
 type PodChecker interface {
-	PodExists(ctx context.Context, namespace, name, uid string) (bool, error)
+	PodExists(ctx context.Context, namespace, name, uid string, want agent.Role) (bool, error)
 }
 
 // ClientPodChecker reads through the manager's cache.
 type ClientPodChecker struct{ Client client.Client }
 
-// PodExists implements PodChecker. It insists on the role label as well, so a
-// hand-built pod with the same ServiceAccount cannot open a session.
-func (c *ClientPodChecker) PodExists(ctx context.Context, namespace, name, uid string) (bool, error) {
+// PodExists implements PodChecker. It demands the same two labels the orphan
+// sweep uses to decide what belongs to Spawnery — role AND managed-by — so a
+// hand-built pod cannot open a session, and so the two places cannot drift
+// apart on what "one of ours" means. The role must match the session being
+// opened, not merely be one of the two we know.
+func (c *ClientPodChecker) PodExists(
+	ctx context.Context,
+	namespace, name, uid string,
+	want agent.Role,
+) (bool, error) {
 	pod := &corev1.Pod{}
 	err := c.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, pod)
 	if apierrors.IsNotFound(err) {
@@ -1749,8 +1775,18 @@ func (c *ClientPodChecker) PodExists(ctx context.Context, namespace, name, uid s
 	if string(pod.UID) != uid {
 		return false, nil
 	}
-	return pod.Labels[podspec.LabelRole] == podspec.RoleServer ||
-		pod.Labels[podspec.LabelRole] == podspec.RoleProxy, nil
+	if pod.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+		return false, nil
+	}
+	return pod.Labels[podspec.LabelRole] == roleLabelFor(want), nil
+}
+
+// roleLabelFor maps a session role to the pod label that carries it.
+func roleLabelFor(role agent.Role) string {
+	if role == agent.RoleProxy {
+		return podspec.RoleProxy
+	}
+	return podspec.RoleServer
 }
 
 // Authenticator checks tokens against the real authenticator of the API
@@ -1779,7 +1815,10 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{a.Audience}},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		return Identity{}, fmt.Errorf("token review unavailable: %w", err)
+		// Marked unavailable so the interceptor can answer with
+		// codes.Unavailable. An agent must back off and retry when the API
+		// server is down, not conclude its credentials are wrong.
+		return Identity{}, wrapUnavailable(fmt.Errorf("token review: %w", err))
 	}
 	if !review.Status.Authenticated {
 		return Identity{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
@@ -1803,9 +1842,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		return Identity{}, fmt.Errorf("token is not bound to a pod")
 	}
 
-	exists, err := a.Pods.PodExists(ctx, namespace, podName, podUID)
+	exists, err := a.Pods.PodExists(ctx, namespace, podName, podUID, want)
 	if err != nil {
-		return Identity{}, fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err)
+		return Identity{}, wrapUnavailable(fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err))
 	}
 	if !exists {
 		return Identity{}, fmt.Errorf("pod %s/%s is not a Spawnery pod", namespace, podName)
@@ -1919,7 +1958,11 @@ func (a *Authenticator) StreamInterceptor() grpc.StreamServerInterceptor {
 			log.FromContext(ctx).V(1).Info("rejected an agent stream",
 				"method", info.FullMethod, "reason", err.Error())
 			AuthFailures.WithLabelValues(string(role)).Inc()
-			return status.Error(codes.Unauthenticated, err.Error())
+			code := codes.Unauthenticated
+			if isUnavailable(err) {
+				code = codes.Unavailable
+			}
+			return status.Error(code, err.Error())
 		}
 
 		return handler(srv, wrappedStream{ServerStream: ss, ctx: context.WithValue(ctx, identityKey{}, id)})
