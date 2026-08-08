@@ -3100,7 +3100,12 @@ Alle gemeinsamen Namen stehen bereits in `internal/podspec/agent.go` (seit Task 
 - Mount des Volumes read-only unter `AgentMountPath`.
 - Vor dem Anhängen der Nutzer-Mounts prüfen, ob einer `AgentVolumeName`, `DataVolumeName` oder `TmpVolumeName` heißt oder mit einem unserer Pfade kollidiert, und mit klarem Fehler abbrechen.
 
-  **Pfade werden als Pfade verglichen, nicht als Zeichenketten.** Beide Seiten durch `path.Clean`, dann ablehnen bei Gleichheit, bei Verschachtelung unter einem unserer Pfade und bei Verschachtelung eines unserer Pfade unter dem Nutzerpfad. Zeichengenauer Vergleich ließe genau den Fall offen, um den es geht: ein Mount auf `/var/run/spawnery/token` überdeckt die Datei, aus der der Agent seinen Token liest, und Kubernetes erlaubt geschachtelte Mounts. Ein Mount auf `/var/run` deckt umgekehrt den Elternpfad ab. Verglichen wird auf Segmentgrenzen (`cleaned + "/"` als Präfix), sonst gälte `/data-extra` fälschlich als unter `/data` liegend — dafür gehört ein Positivfall in die Tabelle.
+  **Pfade werden als Pfade verglichen, nicht als Zeichenketten — aber nicht überall gleich streng.** Beide Seiten laufen durch `path.Clean`, damit die Variante mit Schrägstrich am Ende nicht durchrutscht. Danach:
+
+  - `AgentMountPath` bekommt die volle Prüfung in beide Richtungen: Gleichheit, Verschachtelung darunter, und ein Nutzerpfad, unter dem *unser* Pfad läge. Er ist der einzige der drei, dessen Verdeckung jemandem etwas einbringt — dort liegt die Token-Datei. Ein Mount auf `/var/run/spawnery/token` überdeckt sie, und Kubernetes erlaubt geschachtelte Mounts; ein Mount auf `/var/run` oder `/` deckt den Elternpfad ab.
+  - `DataMountPath` und `TmpMountPath` bekommen nur Gleichheit. **Verschachtelung darunter ist ausdrücklich erlaubt**: Spec 4.3 des Hauptentwurfs zeigt `/data/config` als das kanonische Beispiel für einen Nutzer-Mount. Die Regel dort auszuweiten verböte genau das dokumentierte Muster.
+
+  Verglichen wird auf Segmentgrenzen (`cleaned + "/"` als Präfix), sonst gälte `/data-extra` fälschlich als unter `/data` liegend. Beide Positivfälle — `/data/config` und `/data-extra` — gehören in die Tabelle, sonst räumt sie jemand später weg.
 
 - [ ] **Schritt 4: Aufrufer nachziehen und Tests laufen lassen**
 
