@@ -130,7 +130,9 @@ func TestEnsureRepairsAHandEditedConfigMap(t *testing.T) {
 // serviceaccounts RBAC marker grants no update verb on purpose — a
 // clusterwide write to every ServiceAccount's secrets is too big a grant for
 // a cosmetic label. Ensure must still succeed; the pod only needs the
-// ServiceAccount to exist under its name, not to carry the label.
+// ServiceAccount to exist under its name, not to carry the label. This
+// asserts no write happened at all: the label must still be gone afterwards,
+// not merely that Ensure tolerated either outcome.
 func TestEnsureLeavesAnUnlabelledServiceAccountAlone(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -153,6 +155,9 @@ func TestEnsureLeavesAnUnlabelledServiceAccountAlone(t *testing.T) {
 	}
 	if err := c.Get(ctx, types.NamespacedName{Name: podspec.ServerServiceAccountName, Namespace: ns}, sa); err != nil {
 		t.Fatalf("get ServiceAccount: %v", err)
+	}
+	if _, ok := sa.Labels[podspec.LabelManagedBy]; ok {
+		t.Error("Ensure wrote the label back; ensureServiceAccount must never Update")
 	}
 }
 
