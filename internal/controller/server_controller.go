@@ -51,6 +51,10 @@ const MaxContainerRestarts int32 = 3
 // not control.
 const ReasonPodNameConflict = "PodNameConflict"
 
+// ReasonNamespaceNotBootstrapped marks a Server whose namespace does not yet
+// hold the CA bundle and the agent ServiceAccount its pod would mount.
+const ReasonNamespaceNotBootstrapped = "NamespaceNotBootstrapped"
+
 // defaultDrainTimeoutSeconds and defaultFailedRetentionSeconds mirror the
 // kubebuilder defaults on ServerGroupSpec. They are what a Server falls back to
 // when its group is gone, so drain and cleanup keep sane timings.
@@ -202,21 +206,38 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Create the pod once, and only for a server that has not been asked to go
 	// away. status.podName is the record that a pod once existed; it is never
 	// reused for a different pod, which is what makes PodLost detectable.
-	if groupFound && networkFound && !persistentUnsupported && !nameConflict &&
-		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
-		// The namespace has to hold the CA and the ServiceAccount before the
-		// pod does, not after: the kubelet mounts both at container start, and
-		// a pod that comes up against a missing or empty ca.crt does not wait
-		// — it fails its TLS handshake against the operator and burns the
-		// startup deadline. Ensure fails for as long as no CA is published,
-		// which is exactly the window between process start and the leader's
-		// first certificate, so this is a retry and not an error.
+	createPod := groupFound && networkFound && !persistentUnsupported && !nameConflict &&
+		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero()
+
+	// The namespace has to hold the CA and the ServiceAccount before the pod
+	// does, not after: the kubelet mounts both at container start, and a pod
+	// that comes up against a missing or empty ca.crt does not wait — it fails
+	// its TLS handshake against the operator and burns the startup deadline.
+	//
+	// Ensure fails for as long as no CA is published, which is exactly the
+	// window between process start and the leader's first certificate, so the
+	// requeue below is a retry and not an error. But it fails just as well when
+	// the write itself is refused — an admission webhook, a ResourceQuota on
+	// ConfigMaps, a policy in a customer namespace — and that state does not
+	// pass on its own. Nothing else here would ever say so: status.startedAt is
+	// only set once a pod exists, so StartupDeadlineReached can never fire and
+	// the Server would sit in Pending forever with an empty condition and no
+	// event. Say it on the object, then fall through to the status update; the
+	// requeue still lets it recover by itself once the obstacle is gone.
+	if createPod {
 		if err := r.Bootstrap.Ensure(ctx, srv.Namespace); err != nil {
 			logger.Info("waiting to bootstrap the namespace before creating the pod",
 				"namespace", srv.Namespace, "reason", err.Error())
-			return ctrl.Result{RequeueAfter: resyncInterval}, nil
+			r.Recorder.Eventf(srv, corev1.EventTypeWarning, ReasonNamespaceNotBootstrapped,
+				"cannot bootstrap namespace %s: %v", srv.Namespace, err)
+			setAccepted(srv, false, ReasonNamespaceNotBootstrapped,
+				fmt.Sprintf("namespace %q does not hold the CA bundle and the agent ServiceAccount yet (%v); "+
+					"no pod is created until it does", srv.Namespace, err))
+			createPod = false
 		}
+	}
 
+	if createPod {
 		built, err := podspec.BuildServerPod(network, group, srv, r.AgentEndpoint)
 		if err != nil {
 			return ctrl.Result{}, err
