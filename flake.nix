@@ -77,8 +77,25 @@
         let
           paper = pkgs.callPackage ./nix/paper.nix { };
         in
-        {
+        rec {
           paper-repo = paper.repo;
+
+          spawnery-slp = pkgs.buildGoModule {
+            pname = "spawnery-slp";
+            version = "0.1.0";
+            src = ./.;
+            vendorHash = "sha256-93cgbNfJURfz1mOM0nnOp9WGuMcFqkKlFGJ4tmdXeiw=";
+            subPackages = [ "cmd/spawnery-slp" ];
+            # Static, because the image carries no libc of its own for it.
+            env.CGO_ENABLED = 0;
+            ldflags = [ "-s" "-w" ];
+          };
+
+          # Only builds on x86_64-linux. On aarch64-darwin this needs a Linux
+          # builder; see docs/known-issues.md.
+          paper-image = pkgs.callPackage ./nix/paper-image.nix {
+            inherit paper spawnery-slp;
+          };
         });
     };
 }

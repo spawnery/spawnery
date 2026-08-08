@@ -1,4 +1,6 @@
 CONTROLLER_GEN ?= controller-gen
+CONTAINER ?= docker
+IMAGE ?= ghcr.io/spawnery/paper:26.2-0.1.0
 
 .PHONY: all
 all: proto manifests generate fmt vet test build
@@ -40,3 +42,11 @@ build:
 .PHONY: lint
 lint:
 	golangci-lint run
+
+.PHONY: image
+image:
+	nix build .#paper-image
+
+.PHONY: image-load
+image-load: image
+	$(CONTAINER) load < result
