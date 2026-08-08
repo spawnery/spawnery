@@ -2823,6 +2823,23 @@ Die RBAC-Marker gehören direkt über `Ensure`:
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create
 ```
 
+**Die Rechtetabelle zieht in derselben Aufgabe nach.** `make manifests` erzeugt aus diesen Markern neue Regeln in `config/rbac/role.yaml`, und der Audit meldet sofort „gewährt, aber nicht gefordert". Die neun Einträge für `configmaps` und `serviceaccounts` gehören deshalb hierher in `internal/rbacaudit.Required` und nicht erst in Task 10 — sonst bliebe `make test` über drei Aufgaben hinweg rot, und eine echte Regression versteckte sich darin:
+
+```go
+	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure liest die CA-ConfigMap"},
+	{Group: "", Resource: "configmaps", Verb: "list", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
+	{Group: "", Resource: "configmaps", Verb: "watch", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
+	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure legt die CA-ConfigMap an"},
+	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure zieht eine geänderte CA nach"},
+
+	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.Ensure prüft den Server-SA"},
+	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "eingeschränkter Cache für die Server-SAs"},
+	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "eingeschränkter Cache für die Server-SAs"},
+	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.Ensure legt den Server-SA an"},
+```
+
+Dieselbe Regel gilt für jede spätere Aufgabe, die einen Marker setzt: Marker und Tabelleneintrag gehören in denselben Commit.
+
 - [ ] **Schritt 4: Tests laufen lassen**
 
 ```bash
@@ -3396,16 +3413,9 @@ In `internal/grpcauth/identity.go` über `Authenticate`:
 	{Group: "authentication.k8s.io", Resource: "tokenreviews", Verb: "create",
 		Why: "grpcauth.Authenticator.Authenticate prüft jeden Agent-Token"},
 
-	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure liest die CA-ConfigMap"},
-	{Group: "", Resource: "configmaps", Verb: "list", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
-	{Group: "", Resource: "configmaps", Verb: "watch", Why: "eingeschränkter Cache für die CA-ConfigMaps"},
-	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure legt die CA-ConfigMap an"},
-	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure zieht eine geänderte CA nach"},
-
-	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.Ensure prüft den Server-SA"},
-	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "eingeschränkter Cache für die Server-SAs"},
-	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "eingeschränkter Cache für die Server-SAs"},
-	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.Ensure legt den Server-SA an"},
+	// Die configmaps- und serviceaccounts-Einträge kommen schon mit Task 7:
+	// dort entstehen die Marker, und ohne die Einträge wäre der Audit bis
+	// hierher rot.
 ```
 
 Und die namespace-lokale Tabelle:
