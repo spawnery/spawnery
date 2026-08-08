@@ -11,8 +11,8 @@
     {
       devShells = forAllSystems (pkgs:
         let
-          # Linux: die nixpkgs-Pakete, wie bisher. envtest braucht genau diese
-          # drei Binaries in einem Verzeichnis.
+          # Linux: the nixpkgs packages, as before. envtest wants exactly
+          # these three binaries in one directory.
           envtestFromNixpkgs = pkgs.runCommand "envtest-assets" { } ''
             mkdir -p $out
             ln -s ${pkgs.kubernetes}/bin/kube-apiserver $out/kube-apiserver
@@ -20,12 +20,12 @@
             ln -s ${pkgs.kubectl}/bin/kubectl           $out/kubectl
           '';
 
-          # Darwin: nixpkgs baut kube-apiserver dort nicht. Das
-          # controller-tools-Projekt veröffentlicht fertige Binaries für
-          # darwin/arm64; der Hash ist eingecheckt, geladen wird nur beim
-          # Bauen der Ableitung. Umgekehrt gilt für Linux dasselbe nicht:
-          # die dortigen Binaries sind dynamisch gegen glibc gelinkt und
-          # bräuchten autoPatchelfHook.
+          # Darwin: nixpkgs does not build kube-apiserver there. The
+          # controller-tools project publishes prebuilt binaries for
+          # darwin/arm64; the hash is checked in, and the download only
+          # happens when the derivation is built. The reverse does not
+          # hold for Linux: those prebuilt binaries are dynamically linked
+          # against glibc and would need autoPatchelfHook.
           envtestVersion = "1.36.2";
           envtestFromUpstream = pkgs.stdenvNoCC.mkDerivation {
             pname = "envtest-assets";
