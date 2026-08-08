@@ -26,7 +26,7 @@ spec:
   forwardingSecretRef:
     name: velocity-forwarding-secret
   defaults:
-    minecraftVersion: "1.21.4"
+    minecraftVersion: "26.2"
     resources:
       requests:
         cpu: "1"
@@ -43,7 +43,7 @@ spec:
   networkRef:
     name: production
   type: Ephemeral
-  image: ghcr.io/spawnery/paper:1.21.4-0.1.0
+  image: ghcr.io/spawnery/paper:26.2-0.1.0
   maxPlayers: 100
   drain:
     timeoutSeconds: 60

@@ -1,4 +1,9 @@
 CONTROLLER_GEN ?= controller-gen
+CONTAINER ?= docker
+# Deferred (recursive) on purpose: the nix eval calls only run when $(IMAGE) is
+# actually expanded, i.e. by image-test below. A plain `make test` never
+# references it and pays nothing for it.
+IMAGE ?= $(shell nix eval --raw .#paper-image.imageName):$(shell nix eval --raw .#paper-image.imageTag)
 
 .PHONY: all
 all: proto manifests generate fmt vet test build
@@ -40,3 +45,23 @@ build:
 .PHONY: lint
 lint:
 	golangci-lint run
+
+.PHONY: image
+image:
+	nix build .#paper-image
+
+.PHONY: image-load
+image-load: image
+	$(CONTAINER) load < result
+
+.PHONY: image-test
+image-test: image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) hack/image-test.sh
+
+# Not part of `test` or `all`, for the same reason image-test is not: it needs
+# a container runtime's worth of build time and only works on x86_64-linux.
+# Design 5.3 makes bit-reproducibility an acceptance criterion; this is the
+# standing check for it, rather than a one-time measurement by hand.
+.PHONY: image-repro
+image-repro:
+	nix build .#paper-image --rebuild

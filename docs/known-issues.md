@@ -1,14 +1,14 @@
 # Known issues and carry-overs for later milestones
 
-Status: end of milestone 2a, the agent channel (2026-08-08).
+Status: end of milestone 2b, the Paper base image (2026-08-08).
 
 This list collects what was deliberately left open during the implementation and
-the reviews of milestone 1 and milestone 2a. It does not replace a spec — the
-design decisions live in
+the reviews of milestone 1, milestone 2a and milestone 2b. It does not replace a
+spec — the design decisions live in
 `superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md` and in
 `superpowers/specs/2026-08-08-agent-channel-design.md`.
 
-## Preconditions for milestone 2b (base images, Kotlin agent)
+## Preconditions for milestone 2c (the Kotlin agent)
 
 **The Kotlin agent must reconnect with overlap.** On connect the operator
 announces with `SessionDeadline{renewAfterSeconds, hardDeadlineSeconds}` when it
@@ -43,6 +43,93 @@ before the handler runs. That is not a hole, but the first half is an obligation
 on the Kotlin agent's side, exactly like the overlapping reconnect: whoever
 assembles the header themselves has to set it character for character, or every
 session is rejected without the cause being visible in the error.
+
+## From milestone 2b (the base image)
+
+**The Darwin machine cannot build the image.** A Linux image needs a Linux
+builder, so `nix build .#paper-image`, `make image-test` and the local-cluster
+flow only work on `x86_64-linux`. `make test` still runs everywhere, including
+the entrypoint and SLP tests. This is the mirror image of the envtest gate that
+milestone 2a closed, and it cannot be closed with a checked-in hash.
+
+**Without a memory limit the JVM sizes itself against the whole node.** The
+entrypoint passes `-XX:MaxRAMPercentage=75`, which is a share of the container
+limit — and of the node when there is no limit. `AlwaysPreTouch` then claims
+that share immediately. Neither `ServerGroup` nor `Network` is required to set
+`resources`, and no CEL rule demands it; the sample manifest sets 2Gi and
+nothing makes anyone else do so.
+
+**`fsGroup` is missing.** For ephemeral groups this does not bite: the kubelet
+creates an `emptyDir` world-writable, so uid 10001 writes into `/data` fine. A
+PVC in milestone 5 arrives owned by root, and uid 10001 does not. The fix
+belongs in `podspec.BuildServerPod`'s `PodSecurityContext` and has to land
+before the first persistent server exists.
+
+**Following Paper upstream is manual.** A new build means new hashes in
+`nix/paper.nix`, by hand, including the Mojang hash out of the new jar's
+`META-INF/download-context`. The automated image pipeline is project 3 in the
+main design.
+
+**`cache/mojang_26.2.jar` ships unused**, 61 MB of the image. Paperclip touches
+the cache directory before deciding whether it needs to patch, and fails on a
+read-only path if it is absent. Removing it would require a writable cache
+directory in every pod, which is the worse trade.
+
+**Paper makes two outbound calls on every start that have nothing to do with
+artifact provisioning.** `api.minecraftservices.com/publickeys` is the
+Yggdrasil key fetch that follows from `online-mode=true`; `fill.papermc.io` is
+Paper's own update checker. Both are measured to fail harmlessly with no
+network reachable — the server still reaches `Done` and answers a ping, which
+is what `make image-test` relies on. It matters twice downstream: the egress
+NetworkPolicy in milestone 6 has to allow both, and the Yggdrasil call
+disappears on its own once milestone 3 flips `online-mode` off.
+
+**The image is 724 MB because `jdk25_headless` has a 697 MiB closure** — a full
+headless JDK, not a JRE. Measured. `jre_minimal` exists in this nixpkgs pin and
+would cut it substantially via jlink, but it needs the list of Java modules
+Paper actually requires, and milestone 3's Velocity image would face the same
+question. Left as is; not attempted here.
+
+**`k3d` does not work on this machine, and probably not on similar ones.**
+`docker` here is a Podman 5.8.4 alias with no `/var/run/docker.sock`, only a
+rootless Podman socket. k3d's tools node always bind-mounts the runtime socket
+to the fixed in-container path `/var/run/docker.sock`; rootless Podman refuses
+to create that mount point (`mkdir /var/run/docker.sock: permission denied`),
+regardless of `DOCKER_HOST`. There is no workaround short of a rootful Podman
+socket, which this user does not have group access to. `kind` under
+`KIND_EXPERIMENTAL_PROVIDER=podman`, wrapped in
+`systemd-run --scope --user --property=Delegate=yes`, works against the same
+rootless socket and is what the README now documents. This matters for
+milestone 6, which wires a local-cluster E2E flow into CI: whatever runs CI
+needs either a real Docker daemon, a rootful Podman socket, or kind the same
+way this was done here.
+
+**No image is published.** The tag `ghcr.io/spawnery/paper:26.2-0.1.0` is
+correct but nothing pushes it, so every consumer needs `kind load docker-image`
+(or `k3d image import`, where k3d works) or the equivalent. Publishing belongs
+with CI in milestone 6.
+
+**`/data/config` collides with Paper's own writable config directory.** The
+main design's own §4.3 `ServerGroup` example mounts a ConfigMap at
+`mountPath: /data/config` as the documented way to override configuration —
+but that is also exactly where Paper itself writes `paper-global.yml` and
+`paper-world-defaults.yml` on startup, and a ConfigMap volume is mounted
+read-only. That mount is therefore likely to break the server's start, and
+nothing in this milestone exercises it: the shipped sample carries no `mounts`
+block, so the evidence run never touched the path. Milestone 3 has to reckon
+with this collision when design §5.4's configuration rendering lands — a
+narrower mount (a `subPath` per file, or a different target directory
+entirely) is the likely shape of the fix, since `Mount`
+(`api/v1alpha1/common_types.go:89-105`) has no `subPath` today.
+
+**`set_property` in `image/entrypoint.sh` assumes `server.properties` is
+writable.** It rewrites the file via `grep -v ... >server.properties.tmp` and
+`mv server.properties.tmp server.properties`. If a mount ever makes
+`server.properties` (or its directory) read-only, that `mv` fails under
+`set -eu` with a bare `mv:` message that says nothing about why. Design §8
+claims the entrypoint survives "a user mount overwrites `server.properties` →
+the entrypoint rewrites the three enforced fields afterwards" — it does not,
+once the mount is read-only, and nothing today exercises that case.
 
 ## Preconditions for milestone 3 (proxy integration)
 

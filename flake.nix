@@ -72,5 +72,41 @@
             };
           };
         });
+
+      packages = forAllSystems (pkgs:
+        let
+          paper = pkgs.callPackage ./nix/paper.nix { };
+
+          spawnery-slp = pkgs.buildGoModule {
+            pname = "spawnery-slp";
+            version = "0.1.0";
+            src = ./.;
+            vendorHash = "sha256-93cgbNfJURfz1mOM0nnOp9WGuMcFqkKlFGJ4tmdXeiw=";
+            subPackages = [ "cmd/spawnery-slp" ];
+            # Static, because the image carries no libc of its own for it.
+            env.CGO_ENABLED = 0;
+            ldflags = [ "-s" "-w" ];
+          };
+        in
+        {
+          # Architecture-independent (it is jars), so this stays available on
+          # every system.
+          paper-repo = paper.repo;
+
+          inherit spawnery-slp;
+        } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
+          # dockerTools.buildLayeredImage packs the host's binaries under a
+          # fixed "amd64" label (see nix/paper-image.nix); it does not
+          # cross-compile. Restricting the attribute to x86_64-linux here,
+          # rather than building it everywhere and hoping the label is
+          # accurate, is what keeps that label true: on every other system the
+          # attribute is simply absent, so `nix build .#paper-image` fails
+          # with "does not provide attribute" instead of quietly producing a
+          # mislabelled image. `nix flake show` and `nix develop` stay
+          # unaffected elsewhere.
+          paper-image = pkgs.callPackage ./nix/paper-image.nix {
+            inherit paper spawnery-slp;
+          };
+        });
     };
 }
