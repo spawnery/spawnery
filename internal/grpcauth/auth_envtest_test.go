@@ -179,7 +179,7 @@ func TestRejections(t *testing.T) {
 		{
 			name: "token for another audience",
 			token: func(f *authFixture) string {
-				return f.token(podspec.ServerServiceAccountName, []string{"etwas-anderes"}, f.pod("lobby-otheraud"))
+				return f.token(podspec.ServerServiceAccountName, []string{"something-else"}, f.pod("lobby-otheraud"))
 			},
 			role:    agent.RoleServer,
 			wantErr: "not authenticated",
@@ -203,7 +203,7 @@ func TestRejections(t *testing.T) {
 		},
 		{
 			name:    "garbage instead of a token",
-			token:   func(f *authFixture) string { return "nicht.ein.token" },
+			token:   func(f *authFixture) string { return "not.a.token" },
 			role:    agent.RoleServer,
 			wantErr: "not authenticated",
 		},
@@ -236,7 +236,7 @@ func TestRejectsAPodThatIsNotOurs(t *testing.T) {
 	f := newAuthFixture(t)
 
 	foreign := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: "fremd", Namespace: f.ns},
+		ObjectMeta: metav1.ObjectMeta{Name: "not-ours", Namespace: f.ns},
 		Spec: corev1.PodSpec{
 			ServiceAccountName: podspec.ServerServiceAccountName,
 			Containers:         []corev1.Container{{Name: "c", Image: "example/x:1"}},
@@ -332,7 +332,7 @@ func TestTokenReviewUnavailableIsNotARejection(t *testing.T) {
 		Audience: podspec.AgentTokenAudience,
 	}
 
-	_, err := a.Authenticate(context.Background(), "irgendein-token", agent.RoleServer)
+	_, err := a.Authenticate(context.Background(), "some-token", agent.RoleServer)
 	if err == nil {
 		t.Fatal("Authenticate succeeded although the API server was unreachable")
 	}
@@ -363,7 +363,7 @@ func TestRoleForMethod(t *testing.T) {
 	}{
 		{"/spawnery.agent.v1alpha1.AgentService/ServerSession", agent.RoleServer, true},
 		{"/spawnery.agent.v1alpha1.AgentService/ProxySession", agent.RoleProxy, true},
-		{"/spawnery.agent.v1alpha1.AgentService/Irgendwas", "", false},
+		{"/spawnery.agent.v1alpha1.AgentService/Anything", "", false},
 	}
 	for _, tc := range cases {
 		got, ok := grpcauth.RoleForMethod(tc.method)

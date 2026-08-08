@@ -70,7 +70,7 @@ func TestInterceptorMapsUnavailableToUnavailableCode(t *testing.T) {
 		Pods:     refusingPodChecker{},
 		Audience: podspec.AgentTokenAudience,
 	}
-	stream := &fakeServerStream{ctx: streamCtxWithToken("irgendein-token")}
+	stream := &fakeServerStream{ctx: streamCtxWithToken("some-token")}
 
 	err := a.StreamInterceptor()(nil, stream,
 		&grpc.StreamServerInfo{FullMethod: "/spawnery.agent.v1alpha1.AgentService/ServerSession"},
@@ -94,7 +94,7 @@ func TestInterceptorMapsRejectionToUnauthenticatedCode(t *testing.T) {
 		Pods:     refusingPodChecker{},
 		Audience: podspec.AgentTokenAudience,
 	}
-	stream := &fakeServerStream{ctx: streamCtxWithToken("nicht-echt")}
+	stream := &fakeServerStream{ctx: streamCtxWithToken("not-a-real-token")}
 
 	err := a.StreamInterceptor()(nil, stream,
 		&grpc.StreamServerInfo{FullMethod: "/spawnery.agent.v1alpha1.AgentService/ServerSession"},

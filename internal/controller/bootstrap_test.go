@@ -114,7 +114,7 @@ func TestEnsureRepairsAHandEditedConfigMap(t *testing.T) {
 	if err := c.Get(ctx, types.NamespacedName{Name: podspec.CAConfigMapName, Namespace: ns}, cm); err != nil {
 		t.Fatalf("get ConfigMap: %v", err)
 	}
-	cm.Data[podspec.CAConfigMapKey] = "jemand-hat-daran-gedreht"
+	cm.Data[podspec.CAConfigMapKey] = "someone-tampered-with-this"
 	delete(cm.Labels, podspec.LabelManagedBy)
 	if err := c.Update(ctx, cm); err != nil {
 		t.Fatalf("update ConfigMap: %v", err)
@@ -232,7 +232,7 @@ func TestEnsureRepairsAConfigMapThatFellOutOfTheCache(t *testing.T) {
 		t.Fatalf("get ConfigMap: %v", err)
 	}
 	delete(cm.Labels, podspec.LabelManagedBy)
-	cm.Data[podspec.CAConfigMapKey] = "jemand-hat-daran-gedreht"
+	cm.Data[podspec.CAConfigMapKey] = "someone-tampered-with-this"
 	if err := direct.Update(ctx, cm); err != nil {
 		t.Fatalf("update ConfigMap: %v", err)
 	}
