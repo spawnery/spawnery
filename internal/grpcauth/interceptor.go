@@ -76,7 +76,14 @@ func (a *Authenticator) StreamInterceptor() grpc.StreamServerInterceptor {
 			log.FromContext(ctx).V(1).Info("rejected an agent stream",
 				"method", info.FullMethod, "reason", err.Error())
 			AuthFailures.WithLabelValues(string(role)).Inc()
-			return status.Error(codes.Unauthenticated, err.Error())
+			// An API server outage must look different from a refused
+			// token: Unavailable tells the agent to back off and retry
+			// rather than conclude its credentials are wrong.
+			code := codes.Unauthenticated
+			if isUnavailable(err) {
+				code = codes.Unavailable
+			}
+			return status.Error(code, err.Error())
 		}
 
 		return handler(srv, wrappedStream{ServerStream: ss, ctx: context.WithValue(ctx, identityKey{}, id)})

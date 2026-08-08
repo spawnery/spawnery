@@ -256,6 +256,72 @@ func TestRejectsAPodThatIsNotOurs(t *testing.T) {
 	}
 }
 
+// The pod exists, is genuinely managed by Spawnery, and its ServiceAccount
+// matches — but its role label says proxy while a ServerSession is what was
+// requested. PodExists must refuse it on the role label alone.
+func TestRejectsAPodLabelledForTheOtherRole(t *testing.T) {
+	f := newAuthFixture(t)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lobby-wrongrole",
+			Namespace: f.ns,
+			Labels: map[string]string{
+				podspec.LabelManagedBy: podspec.ManagedByValue,
+				podspec.LabelNetwork:   "production",
+				podspec.LabelGroup:     "lobby",
+				podspec.LabelRole:      podspec.RoleProxy, // wrong: a ServerSession is what is requested below
+			},
+		},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: podspec.ServerServiceAccountName,
+			Containers:         []corev1.Container{{Name: "minecraft", Image: "example/paper:1"}},
+		},
+	}
+	if err := f.c.Create(f.ctx, pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	_, err := f.auth.Authenticate(f.ctx, f.token(podspec.ServerServiceAccountName,
+		[]string{podspec.AgentTokenAudience}, pod), agent.RoleServer)
+	if err == nil {
+		t.Fatal("Authenticate accepted a pod labelled for the other role")
+	}
+	if !strings.Contains(err.Error(), "pod") {
+		t.Errorf("error = %q, want it to mention the pod", err)
+	}
+}
+
+// The pod carries the right role label but not the managed-by label.
+// OrphanReconciler.Sweep treats both labels together as "one of ours"; if
+// PodExists accepted the role label alone, a pod that Sweep would reap as
+// foreign could still open a session in the meantime.
+func TestRejectsAPodWithoutTheManagedByLabel(t *testing.T) {
+	f := newAuthFixture(t)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lobby-nomanagedby",
+			Namespace: f.ns,
+			Labels:    map[string]string{podspec.LabelRole: podspec.RoleServer},
+		},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: podspec.ServerServiceAccountName,
+			Containers:         []corev1.Container{{Name: "minecraft", Image: "example/paper:1"}},
+		},
+	}
+	if err := f.c.Create(f.ctx, pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	_, err := f.auth.Authenticate(f.ctx, f.token(podspec.ServerServiceAccountName,
+		[]string{podspec.AgentTokenAudience}, pod), agent.RoleServer)
+	if err == nil {
+		t.Fatal("Authenticate accepted a pod without the managed-by label")
+	}
+	if !strings.Contains(err.Error(), "pod") {
+		t.Errorf("error = %q, want it to mention the pod", err)
+	}
+}
+
 // An unreachable API server must look different from a refused token: the
 // agent should back off and retry, not conclude its credentials are wrong.
 // This is the one case that needs no cluster, hence the narrow TokenReviewer.
@@ -285,7 +351,7 @@ func (failingReviewer) Create(context.Context, *authnv1.TokenReview, metav1.Crea
 
 type refusingPodChecker struct{}
 
-func (refusingPodChecker) PodExists(context.Context, string, string, string) (bool, error) {
+func (refusingPodChecker) PodExists(context.Context, string, string, string, agent.Role) (bool, error) {
 	return false, errors.New("the pod checker must not be reached")
 }
 

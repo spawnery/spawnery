@@ -23,6 +23,7 @@ package grpcauth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -62,17 +63,22 @@ type TokenReviewer interface {
 	Create(ctx context.Context, tr *authnv1.TokenReview, opts metav1.CreateOptions) (*authnv1.TokenReview, error)
 }
 
-// PodChecker answers whether a pod the token names is one of ours.
+// PodChecker answers whether a pod the token names is one of ours, in the
+// role the caller wants to act as.
 type PodChecker interface {
-	PodExists(ctx context.Context, namespace, name, uid string) (bool, error)
+	PodExists(ctx context.Context, namespace, name, uid string, role agent.Role) (bool, error)
 }
 
 // ClientPodChecker reads through the manager's cache.
 type ClientPodChecker struct{ Client client.Client }
 
-// PodExists implements PodChecker. It insists on the role label as well, so a
-// hand-built pod with the same ServiceAccount cannot open a session.
-func (c *ClientPodChecker) PodExists(ctx context.Context, namespace, name, uid string) (bool, error) {
+// PodExists implements PodChecker. It insists on the managed-by label and the
+// role label matching the requested role, so a hand-built pod — or one
+// labelled for the other role — cannot open a session. This mirrors the two
+// labels OrphanReconciler.Sweep uses to decide what "one of ours" means; the
+// two places must agree, or a pod could pass here yet be swept from the
+// registry as foreign.
+func (c *ClientPodChecker) PodExists(ctx context.Context, namespace, name, uid string, role agent.Role) (bool, error) {
 	pod := &corev1.Pod{}
 	err := c.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, pod)
 	if apierrors.IsNotFound(err) {
@@ -84,8 +90,19 @@ func (c *ClientPodChecker) PodExists(ctx context.Context, namespace, name, uid s
 	if string(pod.UID) != uid {
 		return false, nil
 	}
-	return pod.Labels[podspec.LabelRole] == podspec.RoleServer ||
-		pod.Labels[podspec.LabelRole] == podspec.RoleProxy, nil
+	if pod.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+		return false, nil
+	}
+	return pod.Labels[podspec.LabelRole] == roleLabelFor(role), nil
+}
+
+// roleLabelFor is the podspec.LabelRole value a pod acting in this role must
+// carry.
+func roleLabelFor(role agent.Role) string {
+	if role == agent.RoleProxy {
+		return podspec.RoleProxy
+	}
+	return podspec.RoleServer
 }
 
 // Authenticator checks tokens against the real authenticator of the API
@@ -94,6 +111,25 @@ type Authenticator struct {
 	Reviews  TokenReviewer
 	Pods     PodChecker
 	Audience string
+}
+
+// unavailableErr marks an error as the Kubernetes API server itself failing
+// to answer — the TokenReview call or the pod lookup — as opposed to a token
+// or pod that was checked and refused. The interceptor maps it to
+// codes.Unavailable so an agent backs off and retries instead of concluding
+// its credentials are wrong.
+type unavailableErr struct{ err error }
+
+func (e *unavailableErr) Error() string { return e.err.Error() }
+func (e *unavailableErr) Unwrap() error { return e.err }
+
+func wrapUnavailable(err error) error { return &unavailableErr{err} }
+
+// isUnavailable reports whether err means the API server could not be
+// reached, rather than that it refused the credentials.
+func isUnavailable(err error) bool {
+	var u *unavailableErr
+	return errors.As(err, &u)
 }
 
 // serviceAccountFor is which ServiceAccount may open a session in this role.
@@ -114,7 +150,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{a.Audience}},
 	}, metav1.CreateOptions{})
 	if err != nil {
-		return Identity{}, fmt.Errorf("token review unavailable: %w", err)
+		return Identity{}, wrapUnavailable(fmt.Errorf("token review unavailable: %w", err))
 	}
 	if !review.Status.Authenticated {
 		return Identity{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
@@ -138,9 +174,9 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		return Identity{}, fmt.Errorf("token is not bound to a pod")
 	}
 
-	exists, err := a.Pods.PodExists(ctx, namespace, podName, podUID)
+	exists, err := a.Pods.PodExists(ctx, namespace, podName, podUID, want)
 	if err != nil {
-		return Identity{}, fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err)
+		return Identity{}, wrapUnavailable(fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err))
 	}
 	if !exists {
 		return Identity{}, fmt.Errorf("pod %s/%s is not a Spawnery pod", namespace, podName)
