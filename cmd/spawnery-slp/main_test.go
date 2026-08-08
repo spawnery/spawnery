@@ -23,6 +23,15 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	// Test-only: main.go itself stays free of the Kubernetes dependency tree
+	// (see the package doc comment), but the test needs the real values
+	// internal/podspec builds the readiness probe from, not a restatement of
+	// them.
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 // respondOnce serves exactly one status response. All lengths here are below
@@ -101,14 +110,53 @@ func TestRunRejectsAnUnknownFlag(t *testing.T) {
 // tool five seconds. Anything the probe does not pass has to have a usable
 // default, and the tool's own deadline has to fire first so it exits with a
 // message instead of being killed by the kubelet.
+//
+// The assertions read the port and the probe's TimeoutSeconds off a pod
+// BuildServerPod actually produces, rather than restating the numbers as
+// literals: a literal here would stay green even if internal/podspec's
+// probe changed underneath it, which is exactly the regression this test
+// exists to catch.
 func TestDefaultsMatchTheReadinessProbe(t *testing.T) {
-	if defaultTimeout >= 5*time.Second {
-		t.Errorf("default timeout is %v, want it below the probe's 5s", defaultTimeout)
+	net := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "minecraft"},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "velocity-forwarding-secret"},
+		},
+	}
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: "minecraft"},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: "production"},
+			Type:                          spawneryv1alpha1.ServerGroupEphemeral,
+			Image:                         "ghcr.io/spawnery/paper:26.2-0.1.0",
+			MaxPlayers:                    100,
+			TerminationGracePeriodSeconds: 60,
+			Scaling: &spawneryv1alpha1.ScalingSpec{
+				MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40,
+			},
+		},
+	}
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-x7k2", Namespace: "minecraft", UID: "server-uid"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"},
+		},
+	}
+
+	pod, err := podspec.BuildServerPod(net, group, srv, "spawnery-operator.spawnery-system.svc:9443")
+	if err != nil {
+		t.Fatalf("BuildServerPod: %v", err)
+	}
+	probe := pod.Spec.Containers[0].ReadinessProbe
+	probeTimeout := time.Duration(probe.TimeoutSeconds) * time.Second
+
+	if defaultTimeout >= probeTimeout {
+		t.Errorf("default timeout is %v, want it below the probe's %v", defaultTimeout, probeTimeout)
 	}
 	if defaultHost != "127.0.0.1" {
 		t.Errorf("default host is %q, want %q", defaultHost, "127.0.0.1")
 	}
-	if defaultPort != 25565 {
-		t.Errorf("default port is %d, want 25565", defaultPort)
+	if defaultPort != int(podspec.MinecraftPort) {
+		t.Errorf("default port is %d, want %d", defaultPort, podspec.MinecraftPort)
 	}
 }
