@@ -154,7 +154,8 @@ func (b *Bundle) Validate(now time.Time, dnsNames []string) error {
 	if len(b.CACertPEM) == 0 || len(b.CAKeyPEM) == 0 {
 		return fmt.Errorf("bundle has no CA")
 	}
-	if _, _, err := b.parseCA(); err != nil {
+	caCert, _, err := b.parseCA()
+	if err != nil {
 		return err
 	}
 	cert, err := b.parseServing()
@@ -168,6 +169,9 @@ func (b *Bundle) Validate(now time.Time, dnsNames []string) error {
 		if !slices.Contains(cert.DNSNames, name) {
 			return fmt.Errorf("serving certificate lacks the SAN %q", name)
 		}
+	}
+	if err := cert.CheckSignatureFrom(caCert); err != nil {
+		return fmt.Errorf("serving certificate was not signed by the stored CA: %w", err)
 	}
 	if _, err := b.TLSCertificate(); err != nil {
 		return err

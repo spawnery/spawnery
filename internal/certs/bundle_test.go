@@ -19,6 +19,7 @@ package certs
 import (
 	"crypto/x509"
 	"encoding/pem"
+	"strings"
 	"testing"
 	"time"
 )
@@ -153,16 +154,50 @@ func TestValidateRejectsWhatMustLeadToReissue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
+	// A second serving certificate under the SAME CA as good, so swapping it
+	// in isolates a key/cert mismatch from a CA/cert mismatch.
+	resigned, err := Reissue(testNow, good, testDNSNames())
+	if err != nil {
+		t.Fatalf("Reissue: %v", err)
+	}
+	// An entirely different bundle, with its own CA.
+	other, err := Issue(testNow, testDNSNames())
+	if err != nil {
+		t.Fatalf("Issue (other): %v", err)
+	}
 
 	cases := []struct {
-		name   string
-		mutate func(b *Bundle)
-		at     time.Time
+		name      string
+		mutate    func(b *Bundle)
+		at        time.Time
+		wantError string
 	}{
-		{"garbage instead of a certificate", func(b *Bundle) { b.ServingCertPEM = []byte("nope") }, testNow},
-		{"CA missing", func(b *Bundle) { b.CACertPEM = nil }, testNow},
-		{"CA key missing", func(b *Bundle) { b.CAKeyPEM = nil }, testNow},
-		{"expired", func(b *Bundle) {}, testNow.Add(ServingLifetime + time.Hour)},
+		{"garbage instead of a certificate", func(b *Bundle) { b.ServingCertPEM = []byte("nope") }, testNow, "not PEM"},
+		{"CA missing", func(b *Bundle) { b.CACertPEM = nil }, testNow, "no CA"},
+		{"CA key missing", func(b *Bundle) { b.CAKeyPEM = nil }, testNow, "no CA"},
+		{"expired", func(b *Bundle) {}, testNow.Add(ServingLifetime + time.Hour), "not valid at"},
+		{
+			// The gap this fix closes: a serving certificate that is
+			// well-formed, unexpired and correctly SAN'd, but signed by a
+			// different CA than the one stored alongside it.
+			name: "CA does not match the serving certificate",
+			mutate: func(b *Bundle) {
+				b.CACertPEM = other.CACertPEM
+				b.CAKeyPEM = other.CAKeyPEM
+			},
+			at:        testNow,
+			wantError: "not signed by the stored CA",
+		},
+		{
+			// Same CA on both sides (so the signature check passes), but the
+			// serving key does not belong to the serving certificate.
+			name: "serving certificate does not match the serving key",
+			mutate: func(b *Bundle) {
+				b.ServingCertPEM = resigned.ServingCertPEM
+			},
+			at:        testNow,
+			wantError: "private key",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,8 +206,12 @@ func TestValidateRejectsWhatMustLeadToReissue(t *testing.T) {
 				ServingCertPEM: good.ServingCertPEM, ServingKeyPEM: good.ServingKeyPEM,
 			}
 			tc.mutate(b)
-			if err := b.Validate(tc.at, testDNSNames()); err == nil {
-				t.Error("Validate accepted a bundle that must be reissued")
+			err := b.Validate(tc.at, testDNSNames())
+			if err == nil {
+				t.Fatal("Validate accepted a bundle that must be reissued")
+			}
+			if tc.wantError != "" && !strings.Contains(err.Error(), tc.wantError) {
+				t.Errorf("error = %q, want it to contain %q", err.Error(), tc.wantError)
 			}
 		})
 	}
