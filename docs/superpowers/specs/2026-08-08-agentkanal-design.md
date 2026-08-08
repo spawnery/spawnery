@@ -176,7 +176,11 @@ mit demselben ServiceAccount zwar nie für einen fremden Server sprechen — sei
 Identität ist seine eigene —, wohl aber die Registry mit Einträgen füllen, zu
 denen es keinen CR gibt.
 
-Der Registry-Schlüssel ist `<namespace>/<podname>`.
+**Der Registry-Schlüssel ist die Pod-UID** — so schlüsseln `Lookup` und `Forget`
+sie heute schon (`server_controller.go:392-396`, `orphan.go:93`). Sie kommt
+unmittelbar aus dem Claim `authentication.kubernetes.io/pod-uid`, also aus
+derselben Quelle wie die Identität. Der Podname wird nur fürs Log und für die
+Existenzprüfung nach Punkt 4 gebraucht.
 
 ### 6.4 Was in die Pods kommt
 
