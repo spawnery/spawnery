@@ -2,8 +2,12 @@
 # Entrypoint of the Spawnery Paper base image.
 #
 # It does the least that lets Paper start at all, plus the three fields the
-# operator has to be able to rely on. Everything else stays Paper's default and
-# can be overridden through a user mount under /data/config. See section 6 of
+# operator has to be able to rely on. Everything else stays Paper's default:
+# there is no configuration rendering yet. /data/config is not an override
+# slot — it is Paper's own writable directory, where Paper itself writes
+# paper-global.yml and paper-world-defaults.yml at startup; see
+# docs/known-issues.md for the collision this creates with a read-only mount
+# there. See section 6 of
 # docs/superpowers/specs/2026-08-08-paper-base-image-design.md.
 set -eu
 

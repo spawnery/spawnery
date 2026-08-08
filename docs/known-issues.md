@@ -109,6 +109,28 @@ correct but nothing pushes it, so every consumer needs `kind load docker-image`
 (or `k3d image import`, where k3d works) or the equivalent. Publishing belongs
 with CI in milestone 6.
 
+**`/data/config` collides with Paper's own writable config directory.** The
+main design's own §4.3 `ServerGroup` example mounts a ConfigMap at
+`mountPath: /data/config` as the documented way to override configuration —
+but that is also exactly where Paper itself writes `paper-global.yml` and
+`paper-world-defaults.yml` on startup, and a ConfigMap volume is mounted
+read-only. That mount is therefore likely to break the server's start, and
+nothing in this milestone exercises it: the shipped sample carries no `mounts`
+block, so the evidence run never touched the path. Milestone 3 has to reckon
+with this collision when design §5.4's configuration rendering lands — a
+narrower mount (a `subPath` per file, or a different target directory
+entirely) is the likely shape of the fix, since `Mount`
+(`api/v1alpha1/common_types.go:89-105`) has no `subPath` today.
+
+**`set_property` in `image/entrypoint.sh` assumes `server.properties` is
+writable.** It rewrites the file via `grep -v ... >server.properties.tmp` and
+`mv server.properties.tmp server.properties`. If a mount ever makes
+`server.properties` (or its directory) read-only, that `mv` fails under
+`set -eu` with a bare `mv:` message that says nothing about why. Design §8
+claims the entrypoint survives "a user mount overwrites `server.properties` →
+the entrypoint rewrites the three enforced fields afterwards" — it does not,
+once the mount is read-only, and nothing today exercises that case.
+
 ## Preconditions for milestone 3 (proxy integration)
 
 **The orphan sweep discards proxy agents.** `OrphanReconciler.Sweep` lists pods

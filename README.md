@@ -56,9 +56,10 @@ in phase `Starting`, because the second half of the ready gate wants an agent.
 That agent is the Kotlin plugin from milestone 2c, and until it exists no
 player can join: the Velocity proxy layer (milestone 3) is missing too.
 
-Details of what 2a deliberately leaves open — CA rotation, the Kotlin agent's
-obligation to reconnect with overlap, the missing `spawnery-proxy` ServiceAccount
-— are in [`docs/known-issues.md`](docs/known-issues.md).
+Carry-overs and preconditions for later milestones — CA rotation, the Kotlin
+agent's obligation to reconnect with overlap, the missing `spawnery-proxy`
+ServiceAccount, and what milestone 2b leaves open — are in
+[`docs/known-issues.md`](docs/known-issues.md).
 
 The design lives under [`docs/superpowers/specs/`](docs/superpowers/specs/), the
 plans under [`docs/superpowers/plans/`](docs/superpowers/plans/).

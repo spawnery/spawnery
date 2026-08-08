@@ -26,7 +26,7 @@ spec:
   forwardingSecretRef:
     name: velocity-forwarding-secret
   defaults:
-    minecraftVersion: "1.21.4"
+    minecraftVersion: "26.2"
     resources:
       requests:
         cpu: "1"

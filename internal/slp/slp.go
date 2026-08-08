@@ -60,7 +60,9 @@ type Status struct {
 
 // Ping performs one server list ping. It returns an error unless the peer
 // answered with a status packet whose document is a JSON object carrying a
-// version field. The deadline comes from ctx.
+// version field. The deadline comes from ctx: after the dial, ctx.Deadline()
+// is applied to the connection, but plain cancellation with no deadline set
+// is not otherwise observed, so it will not abort an in-flight read or write.
 func Ping(ctx context.Context, host string, port int) (*Status, error) {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
