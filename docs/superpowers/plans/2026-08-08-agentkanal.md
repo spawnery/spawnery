@@ -2033,7 +2033,12 @@ Interceptor jeden durchließe."
 
 Entwurf Abschnitt 7. Der Dienst selbst: Nachrichten in die Registry, ein Stream pro Pod, Frist mit Überlappung.
 
+**Verdrängung darf die Bereitschaft nicht flackern lassen.** `Registry.Connect` setzt `ready = false`, und der verdrängende Stream ruft es, bevor sein `Hello` eintrifft — `phase.go:334-336` liest „verbunden, aber nicht bereit" als sofortigen Verlust. Ohne Gegenmaßnahme fiele jeder Server im Takt der Frist aus `Ready`, sich bei den Proxies abmeldend und Verluste sammelnd: genau das, was `SessionDeadline` verhindern soll. Die Registry bekommt deshalb `Supersede` — dasselbe wie `Connect`, nur behält es die Bereitschaft.
+
+Es gehört in die Registry und nicht in den `agentserver`, weil `connected` und `ready` in **einem** kritischen Abschnitt gesetzt werden müssen; ein `Connect` gefolgt von einem Setter reißt dasselbe Fenster wieder auf, das es schließen soll. Nach einem echten Abriss gilt weiter `Connect`: der Agent-Prozess kann neu gestartet sein, und nur sein `Hello` darf das Gegenteil behaupten.
+
 **Dateien:**
+- Ändern: `internal/agent/registry.go` (`Supersede`, plus Tests)
 - Erstellen: `internal/agentserver/server.go`
 - Erstellen: `internal/agentserver/streams.go`
 - Erstellen: `internal/agentserver/metrics.go`
@@ -2042,6 +2047,7 @@ Entwurf Abschnitt 7. Der Dienst selbst: Nachrichten in die Registry, ein Stream 
 
 **Schnittstellen:**
 - Verbraucht: `agentpb` (Task 2), `certs.Provider` (Task 4), `grpcauth.Authenticator`, `grpcauth.IdentityFrom` (Task 5), `agent.Registry`.
+- Liefert zusätzlich in `internal/agent`: `func (r *Registry) Supersede(key string, role Role)` — wie `Connect`, aber ohne die Bereitschaft zurückzusetzen. `Connect`, `MarkReady` und `Disconnect` bleiben unverändert.
 - Liefert:
   - `type Options struct { Addr string; Provider *certs.Provider; Auth *grpcauth.Authenticator; Agents *agent.Registry; ReportInterval, RenewAfter, HardDeadline time.Duration; Clock func() time.Time }`
   - `func New(opts Options) *Server`
@@ -2313,6 +2319,14 @@ func TestASecondStreamSupersedesTheFirstWithoutLosingState(t *testing.T) {
 	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
 	defer closeSecond()
 	mustSend(t, second, hello(true))
+
+	// Wait for the operator's first message on the new stream before dropping
+	// the old one. Without this the test proves nothing: Send only fills a
+	// client-side buffer, so closeFirst can land before the operator has even
+	// seen the second stream — an interleaving in which Disconnect is the
+	// correct behaviour. Written the naive way it fails against correct code
+	// in most runs.
+	awaitSession(t, second)
 
 	// The superseded stream ends, and that must not tear down the new one.
 	closeFirst()
