@@ -55,6 +55,12 @@ Kotlin-Agents zum überlappenden Neuverbinden, der fehlende
 Der Entwurf liegt unter [`docs/superpowers/specs/`](docs/superpowers/specs/),
 der Plan unter [`docs/superpowers/plans/`](docs/superpowers/plans/).
 
+Wer Meilenstein 2b beginnt, fängt bei
+[`docs/uebergabe-meilenstein-2b.md`](docs/uebergabe-meilenstein-2b.md) an: dort
+steht, was der Kanal aus 2a einem Agent bereitstellt, welche Pfade und Binaries
+ein Basis-Image mitbringen muss, und was die Entwicklungsumgebung dafür
+zusätzlich braucht.
+
 ## Entwicklung
 
 ```bash
