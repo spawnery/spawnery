@@ -1,0 +1,137 @@
+// Copyright The Spawnery Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package spawnery.agent.v1alpha1;
+
+option go_package = "github.com/spawnery/spawnery/internal/agentpb";
+
+// AgentService is the only channel between the operator and the in-game
+// agents. The agents never read the Kubernetes API; this stream carries both
+// directions instead.
+service AgentService {
+  // ProxySession is milestone 3. The operator answers UNIMPLEMENTED until
+  // then.
+  rpc ProxySession(stream ProxyMessage) returns (stream OperatorToProxy);
+
+  // ServerSession is the Paper agent's channel.
+  rpc ServerSession(stream ServerMessage) returns (stream OperatorToServer);
+}
+
+// ---- shared ----
+
+// ReportInterval is how often the agent should report. The operator dictates
+// it so both sides derive the staleness threshold from the same number.
+message ReportInterval {
+  int32 seconds = 1;
+}
+
+// SessionDeadline bounds the lifetime of one authenticated stream. The agent
+// opens a fresh stream after renew_after_seconds — before the old one ends,
+// so the operator never sees the pod as disconnected. hard_deadline_seconds
+// is when the operator closes it regardless.
+message SessionDeadline {
+  int32 renew_after_seconds = 1;
+  int32 hard_deadline_seconds = 2;
+}
+
+// Hello is the first message on every stream. It carries no identity: that
+// comes from the bearer token alone.
+message Hello {
+  string version = 1;
+  // ready is meaningful for server agents only. Readiness is a state, not an
+  // event, so it is repeated on every connect.
+  bool ready = 2;
+}
+
+// PlayerCount is the periodic report. Proxy agents leave slots at zero.
+message PlayerCount {
+  int32 players = 1;
+  int32 slots = 2;
+}
+
+// ---- server direction ----
+
+// Ready is the immediate notification that the server finished loading.
+message Ready {}
+
+message ServerMessage {
+  oneof message {
+    Hello hello = 1;
+    Ready ready = 2;
+    PlayerCount player_count = 3;
+  }
+}
+
+message OperatorToServer {
+  oneof message {
+    ReportInterval report_interval = 1;
+    SessionDeadline session_deadline = 2;
+  }
+}
+
+// ---- proxy direction (milestone 3) ----
+
+message Heartbeat {}
+
+message PlayerJoinedServer {
+  string player = 1;
+  string server = 2;
+}
+
+message ProxyMessage {
+  oneof message {
+    Hello hello = 1;
+    PlayerCount player_count = 2;
+    PlayerJoinedServer player_joined_server = 3;
+    Heartbeat heartbeat = 4;
+  }
+}
+
+message RegisteredServer {
+  string name = 1;
+  string address = 2;
+  string group = 3;
+}
+
+// FullSync carries exactly the registered servers, so a reconnect during a
+// drain cannot undo a deregistration.
+message FullSync {
+  repeated RegisteredServer servers = 1;
+}
+
+message RegisterServer {
+  RegisteredServer server = 1;
+}
+
+message UnregisterServer {
+  string name = 1;
+}
+
+message DrainPlayers {
+  string from_server = 1;
+  repeated string to_groups = 2;
+}
+
+message OperatorToProxy {
+  oneof message {
+    FullSync full_sync = 1;
+    RegisterServer register_server = 2;
+    UnregisterServer unregister_server = 3;
+    DrainPlayers drain_players = 4;
+    ReportInterval report_interval = 5;
+    SessionDeadline session_deadline = 6;
+  }
+}
