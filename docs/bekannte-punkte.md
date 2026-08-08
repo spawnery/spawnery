@@ -35,6 +35,19 @@ Bereitschaft weiter — womöglich die eines inzwischen neu gestarteten
 Prozesses. Für den Kotlin-Agent heißt das: „kurz nicht bereit, aber weiter
 verbunden" lässt sich mit diesem Kontrakt nicht ausdrücken.
 
+**Der Interceptor liest `Bearer ` zeichengenau, `RoleForMethod` die Methode am
+Suffix.** `internal/grpcauth/interceptor.go` erkennt das Präfix
+`"Bearer "` exakt so — nicht `bearer`, nicht `Bearer` mit zwei Leerzeichen —,
+und die Methodenzuordnung greift auf das Ende des vollen gRPC-Methodennamens
+(`.../ServerSession`). Beides fällt geschlossen aus: eine unpassende
+Schreibweise führt zu „kein Token", eine unbekannte Methode zu gar keiner
+Rolle und damit zu `Unimplemented`, bevor der Handler läuft. Ein Loch ist das
+nicht, aber die erste Hälfte ist
+eine Pflicht auf Seiten des Kotlin-Agents, genau wie das überlappende
+Neuverbinden: wer den Header selbst zusammensetzt, muss ihn zeichengenau so
+setzen, sonst wird jede Session abgelehnt, ohne dass die Ursache im Fehler
+sichtbar wäre.
+
 ## Voraussetzungen für Meilenstein 3 (Proxy-Integration)
 
 **Der Verwaisten-Abgleich verwirft Proxy-Agents.** `OrphanReconciler.Sweep`
@@ -87,6 +100,20 @@ dort kein Kubelet läuft — braucht einen echten Cluster.
 `Degraded`/`CrashLoopBackoff` und dem Einstellen weiterer Versuche. Meilenstein 1
 hat stattdessen nur eine Obergrenze von einem aufbewahrten Fehlschlag pro Gruppe.
 
+**Nichts begrenzt die gemeldeten `slots` gegen `maxPlayers` der Gruppe.**
+`internal/agent/registry.go` weist eine Spielerzahl zurück, die über den
+gemeldeten `slots` liegt, prüft `slots` selbst aber gegen nichts — obwohl der
+Operator die Obergrenze kennt und dem Pod als `SPAWNERY_MAX_PLAYERS` selbst
+mitgegeben hat. Heute landet `slots` nur in `status.slots` und ist damit
+kosmetisch. Ab Meilenstein 4 speist es `FreeSlots` und damit die
+Skalierungsentscheidung: ein kompromittierter Pod, der `slots: 1000000` bei
+null Spielern meldet, lässt die Gruppe dauerhaft als reichlich frei erscheinen
+und unterdrückt jedes Hochskalieren für alle ihre Server — genau die Wirkung
+über Pod-Grenzen hinweg, die Meilenstein 2a sonst ausschließt. Die Begrenzung
+gehört mit `FreeSlots` in dieselbe Änderung: der Registry-Eintrag kennt die
+Gruppe des Pods noch nicht, das Zurechtstutzen auf `maxPlayers` muss also dort
+sitzen, wo beides zusammenkommt.
+
 **Verwaiste `Server` ohne Pod.** Der Abgleich deckt „Pod ohne CR" und „Server
 ohne Gruppe" ab, nicht aber „CR ohne Pod": das übernimmt die Zustandsmaschine
 über `PodLost`, was erst greift, wenn `status.podName` geschrieben wurde. Ein
@@ -117,6 +144,38 @@ echten Cluster läuft (Ebene B des E2E-Entwurfs).
 
 **Kein `--leader-election-namespace`.** Mit Default-Flags scheitert ein lokaler
 Lauf außerhalb des Clusters; nötig ist `--leader-elect=false`.
+
+**Die Isolationszusage von Meilenstein 2a deckt Verfügbarkeit nicht ab.** Das
+Versprechen des Agentkanals lautet: ein kompromittierter Gameserver-Pod kann
+keinem anderen schaden. Für Identität und Vertraulichkeit hält es — der Token
+ist audience-gebunden und wird anderswo nicht angenommen, der
+`spawnery-server`-ServiceAccount hat nirgends ein RoleBinding, die Pods laufen
+mit `automountServiceAccountToken: false`, der private CA-Schlüssel verlässt
+das Operator-Secret nie, `ProxySession` gibt es nicht, und die Identität stammt
+ausschließlich aus dem Token, nie aus dem, was der Agent über sich behauptet.
+Für Verfügbarkeit hält es nicht:
+
+- `grpc.NewServer` in `internal/agentserver` setzt weder
+  `MaxConcurrentStreams` noch `ConnectionTimeout` noch eine
+  Keepalive-Policy — die Zahl offener Streams und halboffener Verbindungen ist
+  nach oben unbegrenzt;
+- vor `Authenticator.Authenticate` steht keine Ratenbegrenzung, ein Absender
+  braucht also keinen gültigen Token, um Arbeit auszulösen;
+- in `config/` gibt es keine NetworkPolicy, Port 9443 ist damit von jedem Pod
+  des Clusters aus erreichbar, nicht nur von den verwalteten;
+- und jeder Verbindungsaufbau kostet einen `TokenReview` gegen den API-Server,
+  ohne Cache für positive Antworten.
+
+Zusammen heißt das: ein einzelner Pod in einer Verbindungsschleife erzeugt
+Last auf dem API-Server und trifft damit den ganzen Cluster, nicht nur sich
+selbst. Ausgelöst wird das von einem kompromittierten oder schlicht fehlerhaft
+neu verbindenden Agent — der Fehlerfall aus dem Kotlin-Agent, der oben schon
+unter „überlappend neu verbinden" steht, ist derselbe Pfad ohne böse Absicht.
+Das Gegenmittel gehört zur Helm-Chart dieses Meilensteins: eine NetworkPolicy,
+die eingehend auf 9443 nur Pods mit `spawnery.cloud/managed-by` zulässt, plus
+eine Obergrenze für gleichzeitige Streams. Wer die Zusage aus Meilenstein 2a
+zitiert, muss diesen Punkt mitzitieren — sie gilt für Identität und
+Vertraulichkeit, nicht für Verfügbarkeit.
 
 ## Zum Agentkanal (`internal/certs`, `internal/agentserver`)
 
@@ -176,9 +235,14 @@ Absicht — die folgenden Punkte betreffen jeweils nur eine der beiden Hälften.
   `required`-Marker auf Feldern dieses Typs nie; die Ablehnung kommt faktisch von
   `MinLength=1` auf dem Namen.
 - `BuildServerPod` lehnt seit Meilenstein 2a einen Nutzer-Mount ab, der `/data`
-  oder `/tmp` exakt trifft oder sich unter dem Agent-Mount-Pfad verschachtelt
-  (`checkMountCollision`). Zwei Nutzer-Mounts mit demselben Namen prüft es
-  weiterhin nicht — das fängt der API-Server ab, aber mit generischer Meldung
+  oder `/tmp` exakt trifft, der einen der reservierten Volume-**Namen** des
+  Operators wiederverwendet, und der sich gegenüber dem Agent-Mount-Pfad in
+  irgendeiner Richtung überschneidet: gleicher Pfad, darunter verschachtelt
+  **oder Vorfahre davon** (`checkMountCollision`). Die Asymmetrie ist Absicht —
+  unter `/data` zu mounten ist der dokumentierte Weg für Zusatzdateien, unter
+  oder über dem Agent-Mount zu mounten überdeckte dagegen den Token, aus dem
+  der Agent seine Identität liest. Zwei Nutzer-Mounts mit demselben Namen prüft
+  es weiterhin nicht — das fängt der API-Server ab, aber mit generischer Meldung
   statt klarem Operator-Fehler.
 - „Ältesten Fehlschlag behalten" trägt nicht bei gleichem `creationTimestamp`
   (Sekundenauflösung); der Tiebreak fällt auf den Zufallssuffix statt auf
