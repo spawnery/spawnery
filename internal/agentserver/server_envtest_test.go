@@ -453,6 +453,34 @@ func TestASupersedingStreamNeverLetsReadinessDrop(t *testing.T) {
 	}
 }
 
+// The complement of the test above, and the reason the carry-over is tied to
+// displacing a live stream rather than granted to every stream: after a real
+// break the agent process may have restarted, and only its own Hello may say
+// it is ready again. A reconnect that stays silent has to stay unready.
+func TestAReconnectAfterARealBreakStartsUnready(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.pod("lobby-abcd")
+
+	first, closeFirst := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	mustSend(t, first, hello(true))
+	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Ready })
+
+	// The break has to be complete before the new stream arrives, or this
+	// would be the make-before-break case again.
+	closeFirst()
+	waitFor(t, func() bool { return !f.agents.Lookup(string(pod.UID)).Connected })
+
+	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	defer closeSecond()
+	// No Hello on this stream: nothing may speak for the agent but the agent.
+	awaitSession(t, second)
+	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Connected })
+
+	if f.agents.Lookup(string(pod.UID)).Ready {
+		t.Error("a silent reconnect came back ready without the agent saying so")
+	}
+}
+
 // The hard deadline is the net under an agent that ignores renewAfter.
 func TestTheHardDeadlineClosesTheStream(t *testing.T) {
 	f := newServerFixtureWithDeadline(t, 300*time.Millisecond, 600*time.Millisecond)
@@ -461,7 +489,12 @@ func TestTheHardDeadlineClosesTheStream(t *testing.T) {
 	defer closeConn()
 
 	mustSend(t, stream, hello(true))
-	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Ready })
+	// The operator's own first message is what proves the session runs, and it
+	// arrives before the deadline can have started counting. Readiness would
+	// be the wrong signal here: the teardown at the deadline clears it, so a
+	// slow TokenReview could push the wait past the 600 ms and leave the test
+	// waiting for a flag that correct code has already taken back.
+	awaitSession(t, stream)
 
 	// Recv returns the error once the operator hangs up.
 	done := make(chan error, 1)
