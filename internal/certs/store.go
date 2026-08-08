@@ -130,47 +130,54 @@ func (s *Store) write(ctx context.Context, existing *corev1.Secret, b *Bundle) e
 	return nil
 }
 
+// snapshot is one generation of the bundle: the serving certificate and the
+// CA it chains to, published together so a reader never sees one half of a
+// generation next to the other half of the next.
+type snapshot struct {
+	cert tls.Certificate
+	ca   []byte
+}
+
 // Provider hands the current certificate to the TLS stack and renews it in the
 // background.
 type Provider struct {
 	store   *Store
-	current atomic.Pointer[tls.Certificate]
-	ca      atomic.Pointer[[]byte]
+	current atomic.Pointer[snapshot]
 }
 
 // NewProvider wires a provider to a store.
 func NewProvider(s *Store) *Provider { return &Provider{store: s} }
 
 // Set publishes a bundle. The next handshake uses it; running connections keep
-// the one they negotiated.
+// the one they negotiated. The certificate and the CA bundle are published as
+// one atomic snapshot, so a concurrent GetCertificate/CABundle pair always
+// sees the same generation.
 func (p *Provider) Set(b *Bundle) error {
 	cert, err := b.TLSCertificate()
 	if err != nil {
 		return err
 	}
-	p.current.Store(&cert)
-	ca := b.CACertPEM
-	p.ca.Store(&ca)
+	p.current.Store(&snapshot{cert: cert, ca: b.CACertPEM})
 	return nil
 }
 
 // GetCertificate is the tls.Config callback.
 func (p *Provider) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	cert := p.current.Load()
-	if cert == nil {
+	s := p.current.Load()
+	if s == nil {
 		return nil, fmt.Errorf("no serving certificate yet")
 	}
-	return cert, nil
+	return &s.cert, nil
 }
 
 // CABundle is what the agents pin. It is a bundle, not a single certificate,
 // so a later rotation can publish old and new side by side.
 func (p *Provider) CABundle() []byte {
-	ca := p.ca.Load()
-	if ca == nil {
+	s := p.current.Load()
+	if s == nil {
 		return nil
 	}
-	return *ca
+	return s.ca
 }
 
 // Start ensures a bundle once and then checks hourly. It is a leader-bound

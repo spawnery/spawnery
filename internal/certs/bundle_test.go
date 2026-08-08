@@ -189,6 +189,17 @@ func TestValidateRejectsWhatMustLeadToReissue(t *testing.T) {
 			wantError: "not signed by the stored CA",
 		},
 		{
+			// ca.crt and ca.key are each individually well-formed but did
+			// not come from the same Issue. parseCA must catch this itself,
+			// since both Validate and the store's repair path go through it.
+			name: "CA cert and CA key are not a pair",
+			mutate: func(b *Bundle) {
+				b.CAKeyPEM = other.CAKeyPEM
+			},
+			at:        testNow,
+			wantError: "CA key does not match",
+		},
+		{
 			// Same CA on both sides (so the signature check passes), but the
 			// serving key does not belong to the serving certificate.
 			name: "serving certificate does not match the serving key",

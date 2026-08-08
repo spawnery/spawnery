@@ -198,6 +198,10 @@ func (b *Bundle) parseCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("parse CA key: %w", err)
 	}
+	certPub, ok := cert.PublicKey.(*ecdsa.PublicKey)
+	if !ok || !key.PublicKey.Equal(certPub) {
+		return nil, nil, fmt.Errorf("CA key does not match the CA certificate")
+	}
 	return cert, key, nil
 }
 

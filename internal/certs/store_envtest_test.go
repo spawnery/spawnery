@@ -23,6 +23,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/spawnery/spawnery/internal/certs"
@@ -120,7 +121,8 @@ func TestEnsureRenewsUnderTheThreshold(t *testing.T) {
 func TestEnsureRepairsACorruptSecret(t *testing.T) {
 	s, _, ctx, ns := newStore(t)
 
-	if _, err := s.Ensure(ctx); err != nil {
+	before, err := s.Ensure(ctx)
+	if err != nil {
 		t.Fatalf("first Ensure: %v", err)
 	}
 
@@ -139,6 +141,60 @@ func TestEnsureRepairsACorruptSecret(t *testing.T) {
 	}
 	if err := b.Validate(s.Clock(), s.DNSNames); err != nil {
 		t.Errorf("the repaired bundle is still broken: %v", err)
+	}
+	// Only the serving certificate was damaged; the CA was still readable, so
+	// the repair must have kept it rather than throwing it away.
+	if string(b.CACertPEM) != string(before.CACertPEM) {
+		t.Error("repairing a damaged serving certificate replaced a still-intact CA")
+	}
+}
+
+// A CA cert and CA key that are each individually well-formed but do not
+// belong together must be repaired once — and the repair must converge, not
+// loop, since a Reissue against a mismatched pair would fail Validate again
+// and Ensure would "fix" it forever under Task 9's hourly ticker.
+func TestEnsureConvergesOnAMismatchedCAPair(t *testing.T) {
+	s, _, ctx, _ := newStore(t)
+
+	other, err := certs.Issue(s.Clock(), s.DNSNames)
+	if err != nil {
+		t.Fatalf("Issue (other): %v", err)
+	}
+	mine, err := certs.Issue(s.Clock(), s.DNSNames)
+	if err != nil {
+		t.Fatalf("Issue (mine): %v", err)
+	}
+	broken := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace},
+		Type:       corev1.SecretTypeTLS,
+		Data: map[string][]byte{
+			"ca.crt":  mine.CACertPEM,
+			"ca.key":  other.CAKeyPEM, // does not belong to ca.crt
+			"tls.crt": mine.ServingCertPEM,
+			"tls.key": mine.ServingKeyPEM,
+		},
+	}
+	if err := s.Client.Create(ctx, broken); err != nil {
+		t.Fatalf("create the mismatched secret: %v", err)
+	}
+
+	first, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("first Ensure over a mismatched CA pair: %v", err)
+	}
+	if err := first.Validate(s.Clock(), s.DNSNames); err != nil {
+		t.Errorf("the repaired bundle is still broken: %v", err)
+	}
+
+	second, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("second Ensure: %v", err)
+	}
+	if string(second.CACertPEM) != string(first.CACertPEM) {
+		t.Error("the repair did not converge: the CA changed again on the second Ensure")
+	}
+	if string(second.ServingCertPEM) != string(first.ServingCertPEM) {
+		t.Error("the repair did not converge: the serving certificate changed again on the second Ensure")
 	}
 }
 
