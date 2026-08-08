@@ -52,6 +52,27 @@ const (
 	// Kubelet knows no SLP probe type, and a tcpSocket probe on 25565 turns
 	// green before the world is loaded.
 	SLPHealthBinary = "/usr/local/bin/spawnery-slp"
+
+	// AgentVolumeName is the projected volume carrying the agent's token and
+	// the CA it verifies the operator's gRPC endpoint with.
+	AgentVolumeName = "spawnery-agent"
+	// AgentMountPath is where AgentVolumeName is mounted.
+	AgentMountPath = "/var/run/spawnery"
+	// AgentTokenPath is the projected file holding the audience-bound
+	// ServiceAccount token, relative to AgentMountPath.
+	AgentTokenPath = "token"
+	// AgentCAPath is the projected file holding the operator's CA
+	// certificate, relative to AgentMountPath.
+	AgentCAPath = "ca.crt"
+
+	// EnvOperatorEndpoint names the container env var carrying the address
+	// the agent dials to reach the operator's gRPC endpoint.
+	EnvOperatorEndpoint = "SPAWNERY_OPERATOR_ENDPOINT"
+
+	// TokenExpirationSeconds is the lifetime of the projected token. Short,
+	// because it keeps the replay window small; the kubelet rotates it
+	// well before it runs out.
+	TokenExpirationSeconds int64 = 600
 )
 
 // DataClaimName is the name of the PVC of a persistent server.
@@ -65,9 +86,13 @@ func BuildServerPod(
 	net *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ServerGroup,
 	srv *spawneryv1alpha1.Server,
+	agentEndpoint string,
 ) (*corev1.Pod, error) {
 	if group.Spec.Image == "" {
 		return nil, fmt.Errorf("server group %q has no image", group.Name)
+	}
+	if agentEndpoint == "" {
+		return nil, fmt.Errorf("server group %q has no agent endpoint", group.Name)
 	}
 
 	resources := group.Spec.Resources
@@ -93,13 +118,44 @@ func BuildServerPod(
 			Name:         TmpVolumeName,
 			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		},
+		{
+			Name: AgentVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Projected: &corev1.ProjectedVolumeSource{
+					Sources: []corev1.VolumeProjection{
+						{
+							// The audience is what makes a standard API server
+							// token worthless here, and the short expiry keeps
+							// the replay window small. The kubelet rotates it.
+							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
+								Audience:          AgentTokenAudience,
+								ExpirationSeconds: ptr.To(TokenExpirationSeconds),
+								Path:              AgentTokenPath,
+							},
+						},
+						{
+							ConfigMap: &corev1.ConfigMapProjection{
+								LocalObjectReference: corev1.LocalObjectReference{Name: CAConfigMapName},
+								Items: []corev1.KeyToPath{
+									{Key: CAConfigMapKey, Path: AgentCAPath},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: DataVolumeName, MountPath: DataMountPath},
 		{Name: TmpVolumeName, MountPath: TmpMountPath},
+		{Name: AgentVolumeName, MountPath: AgentMountPath, ReadOnly: true},
 	}
 
 	for _, m := range group.Spec.Mounts {
+		if err := checkMountCollision(m); err != nil {
+			return nil, err
+		}
 		volumes = append(volumes, corev1.Volume{
 			Name: m.Name,
 			VolumeSource: corev1.VolumeSource{
@@ -127,6 +183,7 @@ func BuildServerPod(
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: "SPAWNERY_SERVER", Value: srv.Name},
 			{Name: "SPAWNERY_MAX_PLAYERS", Value: strconv.FormatInt(int64(group.Spec.MaxPlayers), 10)},
+			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
 		},
 		VolumeMounts: mounts,
 		// Readiness only. A liveness probe would restart the container and
@@ -178,8 +235,11 @@ func BuildServerPod(
 			Containers:    []corev1.Container{container},
 			Volumes:       volumes,
 			RestartPolicy: corev1.RestartPolicyAlways,
-			// The pods carry no Kubernetes credentials. Milestone 2 mounts a
-			// projected, audience-bound token for the gRPC channel instead.
+			// The pods carry no Kubernetes credentials from the API server's
+			// own token machinery. AutomountServiceAccountToken stays off;
+			// the projected, audience-bound token above is the exception,
+			// and it is what ties the pod to ServiceAccountName below.
+			ServiceAccountName:            ServerServiceAccountName,
 			AutomountServiceAccountToken:  ptr.To(false),
 			ImagePullSecrets:              pullSecrets,
 			TerminationGracePeriodSeconds: ptr.To(group.Spec.TerminationGracePeriodSeconds),
@@ -214,4 +274,24 @@ func dataVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Serve
 		Name:         DataVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}
+}
+
+// checkMountCollision refuses a user mount that reuses one of the operator's
+// own volume names or mount paths. The API server would reject the resulting
+// pod anyway — on a duplicate volume name outright, on a duplicate mount path
+// silently by ignoring one of the two mounts — but only after the object left
+// this package, and only with a generic message that does not say which of
+// the user's mounts caused it.
+func checkMountCollision(m spawneryv1alpha1.Mount) error {
+	for _, name := range []string{AgentVolumeName, DataVolumeName, TmpVolumeName} {
+		if m.Name == name {
+			return fmt.Errorf("mount %q reuses the reserved volume name %q", m.Name, name)
+		}
+	}
+	for _, path := range []string{AgentMountPath, DataMountPath, TmpMountPath} {
+		if m.MountPath == path {
+			return fmt.Errorf("mount %q targets the reserved mount path %q", m.Name, path)
+		}
+	}
+	return nil
 }

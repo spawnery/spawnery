@@ -164,6 +164,7 @@ func newFixture(t *testing.T) *fixture {
 			StartupDeadline:      5 * time.Minute,
 			PlayerStatusInterval: 30 * time.Second,
 			Registrar:            registrar,
+			AgentEndpoint:        "spawnery-operator.spawnery-system.svc:9443",
 		},
 	}
 

@@ -563,7 +563,7 @@ func TestServerInAPersistentGroupStillDrainsAndReleasesItself(t *testing.T) {
 
 	// Milestone 5 will create this pod; stand in for it so the drain path is
 	// exercised rather than merely the empty release.
-	built, err := podspec.BuildServerPod(f.network, persistent, srv)
+	built, err := podspec.BuildServerPod(f.network, persistent, srv, f.reconc.AgentEndpoint)
 	if err != nil {
 		t.Fatalf("BuildServerPod: %v", err)
 	}

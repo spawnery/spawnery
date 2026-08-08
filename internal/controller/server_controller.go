@@ -80,6 +80,9 @@ type ServerReconciler struct {
 	PlayerStatusInterval time.Duration
 	// Registrar reaches the proxies.
 	Registrar Registrar
+	// AgentEndpoint is the address the in-game agent dials to reach the
+	// operator's gRPC endpoint, e.g. "spawnery-operator.spawnery-system.svc:9443".
+	AgentEndpoint string
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;delete
@@ -198,7 +201,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// reused for a different pod, which is what makes PodLost detectable.
 	if groupFound && networkFound && !persistentUnsupported && !nameConflict &&
 		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
-		built, err := podspec.BuildServerPod(network, group, srv)
+		built, err := podspec.BuildServerPod(network, group, srv, r.AgentEndpoint)
 		if err != nil {
 			return ctrl.Result{}, err
 		}

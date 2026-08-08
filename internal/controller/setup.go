@@ -39,6 +39,9 @@ type Options struct {
 	OrphanInterval time.Duration
 	// Registrar reaches the proxies. Milestone 1 wires the no-op.
 	Registrar Registrar
+	// AgentEndpoint is the address the in-game agent dials to reach the
+	// operator's gRPC endpoint. Task 9 wires this from a flag.
+	AgentEndpoint string
 }
 
 // Leader election locks on a Lease in the operator's own namespace. It is not
@@ -76,6 +79,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		StartupDeadline:      opts.StartupDeadline,
 		PlayerStatusInterval: opts.PlayerStatusInterval,
 		Registrar:            opts.Registrar,
+		AgentEndpoint:        opts.AgentEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server controller: %w", err)
 	}

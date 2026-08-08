@@ -57,6 +57,7 @@ func TestSetupAllRegistersEveryController(t *testing.T) {
 		PlayerStatusInterval: 30 * time.Second,
 		OrphanInterval:       time.Minute,
 		Registrar:            NoopRegistrar{},
+		AgentEndpoint:        "spawnery-operator.spawnery-system.svc:9443",
 	}
 	if err := SetupAll(mgr, opts); err != nil {
 		t.Fatalf("SetupAll: %v", err)
@@ -112,6 +113,7 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		PlayerStatusInterval: 30 * time.Second,
 		OrphanInterval:       time.Minute,
 		Registrar:            NoopRegistrar{},
+		AgentEndpoint:        "spawnery-operator.spawnery-system.svc:9443",
 	}
 	if err := SetupAll(mgr, opts); err != nil {
 		t.Fatalf("SetupAll: %v", err)
