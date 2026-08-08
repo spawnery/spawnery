@@ -47,12 +47,6 @@ import (
 	"github.com/spawnery/spawnery/internal/version"
 )
 
-// AgentServiceName is the Service in front of the operator's gRPC endpoint.
-// It is the single source of both the certificate's SANs and the address the
-// agents dial, so the two cannot drift apart — and a drift between them shows
-// up as a TLS error in a game server pod, far from its cause.
-const AgentServiceName = "spawnery-operator"
-
 var scheme = runtime.NewScheme()
 
 func init() {
@@ -68,7 +62,7 @@ func init() {
 // the pod: the gRPC endpoint only runs on the leader, and the Service is what
 // keeps a standby out of the way.
 func agentEndpoint(namespace string) string {
-	return fmt.Sprintf("%s.%s.svc:%d", AgentServiceName, namespace, agentserver.DefaultPort)
+	return fmt.Sprintf("%s.%s.svc:%d", podspec.AgentServiceName, namespace, agentserver.DefaultPort)
 }
 
 // validateAgentFlags rejects a configuration that would only fail much later
@@ -201,7 +195,7 @@ func main() {
 		Client:    directClient,
 		Namespace: operatorNamespace,
 		Name:      certs.SecretName,
-		DNSNames:  certs.ServingDNSNames(AgentServiceName, operatorNamespace),
+		DNSNames:  certs.ServingDNSNames(podspec.AgentServiceName, operatorNamespace),
 		Clock:     time.Now,
 	})
 	if err := mgr.Add(provider); err != nil {

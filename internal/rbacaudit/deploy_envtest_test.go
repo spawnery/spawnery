@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
 
+	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -273,6 +274,17 @@ func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
 	readManifest(t, "config/deploy/deployment.yaml", &deploy)
 
 	apply(t, &ns, &svc)
+
+	// The name is the first hop, and the only one no other test touches: the
+	// operator builds both the agents' dial address and its own certificate
+	// SANs from podspec.AgentServiceName, and never compares either against
+	// the manifest. Renaming the Service here alone would leave every agent
+	// dialling a name that resolves to nothing, and the suite fully green.
+	if svc.Name != podspec.AgentServiceName {
+		t.Errorf("the Service is named %q but the operator dials and certifies %q — "+
+			"every agent would fail its TLS handshake against a name that does not resolve",
+			svc.Name, podspec.AgentServiceName)
+	}
 
 	if svc.Namespace != deploy.Namespace {
 		t.Errorf("service namespace = %q, deployment namespace = %q — a Service only "+

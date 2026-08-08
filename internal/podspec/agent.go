@@ -36,4 +36,13 @@ const (
 	CAConfigMapName = "spawnery-ca"
 	// CAConfigMapKey is the data key of CAConfigMapName.
 	CAConfigMapKey = "ca.crt"
+	// AgentServiceName is the Service in front of the operator's gRPC
+	// endpoint. It is the single source of the certificate's SANs and of the
+	// address the agents dial, so the two cannot drift apart — and a drift
+	// between them shows up as a TLS error in a game server pod, far from its
+	// cause. The Service manifest in config/deploy/service.yaml is the third
+	// place the name appears; internal/rbacaudit asserts it against this
+	// constant, because renaming the Service alone would break every dial and
+	// every SAN with a fully green test suite.
+	AgentServiceName = "spawnery-operator"
 )
