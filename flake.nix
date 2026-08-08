@@ -72,5 +72,13 @@
             };
           };
         });
+
+      packages = forAllSystems (pkgs:
+        let
+          paper = pkgs.callPackage ./nix/paper.nix { };
+        in
+        {
+          paper-repo = paper.repo;
+        });
     };
 }
