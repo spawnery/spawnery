@@ -19,13 +19,23 @@ limitations under the License.
 // containerised agent at it, and reads its stdout; it is test-only and never
 // enters the image.
 //
-// It is deliberately *passive*. The real operator supersedes: on a second
-// stream for the same pod, internal/agentserver cancels the displaced stream's
-// context itself. A stub that imitated that would close the outgoing stream on
-// its own, and the assertion "the first stream closed only after the second
-// greeted" would then be measuring the stub rather than the agent. So this one
-// accepts a stream, records what arrives on it, and never cancels one: every
-// close in the recorded trace is the agent's own doing.
+// It is deliberately *passive* by default. The real operator supersedes: on a
+// second stream for the same pod, internal/agentserver cancels the displaced
+// stream's context itself. A stub that imitated that would close the outgoing
+// stream on its own, and the assertion "the first stream closed only after the
+// second greeted" would then be measuring the stub rather than the agent. So by
+// default this one accepts a stream, records what arrives on it, and never
+// cancels one: every close in the recorded trace is the agent's own doing.
+//
+// --supersede turns the other half on, because passivity also hides everything
+// the operator's own retirement order can provoke in the agent. It cancels the
+// displaced stream exactly where sessions.enter() does — at the handler entry
+// of the replacement, before the first Send — answers the cancelled stream with
+// the same Unavailable, and waits for it to be gone before it answers the
+// replacement, so the order the agent sees is the operator's rather than
+// whichever write won a scheduling race (see enter). What is asserted under it
+// is not the overlap but the rate: an agent that mistakes that cancellation for
+// a breakage it owes a reconnect opens a stream a second, forever.
 //
 // It also accepts any bearer token. It is not testing authentication — that is
 // internal/grpcauth's own tests' job — it is recording, verbatim, what the
@@ -59,8 +69,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 
 	"github.com/spawnery/spawnery/internal/agentpb"
 )
@@ -72,6 +84,14 @@ const (
 	// two files through a bind mount of the directory they are written to.
 	worldReadable = 0o644
 	worldEnter    = 0o755
+	// supersedeGrace bounds the wait in enter below. It is a backstop against a
+	// displaced handler that will not return, not a timing assumption: the
+	// handler it waits for is already selecting on the context it just
+	// cancelled.
+	supersedeGrace = 2 * time.Second
+	// retirementHeadStart is how long enter holds the replacement back after
+	// the displaced stream is gone. See enter for why it is not zero.
+	retirementHeadStart = 250 * time.Millisecond
 )
 
 func main() {
@@ -105,6 +125,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	reportInterval := fs.Int("report-interval", 1, "seconds the agent is told to wait between player count reports")
 	renewAfter := fs.Int("renew-after", 5, "seconds after which the agent is told to renew its session")
 	hardDeadline := fs.Int("hard-deadline", 20, "seconds the agent is told its session may live at most")
+	supersede := fs.Bool("supersede", false,
+		"cancel the displaced stream when a new one opens, the way the real operator does")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -142,6 +164,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		reportInterval: int32(*reportInterval),
 		renewAfter:     int32(*renewAfter),
 		hardDeadline:   int32(*hardDeadline),
+		supersede:      *supersede,
 	})
 
 	signals := make(chan os.Signal, 1)
@@ -312,8 +335,9 @@ func (r *recorder) record(kind string, fields map[string]any) {
 	}
 }
 
-// stub serves AgentService and records. It never cancels a stream: see the
-// package comment for why that is the design and not an omission.
+// stub serves AgentService and records. Unless --supersede says otherwise it
+// never cancels a stream: see the package comment for why that is the design
+// and not an omission.
 type stub struct {
 	agentpb.UnimplementedAgentServiceServer
 
@@ -323,6 +347,62 @@ type stub struct {
 	reportInterval int32
 	renewAfter     int32
 	hardDeadline   int32
+
+	// supersede and everything below it are the --supersede half. current is
+	// the stream a new one would displace; there is one because the test points
+	// one agent at this process, where the real operator keys it by pod UID.
+	supersede bool
+	mu        sync.Mutex
+	current   *live
+}
+
+// live is one stream under --supersede: what ends it, and how to tell that it
+// has ended.
+type live struct {
+	cancel context.CancelFunc
+	// done is closed when the handler has returned, which is when its status
+	// has gone out on the wire.
+	done chan struct{}
+}
+
+// enter registers a new stream and retires the one it replaces, which is what
+// internal/agentserver's sessions.enter does and where it does it: at the
+// handler entry of the replacement, before a byte has gone out on it.
+//
+// It then holds the replacement back until the displaced stream is gone and a
+// little beyond, and that is the deliberate part rather than an accident of
+// implementation.
+//
+// The two things the agent has to order — the displaced stream's status and the
+// replacement's first message — travel different connections, and nothing on
+// either side orders them. Cancelling and sending on the next line leaves it to
+// whichever goroutine the Go scheduler picks and whichever of the agent's two
+// transport threads the JVM runs first, and measured, that lands consistently
+// on the side where the agent has already handed over before it hears about the
+// cancellation. Asserting against that would be asserting that the agent keeps
+// winning a coin toss neither end controls: the real operator has a registry
+// write, a metric and two Sends between enter() and the agent hearing anything
+// on the new stream, and a real cluster has two network paths rather than one
+// loopback. So the stub puts the agent on the losing side on purpose. What it
+// then measures is the only thing worth measuring here — that the agent is
+// right either way.
+func (s *stub) enter(current *live) {
+	s.mu.Lock()
+	displaced := s.current
+	s.current = current
+	s.mu.Unlock()
+
+	if displaced == nil {
+		return
+	}
+	displaced.cancel()
+	select {
+	case <-displaced.done:
+	case <-time.After(supersedeGrace):
+	}
+	// The handler has returned; grpc-go writes its trailers after that, so the
+	// status is still only on its way out. Nothing here can observe it arrive.
+	time.Sleep(retirementHeadStart)
 }
 
 func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) error {
@@ -338,6 +418,16 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 		return fields
 	}
 	s.events.record("stream_opened", of(map[string]any{}))
+
+	ctx := stream.Context()
+	if s.supersede {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(ctx)
+		defer cancel()
+		done := make(chan struct{})
+		defer close(done)
+		s.enter(&live{cancel: cancel, done: done})
+	}
 
 	if err := stream.Send(&agentpb.OperatorToServer{
 		Message: &agentpb.OperatorToServer_ReportInterval{
@@ -359,35 +449,85 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 		return nil
 	}
 
-	for {
-		message, err := stream.Recv()
-		if err != nil {
-			reason := ""
-			if !errors.Is(err, io.EOF) {
-				reason = err.Error()
+	if !s.supersede {
+		// The passive loop, and deliberately still a plain blocking Recv: the
+		// only thing that ends this stream is the agent, so there is no second
+		// event to select on and no way for a cancellation to be recorded in
+		// place of the agent's own close.
+		for {
+			message, err := stream.Recv()
+			if err != nil {
+				s.events.record("stream_closed", of(map[string]any{"error": closeReason(err)}))
+				// nil, not the error: the agent ending a stream it renewed is
+				// the expected outcome here, not a failure of the stub.
+				return nil
 			}
-			s.events.record("stream_closed", of(map[string]any{"error": reason}))
-			// nil, not the error: the agent ending a stream it renewed is the
-			// expected outcome here, not a failure of the stub.
-			return nil
-		}
-		switch body := message.Message.(type) {
-		case *agentpb.ServerMessage_Hello:
-			s.events.record("hello", of(map[string]any{
-				"version": body.Hello.GetVersion(),
-				"ready":   body.Hello.GetReady(),
-			}))
-		case *agentpb.ServerMessage_Ready:
-			s.events.record("ready", of(map[string]any{}))
-		case *agentpb.ServerMessage_PlayerCount:
-			s.events.record("player_count", of(map[string]any{
-				"players": body.PlayerCount.GetPlayers(),
-				"slots":   body.PlayerCount.GetSlots(),
-			}))
-		default:
-			s.events.record("unknown", of(map[string]any{}))
+			s.observe(of, message)
 		}
 	}
+
+	// Receiving blocks, so under --supersede it runs in its own goroutine and
+	// the context does the cancelling — the same shape, for the same reason, as
+	// internal/agentserver's ServerSession.
+	received := make(chan *agentpb.ServerMessage)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(received)
+		for {
+			message, err := stream.Recv()
+			if err != nil {
+				errs <- err
+				return
+			}
+			select {
+			case received <- message:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			s.events.record("stream_closed", of(map[string]any{"error": "superseded"}))
+			return status.Error(codes.Unavailable, "session ended, reconnect with a fresh token")
+		case err := <-errs:
+			s.events.record("stream_closed", of(map[string]any{"error": closeReason(err)}))
+			return nil
+		case message := <-received:
+			s.observe(of, message)
+		}
+	}
+}
+
+// observe records one message from the agent.
+func (s *stub) observe(of func(map[string]any) map[string]any, message *agentpb.ServerMessage) {
+	switch body := message.Message.(type) {
+	case *agentpb.ServerMessage_Hello:
+		s.events.record("hello", of(map[string]any{
+			"version": body.Hello.GetVersion(),
+			"ready":   body.Hello.GetReady(),
+		}))
+	case *agentpb.ServerMessage_Ready:
+		s.events.record("ready", of(map[string]any{}))
+	case *agentpb.ServerMessage_PlayerCount:
+		s.events.record("player_count", of(map[string]any{
+			"players": body.PlayerCount.GetPlayers(),
+			"slots":   body.PlayerCount.GetSlots(),
+		}))
+	default:
+		s.events.record("unknown", of(map[string]any{}))
+	}
+}
+
+// closeReason is empty for the agent's own clean half-close, which is what a
+// renewal looks like from here and is not an error.
+func closeReason(err error) string {
+	if errors.Is(err, io.EOF) {
+		return ""
+	}
+	return err.Error()
 }
 
 func authorizationOf(ctx context.Context) string {
