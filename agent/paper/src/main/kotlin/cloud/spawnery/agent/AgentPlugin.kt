@@ -5,6 +5,7 @@ import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
 import org.bukkit.event.server.ServerLoadEvent
 import org.bukkit.plugin.java.JavaPlugin
+import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -36,7 +37,13 @@ class AgentPlugin : JavaPlugin(), Listener {
                 }
 
                 val session = SessionLoop(
-                    channels = { OperatorChannel.build(env.endpoint, env.caBundle) },
+                    // The bundle is read here, per attempt, rather than once at
+                    // enable: see Environment.Configured. A channel is built
+                    // per attempt anyway, so this costs one file read on a
+                    // path that is already opening a TCP connection.
+                    channels = {
+                        OperatorChannel.build(env.endpoint, Files.readAllBytes(env.caBundlePath))
+                    },
                     credentials = BearerCredentials.of(TokenSource(env.tokenPath)),
                     state = state,
                     scheduler = scheduler,
@@ -64,6 +71,18 @@ class AgentPlugin : JavaPlugin(), Listener {
                 server.scheduler.runTaskTimer(this, Runnable {
                     state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
                 }, 0L, SAMPLE_TICKS)
+
+                // Once here, before the first stream exists, because the timer
+                // above does not run until the next tick and onEnable has to
+                // return first. The operator's ReportInterval schedules its
+                // first report at delay zero, so without this the first
+                // PlayerCount of the process carries the zeroes the counters
+                // were constructed with -- and internal/controller/candidates.go
+                // reads Slots - Players, so a server that has just gone Ready
+                // announces itself as having no free slots for a tick. Both
+                // calls are main-thread-safe here, which is the whole reason
+                // the sampling is on a Bukkit timer at all.
+                state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
 
                 session.start()
                 logger.info("spawnery agent connecting to ${env.endpoint}")
