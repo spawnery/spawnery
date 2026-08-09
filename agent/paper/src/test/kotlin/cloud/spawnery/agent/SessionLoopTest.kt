@@ -3,6 +3,11 @@ package cloud.spawnery.agent
 import cloud.spawnery.agent.pb.OperatorToServer
 import cloud.spawnery.agent.pb.ReportInterval
 import cloud.spawnery.agent.pb.ServerMessage
+import io.grpc.CallOptions
+import io.grpc.ClientCall
+import io.grpc.ForwardingClientCall
+import io.grpc.ManagedChannel
+import io.grpc.MethodDescriptor
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -10,8 +15,47 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Collections
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
+
+/**
+ * A [ManagedChannel] that reports, in program order, exactly when a message is
+ * sent on it and when it is shut down — without depending on the operator's
+ * (remote, potentially reordered-relative-to-other-streams) view of events.
+ * Used to prove [SessionLoop.connect]'s local ordering: greet the new stream,
+ * *then* retire the old one.
+ */
+private class TrackingChannel(
+    private val delegate: ManagedChannel,
+    private val onSend: (() -> Unit)? = null,
+    private val onShutdown: (() -> Unit)? = null,
+) : ManagedChannel() {
+    override fun <ReqT, RespT> newCall(
+        methodDescriptor: MethodDescriptor<ReqT, RespT>,
+        callOptions: CallOptions,
+    ): ClientCall<ReqT, RespT> {
+        val call = delegate.newCall(methodDescriptor, callOptions)
+        return object : ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(call) {
+            override fun sendMessage(message: ReqT) {
+                onSend?.invoke()
+                super.sendMessage(message)
+            }
+        }
+    }
+
+    override fun shutdown(): ManagedChannel {
+        onShutdown?.invoke()
+        return delegate.shutdown()
+    }
+
+    override fun shutdownNow(): ManagedChannel = delegate.shutdownNow()
+    override fun isShutdown(): Boolean = delegate.isShutdown()
+    override fun isTerminated(): Boolean = delegate.isTerminated()
+    override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean = delegate.awaitTermination(timeout, unit)
+    override fun authority(): String = delegate.authority()
+}
 
 class SessionLoopTest {
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
@@ -109,6 +153,83 @@ class SessionLoopTest {
                     stream.received.none { it.messageCase == ServerMessage.MessageCase.PLAYER_COUNT },
                     "the interval is the operator's to set; both sides derive the staleness " +
                         "threshold from it, so guessing one locally would break that",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `retires the previous session only after the new one has greeted`(@TempDir dir: Path) {
+        FakeOperator("renews").use { operator ->
+            val state = ServerState()
+            val order = Collections.synchronizedList(mutableListOf<String>())
+            var connectCount = 0
+            val token = dir.resolve("token")
+            Files.writeString(token, "test-token")
+
+            val loop = SessionLoop(
+                channels = {
+                    connectCount++
+                    val real = operator.newChannel()
+                    when (connectCount) {
+                        1 -> TrackingChannel(real, onShutdown = { order.add("first-closed") })
+                        else -> TrackingChannel(real, onSend = { order.add("second-sent") })
+                    }
+                },
+                credentials = BearerCredentials.of(TokenSource(token)),
+                state = state,
+                scheduler = scheduler,
+                version = "26.2-0.2.0",
+                log = { _, _ -> },
+            )
+
+            loop.use {
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // Get the first session reporting, so a leaked session (the
+                // bug) keeps firing on the shared scheduler after a second
+                // connect() -- proof that retirement actually happened, not
+                // just that a message was sent.
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setReportInterval(ReportInterval.newBuilder().setSeconds(1))
+                        .build(),
+                )
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.PLAYER_COUNT }
+
+                // Reconnect while the first session is still live -- no stop()
+                // in between, exactly the case the leak was missed on.
+                loop.start()
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // Half 1: the previous session is actually retired -- its
+                // stream closes and its reporting future stops firing.
+                assertTrue(
+                    first.closed.await(5, TimeUnit.SECONDS),
+                    "the previous session's stream was never closed",
+                )
+                val reportsAtRetirement = first.received.count {
+                    it.messageCase == ServerMessage.MessageCase.PLAYER_COUNT
+                }
+                Thread.sleep(2000)
+                assertEquals(
+                    reportsAtRetirement,
+                    first.received.count { it.messageCase == ServerMessage.MessageCase.PLAYER_COUNT },
+                    "the previous session's reporting future kept firing after retirement",
+                )
+
+                // Half 2: that retirement happened only after the new stream
+                // had already sent its Hello -- make before break. Recorded
+                // from the two channels' own local call order, not from the
+                // operator's (independently-scheduled, cross-stream) view.
+                assertTrue(order.contains("second-sent"), "the new stream never sent anything; saw $order")
+                assertTrue(order.contains("first-closed"), "the previous channel was never shut down; saw $order")
+                assertTrue(
+                    order.indexOf("second-sent") < order.indexOf("first-closed"),
+                    "the previous session was retired before the new one greeted: $order",
                 )
             }
         }

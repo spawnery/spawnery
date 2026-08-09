@@ -110,7 +110,6 @@ class SessionLoop(
         val toOperator = stub.serverSession(fromOperator)
         val session = Session(channel, toOperator)
         holder.set(session)
-        current.set(session)
 
         send(
             session,
@@ -118,6 +117,12 @@ class SessionLoop(
                 .setHello(Hello.newBuilder().setVersion(version).setReady(state.ready))
                 .build(),
         )
+
+        // Retire the outgoing session only now, after the new one has greeted:
+        // make-before-break. Closing it at the point `holder` was assigned —
+        // before the Hello went out — would drop the server out of Ready for
+        // however long the new stream takes to come up.
+        current.getAndSet(session)?.close()
     }
 
     private fun startReporting(session: Session, seconds: Int) {
