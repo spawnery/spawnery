@@ -48,7 +48,10 @@ stdenv.mkDerivation (finalAttrs: {
     # "#!/usr/bin/env bash" shebang has nothing to resolve against inside the
     # build sandbox, which carries no /usr/bin/env, and fails with "bad
     # interpreter" before the check ever runs.
-    bash ${../hack/agent-jar-check.sh} $out/share/spawnery/spawnery-agent.jar
+    # The second argument is the unpacked source root, which installCheckPhase
+    # still has as its working directory: the check asserts on src/main and
+    # src/test as well as on the jar, and neither is reachable from $out.
+    bash ${../hack/agent-jar-check.sh} $out/share/spawnery/spawnery-agent.jar "$PWD"
     runHook postInstallCheck
   '';
 

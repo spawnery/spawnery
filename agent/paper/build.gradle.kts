@@ -153,15 +153,50 @@ tasks.shadowJar {
     // is "relocate all of it" rather than "relocate what currently conflicts",
     // because the second list has to be revisited every time Paper changes a
     // bundled library and nobody will remember to.
+    //
+    // That was the stated rule and not the actual one: the list below used to
+    // hold nine entries and the jar shipped 1 085 unrelocated classes, three of
+    // whose packages are in Paper's own libraries tree — com.google.thirdparty
+    // (guava's *second* top-level package, one line under com.google.common),
+    // com.google.errorprone and com.google.j2objc. Enumerating is what let that
+    // happen, so the enumeration is no longer what enforces it:
+    // hack/agent-jar-check.sh now fails the build on *any* class outside
+    // cloud/spawnery/agent/, whether or not it is named here. Adding a
+    // dependency that brings a new package therefore fails at build time with
+    // the package named, rather than in a pod months later.
     listOf(
-        "com.google.protobuf",
-        "com.google.common",
-        "com.google.gson",
+        // gRPC and its transport.
         "io.grpc",
         "io.perfmark",
         "okio",
         "com.squareup.okhttp3",
+        // protobuf, guava (both of its top-level packages), and the
+        // proto-google-common-protos that grpc-protobuf drags in.
+        "com.google.protobuf",
+        "com.google.common",
+        "com.google.thirdparty",
+        "com.google.gson",
+        "com.google.api",
+        "com.google.apps",
+        "com.google.cloud",
+        "com.google.geo",
+        "com.google.logging",
+        "com.google.longrunning",
+        "com.google.rpc",
+        "com.google.shopping",
+        "com.google.type",
+        // Annotation-only artifacts. They carry no behaviour, which is why the
+        // three Paper also ships were survivable rather than fatal; it is not a
+        // reason to keep them out of the prefix.
+        "com.google.errorprone",
+        "com.google.j2objc",
         "javax.annotation",
+        "org.jetbrains",
+        "org.intellij",
+        "org.jspecify",
+        "org.codehaus.mojo",
+        "android.annotation",
+        // The Kotlin standard library.
         "kotlin",
     ).forEach { relocate(it, "cloud.spawnery.agent.shaded.$it") }
 
