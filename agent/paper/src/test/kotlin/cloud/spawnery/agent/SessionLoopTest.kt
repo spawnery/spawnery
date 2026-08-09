@@ -401,6 +401,124 @@ class SessionLoopTest {
     }
 
     @Test
+    fun `books one reconnect when the replacement dies after the operator retired the outgoing stream`(
+        @TempDir dir: Path,
+    ) {
+        FakeOperator("replacement-dies-late").use { operator ->
+            val state = ServerState().apply { markReady() }
+
+            loopAgainst(operator, state, dir).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // A hard deadline far past the end of this test: what is under
+                // test here is the terminal callbacks, and an answer deadline
+                // firing in the middle of it would be a second reconnect from
+                // somewhere else.
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(30),
+                        )
+                        .build(),
+                )
+
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // The operator cancels the displaced stream at the handler entry
+                // of the replacement, so the agent hears about the outgoing
+                // stream first and skips the reconnect: the replacement owes it.
+                first.toAgent.onError(
+                    Status.UNAVAILABLE
+                        .withDescription("session ended, reconnect with a fresh token")
+                        .asRuntimeException(),
+                )
+                // And then the replacement dies too, still unanswered, which is
+                // where the obligation now lives. This differs from `keeps the
+                // outgoing stream when the renewal's replacement dies at once`
+                // in the two ways that matter: the outgoing stream was already
+                // cancelled by the operator, and the replacement dies
+                // asynchronously rather than from inside serverSession().
+                second.toAgent.onError(
+                    Status.UNAVAILABLE.withDescription("connection reset").asRuntimeException(),
+                )
+
+                // Exactly one reconnect. None at all would be permanent silence
+                // - both streams are gone and nothing else is owed - and two
+                // would be the storm the skip exists to prevent.
+                val third = operator.awaitStream(2)
+                third.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                Thread.sleep(2500)
+                assertEquals(
+                    3,
+                    operator.streams.size,
+                    "the reconnect the dead replacement owed was booked more than once",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `gives up on a replacement the operator accepts and never answers`(
+        @TempDir dir: Path,
+    ) {
+        FakeOperator("mute-operator").use { operator ->
+            val state = ServerState().apply { markReady() }
+
+            loopAgainst(operator, state, dir).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // The operator's own numbers, and the hard deadline is the one
+                // the agent has to bound the wait below with.
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(2),
+                        )
+                        .build(),
+                )
+
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // The operator retires the displaced stream where it always
+                // does, at the replacement's handler entry - and then says
+                // nothing at all on the replacement. That is an operator
+                // goroutine blocked in Agents.Supersede, which sits between the
+                // cancel and the first Send, and its own hard-deadline rescue is
+                // armed after both Sends, so it never arms.
+                first.toAgent.onError(
+                    Status.UNAVAILABLE
+                        .withDescription("session ended, reconnect with a fresh token")
+                        .asRuntimeException(),
+                )
+
+                // Everything the agent could still be waiting for is now gone:
+                // the outgoing stream was cancelled and skipped because a
+                // replacement exists, and the replacement is accepted, mute, and
+                // holds an obligation nothing will ever discharge. Without a
+                // bound of its own the agent is silent for the life of the TCP
+                // connection - no renewal, no reports, no reconnect.
+                val third = operator.awaitStream(2)
+                third.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                assertTrue(
+                    second.closed.await(1, TimeUnit.SECONDS),
+                    "the attempt the agent gave up on was left open",
+                )
+            }
+        }
+    }
+
+    @Test
     fun `keeps the outgoing stream when the renewal's replacement dies at once`(
         @TempDir dir: Path,
     ) {

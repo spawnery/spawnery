@@ -15,6 +15,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -56,12 +57,23 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
     private val replaced = AtomicBoolean(false)
 
     /**
-     * Claimed exactly once, by whichever of the two ends this attempt first:
+     * Claimed exactly once, by whichever of the three ends this attempt first:
      * [close], after which nobody owes this stream a reconnect because a
-     * replacement already exists, or the stream's own terminal callback, which
-     * owes it one unless [replaced] says a replacement is already under way.
+     * replacement already exists, the stream's own terminal callback, which
+     * owes it one unless [replaced] says a replacement is already under way, or
+     * the answer deadline below, which owes it one because nothing else will.
      */
     val ended = AtomicBoolean(false)
+
+    /**
+     * Whether the operator has said anything at all on this stream, and the
+     * one-shot timer that bounds the wait until it does. Both are here rather
+     * than in [SessionLoop] because the timer has to be disarmed by the same
+     * monitor that retires the session: a timer left armed on a stream the
+     * agent has already given up on is a second claim on [ended].
+     */
+    private val answered = AtomicBoolean(false)
+    private var answerDeadline: ScheduledFuture<*>? = null
 
     fun attach(observer: StreamObserver<ServerMessage>) {
         toOperator.set(observer)
@@ -127,6 +139,39 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
     /** Whether an attempt has been opened to replace this one. */
     fun hasReplacement(): Boolean = replaced.get()
 
+    /**
+     * Arms the bound on how long this attempt may go unanswered, unless there
+     * is nothing left to wait for: the operator can answer before connect()
+     * gets here — synchronously from inside `serverSession()` on the in-process
+     * transport, and on any transport if the answer overtakes the rest of
+     * connect() — and the session can already have been retired.
+     */
+    @Synchronized
+    fun awaitAnswer(arm: () -> ScheduledFuture<*>?) {
+        if (retired || answered.get()) return
+        answerDeadline = arm()
+    }
+
+    /**
+     * Records that the operator has said something on this stream — every
+     * message after the first says the same thing — and disarms the bound.
+     */
+    fun answerArrived() {
+        answered.set(true)
+        stopAwaitingAnswer()
+    }
+
+    /**
+     * Drops the bound without answering: the stream ended by some other route,
+     * and the timer would otherwise sit on the scheduler until it fired on a
+     * session that has already been accounted for.
+     */
+    @Synchronized
+    fun stopAwaitingAnswer() {
+        answerDeadline?.cancel(false)
+        answerDeadline = null
+    }
+
     @Synchronized
     fun close() {
         if (retired) return
@@ -137,6 +182,7 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
         ended.set(true)
         reporting?.cancel(false)
         reporting = null
+        stopAwaitingAnswer()
         runCatching { toOperator.get()?.onCompleted() }
         channel.shutdown()
         // Nothing this stream replaced may outlive it: stop() closes only the
@@ -175,6 +221,14 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
  * There is nothing useful for the agent to do other than keep trying: the pod
  * stays up either way, and an operator that is rolling out or briefly
  * unreachable must not cost the agent its session permanently.
+ *
+ * A stream that never breaks and is never answered is retried too, and that is
+ * not the same statement. Nothing else in the agent has a clock on it: the
+ * channel has no keepalive and no idle timeout, the calls have no deadline, and
+ * every timer this class arms is armed by something the operator said. So an
+ * operator that accepts a stream and then goes quiet — see
+ * [SessionLoop.awaitAnswer] for the one way that really happens — would
+ * otherwise hold the agent for the life of the TCP connection.
  */
 class SessionLoop(
     private val channels: () -> ManagedChannel,
@@ -193,6 +247,14 @@ class SessionLoop(
     private val current = AtomicReference<Session?>(null)
     private val attempt = AtomicInteger(0)
     private val stopped = AtomicBoolean(false)
+
+    /**
+     * The operator's own `hardDeadlineSeconds`, as of the last `SessionDeadline`
+     * it sent, in milliseconds. Zero until the operator has said one, which is
+     * why [awaitAnswer] is a no-op on the first attempt of a fresh process:
+     * the bound is the operator's number, not one invented here.
+     */
+    private val hardDeadlineMillis = AtomicLong(0)
 
     companion object {
         /** 1 s doubling to a 30 s cap. Never gives up: see the class comment. */
@@ -257,10 +319,17 @@ class SessionLoop(
         val fromOperator = object : StreamObserver<OperatorToServer> {
             override fun onNext(value: OperatorToServer) {
                 // The operator answering is what proves the stream reached it;
-                // a Hello handed to the transport proves nothing. Resetting the
-                // backoff at the end of connect() instead would turn a stream
-                // that always dies just after it opens into a reconnect every
-                // second, for as long as the operator stays broken.
+                // a Hello handed to the transport proves nothing. Three things
+                // here wait for that proof and nothing weaker.
+                //
+                // The bound on an unanswered attempt is discharged by it: the
+                // attempt is established, so it is no longer a stream the agent
+                // has to give up on.
+                session.answerArrived()
+                // Resetting the backoff at the end of connect() instead would
+                // turn a stream that always dies just after it opens into a
+                // reconnect every second, for as long as the operator stays
+                // broken.
                 attempt.set(0)
                 // And the same proof is what the handover waits for. Make
                 // before break is a claim about what the operator saw, so it
@@ -269,8 +338,14 @@ class SessionLoop(
                 when (value.messageCase) {
                     OperatorToServer.MessageCase.REPORT_INTERVAL ->
                         startReporting(session, value.reportInterval.seconds)
-                    OperatorToServer.MessageCase.SESSION_DEADLINE ->
+                    OperatorToServer.MessageCase.SESSION_DEADLINE -> {
+                        hardDeadlineMillis.set(
+                            TimeUnit.SECONDS.toMillis(
+                                value.sessionDeadline.hardDeadlineSeconds.toLong(),
+                            ),
+                        )
                         scheduleRenewal(session, value.sessionDeadline.renewAfterSeconds)
+                    }
                     else -> Unit
                 }
             }
@@ -323,6 +398,11 @@ class SessionLoop(
         // path below has no close() of its own.
         current.set(session)
 
+        // The obligation the outgoing stream just gave up needs a floor: this
+        // attempt now owes the agent its next stream, and an operator that
+        // never answers would otherwise never let it pay.
+        awaitAnswer(session)
+
         // stop() may have run while this attempt was in flight, in which case it
         // found nothing in `current` to retire and this session would outlive
         // the plugin.
@@ -362,7 +442,57 @@ class SessionLoop(
      */
     private fun streamEnded(session: Session) {
         if (!session.ended.compareAndSet(false, true)) return
+        session.stopAwaitingAnswer()
         if (session.hasReplacement()) return
+        reconnectLater()
+    }
+
+    /**
+     * Bounds how long an attempt may sit accepted and unanswered, because
+     * nothing else does.
+     *
+     * The reconnect obligation is handed to the replacement the moment it is
+     * opened (see [streamEnded]), and that is right — but it makes the
+     * replacement the only thing left that can pay it. An operator that accepts
+     * the stream and then says nothing is therefore not slow, it is terminal:
+     * the outgoing stream has already been cancelled and skipped, no
+     * `ReportInterval` starts a report, no `SessionDeadline` schedules a
+     * renewal, and the channel underneath has no keepalive, no idle timeout and
+     * no call deadline to end the wait. The operator's own rescue does not
+     * arrive either: `internal/agentserver` arms its hard deadline at
+     * server.go:218, *after* both `Send`s, so precisely the operator that fails
+     * to send never arms it. A goroutine blocked in `Agents.Supersede`
+     * (server.go:193), which sits between the cancel and the first `Send`,
+     * produces exactly that — fleet-wide, for every pod whose renewal lands
+     * during the block.
+     *
+     * The bound is the operator's own `hardDeadlineSeconds`, not a constant
+     * invented here: it is the operator's statement about how long one session
+     * may live, so an attempt that has not been answered within it has outlived
+     * anything the operator promised. It also makes [answerOverdue] safe to
+     * retire the outgoing stream along with the attempt, which [Session.close]
+     * does through `takeOver`: by then the stream this one replaced is a whole
+     * hard deadline past the start of its own, so nothing with a future left is
+     * being cut short.
+     */
+    private fun awaitAnswer(session: Session) {
+        val bound = hardDeadlineMillis.get()
+        if (bound <= 0) return
+        session.awaitAnswer {
+            schedule(bound, "the answer deadline could not be scheduled") { answerOverdue(session) }
+        }
+    }
+
+    /**
+     * The operator accepted this attempt and never answered it. Claiming
+     * `ended` here is what keeps the obligation exactly-once: whichever of the
+     * timer and the stream's own terminal callback gets there first books the
+     * one reconnect, and the loser returns.
+     */
+    private fun answerOverdue(session: Session) {
+        if (!session.ended.compareAndSet(false, true)) return
+        log("the operator accepted the stream and never answered it; opening another", null)
+        session.close()
         reconnectLater()
     }
 
@@ -406,13 +536,18 @@ class SessionLoop(
         }
     }
 
-    private fun schedule(delayMillis: Long, whenRejected: String, task: () -> Unit) {
-        try {
+    /**
+     * Returns the scheduled task, or null if the scheduler refused it, so a
+     * caller that has to be able to cancel what it armed can hold on to it.
+     */
+    private fun schedule(delayMillis: Long, whenRejected: String, task: () -> Unit): ScheduledFuture<*>? {
+        return try {
             scheduler.schedule(Runnable { task() }, delayMillis, TimeUnit.MILLISECONDS)
         } catch (e: RejectedExecutionException) {
             // The scheduler is gone, which happens on shutdown. Throwing here
             // would surface on a gRPC callback thread instead.
             log(whenRejected, e)
+            null
         }
     }
 
