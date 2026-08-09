@@ -33,19 +33,33 @@ import java.util.concurrent.atomic.AtomicReference
  * instead of sleeping through it, and so the renewal and backoff timers share
  * the same clock as reporting.
  */
-private class Session(val channel: ManagedChannel, private val replaces: Session?) {
+private class Session(val channel: ManagedChannel, replaces: Session?) {
     private val toOperator = AtomicReference<StreamObserver<ServerMessage>?>(null)
     private var reporting: ScheduledFuture<*>? = null
     private var retired = false
 
-    /** Claimed by whichever of [takeOver] and [abandon] runs first. */
-    private val handedOver = AtomicBoolean(false)
+    /**
+     * The attempt this one replaces, cleared by whichever of [takeOver] and
+     * [abandon] runs first. Clearing it is what makes both idempotent, and it
+     * is also the only thing that stops the chain: holding the reference for
+     * the life of the session would keep every stream the agent ever opened —
+     * and every `ManagedChannel` behind it — reachable from `current`, one
+     * link per renewal, for as long as the JVM runs.
+     */
+    private val replaces = AtomicReference(replaces)
+
+    /**
+     * Set once an attempt has been opened to replace this one, which is also
+     * the moment the reconnect obligation passes to that attempt. See
+     * [SessionLoop.streamEnded] for why the outgoing stream cannot keep it.
+     */
+    private val replaced = AtomicBoolean(false)
 
     /**
      * Claimed exactly once, by whichever of the two ends this attempt first:
      * [close], after which nobody owes this stream a reconnect because a
      * replacement already exists, or the stream's own terminal callback, which
-     * does owe it one.
+     * owes it one unless [replaced] says a replacement is already under way.
      */
     val ended = AtomicBoolean(false)
 
@@ -88,7 +102,7 @@ private class Session(val channel: ManagedChannel, private val replaces: Session
      * anything the agent does locally.
      */
     fun takeOver() {
-        if (handedOver.compareAndSet(false, true)) replaces?.close()
+        replaces.getAndSet(null)?.close()
     }
 
     /**
@@ -98,8 +112,20 @@ private class Session(val channel: ManagedChannel, private val replaces: Session
      * already gone would be break before make by another route.
      */
     fun abandon() {
-        handedOver.set(true)
+        replaces.set(null)
     }
+
+    /**
+     * Records that an attempt has been opened to replace this one. Called
+     * before that attempt's stream exists, because the operator can end this
+     * one the instant it does.
+     */
+    fun replacementOpened() {
+        replaced.set(true)
+    }
+
+    /** Whether an attempt has been opened to replace this one. */
+    fun hasReplacement(): Boolean = replaced.get()
 
     @Synchronized
     fun close() {
@@ -218,7 +244,14 @@ class SessionLoop(
         // in-process transport the operator's first message can arrive from
         // inside serverSession(), and the handover below has to know what it
         // is handing over from by then.
-        val session = Session(channel, current.get())
+        val outgoing = current.get()
+        val session = Session(channel, outgoing)
+        // Marked before the stream exists, and deliberately so: the operator
+        // ends the displaced stream at the *entry* of the replacement's
+        // handler, so the outgoing stream's terminal callback can fire while
+        // the call below is still returning. From here on the replacement owes
+        // the agent its next stream — see streamEnded.
+        outgoing?.replacementOpened()
         val stub = AgentServiceGrpc.newStub(channel).withCallCredentials(credentials)
 
         val fromOperator = object : StreamObserver<OperatorToServer> {
@@ -307,9 +340,30 @@ class SessionLoop(
      * The agent would then sit silent forever, which is worse than reconnecting
      * too eagerly. A per-attempt flag says what `current` cannot: whether this
      * particular stream was replaced on purpose.
+     *
+     * Unless a replacement is already under way, and then the replacement owes
+     * the reconnect rather than this stream. That is not an optimisation: it is
+     * what the operator's own order requires. `internal/agentserver` cancels
+     * the displaced stream's context inside `sessions.enter()`, at the handler
+     * entry of the replacement — before `Supersede`, and before either `Send`
+     * on the new stream. The cancelled handler answers `Unavailable`, so the
+     * agent sees the outgoing stream fail *first*, every time and by design,
+     * while the replacement is still waiting to be answered. A reconnect booked
+     * here would therefore be booked on every renewal, and since the
+     * replacement's first message resets the backoff to its 1 s minimum, the
+     * reconnect one second later would supersede the replacement and start the
+     * same sequence again — a self-sustaining stream churn at roughly 1 Hz, per
+     * server, for as long as the fleet runs.
+     *
+     * Nothing is dropped by skipping it. A replacement that dies books the
+     * reconnect from its own terminal callback (the stillborn path below), one
+     * that is retired in turn has a live successor, and one the agent closed on
+     * purpose was closed by a stop() that wants no reconnect at all.
      */
     private fun streamEnded(session: Session) {
-        if (session.ended.compareAndSet(false, true)) reconnectLater()
+        if (!session.ended.compareAndSet(false, true)) return
+        if (session.hasReplacement()) return
+        reconnectLater()
     }
 
     /**

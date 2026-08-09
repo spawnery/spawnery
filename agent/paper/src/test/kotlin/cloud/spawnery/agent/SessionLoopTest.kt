@@ -337,6 +337,70 @@ class SessionLoopTest {
     }
 
     @Test
+    fun `books no reconnect when the operator retires the outgoing stream before answering the replacement`(
+        @TempDir dir: Path,
+    ) {
+        FakeOperator("supersedes").use { operator ->
+            val state = ServerState().apply { markReady() }
+
+            loopAgainst(operator, state, dir).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(3),
+                        )
+                        .build(),
+                )
+
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // The real operator's order, and the whole point of this test.
+                // internal/agentserver cancels the displaced stream's context
+                // inside sessions.enter(), at the handler entry of the
+                // replacement -- before Supersede and before either Send -- and
+                // the cancelled handler answers Unavailable. So the outgoing
+                // stream fails while the replacement is still unanswered, and
+                // it is not the agent's stream to mourn: the replacement is
+                // already on its way and owes the agent whatever comes next.
+                //
+                // An agent that books a reconnect here books one on every
+                // renewal, and because the replacement's first message resets
+                // the backoff to its 1 s floor, that reconnect supersedes the
+                // replacement a second later and the whole thing repeats,
+                // forever.
+                first.toAgent.onError(
+                    Status.UNAVAILABLE
+                        .withDescription("session ended, reconnect with a fresh token")
+                        .asRuntimeException(),
+                )
+                second.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setReportInterval(ReportInterval.newBuilder().setSeconds(1))
+                        .build(),
+                )
+
+                // Two and a half seconds is two whole backoff floors: a booked
+                // reconnect has fired well before this returns.
+                Thread.sleep(2500)
+                assertEquals(
+                    2,
+                    operator.streams.size,
+                    "the operator retiring the displaced stream was mistaken for a " +
+                        "breakage the agent owes a reconnect, so every renewal opens a " +
+                        "spare stream and the spare supersedes the replacement a second later",
+                )
+            }
+        }
+    }
+
+    @Test
     fun `keeps the outgoing stream when the renewal's replacement dies at once`(
         @TempDir dir: Path,
     ) {
