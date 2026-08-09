@@ -119,7 +119,7 @@ personality, not a new harness.
 
 ## The one thing worth saying plainly
 
-Milestone 2c's agent produced four defects in a row, each uncovered by fixing
+Milestone 2c's agent produced five defects in a row, each uncovered by fixing
 the one before it, and **not one of them was in the code the tests were
 checking**. Each was in an assumption about what the tests measured.
 
@@ -135,6 +135,13 @@ checking**. Each was in an assumption about what the tests measured.
   bound at all, and the operator's own rescue is armed too late to be one.
 - Fixing that bound introduced a graceful shutdown on the one call the operator
   never finishes, parking a transport per stall.
+- And the sharpest one, found only by the final whole-branch review: every
+  reconnect test asserted `operator.streams.size` and the harness counted
+  `stream_opened` — both on the operator's side. So *how many channels the
+  agent left behind* was measured nowhere, and a stream that broke never shut
+  its channel down. An operator outage retained one live `ManagedChannel` per
+  attempt, each still retrying underneath, at the operator that was trying to
+  come back.
 
 The harness is where the assumptions hide, not the code. A Velocity agent will
 be built against this same harness. The useful habit is to ask, of every green

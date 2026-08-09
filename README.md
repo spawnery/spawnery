@@ -43,7 +43,7 @@ readiness all the way to phase `Ready`. `ProxySession`, the other half of the
 same contract, still answers `Unimplemented`; it belongs to milestone 3.
 
 Milestone 2b is done: the Paper base image. `nix build .#paper-image` produces
-a reproducible image holding Paper 26.2, a JRE 25 and `spawnery-slp`, the tool
+a reproducible image holding Paper 26.2, a headless JDK 25 and `spawnery-slp`, the tool
 the readiness probe calls to speak a real server list ping. Paper is patched at
 build time, so a pod downloads nothing at startup; `make image-test` runs the
 image offline to keep that true.

@@ -128,7 +128,7 @@ func TestDefaultsMatchTheReadinessProbe(t *testing.T) {
 		Spec: spawneryv1alpha1.ServerGroupSpec{
 			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: "production"},
 			Type:                          spawneryv1alpha1.ServerGroupEphemeral,
-			Image:                         "ghcr.io/spawnery/paper:26.2-0.1.0",
+			Image:                         "ghcr.io/spawnery/paper:26.2-0.2.0",
 			MaxPlayers:                    100,
 			TerminationGracePeriodSeconds: 60,
 			Scaling: &spawneryv1alpha1.ScalingSpec{

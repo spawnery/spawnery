@@ -194,15 +194,6 @@ its own `AfterFunc` never armed either. Narrow, but it is the one hole the
 milestone's three-phase harness does not cover, because the stub either answers
 fully or not at all.
 
-**Stopping an unanswered session can park its transport.** `Session.close()`
-does a graceful `ManagedChannel.shutdown()`, which waits for pre-existing calls;
-on the give-up path the agent now cancels instead, precisely because that call
-is the one the operator never finishes. `stop()` still takes the graceful route,
-so a plugin disabled during an operator stall parks one socket and its transport
-threads. Bounded to one channel per `stop()`, and `stop()` usually coincides with
-JVM exit, so it only bites across a disable/enable cycle. The parameter that
-fixes it already exists.
-
 **The relocation is not proven on the give-up path.** The cast to
 `ClientCallStreamObserver` that the cancel needs sits inside a `runCatching`,
 which catches `Throwable` — so a `NoClassDefFoundError` from a shading
@@ -238,17 +229,19 @@ nixpkgs while `protobuf-java` (4.35.1, tracking protoc 35.1 one for one) comes
 from `deps.json`. In both cases a nixpkgs bump moves the generator without the
 runtime, and the symptom is a generated stub that does not match the library it
 runs against. The failure is loud — `compileProtoJava` fails with "cannot find
-symbol" — but it appears nowhere near the pin that caused it, and `flake.nix`
-carries no comment pointing back at `build.gradle.kts` at either edit site.
+symbol" — but it appears nowhere near the pin that caused it. `flake.nix` now
+names the coupling at both edit sites, which is the cheapest half; the standing
+check still does not exist, and belongs with the `deps.json` guard above.
 
 **The level-2 harness has rough edges milestone 3 inherits.** `hack/agent-test.sh`
 and `cmd/spawnery-stubop` are exactly what a Velocity agent will be tested with,
 so what they do not check is worth writing down: stream indices `0` and `1` are
 hard-coded in the overlap verdict; `seq` is record order and not arrival order,
 which the verdict's wording overstates; two wait loops after `await_event` do not
-check that the container is still alive; there is no `trap cleanup INT TERM` for
-the background stub, so an interrupted run leaves it behind; and the stub's own
-Go tests cover neither the never-closes property nor the uniqueness of `seq`.
+check that the container is still alive; the three phases are a near-verbatim
+copy of one another rather than one parameterised function, so what each varies
+has to be found by eye; and the stub's own Go tests cover neither the
+never-closes property nor the uniqueness of `seq`.
 
 **The local kind flow needs a `Service` nothing creates.** A pod dials
 `spawnery-operator.<ns>.svc:9443`. When the operator runs outside the cluster —

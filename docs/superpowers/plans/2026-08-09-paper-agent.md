@@ -1060,6 +1060,20 @@ object BearerCredentials {
 }
 ```
 
+> **Correction, made during execution.** `OperatorChannel.build` above is
+> missing `.tlsConnectionSpec(TLS_VERSIONS, CIPHER_SUITES)`, and without it the
+> agent cannot complete a handshake at all. grpc-okhttp chooses its
+> `ConnectionSpec` by platform: the TLS 1.3 + 1.2 spec only on Android, and a
+> TLS-1.2-only legacy spec on every JDK. `internal/agentserver` sets
+> `MinVersion: VersionTLS13`, so the default leaves the agent offering a version
+> the operator refuses and the handshake dies with a `protocol_version` alert
+> before a byte of HTTP/2. Nothing at level 1 could see it — the in-process
+> transport used by the unit tests does no TLS — so it was found by
+> `hack/agent-test.sh` against a real operator-shaped server. The shipped form
+> is `OperatorChannel.kt:71-86`, which spells out TLS 1.3 and its three suites;
+> `docs/handover-milestone-3.md` names it as the first thing to check when a new
+> agent's handshake fails.
+
 - [ ] **Step 5: Run to verify it passes**
 
 Run: `nix build .#paper-agent -L 2>&1 | tail -20`
@@ -1642,6 +1656,34 @@ and add:
     }
 ```
 
+> **Correction, made during execution.** Three things in the two functions
+> above are wrong, and each of them shipped as a defect somewhere before it was
+> found.
+>
+> `connect(); session.close()` inside `scheduleRenewal` is **break before
+> make**, which is the one thing this whole class exists to prevent. It reads
+> like make before break and is not: the replacement needs a fresh TCP
+> connection and a TLS handshake while the retirement travels an established
+> one, so the close reliably overtakes the greeting and the operator sees a
+> disconnect followed by a connect — every server dropping out of `Ready` on
+> the rhythm of the hard deadline. `hack/agent-test.sh` measured it losing
+> every time; the unit tests could not, because the in-process transport
+> delivers the Hello synchronously. The shipped `scheduleRenewal`
+> (`SessionLoop.kt:661-677`) has no `close()` at all: the outgoing stream is
+> retired by `Session.takeOver()`, from `onNext`, once the operator has actually
+> answered the replacement. `docs/known-issues.md:31-36` records it.
+>
+> `log("renewal failed; the old stream stays until it breaks", e)` leaves a
+> failed renewal with nothing that retries it. The outgoing stream does still
+> live until the hard deadline, so there is time — but only if something uses
+> it. The shipped form logs and calls `reconnectLater()`.
+>
+> `runCatching { connect() }` swallows the one failure that has no other
+> retry. `connect()` can throw before anything is registered anywhere — an
+> unreadable token, a channel that will not build — and `runCatching` then ends
+> the agent permanently and silently. The shipped `reconnectLater`
+> (`SessionLoop.kt:679-693`) catches, logs, and reschedules itself.
+
 Replace `fromOperator.onError` and `onCompleted` with:
 
 ```kotlin
@@ -1656,7 +1698,47 @@ Replace `fromOperator.onError` and `onCompleted` with:
             }
 ```
 
+> **Correction, made during execution.** `if (current.compareAndSet(holder.get(),
+> null)) reconnectLater()` is two separate defects at once, and the shipped code
+> is `streamEnded` (`SessionLoop.kt:565-576`), which is neither.
+>
+> Guarding on `current` skips the reconnect exactly when it is most needed.
+> `connect()` installs the session only after the Hello has gone out, so a
+> stream that fails before that — a rejected token, an operator mid-rollout —
+> leaves `current` pointing elsewhere, the compare-and-set fails, and the agent
+> sits silent forever. That is strictly worse than reconnecting too eagerly, and
+> `SessionLoop.kt:538-544` says so. A per-attempt `ended` flag says what
+> `current` cannot: whether *this* stream was replaced on purpose.
+>
+> Booking the reconnect unconditionally is the other half.
+> `internal/agentserver` cancels the displaced stream's context inside
+> `sessions.enter()`, at the handler entry of the replacement — before
+> `Supersede` and before either `Send` — so the agent always sees the outgoing
+> stream fail *first*, on every renewal, while the replacement is still
+> unanswered. A reconnect booked there is booked on every renewal, and since the
+> replacement's first message resets the backoff to its 1 s floor, that
+> reconnect supersedes the replacement a second later and the sequence repeats:
+> a self-sustaining stream churn at roughly 1 Hz, per server, for as long as the
+> fleet runs (`SessionLoop.kt:546-558`). The shipped code skips the reconnect
+> when `hasReplacement()` says a replacement is already under way, and hands the
+> obligation to it.
+>
+> Neither could be seen at level 1 alone, which is why `hack/agent-test.sh`
+> phase 2 bounds the stream rate from above and phase 3 bounds it from below.
+
 Reset `attempt = 0` at the end of `connect()`, after the `Hello` is sent.
+
+> **Correction, made during execution.** Resetting at the end of `connect()`
+> resets it on a `Hello` merely handed to the transport, which proves nothing:
+> a stream that always dies just after it opens then has its backoff cleared on
+> every attempt, and the agent reconnects once a second for as long as the
+> operator stays broken. The reset belongs on the operator's first message, and
+> that is where it is — `SessionLoop.kt:455`, inside `onNext`, beside the two
+> other things that wait for the same proof. It is the same argument as make
+> before break: what the operator saw, not what the agent sent. Deviation (a) of
+> task 6, rejected on the record. `SessionLoopTest.kt`'s `grows the backoff with
+> every failed attempt and starts over once the operator answers` pins both
+> directions.
 
 Add the constructor parameter, last:
 

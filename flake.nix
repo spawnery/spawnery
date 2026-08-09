@@ -62,6 +62,29 @@
               kubernetes-helm
               kind
               k3d
+              # Both of these are pinned a second time, by version, in
+              # agent/paper/build.gradle.kts -- and only this half moves when
+              # nixpkgs does. `protobuf` here is protoc, whose X.Y the
+              # `protobuf-java` artifact tracks one for one (protoc 35.1 <->
+              # protobuf-java 4.35.1); `protoc-gen-grpc-java` here is the
+              # generator whose output the `io.grpc:grpc-*` artifacts have to
+              # match, currently 1.83.1. A `nix flake update` followed by
+              # `make proto` can therefore regenerate stubs that demand a
+              # runtime the build does not resolve, and the symptom
+              # (`compileProtoJava`: cannot find symbol, or a
+              # ProtobufRuntimeVersionException at class init) appears nowhere
+              # near this line. After a flake update, read both new versions
+              # from the repository root and move the literals in
+              # build.gradle.kts:67-77 to match. protoc answers for itself:
+              #
+              #   nix develop -c protoc --version
+              #
+              # The generator plugin takes no option at all, so it is read off
+              # the pinned nixpkgs instead:
+              #
+              #   nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.${builtins.currentSystem}.protoc-gen-grpc-java.version'
+              #
+              # Nothing enforces this but flake.lock. See docs/known-issues.md.
               protobuf
               protoc-gen-go
               protoc-gen-go-grpc
