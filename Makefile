@@ -25,6 +25,13 @@ proto:
 		--go_out=. --go_opt=module=github.com/spawnery/spawnery \
 		--go-grpc_out=. --go-grpc_opt=module=github.com/spawnery/spawnery \
 		proto/spawnery/agent/v1alpha1/agent.proto
+	rm -rf agent/paper/src/proto/java
+	mkdir -p agent/paper/src/proto/java
+	protoc \
+		--proto_path=proto \
+		--java_out=agent/paper/src/proto/java \
+		--grpc-java_out=agent/paper/src/proto/java \
+		proto/spawnery/agent/v1alpha1/agent.proto
 
 .PHONY: fmt
 fmt:
