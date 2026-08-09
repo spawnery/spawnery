@@ -163,6 +163,41 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
     }
 
     /**
+     * Whether the operator ever said anything on this stream.
+     *
+     * Read by [SessionLoop.stop], which has to choose between the two ways of
+     * ending a call for exactly the reason [close] describes: an attempt the
+     * operator never answered is one it will never finish either.
+     */
+    fun wasAnswered(): Boolean = answered.get()
+
+    /**
+     * Shuts the channel down without retiring the session, for a stream that
+     * ended on its own.
+     *
+     * [close] is the wrong tool on that path and not by a little: it ends with
+     * [takeOver], which would retire the stream this one replaced — break
+     * before make, by the one route the renewal tests exist to forbid. So the
+     * reconnect path could not use it, and used nothing instead. A channel is
+     * built per attempt ([SessionLoop.connect] calls `channels()` every time,
+     * and AgentPlugin's factory memoises nothing), so every failed attempt left
+     * one behind: strongly reachable from `current` down the [replaces] chain,
+     * therefore not collectable, and — never having been shut down — still
+     * running gRPC's own reconnect loop underneath. At the 30 s backoff cap
+     * that is about 120 of them an hour, per pod, every one of them dialling
+     * the operator that is trying to come back.
+     *
+     * Graceful is right here, unlike on the give-up path: by the time a
+     * terminal callback has fired the call underneath is finished, so
+     * `shutdown()` has nothing left to wait for and the channel terminates at
+     * once. A later [close] on the same session stays correct, because a second
+     * shutdown of an already-shut-down channel is a no-op.
+     */
+    fun releaseChannel() {
+        channel.shutdown()
+    }
+
+    /**
      * Drops the bound without answering: the stream ended by some other route,
      * and the timer would otherwise sit on the scheduler until it fired on a
      * session that has already been accounted for.
@@ -181,19 +216,24 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
      * handover: the agent half-closes, the operator finishes the call and sends
      * trailers, and `ManagedChannel.shutdown()` — which is graceful, letting
      * pre-existing calls run to completion — terminates the channel once it
-     * has. Every path here except one reaches this with a call that is already
-     * finished or about to be, so graceful is right for all of them.
+     * has. Every path that reaches this with a call the operator has answered
+     * is a path where graceful is right.
      *
-     * The give-up path ([SessionLoop.answerOverdue]) is the exception, and it
-     * is wrong there by construction: the call it abandons is by definition one
-     * the operator is not answering. That handler is blocked before it starts
-     * its receive goroutine (`internal/agentserver/server.go:228`), so it never
-     * observes the half-close, and a half-close is not a cancellation, so
-     * nothing sends `RST_STREAM`. A graceful shutdown then waits on a call that
-     * will never complete: the channel sits in SHUTDOWN forever, holding its
-     * connection and its reader thread, one set per give-up, inside a Paper
-     * server's JVM for as long as the operator stalls. Cancelling ends the call
-     * on both sides, so the channel can actually terminate.
+     * On a call the operator has *not* answered it is wrong by construction,
+     * and there are two such paths: the give-up ([SessionLoop.answerOverdue]),
+     * and a [SessionLoop.stop] that lands on an attempt still waiting for its
+     * first message. The call being ended is by definition one the operator is
+     * not answering. Its handler is blocked before it starts its receive
+     * goroutine (`internal/agentserver/server.go:228`), so it never observes
+     * the half-close, and a half-close is not a cancellation, so nothing sends
+     * `RST_STREAM`. A graceful shutdown then waits on a call that will never
+     * complete: the channel sits in SHUTDOWN forever, holding its connection
+     * and its reader thread, inside a Paper server's JVM for as long as the
+     * operator stalls. Cancelling ends the call on both sides, so the channel
+     * can actually terminate.
+     *
+     * A stream that ended on its own reaches neither: it needs its channel
+     * released without the retirement, which is [releaseChannel].
      */
     @Synchronized
     fun close(cancel: Boolean = false) {
@@ -367,7 +407,15 @@ class SessionLoop(
         // Set first, so a reconnect or renewal already sitting on the scheduler
         // cannot open a stream the plugin has no way left to close.
         stopped.set(true)
-        current.getAndSet(null)?.close()
+        val session = current.getAndSet(null) ?: return
+        // The same choice [answerOverdue] makes, and for the same reason: an
+        // attempt the operator has never answered is one it will never finish,
+        // so a half-close leaves the call open and the graceful shutdown behind
+        // it waits on it forever. onDisable() gives the scheduler two seconds
+        // and returns, so a parked channel here outlives the plugin inside a
+        // JVM that keeps running. Where the operator has answered, graceful is
+        // still right: that call ends the moment the agent half-closes.
+        session.close(cancel = !session.wasAnswered())
     }
 
     override fun close() = stop()
@@ -517,6 +565,12 @@ class SessionLoop(
     private fun streamEnded(session: Session) {
         if (!session.ended.compareAndSet(false, true)) return
         session.stopAwaitingAnswer()
+        // Before the skip, not after it: a superseded stream's channel is as
+        // dead as a broken one's, and the skip is about who owes the next
+        // stream, not about who owns this one's transport. See
+        // [Session.releaseChannel] for what one unreleased channel per failed
+        // attempt costs over an operator outage.
+        session.releaseChannel()
         if (session.hasReplacement()) return
         reconnectLater()
     }

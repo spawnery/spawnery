@@ -21,6 +21,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Collections
 import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
@@ -751,6 +752,144 @@ class SessionLoopTest {
         }
     }
 
+    /**
+     * The quantity nothing else on either side of the wire measures: how many
+     * channels the agent leaves behind.
+     *
+     * Every other reconnect test here counts `operator.streams.size`, and
+     * hack/agent-test.sh counts `stream_opened` — both taken on the operator's
+     * side, where a channel the agent never shut down is invisible. A channel
+     * is built per attempt, so an operator that is unreachable for the length
+     * of a rolling update used to leave one behind per attempt: strongly
+     * reachable through the `replaces` chain, so not collectable, and still
+     * running gRPC's own reconnect loop underneath, aimed at the operator that
+     * is trying to come back.
+     *
+     * The stream count below is asserted too, and deliberately: it is what
+     * makes "every channel terminated" mean "every channel behind a stream
+     * that broke" rather than "no channel was ever built".
+     *
+     * What this does not prove: that a socket and a reader thread are released.
+     * The in-process transport has neither, and termination is the property
+     * those hang off — the same limit `cancels the attempt it gives up on`
+     * records.
+     */
+    @Test
+    fun `shuts down the channel behind every stream that breaks`(@TempDir dir: Path) {
+        FakeOperator("channels-released").use { operator ->
+            val state = ServerState()
+            val opened = Collections.synchronizedList(mutableListOf<ManagedChannel>())
+
+            loopAgainst(
+                operator,
+                state,
+                dir,
+                channels = { operator.newChannel().also { opened.add(it) } },
+                // The backoff sequence is asserted by the test below; here it
+                // only has to be short enough that three failures fit in one
+                // test, and it must not be zero, or the reconnects would race
+                // the assertions rather than follow them.
+                jitter = { 50L },
+            ).use { loop ->
+                loop.start()
+
+                // Three breakages in a row, each on a channel of its own, and
+                // never answered — so nothing takes the handover path and every
+                // channel here is one only the reconnect path can release.
+                repeat(3) { attempt ->
+                    val stream = operator.awaitStream(attempt)
+                    stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                    stream.toAgent.onError(Status.UNAVAILABLE.asRuntimeException())
+                }
+                operator.awaitStream(3).awaitMessage {
+                    it.messageCase == ServerMessage.MessageCase.HELLO
+                }
+
+                assertEquals(4, opened.size, "the agent did not build one channel per attempt")
+                opened.take(3).forEachIndexed { index, channel ->
+                    assertTrue(
+                        channel.awaitTermination(5, TimeUnit.SECONDS),
+                        "the channel behind broken stream $index was never shut down; every " +
+                            "failed attempt retains one for the length of the outage, each " +
+                            "still retrying underneath",
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * The one assertion design section 9 names and nothing had: that the delay
+     * between reconnects is `backoffMillis(attempt)` and that `attempt` moves.
+     *
+     * `backoff grows and is capped` tests the pure function and never runs the
+     * loop; `reconnects with backoff after the stream breaks` runs the loop and
+     * makes no timing assertion. Between them, pinning `attempt` at zero passed
+     * everything — and a permanently unreachable operator dialled once a second
+     * per pod, forever, which is the 1 Hz churn by another route.
+     *
+     * Both directions are here, because each is a separate defect. Growth is
+     * the first three bases; the reset on the operator's answer — and not on a
+     * Hello merely handed to the transport — is the fourth.
+     */
+    @Test
+    fun `grows the backoff with every failed attempt and starts over once the operator answers`(
+        @TempDir dir: Path,
+    ) {
+        FakeOperator("backoff-sequence").use { operator ->
+            val state = ServerState()
+            // The base handed to jitter is backoffMillis(attempt) exactly, so
+            // recording it reads the sequence without waiting it out. The
+            // return value collapses the wait: what is under test is the number
+            // the loop computed, not the scheduler's ability to sleep on it.
+            val bases = LinkedBlockingQueue<Long>()
+            var connectCount = 0
+
+            loopAgainst(
+                operator,
+                state,
+                dir,
+                channels = { if (connectCount++ < 3) FailingChannel() else operator.newChannel() },
+                jitter = { base -> bases.add(base); 1L },
+            ).use { loop ->
+                loop.start()
+
+                assertEquals(
+                    listOf(1_000L, 2_000L, 4_000L),
+                    listOf(nextBase(bases), nextBase(bases), nextBase(bases)),
+                    "the reconnect delay did not grow with the number of failed attempts, so a " +
+                        "permanently unreachable operator is dialled at the floor rate forever",
+                )
+
+                // The fourth attempt reaches the operator, and the operator
+                // answers it. Waiting for the report rather than for the send
+                // is what makes this the operator's answer having been
+                // processed, not merely dispatched.
+                val stream = operator.awaitStream(0)
+                stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                stream.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setReportInterval(ReportInterval.newBuilder().setSeconds(1))
+                        .build(),
+                )
+                stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.PLAYER_COUNT }
+
+                stream.toAgent.onError(Status.UNAVAILABLE.asRuntimeException())
+                assertEquals(
+                    1_000L,
+                    nextBase(bases),
+                    "the backoff was not reset by the operator answering, so a stream that is " +
+                        "established and later breaks is retried as though the operator had " +
+                        "never been reachable",
+                )
+            }
+        }
+    }
+
+    private fun nextBase(bases: LinkedBlockingQueue<Long>): Long =
+        bases.poll(5, TimeUnit.SECONDS)
+            ?: throw AssertionError("the loop scheduled no further reconnect within 5s")
+
     @Test
     fun `reconnects when the stream fails before the session is established`(@TempDir dir: Path) {
         FakeOperator("early-failure").use { operator ->
@@ -832,23 +971,42 @@ class SessionLoopTest {
         }
     }
 
+    /**
+     * The assertion is on the channel and not on the operator's view of the
+     * stream, and the difference is the whole of what `stop()` now does.
+     *
+     * An attempt the operator has never answered is one it will never finish,
+     * so `stop()` cancels it rather than half-closing it — the same choice
+     * `answerOverdue` makes, for the same reason. A cancelled call that had not
+     * yet been handed a transport never reaches the operator at all, so
+     * `awaitStream(1)` is no longer something this test may wait for. That is
+     * not a weaker statement: a stream nobody opened cannot outlive the plugin,
+     * and termination covers the case where it did open as well.
+     *
+     * It is also strictly stronger than the close latch it replaces. Under a
+     * graceful shutdown the channel waits for a call this operator never
+     * finishes, so it would sit in SHUTDOWN forever while the latch — which
+     * counts down on a half-close just as happily — reported success.
+     */
     @Test
-    fun `does not leave a stream behind when stop lands mid-connect`(@TempDir dir: Path) {
+    fun `leaves no channel running when stop lands mid-connect`(@TempDir dir: Path) {
         FakeOperator("stopped-mid-connect").use { operator ->
             val state = ServerState()
             val started = java.util.concurrent.atomic.AtomicReference<SessionLoop?>(null)
+            val opened = Collections.synchronizedList(mutableListOf<ManagedChannel>())
             var connectCount = 0
 
             // stop() runs after connect() has passed its entry check but before
             // the session is installed, so stop() finds nothing in `current` to
-            // retire. Without connect()'s re-check the stream would outlive the
-            // plugin with nothing left holding a reference to close it.
+            // retire. Without connect()'s re-check at the end, the attempt would
+            // outlive the plugin with nothing left holding a reference to close
+            // it -- and its channel would still be running underneath.
             val loop = loopAgainst(
                 operator,
                 state,
                 dir,
                 channels = {
-                    val channel = operator.newChannel()
+                    val channel = operator.newChannel().also { opened.add(it) }
                     if (connectCount++ == 1) started.get()!!.stop()
                     channel
                 },
@@ -862,11 +1020,16 @@ class SessionLoopTest {
 
                 first.toAgent.onError(Status.UNAVAILABLE.asRuntimeException())
 
-                val second = operator.awaitStream(1)
-                assertTrue(
-                    second.closed.await(5, TimeUnit.SECONDS),
-                    "the stream opened while stop() was running was never closed",
-                )
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (opened.size < 2 && System.nanoTime() < deadline) Thread.sleep(10)
+                assertEquals(2, opened.size, "the reconnect stop() was meant to land in never ran")
+
+                opened.forEachIndexed { index, channel ->
+                    assertTrue(
+                        channel.awaitTermination(5, TimeUnit.SECONDS),
+                        "the channel behind attempt $index was still running after stop()",
+                    )
+                }
             }
         }
     }
