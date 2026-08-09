@@ -33,10 +33,13 @@ import java.util.concurrent.atomic.AtomicReference
  * instead of sleeping through it, and so the renewal and backoff timers share
  * the same clock as reporting.
  */
-private class Session(val channel: ManagedChannel) {
+private class Session(val channel: ManagedChannel, private val replaces: Session?) {
     private val toOperator = AtomicReference<StreamObserver<ServerMessage>?>(null)
     private var reporting: ScheduledFuture<*>? = null
     private var retired = false
+
+    /** Claimed by whichever of [takeOver] and [abandon] runs first. */
+    private val handedOver = AtomicBoolean(false)
 
     /**
      * Claimed exactly once, by whichever of the two ends this attempt first:
@@ -77,6 +80,27 @@ private class Session(val channel: ManagedChannel) {
         reporting = schedule()
     }
 
+    /**
+     * Retires the stream this one replaced, once.
+     *
+     * Called when the operator first answers on this stream, and from nowhere
+     * else: see [SessionLoop] for why the handover cannot be timed off
+     * anything the agent does locally.
+     */
+    fun takeOver() {
+        if (handedOver.compareAndSet(false, true)) replaces?.close()
+    }
+
+    /**
+     * Gives up the handover without performing it. The replaced stream keeps
+     * running — it still has the gap between `renewAfterSeconds` and
+     * `hardDeadlineSeconds` left, and retiring it for an attempt that is
+     * already gone would be break before make by another route.
+     */
+    fun abandon() {
+        handedOver.set(true)
+    }
+
     @Synchronized
     fun close() {
         if (retired) return
@@ -89,6 +113,11 @@ private class Session(val channel: ManagedChannel) {
         reporting = null
         runCatching { toOperator.get()?.onCompleted() }
         channel.shutdown()
+        // Nothing this stream replaced may outlive it: stop() closes only the
+        // current session, and a handover still in flight at that point would
+        // otherwise leave the outgoing one running with nobody holding it. The
+        // stillborn path calls abandon() first, so this is a no-op there.
+        takeOver()
     }
 }
 
@@ -99,10 +128,22 @@ private class Session(val channel: ManagedChannel) {
  *
  * Renewal is make-before-break, and that is the point of the class rather than
  * a detail of it: the operator carries readiness across a handover only if the
- * replacement stream has greeted before the outgoing one goes away. Break
+ * replacement stream has reached it before the outgoing one goes away. Break
  * before make would drop every server out of `Ready` on the rhythm of the hard
  * deadline, deregister it from its proxies and book a readiness loss — a
  * self-inflicted flap counter, every ten minutes, forever.
+ *
+ * "Reached it" is the operator's first message on the new stream, and nothing
+ * earlier. Handing the Hello to the transport and retiring the outgoing stream
+ * on the next line reads like make before break and is not: the replacement
+ * needs a fresh TCP connection and a TLS handshake, while the retirement
+ * travels an established one, so the close reliably overtakes the greeting and
+ * the operator sees a disconnect followed by a connect. That is not a race lost
+ * occasionally — hack/agent-test.sh measured it losing every time, against an
+ * operator-shaped server on the same host. The unit tests could not: the
+ * in-process transport delivers the Hello synchronously, so both orders look
+ * identical there. The same argument is already why the backoff resets on the
+ * operator's answer rather than on a Hello that was merely sent.
  *
  * A broken stream is always retried, with backoff and without a give-up point.
  * There is nothing useful for the agent to do other than keep trying: the pod
@@ -172,7 +213,12 @@ class SessionLoop(
     private fun connect() {
         if (stopped.get()) return
         val channel = channels()
-        val session = Session(channel)
+        // The stream this attempt is replacing is captured here, before the
+        // stub call, for the same reason the session itself is: on the
+        // in-process transport the operator's first message can arrive from
+        // inside serverSession(), and the handover below has to know what it
+        // is handing over from by then.
+        val session = Session(channel, current.get())
         val stub = AgentServiceGrpc.newStub(channel).withCallCredentials(credentials)
 
         val fromOperator = object : StreamObserver<OperatorToServer> {
@@ -183,6 +229,10 @@ class SessionLoop(
                 // that always dies just after it opens into a reconnect every
                 // second, for as long as the operator stays broken.
                 attempt.set(0)
+                // And the same proof is what the handover waits for. Make
+                // before break is a claim about what the operator saw, so it
+                // can only be timed off something the operator sent.
+                session.takeOver()
                 when (value.messageCase) {
                     OperatorToServer.MessageCase.REPORT_INTERVAL ->
                         startReporting(session, value.reportInterval.seconds)
@@ -228,16 +278,17 @@ class SessionLoop(
         // between renewAfterSeconds and hardDeadlineSeconds left to live, and
         // the terminal callback has already booked a reconnect.
         if (session.ended.get()) {
+            session.abandon()
             session.close()
             return
         }
 
-        // Retire the outgoing session only now, after the new one has greeted:
-        // make-before-break. Closing it at the point `session` was created —
-        // before the Hello went out — would drop the server out of Ready for
-        // however long the new stream takes to come up. This is also why the
-        // renewal path below has no close() of its own.
-        current.getAndSet(session)?.close()
+        // The new stream is where everything the agent does next belongs — the
+        // renewal it will schedule, a readiness push, a stop(). Retiring the
+        // outgoing one is deliberately *not* part of that: it happens in
+        // onNext, once the operator has answered. This is also why the renewal
+        // path below has no close() of its own.
+        current.set(session)
 
         // stop() may have run while this attempt was in flight, in which case it
         // found nothing in `current` to retire and this session would outlive

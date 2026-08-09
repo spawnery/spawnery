@@ -13,6 +13,7 @@ import io.grpc.MethodDescriptor
 import io.grpc.Status
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -25,10 +26,13 @@ import java.util.concurrent.TimeUnit
 
 /**
  * A [ManagedChannel] that reports, in program order, exactly when a message is
- * sent on it and when it is shut down — without depending on the operator's
- * (remote, potentially reordered-relative-to-other-streams) view of events.
- * Used to prove [SessionLoop.connect]'s local ordering: greet the new stream,
- * *then* retire the old one.
+ * sent on it and when it is shut down.
+ *
+ * It says what the agent did locally, which is enough to catch an outgoing
+ * stream retired for a replacement that never got off the ground. It is not
+ * enough to establish make before break: that is a claim about what the
+ * operator saw, and the tests below make it by holding the operator's answer
+ * back and watching the outgoing stream stay up.
  */
 private class TrackingChannel(
     private val delegate: ManagedChannel,
@@ -201,27 +205,13 @@ class SessionLoopTest {
     }
 
     @Test
-    fun `retires the previous session only after the new one has greeted`(@TempDir dir: Path) {
+    fun `retires the previous session only after the operator has answered the new one`(
+        @TempDir dir: Path,
+    ) {
         FakeOperator("renews").use { operator ->
             val state = ServerState()
-            val order = Collections.synchronizedList(mutableListOf<String>())
-            var connectCount = 0
 
-            val loop = loopAgainst(
-                operator,
-                state,
-                dir,
-                channels = {
-                    connectCount++
-                    val real = operator.newChannel()
-                    when (connectCount) {
-                        1 -> TrackingChannel(real, onShutdown = { order.add("first-closed") })
-                        else -> TrackingChannel(real, onSend = { order.add("second-sent") })
-                    }
-                },
-            )
-
-            loop.use {
+            loopAgainst(operator, state, dir).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -243,8 +233,23 @@ class SessionLoopTest {
                 val second = operator.awaitStream(1)
                 second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // Half 1: the previous session is actually retired -- its
-                // stream closes and its reporting future stops firing.
+                // Half 1: make before break. The operator has the new stream's
+                // Hello and has not answered it, and until it does the outgoing
+                // stream has to stay up. Waiting on the latch rather than
+                // sleeping keeps the failure fast: a regression closes the
+                // stream at once and this returns immediately.
+                assertFalse(
+                    first.closed.await(1, TimeUnit.SECONDS),
+                    "the previous session was retired before the operator answered the new one",
+                )
+
+                // Half 2: once it does answer, the previous session is actually
+                // retired -- its stream closes and its reporting future stops.
+                second.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setReportInterval(ReportInterval.newBuilder().setSeconds(1))
+                        .build(),
+                )
                 assertTrue(
                     first.closed.await(5, TimeUnit.SECONDS),
                     "the previous session's stream was never closed",
@@ -258,45 +263,18 @@ class SessionLoopTest {
                     first.received.count { it.messageCase == ServerMessage.MessageCase.PLAYER_COUNT },
                     "the previous session's reporting future kept firing after retirement",
                 )
-
-                // Half 2: that retirement happened only after the new stream
-                // had already sent its Hello -- make before break. Recorded
-                // from the two channels' own local call order, not from the
-                // operator's (independently-scheduled, cross-stream) view.
-                assertTrue(order.contains("second-sent"), "the new stream never sent anything; saw $order")
-                assertTrue(order.contains("first-closed"), "the previous channel was never shut down; saw $order")
-                assertTrue(
-                    order.indexOf("second-sent") < order.indexOf("first-closed"),
-                    "the previous session was retired before the new one greeted: $order",
-                )
             }
         }
     }
 
     @Test
-    fun `renews before the deadline and keeps the old stream open until the new one greets`(
+    fun `renews before the deadline and keeps the old stream open until the operator answers`(
         @TempDir dir: Path,
     ) {
         FakeOperator("renew").use { operator ->
             val state = ServerState().apply { markReady() }
-            val order = Collections.synchronizedList(mutableListOf<String>())
-            var connectCount = 0
 
-            val loop = loopAgainst(
-                operator,
-                state,
-                dir,
-                channels = {
-                    connectCount++
-                    val real = operator.newChannel()
-                    when (connectCount) {
-                        1 -> TrackingChannel(real, onShutdown = { order.add("first-closed") })
-                        else -> TrackingChannel(real, onSend = { order.add("second-sent") })
-                    }
-                },
-            )
-
-            loop.use {
+            loopAgainst(operator, state, dir).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -320,20 +298,29 @@ class SessionLoopTest {
                 // Supersede has something to carry across the handover.
                 assertTrue(hello.hello.ready, "the renewed stream greeted as not ready")
 
-                // Make before break. Taken from each channel's own call order
-                // rather than from the operator's cross-stream view, which is
-                // two independently scheduled RPCs and proves nothing about
-                // which happened first.
+                // Make before break, stated as what the operator sees rather
+                // than as what the agent does: the renewed stream is greeted
+                // and unanswered, and for as long as that is true the outgoing
+                // stream must still be there. An agent that retires it on its
+                // own Hello passes a local-ordering check and still hands the
+                // operator a disconnect followed by a connect, because the
+                // replacement's TLS handshake takes longer than the outgoing
+                // stream's close.
+                assertFalse(
+                    first.closed.await(1, TimeUnit.SECONDS),
+                    "break before make: the outgoing stream was retired before the " +
+                        "operator had answered the renewed one, so the operator sees a " +
+                        "disconnect and the server drops out of Ready",
+                )
+
+                second.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setReportInterval(ReportInterval.newBuilder().setSeconds(1))
+                        .build(),
+                )
                 assertTrue(
                     first.closed.await(5, TimeUnit.SECONDS),
                     "the outgoing stream was never closed",
-                )
-                assertTrue(order.contains("second-sent"), "the renewed stream never greeted; saw $order")
-                assertTrue(order.contains("first-closed"), "the outgoing channel was never shut down; saw $order")
-                assertTrue(
-                    order.indexOf("second-sent") < order.indexOf("first-closed"),
-                    "break before make: the operator sees a disconnect and the server " +
-                        "drops out of Ready for the length of the gap: $order",
                 )
 
                 // Retiring the outgoing stream is not a breakage, so it must not
@@ -398,6 +385,19 @@ class SessionLoopTest {
                 // failing is not the end of the agent's session.
                 val replacement = operator.awaitStream(1)
                 replacement.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // The outgoing stream survived the failed attempt: it is still
+                // open here, one whole renewal later, and only the operator
+                // answering the replacement retires it.
+                assertFalse(
+                    first.closed.await(1, TimeUnit.SECONDS),
+                    "the outgoing stream was retired for a replacement that had already died",
+                )
+                replacement.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setReportInterval(ReportInterval.newBuilder().setSeconds(1))
+                        .build(),
+                )
                 assertTrue(
                     first.closed.await(5, TimeUnit.SECONDS),
                     "the outgoing stream was never closed",

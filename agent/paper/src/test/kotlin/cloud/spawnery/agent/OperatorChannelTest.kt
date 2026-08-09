@@ -1,14 +1,26 @@
 package cloud.spawnery.agent
 
+import cloud.spawnery.agent.pb.AgentServiceGrpc
+import cloud.spawnery.agent.pb.OperatorToServer
 import io.grpc.CallOptions
 import io.grpc.Metadata
+import io.grpc.stub.StreamObserver
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.net.InetAddress
 import java.nio.file.Files
 import java.nio.file.Path
+import java.security.KeyStore
+import java.security.cert.Certificate
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
+import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLServerSocket
+import javax.net.ssl.SSLSocket
 
 class OperatorChannelTest {
     @Test
@@ -34,6 +46,72 @@ class OperatorChannelTest {
     fun `rejects an empty bundle`() {
         assertThrows(IllegalArgumentException::class.java) {
             OperatorChannel.trustManager(ByteArray(0))
+        }
+    }
+
+    /**
+     * grpc-okhttp chooses its ConnectionSpec by platform, and on every JDK
+     * that choice is a TLS-1.2-only one; the 1.3 spec is reserved for Android.
+     * internal/agentserver serves with MinVersion: VersionTLS13, so the
+     * default leaves the agent unable to reach the operator at all — the
+     * handshake dies with a protocol_version alert, and no unit test built on
+     * the in-process transport can see it, because that transport does no TLS.
+     *
+     * The server here offers both versions rather than only 1.3 on purpose: a
+     * regression then shows up as "expected TLSv1.3, was TLSv1.2" instead of
+     * an SSLHandshakeException whose message names neither side's intent.
+     */
+    @Test
+    fun `negotiates TLS 1_3, the only version the operator will accept`() {
+        val ca = newTestCa("operator-ca")
+        val serving = newServingCertificate(ca, "localhost")
+
+        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+        keyStore.load(null, null)
+        keyStore.setKeyEntry(
+            "serving",
+            serving.keyPair.private,
+            CharArray(0),
+            arrayOf<Certificate>(serving.certificate, ca.certificate),
+        )
+        val keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+        keys.init(keyStore, CharArray(0))
+        val serverContext = SSLContext.getInstance("TLS")
+        serverContext.init(keys.keyManagers, null, null)
+
+        val listener = serverContext.serverSocketFactory
+            .createServerSocket(0, 1, InetAddress.getLoopbackAddress()) as SSLServerSocket
+        listener.enabledProtocols = arrayOf("TLSv1.2", "TLSv1.3")
+
+        val negotiated = CompletableFuture<String>()
+        Thread {
+            try {
+                (listener.accept() as SSLSocket).use { socket ->
+                    socket.startHandshake()
+                    negotiated.complete(socket.session.protocol)
+                }
+            } catch (e: Exception) {
+                negotiated.completeExceptionally(e)
+            }
+        }.apply { isDaemon = true }.start()
+
+        val channel = OperatorChannel.build("localhost:${listener.localPort}", ca.pem())
+        try {
+            // The RPC is only what makes the channel connect. Nothing on the
+            // other end speaks HTTP/2, so it cannot survive — but the TLS
+            // handshake is complete before gRPC discovers that, and the
+            // handshake is the whole subject here.
+            AgentServiceGrpc.newStub(channel).serverSession(
+                object : StreamObserver<OperatorToServer> {
+                    override fun onNext(value: OperatorToServer) = Unit
+                    override fun onError(t: Throwable) = Unit
+                    override fun onCompleted() = Unit
+                },
+            )
+            assertEquals("TLSv1.3", negotiated.get(20, TimeUnit.SECONDS))
+        } finally {
+            channel.shutdownNow()
+            listener.close()
         }
     }
 

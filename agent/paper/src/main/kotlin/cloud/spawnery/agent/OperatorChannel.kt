@@ -51,6 +51,30 @@ object OperatorChannel {
         return trustFactory.trustManagers.filterIsInstance<X509TrustManager>().first()
     }
 
+    /**
+     * TLS 1.3 and its three suites, spelled out rather than left to the
+     * default.
+     *
+     * grpc-okhttp picks its ConnectionSpec by platform: the TLS 1.3 + 1.2 one
+     * only on Android, and a TLS-1.2-only legacy spec everywhere else,
+     * including every JDK. internal/agentserver sets MinVersion:
+     * VersionTLS13, so the default leaves the agent offering a version the
+     * operator refuses, and the handshake dies with a protocol_version alert
+     * before a single byte of HTTP/2 — measured against a real operator-shaped
+     * server in hack/agent-test.sh, which is the only level that could see it:
+     * the in-process transport used by the unit tests does no TLS at all.
+     *
+     * Only 1.3, not "1.3 and 1.2": the operator accepts nothing else, so
+     * offering 1.2 as well could only ever produce the same failure one round
+     * trip later and with a vaguer message.
+     */
+    private val TLS_VERSIONS = arrayOf("TLSv1.3")
+    private val CIPHER_SUITES = arrayOf(
+        "TLS_AES_128_GCM_SHA256",
+        "TLS_AES_256_GCM_SHA384",
+        "TLS_CHACHA20_POLY1305_SHA256",
+    )
+
     fun build(endpoint: String, caBundlePem: ByteArray): ManagedChannel {
         val trust = trustManager(caBundlePem)
         val context = SSLContext.getInstance("TLS")
@@ -58,6 +82,7 @@ object OperatorChannel {
         return OkHttpChannelBuilder.forTarget(endpoint)
             .useTransportSecurity()
             .sslSocketFactory(context.socketFactory)
+            .tlsConnectionSpec(TLS_VERSIONS, CIPHER_SUITES)
             .build()
     }
 }
