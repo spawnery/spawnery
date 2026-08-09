@@ -16,12 +16,26 @@ import io.grpc.stub.StreamObserver
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /** One accepted stream, with everything the test wants to assert about it. */
 class AcceptedStream(val authorization: String?) {
     val received = ConcurrentLinkedQueue<ServerMessage>()
     val closed = CountDownLatch(1)
     lateinit var toAgent: StreamObserver<OperatorToServer>
+
+    /**
+     * How the agent ended its half of the stream, as the operator saw it:
+     * `half-closed` when the agent called `onCompleted`, `cancelled` when it
+     * cancelled the call. gRPC surfaces the two differently on purpose — a
+     * half-close is `onHalfClose` and leaves the call open for the operator to
+     * finish, a cancellation is `onCancel` and ends it — and [closed] alone
+     * cannot tell them apart, because it fires on either.
+     *
+     * The difference is the whole of the give-up path: an operator that is not
+     * answering is by definition one that will not finish a half-closed call.
+     */
+    val terminal = AtomicReference<String?>(null)
 
     fun awaitMessage(predicate: (ServerMessage) -> Boolean): ServerMessage {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
@@ -61,8 +75,16 @@ class FakeOperator(name: String) : AutoCloseable {
             streams.add(accepted)
             return object : StreamObserver<ServerMessage> {
                 override fun onNext(value: ServerMessage) { accepted.received.add(value) }
-                override fun onError(t: Throwable) { accepted.closed.countDown() }
-                override fun onCompleted() { accepted.closed.countDown() }
+
+                override fun onError(t: Throwable) {
+                    accepted.terminal.compareAndSet(null, "cancelled")
+                    accepted.closed.countDown()
+                }
+
+                override fun onCompleted() {
+                    accepted.terminal.compareAndSet(null, "half-closed")
+                    accepted.closed.countDown()
+                }
             }
         }
     }

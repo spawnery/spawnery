@@ -8,6 +8,7 @@ import cloud.spawnery.agent.pb.Ready
 import cloud.spawnery.agent.pb.ServerMessage
 import io.grpc.CallCredentials
 import io.grpc.ManagedChannel
+import io.grpc.stub.ClientCallStreamObserver
 import io.grpc.stub.StreamObserver
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
@@ -172,8 +173,30 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
         answerDeadline = null
     }
 
+    /**
+     * Retires this attempt. [cancel] chooses how the call underneath it ends,
+     * and that choice is not cosmetic.
+     *
+     * The default is the graceful one, and it is what makes a handover a
+     * handover: the agent half-closes, the operator finishes the call and sends
+     * trailers, and `ManagedChannel.shutdown()` — which is graceful, letting
+     * pre-existing calls run to completion — terminates the channel once it
+     * has. Every path here except one reaches this with a call that is already
+     * finished or about to be, so graceful is right for all of them.
+     *
+     * The give-up path ([SessionLoop.answerOverdue]) is the exception, and it
+     * is wrong there by construction: the call it abandons is by definition one
+     * the operator is not answering. That handler is blocked before it starts
+     * its receive goroutine (`internal/agentserver/server.go:228`), so it never
+     * observes the half-close, and a half-close is not a cancellation, so
+     * nothing sends `RST_STREAM`. A graceful shutdown then waits on a call that
+     * will never complete: the channel sits in SHUTDOWN forever, holding its
+     * connection and its reader thread, one set per give-up, inside a Paper
+     * server's JVM for as long as the operator stalls. Cancelling ends the call
+     * on both sides, so the channel can actually terminate.
+     */
     @Synchronized
-    fun close() {
+    fun close(cancel: Boolean = false) {
         if (retired) return
         retired = true
         // Set before anything below can provoke a terminal callback: this
@@ -183,12 +206,35 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
         reporting?.cancel(false)
         reporting = null
         stopAwaitingAnswer()
-        runCatching { toOperator.get()?.onCompleted() }
-        channel.shutdown()
+        val observer = toOperator.get()
+        if (cancel) {
+            // The cast is what the async stub really returns for a
+            // bidi-streaming call, and cancelling through it is what puts
+            // RST_STREAM on the wire. shutdownNow() behind it is the part that
+            // does not depend on the cast holding: this channel carries this
+            // one call and nothing else, so there is nothing else it could cut
+            // short.
+            runCatching {
+                @Suppress("UNCHECKED_CAST")
+                (observer as? ClientCallStreamObserver<ServerMessage>)
+                    ?.cancel("the operator never answered this stream", null)
+            }
+            channel.shutdownNow()
+        } else {
+            runCatching { observer?.onCompleted() }
+            channel.shutdown()
+        }
         // Nothing this stream replaced may outlive it: stop() closes only the
         // current session, and a handover still in flight at that point would
         // otherwise leave the outgoing one running with nobody holding it. The
-        // stillborn path calls abandon() first, so this is a no-op there.
+        // stillborn path calls abandon() first, so this is a no-op there. It
+        // retires gracefully whichever way this one went, including the
+        // give-up: the stream being handed over from is one the operator did
+        // answer. That is the second thing resting on the unreachability
+        // argument in [SessionLoop.answerOverdue] rather than a fact about this
+        // method — were a session ever both unanswered and replaced, this line
+        // would hand a graceful shutdown a call the operator will never finish
+        // and park the transport one link away from where it was just fixed.
         takeOver()
     }
 }
@@ -243,6 +289,12 @@ class SessionLoop(
         // so the reconnect delay needs this as much as the renewal delay does.
         base + (Math.random() * 0.2 * base).toLong() - (0.1 * base).toLong()
     },
+    /**
+     * The bound on an unanswered attempt while the operator has not yet stated
+     * one of its own — see [FALLBACK_ANSWER_BOUND_MILLIS] and [awaitAnswer].
+     * Injected only so tests need not wait it out.
+     */
+    private val fallbackAnswerBoundMillis: Long = FALLBACK_ANSWER_BOUND_MILLIS,
 ) : AutoCloseable {
     private val current = AtomicReference<Session?>(null)
     private val attempt = AtomicInteger(0)
@@ -250,9 +302,10 @@ class SessionLoop(
 
     /**
      * The operator's own `hardDeadlineSeconds`, as of the last `SessionDeadline`
-     * it sent, in milliseconds. Zero until the operator has said one, which is
-     * why [awaitAnswer] is a no-op on the first attempt of a fresh process:
-     * the bound is the operator's number, not one invented here.
+     * it sent, in milliseconds. Zero until the operator has said one, and while
+     * it is zero [awaitAnswer] falls back to [FALLBACK_ANSWER_BOUND_MILLIS]:
+     * the bound is the operator's number wherever there is one, and a finite
+     * number rather than none where there is not.
      */
     private val hardDeadlineMillis = AtomicLong(0)
 
@@ -260,6 +313,27 @@ class SessionLoop(
         /** 1 s doubling to a 30 s cap. Never gives up: see the class comment. */
         fun backoffMillis(attempt: Int): Long =
             minOf(30_000L, 1_000L shl minOf(attempt, 20))
+
+        /**
+         * How long the first attempt of a fresh process may go unanswered
+         * before the operator has stated a deadline of its own.
+         *
+         * Deliberately loose. It is not an estimate of how fast a healthy
+         * operator answers — that is microseconds, one mutex-guarded map write
+         * after the handler starts — only a finite number in place of no number
+         * at all, five orders of magnitude clear of anything a working operator
+         * does. It is used at most once per process: the first
+         * `SessionDeadline` replaces it, and from then on every bound is the
+         * operator's own.
+         *
+         * Without it the first attempt of a fresh process is unbounded, and an
+         * operator that accepts a stream and stalls before its first `Send`
+         * hangs every pod that starts during the stall, permanently. That is
+         * the strictly worse half of the case [awaitAnswer] describes: on the
+         * non-superseded path the operator has not even read the Hello, so the
+         * pod is invisible to the control plane rather than merely silent.
+         */
+        const val FALLBACK_ANSWER_BOUND_MILLIS = 5L * 60 * 1000
     }
 
     fun start() {
@@ -474,9 +548,18 @@ class SessionLoop(
      * does through `takeOver`: by then the stream this one replaced is a whole
      * hard deadline past the start of its own, so nothing with a future left is
      * being cut short.
+     *
+     * Until the operator has stated that number the bound is
+     * [FALLBACK_ANSWER_BOUND_MILLIS], which *is* invented here — because the
+     * alternative on the first attempt of a fresh process is no bound at all,
+     * and the same stalled operator then hangs the pod before it has been seen
+     * by the control plane at all. Nothing on the operator's side rescues that
+     * one either: `sessions.cancel` cancels the derived context, not
+     * `stream.Context()`, so a handler stuck before its own `select` never
+     * observes it however early the operator arms its deadline.
      */
     private fun awaitAnswer(session: Session) {
-        val bound = hardDeadlineMillis.get()
+        val bound = hardDeadlineMillis.get().takeIf { it > 0 } ?: fallbackAnswerBoundMillis
         if (bound <= 0) return
         session.awaitAnswer {
             schedule(bound, "the answer deadline could not be scheduled") { answerOverdue(session) }
@@ -488,11 +571,30 @@ class SessionLoop(
      * `ended` here is what keeps the obligation exactly-once: whichever of the
      * timer and the stream's own terminal callback gets there first books the
      * one reconnect, and the loser returns.
+     *
+     * The compare-and-set is only half of that argument, and the other half is
+     * written nowhere else, so it is written here. Unlike [streamEnded] this
+     * does not skip the reconnect when a replacement already exists — and it
+     * does not have to, because a session cannot be both unanswered and
+     * replaced. Becoming the outgoing stream requires connect() to run while
+     * this session is `current`, and the only two callers cannot: scheduleRenewal
+     * is armed by a `SessionDeadline`, which is an answer, and reconnectLater
+     * runs once per ended session and the one that opened this session has
+     * already spent itself. It becomes reachable the moment the operator sends
+     * two `SessionDeadline`s on one stream — which `internal/agentserver` does
+     * not, and which would be a double-renewal defect in its own right. Anyone
+     * changing either side into sending a second one has to add the
+     * `hasReplacement()` guard here, or this and the replacement will each book
+     * a reconnect for the same session.
+     *
+     * The close is the forceful one. See [Session.close]: this is the single
+     * path where the call being ended is one the operator will never finish,
+     * and asking a graceful shutdown to wait for it parks the transport.
      */
     private fun answerOverdue(session: Session) {
         if (!session.ended.compareAndSet(false, true)) return
         log("the operator accepted the stream and never answered it; opening another", null)
-        session.close()
+        session.close(cancel = true)
         reconnectLater()
     }
 

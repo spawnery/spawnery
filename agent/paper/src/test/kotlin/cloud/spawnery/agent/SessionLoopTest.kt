@@ -111,6 +111,11 @@ class SessionLoopTest {
         // production default spreads them by ±10 %, which would make every
         // assertion about timing approximate.
         jitter: (Long) -> Long = { it },
+        // The production value is five minutes, which is the point of it — see
+        // SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS. Only the test that is about
+        // that bound overrides it, and every other test here is answered long
+        // before it could matter.
+        fallbackAnswerBoundMillis: Long = SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS,
     ): SessionLoop {
         val token = dir.resolve("token")
         Files.writeString(token, "test-token")
@@ -122,6 +127,7 @@ class SessionLoopTest {
             version = "26.2-0.2.0",
             log = { _, _ -> },
             jitter = jitter,
+            fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
         )
     }
 
@@ -513,6 +519,139 @@ class SessionLoopTest {
                 assertTrue(
                     second.closed.await(1, TimeUnit.SECONDS),
                     "the attempt the agent gave up on was left open",
+                )
+            }
+        }
+    }
+
+    /**
+     * The give-up has to end the call, not merely stop talking on it.
+     *
+     * `close()` half-closes and shuts the channel down gracefully, which is
+     * right everywhere else: the operator finishes the call and the channel
+     * terminates behind it. On this one path the operator is by definition not
+     * answering — in production its handler is blocked before it starts
+     * receiving — so it never finishes anything, and a graceful shutdown waits
+     * for that forever. The channel stays in SHUTDOWN holding a connection and
+     * a reader thread, once per give-up, for as long as the operator stalls.
+     *
+     * What this proves: the operator observes a cancellation rather than a
+     * half-close, and the channel actually reaches TERMINATED against an
+     * operator that answers neither.
+     *
+     * What it does not prove: that a socket and an OkHttp reader thread are
+     * released. The in-process transport has neither. Termination is the
+     * property those hang off, so this is the closest a unit test gets, and the
+     * `closed` latch on its own is no pin at all — it counts down on a
+     * half-close and on a cancellation alike, which is why the existing
+     * give-up test above passes either way.
+     */
+    @Test
+    fun `cancels the attempt it gives up on instead of waiting for an answer that is not coming`(
+        @TempDir dir: Path,
+    ) {
+        FakeOperator("mute-parks-transport").use { operator ->
+            val state = ServerState().apply { markReady() }
+            val opened = Collections.synchronizedList(mutableListOf<ManagedChannel>())
+
+            loopAgainst(
+                operator,
+                state,
+                dir,
+                channels = { operator.newChannel().also { opened.add(it) } },
+            ).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(2),
+                        )
+                        .build(),
+                )
+
+                // The renewal's attempt, which the operator accepts and never
+                // answers, on a channel of its own that the test holds.
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                first.toAgent.onError(
+                    Status.UNAVAILABLE
+                        .withDescription("session ended, reconnect with a fresh token")
+                        .asRuntimeException(),
+                )
+
+                // The give-up, and the stream it books.
+                operator.awaitStream(2)
+
+                assertTrue(
+                    second.closed.await(5, TimeUnit.SECONDS),
+                    "the attempt the agent gave up on was left open",
+                )
+                assertEquals(
+                    "cancelled",
+                    second.terminal.get(),
+                    "the agent half-closed the stream it gave up on; an operator that is not " +
+                        "answering does not answer a half-close either, so the call stays open",
+                )
+                assertTrue(
+                    opened[1].awaitTermination(5, TimeUnit.SECONDS),
+                    "the channel behind the abandoned attempt never terminated: a graceful " +
+                        "shutdown waits for a call the operator will never finish, and every " +
+                        "give-up parks another one",
+                )
+            }
+        }
+    }
+
+    /**
+     * The same bound, on the attempt that has no operator number to use.
+     *
+     * `hardDeadlineMillis` is zero until the operator has sent a
+     * `SessionDeadline`, so before this the first attempt of a fresh process
+     * was bounded by nothing. That is the worse half of the case, not a corner
+     * of it: `internal/agentserver` calls `Agents.Connect` before both `Send`s
+     * and before its receive goroutine, so any operator that accepts a stream
+     * and stalls there hangs every pod that starts during the stall — with no
+     * reports, no readiness, and the Hello unread, so the pod is invisible to
+     * the control plane rather than merely quiet.
+     *
+     * What this proves: with no `SessionDeadline` ever sent, the agent still
+     * gives up and opens another stream. What it does not prove: anything about
+     * the production value of the bound, which is five minutes and is what this
+     * test overrides. The test above and `gives up on a replacement the
+     * operator accepts and never answers` are what pin the operator's own
+     * number taking over as soon as there is one.
+     */
+    @Test
+    fun `bounds a first attempt the operator has not given it a deadline for`(
+        @TempDir dir: Path,
+    ) {
+        FakeOperator("mute-from-the-start").use { operator ->
+            val state = ServerState().apply { markReady() }
+
+            loopAgainst(operator, state, dir, fallbackAnswerBoundMillis = 500).use { loop ->
+                loop.start()
+
+                // Accepted, greeted, and never answered — no ReportInterval and
+                // no SessionDeadline, so the agent has no number of the
+                // operator's to bound the wait with.
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                assertTrue(
+                    first.closed.await(1, TimeUnit.SECONDS),
+                    "the first attempt was left open after the agent gave up on it",
+                )
+                assertEquals(
+                    "cancelled",
+                    first.terminal.get(),
+                    "the first attempt was half-closed rather than cancelled",
                 )
             }
         }
