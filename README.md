@@ -39,11 +39,8 @@ process accepts TLS connections from game server pods, identifies them through a
 pod-bound ServiceAccount token, and the registry behind it feeds the two-stage
 ready gate and `status.players` that milestone 1 had left unwired. The channel
 is proven end to end in envtest — a test agent brings a `Server` with green pod
-readiness all the way to phase `Ready` — but no real agent talks to it yet: a
-player still cannot connect, because two things are missing: the Velocity proxy
-layer (milestone 3; until then `ProxySession` only answers `Unimplemented`) and
-the Kotlin agent (milestone 2c) — the base image milestone 2b needed no longer
-stands in the way, but pod readiness is only half of the ready gate.
+readiness all the way to phase `Ready`. `ProxySession`, the other half of the
+same contract, still answers `Unimplemented`; it belongs to milestone 3.
 
 Milestone 2b is done: the Paper base image. `nix build .#paper-image` produces
 a reproducible image holding Paper 26.2, a JRE 25 and `spawnery-slp`, the tool
@@ -51,33 +48,48 @@ the readiness probe calls to speak a real server list ping. Paper is patched at
 build time, so a pod downloads nothing at startup; `make image-test` runs the
 image offline to keep that true.
 
-A pod now starts and its readiness probe turns green — and the `Server` stops
-in phase `Starting`, because the second half of the ready gate wants an agent.
-That agent is the Kotlin plugin from milestone 2c, and until it exists no
-player can join: the Velocity proxy layer (milestone 3) is missing too.
+Milestone 2c is done: the Paper agent. `nix build .#paper-agent` produces a
+shaded, bit-reproducible Kotlin plugin that is baked into the image; the
+entrypoint copies it into the pod's writable plugins directory, and from there
+it opens an authenticated `ServerSession` to the operator, reports its
+readiness and its player counts, and renews the session with overlap so a
+renewal never costs a server its `Ready`.
 
-Carry-overs and preconditions for later milestones — CA rotation, the Kotlin
-agent's obligation to reconnect with overlap, the missing `spawnery-proxy`
-ServiceAccount, and what milestone 2b leaves open — are in
+Both halves of the ready gate now close. Measured in a local kind cluster, a
+`Server` reaches phase `Ready` about twenty seconds after its pod is created,
+and `status.players` and `status.slots` carry what the agent read off the
+running server rather than a placeholder.
+
+What is still missing is the whole reason a player would care: the Velocity
+proxy layer of milestone 3. Nothing routes a client to a backend,
+`ProxySession` still answers `Unimplemented`, and no proxy pod has a
+ServiceAccount to identify itself with — so a player still cannot connect to a
+network that is otherwise fully ready.
+
+Carry-overs and preconditions for later milestones — CA rotation, the missing
+`spawnery-proxy` ServiceAccount, the orphan sweep that would discard a proxy
+agent, and what milestones 2b and 2c leave open — are in
 [`docs/known-issues.md`](docs/known-issues.md).
 
 The design lives under [`docs/superpowers/specs/`](docs/superpowers/specs/), the
 plans under [`docs/superpowers/plans/`](docs/superpowers/plans/).
 
-Anyone starting milestone 2c begins at
-[`docs/handover-milestone-2c.md`](docs/handover-milestone-2c.md): it says what
-the image and the pod provide to an agent, where the plugin jar cannot simply
-be put and why, and which question about building it reproducibly decides the
-shape of that milestone.
-[`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md) is its
-predecessor, kept as the record of what 2b started from.
+Anyone starting milestone 3 begins at
+[`docs/handover-milestone-3.md`](docs/handover-milestone-3.md): it says where 2c
+stopped, what a Velocity agent finds already built, which parts of the Paper
+agent apply again almost unchanged, and what has to be settled before code.
+[`docs/handover-milestone-2c.md`](docs/handover-milestone-2c.md) and
+[`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md) are its
+predecessors, kept as the record of what those milestones started from.
 
 ## Development
 
 ```bash
-nix develop            # Go, controller-gen, envtest assets, kubectl, kind, k3d
+nix develop            # Go, controller-gen, envtest assets, kubectl, kind, k3d,
+                       # protoc with its Go and Java plugins, JDK 21, Gradle
 make test              # unit and envtest tests
 make build             # bin/spawnery-operator
+make agent             # the Paper agent plugin and its JUnit suite
 ```
 
 `make proto` regenerates the Go code under `internal/agentpb` from
@@ -85,6 +97,20 @@ make build             # bin/spawnery-operator
 like `zz_generated.deepcopy.go` — after a change to the `.proto`, run `make
 proto` and commit the diff with it; `make test` does not regenerate it on its
 own.
+
+`make agent` builds the Paper agent plugin (`nix build .#paper-agent`) and runs
+its JUnit suite as the derivation's check phase — the target to reach for after
+any change under `agent/paper/`. `make agent-deps` regenerates
+`agent/paper/deps.json`, the checked-in lockfile that pins every Maven artifact
+by hash; it is needed only when `agent/paper/build.gradle.kts` changes a
+dependency, and it is deliberately part of no other target, not even `make
+all`, because it reaches Maven Central — a dependency change is an explicit act
+and a Nix build must never depend on the network. `make agent-test` runs the
+real image against the Go stub operator in `cmd/spawnery-stubop` and checks the
+handshake, the authorization header, the player reports, the overlapping
+renewal and the bound on a session the operator never answers; it is the target
+to run after any change to the agent's session handling, and like the image
+targets below it needs a container runtime and only works on `x86_64-linux`.
 
 `make image` builds the Paper base image, `make image-load` hands it to the
 local container runtime, and `make image-test` runs it offline under the same
@@ -129,11 +155,27 @@ The operator runs here through `go run` outside the cluster, so without
 `POD_NAMESPACE` from the downward API. `--operator-namespace` therefore has to
 be set explicitly — without the flag the process refuses to start (see
 `validateAgentFlags`), because the serving certificate would otherwise carry the
-wrong SANs. The agent channel itself stays unused in this flow: the operator does
-bootstrap the CA ConfigMap and the `spawnery-server` ServiceAccount in the
-namespace, but the pod dials `spawnery-operator.<ns>.svc:9443` — a service this
-flow never creates, because the operator process does not run in the cluster and
-there would be no endpoint pointing at it.
+wrong SANs.
+
+That leaves one gap this flow has to close by hand, and since milestone 2c it
+is the difference between a `Server` that reaches `Ready` and one that does
+not. The pod dials `spawnery-operator.<ns>.svc:9443`, and nothing creates that
+Service: the operator is not in the cluster, so no selector could find it. A
+selector-less `Service` with a hand-written `Endpoints` pointing at the host
+closes it — the serving certificate already carries that DNS name, so TLS
+verifies against the CA the pod was given.
+
+Which address goes into those `Endpoints` depends on the runtime. With a real
+Docker daemon it is the bridge gateway, `172.17.0.1`, and nothing further is
+needed. Under rootless Podman it is none of the obvious candidates: the gateway
+of the `kind` network (`10.89.0.1` here) lives inside the rootless network
+namespace, where the operator is not listening and a connection is refused, and
+the one address that does reach the host — the pasta link-local
+`169.254.1.2`, which Podman also publishes as `host.containers.internal` — is
+rejected by the API server in both `Endpoints` and `EndpointSlice` with
+`may not be in the link-local range`. What works, measured, is one more
+container on the same Podman network relaying to the host: it gets a routable
+address on that network, and pods reach it.
 
 ```bash
 systemd-run --scope --user --property=Delegate=yes \
@@ -141,35 +183,102 @@ systemd-run --scope --user --property=Delegate=yes \
   nix develop -c kind create cluster --name spawnery-dev
 systemd-run --scope --user --property=Delegate=yes \
   env KIND_EXPERIMENTAL_PROVIDER=podman \
-  nix develop -c kind load docker-image ghcr.io/spawnery/paper:26.2-0.1.0 --name spawnery-dev
+  nix develop -c kind load docker-image ghcr.io/spawnery/paper:26.2-0.2.0 --name spawnery-dev
 nix develop -c kubectl apply -f config/crd/bases
 nix develop -c kubectl apply -f config/samples/network.yaml
 nix develop -c go run ./cmd/spawnery-operator --leader-elect=false --operator-namespace minecraft &
-sleep 60
+
+# Rootless Podman only. With a real Docker daemon, skip this and use
+# 172.17.0.1 as the endpoint address below.
+podman run -d --name spawnery-relay --network kind \
+  -v /nix/store:/nix/store:ro \
+  --entrypoint "$(nix build --no-link --print-out-paths nixpkgs#socat)/bin/socat" \
+  ghcr.io/spawnery/paper:26.2-0.2.0 \
+  TCP-LISTEN:9443,fork,reuseaddr TCP:host.containers.internal:9443
+RELAY_IP=$(podman inspect spawnery-relay \
+  --format '{{.NetworkSettings.Networks.kind.IPAddress}}')
+
+nix develop -c kubectl apply -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: spawnery-operator
+  namespace: minecraft
+spec:
+  ports:
+    - name: agent
+      port: 9443
+      targetPort: 9443
+      protocol: TCP
+---
+apiVersion: v1
+kind: Endpoints
+metadata:
+  name: spawnery-operator
+  namespace: minecraft
+subsets:
+  - addresses:
+      - ip: $RELAY_IP
+    ports:
+      - name: agent
+        port: 9443
+        protocol: TCP
+EOF
+
+sleep 90
 nix develop -c kubectl get networks,servergroups,servers,pods -n minecraft
 ```
 
+The image only needs a rootfs for the relay, which is why the Paper image
+stands in for one; `socat` itself comes out of the mounted Nix store.
+
 The first server can take a good half minute to appear: if the ServerGroup
-meets its network before the Network controller has accepted it, it tries
-again only after `networkRetryInterval` (30 seconds). The 60 seconds above
-also cover loading the 724 MB image into the cluster, which is not instant.
+meets its network before the Network controller has accepted it, it tries again
+only after `networkRetryInterval` (30 seconds). The 90 seconds above also cover
+Paper's own start — about seven seconds to a first answered ping — and the
+agent's handshake after it. Loading the image into the cluster beforehand is
+its own wait: at 26.2-0.2.0 it is 735 MB as a tarball, a little over a gigabyte
+unpacked.
 
-Expected:
+Expected, as measured on 2026-08-10 against `kind` v1.36.1 under rootless
+Podman:
 
-- `network production` with `Accepted=True`,
-- `servergroup lobby` in phase `Pending` with `READY 0` — that field is
-  `status.readyReplicas`, servers that reached phase `Ready`, and none do at
-  this milestone, so `Pending` is the correct end state and not a stall,
+- `network production` with `Accepted=True` and `SERVER GROUPS 1`,
+- `servergroup lobby` in phase `Ready` with `READY 1` and `FREE SLOTS 100` —
+  `READY` is `status.readyReplicas`, and since 2c a server does reach `Ready`,
+  so unlike after 2b this is no longer `Pending 0`,
 - a pod `lobby-xxxx` in `Running` with `READY 1/1` — the readiness probe spoke
   a real server list ping to a real Paper process,
-- a `server lobby-xxxx` in phase `Starting`, staying there. That is the
-  expected end state after milestone 2b: pod readiness is one half of the
-  gate, and the other half waits for the agent from milestone 2c.
+- a `server lobby-xxxx` in phase `Ready` with `SLOTS 100`, `PLAYERS 0` and
+  `REGISTERED true`. `SLOTS` is what the agent reported from
+  `SPAWNERY_MAX_PLAYERS`, `PLAYERS` what it counted on the running server —
+  zero, because nobody can join yet.
+
+If the `Server` stops in `Starting` instead, the agent cannot reach the
+operator: `kubectl logs` on the pod shows the reason, and it has so far always
+been the `Service`/`Endpoints` pair above, not the agent.
+
+Leaving it running for a quarter of an hour shows the other half of what the
+agent is for. The session renews after eight minutes
+(`--agent-session-renew-after`), and if the replacement stream did not overlap
+the outgoing one, the server would drop out of `Ready` on that rhythm. Measured
+over thirteen minutes:
+
+```bash
+nix develop -c kubectl get server lobby-xxxx -n minecraft \
+  -o jsonpath='{.status.readinessLosses} {.status.readySince} {.status.playersUpdatedAt}'
+# 0 2026-08-09T22:37:36Z 2026-08-09T22:49:57Z
+```
+
+`readinessLosses` still zero and `readySince` still the original timestamp,
+while `playersUpdatedAt` keeps moving — the renewal happened and cost the
+server nothing.
 
 Afterwards, clean up:
 
 ```bash
 kill %1
+podman rm -f spawnery-relay
 systemd-run --scope --user --property=Delegate=yes \
   env KIND_EXPERIMENTAL_PROVIDER=podman \
   nix develop -c kind delete cluster --name spawnery-dev

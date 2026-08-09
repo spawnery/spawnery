@@ -1,7 +1,7 @@
 # A minimal Spawnery network: one lobby group of ephemeral Paper servers.
-# The proxy layer arrives in milestone 3 — until then the servers come up and
-# reach phase Starting, and the ready gate closes once the agent of milestone 2
-# reports in.
+# The servers come up, their agent reports in and they reach phase Ready. The
+# proxy layer arrives in milestone 3 — until then nothing routes a player onto
+# one of them.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -43,7 +43,7 @@ spec:
   networkRef:
     name: production
   type: Ephemeral
-  image: ghcr.io/spawnery/paper:26.2-0.1.0
+  image: ghcr.io/spawnery/paper:26.2-0.2.0
   maxPlayers: 100
   drain:
     timeoutSeconds: 60

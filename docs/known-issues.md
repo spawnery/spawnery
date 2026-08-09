@@ -1,14 +1,20 @@
 # Known issues and carry-overs for later milestones
 
-Status: end of milestone 2b, the Paper base image (2026-08-08).
+Status: end of milestone 2c, the Paper agent (2026-08-10).
 
 This list collects what was deliberately left open during the implementation and
-the reviews of milestone 1, milestone 2a and milestone 2b. It does not replace a
-spec — the design decisions live in
-`superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md` and in
-`superpowers/specs/2026-08-08-agent-channel-design.md`.
+the reviews of milestone 1, milestone 2a, milestone 2b and milestone 2c. It does
+not replace a spec — the design decisions live in
+`superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md`, in
+`superpowers/specs/2026-08-08-agent-channel-design.md` and in
+`superpowers/specs/2026-08-09-paper-agent-design.md`.
 
-## Preconditions for milestone 2c (the Kotlin agent)
+## Preconditions for milestone 2c (the Kotlin agent) — met
+
+The three obligations below are discharged. They are kept rather than deleted,
+because the reasoning behind each is what a second agent — Velocity, in
+milestone 3 — has to satisfy all over again, and only the reasoning makes that
+legible.
 
 **The Kotlin agent must reconnect with overlap.** On connect the operator
 announces with `SessionDeadline{renewAfterSeconds, hardDeadlineSeconds}` when it
@@ -19,8 +25,16 @@ the proxies and collects a readiness loss — a home-made flap counter (design,
 section 7.1). `internal/agentserver` only supplies the operator half of this
 (`Registry.Supersede` carries the readiness of a superseding stream over);
 without an agent that actually reconnects before the deadline it has no effect.
-The test agent from 2a does it, and the Kotlin agent has to as well — not
-optional, but the precondition under which `SessionDeadline` serves its purpose.
+
+*Met* by `SessionLoop` in `agent/paper/src/main/kotlin`, which opens the
+replacement stream and only retires the outgoing one once the operator has
+answered on the replacement. That last clause is not decoration: an earlier
+version retired on the local `Hello` call, which travels an established
+connection and therefore beats a greeting that still needs TCP and TLS, so the
+operator saw `leave()` then `enter()` — a `Disconnect` followed by a `Connect`
+rather than a `Supersede` — and every server would have dropped out of `Ready`
+on every renewal. Phase 1 of `make agent-test` is the standing proof, on the
+operator's side of the wire.
 
 **`Hello{ready:false}` cannot lower a readiness that was once set.**
 `registry.MarkReady` is only called on `Hello{ready:true}` and on the standalone
@@ -33,6 +47,10 @@ forward — possibly that of a process that has since restarted. For the Kotlin
 agent that means: "briefly not ready, but still connected" cannot be expressed
 with this contract.
 
+*Met* by not needing it: the Paper agent latches readiness once the server is
+up and never lowers it, so the gap in the contract is never reached. A Velocity
+agent that wants to express "draining, still connected" will reach it.
+
 **The interceptor reads `Bearer ` character for character, and `RoleForMethod`
 matches the method on its suffix.** `internal/grpcauth/interceptor.go`
 recognizes the prefix `"Bearer "` exactly like that — not `bearer`, not `Bearer`
@@ -43,6 +61,11 @@ before the handler runs. That is not a hole, but the first half is an obligation
 on the Kotlin agent's side, exactly like the overlapping reconnect: whoever
 assembles the header themselves has to set it character for character, or every
 session is rejected without the cause being visible in the error.
+
+*Met* by `BearerCredentials`, and checked twice: once in the plugin's own unit
+tests, and once byte for byte by the stub operator in `make agent-test`, which
+compares the header it received against the literal string rather than parsing
+it.
 
 ## From milestone 2b (the base image)
 
@@ -84,19 +107,14 @@ is what `make image-test` relies on. It matters twice downstream: the egress
 NetworkPolicy in milestone 6 has to allow both, and the Yggdrasil call
 disappears on its own once milestone 3 flips `online-mode` off.
 
-**The image is 724 MB because `jdk25_headless` has a 697 MiB closure** — a full
-headless JDK, not a JRE. Measured. There is no cheap substitution: this pin's
+**The image is large because `jdk25_headless` has a 697 MiB closure** — a full
+headless JDK, not a JRE. Measured at 724 MB as a tarball for 26.2-0.1.0, and
+735 MB for 26.2-0.2.0 once the agent joined it (a little over a gigabyte
+unpacked, as Podman reports it). There is no cheap substitution: this pin's
 `temurin-jre-bin` stops at 21, and Paper 26.2 needs 25 or newer, while
 `jre25_minimal` is `jlink` with `modules = [ "java.base" ]` by default and
-therefore needs a module list nobody has yet.
-
-**The right time to cut it is after milestone 2c, not before.** The agent
-plugin joins the classpath there, and gRPC and Netty pull modules Paper alone
-does not, so a list determined now would have to be determined again. Derive it
-once, from the complete classpath, with `jdeps --print-module-deps` or
-`-verbose:module` against a running server — and do it in one change covering
-the Velocity image too, since milestone 3 faces the same question with the same
-answer.
+therefore needs a module list nobody has yet. The right time to derive that list
+has now arrived — see "The JRE module list is now derivable" below.
 
 **`k3d` does not work on this machine, and probably not on similar ones.**
 `docker` here is a Podman 5.8.4 alias with no `/var/run/docker.sock`, only a
@@ -112,7 +130,7 @@ milestone 6, which wires a local-cluster E2E flow into CI: whatever runs CI
 needs either a real Docker daemon, a rootful Podman socket, or kind the same
 way this was done here.
 
-**No image is published.** The tag `ghcr.io/spawnery/paper:26.2-0.1.0` is
+**No image is published.** The tag `ghcr.io/spawnery/paper:26.2-0.2.0` is
 correct but nothing pushes it, so every consumer needs `kind load docker-image`
 (or `k3d image import`, where k3d works) or the equivalent. Publishing belongs
 with CI in milestone 6.
@@ -138,6 +156,112 @@ writable.** It rewrites the file via `grep -v ... >server.properties.tmp` and
 claims the entrypoint survives "a user mount overwrites `server.properties` →
 the entrypoint rewrites the three enforced fields afterwards" — it does not,
 once the mount is read-only, and nothing today exercises that case.
+
+## From milestone 2c (the Paper agent)
+
+**A read-only mount at `/data/plugins` breaks the start.** `image/entrypoint.sh`
+copies the agent jar out of the image into `plugins/` under `/data`, because
+Paper writes its plugins' data folders inside the plugins directory and a
+read-only one takes Paper's own bundled plugins down with it. Mounts below
+`/data` are the documented way to add files and `checkMountCollision` allows
+them; a ConfigMap or Secret mount is always read-only (`internal/podspec`
+sets `ReadOnly: true` on every user mount unconditionally). So a mount at
+`/data/plugins` makes the `cp` fail under `set -eu` with a bare `cp:` message
+that says nothing about why. This is the same shape as the `/data/config`
+collision above and wants the same fix; the entrypoint already points here for
+it.
+
+**The operator's hard-deadline rescue is armed after its first two `Send`s, and
+moving it up is necessary but not sufficient.** `internal/agentserver/server.go`
+arms `time.AfterFunc(s.opts.HardDeadline, …)` at `:218`, below the `ReportInterval`
+and `SessionDeadline` sends. An operator that stalls *before* its first `Send`
+therefore never arms its own rescue, and the stream stays open forever. Moving
+the `time.AfterFunc` above both `Send`s is worth doing — and it does not close
+the case on its own, because `sessions.cancel` cancels the context *derived*
+from the stream's (`streams.go:104-113`), not `stream.Context()`, so a handler
+blocked inside `Send` never observes it. The agent no longer depends on either:
+since milestone 2c it bounds an unanswered session itself, with the operator's
+own `hardDeadlineSeconds` once it knows it and a finite fallback until then.
+This is milestone 2a code and was deliberately left untouched by 2c.
+
+**An operator that answers once and then stalls leaves a session with no
+future.** The agent's answer bound is discharged by *any* first message, but
+only a `SessionDeadline` gives the session a renewal. An operator that completes
+the `ReportInterval` send (`server.go:200`) and then stalls before the
+`SessionDeadline` send (`:207`) leaves the agent with an answered session, no
+renewal scheduled, `hardDeadlineMillis` still zero — and, per the entry above,
+its own `AfterFunc` never armed either. Narrow, but it is the one hole the
+milestone's three-phase harness does not cover, because the stub either answers
+fully or not at all.
+
+**Stopping an unanswered session can park its transport.** `Session.close()`
+does a graceful `ManagedChannel.shutdown()`, which waits for pre-existing calls;
+on the give-up path the agent now cancels instead, precisely because that call
+is the one the operator never finishes. `stop()` still takes the graceful route,
+so a plugin disabled during an operator stall parks one socket and its transport
+threads. Bounded to one channel per `stop()`, and `stop()` usually coincides with
+JVM exit, so it only bites across a disable/enable cycle. The parameter that
+fixes it already exists.
+
+**The relocation is not proven on the give-up path.** The cast to
+`ClientCallStreamObserver` that the cancel needs sits inside a `runCatching`,
+which catches `Throwable` — so a `NoClassDefFoundError` from a shading
+regression would be swallowed and phase 3 of `make agent-test` would still pass.
+Phase 3 being green is evidence that the bound holds, not that the cast resolves
+under the shaded names.
+
+**A permanently unreachable operator writes one WARNING every 30 seconds,
+forever.** There is no rate limit and no deduplication on the reconnect log. One
+line per pod per 30 s is nothing for one server and is a real log bill for a
+fleet that loses its operator for a day. `SessionLoop` owns the cadence; the
+cheap fix is to log the first failure and then only on a change of cause.
+
+**The JRE module list is now derivable, and milestone 3 is where to cut it.**
+The Paper-side classpath stopped moving with this milestone: the agent is the
+last thing that joins it, and gRPC and okhttp pull modules Paper alone does not.
+So the list can finally be derived from the complete classpath, with `jdeps
+--print-module-deps` or `-verbose:module` against a running server. Milestone 3
+adds Velocity and faces the same question with the same answer, so derive it
+once, there, for both images — see the image-size entry under milestone 2b for
+what it buys.
+
+**`deps.json` has no CI guard.** Nothing fails if `agent/paper/deps.json` drifts
+from `agent/paper/build.gradle.kts`; the drift only shows up when someone runs
+`make agent-deps` and gets a diff. The target cannot run inside a Nix build,
+because it reaches Maven Central, so the check belongs with CI in milestone 6:
+run `make agent-deps` and fail on a non-empty `git diff`.
+
+**Two toolchain versions are pinned twice each, and a nixpkgs bump moves only
+one half.** `protoc-gen-grpc-java` comes from nixpkgs (1.83.1 at this pin) while
+the grpc-java runtime artifacts come from `deps.json`; `protoc` comes from
+nixpkgs while `protobuf-java` (4.35.1, tracking protoc 35.1 one for one) comes
+from `deps.json`. In both cases a nixpkgs bump moves the generator without the
+runtime, and the symptom is a generated stub that does not match the library it
+runs against. The failure is loud — `compileProtoJava` fails with "cannot find
+symbol" — but it appears nowhere near the pin that caused it, and `flake.nix`
+carries no comment pointing back at `build.gradle.kts` at either edit site.
+
+**The level-2 harness has rough edges milestone 3 inherits.** `hack/agent-test.sh`
+and `cmd/spawnery-stubop` are exactly what a Velocity agent will be tested with,
+so what they do not check is worth writing down: stream indices `0` and `1` are
+hard-coded in the overlap verdict; `seq` is record order and not arrival order,
+which the verdict's wording overstates; two wait loops after `await_event` do not
+check that the container is still alive; there is no `trap cleanup INT TERM` for
+the background stub, so an interrupted run leaves it behind; and the stub's own
+Go tests cover neither the never-closes property nor the uniqueness of `seq`.
+
+**The local kind flow needs a `Service` nothing creates.** A pod dials
+`spawnery-operator.<ns>.svc:9443`. When the operator runs outside the cluster —
+which is the only way the README's local flow runs it — no selector can find it,
+so the flow has to create a selector-less `Service` and a hand-written
+`Endpoints` by hand, or the `Server` never leaves `Starting`. Under rootless
+Podman that is harder than it sounds: the `kind` network's gateway is inside the
+rootless network namespace and refuses the connection, and the address that does
+reach the host (`host.containers.internal`, a pasta link-local `169.254.x.x`) is
+rejected by the API server in both `Endpoints` and `EndpointSlice`. The README
+documents the relay container that works. Milestone 6 wires this flow into CI and
+will meet the same wall, and the durable answer there is to run the operator
+inside the cluster from its own image, where the Service is a Service.
 
 ## Preconditions for milestone 3 (proxy integration)
 
