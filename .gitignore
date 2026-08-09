@@ -4,3 +4,6 @@ cover.out
 result
 result-*
 .direnv/
+agent/paper/paper-repo
+agent/paper/.gradle/
+agent/paper/build/

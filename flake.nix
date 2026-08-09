@@ -65,6 +65,9 @@
               protobuf
               protoc-gen-go
               protoc-gen-go-grpc
+              protoc-gen-grpc-java
+              gradle
+              jdk21_headless
             ];
 
             env = {
@@ -87,13 +90,17 @@
             env.CGO_ENABLED = 0;
             ldflags = [ "-s" "-w" ];
           };
+
+          paper-agent = pkgs.callPackage ./nix/paper-agent.nix {
+            inherit paper;
+          };
         in
         {
           # Architecture-independent (it is jars), so this stays available on
           # every system.
           paper-repo = paper.repo;
 
-          inherit spawnery-slp;
+          inherit spawnery-slp paper-agent;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not

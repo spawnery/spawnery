@@ -6,7 +6,7 @@ CONTAINER ?= docker
 IMAGE ?= $(shell nix eval --raw .#paper-image.imageName):$(shell nix eval --raw .#paper-image.imageTag)
 
 .PHONY: all
-all: proto manifests generate fmt vet test build
+all: proto manifests generate fmt vet test build agent
 
 .PHONY: manifests
 manifests:
@@ -45,6 +45,19 @@ build:
 .PHONY: lint
 lint:
 	golangci-lint run
+
+.PHONY: agent
+agent:
+	nix build .#paper-agent
+
+# Regenerates agent/paper/deps.json. Runs outside the Nix sandbox because it
+# has to reach Maven Central, so it is deliberately in no other target: a
+# dependency change is an explicit act, not a side effect of `make all`.
+# The output path in the lockfile is relative to the working directory, so this
+# only does the right thing from the repository root.
+.PHONY: agent-deps
+agent-deps:
+	"$$(nix build --no-link --print-out-paths .#paper-agent.mitmCache.updateScript)"
 
 .PHONY: image
 image:
