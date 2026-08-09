@@ -55,9 +55,21 @@ cleanup() {
 	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" >/dev/null 2>&1 || true
 	rm -rf "$WORK"
 }
-trap cleanup EXIT
+# INT and TERM as well as EXIT: an untrapped SIGINT kills the shell without
+# running the handler, and a run that takes several minutes gets interrupted.
+# That used to leave three containers, three volumes, up to three stub processes
+# and a temp directory behind, on a machine where the next run would then hit
+# them.
+trap cleanup EXIT INT TERM
 
+# 0755 on the directory rather than on what the stub writes into it: the
+# container runs as uid 10001 and has to traverse it, and mktemp -d gives 0700
+# under any umask. The two files need nothing from here -- the stub writes them
+# world-readable and chmods them itself (cmd/spawnery-stubop/main.go's `write`)
+# -- and doing it before the stub starts is what keeps this off the far side of
+# a liveness check that could not prove the files existed anyway.
 mkdir -p "$WORK/agent"
+chmod 0755 "$WORK/agent"
 
 # host-gateway is understood by both Docker and Podman, so the container
 # reaches the stub the same way under either runtime, and the SAN below is the
@@ -72,15 +84,12 @@ mkdir -p "$WORK/agent"
 	>"$EVENTS" 2>"$WORK/stub.log" &
 STUB_PID=$!
 
-# The container runs as uid 10001 and reads these through a bind mount.
 sleep 1
 if ! kill -0 "$STUB_PID" 2>/dev/null; then
 	echo "the stub operator did not stay up:" >&2
 	cat "$WORK/stub.log" >&2
 	exit 1
 fi
-chmod 0755 "$WORK/agent"
-chmod 0644 "$WORK/agent/ca.crt" "$WORK/agent/token"
 
 "$CONTAINER" volume create "$VOLUME" >/dev/null
 "$CONTAINER" run -d --name "$NAME" \
@@ -157,25 +166,38 @@ echo "authorization header is exact"
 await_event ready
 echo "the agent reported readiness"
 
-# The enforced maximum comes from the Bukkit main thread, which samples it on a
-# timer; the operator's ReportInterval can reach the agent before that timer's
-# first run, so the very first report legitimately carries the zero the counter
-# was constructed with. What has to be true is that the number the agent
-# reports is the server's own max-players, not that it never reports before it
-# knows one - so this waits for the sampled value rather than reading the first
-# line and calling a startup ordering a defect.
+# The enforced maximum, and on the *first* report rather than eventually.
+#
+# This used to wait for max(slots) to reach 100, because the sampler is a Bukkit
+# timer whose first run is the tick after onEnable returns while the operator's
+# ReportInterval schedules the first report at delay zero - so the first
+# PlayerCount of the process carried the zero the counter was constructed with.
+# That is not a startup ordering to be waited out: internal/controller computes
+# free := Slots - Players, so a server that has just gone Ready announced itself
+# as having no free slots. The plugin now samples once in onEnable, before the
+# session starts, and this asserts the number that crosses the seam rather than
+# working around it.
 await_event player_count
-echo "waiting for a sampled player count..."
+# The stub appends a line at a time, so a read can catch a partial one. Retried
+# until it parses rather than guarded with `|| echo 0`, which would turn an
+# unparseable file into a wrong number instead of a wait.
 start=$SECONDS
-until [ "$(jq -rs '[.[] | select(.kind == "player_count") | .slots] | max // 0' <"$EVENTS" 2>/dev/null || echo 0)" = "100" ]; do
-	if [ $((SECONDS - start)) -gt 60 ]; then
-		echo "no player count carried slots = 100 from the server's own max-players within 60s" >&2
-		jq -rs '[.[] | select(.kind == "player_count")]' <"$EVENTS" >&2
+until first_slots="$(jq -rs '[.[] | select(.kind == "player_count")] | first | .slots' <"$EVENTS" 2>/dev/null)" &&
+	[ -n "$first_slots" ] && [ "$first_slots" != "null" ]; do
+	if [ $((SECONDS - start)) -gt 30 ]; then
+		echo "no complete player count event within 30s" >&2
+		cat "$EVENTS" >&2
 		exit 1
 	fi
-	sleep 2
+	sleep 1
 done
-echo "the agent reports player counts with the enforced maximum"
+if [ "$first_slots" != "100" ]; then
+	echo "the first player count carried slots = $first_slots, want the server's own max-players of 100" >&2
+	echo "the agent reported before it had sampled, so the operator saw a Ready server with no free slots" >&2
+	jq -rs '[.[] | select(.kind == "player_count")]' <"$EVENTS" >&2
+	exit 1
+fi
+echo "the first player count already carries the enforced maximum"
 
 # The overlap. Two streams must exist, and the second must have greeted before
 # the first was closed - which is exactly what a make-before-break renewal
@@ -265,6 +287,7 @@ kill "$STUB_PID" 2>/dev/null || true
 STUB_PID=""
 
 mkdir -p "$WORK/agent-supersede"
+chmod 0755 "$WORK/agent-supersede"
 "$STUBOP" \
 	--dir "$WORK/agent-supersede" \
 	--san stubop \
@@ -282,8 +305,6 @@ if ! kill -0 "$STUB2_PID" 2>/dev/null; then
 	cat "$WORK/stub2.log" >&2
 	exit 1
 fi
-chmod 0755 "$WORK/agent-supersede"
-chmod 0644 "$WORK/agent-supersede/ca.crt" "$WORK/agent-supersede/token"
 
 "$CONTAINER" volume create "$VOLUME2" >/dev/null
 "$CONTAINER" run -d --name "$NAME2" \
@@ -373,6 +394,7 @@ STUB2_PID=""
 
 MUTE_HARD_DEADLINE=20
 mkdir -p "$WORK/agent-mute"
+chmod 0755 "$WORK/agent-mute"
 "$STUBOP" \
 	--dir "$WORK/agent-mute" \
 	--san stubop \
@@ -391,8 +413,6 @@ if ! kill -0 "$STUB3_PID" 2>/dev/null; then
 	cat "$WORK/stub3.log" >&2
 	exit 1
 fi
-chmod 0755 "$WORK/agent-mute"
-chmod 0644 "$WORK/agent-mute/ca.crt" "$WORK/agent-mute/token"
 
 "$CONTAINER" volume create "$VOLUME3" >/dev/null
 "$CONTAINER" run -d --name "$NAME3" \
