@@ -8,6 +8,7 @@
 , stdenv
 , gradle
 , paper
+, unzip
 , imageVersion ? "0.2.0"
 }:
 
@@ -17,7 +18,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   src = ../agent/paper;
 
-  nativeBuildInputs = [ gradle ];
+  nativeBuildInputs = [ gradle unzip ];
 
   mitmCache = gradle.fetchDeps {
     pkg = finalAttrs.finalPackage;
@@ -30,14 +31,25 @@ stdenv.mkDerivation (finalAttrs: {
   '';
 
   gradleFlags = [ "-PagentVersion=${finalAttrs.version}" ];
-  gradleBuildTask = "jar";
+  gradleBuildTask = "shadowJar";
 
   doCheck = true;
 
   installPhase = ''
     runHook preInstall
-    install -Dm644 build/libs/*.jar $out/share/spawnery/spawnery-agent.jar
+    install -Dm644 build/libs/spawnery-paper-agent-${finalAttrs.version}.jar $out/share/spawnery/spawnery-agent.jar
     runHook postInstall
+  '';
+
+  doInstallCheck = true;
+  installCheckPhase = ''
+    runHook preInstallCheck
+    # Invoked through bash rather than executed directly: the store path's
+    # "#!/usr/bin/env bash" shebang has nothing to resolve against inside the
+    # build sandbox, which carries no /usr/bin/env, and fails with "bad
+    # interpreter" before the check ever runs.
+    bash ${../hack/agent-jar-check.sh} $out/share/spawnery/spawnery-agent.jar
+    runHook postInstallCheck
   '';
 
   meta = {

@@ -1,0 +1,5 @@
+name: SpawneryAgent
+version: '${version}'
+main: cloud.spawnery.agent.AgentPlugin
+api-version: '26.2'
+description: Reports readiness and player counts to the Spawnery operator.
