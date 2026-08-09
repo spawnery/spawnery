@@ -68,6 +68,8 @@
               protoc-gen-grpc-java
               gradle
               jdk21_headless
+              # hack/agent-test.sh asserts on the stub operator's event stream.
+              jq
             ];
 
             env = {
@@ -98,6 +100,18 @@
             ldflags = [ "-s" "-w" ];
           };
 
+          # Test-only, and deliberately not referenced by nix/paper-image.nix:
+          # the operator's counterpart has no business inside a server image.
+          # hack/agent-test.sh runs it on the host.
+          spawnery-stubop = pkgs.buildGoModule {
+            pname = "spawnery-stubop";
+            version = "0.2.0";
+            src = ./.;
+            vendorHash = "sha256-93cgbNfJURfz1mOM0nnOp9WGuMcFqkKlFGJ4tmdXeiw=";
+            subPackages = [ "cmd/spawnery-stubop" ];
+            env.CGO_ENABLED = 0;
+          };
+
           paper-agent = pkgs.callPackage ./nix/paper-agent.nix {
             inherit paper imageVersion;
           };
@@ -107,7 +121,7 @@
           # every system.
           paper-repo = paper.repo;
 
-          inherit spawnery-slp paper-agent;
+          inherit spawnery-slp spawnery-stubop paper-agent;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not

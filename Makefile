@@ -4,6 +4,7 @@ CONTAINER ?= docker
 # actually expanded, i.e. by image-test below. A plain `make test` never
 # references it and pays nothing for it.
 IMAGE ?= $(shell nix eval --raw .#paper-image.imageName):$(shell nix eval --raw .#paper-image.imageTag)
+STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
 
 .PHONY: all
 all: proto manifests generate fmt vet test build agent
@@ -77,6 +78,13 @@ image-load: image
 .PHONY: image-test
 image-test: image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) hack/image-test.sh
+
+# The level-2 proof from design section 9. Not part of `test` or `all`, for the
+# same reason image-test is not: it needs a container runtime and only works on
+# x86_64-linux.
+.PHONY: agent-test
+agent-test: image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) STUBOP=$(STUBOP) hack/agent-test.sh
 
 # Not part of `test` or `all`, for the same reason image-test is not: it needs
 # a container runtime's worth of build time and only works on x86_64-linux.

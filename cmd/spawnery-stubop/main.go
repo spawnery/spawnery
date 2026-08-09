@@ -1,0 +1,403 @@
+/*
+Copyright The Spawnery Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Command spawnery-stubop is an operator-shaped counterpart for the Paper
+// agent, and nothing else. hack/agent-test.sh runs it on the host, points a
+// containerised agent at it, and reads its stdout; it is test-only and never
+// enters the image.
+//
+// It is deliberately *passive*. The real operator supersedes: on a second
+// stream for the same pod, internal/agentserver cancels the displaced stream's
+// context itself. A stub that imitated that would close the outgoing stream on
+// its own, and the assertion "the first stream closed only after the second
+// greeted" would then be measuring the stub rather than the agent. So this one
+// accepts a stream, records what arrives on it, and never cancels one: every
+// close in the recorded trace is the agent's own doing.
+//
+// It also accepts any bearer token. It is not testing authentication — that is
+// internal/grpcauth's own tests' job — it is recording, verbatim, what the
+// agent put in the header.
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+
+	"github.com/spawnery/spawnery/internal/agentpb"
+)
+
+const (
+	// certificateLifetime only has to outlive one test run. Nothing renews it.
+	certificateLifetime = 24 * time.Hour
+	// worldReadable, because the container runs as uid 10001 and reads these
+	// two files through a bind mount of the directory they are written to.
+	worldReadable = 0o644
+	worldEnter    = 0o755
+)
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// names collects a repeatable flag. The serving certificate needs one SAN per
+// name the agent might dial it by, and under a container runtime that is not
+// the host's own hostname.
+type names []string
+
+func (n *names) String() string { return strings.Join(*n, ",") }
+
+func (n *names) Set(value string) error {
+	if value == "" {
+		return fmt.Errorf("an empty SAN would match nothing")
+	}
+	*n = append(*n, value)
+	return nil
+}
+
+// run returns the process exit code: 0 on a clean SIGTERM, 1 on anything else.
+func run(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("spawnery-stubop", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	dir := fs.String("dir", "", "directory to write ca.crt and token into (required)")
+	var sans names
+	fs.Var(&sans, "san", "DNS name to put in the serving certificate; repeatable (default stubop)")
+	listen := fs.String("listen", ":9443", "address to serve AgentService on")
+	reportInterval := fs.Int("report-interval", 1, "seconds the agent is told to wait between player count reports")
+	renewAfter := fs.Int("renew-after", 5, "seconds after which the agent is told to renew its session")
+	hardDeadline := fs.Int("hard-deadline", 20, "seconds the agent is told its session may live at most")
+
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	if *dir == "" {
+		fmt.Fprintln(stderr, "--dir is required: the agent reads its CA and token from a directory")
+		return 1
+	}
+	if len(sans) == 0 {
+		sans = names{"stubop"}
+	}
+
+	material, err := materialise(*dir, sans)
+	if err != nil {
+		fmt.Fprintf(stderr, "could not write the agent's credentials: %v\n", err)
+		return 1
+	}
+
+	listener, err := net.Listen("tcp", *listen)
+	if err != nil {
+		fmt.Fprintf(stderr, "listen on %s: %v\n", *listen, err)
+		return 1
+	}
+
+	// TLS 1.3 as a floor, matching internal/agentserver: a stub that accepted
+	// less could pass while the agent negotiated something the real operator
+	// would refuse.
+	creds := credentials.NewTLS(&tls.Config{
+		Certificates: []tls.Certificate{material.Certificate},
+		MinVersion:   tls.VersionTLS13,
+	})
+	server := grpc.NewServer(grpc.Creds(creds))
+	agentpb.RegisterAgentServiceServer(server, &stub{
+		events:         newRecorder(stdout),
+		reportInterval: int32(*reportInterval),
+		renewAfter:     int32(*renewAfter),
+		hardDeadline:   int32(*hardDeadline),
+	})
+
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-signals
+		// Stop, not GracefulStop: every RPC here is a stream the agent means to
+		// hold open, and this process is meant to end when the test does.
+		server.Stop()
+	}()
+
+	fmt.Fprintf(stderr, "serving AgentService on %s for %v\n", listener.Addr(), []string(sans))
+	if err := server.Serve(listener); err != nil {
+		fmt.Fprintf(stderr, "serve: %v\n", err)
+		return 1
+	}
+	return 0
+}
+
+// material is what the stub hands the agent: the serving certificate it
+// presents, and the token it will accept in any spelling of the header.
+type material struct {
+	Certificate tls.Certificate
+	Token       string
+}
+
+// materialise generates the CA and serving certificate and writes ca.crt and
+// token into dir.
+func materialise(dir string, sans []string) (*material, error) {
+	if err := os.MkdirAll(dir, worldEnter); err != nil {
+		return nil, fmt.Errorf("create %s: %w", dir, err)
+	}
+	// MkdirAll leaves an existing directory's mode alone and applies the umask
+	// to a new one, and the bind-mounted directory has to be enterable by a
+	// uid that is not this one.
+	if err := os.Chmod(dir, worldEnter); err != nil {
+		return nil, fmt.Errorf("chmod %s: %w", dir, err)
+	}
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate the CA key: %w", err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "spawnery-stubop"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(certificateLifetime),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		return nil, fmt.Errorf("sign the CA certificate: %w", err)
+	}
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		return nil, fmt.Errorf("parse the CA certificate: %w", err)
+	}
+
+	servingKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generate the serving key: %w", err)
+	}
+	servingTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: sans[0]},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(certificateLifetime),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		DNSNames:     sans,
+	}
+	servingDER, err := x509.CreateCertificate(rand.Reader, servingTemplate, ca, &servingKey.PublicKey, caKey)
+	if err != nil {
+		return nil, fmt.Errorf("sign the serving certificate: %w", err)
+	}
+	serving, err := x509.ParseCertificate(servingDER)
+	if err != nil {
+		return nil, fmt.Errorf("parse the serving certificate: %w", err)
+	}
+
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("draw a token: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(secret)
+
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})
+	if err := write(filepath.Join(dir, "ca.crt"), caPEM); err != nil {
+		return nil, err
+	}
+	// No trailing newline: the agent sends the file's bytes as the token, so
+	// anything written here is part of the header the operator would match.
+	if err := write(filepath.Join(dir, "token"), []byte(token)); err != nil {
+		return nil, err
+	}
+
+	return &material{
+		Certificate: tls.Certificate{
+			Certificate: [][]byte{servingDER},
+			PrivateKey:  servingKey,
+			Leaf:        serving,
+		},
+		Token: token,
+	}, nil
+}
+
+// write puts the file where the agent can read it whatever the umask says.
+func write(path string, contents []byte) error {
+	if err := os.WriteFile(path, contents, worldReadable); err != nil {
+		return fmt.Errorf("write %s: %w", path, err)
+	}
+	if err := os.Chmod(path, worldReadable); err != nil {
+		return fmt.Errorf("chmod %s: %w", path, err)
+	}
+	return nil
+}
+
+// recorder writes the observed events as one JSON object per line, so the test
+// script can tail the file and assert on the order of what it finds there.
+type recorder struct {
+	mu  sync.Mutex
+	out io.Writer
+	seq int
+}
+
+// newRecorder returns a recorder writing one JSON object per line to w.
+func newRecorder(w io.Writer) *recorder {
+	return &recorder{out: w}
+}
+
+// record writes {"kind":..., "seq":..., ...fields} and flushes.
+//
+// seq is the whole reason this is not just an encoder: several streams record
+// concurrently, and the overlap assertion needs a total order over the events
+// rather than over the lines of one stream. Taking it under the same lock that
+// serialises the write is what makes the two agree.
+func (r *recorder) record(kind string, fields map[string]any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	event := make(map[string]any, len(fields)+2)
+	for key, value := range fields {
+		event[key] = value
+	}
+	event["kind"] = kind
+	event["seq"] = r.seq
+	r.seq++
+
+	line, err := json.Marshal(event)
+	if err != nil {
+		// Only a caller passing something unmarshalable can reach this, and
+		// every caller is in this file.
+		fmt.Fprintf(os.Stderr, "could not record a %s event: %v\n", kind, err)
+		return
+	}
+	if _, err := r.out.Write(append(line, '\n')); err != nil {
+		fmt.Fprintf(os.Stderr, "could not write a %s event: %v\n", kind, err)
+		return
+	}
+	// A reader tailing the file has to see events as they happen; an os.File
+	// write is already a syscall, but the fsync removes the page cache from
+	// the question entirely.
+	if file, ok := r.out.(*os.File); ok {
+		_ = file.Sync()
+	}
+}
+
+// stub serves AgentService and records. It never cancels a stream: see the
+// package comment for why that is the design and not an omission.
+type stub struct {
+	agentpb.UnimplementedAgentServiceServer
+
+	events  *recorder
+	streams atomic.Int64
+
+	reportInterval int32
+	renewAfter     int32
+	hardDeadline   int32
+}
+
+func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) error {
+	index := s.streams.Add(1) - 1
+	// Verbatim. The script compares this against "Bearer <token>" character for
+	// character, the way internal/grpcauth's interceptor does, so nothing here
+	// may trim, split or case-fold it.
+	authorization := authorizationOf(stream.Context())
+
+	of := func(fields map[string]any) map[string]any {
+		fields["stream"] = index
+		fields["authorization"] = authorization
+		return fields
+	}
+	s.events.record("stream_opened", of(map[string]any{}))
+
+	if err := stream.Send(&agentpb.OperatorToServer{
+		Message: &agentpb.OperatorToServer_ReportInterval{
+			ReportInterval: &agentpb.ReportInterval{Seconds: s.reportInterval},
+		},
+	}); err != nil {
+		s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
+		return nil
+	}
+	if err := stream.Send(&agentpb.OperatorToServer{
+		Message: &agentpb.OperatorToServer_SessionDeadline{
+			SessionDeadline: &agentpb.SessionDeadline{
+				RenewAfterSeconds:   s.renewAfter,
+				HardDeadlineSeconds: s.hardDeadline,
+			},
+		},
+	}); err != nil {
+		s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
+		return nil
+	}
+
+	for {
+		message, err := stream.Recv()
+		if err != nil {
+			reason := ""
+			if !errors.Is(err, io.EOF) {
+				reason = err.Error()
+			}
+			s.events.record("stream_closed", of(map[string]any{"error": reason}))
+			// nil, not the error: the agent ending a stream it renewed is the
+			// expected outcome here, not a failure of the stub.
+			return nil
+		}
+		switch body := message.Message.(type) {
+		case *agentpb.ServerMessage_Hello:
+			s.events.record("hello", of(map[string]any{
+				"version": body.Hello.GetVersion(),
+				"ready":   body.Hello.GetReady(),
+			}))
+		case *agentpb.ServerMessage_Ready:
+			s.events.record("ready", of(map[string]any{}))
+		case *agentpb.ServerMessage_PlayerCount:
+			s.events.record("player_count", of(map[string]any{
+				"players": body.PlayerCount.GetPlayers(),
+				"slots":   body.PlayerCount.GetSlots(),
+			}))
+		default:
+			s.events.record("unknown", of(map[string]any{}))
+		}
+	}
+}
+
+func authorizationOf(ctx context.Context) string {
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return ""
+	}
+	values := md.Get("authorization")
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
+}
