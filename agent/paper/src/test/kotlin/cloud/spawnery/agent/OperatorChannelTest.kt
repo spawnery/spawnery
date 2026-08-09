@@ -31,6 +31,13 @@ class OperatorChannelTest {
     }
 
     @Test
+    fun `rejects an empty bundle`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            OperatorChannel.trustManager(ByteArray(0))
+        }
+    }
+
+    @Test
     fun `bearer credentials carry the current token, one space after Bearer`(@TempDir dir: Path) {
         val path = dir.resolve("token")
         Files.writeString(path, "abc")
