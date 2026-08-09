@@ -3,11 +3,14 @@ package cloud.spawnery.agent
 import cloud.spawnery.agent.pb.OperatorToServer
 import cloud.spawnery.agent.pb.ReportInterval
 import cloud.spawnery.agent.pb.ServerMessage
+import cloud.spawnery.agent.pb.SessionDeadline
 import io.grpc.CallOptions
 import io.grpc.ClientCall
 import io.grpc.ForwardingClientCall
 import io.grpc.ManagedChannel
+import io.grpc.Metadata
 import io.grpc.MethodDescriptor
+import io.grpc.Status
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -57,6 +60,39 @@ private class TrackingChannel(
     override fun authority(): String = delegate.authority()
 }
 
+/**
+ * A channel whose calls fail the instant they are started — synchronously, from
+ * inside `stub.serverSession()`, before [SessionLoop] has had the chance to
+ * install the session anywhere. It stands in for every way a stream can die
+ * before it is established: an operator that is rolling out, a DNS name that
+ * does not resolve yet, a rejected token.
+ */
+private class FailingChannel : ManagedChannel() {
+    override fun <ReqT, RespT> newCall(
+        methodDescriptor: MethodDescriptor<ReqT, RespT>,
+        callOptions: CallOptions,
+    ): ClientCall<ReqT, RespT> = object : ClientCall<ReqT, RespT>() {
+        override fun start(responseListener: Listener<RespT>, headers: Metadata) {
+            responseListener.onClose(
+                Status.UNAVAILABLE.withDescription("no operator"),
+                Metadata(),
+            )
+        }
+
+        override fun request(numMessages: Int) = Unit
+        override fun cancel(message: String?, cause: Throwable?) = Unit
+        override fun halfClose() = Unit
+        override fun sendMessage(message: ReqT) = Unit
+    }
+
+    override fun shutdown(): ManagedChannel = this
+    override fun shutdownNow(): ManagedChannel = this
+    override fun isShutdown(): Boolean = true
+    override fun isTerminated(): Boolean = true
+    override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean = true
+    override fun authority(): String = "failing"
+}
+
 class SessionLoopTest {
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
 
@@ -66,16 +102,22 @@ class SessionLoopTest {
         operator: FakeOperator,
         state: ServerState,
         dir: Path,
+        channels: () -> ManagedChannel = { operator.newChannel() },
+        // Identity, so a test's delays are the delays it wrote down. The
+        // production default spreads them by ±10 %, which would make every
+        // assertion about timing approximate.
+        jitter: (Long) -> Long = { it },
     ): SessionLoop {
         val token = dir.resolve("token")
         Files.writeString(token, "test-token")
         return SessionLoop(
-            channels = { operator.newChannel() },
+            channels = channels,
             credentials = BearerCredentials.of(TokenSource(token)),
             state = state,
             scheduler = scheduler,
             version = "26.2-0.2.0",
             log = { _, _ -> },
+            jitter = jitter,
         )
     }
 
@@ -164,10 +206,11 @@ class SessionLoopTest {
             val state = ServerState()
             val order = Collections.synchronizedList(mutableListOf<String>())
             var connectCount = 0
-            val token = dir.resolve("token")
-            Files.writeString(token, "test-token")
 
-            val loop = SessionLoop(
+            val loop = loopAgainst(
+                operator,
+                state,
+                dir,
                 channels = {
                     connectCount++
                     val real = operator.newChannel()
@@ -176,11 +219,6 @@ class SessionLoopTest {
                         else -> TrackingChannel(real, onSend = { order.add("second-sent") })
                     }
                 },
-                credentials = BearerCredentials.of(TokenSource(token)),
-                state = state,
-                scheduler = scheduler,
-                version = "26.2-0.2.0",
-                log = { _, _ -> },
             )
 
             loop.use {
@@ -233,5 +271,159 @@ class SessionLoopTest {
                 )
             }
         }
+    }
+
+    @Test
+    fun `renews before the deadline and keeps the old stream open until the new one greets`(
+        @TempDir dir: Path,
+    ) {
+        FakeOperator("renew").use { operator ->
+            val state = ServerState().apply { markReady() }
+            val order = Collections.synchronizedList(mutableListOf<String>())
+            var connectCount = 0
+
+            val loop = loopAgainst(
+                operator,
+                state,
+                dir,
+                channels = {
+                    connectCount++
+                    val real = operator.newChannel()
+                    when (connectCount) {
+                        1 -> TrackingChannel(real, onShutdown = { order.add("first-closed") })
+                        else -> TrackingChannel(real, onSend = { order.add("second-sent") })
+                    }
+                },
+            )
+
+            loop.use {
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(3),
+                        )
+                        .build(),
+                )
+
+                // Nothing else opens a stream: arriving at all is the assertion
+                // that the deadline was acted on before it ran out.
+                val second = operator.awaitStream(1)
+                val hello = second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // Readiness is repeated on every connect, so the operator's
+                // Supersede has something to carry across the handover.
+                assertTrue(hello.hello.ready, "the renewed stream greeted as not ready")
+
+                // Make before break. Taken from each channel's own call order
+                // rather than from the operator's cross-stream view, which is
+                // two independently scheduled RPCs and proves nothing about
+                // which happened first.
+                assertTrue(
+                    first.closed.await(5, TimeUnit.SECONDS),
+                    "the outgoing stream was never closed",
+                )
+                assertTrue(order.contains("second-sent"), "the renewed stream never greeted; saw $order")
+                assertTrue(order.contains("first-closed"), "the outgoing channel was never shut down; saw $order")
+                assertTrue(
+                    order.indexOf("second-sent") < order.indexOf("first-closed"),
+                    "break before make: the operator sees a disconnect and the server " +
+                        "drops out of Ready for the length of the gap: $order",
+                )
+
+                // Retiring the outgoing stream is not a breakage, so it must not
+                // start a reconnect of its own. Bounded wait: the shortest
+                // backoff is a second.
+                Thread.sleep(2000)
+                assertEquals(
+                    2,
+                    operator.streams.size,
+                    "the handover was mistaken for a broken stream and reconnected",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `reconnects with backoff after the stream breaks`(@TempDir dir: Path) {
+        FakeOperator("reconnect").use { operator ->
+            val state = ServerState()
+            loopAgainst(operator, state, dir).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                first.toAgent.onError(Status.UNAVAILABLE.asRuntimeException())
+
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+            }
+        }
+    }
+
+    @Test
+    fun `reconnects when the stream fails before the session is established`(@TempDir dir: Path) {
+        FakeOperator("early-failure").use { operator ->
+            val state = ServerState()
+            var connectCount = 0
+
+            // The first attempt fails from inside stub.serverSession(), which is
+            // before connect() reaches the point where the session becomes the
+            // current one. A reconnect guarded on `current` would skip this case
+            // and the agent would sit silent forever -- the one outcome worse
+            // than reconnecting too eagerly.
+            val loop = loopAgainst(
+                operator,
+                state,
+                dir,
+                channels = { if (connectCount++ == 0) FailingChannel() else operator.newChannel() },
+            )
+
+            loop.use {
+                loop.start()
+                val stream = operator.awaitStream(0)
+                stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+            }
+        }
+    }
+
+    @Test
+    fun `does not reconnect after stop`(@TempDir dir: Path) {
+        FakeOperator("stopped").use { operator ->
+            val state = ServerState()
+            // Three seconds of headroom between the breakage and the reconnect
+            // it schedules, so stop() lands inside that window without the test
+            // depending on how fast the machine is.
+            loopAgainst(operator, state, dir, jitter = { 3_000L }).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                first.toAgent.onError(Status.UNAVAILABLE.asRuntimeException())
+                loop.stop()
+
+                Thread.sleep(1500)
+                assertEquals(
+                    1,
+                    operator.streams.size,
+                    "a reconnect outlived the plugin that asked to be stopped",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `backoff grows and is capped`() {
+        val delays = (0..10).map { SessionLoop.backoffMillis(it) }
+        assertEquals(1_000L, delays[0])
+        assertEquals(2_000L, delays[1])
+        assertEquals(4_000L, delays[2])
+        assertTrue(delays.all { it <= 30_000L }, "capped at 30s: $delays")
+        assertEquals(30_000L, delays.last())
     }
 }
