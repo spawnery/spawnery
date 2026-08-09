@@ -140,7 +140,11 @@ org.gradle.java.installations.auto-download=false
 
 ```kotlin
 plugins {
-    kotlin("jvm") version "2.2.20"
+    // 2.4.10 and not lower: that is the version measured to read the
+    // class-file-major-69 Paper jars on the compile classpath. An older Kotlin
+    // may not, and the failure is an UnsupportedClassVersionError that names
+    // the jar rather than the compiler.
+    kotlin("jvm") version "2.4.10"
 }
 
 group = "cloud.spawnery"
@@ -610,7 +614,11 @@ In `agent/paper/build.gradle.kts`, the `plugins` block becomes:
 
 ```kotlin
 plugins {
-    kotlin("jvm") version "2.2.20"
+    // 2.4.10 and not lower: that is the version measured to read the
+    // class-file-major-69 Paper jars on the compile classpath. An older Kotlin
+    // may not, and the failure is an UnsupportedClassVersionError that names
+    // the jar rather than the compiler.
+    kotlin("jvm") version "2.4.10"
     id("com.gradleup.shadow") version "9.0.0"
 }
 ```
