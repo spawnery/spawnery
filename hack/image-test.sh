@@ -115,15 +115,18 @@ if ! grep -q 'spawnery agent dormant' <<<"$container_logs"; then
 fi
 echo "the agent plugin loaded and stayed dormant without an operator"
 
-# And that relocation held. A protobuf or Netty conflict with Paper's own
-# copies surfaces exactly here, at class load, as a NoSuchMethodError or
-# NoClassDefFoundError that names neither the plugin nor the conflict.
+# And that nothing broke at class load. Note what this does NOT prove: with no
+# operator endpoint the plugin goes dormant before SessionLoop, OperatorChannel
+# or BearerCredentials are ever constructed, and those are the classes that
+# import io.grpc. Class loading is lazy, so the shaded gRPC tree is never
+# touched in this run. A shading regression confined to the operator-connection
+# path would pass here. That proof is make agent-test's, in the next task.
 if grep -qE 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs"; then
-	echo "a linkage error appeared; the shaded dependencies met Paper's own:" >&2
+	echo "a linkage error appeared while loading the plugin:" >&2
 	grep -B2 -A10 -E 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs" >&2
 	exit 1
 fi
-echo "no linkage error: the relocation holds"
+echo "the plugin's own classes load without a linkage error"
 
 # SIGTERM reaches PID 1 and saves the world. Without exec in the entrypoint the
 # grace period would run out empty and every stop would lose world state.

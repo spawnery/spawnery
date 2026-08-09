@@ -68,7 +68,6 @@ set_property enable-status true
 if [ -f "$PAPER_HOME/agent/spawnery-agent.jar" ]; then
 	mkdir -p plugins
 	cp -f "$PAPER_HOME/agent/spawnery-agent.jar" plugins/spawnery-agent.jar
-	chmod u+w plugins/spawnery-agent.jar
 fi
 
 # exec, so the JVM becomes PID 1 and receives SIGTERM directly. With a shell in
