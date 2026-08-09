@@ -463,11 +463,41 @@ proto:
 
 - [ ] **Step 3: Regenerate and prove the Go side is untouched**
 
-Run: `nix develop -c make proto && git diff --stat internal/agentpb/`
+> **Correction, made during execution.** This step originally demanded that
+> `git diff --stat internal/agentpb/` be **empty**, and the implementer
+> correctly stopped when it was not. The demand was impossible, not the
+> assumption behind it: a `FileDescriptorProto` carries one `FileOptions` block
+> shared by every target language, and `protoc-gen-go` embeds the whole
+> serialized descriptor in `rawDesc` for reflection — so *any* additive
+> file-level option for *any* language moves those bytes. Verified on the real
+> diff: the only change is inside the `rawDesc` string literal, where
+> `java_package`, `java_outer_classname` and `java_multiple_files` now appear
+> beside an unchanged `go_package`. No exported Go symbol, message name or
+> field number moves.
+>
+> The check below replaces it and tests what the original meant to test.
 
-Expected: **empty output.** The Java options must not change a byte of the
-generated Go. If they do, stop and report it — the assumption this task rests
-on is wrong.
+Run:
+
+```bash
+nix develop -c make proto
+git diff --stat internal/agentpb/
+git diff internal/agentpb/ | grep -E '^[+-][[:space:]]*(func|type|const|var) ' || echo "no Go API change"
+nix develop -c go test ./internal/agentpb/...
+```
+
+Expected, all four:
+
+1. `agent.pb.go` is the only file changed, by about four lines.
+   `agent_grpc.pb.go` must be untouched — the service surface is what a
+   consumer actually binds to.
+2. The diff is confined to the `file_spawnery_agent_v1alpha1_agent_proto_rawDesc`
+   literal, and the substring `Z-github.com/spawnery/spawnery/internal/agentpb`
+   still appears in it.
+3. `no Go API change` — no added or removed `func`, `type`, `const` or `var`.
+4. The existing Go tests pass **unmodified**. If a Go test needs editing to
+   stay green, stop and report: that is the wire-compatibility break this step
+   exists to catch.
 
 Then: `git status --short agent/paper/src/proto/java | head`
 
