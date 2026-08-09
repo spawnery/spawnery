@@ -171,6 +171,43 @@ func TestEntrypointRefusesAnUnusableMaxPlayers(t *testing.T) {
 	}
 }
 
+func TestCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	// The image ships the jar in the read-only part; the entrypoint's job is
+	// to get it somewhere Paper may also write, because Paper puts its
+	// plugins' data folders inside the plugins directory.
+	paperHome := filepath.Join(dir, "opt", "paper")
+	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jar := filepath.Join(paperHome, "agent", "spawnery-agent.jar")
+	if err := os.WriteFile(jar, []byte("fresh"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	// A stale copy from a previous start must lose: the image is the truth.
+	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, "plugins", "spawnery-agent.jar")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100", "PAPER_HOME="+paperHome); err != nil {
+		t.Fatalf("entrypoint: %v", err)
+	}
+
+	got, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatalf("the agent jar is not in the plugins directory: %v", err)
+	}
+	if string(got) != "fresh" {
+		t.Errorf("plugins/spawnery-agent.jar = %q, want the copy from the image", got)
+	}
+}
+
 func parseProperties(raw string) map[string]string {
 	props := map[string]string{}
 	for _, line := range strings.Split(raw, "\n") {

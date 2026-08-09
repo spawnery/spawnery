@@ -80,6 +80,13 @@
         let
           paper = pkgs.callPackage ./nix/paper.nix { };
 
+          # The one place this version is written down. It reaches both the
+          # plugin's paper-plugin.yml (which the agent reports to the
+          # operator as Hello.version) and the image tag, so the two can
+          # never drift apart the way paper-agent.nix and paper-image.nix's
+          # separate defaults once could.
+          imageVersion = "0.2.0";
+
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
             version = "0.1.0";
@@ -92,7 +99,7 @@
           };
 
           paper-agent = pkgs.callPackage ./nix/paper-agent.nix {
-            inherit paper;
+            inherit paper imageVersion;
           };
         in
         {
@@ -112,7 +119,7 @@
           # mislabelled image. `nix flake show` and `nix develop` stay
           # unaffected elsewhere.
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
-            inherit paper spawnery-slp;
+            inherit paper spawnery-slp paper-agent imageVersion;
           };
         });
     };

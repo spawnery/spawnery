@@ -9,7 +9,7 @@
 , gradle
 , paper
 , unzip
-, imageVersion ? "0.2.0"
+, imageVersion
 }:
 
 stdenv.mkDerivation (finalAttrs: {
