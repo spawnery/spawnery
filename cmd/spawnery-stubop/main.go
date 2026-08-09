@@ -37,6 +37,14 @@ limitations under the License.
 // is not the overlap but the rate: an agent that mistakes that cancellation for
 // a breakage it owes a reconnect opens a stream a second, forever.
 //
+// --mute-after is the third thing an operator can do, and the only one that is
+// not an event: accept a stream and then say nothing on it. It is a silence
+// rather than a failure, so no error reaches the agent and no deadline of the
+// operator's ever fires — see muted for where the real operator does this. What
+// is asserted under it is a lower bound on the rate: an agent with no bound of
+// its own stops opening streams entirely, which is the one failure an upper
+// bound reads as success.
+//
 // It also accepts any bearer token. It is not testing authentication — that is
 // internal/grpcauth's own tests' job — it is recording, verbatim, what the
 // agent put in the header.
@@ -127,6 +135,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	hardDeadline := fs.Int("hard-deadline", 20, "seconds the agent is told its session may live at most")
 	supersede := fs.Bool("supersede", false,
 		"cancel the displaced stream when a new one opens, the way the real operator does")
+	muteAfter := fs.Int("mute-after", -1,
+		"accept streams from this index on and never answer them, the way an operator "+
+			"blocked between the cancel and its first Send does; negative disables")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -165,6 +176,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		renewAfter:     int32(*renewAfter),
 		hardDeadline:   int32(*hardDeadline),
 		supersede:      *supersede,
+		muteAfter:      *muteAfter,
 	})
 
 	signals := make(chan os.Signal, 1)
@@ -352,8 +364,28 @@ type stub struct {
 	// the stream a new one would displace; there is one because the test points
 	// one agent at this process, where the real operator keys it by pod UID.
 	supersede bool
+	// muteAfter is the first stream index that is accepted and never answered.
+	// Negative means every stream is answered. See muted.
+	muteAfter int
 	mu        sync.Mutex
 	current   *live
+}
+
+// muted reports whether this stream is one the stub accepts and then says
+// nothing on.
+//
+// This is the other half of what an operator can do to an agent, and the half
+// that has no failure of its own to make it visible. internal/agentserver
+// cancels the displaced stream inside sessions.enter (server.go:179) and only
+// then calls Agents.Supersede (server.go:193), increments a metric and sends
+// (server.go:200, :207); its hard-deadline rescue is armed after both Sends
+// (server.go:218). So an operator goroutine that blocks anywhere in between has
+// retired the agent's outgoing stream, accepted its replacement, and armed
+// nothing that will ever end either wait. Nothing on the operator's side
+// resolves that, which is why the agent needs a bound of its own and why this
+// flag exists to hold it to one.
+func (s *stub) muted(index int64) bool {
+	return s.muteAfter >= 0 && index >= int64(s.muteAfter)
 }
 
 // live is one stream under --supersede: what ends it, and how to tell that it
@@ -417,7 +449,8 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 		fields["authorization"] = authorization
 		return fields
 	}
-	s.events.record("stream_opened", of(map[string]any{}))
+	muted := s.muted(index)
+	s.events.record("stream_opened", of(map[string]any{"muted": muted}))
 
 	ctx := stream.Context()
 	if s.supersede {
@@ -429,24 +462,29 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 		s.enter(&live{cancel: cancel, done: done})
 	}
 
-	if err := stream.Send(&agentpb.OperatorToServer{
-		Message: &agentpb.OperatorToServer_ReportInterval{
-			ReportInterval: &agentpb.ReportInterval{Seconds: s.reportInterval},
-		},
-	}); err != nil {
-		s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
-		return nil
-	}
-	if err := stream.Send(&agentpb.OperatorToServer{
-		Message: &agentpb.OperatorToServer_SessionDeadline{
-			SessionDeadline: &agentpb.SessionDeadline{
-				RenewAfterSeconds:   s.renewAfter,
-				HardDeadlineSeconds: s.hardDeadline,
+	// A muted stream skips both Sends and nothing else: it is registered, it
+	// displaced whatever came before it, and it stays open. That is the point —
+	// the agent holds a stream the operator accepted and will never answer.
+	if !muted {
+		if err := stream.Send(&agentpb.OperatorToServer{
+			Message: &agentpb.OperatorToServer_ReportInterval{
+				ReportInterval: &agentpb.ReportInterval{Seconds: s.reportInterval},
 			},
-		},
-	}); err != nil {
-		s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
-		return nil
+		}); err != nil {
+			s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
+			return nil
+		}
+		if err := stream.Send(&agentpb.OperatorToServer{
+			Message: &agentpb.OperatorToServer_SessionDeadline{
+				SessionDeadline: &agentpb.SessionDeadline{
+					RenewAfterSeconds:   s.renewAfter,
+					HardDeadlineSeconds: s.hardDeadline,
+				},
+			},
+		}); err != nil {
+			s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
+			return nil
+		}
 	}
 
 	if !s.supersede {

@@ -12,13 +12,20 @@
 # The last one is what docs/known-issues.md calls non-optional, and a unit test
 # can only claim it.
 #
-# It runs in two phases, against the two halves of what an operator does.
-# Against the passive stub, everything closed in the trace was closed by the
-# agent, which is what makes the overlap assertion a statement about the agent
-# at all. Against --supersede, the stub retires the displaced stream itself,
-# where and when internal/agentserver does - and what is asserted there is the
-# rate at which the agent opens streams, because that is what an agent gets
-# wrong when it mistakes the operator's retirement for a breakage of its own.
+# It runs in three phases, against the three things an operator does to an
+# agent. Against the passive stub, everything closed in the trace was closed by
+# the agent, which is what makes the overlap assertion a statement about the
+# agent at all. Against --supersede, the stub retires the displaced stream
+# itself, where and when internal/agentserver does. Against --mute-after it
+# does that and then says nothing, which is an operator blocked between the
+# cancel and its first Send.
+#
+# The last two assert the same quantity from opposite sides: the rate at which
+# the agent opens streams. Mistaking the operator's retirement for a breakage
+# it owes a reconnect makes that rate too high; having no bound on a stream the
+# operator accepted and never answered makes it zero. Both bounds are on both
+# phases, because a phase that only fails upwards reads a dead agent as a
+# healthy one.
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-docker}"
@@ -30,17 +37,22 @@ NAME="spawnery-agent-test-$$"
 VOLUME="spawnery-agent-test-$$"
 NAME2="spawnery-agent-test-supersede-$$"
 VOLUME2="spawnery-agent-test-supersede-$$"
+NAME3="spawnery-agent-test-mute-$$"
+VOLUME3="spawnery-agent-test-mute-$$"
 WORK="$(mktemp -d)"
 EVENTS="$WORK/events.jsonl"
 EVENTS2="$WORK/events-supersede.jsonl"
+EVENTS3="$WORK/events-mute.jsonl"
 STUB_PID=""
 STUB2_PID=""
+STUB3_PID=""
 
 cleanup() {
 	[ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
 	[ -n "$STUB2_PID" ] && kill "$STUB2_PID" 2>/dev/null || true
-	"$CONTAINER" rm -f "$NAME" "$NAME2" >/dev/null 2>&1 || true
-	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" >/dev/null 2>&1 || true
+	[ -n "$STUB3_PID" ] && kill "$STUB3_PID" 2>/dev/null || true
+	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" >/dev/null 2>&1 || true
+	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" >/dev/null 2>&1 || true
 	rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -115,6 +127,13 @@ await_event() {
 		fi
 		sleep 2
 	done
+}
+
+# streams_opened <events file> - how many streams the agent has opened so far.
+# The two rate assertions below are this measurement taken at both ends of a
+# window; the difference is what they bound, from above and from below.
+streams_opened() {
+	jq -rs '[.[] | select(.kind == "stream_opened")] | length' <"$1"
 }
 
 echo "waiting up to ${DEADLINE}s for the agent to greet..."
@@ -285,13 +304,21 @@ await_event hello "$EVENTS2" "$NAME2"
 # One renewal interval is 5s, so the window holds about six of them. Twice that
 # plus two is the threshold: a correct agent is nowhere near it and the 1 Hz
 # churn is several times past it, so the number below is not a timing guess.
+#
+# Half the renewals due is the floor, and it is not decoration. Everything this
+# phase measures is bounded from above, so every way the agent can stop - a
+# container that died, a wedged session, a stub that stopped renewing - produces
+# a low count and would print "no reconnect storm" on the strength of it. That
+# is the milestone's own assertion passing for the exact failure it exists to
+# catch.
 WINDOW=30
 RENEWALS=$((WINDOW / 5))
 LIMIT=$((RENEWALS * 2 + 2))
-before="$(jq -rs '[.[] | select(.kind == "stream_opened")] | length' <"$EVENTS2")"
+FLOOR=$((RENEWALS / 2))
+before="$(streams_opened "$EVENTS2")"
 echo "counting the streams the agent opens over ${WINDOW}s of renewals..."
 sleep "$WINDOW"
-after="$(jq -rs '[.[] | select(.kind == "stream_opened")] | length' <"$EVENTS2")"
+after="$(streams_opened "$EVENTS2")"
 opened=$((after - before))
 
 # Without this the phase would pass for the wrong reason: a stub that never
@@ -309,6 +336,123 @@ if [ "$opened" -gt "$LIMIT" ]; then
 	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS2" >&2
 	exit 1
 fi
+if [ "$opened" -lt "$FLOOR" ]; then
+	echo "the agent opened $opened streams in ${WINDOW}s, at least $FLOOR expected from a ${RENEWALS}-renewal window" >&2
+	echo "the agent stopped renewing during the window, so the count above measured a stopped agent rather than a quiet one" >&2
+	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS2" >&2
+	# One of the things this catches is a container that is no longer there, so
+	# the log read has to be allowed to fail without replacing the verdict above
+	# with its own exit status.
+	"$CONTAINER" logs "$NAME2" 2>&1 | tail -20 >&2 || true
+	exit 1
+fi
 echo "the agent opened $opened streams in ${WINDOW}s across $superseded supersessions: one per renewal, no reconnect storm"
+
+# ---------------------------------------------------------------------------
+# Phase three: the operator that accepts a stream and then says nothing.
+#
+# The phase above proves the agent does not mistake the operator's retirement
+# for a breakage. It does that by handing the reconnect obligation forward to
+# the replacement - which leaves the replacement as the only thing that can ever
+# discharge it. internal/agentserver cancels the displaced stream inside
+# sessions.enter (server.go:179), calls Agents.Supersede (server.go:193) and
+# only then sends (server.go:200); its own hard-deadline rescue is armed after
+# both Sends (server.go:218). An operator that blocks in between has therefore
+# retired the agent's outgoing stream, accepted its replacement, and armed
+# nothing that ends either wait - and the agent's channel has no keepalive, no
+# idle timeout and no call deadline of its own.
+#
+# So this is the same measurement as above with the bound that matters
+# reversed: with no floor of its own the agent opens no further stream, ever,
+# and silence is not something an upper bound can see.
+echo
+echo "restarting the agent against an operator that accepts a stream and says nothing..."
+"$CONTAINER" rm -f "$NAME2" >/dev/null 2>&1 || true
+kill "$STUB2_PID" 2>/dev/null || true
+STUB2_PID=""
+
+MUTE_HARD_DEADLINE=20
+mkdir -p "$WORK/agent-mute"
+"$STUBOP" \
+	--dir "$WORK/agent-mute" \
+	--san stubop \
+	--listen ":19445" \
+	--report-interval 1 \
+	--renew-after 5 \
+	--hard-deadline "$MUTE_HARD_DEADLINE" \
+	--supersede \
+	--mute-after 1 \
+	>"$EVENTS3" 2>"$WORK/stub3.log" &
+STUB3_PID=$!
+
+sleep 1
+if ! kill -0 "$STUB3_PID" 2>/dev/null; then
+	echo "the muting stub operator did not stay up:" >&2
+	cat "$WORK/stub3.log" >&2
+	exit 1
+fi
+chmod 0755 "$WORK/agent-mute"
+chmod 0644 "$WORK/agent-mute/ca.crt" "$WORK/agent-mute/token"
+
+"$CONTAINER" volume create "$VOLUME3" >/dev/null
+"$CONTAINER" run -d --name "$NAME3" \
+	--add-host stubop:host-gateway \
+	--read-only --tmpfs /tmp:rw,exec,size=256m \
+	--cap-drop ALL \
+	--security-opt no-new-privileges \
+	--memory 2g \
+	-v "$VOLUME3:/data" \
+	-v "$WORK/agent-mute:/var/run/spawnery:ro" \
+	-e SPAWNERY_MAX_PLAYERS=100 \
+	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19445 \
+	"$IMAGE" >/dev/null
+
+echo "waiting up to ${DEADLINE}s for the agent to greet the muting operator..."
+await_event hello "$EVENTS3" "$NAME3"
+
+# Stream 0 is answered, so the agent learns the interval and both deadlines from
+# it and renews on schedule. Stream 1 is the first muted one: the moment it
+# opens is when the agent is holding an accepted, unanswered stream and owes
+# itself everything that follows. The window starts there.
+echo "waiting for the renewal the operator will not answer..."
+start=$SECONDS
+until [ "$(streams_opened "$EVENTS3")" -ge 2 ]; do
+	if [ $((SECONDS - start)) -gt 60 ]; then
+		echo "no second stream within 60s of a 5s renewal deadline" >&2
+		cat "$EVENTS3" >&2
+		exit 1
+	fi
+	sleep 1
+done
+
+# Two hard deadlines plus the backoff between them. The agent's bound on an
+# unanswered stream is the operator's own hardDeadlineSeconds, so a correct
+# agent gives up at 20s, reconnects a second later, gives up again at 41s and so
+# on: two further streams in the window, against a floor of one. An agent
+# without the bound opens none at all, and one that gave up on some invented
+# short constant would run past the ceiling.
+WINDOW3=45
+MUTE_FLOOR=1
+MUTE_LIMIT=$((WINDOW3 / MUTE_HARD_DEADLINE + 2))
+before3="$(streams_opened "$EVENTS3")"
+echo "counting the streams the agent opens over ${WINDOW3}s of silence..."
+sleep "$WINDOW3"
+after3="$(streams_opened "$EVENTS3")"
+opened3=$((after3 - before3))
+
+if [ "$opened3" -lt "$MUTE_FLOOR" ]; then
+	echo "the agent opened $opened3 streams in ${WINDOW3}s of an unanswered session, at least $MUTE_FLOOR expected" >&2
+	echo "an operator that accepts a stream and never answers it leaves the agent with no renewal, no reports and no reconnect: the wait has no bound of its own" >&2
+	jq -rs '.' <"$EVENTS3" >&2
+	"$CONTAINER" logs "$NAME3" 2>&1 | tail -20 >&2 || true
+	exit 1
+fi
+if [ "$opened3" -gt "$MUTE_LIMIT" ]; then
+	echo "the agent opened $opened3 streams in ${WINDOW3}s of an unanswered session, at most $MUTE_LIMIT expected" >&2
+	echo "the bound on an unanswered stream is meant to be the operator's own ${MUTE_HARD_DEADLINE}s hard deadline, not something shorter" >&2
+	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS3" >&2
+	exit 1
+fi
+echo "the agent opened $opened3 streams in ${WINDOW3}s while the operator said nothing: an unanswered session is bounded by the operator's hard deadline"
 
 echo "agent-test: ok"
