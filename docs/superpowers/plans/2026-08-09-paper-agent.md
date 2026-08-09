@@ -2023,14 +2023,19 @@ java` line:
 if [ -f "$PAPER_HOME/agent/spawnery-agent.jar" ]; then
 	mkdir -p plugins
 	cp -f "$PAPER_HOME/agent/spawnery-agent.jar" plugins/spawnery-agent.jar
-	chmod u+w plugins/spawnery-agent.jar
 fi
 ```
 
-The `chmod` matters: the source is mode 0444 in the Nix store, `cp` preserves
-nothing by default but the destination may already exist from a previous start
-as read-only, and `cp -f` unlinks rather than writing through — the chmod makes
-the next start's overwrite work regardless.
+> **Correction, made during execution.** This step originally added
+> `chmod u+w plugins/spawnery-agent.jar` after the copy, justified by the claim
+> that "`cp -f` unlinks rather than writing through — the chmod makes the next
+> start's overwrite work regardless." The reviewer tested `cp -f` against a
+> genuinely read-only 0444 destination: it already unlinks and recreates, which
+> needs only the *directory* to be writable, and `/data` always is under the
+> podspec contract. The `chmod` was therefore dead code carrying a false
+> explanation — the exact defect class milestone 2b's final review named, a
+> comment asserting a mechanism the code does not rely on. Removed, along with
+> the claim.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -2096,16 +2101,27 @@ if ! grep -q 'spawnery agent dormant' <<<"$container_logs"; then
 fi
 echo "the agent plugin loaded and stayed dormant without an operator"
 
-# And that relocation held. A protobuf or Netty conflict with Paper's own
-# copies surfaces exactly here, at class load, as a NoSuchMethodError or
-# NoClassDefFoundError that names neither the plugin nor the conflict.
+# And that nothing broke at class load. Note what this does NOT prove: with no
+# operator endpoint the plugin goes dormant before SessionLoop, OperatorChannel
+# or BearerCredentials are ever constructed, and those are the classes that
+# import io.grpc. Class loading is lazy, so the shaded gRPC tree is never
+# touched in this run. A shading regression confined to the operator-connection
+# path would pass here. That proof is make agent-test's, in the next task.
 if grep -qE 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs"; then
-	echo "a linkage error appeared; the shaded dependencies met Paper's own:" >&2
+	echo "a linkage error appeared while loading the plugin:" >&2
 	grep -B2 -A10 -E 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs" >&2
 	exit 1
 fi
-echo "no linkage error: the relocation holds"
+echo "the plugin's own classes load without a linkage error"
 ```
+
+> **Correction, made during execution.** The original text of this check
+> claimed "a protobuf or Netty conflict with Paper's own copies surfaces
+> exactly here, at class load" and printed "the relocation holds". It does not
+> and it does not: the dormant path never reaches a class that imports
+> `io.grpc`. The check is still worth having — it catches a plugin that fails
+> to load at all — but it had to stop claiming the one thing it cannot see.
+> Section 9 of the design already assigns that proof to level 2.
 
 Run: `make image-test`
 
