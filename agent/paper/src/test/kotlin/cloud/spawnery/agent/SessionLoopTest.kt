@@ -350,6 +350,70 @@ class SessionLoopTest {
     }
 
     @Test
+    fun `keeps the outgoing stream when the renewal's replacement dies at once`(
+        @TempDir dir: Path,
+    ) {
+        FakeOperator("renew-fails").use { operator ->
+            val state = ServerState().apply { markReady() }
+            val order = Collections.synchronizedList(mutableListOf<String>())
+            var connectCount = 0
+
+            // The renewal's attempt dies from inside stub.serverSession(), the
+            // way a rejected token or a briefly unreachable operator does. The
+            // outgoing stream is untouched by that and still has the gap between
+            // renewAfterSeconds and hardDeadlineSeconds left to live, so
+            // retiring it for a replacement that never existed would be break
+            // before make -- the readiness loss the overlap exists to prevent,
+            // reached by a different route.
+            val loop = loopAgainst(
+                operator,
+                state,
+                dir,
+                channels = {
+                    when (connectCount++) {
+                        0 -> TrackingChannel(operator.newChannel(), onShutdown = { order.add("outgoing-closed") })
+                        1 -> FailingChannel()
+                        else -> TrackingChannel(operator.newChannel(), onSend = { order.add("replacement-greeted") })
+                    }
+                },
+            )
+
+            loop.use {
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(3),
+                        )
+                        .build(),
+                )
+
+                // The failed renewal owes itself a reconnect, and that one
+                // succeeds: arriving at all is the assertion that a renewal
+                // failing is not the end of the agent's session.
+                val replacement = operator.awaitStream(1)
+                replacement.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                assertTrue(
+                    first.closed.await(5, TimeUnit.SECONDS),
+                    "the outgoing stream was never closed",
+                )
+
+                assertTrue(order.contains("replacement-greeted"), "nothing ever greeted; saw $order")
+                assertTrue(order.contains("outgoing-closed"), "the outgoing channel was never shut down; saw $order")
+                assertTrue(
+                    order.indexOf("replacement-greeted") < order.indexOf("outgoing-closed"),
+                    "the outgoing stream was retired for a replacement that had already died: $order",
+                )
+            }
+        }
+    }
+
+    @Test
     fun `reconnects with backoff after the stream breaks`(@TempDir dir: Path) {
         FakeOperator("reconnect").use { operator ->
             val state = ServerState()
@@ -393,13 +457,43 @@ class SessionLoopTest {
     }
 
     @Test
+    fun `retries when the very first connect throws`(@TempDir dir: Path) {
+        FakeOperator("first-throws").use { operator ->
+            val state = ServerState()
+            var connectCount = 0
+
+            // Every other call site of connect() is a scheduled one that
+            // reschedules itself. start() is not, so a first attempt that throws
+            // before the stream exists -- an endpoint that will not parse, a CA
+            // bundle that will not load -- has to be caught here or the agent
+            // never opens a session at all and never says why.
+            loopAgainst(
+                operator,
+                state,
+                dir,
+                channels = {
+                    if (connectCount++ == 0) throw IllegalStateException("the channel could not be built")
+                    operator.newChannel()
+                },
+            ).use { loop ->
+                loop.start()
+                val stream = operator.awaitStream(0)
+                stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+            }
+        }
+    }
+
+    @Test
     fun `does not reconnect after stop`(@TempDir dir: Path) {
         FakeOperator("stopped").use { operator ->
             val state = ServerState()
-            // Three seconds of headroom between the breakage and the reconnect
-            // it schedules, so stop() lands inside that window without the test
-            // depending on how fast the machine is.
-            loopAgainst(operator, state, dir, jitter = { 3_000L }).use { loop ->
+            // The delay has to be long enough that stop() lands before the
+            // reconnect fires, and short enough that the wait below outlives it:
+            // a window that ends before the reconnect was due would pass whether
+            // or not stop() suppressed anything. Half a second of headroom
+            // against the microseconds stop() needs, and a full second of
+            // observation after the reconnect should have opened a stream.
+            loopAgainst(operator, state, dir, jitter = { 500L }).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -412,6 +506,45 @@ class SessionLoopTest {
                     1,
                     operator.streams.size,
                     "a reconnect outlived the plugin that asked to be stopped",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `does not leave a stream behind when stop lands mid-connect`(@TempDir dir: Path) {
+        FakeOperator("stopped-mid-connect").use { operator ->
+            val state = ServerState()
+            val started = java.util.concurrent.atomic.AtomicReference<SessionLoop?>(null)
+            var connectCount = 0
+
+            // stop() runs after connect() has passed its entry check but before
+            // the session is installed, so stop() finds nothing in `current` to
+            // retire. Without connect()'s re-check the stream would outlive the
+            // plugin with nothing left holding a reference to close it.
+            val loop = loopAgainst(
+                operator,
+                state,
+                dir,
+                channels = {
+                    val channel = operator.newChannel()
+                    if (connectCount++ == 1) started.get()!!.stop()
+                    channel
+                },
+            )
+            started.set(loop)
+
+            loop.use {
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                first.toAgent.onError(Status.UNAVAILABLE.asRuntimeException())
+
+                val second = operator.awaitStream(1)
+                assertTrue(
+                    second.closed.await(5, TimeUnit.SECONDS),
+                    "the stream opened while stop() was running was never closed",
                 )
             }
         }

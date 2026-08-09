@@ -135,7 +135,18 @@ class SessionLoop(
 
     fun start() {
         stopped.set(false)
-        connect()
+        attempt.set(0)
+        try {
+            connect()
+        } catch (e: Exception) {
+            // Every other call site of connect() is a scheduled one that
+            // reschedules itself on failure. This one is not, so a first attempt
+            // that throws before the stream exists — an endpoint that will not
+            // parse, an unreadable CA bundle — would otherwise end the agent
+            // before it ever started.
+            log("the first connect to the operator failed", e)
+            reconnectLater()
+        }
     }
 
     /**
@@ -192,7 +203,15 @@ class SessionLoop(
             }
         }
 
-        session.attach(stub.serverSession(fromOperator))
+        val toOperator = try {
+            stub.serverSession(fromOperator)
+        } catch (e: Exception) {
+            // The channel was built here and was never handed to anything that
+            // would shut it down, so this is the only place that can.
+            channel.shutdown()
+            throw e
+        }
+        session.attach(toOperator)
 
         send(
             session,
@@ -200,6 +219,18 @@ class SessionLoop(
                 .setHello(Hello.newBuilder().setVersion(version).setReady(state.ready))
                 .build(),
         )
+
+        // The replacement died before it could take over — synchronously from
+        // inside serverSession() on the in-process transport, and in production
+        // a rejected token or an operator that is briefly unreachable. Retiring
+        // the outgoing session for a stream that is already gone would be break
+        // before make with extra steps: the outgoing one still has the gap
+        // between renewAfterSeconds and hardDeadlineSeconds left to live, and
+        // the terminal callback has already booked a reconnect.
+        if (session.ended.get()) {
+            session.close()
+            return
+        }
 
         // Retire the outgoing session only now, after the new one has greeted:
         // make-before-break. Closing it at the point `session` was created —
@@ -282,24 +313,30 @@ class SessionLoop(
 
     private fun startReporting(session: Session, seconds: Int) {
         if (seconds <= 0) return
-        session.report {
-            scheduler.scheduleAtFixedRate(
-                {
-                    send(
-                        session,
-                        ServerMessage.newBuilder()
-                            .setPlayerCount(
-                                PlayerCount.newBuilder()
-                                    .setPlayers(state.players)
-                                    .setSlots(state.slots),
-                            )
-                            .build(),
-                    )
-                },
-                0,
-                seconds.toLong(),
-                TimeUnit.SECONDS,
-            )
+        try {
+            session.report {
+                scheduler.scheduleAtFixedRate(
+                    {
+                        send(
+                            session,
+                            ServerMessage.newBuilder()
+                                .setPlayerCount(
+                                    PlayerCount.newBuilder()
+                                        .setPlayers(state.players)
+                                        .setSlots(state.slots),
+                                )
+                                .build(),
+                        )
+                    },
+                    0,
+                    seconds.toLong(),
+                    TimeUnit.SECONDS,
+                )
+            }
+        } catch (e: RejectedExecutionException) {
+            // The same shutdown case [schedule] covers, and the same reason for
+            // covering it: this runs on a gRPC callback thread.
+            log("the reporting timer could not be scheduled", e)
         }
     }
 
