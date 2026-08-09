@@ -62,9 +62,15 @@ jar.
 next to `protobuf` 35.1. Stub generation is therefore a Nix-native step, exactly
 like `make proto` is for Go, and needs no Gradle plugin.
 
-**`paper-api` is class file major 69, i.e. Java 25.** Reading it requires a
-Java 25 capable compiler. nixpkgs `gradle` 8.14.4 runs on JDK 21 by default;
-see §4.4.
+**`paper-api` is class file major 69, i.e. Java 25 — and JDK 21 handles it
+anyway.** nixpkgs `gradle` 8.14.4 runs on JDK 21 by default, which looked like a
+problem and is not. Measured: `kotlinc` 2.4.10 compiles a `JavaPlugin` subclass
+with a `ServerLoadEvent` listener against the full `libraries` tree with
+`-jvm-target 21`, reading the major-69 jars without complaint and emitting major
+65. `javac` 21 tolerates the same jars on its classpath as long as it does not
+have to resolve a class out of them. The build therefore needs no Java 25
+toolchain at all; the image's JDK 25 runs major 65 without question. See §4.4
+for the one consequence this does carry.
 
 ## 4. The build
 
@@ -105,21 +111,21 @@ the plugin must not meet it.
 
 ### 4.4 The toolchain
 
-Gradle runs on the JDK it ships with (21). Compilation uses a **Java 25
-toolchain**, registered by overriding the nixpkgs Gradle package:
-`gradle.override { javaToolchains = [ jdk25_headless ]; }`, which writes
-`org.gradle.java.installations.paths` into Gradle's own `gradle.properties`.
+Gradle runs on the JDK it ships with (21), and everything compiles on that same
+JDK. `jvmTarget` and `targetCompatibility` are **21** — measured to be
+sufficient in §3. No Java 25 toolchain is registered, no
+`gradle.override { javaToolchains = … }`, and Gradle's toolchain
+auto-provisioning stays off, so the build cannot reach for a JDK download in the
+sandbox.
 
-Three things about this must be **verified first, before any plugin code is
-written**, because the answers change the build file and nothing else in this
-design depends on them:
-
-1. that Kotlin 2.x as resolved by the Kotlin Gradle Plugin accepts a class file
-   major 69 jar on its compile classpath,
-2. which `jvmTarget` the output should carry — 21 is sufficient, since the
-   image runs a JDK 25 that reads it, and a lower target is the safer default,
-3. that the Java 25 toolchain resolves inside the Nix sandbox without Gradle
-   attempting a download (`toolchainManagement` auto-provisioning must be off).
+The one consequence worth designing around: `javac` 21 tolerates the major-69
+jars only while it never has to resolve a class out of them. The generated
+stubs (§4.6) reference gRPC and protobuf and nothing from `org.bukkit`, so this
+holds — but it holds by accident of what the stubs import, not by construction.
+It is made structural instead: the generated Java lives in its **own source
+set** whose compile classpath carries gRPC and protobuf only, never the Paper
+libraries. Six lines in the build file, and a whole class of confusing
+`UnsupportedClassVersionError` at compile time becomes impossible.
 
 The Kotlin compiler itself arrives through the Kotlin Gradle Plugin and thus
 through `deps.json`. nixpkgs `kotlin` is not needed and is not added.
