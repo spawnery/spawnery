@@ -105,6 +105,11 @@
         let
           paper = pkgs.callPackage ./nix/paper.nix { };
 
+          # Extracted while paper-image was the only consumer; velocity-image
+          # will be the second (see nix/oci-common.nix for why that timing
+          # matters).
+          oci-common = pkgs.callPackage ./nix/oci-common.nix { };
+
           # The one place this version is written down. It reaches both the
           # plugin's paper-plugin.yml (which the agent reports to the
           # operator as Hello.version) and the image tag, so the two can
@@ -156,7 +161,7 @@
           # mislabelled image. `nix flake show` and `nix develop` stay
           # unaffected elsewhere.
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
-            inherit paper spawnery-slp paper-agent imageVersion;
+            inherit paper spawnery-slp paper-agent imageVersion oci-common;
           };
         });
     };

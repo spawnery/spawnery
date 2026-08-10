@@ -6,50 +6,17 @@
 { bash
 , buildEnv
 , coreutils
-, dockerTools
 , gnugrep
 , jdk25_headless
 , runCommand
-, runtimeShell
-, writeTextDir
 , paper
 , spawnery-slp
 , paper-agent
 , imageVersion
+, oci-common
 }:
 
 let
-  # runAsNonRoot refuses to start an image with no numeric user. The probe
-  # measured that Java itself does not need the passwd entry as long as HOME is
-  # set; it is here because a failing getpwuid inside a library on the
-  # classpath surfaces as an error that says nothing about its cause.
-  passwd = writeTextDir "etc/passwd" ''
-    root:x:0:0:root:/root:/bin/sh
-    spawnery:x:10001:10001:spawnery:/data:/bin/sh
-  '';
-
-  group = writeTextDir "etc/group" ''
-    root:x:0:
-    spawnery:x:10001:
-  '';
-
-  # The shebang is rewritten to a shell that exists in this image. Relying on
-  # /bin/sh in a Nix-built image would work today and break the day the tool
-  # set changes.
-  entrypoint = runCommand "spawnery-entrypoint" { } ''
-    mkdir -p $out/usr/local/bin
-    substitute ${../image/entrypoint.sh} $out/usr/local/bin/spawnery-entrypoint \
-      --replace-fail '#!/bin/sh' '#!${runtimeShell}'
-    chmod +x $out/usr/local/bin/spawnery-entrypoint
-  '';
-
-  # Copied rather than symlinked, so the path in the image is exactly the one
-  # internal/podspec names and does not depend on a store link resolving.
-  slp = runCommand "spawnery-slp-image-path" { } ''
-    mkdir -p $out/usr/local/bin
-    cp ${spawnery-slp}/bin/spawnery-slp $out/usr/local/bin/spawnery-slp
-  '';
-
   paperHome = runCommand "paper-home" { } ''
     mkdir -p $out/opt/paper
     cp ${paper.paperJar} $out/opt/paper/paper.jar
@@ -64,16 +31,9 @@ let
     cp ${paper-agent}/share/spawnery/spawnery-agent.jar $out/opt/paper/agent/spawnery-agent.jar
   '';
 in
-dockerTools.buildLayeredImage {
+oci-common.layeredImage {
   name = "ghcr.io/spawnery/paper";
   tag = "${paper.paperVersion}-${imageVersion}";
-
-  # amd64 explicitly, not the host's architecture: this is only a label and
-  # dockerTools.buildLayeredImage does not cross-compile, so it is only true
-  # because flake.nix exposes `packages.paper-image` exclusively on
-  # x86_64-linux (see the comment there). If this derivation is ever called
-  # from elsewhere, that guarantee has to move with it.
-  architecture = "amd64";
 
   # Ordered by rate of change. The JRE and the patched Paper repo are large and
   # almost static; our own two files are small and change per commit. Milestone
@@ -92,27 +52,15 @@ dockerTools.buildLayeredImage {
       paths = [ bash coreutils gnugrep jdk25_headless ];
       pathsToLink = [ "/bin" ];
     })
-    passwd
-    group
+    oci-common.passwd
+    oci-common.group
     paperHome
     agent
-    slp
-    entrypoint
+    (oci-common.binIn { package = spawnery-slp; name = "spawnery-slp"; })
+    (oci-common.entrypointFrom ../image/entrypoint.sh)
   ];
 
-  # /data and /tmp are always mounted over in Kubernetes, so their mode there
-  # comes from the kubelet, which creates an emptyDir world-writable. The mode
-  # set here is what makes the same image usable under a plain container
-  # runtime with a fresh volume — which is exactly what make image-test does.
-  extraCommands = ''
-    mkdir -p data tmp
-    chmod 0777 data
-    chmod 1777 tmp
-  '';
-
   config = {
-    User = "10001:10001";
-    WorkingDir = "/data";
     Env = [
       "HOME=/data"
       "PATH=/bin:/usr/local/bin"
