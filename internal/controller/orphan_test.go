@@ -15,6 +15,29 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
+// createProxyPod adds a managed proxy pod belonging to the named group, and
+// returns its UID — the key the agent registry is on.
+func (f *fixture) createProxyPod(name, group string) string {
+	f.t.Helper()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: f.ns,
+			Labels:    podspec.ProxyLabels("production", group),
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "velocity", Image: "velocity"}},
+		},
+	}
+	if err := f.c.Create(f.ctx, pod); err != nil {
+		f.t.Fatalf("create proxy pod: %v", err)
+	}
+	return string(pod.UID)
+}
+
+// `createProxyGroup` comes from Task 7's proxygroup_controller_test.go — both
+// files are in package controller, so it is already available here.
+
 func orphanReconciler(f *fixture) *OrphanReconciler {
 	return &OrphanReconciler{
 		Client:   f.c,
@@ -187,6 +210,98 @@ func TestSweepKeepsAPodWhoseServerHasNotRecordedTheNameYet(t *testing.T) {
 
 	if _, ok := f.pod("lobby-p3nd"); !ok {
 		t.Fatal("the sweep deleted a pod about to be adopted by its Server")
+	}
+}
+
+// The defect this task exists to remove: a proxy agent connects, one sweep
+// runs, and the registry has forgotten it. Nothing logs a reason, because from
+// the sweep's point of view the pod never existed — it filtered on role=server
+// and then pruned every registry key not in that list.
+func TestSweepKeepsAConnectedProxyAgent(t *testing.T) {
+	f := newFixture(t)
+	o := orphanReconciler(f)
+	f.createProxyGroup("gateway")
+	uid := f.createProxyPod("gateway-abcd", "gateway")
+
+	f.agents.Connect(uid, agent.RoleProxy)
+
+	if err := o.Sweep(f.ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if snap := f.agents.Lookup(uid); !snap.Known || !snap.Connected {
+		t.Errorf("the sweep forgot a connected proxy agent: %+v", snap)
+	}
+}
+
+// The mirror of the Server case. A proxy has no CR of its own, so its group is
+// what owns it, and nothing else would ever remove the pod.
+func TestSweepDeletesAProxyPodWhoseGroupIsGone(t *testing.T) {
+	f := newFixture(t)
+	o := orphanReconciler(f)
+	f.createProxyPod("gateway-orphan", "does-not-exist")
+
+	if err := o.Sweep(f.ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	err := f.c.Get(f.ctx, types.NamespacedName{Name: "gateway-orphan", Namespace: f.ns}, &corev1.Pod{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("a proxy pod whose group is gone survived the sweep: %v", err)
+	}
+}
+
+// The widened list must not make proxy pods candidates for the Server check.
+// They carry no server label and never will, and deleting them for that would
+// be the same bug pointing the other way.
+func TestSweepKeepsAProxyPodThatHasItsGroup(t *testing.T) {
+	f := newFixture(t)
+	o := orphanReconciler(f)
+	f.createProxyGroup("gateway")
+	f.createProxyPod("gateway-abcd", "gateway")
+
+	if err := o.Sweep(f.ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "gateway-abcd", Namespace: f.ns}, &corev1.Pod{}); err != nil {
+		t.Fatalf("the sweep deleted a proxy pod that has its group: %v", err)
+	}
+}
+
+// The switch in Sweep has no default case, so an unrecognised role is a
+// silent no-op by construction — nothing matches, err stays nil, nothing is
+// deleted. Nothing but this test would catch a regression that changed that:
+// a `default:` branch added later that deletes, or a new role value routed
+// into the wrong case by copy-paste. The pod is still managed-by Spawnery, so
+// it must reach the loop body; it just must not be acted on once there.
+func TestSweepIgnoresAManagedPodWithAnUnknownRole(t *testing.T) {
+	f := newFixture(t)
+	o := orphanReconciler(f)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "mystery-pod",
+			Namespace: f.ns,
+			Labels: map[string]string{
+				podspec.LabelManagedBy: podspec.ManagedByValue,
+				podspec.LabelRole:      "loadbalancer",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "app", Image: "app"}},
+		},
+	}
+	if err := f.c.Create(f.ctx, pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	if err := o.Sweep(f.ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "mystery-pod", Namespace: f.ns}, &corev1.Pod{}); err != nil {
+		t.Fatalf("the sweep deleted a managed pod whose role it does not recognise: %v", err)
 	}
 }
 

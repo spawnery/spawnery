@@ -64,8 +64,10 @@ func ServerLabels(network, group, server string) map[string]string {
 }
 
 // ProxyLabels are the labels of a Velocity pod. There is deliberately no
-// LabelServer: a proxy has no Server object, and the orphan sweep tells the
-// two kinds of managed pod apart by that absence.
+// LabelServer: a proxy has no Server object, so there is nothing to put in
+// it. The orphan sweep does not depend on the absence — it tells server and
+// proxy pods apart by LabelRole — so this is a fact about proxy pods, not a
+// mechanism anything is built on.
 func ProxyLabels(network, group string) map[string]string {
 	return map[string]string{
 		LabelManagedBy: ManagedByValue,
