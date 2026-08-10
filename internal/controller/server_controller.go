@@ -482,13 +482,24 @@ func (r *ServerReconciler) applyDecision(
 		srv.Status.Registered = false
 	}
 	if d.Register {
+		// Persisted before the side effect, not after. Remembered for the life
+		// of this pod: from here on a deletion has to drain, even if the server
+		// falls back out of Ready first. Writing it afterwards means a lost
+		// status update in this window makes a later deletion take the "never
+		// registered, terminate immediately" branch — with players already on
+		// the server, because the proxies were told about it a moment ago.
+		//
+		// One extra status write, at the single transition into Ready.
+		if !srv.Status.WasRegistered {
+			srv.Status.WasRegistered = true
+			if err := r.Status().Update(ctx, srv); err != nil {
+				return fmt.Errorf("persist the registration intent for %s: %w", srv.Name, err)
+			}
+		}
 		if err := r.Registrar.Register(ctx, srv); err != nil {
 			return fmt.Errorf("register %s: %w", srv.Name, err)
 		}
 		srv.Status.Registered = true
-		// Remembered for the life of this pod: from here on a deletion has to
-		// drain, even if the server falls back out of Ready first.
-		srv.Status.WasRegistered = true
 	}
 	// The drain clock starts with the drain, not with phase Draining: a Failed
 	// server is drained while staying Failed, and without this its deadline

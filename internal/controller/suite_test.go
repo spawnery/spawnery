@@ -110,10 +110,18 @@ type recordingRegistrar struct {
 	registered   []string
 	deregistered []string
 	drained      []string
+
+	// onRegister runs inside Register, before it returns. It is how a test
+	// observes what was already durable at the moment the proxies were told —
+	// the ordering that matters here cannot be seen from outside the call.
+	onRegister func(*spawneryv1alpha1.Server) error
 }
 
 func (r *recordingRegistrar) Register(_ context.Context, s *spawneryv1alpha1.Server) error {
 	r.registered = append(r.registered, s.Name)
+	if r.onRegister != nil {
+		return r.onRegister(s)
+	}
 	return nil
 }
 

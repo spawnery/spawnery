@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
@@ -1283,5 +1284,99 @@ func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
 	if !hasCondition(f.server("lobby-x7k2").Status.Conditions, spawneryv1alpha1.ConditionAccepted,
 		metav1.ConditionTrue, spawneryv1alpha1.ReasonAccepted) {
 		t.Error("the Accepted condition stayed false after the namespace was bootstrapped")
+	}
+}
+
+// While the registrar was a no-op this window was harmless. With a real one it
+// is not: if the status write is lost while players are already joining, a
+// deletion in that window takes the branch "never registered, terminate
+// immediately, no drain" and throws them out instead of moving them.
+//
+// The assertion is deliberately made from inside Register, against the API
+// server rather than against the in-memory object: what matters is that the
+// intent was durable before the proxies heard anything, and only a read-back
+// can tell the difference.
+//
+// The read-back also carries the Accepted condition, set earlier in this same
+// reconcile. The mid-reconcile status write this test exists to check on must
+// not be able to lose it the way a non-status Update would (see
+// ensureFinalizer): the assertion here, and the one on the Ready condition
+// after the server settles, are the regression guard for that.
+func TestWasRegisteredIsDurableBeforeTheProxiesAreTold(t *testing.T) {
+	f := newFixture(t)
+
+	var wasDurable bool
+	f.registrar.onRegister = func(s *spawneryv1alpha1.Server) error {
+		persisted := &spawneryv1alpha1.Server{}
+		key := types.NamespacedName{Name: s.Name, Namespace: f.ns}
+		if err := f.c.Get(f.ctx, key, persisted); err != nil {
+			t.Errorf("read the Server back inside Register: %v", err)
+			return nil
+		}
+		wasDurable = persisted.Status.WasRegistered
+		if !hasCondition(persisted.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonAccepted) {
+			t.Error("the Accepted condition set earlier this reconcile did not survive the mid-reconcile status write")
+		}
+		return nil
+	}
+
+	bringUpReady(t, f, "lobby-order")
+
+	if len(f.registrar.registered) != 1 {
+		t.Fatalf("registered = %v, want exactly one registration", f.registrar.registered)
+	}
+	if !wasDurable {
+		t.Error("the proxies were told about a server whose registration intent was not yet persisted")
+	}
+	if !hasCondition(f.server("lobby-order").Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionTrue, spawneryv1alpha1.ReasonAccepted) {
+		t.Error("the Accepted condition is not True once the server reached Ready")
+	}
+}
+
+// status.registered must not be left true with no registration behind it
+// looking like a success: the reconcile has to fail so the next pass tries
+// again. status.wasRegistered is the opposite case: it is deliberately left
+// true even though this registration failed, because it is the fail-safe
+// that forces a later deletion to drain rather than terminate outright, and a
+// failed attempt does not undo the fact that the proxies may already have
+// been told about an earlier one.
+func TestAFailedRegisterFailsTheReconcile(t *testing.T) {
+	f := newFixture(t)
+	f.registrar.onRegister = func(*spawneryv1alpha1.Server) error {
+		return errors.New("no proxy accepted the registration")
+	}
+
+	f.createServer("lobby-refuse")
+	f.reconcile("lobby-refuse")
+	pod, ok := f.pod("lobby-refuse")
+	if !ok {
+		t.Fatal("reconcile did not create the pod")
+	}
+	f.setPodRunning("lobby-refuse", false)
+	f.reconcile("lobby-refuse")
+
+	f.setPodRunning("lobby-refuse", true)
+	f.agents.Connect(string(pod.UID), agentRoleServer())
+	f.agents.MarkReady(string(pod.UID))
+	if err := f.agents.ReportPlayers(string(pod.UID), 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+
+	// f.reconcile fails the test on error, so call the reconciler directly.
+	_, err := f.reconc.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "lobby-refuse", Namespace: f.ns},
+	})
+	if err == nil {
+		t.Fatal("a refused registration did not fail the reconcile")
+	}
+
+	got := f.server("lobby-refuse").Status
+	if got.Registered {
+		t.Error("status.registered is true after a registration that failed")
+	}
+	if !got.WasRegistered {
+		t.Error("status.wasRegistered is false, but it must be written before Register is even called")
 	}
 }
