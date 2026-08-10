@@ -28,6 +28,14 @@ package render
 // Every target format reduces to a flat key set before it is serialised —
 // dotted keys for the nested ones — so one merge serves all three files.
 //
+// One exception: internal/render/paper.go's paperGlobal reimplements this
+// same base-then-overlay-then-critical order by hand for paper-global.yml's
+// nested proxies.velocity block, rather than flattening it to dotted keys
+// and nesting on write. That duplication was a deliberate call, not an
+// oversight — see the note on paperGlobal. It means this order and that
+// order must be changed together, or the two files silently disagree about
+// which layer wins.
+//
 // The inputs are not mutated: callers hold them for the next file.
 func Layer(base, overlay, critical map[string]string) map[string]string {
 	out := make(map[string]string, len(base)+len(overlay)+len(critical))
