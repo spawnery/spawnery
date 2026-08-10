@@ -7,7 +7,15 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * PlayerCount is the periodic report. Proxy agents leave slots at zero.
+ * PlayerCount is the periodic report.
+ *
+ * A proxy reports its configured player limit as slots. The obvious
+ * alternative — leaving slots at zero, as an earlier draft of this file said —
+ * collides with the registry, which discards any report where players exceed
+ * slots: a proxy with one player online would have every report thrown away,
+ * visible only as a counter, while its connected player count sat at zero.
+ * One rule in the registry is worth more than a role-dependent one, and a
+ * proxy does have a capacity: ProxyGroup.spec.config.playerLimit.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.PlayerCount}
@@ -248,7 +256,15 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * PlayerCount is the periodic report. Proxy agents leave slots at zero.
+   * PlayerCount is the periodic report.
+   *
+   * A proxy reports its configured player limit as slots. The obvious
+   * alternative — leaving slots at zero, as an earlier draft of this file said —
+   * collides with the registry, which discards any report where players exceed
+   * slots: a proxy with one player online would have every report thrown away,
+   * visible only as a counter, while its connected player count sat at zero.
+   * One rule in the registry is worth more than a role-dependent one, and a
+   * proxy does have a capacity: ProxyGroup.spec.config.playerLimit.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.PlayerCount}

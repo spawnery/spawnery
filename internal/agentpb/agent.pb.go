@@ -193,7 +193,15 @@ func (x *Hello) GetReady() bool {
 	return false
 }
 
-// PlayerCount is the periodic report. Proxy agents leave slots at zero.
+// PlayerCount is the periodic report.
+//
+// A proxy reports its configured player limit as slots. The obvious
+// alternative — leaving slots at zero, as an earlier draft of this file said —
+// collides with the registry, which discards any report where players exceed
+// slots: a proxy with one player online would have every report thrown away,
+// visible only as a counter, while its connected player count sat at zero.
+// One rule in the registry is worth more than a role-dependent one, and a
+// proxy does have a capacity: ProxyGroup.spec.config.playerLimit.
 type PlayerCount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Players       int32                  `protobuf:"varint,1,opt,name=players,proto3" json:"players,omitempty"`

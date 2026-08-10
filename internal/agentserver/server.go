@@ -44,6 +44,7 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/proxyreg"
 )
 
 const (
@@ -65,6 +66,9 @@ type Options struct {
 	Provider *certs.Provider
 	Auth     *grpcauth.Authenticator
 	Agents   *agent.Registry
+	// Proxies is the fan-out every proxy session joins. Required for
+	// ProxySession; a nil one is a programming error, not a runtime state.
+	Proxies *proxyreg.Fleet
 	// ReportInterval is how often an agent should report its player count.
 	ReportInterval time.Duration
 	// RenewAfter is when an agent should open its next stream — before the
@@ -221,25 +225,7 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 	})
 	defer deadline.Stop()
 
-	// Receiving blocks, so it runs in its own goroutine and the context does
-	// the cancelling.
-	received := make(chan *agentpb.ServerMessage)
-	errs := make(chan error, 1)
-	go func() {
-		defer close(received)
-		for {
-			msg, err := stream.Recv()
-			if err != nil {
-				errs <- err
-				return
-			}
-			select {
-			case received <- msg:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
+	received, errs := recvPump(ctx, stream.Recv)
 
 	for {
 		select {
@@ -279,9 +265,146 @@ func (s *Server) handle(logger logr.Logger, id grpcauth.Identity, msg *agentpb.S
 	}
 }
 
-// ProxySession is milestone 3.
-func (s *Server) ProxySession(agentpb.AgentService_ProxySessionServer) error {
-	return status.Error(codes.Unimplemented, "proxy sessions arrive with milestone 3")
+// ProxySession is the Velocity agent's channel. It reads from the fan-out and
+// never writes into it: everything a proxy is told is decided by a controller,
+// so a compromised proxy cannot make the operator say anything.
+func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) error {
+	id, ok := grpcauth.IdentityFrom(stream.Context())
+	if !ok {
+		return status.Error(codes.Unauthenticated, "no identity on the stream")
+	}
+	logger := log.FromContext(stream.Context()).WithValues("pod", id.PodName, "namespace", id.Namespace)
+	openedAt := s.opts.Clock()
+
+	ctx, gen, superseded := s.sessions.enter(stream.Context(), id.PodUID)
+	defer func() {
+		if s.sessions.leave(id.PodUID, gen) {
+			s.opts.Agents.Disconnect(id.PodUID)
+		}
+		logger.V(1).Info("session ended", "after", s.opts.Clock().Sub(openedAt))
+	}()
+
+	if superseded {
+		s.opts.Agents.Supersede(id.PodUID, agent.RoleProxy)
+	} else {
+		s.opts.Agents.Connect(id.PodUID, agent.RoleProxy)
+	}
+	OpenStreams.WithLabelValues(string(agent.RoleProxy)).Inc()
+	defer OpenStreams.WithLabelValues(string(agent.RoleProxy)).Dec()
+
+	if err := stream.Send(&agentpb.OperatorToProxy{
+		Message: &agentpb.OperatorToProxy_ReportInterval{
+			ReportInterval: &agentpb.ReportInterval{Seconds: seconds(s.opts.ReportInterval)},
+		},
+	}); err != nil {
+		return err
+	}
+	if err := stream.Send(&agentpb.OperatorToProxy{
+		Message: &agentpb.OperatorToProxy_SessionDeadline{
+			SessionDeadline: &agentpb.SessionDeadline{
+				RenewAfterSeconds:   seconds(s.opts.RenewAfter),
+				HardDeadlineSeconds: seconds(s.opts.HardDeadline),
+			},
+		},
+	}); err != nil {
+		return err
+	}
+
+	// Joining after the two fixed messages, not before: the FullSync is the
+	// first thing whose content depends on the cluster, and the agent needs the
+	// deadline in hand before it starts processing a server list.
+	outbox, leave, err := s.opts.Proxies.Join(ctx, id.Namespace, id.Group, id.PodUID)
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "join the proxy fleet: %v", err)
+	}
+	defer leave()
+
+	deadline := time.AfterFunc(s.opts.HardDeadline, func() {
+		logger.V(1).Info("closing the stream at its hard deadline")
+		s.sessions.cancel(id.PodUID, gen)
+	})
+	defer deadline.Stop()
+
+	received, errs := recvPump(ctx, stream.Recv)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return status.Error(codes.Unavailable, "session ended, reconnect with a fresh token")
+		case err := <-errs:
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		case msg := <-received:
+			s.handleProxy(logger, id, msg)
+		case msg, ok := <-outbox:
+			if !ok {
+				// The fan-out cut us loose. Ending the stream is the point:
+				// a partial server list is worse than a reconnect.
+				return status.Error(codes.ResourceExhausted, "proxy fell behind, reconnect for a fresh sync")
+			}
+			if err := stream.Send(msg); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+// handleProxy applies one message from a proxy. An unknown branch is ignored so
+// a newer agent against an older operator keeps working.
+func (s *Server) handleProxy(logger logr.Logger, id grpcauth.Identity, msg *agentpb.ProxyMessage) {
+	switch m := msg.GetMessage().(type) {
+	case *agentpb.ProxyMessage_Hello:
+		// A proxy's readiness is not carried here. The agent serves the pod's
+		// readiness probe itself (design 6.6), so the kubelet has already
+		// written the answer where the ProxyGroup controller reads it.
+		logger.V(1).Info("proxy connected", "version", m.Hello.GetVersion())
+	case *agentpb.ProxyMessage_PlayerCount:
+		if err := s.opts.Agents.ReportPlayers(id.PodUID,
+			m.PlayerCount.GetPlayers(), m.PlayerCount.GetSlots()); err != nil {
+			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
+			logger.V(1).Info("discarded a player count", "reason", err.Error())
+		}
+	case *agentpb.ProxyMessage_Heartbeat:
+		// Nothing. The stream is its own liveness signal and the registry's
+		// staleness rule already derives from ReportInterval. A second liveness
+		// path would be a second truth about the same fact.
+	case *agentpb.ProxyMessage_PlayerJoinedServer:
+		// Accepted and ignored. Nothing in milestones 3 or 4 consumes it —
+		// player counts come from the servers — and it is on the wire for the
+		// dashboard in project 4.
+		logger.V(1).Info("player joined a server",
+			"player", m.PlayerJoinedServer.GetPlayer(), "server", m.PlayerJoinedServer.GetServer())
+	}
+}
+
+// recvPump moves a stream's receive side onto channels, because Recv blocks
+// and the handler has three other things to select on. It is generic over the
+// message type: the two sessions differ in nothing else here, and this is the
+// part that is easy to get subtly wrong twice.
+//
+// The goroutine ends when Recv fails or when ctx is done, so it cannot outlive
+// its stream.
+func recvPump[T any](ctx context.Context, recv func() (T, error)) (<-chan T, <-chan error) {
+	received := make(chan T)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(received)
+		for {
+			msg, err := recv()
+			if err != nil {
+				errs <- err
+				return
+			}
+			select {
+			case received <- msg:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	return received, errs
 }
 
 // seconds is what goes on the wire. The protocol counts whole seconds, so a

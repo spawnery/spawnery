@@ -45,8 +45,7 @@ const (
 // agents. The agents never read the Kubernetes API; this stream carries both
 // directions instead.
 type AgentServiceClient interface {
-	// ProxySession is milestone 3. The operator answers UNIMPLEMENTED until
-	// then.
+	// ProxySession is the Velocity agent's channel.
 	ProxySession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ProxyMessage, OperatorToProxy], error)
 	// ServerSession is the Paper agent's channel.
 	ServerSession(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ServerMessage, OperatorToServer], error)
@@ -94,8 +93,7 @@ type AgentService_ServerSessionClient = grpc.BidiStreamingClient[ServerMessage, 
 // agents. The agents never read the Kubernetes API; this stream carries both
 // directions instead.
 type AgentServiceServer interface {
-	// ProxySession is milestone 3. The operator answers UNIMPLEMENTED until
-	// then.
+	// ProxySession is the Velocity agent's channel.
 	ProxySession(grpc.BidiStreamingServer[ProxyMessage, OperatorToProxy]) error
 	// ServerSession is the Paper agent's channel.
 	ServerSession(grpc.BidiStreamingServer[ServerMessage, OperatorToServer]) error

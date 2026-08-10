@@ -149,8 +149,7 @@ public final class AgentServiceGrpc {
 
     /**
      * <pre>
-     * ProxySession is milestone 3. The operator answers UNIMPLEMENTED until
-     * then.
+     * ProxySession is the Velocity agent's channel.
      * </pre>
      */
     default io.grpc.stub.StreamObserver<cloud.spawnery.agent.pb.ProxyMessage> proxySession(
@@ -208,8 +207,7 @@ public final class AgentServiceGrpc {
 
     /**
      * <pre>
-     * ProxySession is milestone 3. The operator answers UNIMPLEMENTED until
-     * then.
+     * ProxySession is the Velocity agent's channel.
      * </pre>
      */
     public io.grpc.stub.StreamObserver<cloud.spawnery.agent.pb.ProxyMessage> proxySession(
@@ -253,8 +251,7 @@ public final class AgentServiceGrpc {
 
     /**
      * <pre>
-     * ProxySession is milestone 3. The operator answers UNIMPLEMENTED until
-     * then.
+     * ProxySession is the Velocity agent's channel.
      * </pre>
      */
     @io.grpc.ExperimentalApi("https://github.com/grpc/grpc-java/issues/10918")

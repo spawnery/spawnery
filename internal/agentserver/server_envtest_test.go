@@ -44,6 +44,7 @@ import (
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/grpcauth"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/proxyreg"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -78,14 +79,15 @@ func dialAgent(t *testing.T, ctx context.Context, addr string, ca []byte, token 
 }
 
 type serverFixture struct {
-	t      *testing.T
-	ctx    context.Context
-	c      client.Client
-	cs     *kubernetes.Clientset
-	ns     string
-	agents *agent.Registry
-	addr   string
-	ca     []byte
+	t       *testing.T
+	ctx     context.Context
+	c       client.Client
+	cs      *kubernetes.Clientset
+	ns      string
+	agents  *agent.Registry
+	proxies *proxyreg.Fleet
+	addr    string
+	ca      []byte
 }
 
 func newServerFixture(t *testing.T) *serverFixture {
@@ -124,6 +126,7 @@ func newServerFixtureWithDeadline(t *testing.T, renewAfter, hardDeadline time.Du
 	}
 
 	registry := agent.New(now, 5*time.Second, now())
+	fleet := proxyreg.New(proxyreg.Options{Reader: c})
 	srv := agentserver.New(agentserver.Options{
 		// Port 0: the kernel picks a free one, so parallel packages do not
 		// collide.
@@ -135,6 +138,7 @@ func newServerFixtureWithDeadline(t *testing.T, renewAfter, hardDeadline time.Du
 			Audience: podspec.AgentTokenAudience,
 		},
 		Agents:         registry,
+		Proxies:        fleet,
 		ReportInterval: 5 * time.Second,
 		RenewAfter:     renewAfter,
 		HardDeadline:   hardDeadline,
@@ -159,7 +163,7 @@ func newServerFixtureWithDeadline(t *testing.T, renewAfter, hardDeadline time.Du
 
 	return &serverFixture{
 		t: t, ctx: ctx, c: c, cs: cs, ns: ns,
-		agents: registry, addr: srv.Addr(), ca: provider.CABundle(),
+		agents: registry, proxies: fleet, addr: srv.Addr(), ca: provider.CABundle(),
 	}
 }
 
@@ -185,13 +189,16 @@ func (f *serverFixture) pod(name string) *corev1.Pod {
 	return pod
 }
 
-// token mints a pod-bound agent token the way the kubelet would.
-func (f *serverFixture) token(boundTo *corev1.Pod) string {
+// token mints a pod-bound token the way the kubelet would. sa and audiences
+// are explicit rather than assumed to be the server agent's, because a proxy
+// pod needs a token bound to its own ServiceAccount: the real TokenRequest
+// API refuses to bind a token for one ServiceAccount to a pod running under
+// another.
+func (f *serverFixture) token(sa string, audiences []string, boundTo *corev1.Pod) string {
 	f.t.Helper()
-	tr, err := f.cs.CoreV1().ServiceAccounts(f.ns).CreateToken(f.ctx,
-		podspec.ServerServiceAccountName,
+	tr, err := f.cs.CoreV1().ServiceAccounts(f.ns).CreateToken(f.ctx, sa,
 		&authnv1.TokenRequest{Spec: authnv1.TokenRequestSpec{
-			Audiences:         []string{podspec.AgentTokenAudience},
+			Audiences:         audiences,
 			ExpirationSeconds: ptr.To(int64(600)),
 			BoundObjectRef: &authnv1.BoundObjectReference{
 				Kind: "Pod", APIVersion: "v1", Name: boundTo.Name, UID: boundTo.UID,
@@ -201,6 +208,34 @@ func (f *serverFixture) token(boundTo *corev1.Pod) string {
 		f.t.Fatalf("TokenRequest: %v", err)
 	}
 	return tr.Status.Token
+}
+
+// proxyPod creates a pod running under the proxy ServiceAccount. It exists
+// only so a proxy token can be minted at all: the real TokenRequest API
+// refuses to bind a token for one ServiceAccount to a pod that runs under a
+// different one, so a proxy token needs a genuine proxy pod behind it.
+func (f *serverFixture) proxyPod(name string) *corev1.Pod {
+	f.t.Helper()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: f.ns,
+			Labels: map[string]string{
+				podspec.LabelManagedBy: podspec.ManagedByValue,
+				podspec.LabelNetwork:   "production",
+				podspec.LabelGroup:     "gateway",
+				podspec.LabelRole:      podspec.RoleProxy,
+			},
+		},
+		Spec: corev1.PodSpec{
+			ServiceAccountName: podspec.ProxyServiceAccountName,
+			Containers:         []corev1.Container{{Name: "velocity", Image: "example/velocity:1"}},
+		},
+	}
+	if err := f.c.Create(f.ctx, pod); err != nil {
+		f.t.Fatalf("create pod: %v", err)
+	}
+	return pod
 }
 
 type serverStream = grpc.BidiStreamingClient[agentpb.ServerMessage, agentpb.OperatorToServer]
@@ -260,7 +295,7 @@ func waitFor(t *testing.T, cond func() bool) {
 func TestHelloWithReadyMarksTheAgentReady(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
-	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeConn()
 
 	if err := stream.Send(&agentpb.ServerMessage{
@@ -281,7 +316,7 @@ func TestHelloWithReadyMarksTheAgentReady(t *testing.T) {
 func TestOperatorSendsIntervalAndDeadlineOnConnect(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
-	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeConn()
 
 	var gotInterval, gotDeadline bool
@@ -313,7 +348,7 @@ func TestOperatorSendsIntervalAndDeadlineOnConnect(t *testing.T) {
 func TestPlayerCountReachesTheRegistry(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
-	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeConn()
 
 	mustSend(t, stream, hello(true))
@@ -330,7 +365,7 @@ func TestPlayerCountReachesTheRegistry(t *testing.T) {
 func TestPlayerCountAboveSlotsIsDiscardedButKeepsTheStream(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
-	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeConn()
 
 	mustSend(t, stream, hello(true))
@@ -349,7 +384,7 @@ func TestPlayerCountAboveSlotsIsDiscardedButKeepsTheStream(t *testing.T) {
 func TestDisconnectIsVisibleInTheRegistry(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
-	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 
 	mustSend(t, stream, hello(true))
 	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Ready })
@@ -367,12 +402,12 @@ func TestASecondStreamSupersedesTheFirstWithoutLosingState(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
 
-	first, closeFirst := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	first, closeFirst := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	mustSend(t, first, hello(true))
 	mustSend(t, first, playerCount(3, 100))
 	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Players == 3 })
 
-	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeSecond()
 	// Established first, dropped second: the order the agent owes the
 	// operator. Without the wait the new stream may not have reached the
@@ -406,7 +441,7 @@ func TestASupersedingStreamNeverLetsReadinessDrop(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
 
-	first, closeFirst := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	first, closeFirst := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeFirst()
 	mustSend(t, first, hello(true))
 	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Ready })
@@ -431,7 +466,7 @@ func TestASupersedingStreamNeverLetsReadinessDrop(t *testing.T) {
 		}
 	}()
 
-	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeSecond()
 	// A report the registry accepts proves the new stream is the live one:
 	// ReportPlayers refuses anything without a live stream behind it.
@@ -461,7 +496,7 @@ func TestAReconnectAfterARealBreakStartsUnready(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
 
-	first, closeFirst := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	first, closeFirst := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	mustSend(t, first, hello(true))
 	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Ready })
 
@@ -470,7 +505,7 @@ func TestAReconnectAfterARealBreakStartsUnready(t *testing.T) {
 	closeFirst()
 	waitFor(t, func() bool { return !f.agents.Lookup(string(pod.UID)).Connected })
 
-	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeSecond()
 	// No Hello on this stream: nothing may speak for the agent but the agent.
 	awaitSession(t, second)
@@ -485,7 +520,7 @@ func TestAReconnectAfterARealBreakStartsUnready(t *testing.T) {
 func TestTheHardDeadlineClosesTheStream(t *testing.T) {
 	f := newServerFixtureWithDeadline(t, 300*time.Millisecond, 600*time.Millisecond)
 	pod := f.pod("lobby-abcd")
-	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeConn()
 
 	mustSend(t, stream, hello(true))
@@ -518,7 +553,7 @@ func TestTheHardDeadlineClosesTheStream(t *testing.T) {
 func TestAnEmptyMessageIsIgnored(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
-	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(pod))
+	stream, closeConn := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeConn()
 
 	mustSend(t, stream, hello(true))
@@ -535,9 +570,11 @@ func TestAnEmptyMessageIsIgnored(t *testing.T) {
 	}
 }
 
-// Milestone 3 fills ProxySession in; until then it must refuse outright rather
-// than half-work.
-func TestProxySessionIsRefused(t *testing.T) {
+// A server pod's token does not carry a Group, and even if it did, the role
+// the authenticator saw at TokenReview time was server — a proxy session
+// insists on RoleProxy, so this is refused before a single message crosses
+// the wire.
+func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
 
@@ -556,7 +593,7 @@ func TestProxySessionIsRefused(t *testing.T) {
 	}
 	defer conn.Close()
 
-	ctx := metadata.AppendToOutgoingContext(f.ctx, "authorization", "Bearer "+f.token(pod))
+	ctx := metadata.AppendToOutgoingContext(f.ctx, "authorization", "Bearer "+f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	stream, err := agentpb.NewAgentServiceClient(conn).ProxySession(ctx)
 	if err != nil {
 		t.Fatalf("open ProxySession: %v", err)
@@ -570,12 +607,9 @@ func TestProxySessionIsRefused(t *testing.T) {
 	}
 	_, err = stream.Recv()
 	if err == nil {
-		t.Fatal("ProxySession answered although milestone 3 has not happened")
+		t.Fatal("ProxySession answered a server token")
 	}
-	// Unauthenticated (server token on a proxy session) and Unimplemented are
-	// both refusals; which one wins depends on interceptor order.
-	code := status.Code(err)
-	if code != codes.Unauthenticated && code != codes.Unimplemented {
-		t.Errorf("code = %s, want Unauthenticated or Unimplemented", code)
+	if code := status.Code(err); code != codes.Unauthenticated {
+		t.Errorf("code = %s, want Unauthenticated", code)
 	}
 }
