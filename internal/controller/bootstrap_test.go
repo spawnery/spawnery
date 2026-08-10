@@ -334,3 +334,63 @@ func TestEnsureRefusesAnEmptyCA(t *testing.T) {
 		t.Error("Ensure wrote an empty CA bundle")
 	}
 }
+
+// Without this a proxy pod would have no identity to present at all: the token
+// projection names a ServiceAccount, and the kubelet cannot mint a token for
+// one that does not exist — the pod fails before it reaches the first TLS
+// handshake, with an error about a volume rather than about credentials.
+func TestEnsureCreatesBothServiceAccounts(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+
+	if err := b.Ensure(ctx, ns); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	for _, name := range []string{podspec.ServerServiceAccountName, podspec.ProxyServiceAccountName} {
+		sa := &corev1.ServiceAccount{}
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, sa); err != nil {
+			t.Errorf("get ServiceAccount %s: %v", name, err)
+			continue
+		}
+		if sa.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+			t.Errorf("ServiceAccount %s is unlabelled", name)
+		}
+	}
+}
+
+// The no-write guarantee has to hold for both. It is what lets the operator
+// keep get;list;watch;create on serviceaccounts and no update verb at all.
+func TestEnsureLeavesExistingServiceAccountsAlone(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+
+	if err := b.Ensure(ctx, ns); err != nil {
+		t.Fatalf("first Ensure: %v", err)
+	}
+
+	before := map[string]string{}
+	for _, name := range []string{podspec.ServerServiceAccountName, podspec.ProxyServiceAccountName} {
+		sa := &corev1.ServiceAccount{}
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, sa); err != nil {
+			t.Fatalf("get ServiceAccount %s: %v", name, err)
+		}
+		before[name] = sa.ResourceVersion
+	}
+
+	if err := b.Ensure(ctx, ns); err != nil {
+		t.Fatalf("second Ensure: %v", err)
+	}
+
+	for name, was := range before {
+		sa := &corev1.ServiceAccount{}
+		if err := c.Get(ctx, types.NamespacedName{Name: name, Namespace: ns}, sa); err != nil {
+			t.Fatalf("get ServiceAccount %s: %v", name, err)
+		}
+		if sa.ResourceVersion != was {
+			t.Errorf("ServiceAccount %s was written on the second Ensure — the update verb is not granted", name)
+		}
+	}
+}

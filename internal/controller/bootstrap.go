@@ -71,7 +71,7 @@ func (b *Bootstrapper) Ensure(ctx context.Context, namespace string) error {
 	if err := b.ensureConfigMap(ctx, namespace, ca); err != nil {
 		return fmt.Errorf("bootstrap namespace %q: %w", namespace, err)
 	}
-	if err := b.ensureServiceAccount(ctx, namespace); err != nil {
+	if err := b.ensureServiceAccounts(ctx, namespace); err != nil {
 		return fmt.Errorf("bootstrap namespace %q: %w", namespace, err)
 	}
 	return nil
@@ -119,8 +119,8 @@ func (b *Bootstrapper) ensureConfigMap(ctx context.Context, namespace string, ca
 	return nil
 }
 
-// ensureServiceAccount creates the agent's ServiceAccount if it is missing,
-// and otherwise leaves it alone.
+// ensureServiceAccounts creates the agent's ServiceAccounts if they are missing,
+// and otherwise leaves them alone.
 //
 // Unlike ensureConfigMap, this deliberately never issues a Client.Update,
 // on purpose written as a plain Get-then-Create rather than
@@ -145,30 +145,38 @@ func (b *Bootstrapper) ensureConfigMap(ctx context.Context, namespace string, ca
 // namespace will see NotFound on the cached Get, attempt a Create, and get
 // AlreadyExists back — one wasted API call per pod creation, in a namespace
 // someone edited by hand. Cheaper than the permission.
-func (b *Bootstrapper) ensureServiceAccount(ctx context.Context, namespace string) error {
-	key := types.NamespacedName{Name: podspec.ServerServiceAccountName, Namespace: namespace}
-	existing := &corev1.ServiceAccount{}
-	err := b.Client.Get(ctx, key, existing)
-	if err == nil {
-		// It exists, which is all Ensure needs: the pod references it by
-		// name regardless of its labels. No write follows, ever.
-		return nil
-	}
-	if !apierrors.IsNotFound(err) {
-		return err
-	}
+//
+// Both ServiceAccounts are created in every namespace, including one that will
+// only ever run servers. An unused ServiceAccount costs nothing; teaching
+// Ensure a role parameter would put the decision at two call sites that both
+// have to get it right, and the Server controller calling it does not know
+// whether a ProxyGroup will appear tomorrow.
+func (b *Bootstrapper) ensureServiceAccounts(ctx context.Context, namespace string) error {
+	for _, name := range []string{podspec.ServerServiceAccountName, podspec.ProxyServiceAccountName} {
+		key := types.NamespacedName{Name: name, Namespace: namespace}
+		existing := &corev1.ServiceAccount{}
+		err := b.Client.Get(ctx, key, existing)
+		if err == nil {
+			// It exists, which is all Ensure needs: the pod references it by
+			// name regardless of its labels. No write follows, ever.
+			continue
+		}
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
 
-	sa := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podspec.ServerServiceAccountName,
-			Namespace: namespace,
-			Labels:    map[string]string{podspec.LabelManagedBy: podspec.ManagedByValue},
-		},
-	}
-	// AlreadyExists here just means someone else created it between our Get
-	// and this Create; that is success, not a conflict to resolve.
-	if err := b.Client.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
-		return err
+		sa := &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: namespace,
+				Labels:    map[string]string{podspec.LabelManagedBy: podspec.ManagedByValue},
+			},
+		}
+		// AlreadyExists here just means someone else created it between our Get
+		// and this Create; that is success, not a conflict to resolve.
+		if err := b.Client.Create(ctx, sa); err != nil && !apierrors.IsAlreadyExists(err) {
+			return err
+		}
 	}
 	return nil
 }
