@@ -31,19 +31,19 @@ import (
 )
 
 // Bootstrapper makes sure a namespace holds what a Spawnery agent pod needs
-// before it can start: the CA bundle it pins and the ServiceAccount whose
-// projected token it presents to the operator's gRPC endpoint. The Server
-// controller calls Ensure for a namespace right before it creates the first
-// pod in it.
+// before it can start: the CA bundle it pins and a ServiceAccount whose
+// projected token it presents to the operator's gRPC endpoint — which one
+// depends on the pod's role. The Server controller calls Ensure for a
+// namespace right before it creates the first pod in it.
 type Bootstrapper struct {
 	// Client is the manager's cached client. Task 9 restricts that cache to
-	// objects carrying podspec.LabelManagedBy, so both objects Ensure writes
-	// must carry it too, or Ensure would never see them as already present.
+	// objects carrying podspec.LabelManagedBy, so every object Ensure writes
+	// must carry it too, or Ensure would never see it as already present.
 	Client client.Client
 	// Reader is an uncached client, used only to recover from the case where
 	// the cached Client's view of the CA ConfigMap has fallen out of sync
 	// with the cluster (see the AlreadyExists handling in ensureConfigMap).
-	// ensureServiceAccount has no comparable repair path — see its comment.
+	// ensureServiceAccounts has no comparable repair path — see its comment.
 	Reader client.Reader
 	// CA returns the current CA bundle. It is nil until certs.Provider has
 	// published one; Ensure refuses to run until it returns a non-empty
@@ -55,11 +55,11 @@ type Bootstrapper struct {
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create
 
-// Ensure makes sure namespace holds an up-to-date CA ConfigMap and a
-// ServiceAccount for the agent pods that will run there. It is idempotent
+// Ensure makes sure namespace holds an up-to-date CA ConfigMap and the
+// ServiceAccounts for the agent pods that will run there. It is idempotent
 // and safe to call on every reconcile.
 //
-// Neither object gets an OwnerReference: they are meant to outlive the
+// These objects get no OwnerReference: they are meant to outlive the
 // operator, so a pod restarting during an operator outage still finds a CA
 // to trust and a ServiceAccount to authenticate with.
 func (b *Bootstrapper) Ensure(ctx context.Context, namespace string) error {
