@@ -53,6 +53,11 @@ type Identity struct {
 	PodUID         string
 	ServiceAccount string
 	Role           agent.Role
+	// Group is the pod's spawnery.cloud/group label. A proxy session needs it
+	// to know which fallback groups its DrainPlayers messages carry, and the
+	// pod is fetched during authentication anyway — reading it here costs one
+	// map lookup and saves proxyreg a second Get of the same object.
+	Group string
 }
 
 // TokenReviewer submits a token to the real authenticator of the API server.
@@ -63,37 +68,40 @@ type TokenReviewer interface {
 	Create(ctx context.Context, tr *authnv1.TokenReview, opts metav1.CreateOptions) (*authnv1.TokenReview, error)
 }
 
-// PodChecker answers whether a pod the token names is one of ours, in the
-// role the caller wants to act as.
+// PodChecker answers whether a pod the token names is one of ours, in the role
+// the caller wants to act as, and which group it belongs to.
 type PodChecker interface {
-	PodExists(ctx context.Context, namespace, name, uid string, role agent.Role) (bool, error)
+	LookupPod(ctx context.Context, namespace, name, uid string, role agent.Role) (group string, ok bool, err error)
 }
 
 // ClientPodChecker reads through the manager's cache.
 type ClientPodChecker struct{ Client client.Client }
 
-// PodExists implements PodChecker. It insists on the managed-by label and the
+// LookupPod implements PodChecker. It insists on the managed-by label and the
 // role label matching the requested role, so a hand-built pod — or one
 // labelled for the other role — cannot open a session. This mirrors the two
 // labels OrphanReconciler.Sweep uses to decide what "one of ours" means; the
 // two places must agree, or a pod could pass here yet be swept from the
 // registry as foreign.
-func (c *ClientPodChecker) PodExists(ctx context.Context, namespace, name, uid string, role agent.Role) (bool, error) {
+func (c *ClientPodChecker) LookupPod(ctx context.Context, namespace, name, uid string, role agent.Role) (string, bool, error) {
 	pod := &corev1.Pod{}
 	err := c.Client.Get(ctx, types.NamespacedName{Name: name, Namespace: namespace}, pod)
 	if apierrors.IsNotFound(err) {
-		return false, nil
+		return "", false, nil
 	}
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	if string(pod.UID) != uid {
-		return false, nil
+		return "", false, nil
 	}
 	if pod.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
-		return false, nil
+		return "", false, nil
 	}
-	return pod.Labels[podspec.LabelRole] == roleLabelFor(role), nil
+	if pod.Labels[podspec.LabelRole] != roleLabelFor(role) {
+		return "", false, nil
+	}
+	return pod.Labels[podspec.LabelGroup], true, nil
 }
 
 // roleLabelFor is the podspec.LabelRole value a pod acting in this role must
@@ -178,7 +186,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		return Identity{}, fmt.Errorf("token is not bound to a pod")
 	}
 
-	exists, err := a.Pods.PodExists(ctx, namespace, podName, podUID, want)
+	group, exists, err := a.Pods.LookupPod(ctx, namespace, podName, podUID, want)
 	if err != nil {
 		return Identity{}, wrapUnavailable(fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err))
 	}
@@ -192,6 +200,7 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		PodUID:         podUID,
 		ServiceAccount: name,
 		Role:           want,
+		Group:          group,
 	}, nil
 }
 

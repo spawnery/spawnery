@@ -351,8 +351,39 @@ func (failingReviewer) Create(context.Context, *authnv1.TokenReview, metav1.Crea
 
 type refusingPodChecker struct{}
 
-func (refusingPodChecker) PodExists(context.Context, string, string, string, agent.Role) (bool, error) {
-	return false, errors.New("the pod checker must not be reached")
+func (refusingPodChecker) LookupPod(context.Context, string, string, string, agent.Role) (string, bool, error) {
+	return "", false, errors.New("the pod checker must not be reached")
+}
+
+// The group label of the pod has to survive the trip through the token, because
+// a proxy session's DrainPlayers messages carry the fallback groups of exactly
+// that ProxyGroup and nothing on the wire could tell the operator which one it
+// is.
+func TestIdentityCarriesTheGroupLabel(t *testing.T) {
+	f := newAuthFixture(t)
+
+	server := f.pod("lobby-group")
+	id, err := f.auth.Authenticate(f.ctx, f.token(podspec.ServerServiceAccountName,
+		[]string{podspec.AgentTokenAudience}, server), agent.RoleServer)
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if id.Group != "lobby" {
+		t.Errorf("server Group = %q, want %q", id.Group, "lobby")
+	}
+
+	proxy := f.proxyPod("gateway-group")
+	id, err = f.auth.Authenticate(f.ctx, f.token(podspec.ProxyServiceAccountName,
+		[]string{podspec.AgentTokenAudience}, proxy), agent.RoleProxy)
+	if err != nil {
+		t.Fatalf("Authenticate proxy: %v", err)
+	}
+	if id.Group != "gateway" {
+		t.Errorf("proxy Group = %q, want %q", id.Group, "gateway")
+	}
+	if id.Role != agent.RoleProxy {
+		t.Errorf("Role = %q, want %q", id.Role, agent.RoleProxy)
+	}
 }
 
 func TestRoleForMethod(t *testing.T) {
