@@ -105,6 +105,8 @@
         let
           paper = pkgs.callPackage ./nix/paper.nix { };
 
+          velocity = pkgs.callPackage ./nix/velocity.nix { };
+
           # Extracted while paper-image was the only consumer; velocity-image
           # will be the second (see nix/oci-common.nix for why that timing
           # matters).
@@ -148,6 +150,7 @@
           # Architecture-independent (it is jars), so this stays available on
           # every system.
           paper-repo = paper.repo;
+          velocity-jar = velocity.jar;
 
           inherit spawnery-slp spawnery-stubop paper-agent;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
