@@ -577,6 +577,15 @@ git commit
 
 - [ ] **Step 1: Write the failing check**
 
+> **Correction, made during execution.** The script below is the version this
+> task shipped, and the final whole-branch review found four blind spots in it:
+> `com.google.gson` unchecked although Paper ships gson-2.14.0; the presence of
+> `paper-plugin.yml` checked but not that its `${version}` expanded; nothing
+> asserting the generated protobuf stubs are in the jar; and a collision message
+> that is false for okio, okhttp3 and perfmark. The shipped
+> `hack/agent-jar-check.sh` also gained a no-`.java` guard. Read that file, not
+> this block.
+
 `hack/agent-jar-check.sh`:
 
 ```bash
@@ -659,6 +668,9 @@ and at the end of the file:
 tasks.shadowJar {
     archiveClassifier.set("")
 
+    // CORRECTED DURING EXECUTION - see the note under this code block. The
+    // comment below claims a rule this list does not implement.
+    //
     // Everything the plugin brings is relocated, without exception. The rule
     // is "relocate all of it" rather than "relocate what currently conflicts",
     // because the second list has to be revisited every time Paper changes a
@@ -680,6 +692,16 @@ tasks.shadowJar {
 
 tasks.build { dependsOn(tasks.shadowJar) }
 ```
+
+> **Correction, made during execution.** That nine-entry list is exactly the
+> "relocate what currently conflicts" list its own comment says not to keep, and
+> it had already fallen behind by the end of the milestone: measured from the
+> built jar, 1187 class files shipped unrelocated, three of those packages
+> present in Paper's own `libraries` tree — `com.google.thirdparty` (guava's
+> second top-level package, one line below `com.google.common` here),
+> `com.google.errorprone` and `com.google.j2objc`. The shipped
+> `agent/paper/build.gradle.kts` resolves this; read it rather than the block
+> above.
 
 In `nix/paper-agent.nix`, change `gradleBuildTask = "jar";` to
 `gradleBuildTask = "shadowJar";` and add the check to the derivation:
@@ -1410,6 +1432,11 @@ class SessionLoop(
         send(session, ServerMessage.newBuilder().setReady(Ready.getDefaultInstance()).build())
     }
 
+    // CORRECTED DURING EXECUTION. A graceful close here parks the transport
+    // when stop() lands on an attempt still waiting for its first message: the
+    // call it half-closes is one the operator will never finish, and a
+    // half-close is not a cancellation. The shipped SessionLoop.stop() forces
+    // that one down. Read the file, not this.
     fun stop() {
         current.getAndSet(null)?.close()
     }
@@ -1860,6 +1887,11 @@ import java.nio.file.Path
  * Being dormant is a normal outcome, not a failure: the image is meant to be
  * runnable outside a cluster, and make image-test does exactly that. A missing
  * endpoint therefore produces one log line and silence, not a retry loop.
+ *
+ * CORRECTED DURING EXECUTION: carrying the bundle as a ByteArray read once in
+ * Environment.from means the agent holds whatever was on disk at onEnable, so
+ * it cannot survive the CA rotation the concatenated-PEM format exists to
+ * allow. The shipped Environment hands on the path instead. Read that file.
  */
 sealed interface Environment {
     data class Configured(

@@ -641,9 +641,11 @@ class SessionLoop(
      * `hasReplacement()` guard here, or this and the replacement will each book
      * a reconnect for the same session.
      *
-     * The close is the forceful one. See [Session.close]: this is the single
-     * path where the call being ended is one the operator will never finish,
-     * and asking a graceful shutdown to wait for it parks the transport.
+     * The close is the forceful one. See [Session.close]: this is one of the
+     * two paths where the call being ended is one the operator will never
+     * finish — the other is a [stop] landing on an attempt still waiting for
+     * its first message — and asking a graceful shutdown to wait for such a
+     * call parks the transport.
      */
     private fun answerOverdue(session: Session) {
         if (!session.ended.compareAndSet(false, true)) return

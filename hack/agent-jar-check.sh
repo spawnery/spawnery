@@ -100,6 +100,13 @@ fi
 # only fails if it resolves a class out of one, and under src/main/kotlin
 # kotlinc reads it for resolution and never emits it.
 if [ -n "$SRC" ]; then
+	# Without this the check passes silently when the directories are not
+	# there at all - a moved sourceRoot, a changed `src` in
+	# nix/paper-agent.nix, or an invocation from the wrong directory would
+	# each read as "no stray Java" rather than "nothing was looked at".
+	for dir in "$SRC/src/main" "$SRC/src/test"; do
+		[ -d "$dir" ] || fail "$dir does not exist, so the no-Java constraint checked nothing"
+	done
 	strayjava="$(find "$SRC/src/main" "$SRC/src/test" -name '*.java' -print 2>/dev/null || true)"
 	if [ -n "$strayjava" ]; then
 		echo "agent-jar-check: these Java sources are outside the generated source set:" >&2
