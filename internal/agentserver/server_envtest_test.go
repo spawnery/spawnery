@@ -91,10 +91,21 @@ type serverFixture struct {
 }
 
 func newServerFixture(t *testing.T) *serverFixture {
-	return newServerFixtureWithDeadline(t, 8*time.Minute, 10*time.Minute)
+	return newFixture(t, 8*time.Minute, 10*time.Minute, 0)
 }
 
 func newServerFixtureWithDeadline(t *testing.T, renewAfter, hardDeadline time.Duration) *serverFixture {
+	return newFixture(t, renewAfter, hardDeadline, 0)
+}
+
+// newServerFixtureWithProxyOutbox is for the closed-outbox test: it needs a
+// queue small enough to overflow after a handful of registrations rather than
+// however many it takes to exhaust a real stream's flow-control window.
+func newServerFixtureWithProxyOutbox(t *testing.T, outboxSize int) *serverFixture {
+	return newFixture(t, 8*time.Minute, 10*time.Minute, outboxSize)
+}
+
+func newFixture(t *testing.T, renewAfter, hardDeadline time.Duration, proxyOutboxSize int) *serverFixture {
 	t.Helper()
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -126,7 +137,7 @@ func newServerFixtureWithDeadline(t *testing.T, renewAfter, hardDeadline time.Du
 	}
 
 	registry := agent.New(now, 5*time.Second, now())
-	fleet := proxyreg.New(proxyreg.Options{Reader: c})
+	fleet := proxyreg.New(proxyreg.Options{Reader: c, OutboxSize: proxyOutboxSize})
 	srv := agentserver.New(agentserver.Options{
 		// Port 0: the kernel picks a free one, so parallel packages do not
 		// collide.
@@ -602,7 +613,12 @@ func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 		Message: &agentpb.ProxyMessage_Hello{Hello: &agentpb.Hello{Version: "0.1.0"}},
 	}); err != nil {
 		// A send may already fail once the server hung up; that is a refusal
-		// too.
+		// too, but it still has to carry the right reason rather than being
+		// waved through unchecked — this is the only guard left on the
+		// role-mismatch refusal if it takes this path.
+		if code := status.Code(err); code != codes.Unauthenticated {
+			t.Errorf("Send failed with code = %s, want Unauthenticated", code)
+		}
 		return
 	}
 	_, err = stream.Recv()

@@ -173,57 +173,27 @@ func (s *Server) Start(ctx context.Context) error {
 
 // ServerSession is the Paper agent's channel.
 func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) error {
-	id, ok := grpcauth.IdentityFrom(stream.Context())
-	if !ok {
-		return status.Error(codes.Unauthenticated, "no identity on the stream")
-	}
-	logger := log.FromContext(stream.Context()).WithValues("pod", id.PodName, "namespace", id.Namespace)
-	openedAt := s.opts.Clock()
-
-	ctx, gen, superseded := s.sessions.enter(stream.Context(), id.PodUID)
-	defer func() {
-		// Only the current stream may report the disconnect. A superseded one
-		// must not, or make-before-break would break.
-		if s.sessions.leave(id.PodUID, gen) {
-			s.opts.Agents.Disconnect(id.PodUID)
-		}
-		logger.V(1).Info("session ended", "after", s.opts.Clock().Sub(openedAt))
-	}()
-
-	if superseded {
-		// The stream this one displaced was still live, so the agent process
-		// never went away: its readiness carries over and the server does not
-		// flicker out of Ready for the length of one round trip.
-		s.opts.Agents.Supersede(id.PodUID, agent.RoleServer)
-	} else {
-		s.opts.Agents.Connect(id.PodUID, agent.RoleServer)
-	}
-	OpenStreams.WithLabelValues(string(agent.RoleServer)).Inc()
-	defer OpenStreams.WithLabelValues(string(agent.RoleServer)).Dec()
-
-	if err := stream.Send(&agentpb.OperatorToServer{
-		Message: &agentpb.OperatorToServer_ReportInterval{
-			ReportInterval: &agentpb.ReportInterval{Seconds: seconds(s.opts.ReportInterval)},
-		},
-	}); err != nil {
-		return err
-	}
-	if err := stream.Send(&agentpb.OperatorToServer{
-		Message: &agentpb.OperatorToServer_SessionDeadline{
-			SessionDeadline: &agentpb.SessionDeadline{
-				RenewAfterSeconds:   seconds(s.opts.RenewAfter),
-				HardDeadlineSeconds: seconds(s.opts.HardDeadline),
+	id, logger, ctx, cleanup, err := s.sessionPrologue(stream.Context(), agent.RoleServer, func() error {
+		if err := stream.Send(&agentpb.OperatorToServer{
+			Message: &agentpb.OperatorToServer_ReportInterval{
+				ReportInterval: &agentpb.ReportInterval{Seconds: seconds(s.opts.ReportInterval)},
 			},
-		},
-	}); err != nil {
+		}); err != nil {
+			return err
+		}
+		return stream.Send(&agentpb.OperatorToServer{
+			Message: &agentpb.OperatorToServer_SessionDeadline{
+				SessionDeadline: &agentpb.SessionDeadline{
+					RenewAfterSeconds:   seconds(s.opts.RenewAfter),
+					HardDeadlineSeconds: seconds(s.opts.HardDeadline),
+				},
+			},
+		})
+	})
+	if err != nil {
 		return err
 	}
-
-	deadline := time.AfterFunc(s.opts.HardDeadline, func() {
-		logger.V(1).Info("closing the stream at its hard deadline")
-		s.sessions.cancel(id.PodUID, gen)
-	})
-	defer deadline.Stop()
+	defer cleanup()
 
 	received, errs := recvPump(ctx, stream.Recv)
 
@@ -240,6 +210,80 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 			s.handle(logger, id, msg)
 		}
 	}
+}
+
+// sessionPrologue is everything a session does before its main loop, and
+// everything ServerSession and ProxySession would otherwise both write out by
+// hand: authenticate the stream, register it with make-before-break semantics
+// (entering sessions, choosing Connect vs. Supersede, bumping OpenStreams),
+// send the two fixed messages every session opens with, and start the
+// hard-deadline timer.
+//
+// It was pulled out for the same reason recvPump was: a divergence here is
+// invisible from outside and dangerous on the inside. Two copies of the
+// enter/Supersede/OpenStreams sequence could drift so one role's stream
+// forgets to bump the gauge it decrements, or registers before deciding
+// superseded vs. fresh — either wrong and no test would catch it, because
+// both roles look identical to a client watching the wire. sendFixed is the
+// one piece left to the caller: the two fixed messages carry the same values
+// on every stream, but OperatorToServer and OperatorToProxy are different
+// wire types with no message in common, so building them is the caller's job.
+// Everything sendFixed does is bracketed by the same Connect/Supersede and
+// OpenStreams bookkeeping either session needs, in the same order the
+// original two handlers used, so a Send failure here still decrements the
+// gauge and reports the disconnect exactly as if the loop below had run and
+// exited immediately.
+//
+// gen is deliberately not among the return values. Both of its uses — leave's
+// identity check and the hard-deadline timer's cancel — now live entirely
+// inside this function and its returned cleanup; nothing past this point ever
+// needs the raw number, and returning it just to satisfy a shape the callers
+// do not use would be dead weight.
+func (s *Server) sessionPrologue(streamCtx context.Context, role agent.Role, sendFixed func() error) (
+	grpcauth.Identity, logr.Logger, context.Context, func(), error) {
+	id, ok := grpcauth.IdentityFrom(streamCtx)
+	if !ok {
+		return grpcauth.Identity{}, logr.Logger{}, nil, nil, status.Error(codes.Unauthenticated, "no identity on the stream")
+	}
+	logger := log.FromContext(streamCtx).WithValues("pod", id.PodName, "namespace", id.Namespace)
+	openedAt := s.opts.Clock()
+
+	ctx, gen, superseded := s.sessions.enter(streamCtx, id.PodUID)
+	leave := func() {
+		// Only the current stream may report the disconnect. A superseded one
+		// must not, or make-before-break would break.
+		if s.sessions.leave(id.PodUID, gen) {
+			s.opts.Agents.Disconnect(id.PodUID)
+		}
+		logger.V(1).Info("session ended", "after", s.opts.Clock().Sub(openedAt))
+	}
+
+	if superseded {
+		// The stream this one displaced was still live, so the agent process
+		// never went away: its readiness (for a server) or its place in the
+		// fan-out (for a proxy) carries over.
+		s.opts.Agents.Supersede(id.PodUID, role)
+	} else {
+		s.opts.Agents.Connect(id.PodUID, role)
+	}
+	OpenStreams.WithLabelValues(string(role)).Inc()
+
+	if err := sendFixed(); err != nil {
+		OpenStreams.WithLabelValues(string(role)).Dec()
+		leave()
+		return grpcauth.Identity{}, logr.Logger{}, nil, nil, err
+	}
+
+	deadline := time.AfterFunc(s.opts.HardDeadline, func() {
+		logger.V(1).Info("closing the stream at its hard deadline")
+		s.sessions.cancel(id.PodUID, gen)
+	})
+	cleanup := func() {
+		deadline.Stop()
+		OpenStreams.WithLabelValues(string(role)).Dec()
+		leave()
+	}
+	return id, logger, ctx, cleanup, nil
 }
 
 // handle applies one message. An unknown branch is ignored so a newer agent
@@ -269,61 +313,36 @@ func (s *Server) handle(logger logr.Logger, id grpcauth.Identity, msg *agentpb.S
 // never writes into it: everything a proxy is told is decided by a controller,
 // so a compromised proxy cannot make the operator say anything.
 func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) error {
-	id, ok := grpcauth.IdentityFrom(stream.Context())
-	if !ok {
-		return status.Error(codes.Unauthenticated, "no identity on the stream")
-	}
-	logger := log.FromContext(stream.Context()).WithValues("pod", id.PodName, "namespace", id.Namespace)
-	openedAt := s.opts.Clock()
-
-	ctx, gen, superseded := s.sessions.enter(stream.Context(), id.PodUID)
-	defer func() {
-		if s.sessions.leave(id.PodUID, gen) {
-			s.opts.Agents.Disconnect(id.PodUID)
-		}
-		logger.V(1).Info("session ended", "after", s.opts.Clock().Sub(openedAt))
-	}()
-
-	if superseded {
-		s.opts.Agents.Supersede(id.PodUID, agent.RoleProxy)
-	} else {
-		s.opts.Agents.Connect(id.PodUID, agent.RoleProxy)
-	}
-	OpenStreams.WithLabelValues(string(agent.RoleProxy)).Inc()
-	defer OpenStreams.WithLabelValues(string(agent.RoleProxy)).Dec()
-
-	if err := stream.Send(&agentpb.OperatorToProxy{
-		Message: &agentpb.OperatorToProxy_ReportInterval{
-			ReportInterval: &agentpb.ReportInterval{Seconds: seconds(s.opts.ReportInterval)},
-		},
-	}); err != nil {
-		return err
-	}
-	if err := stream.Send(&agentpb.OperatorToProxy{
-		Message: &agentpb.OperatorToProxy_SessionDeadline{
-			SessionDeadline: &agentpb.SessionDeadline{
-				RenewAfterSeconds:   seconds(s.opts.RenewAfter),
-				HardDeadlineSeconds: seconds(s.opts.HardDeadline),
+	id, logger, ctx, cleanup, err := s.sessionPrologue(stream.Context(), agent.RoleProxy, func() error {
+		if err := stream.Send(&agentpb.OperatorToProxy{
+			Message: &agentpb.OperatorToProxy_ReportInterval{
+				ReportInterval: &agentpb.ReportInterval{Seconds: seconds(s.opts.ReportInterval)},
 			},
-		},
-	}); err != nil {
+		}); err != nil {
+			return err
+		}
+		return stream.Send(&agentpb.OperatorToProxy{
+			Message: &agentpb.OperatorToProxy_SessionDeadline{
+				SessionDeadline: &agentpb.SessionDeadline{
+					RenewAfterSeconds:   seconds(s.opts.RenewAfter),
+					HardDeadlineSeconds: seconds(s.opts.HardDeadline),
+				},
+			},
+		})
+	})
+	if err != nil {
 		return err
 	}
+	defer cleanup()
 
 	// Joining after the two fixed messages, not before: the FullSync is the
 	// first thing whose content depends on the cluster, and the agent needs the
 	// deadline in hand before it starts processing a server list.
-	outbox, leave, err := s.opts.Proxies.Join(ctx, id.Namespace, id.Group, id.PodUID)
+	outbox, leaveFleet, err := s.opts.Proxies.Join(ctx, id.Namespace, id.Group, id.PodUID)
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "join the proxy fleet: %v", err)
 	}
-	defer leave()
-
-	deadline := time.AfterFunc(s.opts.HardDeadline, func() {
-		logger.V(1).Info("closing the stream at its hard deadline")
-		s.sessions.cancel(id.PodUID, gen)
-	})
-	defer deadline.Stop()
+	defer leaveFleet()
 
 	received, errs := recvPump(ctx, stream.Recv)
 
@@ -340,6 +359,18 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 			s.handleProxy(logger, id, msg)
 		case msg, ok := <-outbox:
 			if !ok {
+				// A renewal cancels this session's ctx and closes its outbox
+				// within a few lines of each other in the fleet and in
+				// sessions.enter, so both select cases can be ready at once —
+				// Go picks between them arbitrarily, not in the order the two
+				// events actually happened. ctx.Err() is what tells the two
+				// apart: non-nil means the session ended for some other
+				// reason (superseded, or the server shutting down) and this
+				// close is just the fleet catching up, not the proxy actually
+				// having fallen behind.
+				if ctx.Err() != nil {
+					return status.Error(codes.Unavailable, "session ended, reconnect with a fresh token")
+				}
 				// The fan-out cut us loose. Ending the stream is the point:
 				// a partial server list is worse than a reconnect.
 				return status.Error(codes.ResourceExhausted, "proxy fell behind, reconnect for a fresh sync")
