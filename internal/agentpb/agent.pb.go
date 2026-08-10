@@ -1117,7 +1117,9 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\amessage2\xdb\x01\n" +
 	"\fAgentService\x12c\n" +
 	"\fProxySession\x12%.spawnery.agent.v1alpha1.ProxyMessage\x1a(.spawnery.agent.v1alpha1.OperatorToProxy(\x010\x01\x12f\n" +
-	"\rServerSession\x12&.spawnery.agent.v1alpha1.ServerMessage\x1a).spawnery.agent.v1alpha1.OperatorToServer(\x010\x01B/Z-github.com/spawnery/spawnery/internal/agentpbb\x06proto3"
+	"\rServerSession\x12&.spawnery.agent.v1alpha1.ServerMessage\x1a).spawnery.agent.v1alpha1.OperatorToServer(\x010\x01BV\n" +
+	"\x17cloud.spawnery.agent.pbB\n" +
+	"AgentProtoP\x01Z-github.com/spawnery/spawnery/internal/agentpbb\x06proto3"
 
 var (
 	file_spawnery_agent_v1alpha1_agent_proto_rawDescOnce sync.Once

@@ -52,6 +52,24 @@ set_property server-port 25565
 set_property max-players "$SPAWNERY_MAX_PLAYERS"
 set_property enable-status true
 
+# The agent plugin. It ships in the read-only part of the image and is copied
+# out on every start, unconditionally: the image is the truth, not whatever a
+# previous start left in the volume.
+#
+# It cannot simply be loaded from where it ships. Paper writes its plugins'
+# data folders inside the plugins directory - measured in milestone 2b, which
+# saw plugins/spark/config.json and plugins/bStats/config.yml appear on a plain
+# run - so pointing --plugins at a read-only directory takes Paper's own
+# bundled plugins down with it.
+#
+# A read-only mount at /data/plugins therefore breaks the start here, with a
+# bare cp error. Mounts below /data are allowed by internal/podspec, so this is
+# reachable; see docs/known-issues.md.
+if [ -f "$PAPER_HOME/agent/spawnery-agent.jar" ]; then
+	mkdir -p plugins
+	cp -f "$PAPER_HOME/agent/spawnery-agent.jar" plugins/spawnery-agent.jar
+fi
+
 # exec, so the JVM becomes PID 1 and receives SIGTERM directly. With a shell in
 # between, the group's termination grace period would run out empty and every
 # server would lose its last world state on every stop.

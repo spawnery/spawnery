@@ -463,11 +463,41 @@ proto:
 
 - [ ] **Step 3: Regenerate and prove the Go side is untouched**
 
-Run: `nix develop -c make proto && git diff --stat internal/agentpb/`
+> **Correction, made during execution.** This step originally demanded that
+> `git diff --stat internal/agentpb/` be **empty**, and the implementer
+> correctly stopped when it was not. The demand was impossible, not the
+> assumption behind it: a `FileDescriptorProto` carries one `FileOptions` block
+> shared by every target language, and `protoc-gen-go` embeds the whole
+> serialized descriptor in `rawDesc` for reflection — so *any* additive
+> file-level option for *any* language moves those bytes. Verified on the real
+> diff: the only change is inside the `rawDesc` string literal, where
+> `java_package`, `java_outer_classname` and `java_multiple_files` now appear
+> beside an unchanged `go_package`. No exported Go symbol, message name or
+> field number moves.
+>
+> The check below replaces it and tests what the original meant to test.
 
-Expected: **empty output.** The Java options must not change a byte of the
-generated Go. If they do, stop and report it — the assumption this task rests
-on is wrong.
+Run:
+
+```bash
+nix develop -c make proto
+git diff --stat internal/agentpb/
+git diff internal/agentpb/ | grep -E '^[+-][[:space:]]*(func|type|const|var) ' || echo "no Go API change"
+nix develop -c go test ./internal/agentpb/...
+```
+
+Expected, all four:
+
+1. `agent.pb.go` is the only file changed, by about four lines.
+   `agent_grpc.pb.go` must be untouched — the service surface is what a
+   consumer actually binds to.
+2. The diff is confined to the `file_spawnery_agent_v1alpha1_agent_proto_rawDesc`
+   literal, and the substring `Z-github.com/spawnery/spawnery/internal/agentpb`
+   still appears in it.
+3. `no Go API change` — no added or removed `func`, `type`, `const` or `var`.
+4. The existing Go tests pass **unmodified**. If a Go test needs editing to
+   stay green, stop and report: that is the wire-compatibility break this step
+   exists to catch.
 
 Then: `git status --short agent/paper/src/proto/java | head`
 
@@ -546,6 +576,15 @@ git commit
 - Produces: `$out/share/spawnery/spawnery-agent.jar` is now the *shaded* jar. `hack/agent-jar-check.sh <jar>` exits 0 if the relocation holds.
 
 - [ ] **Step 1: Write the failing check**
+
+> **Correction, made during execution.** The script below is the version this
+> task shipped, and the final whole-branch review found four blind spots in it:
+> `com.google.gson` unchecked although Paper ships gson-2.14.0; the presence of
+> `paper-plugin.yml` checked but not that its `${version}` expanded; nothing
+> asserting the generated protobuf stubs are in the jar; and a collision message
+> that is false for okio, okhttp3 and perfmark. The shipped
+> `hack/agent-jar-check.sh` also gained a no-`.java` guard. Read that file, not
+> this block.
 
 `hack/agent-jar-check.sh`:
 
@@ -629,6 +668,9 @@ and at the end of the file:
 tasks.shadowJar {
     archiveClassifier.set("")
 
+    // CORRECTED DURING EXECUTION - see the note under this code block. The
+    // comment below claims a rule this list does not implement.
+    //
     // Everything the plugin brings is relocated, without exception. The rule
     // is "relocate all of it" rather than "relocate what currently conflicts",
     // because the second list has to be revisited every time Paper changes a
@@ -650,6 +692,16 @@ tasks.shadowJar {
 
 tasks.build { dependsOn(tasks.shadowJar) }
 ```
+
+> **Correction, made during execution.** That nine-entry list is exactly the
+> "relocate what currently conflicts" list its own comment says not to keep, and
+> it had already fallen behind by the end of the milestone: measured from the
+> built jar, 1187 class files shipped unrelocated, three of those packages
+> present in Paper's own `libraries` tree — `com.google.thirdparty` (guava's
+> second top-level package, one line below `com.google.common` here),
+> `com.google.errorprone` and `com.google.j2objc`. The shipped
+> `agent/paper/build.gradle.kts` resolves this; read it rather than the block
+> above.
 
 In `nix/paper-agent.nix`, change `gradleBuildTask = "jar";` to
 `gradleBuildTask = "shadowJar";` and add the check to the derivation:
@@ -1030,6 +1082,20 @@ object BearerCredentials {
 }
 ```
 
+> **Correction, made during execution.** `OperatorChannel.build` above is
+> missing `.tlsConnectionSpec(TLS_VERSIONS, CIPHER_SUITES)`, and without it the
+> agent cannot complete a handshake at all. grpc-okhttp chooses its
+> `ConnectionSpec` by platform: the TLS 1.3 + 1.2 spec only on Android, and a
+> TLS-1.2-only legacy spec on every JDK. `internal/agentserver` sets
+> `MinVersion: VersionTLS13`, so the default leaves the agent offering a version
+> the operator refuses and the handshake dies with a `protocol_version` alert
+> before a byte of HTTP/2. Nothing at level 1 could see it — the in-process
+> transport used by the unit tests does no TLS — so it was found by
+> `hack/agent-test.sh` against a real operator-shaped server. The shipped form
+> is `OperatorChannel.kt:71-86`, which spells out TLS 1.3 and its three suites;
+> `docs/handover-milestone-3.md` names it as the first thing to check when a new
+> agent's handshake fails.
+
 - [ ] **Step 5: Run to verify it passes**
 
 Run: `nix build .#paper-agent -L 2>&1 | tail -20`
@@ -1366,6 +1432,11 @@ class SessionLoop(
         send(session, ServerMessage.newBuilder().setReady(Ready.getDefaultInstance()).build())
     }
 
+    // CORRECTED DURING EXECUTION. A graceful close here parks the transport
+    // when stop() lands on an attempt still waiting for its first message: the
+    // call it half-closes is one the operator will never finish, and a
+    // half-close is not a cancellation. The shipped SessionLoop.stop() forces
+    // that one down. Read the file, not this.
     fun stop() {
         current.getAndSet(null)?.close()
     }
@@ -1612,6 +1683,34 @@ and add:
     }
 ```
 
+> **Correction, made during execution.** Three things in the two functions
+> above are wrong, and each of them shipped as a defect somewhere before it was
+> found.
+>
+> `connect(); session.close()` inside `scheduleRenewal` is **break before
+> make**, which is the one thing this whole class exists to prevent. It reads
+> like make before break and is not: the replacement needs a fresh TCP
+> connection and a TLS handshake while the retirement travels an established
+> one, so the close reliably overtakes the greeting and the operator sees a
+> disconnect followed by a connect — every server dropping out of `Ready` on
+> the rhythm of the hard deadline. `hack/agent-test.sh` measured it losing
+> every time; the unit tests could not, because the in-process transport
+> delivers the Hello synchronously. The shipped `scheduleRenewal`
+> (`SessionLoop.kt:661-677`) has no `close()` at all: the outgoing stream is
+> retired by `Session.takeOver()`, from `onNext`, once the operator has actually
+> answered the replacement. `docs/known-issues.md:31-36` records it.
+>
+> `log("renewal failed; the old stream stays until it breaks", e)` leaves a
+> failed renewal with nothing that retries it. The outgoing stream does still
+> live until the hard deadline, so there is time — but only if something uses
+> it. The shipped form logs and calls `reconnectLater()`.
+>
+> `runCatching { connect() }` swallows the one failure that has no other
+> retry. `connect()` can throw before anything is registered anywhere — an
+> unreadable token, a channel that will not build — and `runCatching` then ends
+> the agent permanently and silently. The shipped `reconnectLater`
+> (`SessionLoop.kt:679-693`) catches, logs, and reschedules itself.
+
 Replace `fromOperator.onError` and `onCompleted` with:
 
 ```kotlin
@@ -1626,7 +1725,47 @@ Replace `fromOperator.onError` and `onCompleted` with:
             }
 ```
 
+> **Correction, made during execution.** `if (current.compareAndSet(holder.get(),
+> null)) reconnectLater()` is two separate defects at once, and the shipped code
+> is `streamEnded` (`SessionLoop.kt:565-576`), which is neither.
+>
+> Guarding on `current` skips the reconnect exactly when it is most needed.
+> `connect()` installs the session only after the Hello has gone out, so a
+> stream that fails before that — a rejected token, an operator mid-rollout —
+> leaves `current` pointing elsewhere, the compare-and-set fails, and the agent
+> sits silent forever. That is strictly worse than reconnecting too eagerly, and
+> `SessionLoop.kt:538-544` says so. A per-attempt `ended` flag says what
+> `current` cannot: whether *this* stream was replaced on purpose.
+>
+> Booking the reconnect unconditionally is the other half.
+> `internal/agentserver` cancels the displaced stream's context inside
+> `sessions.enter()`, at the handler entry of the replacement — before
+> `Supersede` and before either `Send` — so the agent always sees the outgoing
+> stream fail *first*, on every renewal, while the replacement is still
+> unanswered. A reconnect booked there is booked on every renewal, and since the
+> replacement's first message resets the backoff to its 1 s floor, that
+> reconnect supersedes the replacement a second later and the sequence repeats:
+> a self-sustaining stream churn at roughly 1 Hz, per server, for as long as the
+> fleet runs (`SessionLoop.kt:546-558`). The shipped code skips the reconnect
+> when `hasReplacement()` says a replacement is already under way, and hands the
+> obligation to it.
+>
+> Neither could be seen at level 1 alone, which is why `hack/agent-test.sh`
+> phase 2 bounds the stream rate from above and phase 3 bounds it from below.
+
 Reset `attempt = 0` at the end of `connect()`, after the `Hello` is sent.
+
+> **Correction, made during execution.** Resetting at the end of `connect()`
+> resets it on a `Hello` merely handed to the transport, which proves nothing:
+> a stream that always dies just after it opens then has its backoff cleared on
+> every attempt, and the agent reconnects once a second for as long as the
+> operator stays broken. The reset belongs on the operator's first message, and
+> that is where it is — `SessionLoop.kt:455`, inside `onNext`, beside the two
+> other things that wait for the same proof. It is the same argument as make
+> before break: what the operator saw, not what the agent sent. Deviation (a) of
+> task 6, rejected on the record. `SessionLoopTest.kt`'s `grows the backoff with
+> every failed attempt and starts over once the operator answers` pins both
+> directions.
 
 Add the constructor parameter, last:
 
@@ -1748,6 +1887,11 @@ import java.nio.file.Path
  * Being dormant is a normal outcome, not a failure: the image is meant to be
  * runnable outside a cluster, and make image-test does exactly that. A missing
  * endpoint therefore produces one log line and silence, not a retry loop.
+ *
+ * CORRECTED DURING EXECUTION: carrying the bundle as a ByteArray read once in
+ * Environment.from means the agent holds whatever was on disk at onEnable, so
+ * it cannot survive the CA rotation the concatenated-PEM format exists to
+ * allow. The shipped Environment hands on the path instead. Read that file.
  */
 sealed interface Environment {
     data class Configured(
@@ -1993,14 +2137,19 @@ java` line:
 if [ -f "$PAPER_HOME/agent/spawnery-agent.jar" ]; then
 	mkdir -p plugins
 	cp -f "$PAPER_HOME/agent/spawnery-agent.jar" plugins/spawnery-agent.jar
-	chmod u+w plugins/spawnery-agent.jar
 fi
 ```
 
-The `chmod` matters: the source is mode 0444 in the Nix store, `cp` preserves
-nothing by default but the destination may already exist from a previous start
-as read-only, and `cp -f` unlinks rather than writing through — the chmod makes
-the next start's overwrite work regardless.
+> **Correction, made during execution.** This step originally added
+> `chmod u+w plugins/spawnery-agent.jar` after the copy, justified by the claim
+> that "`cp -f` unlinks rather than writing through — the chmod makes the next
+> start's overwrite work regardless." The reviewer tested `cp -f` against a
+> genuinely read-only 0444 destination: it already unlinks and recreates, which
+> needs only the *directory* to be writable, and `/data` always is under the
+> podspec contract. The `chmod` was therefore dead code carrying a false
+> explanation — the exact defect class milestone 2b's final review named, a
+> comment asserting a mechanism the code does not rely on. Removed, along with
+> the claim.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -2066,16 +2215,27 @@ if ! grep -q 'spawnery agent dormant' <<<"$container_logs"; then
 fi
 echo "the agent plugin loaded and stayed dormant without an operator"
 
-# And that relocation held. A protobuf or Netty conflict with Paper's own
-# copies surfaces exactly here, at class load, as a NoSuchMethodError or
-# NoClassDefFoundError that names neither the plugin nor the conflict.
+# And that nothing broke at class load. Note what this does NOT prove: with no
+# operator endpoint the plugin goes dormant before SessionLoop, OperatorChannel
+# or BearerCredentials are ever constructed, and those are the classes that
+# import io.grpc. Class loading is lazy, so the shaded gRPC tree is never
+# touched in this run. A shading regression confined to the operator-connection
+# path would pass here. That proof is make agent-test's, in the next task.
 if grep -qE 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs"; then
-	echo "a linkage error appeared; the shaded dependencies met Paper's own:" >&2
+	echo "a linkage error appeared while loading the plugin:" >&2
 	grep -B2 -A10 -E 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs" >&2
 	exit 1
 fi
-echo "no linkage error: the relocation holds"
+echo "the plugin's own classes load without a linkage error"
 ```
+
+> **Correction, made during execution.** The original text of this check
+> claimed "a protobuf or Netty conflict with Paper's own copies surfaces
+> exactly here, at class load" and printed "the relocation holds". It does not
+> and it does not: the dormant path never reaches a class that imports
+> `io.grpc`. The check is still worth having — it catches a plugin that fails
+> to load at all — but it had to stop claiming the one thing it cannot see.
+> Section 9 of the design already assigns that proof to level 2.
 
 Run: `make image-test`
 

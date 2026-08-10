@@ -102,6 +102,32 @@ container_logs="$("$CONTAINER" logs "$NAME" 2>&1)"
 check_no_download "$container_logs"
 echo "no download attempted"
 
+# The plugin is in the image but has no operator to reach here. Two things have
+# to be true, and neither is visible from a green ping alone.
+#
+# That it loaded at all: a paper-plugin.yml naming a class that is not there,
+# or an api-version Paper rejects, produces a server that starts perfectly and
+# silently has no agent.
+if ! grep -q 'spawnery agent dormant' <<<"$container_logs"; then
+	echo "the agent plugin did not load, or did not report why it stayed dormant:" >&2
+	grep -iE 'spawnery|plugin' <<<"$container_logs" >&2 || true
+	exit 1
+fi
+echo "the agent plugin loaded and stayed dormant without an operator"
+
+# And that nothing broke at class load. Note what this does NOT prove: with no
+# operator endpoint the plugin goes dormant before SessionLoop, OperatorChannel
+# or BearerCredentials are ever constructed, and those are the classes that
+# import io.grpc. Class loading is lazy, so the shaded gRPC tree is never
+# touched in this run. A shading regression confined to the operator-connection
+# path would pass here. That proof is make agent-test's, in the next task.
+if grep -qE 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs"; then
+	echo "a linkage error appeared while loading the plugin:" >&2
+	grep -B2 -A10 -E 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs" >&2
+	exit 1
+fi
+echo "the plugin's own classes load without a linkage error"
+
 # SIGTERM reaches PID 1 and saves the world. Without exec in the entrypoint the
 # grace period would run out empty and every stop would lose world state.
 "$CONTAINER" stop -t 60 "$NAME" >/dev/null

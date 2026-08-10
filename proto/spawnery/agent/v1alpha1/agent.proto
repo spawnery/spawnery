@@ -17,6 +17,9 @@ syntax = "proto3";
 package spawnery.agent.v1alpha1;
 
 option go_package = "github.com/spawnery/spawnery/internal/agentpb";
+option java_package = "cloud.spawnery.agent.pb";
+option java_multiple_files = true;
+option java_outer_classname = "AgentProto";
 
 // AgentService is the only channel between the operator and the in-game
 // agents. The agents never read the Kubernetes API; this stream carries both

@@ -14,7 +14,8 @@
 , writeTextDir
 , paper
 , spawnery-slp
-, imageVersion ? "0.1.0"
+, paper-agent
+, imageVersion
 }:
 
 let
@@ -55,6 +56,13 @@ let
     cp -r ${paper.repo} $out/opt/paper/repo
     chmod -R a-w $out/opt/paper
   '';
+
+  # Its own layer: it changes on every commit, while the JRE and the patched
+  # Paper repo above it do not.
+  agent = runCommand "paper-agent-image-path" { } ''
+    mkdir -p $out/opt/paper/agent
+    cp ${paper-agent}/share/spawnery/spawnery-agent.jar $out/opt/paper/agent/spawnery-agent.jar
+  '';
 in
 dockerTools.buildLayeredImage {
   name = "ghcr.io/spawnery/paper";
@@ -87,6 +95,7 @@ dockerTools.buildLayeredImage {
     passwd
     group
     paperHome
+    agent
     slp
     entrypoint
   ];

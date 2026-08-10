@@ -62,9 +62,37 @@
               kubernetes-helm
               kind
               k3d
+              # Both of these are pinned a second time, by version, in
+              # agent/paper/build.gradle.kts -- and only this half moves when
+              # nixpkgs does. `protobuf` here is protoc, whose X.Y the
+              # `protobuf-java` artifact tracks one for one (protoc 35.1 <->
+              # protobuf-java 4.35.1); `protoc-gen-grpc-java` here is the
+              # generator whose output the `io.grpc:grpc-*` artifacts have to
+              # match, currently 1.83.1. A `nix flake update` followed by
+              # `make proto` can therefore regenerate stubs that demand a
+              # runtime the build does not resolve, and the symptom
+              # (`compileProtoJava`: cannot find symbol, or a
+              # ProtobufRuntimeVersionException at class init) appears nowhere
+              # near this line. After a flake update, read both new versions
+              # from the repository root and move the literals in
+              # build.gradle.kts:67-77 to match. protoc answers for itself:
+              #
+              #   nix develop -c protoc --version
+              #
+              # The generator plugin takes no option at all, so it is read off
+              # the pinned nixpkgs instead:
+              #
+              #   nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.${builtins.currentSystem}.protoc-gen-grpc-java.version'
+              #
+              # Nothing enforces this but flake.lock. See docs/known-issues.md.
               protobuf
               protoc-gen-go
               protoc-gen-go-grpc
+              protoc-gen-grpc-java
+              gradle
+              jdk21_headless
+              # hack/agent-test.sh asserts on the stub operator's event stream.
+              jq
             ];
 
             env = {
@@ -77,6 +105,13 @@
         let
           paper = pkgs.callPackage ./nix/paper.nix { };
 
+          # The one place this version is written down. It reaches both the
+          # plugin's paper-plugin.yml (which the agent reports to the
+          # operator as Hello.version) and the image tag, so the two can
+          # never drift apart the way paper-agent.nix and paper-image.nix's
+          # separate defaults once could.
+          imageVersion = "0.2.0";
+
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
             version = "0.1.0";
@@ -87,13 +122,29 @@
             env.CGO_ENABLED = 0;
             ldflags = [ "-s" "-w" ];
           };
+
+          # Test-only, and deliberately not referenced by nix/paper-image.nix:
+          # the operator's counterpart has no business inside a server image.
+          # hack/agent-test.sh runs it on the host.
+          spawnery-stubop = pkgs.buildGoModule {
+            pname = "spawnery-stubop";
+            version = "0.2.0";
+            src = ./.;
+            vendorHash = "sha256-93cgbNfJURfz1mOM0nnOp9WGuMcFqkKlFGJ4tmdXeiw=";
+            subPackages = [ "cmd/spawnery-stubop" ];
+            env.CGO_ENABLED = 0;
+          };
+
+          paper-agent = pkgs.callPackage ./nix/paper-agent.nix {
+            inherit paper imageVersion;
+          };
         in
         {
           # Architecture-independent (it is jars), so this stays available on
           # every system.
           paper-repo = paper.repo;
 
-          inherit spawnery-slp;
+          inherit spawnery-slp spawnery-stubop paper-agent;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
@@ -105,7 +156,7 @@
           # mislabelled image. `nix flake show` and `nix develop` stay
           # unaffected elsewhere.
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
-            inherit paper spawnery-slp;
+            inherit paper spawnery-slp paper-agent imageVersion;
           };
         });
     };

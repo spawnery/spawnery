@@ -171,6 +171,95 @@ func TestEntrypointRefusesAnUnusableMaxPlayers(t *testing.T) {
 	}
 }
 
+func TestCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
+	dir := t.TempDir()
+
+	// The image ships the jar in the read-only part; the entrypoint's job is
+	// to get it somewhere Paper may also write, because Paper puts its
+	// plugins' data folders inside the plugins directory.
+	paperHome := filepath.Join(dir, "opt", "paper")
+	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jar := filepath.Join(paperHome, "agent", "spawnery-agent.jar")
+	if err := os.WriteFile(jar, []byte("fresh"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	// A stale copy from a previous start must lose: the image is the truth.
+	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := filepath.Join(dir, "plugins", "spawnery-agent.jar")
+	if err := os.WriteFile(stale, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100", "PAPER_HOME="+paperHome); err != nil {
+		t.Fatalf("entrypoint: %v", err)
+	}
+
+	got, err := os.ReadFile(stale)
+	if err != nil {
+		t.Fatalf("the agent jar is not in the plugins directory: %v", err)
+	}
+	if string(got) != "fresh" {
+		t.Errorf("plugins/spawnery-agent.jar = %q, want the copy from the image", got)
+	}
+}
+
+func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *testing.T) {
+	dir := t.TempDir()
+
+	// The jar ships read-only in the Nix store, and cp with no -p inherits the
+	// source's mode — so the copy a first start leaves in plugins/ is 0444
+	// too, the same state a real second start finds. Nothing in the
+	// entrypoint chmods it: cp -f alone has to be able to replace it.
+	paperHome := filepath.Join(dir, "opt", "paper")
+	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jar := filepath.Join(paperHome, "agent", "spawnery-agent.jar")
+	if err := os.WriteFile(jar, []byte("v1"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100", "PAPER_HOME="+paperHome); err != nil {
+		t.Fatalf("first entrypoint run: %v", err)
+	}
+
+	copied := filepath.Join(dir, "plugins", "spawnery-agent.jar")
+	info, err := os.Stat(copied)
+	if err != nil {
+		t.Fatalf("stat after first run: %v", err)
+	}
+	if info.Mode().Perm()&0o200 != 0 {
+		t.Fatalf("setup invalid: the first run's copy is writable (mode %v); this test needs it read-only to prove the second run doesn't depend on a chmod", info.Mode().Perm())
+	}
+
+	// A new image ships a new jar. The source file must be removed before
+	// rewriting it — it is 0444 itself, and os.WriteFile can't truncate a
+	// read-only file it doesn't own the mode of.
+	if err := os.Remove(jar); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(jar, []byte("v2"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100", "PAPER_HOME="+paperHome); err != nil {
+		t.Fatalf("second entrypoint run: %v", err)
+	}
+
+	got, err := os.ReadFile(copied)
+	if err != nil {
+		t.Fatalf("read after second run: %v", err)
+	}
+	if string(got) != "v2" {
+		t.Errorf("plugins/spawnery-agent.jar = %q after the second run, want %q — cp -f alone must replace a read-only leftover, with no chmod in between", got, "v2")
+	}
+}
+
 func parseProperties(raw string) map[string]string {
 	props := map[string]string{}
 	for _, line := range strings.Split(raw, "\n") {
