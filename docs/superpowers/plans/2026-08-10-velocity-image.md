@@ -22,7 +22,7 @@ These bind every task.
 - **One new direct Go dependency is authorised: `github.com/pelletier/go-toml/v2`.** Nothing else. It exists because a user overlay for `velocity.toml` has to be parsed and merged, and hand-rolling a TOML parser is strictly worse than one well-maintained library. YAML is already available through `sigs.k8s.io/yaml`; do not add a second YAML library.
 - **`make test` stays Go-only.** Measured at the 3a merge: `go test ./... -count=1` takes **37.7 s**. Do not accept a larger number without knowing which test bought it.
 - **A critical field is unreachable from any lower layer.** If a test can set `online-mode` from the ConfigMap or the overlay, the layering is wrong regardless of what else passes.
-- **Both images run as `10001:10001` with a read-only root filesystem**, and that fact comes from `nix/oci-common.nix` after Task 1, not from two files agreeing.
+- **Both images declare the numeric user `10001:10001`**, and after Task 1 that comes from `nix/oci-common.nix` rather than from two files agreeing. The read-only root filesystem is *not* an image property and never was: it is `ReadOnlyRootFilesystem` in the pod's `securityContext` (`internal/podspec/server.go`, `proxy.go`). Do not look for it in the Nix, and do not add it there.
 
 ## A deliberate change in how this plan is written
 
