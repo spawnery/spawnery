@@ -34,6 +34,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agentpb"
@@ -316,3 +317,60 @@ func (f *Fleet) Sessions() int {
 	defer f.mu.Unlock()
 	return len(f.sessions)
 }
+
+// Resync re-sends every live session the same construction Join builds.
+//
+// This is not in section 5.2 of the main design, and it is not redundant with
+// the ordering invariant in Join. That invariant closes the window between a
+// broadcast and a session entering. It cannot close the one between the Server
+// controller writing a status and the cache snapshot reads from catching up:
+//
+//	Deregister for X is broadcast and queued on a session
+//	the same session rejoins
+//	its FullSync is built from a cache that still shows X as registered
+//	the proxy ends up with X in its list after being told to drop it
+//
+// Nothing else would ever correct that. The window is short and this closes it
+// within one interval. Do not remove it because "the list is derived from the
+// CRs anyway" — that is exactly the reasoning that leaves it broken.
+//
+// It is exported rather than only ticked, so tests drive it instead of
+// sleeping.
+func (f *Fleet) Resync(ctx context.Context) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	for podUID, s := range f.sessions {
+		messages, err := f.snapshot(ctx, s.namespace, s.group)
+		if err != nil {
+			// One unreadable namespace must not stop the others. The next tick
+			// tries again, and the session keeps its last known list until then
+			// — which is the correct answer while the operator cannot read.
+			log.FromContext(ctx).V(1).Info("skipped a proxy resync",
+				"pod", podUID, "namespace", s.namespace, "reason", err.Error())
+			continue
+		}
+		for _, msg := range messages {
+			f.send(s, msg)
+		}
+	}
+}
+
+// Start runs the resync ticker until ctx ends. It implements manager.Runnable.
+func (f *Fleet) Start(ctx context.Context) error {
+	ticker := time.NewTicker(f.opts.ResyncInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			f.Resync(ctx)
+		}
+	}
+}
+
+// NeedLeaderElection makes this leader-bound, for the same reason the agent
+// endpoint is: only the leader holds the streams these messages go to.
+func (f *Fleet) NeedLeaderElection() bool { return true }

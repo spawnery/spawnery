@@ -294,6 +294,48 @@ func TestASupersedingJoinClosesThePredecessorsOutbox(t *testing.T) {
 	}
 }
 
+// The scenario the resync exists for, played out exactly: a registration is
+// broadcast while the reader still shows the old world, the session's FullSync
+// is therefore built without it, and nothing else would ever correct that.
+func TestResyncHealsARegistrationTheCacheHadNotSeen(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	reader := fake.NewClientBuilder().WithScheme(scheme).
+		WithStatusSubresource(&spawneryv1alpha1.Server{}).
+		WithObjects(proxyGroup("lobby")).Build()
+	f := proxyreg.New(proxyreg.Options{Reader: reader})
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	if servers := recv(t, outbox).GetFullSync().GetServers(); len(servers) != 0 {
+		t.Fatalf("FullSync carries %d servers, want none", len(servers))
+	}
+
+	// The world moves on without the session having been told.
+	late := registered("lobby-iiii", "10.0.0.9:25565")
+	if err := reader.Create(context.Background(), late); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := reader.Status().Update(context.Background(), late); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+
+	f.Resync(context.Background())
+
+	sync := recv(t, outbox).GetFullSync()
+	if sync == nil {
+		t.Fatal("the resync did not send a FullSync")
+	}
+	if len(sync.GetServers()) != 1 || sync.GetServers()[0].GetName() != "lobby-iiii" {
+		t.Errorf("resynced FullSync = %+v, want the late registration", sync.GetServers())
+	}
+}
+
 // A full queue cuts the session instead of dropping the message: dropping
 // would leave a proxy routing on a list it has no way of knowing is wrong,
 // looking healthy the whole time, while a closed stream is something the
