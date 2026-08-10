@@ -63,6 +63,18 @@ func ServerLabels(network, group, server string) map[string]string {
 	}
 }
 
+// ProxyLabels are the labels of a Velocity pod. There is deliberately no
+// LabelServer: a proxy has no Server object, and the orphan sweep tells the
+// two kinds of managed pod apart by that absence.
+func ProxyLabels(network, group string) map[string]string {
+	return map[string]string{
+		LabelManagedBy: ManagedByValue,
+		LabelNetwork:   network,
+		LabelGroup:     group,
+		LabelRole:      RoleProxy,
+	}
+}
+
 // ManagedSelector matches every pod Spawnery manages for one network.
 func ManagedSelector(network string) map[string]string {
 	return map[string]string{
