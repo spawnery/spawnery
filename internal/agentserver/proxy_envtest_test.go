@@ -191,13 +191,18 @@ func TestAProxyPlayerCountAgainstItsLimitIsAccepted(t *testing.T) {
 // proxyreg's own tests prove the fan-out closes the outbox; this proves the
 // closed outbox actually ends the gRPC stream a real proxy is holding.
 //
-// A small OutboxSize is what makes this deterministic. The client stalls its
-// receive after the setup messages — never calling Recv again — so once the
-// stream's flow-control window fills, ProxySession's forwarding Send blocks
-// and stops draining the outbox; well before that, a queue this small
-// overflows against a burst of registrations, because each one is a cheap
-// in-memory broadcast racing a goroutine that has to marshal and write to the
-// wire for every message it drains.
+// A small OutboxSize is what makes this deterministic, but not because it
+// starves the stream's flow control — forty small RegisterServer messages
+// are a few KB against a default window of 64KB, nowhere near enough to make
+// the forwarding Send block. What actually overflows the queue is the gap
+// between the two sides of it: f.proxies.Register is a pure in-memory
+// broadcast under one mutex, so forty back-to-back calls enqueue about as
+// fast as a Go channel send allows, while the only consumer draining the
+// other end has to marshal and write each message to the wire before it can
+// take the next one. Against a three-slot queue (OutboxSize 2 plus the
+// initial FullSync), that consumer cannot keep up, and the client stalling
+// its own receive after the setup messages just removes the one thing that
+// would otherwise eventually slow the producer down to match.
 func TestAProxyThatFallsBehindIsDisconnected(t *testing.T) {
 	f := newServerFixtureWithProxyOutbox(t, 2)
 	pod := f.proxyPod("gateway-dddd")
@@ -247,6 +252,12 @@ func TestAProxyThatFallsBehindIsDisconnected(t *testing.T) {
 // agent that ignores renewAfter is the same one under a server or a proxy,
 // because both sessions share the one hard-deadline timer sessionPrologue
 // starts.
+//
+// Asserting the code, not just that the stream ended, is what makes this
+// discriminating rather than a liveness check: ProxySession has two teardown
+// codes now, and a deadline that fired but was misreported as
+// ResourceExhausted — "fell behind" — would still pass a test that only
+// checked Recv returned an error.
 func TestTheHardDeadlineClosesAProxyStream(t *testing.T) {
 	f := newServerFixtureWithDeadline(t, 300*time.Millisecond, 600*time.Millisecond)
 	pod := f.proxyPod("gateway-eeee")
@@ -272,7 +283,10 @@ func TestTheHardDeadlineClosesAProxyStream(t *testing.T) {
 		}
 	}()
 	select {
-	case <-done2:
+	case err := <-done2:
+		if code := status.Code(err); code != codes.Unavailable {
+			t.Errorf("code = %s, want Unavailable (a deadline, not a slow proxy)", code)
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the operator did not close the proxy stream at the hard deadline")
 	}

@@ -612,12 +612,15 @@ func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 	if err := stream.Send(&agentpb.ProxyMessage{
 		Message: &agentpb.ProxyMessage_Hello{Hello: &agentpb.Hello{Version: "0.1.0"}},
 	}); err != nil {
-		// A send may already fail once the server hung up; that is a refusal
-		// too, but it still has to carry the right reason rather than being
-		// waved through unchecked — this is the only guard left on the
-		// role-mismatch refusal if it takes this path.
-		if code := status.Code(err); code != codes.Unauthenticated {
-			t.Errorf("Send failed with code = %s, want Unauthenticated", code)
+		// A send may already fail once the server hung up — but SendMsg
+		// never carries the wire status; gRPC returns io.EOF once the server
+		// has ended the stream, or a client-side Unavailable, and requires
+		// the caller to fetch the real reason from RecvMsg. Asserting on
+		// err here would be exactly the operator-side/wire-side confusion
+		// this whole channel exists to eliminate: the status this test
+		// cares about is Recv's, not Send's, on either path.
+		if _, recvErr := stream.Recv(); status.Code(recvErr) != codes.Unauthenticated {
+			t.Errorf("code = %s, want Unauthenticated", status.Code(recvErr))
 		}
 		return
 	}
