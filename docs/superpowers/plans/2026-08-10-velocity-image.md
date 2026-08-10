@@ -207,13 +207,22 @@ Expected: a store path.
 
 - [ ] **Step 5: Prove the refactor moved nothing**
 
+**Do not compare store paths.** An earlier version of this plan did, and the check is structurally impossible in this repository: `spawnery-slp` is built with `src = ./.`, so every tracked file feeds its input hash, and the image's path moves whenever any file in the repository changes — including the ones this task edits. An identical path would be the surprise, not the proof.
+
+Compare the contents instead:
+
 ```bash
-diff <(cat /tmp/paper-image-before.txt) <(nix --extra-experimental-features 'nix-command flakes' build .#paper-image --no-link --print-out-paths)
+mkdir -p /tmp/img-before /tmp/img-after
+tar tvf "$(cat /tmp/paper-image-before.txt)" | sort > /tmp/img-before/listing
+tar tvf "$(nix build .#paper-image --no-link --print-out-paths)" | sort > /tmp/img-after/listing
+diff /tmp/img-before/listing /tmp/img-after/listing
 ```
 
-Expected: no output. The store path is content-addressed by its inputs, so an identical path is proof the image did not change.
+Expected: no output, or differences confined to layer tarball *names* — those are derived from store paths and move for the reason above. Any difference in a file's size, mode or owner is a real change and must be explained before you proceed.
 
-If the paths differ, do not proceed and do not "fix" it by accepting the new one. Compare the two tarballs (`tar tvf` both and diff the listings) and find what moved. A refactor that changes the image is not the refactor this task asked for.
+For the files that matter most, compare the bytes rather than the listing: extract both images and check that `usr/local/bin/spawnery-slp`, `usr/local/bin/spawnery-entrypoint`, `etc/passwd` and `etc/group` have identical `sha256sum` values across the two. Those four are exactly what `oci-common.nix` took over, so an identical hash on each is the honest form of "the refactor moved nothing".
+
+A refactor that changes any of those four is not the refactor this task asked for. Report it rather than accepting it.
 
 - [ ] **Step 6: Run the image test**
 
