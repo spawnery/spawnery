@@ -40,6 +40,7 @@ import (
 	"github.com/spawnery/spawnery/internal/grpcauth"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/proxyreg"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -104,6 +105,7 @@ func newChannelFixture(t *testing.T) *channelFixture {
 			Audience: podspec.AgentTokenAudience,
 		},
 		Agents:         base.agents,
+		Proxies:        proxyreg.New(proxyreg.Options{Reader: base.c}),
 		ReportInterval: 5 * time.Second,
 		RenewAfter:     8 * time.Minute,
 		HardDeadline:   10 * time.Minute,

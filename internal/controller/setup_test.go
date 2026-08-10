@@ -138,9 +138,9 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		LeaderElectionID:        "spawnery-e2e-test",
 		// controller-runtime tracks controller names in a process-global set to
 		// catch metric collisions. TestSetupAllRegistersEveryController already
-		// registered "network"/"servergroup"/"server" once in this test binary;
-		// this manager is a separate instance with its own metrics, so the
-		// collision the check guards against does not apply here.
+		// registered "network"/"servergroup"/"server"/"proxygroup" once in this
+		// test binary; this manager is a separate instance with its own metrics,
+		// so the collision the check guards against does not apply here.
 		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	if err != nil {

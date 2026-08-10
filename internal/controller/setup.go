@@ -98,6 +98,16 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		return fmt.Errorf("setup server controller: %w", err)
 	}
 
+	if err := (&ProxyGroupReconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Agents:        opts.Agents,
+		Bootstrap:     opts.Bootstrapper,
+		AgentEndpoint: opts.AgentEndpoint,
+	}).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("setup proxy group controller: %w", err)
+	}
+
 	if err := mgr.Add(&OrphanReconciler{
 		Client:   mgr.GetClient(),
 		Recorder: mgr.GetEventRecorderFor("orphan"),

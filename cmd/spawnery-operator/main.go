@@ -44,6 +44,7 @@ import (
 	"github.com/spawnery/spawnery/internal/controller"
 	"github.com/spawnery/spawnery/internal/grpcauth"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/proxyreg"
 	"github.com/spawnery/spawnery/internal/version"
 )
 
@@ -212,6 +213,15 @@ func main() {
 	started := time.Now()
 	registry := agent.New(time.Now, reportInterval, started)
 
+	// One Fleet for the whole process: the controllers write into it and the
+	// gRPC endpoint reads from it. Two would mean a registration reaching a
+	// fan-out nobody is streaming from.
+	proxies := proxyreg.New(proxyreg.Options{Reader: mgr.GetClient()})
+	if err := mgr.Add(proxies); err != nil {
+		setupLog.Error(err, "unable to add the proxy resync")
+		os.Exit(1)
+	}
+
 	if err := mgr.Add(agentserver.New(agentserver.Options{
 		Addr:     agentBindAddress,
 		Provider: provider,
@@ -221,6 +231,7 @@ func main() {
 			Audience: podspec.AgentTokenAudience,
 		},
 		Agents:         registry,
+		Proxies:        proxies,
 		ReportInterval: reportInterval,
 		RenewAfter:     renewAfter,
 		HardDeadline:   hardDeadline,
@@ -236,8 +247,7 @@ func main() {
 		StartupDeadline:      startupDeadline,
 		PlayerStatusInterval: playerStatusInterval,
 		OrphanInterval:       orphanInterval,
-		// Milestone 3 replaces this with the proxy broadcast.
-		Registrar: controller.NoopRegistrar{},
+		Registrar:            proxies,
 		Bootstrapper: &controller.Bootstrapper{
 			Client: mgr.GetClient(),
 			Reader: mgr.GetAPIReader(),

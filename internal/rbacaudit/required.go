@@ -30,18 +30,27 @@ package rbacaudit
 // a permission missing from both. Only the operator actually running under
 // this ServiceAccount can prove completeness, which is what the cluster-level
 // end-to-end test is for.
+//
+// A `get` entry sometimes names a call site whose read never crosses the wire
+// — `pods`, `poddisruptionbudgets` and `services` are all in the manager's
+// cache, so the `Get` inside `CreateOrUpdate` or a plain fetch is served from
+// the informer's local store rather than a live API call. The entry is kept
+// anyway: it records what the code calls, not what today's cache
+// configuration happens to make free, so swapping that call site onto an
+// uncached client later is not also an RBAC change nobody remembered to make.
 var RequiredCluster = []Permission{
 	// Events — the recorder writes them for every phase change and every
 	// warning, and patches them when it aggregates repeats.
 	{Group: "", Resource: "events", Verb: "create", Why: "Recorder.Eventf in every controller"},
 	{Group: "", Resource: "events", Verb: "patch", Why: "the recorder's event aggregation"},
 
-	// Pods — the Server controller owns their whole life cycle.
+	// Pods — the Server controller owns a game server pod's whole life cycle;
+	// since this milestone ProxyGroupReconciler owns a proxy pod's the same way.
 	{Group: "", Resource: "pods", Verb: "get", Why: "ServerReconciler.fetchPod and ServerGroupReconciler.podFor"},
-	{Group: "", Resource: "pods", Verb: "list", Why: "OrphanReconciler.Sweep"},
-	{Group: "", Resource: "pods", Verb: "watch", Why: "ServerReconciler Owns(&corev1.Pod{})"},
-	{Group: "", Resource: "pods", Verb: "create", Why: "ServerReconciler creates the pod from podspec"},
-	{Group: "", Resource: "pods", Verb: "delete", Why: "the terminating decision and the orphan sweep"},
+	{Group: "", Resource: "pods", Verb: "list", Why: "OrphanReconciler.Sweep and ProxyGroupReconciler.pods"},
+	{Group: "", Resource: "pods", Verb: "watch", Why: "ServerReconciler and ProxyGroupReconciler both Owns(&corev1.Pod{})"},
+	{Group: "", Resource: "pods", Verb: "create", Why: "ServerReconciler and ProxyGroupReconciler create pods from podspec"},
+	{Group: "", Resource: "pods", Verb: "delete", Why: "the terminating decision, the orphan sweep, and ProxyGroupReconciler scaling down"},
 	{Group: "", Resource: "pods", Verb: "patch", Why: "syncOccupiedLabel patches the occupied label"},
 
 	// PodDisruptionBudgets — one per group, kept in step with the occupied count.
@@ -52,17 +61,18 @@ var RequiredCluster = []Permission{
 	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "update", Why: "CreateOrUpdate in reconcilePDB"},
 
 	// Namespace bootstrap — Bootstrapper.Ensure keeps the CA ConfigMap and
-	// the server ServiceAccount current in every namespace that runs pods.
+	// the server and proxy ServiceAccounts current in every namespace that
+	// runs pods.
 	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure reads the CA ConfigMap"},
 	{Group: "", Resource: "configmaps", Verb: "list", Why: "the restricted cache over the CA ConfigMaps"},
 	{Group: "", Resource: "configmaps", Verb: "watch", Why: "the restricted cache over the CA ConfigMaps"},
 	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure creates the CA ConfigMap"},
 	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure carries a changed CA forward"},
 
-	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.Ensure checks the server ServiceAccount"},
-	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "the restricted cache over the server ServiceAccounts"},
-	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "the restricted cache over the server ServiceAccounts"},
-	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.Ensure creates the server ServiceAccount"},
+	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.ensureServiceAccounts checks the server and proxy ServiceAccounts"},
+	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "the restricted cache over the server and proxy ServiceAccounts"},
+	{Group: "", Resource: "serviceaccounts", Verb: "watch", Why: "the restricted cache over the server and proxy ServiceAccounts"},
+	{Group: "", Resource: "serviceaccounts", Verb: "create", Why: "Bootstrapper.ensureServiceAccounts creates the server and proxy ServiceAccounts"},
 
 	// Every agent token is checked against the real authenticator of the API
 	// server. TokenReview is cluster-scoped, so there is no namespaced variant
@@ -98,10 +108,21 @@ var RequiredCluster = []Permission{
 	{Group: "spawnery.cloud", Resource: "servers", Subresource: "status", Verb: "update", Why: "ServerReconciler writes phase, timestamps and conditions"},
 	{Group: "spawnery.cloud", Resource: "servers", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod owner references in podspec.BuildServerPod"},
 
-	// No entry for proxygroups:get — nothing fetches a single ProxyGroup; the
-	// controller only counts them through a list.
+	// The proxy layer's Service. One per ProxyGroup, and the only way a player
+	// reaches a proxy at all.
+	{Group: "", Resource: "services", Verb: "get", Why: "CreateOrUpdate in ProxyGroupReconciler"},
+	{Group: "", Resource: "services", Verb: "list", Why: "ProxyGroupReconciler Owns(&corev1.Service{})"},
+	{Group: "", Resource: "services", Verb: "watch", Why: "ProxyGroupReconciler Owns(&corev1.Service{})"},
+	{Group: "", Resource: "services", Verb: "create", Why: "CreateOrUpdate in ProxyGroupReconciler"},
+	{Group: "", Resource: "services", Verb: "update", Why: "CreateOrUpdate in ProxyGroupReconciler"},
+
+	// Two things fetch a single ProxyGroup as of this milestone: the
+	// reconciler itself, and the fan-out reading a group's fallback list.
+	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "get", Why: "ProxyGroupReconciler.Reconcile and proxyreg.fallbacks"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "list", Why: "NetworkReconciler counts proxy groups"},
-	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "watch", Why: "the manager's cache"},
+	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "watch", Why: "ProxyGroupReconciler For(&ProxyGroup{})"},
+	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "status", Verb: "update", Why: "ProxyGroupReconciler writes replicas, address and conditions"},
+	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod and Service owner references"},
 }
 
 // RequiredNamespaced is what the operator does in its own namespace only, and

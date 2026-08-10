@@ -1,13 +1,14 @@
 # Known issues and carry-overs for later milestones
 
-Status: end of milestone 2c, the Paper agent (2026-08-10).
+Status: end of milestone 3a, the operator's proxy side (2026-08-10).
 
 This list collects what was deliberately left open during the implementation and
-the reviews of milestone 1, milestone 2a, milestone 2b and milestone 2c. It does
-not replace a spec — the design decisions live in
+the reviews of milestone 1, milestone 2a, milestone 2b, milestone 2c and
+milestone 3a. It does not replace a spec — the design decisions live in
 `superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md`, in
-`superpowers/specs/2026-08-08-agent-channel-design.md` and in
-`superpowers/specs/2026-08-09-paper-agent-design.md`.
+`superpowers/specs/2026-08-08-agent-channel-design.md`, in
+`superpowers/specs/2026-08-09-paper-agent-design.md` and in
+`superpowers/specs/2026-08-10-proxy-channel-design.md`.
 
 ## Preconditions for milestone 2c (the Kotlin agent) — met
 
@@ -258,6 +259,14 @@ inside the cluster from its own image, where the Service is a Service.
 
 ## Preconditions for milestone 3 (proxy integration)
 
+Three of the five original preconditions below are discharged by milestone 3a
+(the operator's proxy side, 2026-08-10). They are kept rather than deleted for
+the same reason milestone 2c's closed preconditions are: the reasoning is what
+the next sub-project — 3b, the Velocity image — inherits, and only the
+reasoning makes it legible. The two image-layer items stay open; they belong
+to 3b. What 3a itself discovered while closing the other three follows after
+them.
+
 **Factor the shared image Nix while there is still exactly one consumer.**
 `nix/paper-image.nix` holds four things the Velocity image will need verbatim:
 the `passwd`/`group` pair for the numeric user, the entrypoint's shebang
@@ -280,33 +289,101 @@ natural home for §5.4's per-group ConfigMap rendering when that arrives. It is
 also where the `/data/config` collision above has to be resolved, since that is
 the directory the rendered configuration would land in.
 
-**The orphan sweep discards proxy agents.** `OrphanReconciler.Sweep` lists pods
-with `spawnery.cloud/role=server` and then forgets every registry entry not in
-that list. As soon as the first Velocity agent opens a session, it is removed
-from the registry within one sweep interval. With the agent channel from
-milestone 2a this is no longer a hypothetical path: `ServerSession` already
-works, and as soon as `ProxySession` is implemented (see below) the sweep hits
-immediately. The proxy podspec and the widened filter — list only by
-`spawnery.cloud/managed-by`, restrict the server existence check to
-`role=server` — have to land in the same change. This belongs in the
-**acceptance criteria** of milestone 3, not in its notes.
+**The orphan sweep discarded proxy agents — met.** `OrphanReconciler.Sweep`
+used to list pods with `spawnery.cloud/role=server` and then forget every
+registry entry not in that list, so the first Velocity agent to open a session
+would have been removed from the registry within one sweep interval.
 
-**`ProxySession` answers `Unimplemented`, and no bootstrap creates the
-`spawnery-proxy` ServiceAccount.** The contract from milestone 2a covers both
-sessions completely (design, section 5), but implements and authenticates only
-`ServerSession`. `internal/controller.Bootstrapper` so far knows only the
-ServiceAccount `spawnery-server`; a proxy pod would get no ServiceAccount to
-identify itself with at all. The `ProxySession` implementation, the bootstrap
-entry for `spawnery-proxy` and the widened orphan filter above belong in the same
-change — none of the three amounts to a working proxy agent on its own.
+*Met* by widening the filter: `Sweep` now lists by
+`spawnery.cloud/managed-by` and restricts the server-existence check to
+`role=server` (`internal/controller/orphan.go`), so a connected proxy's
+registry entry survives a sweep the same way a connected server's does.
 
-**`Register` is sent before `WasRegistered` is persisted.** `applyDecision`
-calls the registrar and only afterwards writes `status.wasRegistered = true`. If
-the status write is lost while players are already joining, a deletion in that
-window takes the branch "never registered → terminate immediately, no drain".
-Harmless in milestone 1 because the registrar is a no-op. The right fix is to
-persist the intent before the side effect; that is a behavioural change and
-belongs together with splitting `applyDecision`.
+**`ProxySession` answered `Unimplemented`, and no bootstrap created the
+`spawnery-proxy` ServiceAccount — met.** The contract from milestone 2a covers
+both sessions completely (design, section 5), but through milestone 2c only
+`ServerSession` was implemented and authenticated, and
+`internal/controller.Bootstrapper` knew only the `spawnery-server`
+ServiceAccount.
+
+*Met*: `ProxySession` joins the fan-out and streams it back
+(`internal/agentserver/server.go`), and `Bootstrapper.ensureServiceAccounts`
+now creates both `spawnery-server` and `spawnery-proxy` in every namespace it
+touches (`internal/controller/bootstrap.go`).
+
+**`Register` was sent before `WasRegistered` was persisted — met.**
+`applyDecision` called the registrar and only afterwards wrote
+`status.wasRegistered = true`. If the status write were lost while players
+were already joining, a deletion in that window would take the branch "never
+registered → terminate immediately, no drain" — harmless while the registrar
+was a no-op, real from milestone 3a on.
+
+*Met* by reordering: `applyDecision` now persists `WasRegistered` with its own
+`Status().Update` before calling `Registrar.Register`
+(`internal/controller/server_controller.go`), so a crash between the two
+finds the intent already durable.
+
+What follows is what 3a discovered while closing the items above, and what
+3b and 3c inherit as a result (design, §7 and §11).
+
+**No lowerable readiness in the agent registry, and proxy drain will need
+it.** `internal/agent/registry.go`'s contract cannot express "connected, but
+no longer ready" — `Hello{ready:false}` is a no-op once readiness has latched
+(see the milestone 2c precondition above). 3a lives inside that limit by
+making a proxy's readiness startup-only: once ready, a proxy stays ready even
+if its stream later breaks (design §3, §6.6). Proxy drain — stop accepting new
+players while still serving the ones already connected — needs to lower a
+readiness that was already reported, and the registry cannot do that today.
+Milestone 4, which owns proxy drain, is where this becomes a change to the
+milestone 2a contract rather than something worked around.
+
+**A NetworkPolicy restricting backends to proxies-only is deferred until
+`online-mode` is actually off.** Design §7 leaves it out of 3a on purpose:
+built now, before 3b flips `online-mode=false`, the policy would guard an
+invariant nothing yet relies on, and a green NetworkPolicy test would look
+like proof of an isolation guarantee the servers do not actually have — they
+still trust connections directly. Milestone 6 owns NetworkPolicies generally
+(see the availability precondition below); 3b is where pairing this one with
+`online-mode` first becomes checkable, and that is the point at which leaving
+it out stops being safe.
+
+**A proxy must report its configured player limit as `slots`, not zero.**
+`Registry.ReportPlayers` rejects any report where `players > slots`; the
+original proto comment said proxies leave `slots` at zero, which means a
+proxy with even one player online would have every report silently discarded
+— visible only as a `RejectedReports` counter — and
+`ProxyGroup.status.connectedPlayers` would sit at zero forever while players
+were connected. Design §8 corrects the comment: a proxy reports
+`spec.config.playerLimit` as `slots`. The wire format did not move, only the
+agreement about what goes on it, but 3c's Velocity agent has to honor the
+corrected comment rather than the original one — 3a's own stub client already
+reports the corrected way, and is the only thing today that would catch a
+Velocity agent that did not.
+
+**Whether the Velocity and Paper agents share a Gradle subproject was open;
+it is now decided: yes.** `agent/common` will hold the session loop, the
+token source, the channel construction, the credentials and the TLS-1.3
+`ConnectionSpec` override that milestone 2c built for Paper. The cost is real:
+the two agents can no longer be versioned apart, and 3c is where that
+constraint has to be lived with rather than reopened.
+
+**Where the forwarding secret reaches the backend is decided: a mounted
+file, merged by a small Go program, not an extended `set_property`.** Velocity
+points `forwarding-secret-file` directly at the mount; on the Paper side, a
+Go program baked into the image merges `online-mode` and the secret into
+`config/paper-global.yml`, reusing the `buildGoModule` path `spawnery-slp`
+already establishes. This is the concrete answer to "do not extend
+`set_property`" above — 3b is where it has to be built, since that is also
+where the `/data/config` collision has to be resolved.
+
+**Whether the operator runs inside the cluster for the E2E flow is still
+open, and 3c's evidence run is where it starts to cost.** Today it runs
+outside through `go run`, and the local kind flow hand-builds the `Service`
+and `Endpoints` its own pods dial (see "The local kind flow needs a `Service`
+nothing creates" above) — workable for one person at a terminal, a wall for
+milestone 6's CI. An operator image is out of scope for all of milestone 3,
+but 3c is where its absence first has to be worked around a second time
+rather than once.
 
 ## Preconditions for milestone 4 (scaling and drain)
 

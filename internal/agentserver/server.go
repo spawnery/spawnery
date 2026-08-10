@@ -96,12 +96,21 @@ type Server struct {
 }
 
 // New creates the server. It does not listen yet; Start does.
+//
+// It panics if opts.Proxies is nil — a programming error the caller must fix,
+// not a runtime state the server can run without.
 func New(opts Options) *Server {
 	if opts.Addr == "" {
 		opts.Addr = fmt.Sprintf(":%d", DefaultPort)
 	}
 	if opts.Clock == nil {
 		opts.Clock = time.Now
+	}
+	// Refused here rather than at the first proxy stream: a nil fleet would
+	// surface as a panic inside a gRPC handler, minutes after start and in a
+	// goroutine, instead of as a startup error.
+	if opts.Proxies == nil {
+		panic("agentserver: no proxy fleet")
 	}
 	return &Server{opts: opts, sessions: newSessions()}
 }
