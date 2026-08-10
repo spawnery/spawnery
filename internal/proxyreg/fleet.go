@@ -122,6 +122,16 @@ func (f *Fleet) Join(ctx context.Context, namespace, group, podUID string) (<-ch
 	for _, msg := range initial {
 		s.outbox <- msg
 	}
+	// A second Join for a pod already registered supersedes the first, the same
+	// make-before-break case leave guards against. Close the displaced session
+	// here rather than leaving it to leave: once the map entry is overwritten,
+	// the old session's own leave call finds a different pointer at this key and
+	// exits at the identity guard without closing anything, so the channel would
+	// otherwise stay open forever and a caller ranging over it would never see
+	// it end.
+	if previous, ok := f.sessions[podUID]; ok {
+		f.close(previous)
+	}
 	f.sessions[podUID] = s
 
 	return s.outbox, func() { f.leave(podUID, s) }, nil

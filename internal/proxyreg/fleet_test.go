@@ -1,3 +1,19 @@
+/*
+Copyright The Spawnery Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
 package proxyreg_test
 
 import (
@@ -48,7 +64,7 @@ func proxyGroup(fallbacks ...string) *spawneryv1alpha1.ProxyGroup {
 	}
 }
 
-func newFleet(t *testing.T, objects ...client.Object) *proxyreg.Fleet {
+func newReader(t *testing.T, objects ...client.Object) client.Reader {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
@@ -56,10 +72,21 @@ func newFleet(t *testing.T, objects ...client.Object) *proxyreg.Fleet {
 	}
 	// WithStatusSubresource, or Status().Update on the fake client silently
 	// writes nothing and the resync test would pass for the wrong reason.
-	reader := fake.NewClientBuilder().WithScheme(scheme).
+	return fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&spawneryv1alpha1.Server{}).
 		WithObjects(objects...).Build()
-	return proxyreg.New(proxyreg.Options{Reader: reader})
+}
+
+func newFleet(t *testing.T, objects ...client.Object) *proxyreg.Fleet {
+	t.Helper()
+	return proxyreg.New(proxyreg.Options{Reader: newReader(t, objects...)})
+}
+
+// newFleetWithOutboxSize is for the overflow test: it needs a queue depth
+// small enough to reach with a handful of Registers rather than thousands.
+func newFleetWithOutboxSize(t *testing.T, size int, objects ...client.Object) *proxyreg.Fleet {
+	t.Helper()
+	return proxyreg.New(proxyreg.Options{Reader: newReader(t, objects...), OutboxSize: size})
 }
 
 // recv takes one message or fails. Nothing here blocks in practice: every
@@ -236,5 +263,71 @@ func TestRegisterWithNoSessionsIsNotAnError(t *testing.T) {
 	f := newFleet(t, proxyGroup("lobby"))
 	if err := f.Register(context.Background(), registered("lobby-hhhh", "10.0.0.8:25565")); err != nil {
 		t.Errorf("Register with no proxies connected: %v", err)
+	}
+}
+
+// The other half of make-before-break: a second Join for a pod that already
+// has a live session must close the first session's outbox, not just stop
+// delivering to it. Join's own doc comment promises that a closed channel
+// means "end your stream" — a consumer that never sees the close would range
+// over the channel forever. Leaving the close to the displaced session's own
+// leave call would work only if that call happens to run after the second
+// Join, which make-before-break does not guarantee.
+func TestASupersedingJoinClosesThePredecessorsOutbox(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+
+	first, _, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("first Join: %v", err)
+	}
+	recv(t, first) // the FullSync
+
+	second, leaveSecond, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("second Join: %v", err)
+	}
+	defer leaveSecond()
+	recv(t, second) // the FullSync
+
+	if _, ok := <-first; ok {
+		t.Error("the displaced session's outbox is still open")
+	}
+}
+
+// A full queue cuts the session instead of dropping the message: dropping
+// would leave a proxy routing on a list it has no way of knowing is wrong,
+// looking healthy the whole time, while a closed stream is something the
+// agent already knows how to recover from.
+func TestAFullOutboxCutsTheSession(t *testing.T) {
+	f := newFleetWithOutboxSize(t, 1, proxyGroup("lobby"))
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+
+	// The queue's capacity is OutboxSize+len(initial) = 1+1 = 2, and it already
+	// holds the FullSync from Join. The first Register fills the remaining
+	// slot; the second finds the queue full and cuts the session rather than
+	// dropping the message.
+	if err := f.Register(context.Background(), registered("lobby-iiii", "10.0.0.9:25565")); err != nil {
+		t.Fatalf("Register 1: %v", err)
+	}
+	if err := f.Register(context.Background(), registered("lobby-jjjj", "10.0.0.10:25565")); err != nil {
+		t.Fatalf("Register 2: %v", err)
+	}
+
+	// Drain what made it into the queue before the cut: the FullSync and the
+	// one RegisterServer that fit.
+	if recv(t, outbox).GetFullSync() == nil {
+		t.Fatal("first message is not a FullSync")
+	}
+	if recv(t, outbox).GetRegisterServer() == nil {
+		t.Fatal("second message is not the RegisterServer that fit")
+	}
+
+	if _, ok := <-outbox; ok {
+		t.Error("the outbox was not closed after a message overflowed it")
 	}
 }
