@@ -44,7 +44,6 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/grpcauth"
-	"github.com/spawnery/spawnery/internal/proxyreg"
 )
 
 const (
@@ -55,6 +54,22 @@ const (
 	// so an unbounded GracefulStop would wait for the agents' own deadlines.
 	shutdownGrace = 5 * time.Second
 )
+
+// ProxyFleet is the one thing ProxySession needs from the proxy fan-out.
+// *proxyreg.Fleet has a much wider surface — Register, Deregister, Drain,
+// Resync — that belongs to the controllers, which write into the fan-out.
+// ProxySession only ever reads from it, and giving it the concrete *Fleet
+// would let a future change to this handler start writing too without the
+// compiler ever objecting. Narrowing the type here is what keeps that true.
+//
+// It also matters for what a test can observe. Fleet.Join's guard against a
+// displaced handler is only sound because ProxySession passes it the
+// enter-derived context, not stream.Context(); with the concrete type there
+// was no seam to substitute a fake and watch which one arrives.
+type ProxyFleet interface {
+	// Join is *proxyreg.Fleet.Join: see its doc comment for the contract.
+	Join(ctx context.Context, namespace, group, podUID string) (<-chan *agentpb.OperatorToProxy, func(), error)
+}
 
 // Options configures the server. The three durations are what the operator
 // dictates to its agents; both sides derive their thresholds from them, so
@@ -68,7 +83,9 @@ type Options struct {
 	Agents   *agent.Registry
 	// Proxies is the fan-out every proxy session joins. Required for
 	// ProxySession; a nil one is a programming error, not a runtime state.
-	Proxies *proxyreg.Fleet
+	// The narrow ProxyFleet interface, not *proxyreg.Fleet: see its doc
+	// comment for why.
+	Proxies ProxyFleet
 	// ReportInterval is how often an agent should report its player count.
 	ReportInterval time.Duration
 	// RenewAfter is when an agent should open its next stream — before the

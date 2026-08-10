@@ -106,6 +106,17 @@ func newServerFixtureWithProxyOutbox(t *testing.T, outboxSize int) *serverFixtur
 }
 
 func newFixture(t *testing.T, renewAfter, hardDeadline time.Duration, proxyOutboxSize int) *serverFixture {
+	return newFixtureWithProxies(t, renewAfter, hardDeadline, proxyOutboxSize, nil)
+}
+
+// newFixtureWithProxies is newFixture with one more knob: what the server's
+// Options.Proxies actually is. Every other fixture wants the real *Fleet
+// wired straight through — wrap nil gives them exactly that — but a test that
+// needs to observe what ProxySession hands Join needs a fake sitting in that
+// one slot without losing the rest of the scaffolding (certs, auth, the real
+// fleet still available for f.proxies.Register and friends).
+func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration, proxyOutboxSize int,
+	wrap func(*proxyreg.Fleet) agentserver.ProxyFleet) *serverFixture {
 	t.Helper()
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -138,6 +149,10 @@ func newFixture(t *testing.T, renewAfter, hardDeadline time.Duration, proxyOutbo
 
 	registry := agent.New(now, 5*time.Second, now())
 	fleet := proxyreg.New(proxyreg.Options{Reader: c, OutboxSize: proxyOutboxSize})
+	var proxies agentserver.ProxyFleet = fleet
+	if wrap != nil {
+		proxies = wrap(fleet)
+	}
 	srv := agentserver.New(agentserver.Options{
 		// Port 0: the kernel picks a free one, so parallel packages do not
 		// collide.
@@ -149,7 +164,7 @@ func newFixture(t *testing.T, renewAfter, hardDeadline time.Duration, proxyOutbo
 			Audience: podspec.AgentTokenAudience,
 		},
 		Agents:         registry,
-		Proxies:        fleet,
+		Proxies:        proxies,
 		ReportInterval: 5 * time.Second,
 		RenewAfter:     renewAfter,
 		HardDeadline:   hardDeadline,

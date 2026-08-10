@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1_test
 
 import (
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -129,7 +130,15 @@ func TestProxyGroupNetworkRefIsImmutable(t *testing.T) {
 	}
 
 	g.Spec.NetworkRef = spawneryv1alpha1.ObjectRef{Name: "another-network"}
-	if err := c.Update(ctx, g); err == nil {
+	err := c.Update(ctx, g)
+	if err == nil {
 		t.Fatal("update changed spec.networkRef, want rejection")
+	}
+	// Matching only "rejected" would pass for any error at all — a conflict, a
+	// schema violation, an unrelated CEL rule. The CEL rule's own message is
+	// what proves this update was refused for being a networkRef change and
+	// not for some other reason.
+	if want := "spec.networkRef is immutable"; !strings.Contains(err.Error(), want) {
+		t.Fatalf("update rejected as %q, want it to mention %q", err, want)
 	}
 }

@@ -119,10 +119,14 @@ func (f *Fleet) Join(ctx context.Context, namespace, group, podUID string) (<-ch
 	// this check, B would find C installed as "previous" below, close C's
 	// live outbox, and install itself in its place: a healthy session killed
 	// and mislabelled as having fallen behind. The check is sound because
-	// enter happens-before Join within one handler, and the only thing that
-	// ever cancels this context is a successor's enter — so by the time we
-	// can observe the cancellation, that successor already holds the map
-	// entry and it, not us, is the one that must keep it.
+	// enter happens-before Join within one handler, whichever of the three
+	// ways this context ends is the one we observe here: a successor's enter
+	// (the case above), the stream's own context ending, or the hard-deadline
+	// timer calling sessions.cancel. In the first, a successor already holds
+	// the map entry and it, not us, is the one that must keep it. In the
+	// other two, this session is ending on its own — nothing has displaced
+	// it, but nothing here needs installing either, so returning early is
+	// still the right call.
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
