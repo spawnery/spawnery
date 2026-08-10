@@ -417,6 +417,24 @@ belongs in the same change as `FreeSlots`: the registry entry does not yet know
 the pod's group, so clamping to `maxPlayers` has to sit where both come
 together.
 
+**`ProxyGroupReconciler.pods()` has no expectations tracking, and the blast
+radius of that is new.** It lists pods through the manager's plain cached
+`List`, with no reservation for a create it just issued. A reconcile the
+group's own pod-create event triggers can therefore read a cache that has not
+caught up yet, see the count still short, create a second pod, and have the
+next reconcile — once the cache catches up — delete the surplus.
+`ServerGroupReconciler.pods()` has the identical shape (`servergroup_controller.go`),
+so this is a repository-wide pattern, not something 3a introduced. What 3a
+changes is the cost of hitting it: milestone 3a ships no proxy drain, so
+deleting a surplus proxy pod disconnects every player on it outright, where
+deleting a surplus `Server` at least goes through the drain state machine
+first. The fix — expectations tracking, à la the original `ReplicaSet`
+controller, or deterministic pod names derived from an ordinal instead of a
+random suffix — belongs with milestone 4's rolling updates, which touch this
+same code for an unrelated reason. This entry is the precondition: the record
+that the problem exists and why, so milestone 4 does not have to rediscover
+it.
+
 **Orphaned `Server`s without a pod.** The sweep covers "pod without CR" and
 "server without group", but not "CR without pod": that is handled by the state
 machine through `PodLost`, which only applies once `status.podName` has been

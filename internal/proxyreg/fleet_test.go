@@ -52,8 +52,15 @@ func registered(name, address string) *spawneryv1alpha1.Server {
 }
 
 func proxyGroup(fallbacks ...string) *spawneryv1alpha1.ProxyGroup {
+	return proxyGroupNamed(group, fallbacks...)
+}
+
+// proxyGroupNamed is proxyGroup with the group name broken out, for tests that
+// need two distinct ProxyGroups in one namespace — proxyGroup alone can only
+// ever produce one, since it hardcodes the package-level group constant.
+func proxyGroupNamed(name string, fallbacks ...string) *spawneryv1alpha1.ProxyGroup {
 	return &spawneryv1alpha1.ProxyGroup{
-		ObjectMeta: metav1.ObjectMeta{Name: group, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Spec: spawneryv1alpha1.ProxyGroupSpec{
 			NetworkRef: spawneryv1alpha1.ObjectRef{Name: "production"},
 			Replicas:   1,
@@ -333,6 +340,130 @@ func TestResyncHealsARegistrationTheCacheHadNotSeen(t *testing.T) {
 	}
 	if len(sync.GetServers()) != 1 || sync.GetServers()[0].GetName() != "lobby-iiii" {
 		t.Errorf("resynced FullSync = %+v, want the late registration", sync.GetServers())
+	}
+}
+
+// The cross-session race described on Join's own doc comment: a superseded
+// stream can still reach Join after its successor already has, because
+// sessions.enter's cancellation in agentserver cannot interrupt the blocking
+// stream.Send calls sessionPrologue makes before either stream gets here.
+// Driving that actual interleaving is not practical from this package — it
+// depends on two goroutines racing inside agentserver's gRPC handlers — but
+// the contract Join promises is exercisable directly: a caller whose context
+// is already cancelled must leave whatever session is currently registered
+// for that pod alone, rather than tearing it down and installing nothing
+// useful in its place.
+func TestJoinRefusesAnAlreadyCancelledContext(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+
+	live, leaveLive, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leaveLive()
+	recv(t, live) // the FullSync
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := f.Join(cancelled, ns, group, "uid-1"); err == nil {
+		t.Fatal("Join with an already-cancelled context returned no error")
+	}
+
+	// The live session must be exactly as it was: still registered for this
+	// pod, and its outbox still open. A Register reaching it proves both —
+	// Join's ctx.Err() guard did not close it out from under a caller who was
+	// never told the session was gone.
+	if err := f.Register(context.Background(), registered("lobby-zzzz", "10.0.0.20:25565")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if recv(t, live).GetRegisterServer() == nil {
+		t.Error("the live session stopped receiving after a cancelled Join targeted its pod")
+	}
+}
+
+// This is the test that proves fallbacks are per-ProxyGroup rather than a
+// union across the namespace: two sessions in different groups, with
+// different fallback lists, must each see only their own group's list on a
+// Drain. A union bug would show up here as beta's session receiving alpha's
+// fallback too.
+func TestDrainSendsEachSessionItsOwnGroupsFallbacks(t *testing.T) {
+	f := newFleet(t,
+		proxyGroupNamed("alpha", "fallback-a"),
+		proxyGroupNamed("beta", "fallback-b1", "fallback-b2"))
+
+	alpha, leaveAlpha, err := f.Join(context.Background(), ns, "alpha", "uid-alpha")
+	if err != nil {
+		t.Fatalf("Join alpha: %v", err)
+	}
+	defer leaveAlpha()
+	recv(t, alpha) // the FullSync
+
+	beta, leaveBeta, err := f.Join(context.Background(), ns, "beta", "uid-beta")
+	if err != nil {
+		t.Fatalf("Join beta: %v", err)
+	}
+	defer leaveBeta()
+	recv(t, beta) // the FullSync
+
+	srv := registered("lobby-drain", "10.0.0.30:25565")
+	srv.Status.Phase = "Draining"
+	if err := f.Drain(context.Background(), srv); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+
+	alphaDrain := recv(t, alpha).GetDrainPlayers()
+	if alphaDrain == nil {
+		t.Fatal("alpha's session did not receive a DrainPlayers")
+	}
+	if got := alphaDrain.GetToGroups(); len(got) != 1 || got[0] != "fallback-a" {
+		t.Errorf("alpha's toGroups = %v, want [fallback-a]", got)
+	}
+	if alphaDrain.GetFromServer() != "lobby-drain" {
+		t.Errorf("alpha's fromServer = %q, want lobby-drain", alphaDrain.GetFromServer())
+	}
+
+	betaDrain := recv(t, beta).GetDrainPlayers()
+	if betaDrain == nil {
+		t.Fatal("beta's session did not receive a DrainPlayers")
+	}
+	if got := betaDrain.GetToGroups(); len(got) != 2 || got[0] != "fallback-b1" || got[1] != "fallback-b2" {
+		t.Errorf("beta's toGroups = %v, want [fallback-b1 fallback-b2] — "+
+			"a union across the namespace would have leaked alpha's fallback in here", got)
+	}
+}
+
+// Deregister is otherwise untested in this package: it must carry the right
+// server name, and it must reach only sessions in that server's namespace —
+// the same scoping TestRegisterReachesOnlyItsOwnNamespace proves for
+// Register.
+func TestDeregisterCarriesTheServerAndOnlyItsNamespace(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+
+	mine, leaveMine, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leaveMine()
+	other, leaveOther, err := f.Join(context.Background(), "elsewhere", group, "uid-2")
+	if err != nil {
+		t.Fatalf("Join other: %v", err)
+	}
+	defer leaveOther()
+	recv(t, mine)  // the FullSync
+	recv(t, other) // the FullSync
+
+	if err := f.Deregister(context.Background(), registered("lobby-dereg", "10.0.0.40:25565")); err != nil {
+		t.Fatalf("Deregister: %v", err)
+	}
+
+	msg := recv(t, mine).GetUnregisterServer()
+	if msg == nil || msg.GetName() != "lobby-dereg" {
+		t.Fatalf("the session in the namespace got %+v", msg)
+	}
+	select {
+	case msg := <-other:
+		t.Fatalf("a session in another namespace received %+v", msg)
+	default:
 	}
 }
 

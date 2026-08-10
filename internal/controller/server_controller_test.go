@@ -1298,10 +1298,14 @@ func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
 // can tell the difference.
 //
 // The read-back also carries the Accepted condition, set earlier in this same
-// reconcile. The mid-reconcile status write this test exists to check on must
-// not be able to lose it the way a non-status Update would (see
-// ensureFinalizer): the assertion here, and the one on the Ready condition
-// after the server settles, are the regression guard for that.
+// reconcile. That is not the regression guard against downgrading this
+// mid-reconcile write to a non-status Update (see ensureFinalizer) — by the
+// time d.Register runs here, Accepted has already been durable for two
+// reconciles courtesy of bringUpReady, so these assertions would pass
+// whichever kind of Update wrote it; wasDurable above is what actually catches
+// that regression. What the assertion here, and the one on the Accepted
+// condition after the server settles below, catch independently is a status
+// struct replaced wholesale inside a legitimate status call.
 func TestWasRegisteredIsDurableBeforeTheProxiesAreTold(t *testing.T) {
 	f := newFixture(t)
 

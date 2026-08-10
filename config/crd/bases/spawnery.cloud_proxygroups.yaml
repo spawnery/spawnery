@@ -156,7 +156,7 @@ spec:
                 minLength: 1
                 type: string
               networkRef:
-                description: NetworkRef names the Network this group belongs to.
+                description: NetworkRef names the Network this group belongs to. Immutable.
                 properties:
                   name:
                     description: Name of the referenced object.
@@ -1218,6 +1218,9 @@ spec:
             - replicas
             - routing
             type: object
+            x-kubernetes-validations:
+            - message: spec.networkRef is immutable
+              rule: self.networkRef == oldSelf.networkRef
           status:
             description: ProxyGroupStatus is the observed state of a ProxyGroup.
             properties:

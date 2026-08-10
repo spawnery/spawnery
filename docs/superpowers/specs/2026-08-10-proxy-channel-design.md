@@ -240,7 +240,24 @@ fungible: there is no per-proxy CR and therefore no state machine.
 - Ensure the NodePort `Service`, named after the group, selecting
   `managed-by`, `network`, `group`, `role=proxy`, port 25565 → the group's
   `expose.nodePort.port`. Owned by the ProxyGroup, so deleting the group
-  cascades.
+  cascades. `externalTrafficPolicy: Local`, for the same reason
+  `LoadBalancerSpec.ExternalTrafficPolicy` defaults to `Local`: the `Cluster`
+  default SNATs, so Velocity would never see a player's real IP, and bans and
+  rate limits depend on it. This was not decided anywhere else in this
+  document; it is a human ruling recorded here because the design left it
+  open. The consequence is a real trade-off, not a free win: with `Local`, a
+  client that reaches a node running no proxy pod for the group gets no
+  answer at all rather than being routed to one that does. That is safe only
+  because `status.address` (below) publishes the `hostIP` of a node that
+  demonstrably runs a ready proxy, so a client dialing the published address
+  never hits the empty case.
+- `spec.networkRef` is immutable, enforced by a CEL rule on `ProxyGroupSpec`
+  matching the style of `ServerGroupSpec`'s existing immutable-field rules.
+  Without it, a live edit leaves the existing pods labelled with the old
+  network: invisible to `pods()` below, invisible to the Service selector, and
+  never swept — orphan cleanup only removes pods whose `ProxyGroup` is gone,
+  and this one still exists. Server pods have no equivalent hole because they
+  are found through `srv.Status.PodName`, not labels.
 - Status: `readyReplicas` from the pods' `Ready` condition; `connectedPlayers`
   as the sum over the registry; `phase` derived the same way `derivePhase`
   does it (`Degraded` if the condition is set, `Ready` at full ready replicas,
@@ -451,7 +468,12 @@ test that reads `Fleet`'s internal maps proves the operator did what the
 operator thinks it did, which is exactly the class of test that was green
 throughout 2c while the agent leaked a `ManagedChannel` per reconnect.
 
-`make test` stays Go-only and must not get slower than its current ~24 s.
+`make test` stays Go-only. Its "current" time was already wrong by the time
+this line was written; measured directly with `go test ./... -count=1`
+(wall-clock, warm build cache, this machine) it is 35.2 s at the merge base
+`fc264fc` and 37.7 s at the tip of this branch, `b290e08`. Record a number
+this way — command, cache state, machine — rather than a remembered figure, or
+the next person inherits the same drift this one corrects.
 
 ## 10. Acceptance criteria
 

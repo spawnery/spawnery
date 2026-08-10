@@ -159,15 +159,9 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 // deterministic rather than map-order.
 //
 // The filter is podspec.ProxyLabels, the exact map reconcileService also uses
-// as the Service selector — not a hand-written subset of it. Spec.networkRef
-// carries no immutability rule, so a group's network can change on a live
-// object; if this filter and the selector were two independently maintained
-// label sets, changing the network would flip the Service's selector to the
-// new value while this list kept matching pods still labelled with the old
-// one, and the reconciler would count them as live and ready while the
-// Service that is supposed to reach them has no endpoints at all. Deriving
-// both from the same function makes that impossible by construction rather
-// than by the two places agreeing.
+// as the Service selector — not a hand-written subset of it. Deriving both
+// from the same function keeps them in agreement by construction rather than
+// by the two places happening to match.
 func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) ([]corev1.Pod, error) {
 	list := &corev1.PodList{}
 	labels := podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
@@ -226,6 +220,16 @@ func (r *ProxyGroupReconciler) reconcileService(ctx context.Context, group *spaw
 		}
 		svc.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
 		svc.Spec.Type = corev1.ServiceTypeNodePort
+		// Local, not the Cluster default, for the same reason
+		// LoadBalancerSpec.ExternalTrafficPolicy defaults to Local: the default
+		// SNATs, so Velocity would never see a player's real IP, and bans and
+		// rate limits depend on it. The consequence is the trade-off this makes:
+		// a client that reaches a node running no proxy pod for this group gets
+		// no answer at all, rather than being routed to one that does. That is
+		// consistent with proxyAddress below only ever publishing the hostIP of
+		// a node that demonstrably runs a ready proxy — a client dialing the
+		// published address never hits the empty case.
+		svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
 		// The selector must pin the role as well as the group: without it the
 		// Service would also select any server pod that happened to share the
 		// group name, and players would land on a backend directly.

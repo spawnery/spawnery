@@ -109,8 +109,9 @@ type ProxyConfigSpec struct {
 }
 
 // ProxyGroupSpec describes the Velocity layer of a network.
+// +kubebuilder:validation:XValidation:rule="self.networkRef == oldSelf.networkRef",message="spec.networkRef is immutable"
 type ProxyGroupSpec struct {
-	// NetworkRef names the Network this group belongs to.
+	// NetworkRef names the Network this group belongs to. Immutable.
 	NetworkRef ObjectRef `json:"networkRef"`
 
 	// Replicas is the number of proxy pods.

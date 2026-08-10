@@ -107,6 +107,26 @@ func (f *Fleet) Join(ctx context.Context, namespace, group, podUID string) (<-ch
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// This looks like a redundant guard on a context nothing downstream reads
+	// again — until you ask why it could ever be cancelled here at all.
+	// sessions.enter cancels a superseded stream's derived context, but that
+	// cancellation cannot interrupt the two blocking stream.Send calls
+	// sessionPrologue makes before ProxySession ever reaches Join: those are
+	// bound to stream.Context(), a different context that enter never
+	// touches. So the superseded stream (call it B) can still reach Join
+	// after its successor (C) already has — B.enter's cancellation raced
+	// nothing C was waiting on, B's two sends simply finished late. Without
+	// this check, B would find C installed as "previous" below, close C's
+	// live outbox, and install itself in its place: a healthy session killed
+	// and mislabelled as having fallen behind. The check is sound because
+	// enter happens-before Join within one handler, and the only thing that
+	// ever cancels this context is a successor's enter — so by the time we
+	// can observe the cancellation, that successor already holds the map
+	// entry and it, not us, is the one that must keep it.
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
+
 	initial, err := f.snapshot(ctx, namespace, group)
 	if err != nil {
 		return nil, nil, err
@@ -309,13 +329,6 @@ func (f *Fleet) Drain(ctx context.Context, srv *spawneryv1alpha1.Server) error {
 		return drainMessage(srv, f.fallbacks(ctx, s.namespace, s.group))
 	})
 	return nil
-}
-
-// Sessions is how many proxy sessions are live. For tests and for the metric.
-func (f *Fleet) Sessions() int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return len(f.sessions)
 }
 
 // Resync re-sends every live session the same construction Join builds.

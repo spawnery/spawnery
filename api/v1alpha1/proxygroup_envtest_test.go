@@ -108,3 +108,28 @@ func TestProxyGroupExposeValidation(t *testing.T) {
 		})
 	}
 }
+
+// A live networkRef edit would otherwise leave the existing pods labelled
+// with the old network: invisible to ProxyGroupReconciler.pods() and to the
+// Service selector, which both derive from the current spec, and never swept
+// because their ProxyGroup still exists. They would run forever, holding
+// their agent sessions. The CEL rule on ProxyGroupSpec is what rules that out
+// before it can happen, and this proves the rule actually rejects the update
+// rather than only being present in the schema.
+func TestProxyGroupNetworkRefIsImmutable(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	g := proxyGroup(ns, spawneryv1alpha1.ExposeSpec{
+		Type:     spawneryv1alpha1.ExposeNodePort,
+		NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30565},
+	})
+	if err := c.Create(ctx, g); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	g.Spec.NetworkRef = spawneryv1alpha1.ObjectRef{Name: "another-network"}
+	if err := c.Update(ctx, g); err == nil {
+		t.Fatal("update changed spec.networkRef, want rejection")
+	}
+}

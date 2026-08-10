@@ -489,6 +489,15 @@ func (r *ServerReconciler) applyDecision(
 		// registered, terminate immediately" branch — with players already on
 		// the server, because the proxies were told about it a moment ago.
 		//
+		// This ordering has a cost of its own, and it is worth stating rather
+		// than only the upside above: if Register itself fails after the flag
+		// is already persisted, a later deletion takes the drain branch for a
+		// server no proxy was actually told about. With a stale agent stream,
+		// isOccupied still counts it occupied, so that drain runs out its full
+		// deadline instead of terminating immediately. Bounded — it ends on its
+		// own once the deadline passes — and the safe direction to err in, but
+		// not free.
+		//
 		// One extra status write, at the single transition into Ready.
 		if !srv.Status.WasRegistered {
 			srv.Status.WasRegistered = true
