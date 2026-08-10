@@ -64,7 +64,7 @@ func TestSampleManifestIsAcceptedByTheAPIServer(t *testing.T) {
 			t.Errorf("create %s %s/%s: %v", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
 		}
 	}
-	if count != 4 {
-		t.Fatalf("decoded %d documents from the sample, want 4 (Namespace, Secret, Network, ServerGroup)", count)
+	if count != 5 {
+		t.Fatalf("decoded %d documents from the sample, want 5 (Namespace, Secret, Network, ServerGroup, ProxyGroup)", count)
 	}
 }

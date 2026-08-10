@@ -201,6 +201,22 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("accept fixture network: %v", err)
 	}
 
+	// envtest runs no namespace controller, so a Service created by this test
+	// would otherwise hold its NodePort allocated for the rest of the binary —
+	// NodePorts are cluster-scoped, unlike every other object these tests
+	// create, so per-test namespace isolation alone does not free one for the
+	// next test to reuse. Deleting it here releases the port synchronously,
+	// the same way a real cluster would on deletion.
+	t.Cleanup(func() {
+		svcs := &corev1.ServiceList{}
+		if err := c.List(ctx, svcs, client.InNamespace(ns)); err != nil {
+			return
+		}
+		for i := range svcs.Items {
+			_ = c.Delete(ctx, &svcs.Items[i])
+		}
+	})
+
 	f.group = &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: ns},
 		Spec: spawneryv1alpha1.ServerGroupSpec{

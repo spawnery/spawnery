@@ -1,7 +1,8 @@
-# A minimal Spawnery network: one lobby group of ephemeral Paper servers.
-# The servers come up, their agent reports in and they reach phase Ready. The
-# proxy layer arrives in milestone 3 — until then nothing routes a player onto
-# one of them.
+# A minimal Spawnery network: one lobby group of ephemeral Paper servers and
+# one gateway group of Velocity proxies. The servers come up, their agent
+# reports in and they reach phase Ready; the ProxyGroup is accepted and gets
+# its NodePort Service. The Velocity image itself arrives with milestone 3b —
+# until then the proxy pods sit in ImagePullBackOff and no player is routed.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -51,3 +52,26 @@ spec:
     minReplicas: 1
     maxReplicas: 10
     spareSlots: 40
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  replicas: 1
+  # The Velocity image arrives with milestone 3b. Until then this group is
+  # accepted, its Service is created and its pods stay in ImagePullBackOff.
+  image: ghcr.io/spawnery/velocity:3.4.0-0.2.0
+  expose:
+    type: NodePort
+    nodePort:
+      port: 30001
+  routing:
+    fallbackGroups:
+      - lobby
+  config:
+    playerLimit: 500
+    motd: "A Spawnery network"

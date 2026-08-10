@@ -8,6 +8,7 @@ rules:
   - ""
   resources:
   - configmaps
+  - services
   verbs:
   - create
   - get
@@ -61,6 +62,7 @@ rules:
   - spawnery.cloud
   resources:
   - networks
+  - proxygroups
   - servergroups
   verbs:
   - get
@@ -70,19 +72,14 @@ rules:
   - spawnery.cloud
   resources:
   - networks/status
+  - proxygroups/finalizers
+  - proxygroups/status
   - servergroups/finalizers
   - servergroups/status
   - servers/finalizers
   - servers/status
   verbs:
   - update
-- apiGroups:
-  - spawnery.cloud
-  resources:
-  - proxygroups
-  verbs:
-  - list
-  - watch
 - apiGroups:
   - spawnery.cloud
   resources:

@@ -30,15 +30,16 @@ const (
 
 // Condition reasons.
 const (
-	ReasonDuplicateNetwork   = "DuplicateNetwork"
-	ReasonNetworkNotFound    = "NetworkNotFound"
-	ReasonNetworkNotAccepted = "NetworkNotAccepted"
-	ReasonGroupNotFound      = "GroupNotFound"
-	ReasonAccepted           = "Accepted"
-	ReasonCrashLoopBackoff   = "CrashLoopBackoff"
-	ReasonNoFallback         = "NoFallbackAvailable"
-	ReasonNotImplemented     = "NotImplementedInThisVersion"
-	ReasonReconciling        = "Reconciling"
+	ReasonDuplicateNetwork     = "DuplicateNetwork"
+	ReasonNetworkNotFound      = "NetworkNotFound"
+	ReasonNetworkNotAccepted   = "NetworkNotAccepted"
+	ReasonGroupNotFound        = "GroupNotFound"
+	ReasonAccepted             = "Accepted"
+	ReasonCrashLoopBackoff     = "CrashLoopBackoff"
+	ReasonNoFallback           = "NoFallbackAvailable"
+	ReasonNotImplemented       = "NotImplementedInThisVersion"
+	ReasonReconciling          = "Reconciling"
+	ReasonExposeNotImplemented = "ExposeStrategyNotImplemented"
 )
 
 // ObjectRef names another object in the same namespace.
