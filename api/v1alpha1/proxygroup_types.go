@@ -144,6 +144,18 @@ type ProxyGroupSpec struct {
 	// Config are the rendered Velocity settings.
 	// +optional
 	Config *ProxyConfigSpec `json:"config,omitempty"`
+
+	// ConfigOverlay names a ConfigMap whose keys are configuration files to
+	// merge over the rendered defaults — "server.properties",
+	// "paper-global.yml" or "velocity.toml", in the target's own dialect.
+	//
+	// It is a field of its own rather than a reserved name inside mounts,
+	// because mounts is documented as raw files for plugins and worlds and a
+	// name-based convention is invisible until someone picks that name by
+	// accident. It outranks the rendered defaults and is outranked by the
+	// operationally critical fields, which nothing can reach.
+	// +optional
+	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 }
 
 // ProxyGroupStatus is the observed state of a ProxyGroup.

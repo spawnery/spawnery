@@ -70,6 +70,25 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              configOverlay:
+                description: |-
+                  ConfigOverlay names a ConfigMap whose keys are configuration files to
+                  merge over the rendered defaults — "server.properties",
+                  "paper-global.yml" or "velocity.toml", in the target's own dialect.
+
+                  It is a field of its own rather than a reserved name inside mounts,
+                  because mounts is documented as raw files for plugins and worlds and a
+                  name-based convention is invisible until someone picks that name by
+                  accident. It outranks the rendered defaults and is outranked by the
+                  operationally critical fields, which nothing can reach.
+                properties:
+                  name:
+                    description: Name of the referenced object.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
               drain:
                 default:
                   timeoutSeconds: 300

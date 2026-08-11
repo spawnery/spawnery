@@ -18,6 +18,7 @@ package podspec
 
 import (
 	"fmt"
+	"path"
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
@@ -141,6 +142,24 @@ func BuildProxyPod(
 				},
 			},
 		},
+		configVolume(GroupConfigMapName(group.Name), net.Spec.ForwardingSecretRef.Name),
+	}
+	mounts := []corev1.VolumeMount{
+		{Name: DataVolumeName, MountPath: DataMountPath},
+		{Name: TmpVolumeName, MountPath: TmpMountPath},
+		{Name: AgentVolumeName, MountPath: AgentMountPath, ReadOnly: true},
+		{Name: ConfigVolumeName, MountPath: ConfigMountPath, ReadOnly: true},
+	}
+	// Nested inside ConfigVolumeName's own mount, exactly as BuildServerPod
+	// does it — see the comment there on why Kubernetes allows this and on
+	// ConfigOverlayVolumeName for why it is a separate, unfiltered volume.
+	if vol := configOverlayVolume(group.Spec.ConfigOverlay); vol != nil {
+		volumes = append(volumes, *vol)
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      ConfigOverlayVolumeName,
+			MountPath: path.Join(ConfigMountPath, configOverlayDir),
+			ReadOnly:  true,
+		})
 	}
 
 	container := corev1.Container{
@@ -165,11 +184,7 @@ func BuildProxyPod(
 			{Name: EnvPlayerLimit, Value: strconv.FormatInt(int64(playerLimit), 10)},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
 		},
-		VolumeMounts: []corev1.VolumeMount{
-			{Name: DataVolumeName, MountPath: DataMountPath},
-			{Name: TmpVolumeName, MountPath: TmpMountPath},
-			{Name: AgentVolumeName, MountPath: AgentMountPath, ReadOnly: true},
-		},
+		VolumeMounts: mounts,
 		// Readiness only, for the same reason the server pod has no liveness
 		// probe: a restart would disconnect every player on this proxy, and
 		// the client connection terminates here.

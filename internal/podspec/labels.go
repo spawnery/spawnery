@@ -77,6 +77,17 @@ func ProxyLabels(network, group string) map[string]string {
 	}
 }
 
+// GroupConfigMapName is the ConfigMap a group's controller renders its
+// configuration into, per design section 4.6 — named after the group itself
+// and owned by it, so deletion cascades without a name derived by
+// convention. BuildServerPod and BuildProxyPod call this to know what to
+// project into ConfigVolumeName; Task 10's controllers call it to know what
+// to write, so the two sides can only agree on a running pod if both go
+// through this one function.
+func GroupConfigMapName(group string) string {
+	return group
+}
+
 // ManagedSelector matches every pod Spawnery manages for one network.
 func ManagedSelector(network string) map[string]string {
 	return map[string]string{

@@ -67,6 +67,72 @@ const (
 	// certificate, relative to AgentMountPath.
 	AgentCAPath = "ca.crt"
 
+	// ConfigVolumeName is the projected volume carrying the operator's
+	// rendered configuration: the group's own ConfigMap and the Network's
+	// forwarding secret. internal/render.Load reads exactly this layout by
+	// default, and it is shared verbatim by BuildServerPod and BuildProxyPod
+	// through configVolume below, so the two layers cannot drift into
+	// different answers about where configuration lives.
+	ConfigVolumeName = "spawnery-config"
+	// ConfigOverlayVolumeName carries the user's spec.configOverlay
+	// ConfigMap, mounted only when a group declares one, nested inside
+	// ConfigMountPath at configOverlayDir.
+	//
+	// It is a plain ConfigMap volume, not a source folded into
+	// ConfigVolumeName's own Projected volume, and that is not
+	// interchangeable with the alternative: a Projected ConfigMap source
+	// only ever surfaces the keys explicitly named in its Items, so the only
+	// way to fold an arbitrarily-named overlay key in without enumerating a
+	// fixed list — which internal/render's checkOverlayFiles must see even
+	// the *wrong* names to refuse loudly, per its own doc comment — would be
+	// to guess the flavour's target names ahead of time and hardcode them
+	// here. A typo or a name from a different flavour would then be dropped
+	// by the kubelet before internal/render ever saw it: no refusal, no
+	// crash loop, just an overlay that silently did nothing — the one
+	// failure mode this whole area of the design exists to prevent. A plain
+	// ConfigMap volume with no Items mounts every key under it unfiltered,
+	// so whatever the user actually wrote reaches the renderer and
+	// checkOverlayFiles is what decides whether it is accepted.
+	ConfigOverlayVolumeName = "spawnery-config-overlay"
+	// ConfigMountPath is where ConfigVolumeName is mounted.
+	//
+	// Not /data/config: Paper writes paper-global.yml and
+	// paper-world-defaults.yml there itself at startup, and a ConfigMap
+	// mount is always read-only, so a mount there breaks the start —
+	// known-issues.md has recorded that collision since milestone 2b.
+	// Mounting at ConfigMountPath instead means the collision never arises
+	// rather than getting resolved.
+	//
+	// Not under AgentMountPath: that is the agent's credential mount, and
+	// checkMountCollision guards it with a bidirectional nesting check it
+	// applies to nothing else. Keeping the two apart keeps that rule saying
+	// the one thing it exists to say — ConfigMountPath gets the same
+	// bidirectional check below, for the same reason: a user mount there
+	// would shadow the file the renderer reads the forwarding secret from.
+	ConfigMountPath = "/etc/spawnery"
+	// ConfigValuesKey is both the data key of the group's rendered ConfigMap
+	// — the key Task 10's controller marshals render.Values into — and the
+	// file name it lands at under ConfigMountPath, since that key already
+	// matches internal/render.ValuesFile and needs no renaming between the
+	// two.
+	ConfigValuesKey = "config.yaml"
+	// ForwardingSecretKey is the data key of the Network's forwarding
+	// Secret, per NetworkSpec.ForwardingSecretRef's documented contract.
+	ForwardingSecretKey = "secret"
+	// configSecretFile is where ForwardingSecretKey lands under
+	// ConfigMountPath. internal/render.SecretFile names the same file
+	// independently: podspec stays free of internal/render so that building
+	// a pod spec never depends on a package that touches the filesystem.
+	configSecretFile = "forwarding.secret"
+	// configOverlayDir is the subdirectory the overlay's files land under.
+	// internal/render.OverlayDir names the same directory independently, for
+	// the reason above — and load.go's own comment on why that loader
+	// resolves each entry with os.Stat, rather than trusting DirEntry's
+	// Lstat-based type, is exactly why this must be a real subdirectory a
+	// ConfigMap is mounted at, not a naming convention layered onto the
+	// mount root.
+	configOverlayDir = "overlay"
+
 	// EnvOperatorEndpoint names the container env var carrying the address
 	// the agent dials to reach the operator's gRPC endpoint.
 	EnvOperatorEndpoint = "SPAWNERY_OPERATOR_ENDPOINT"
@@ -80,6 +146,65 @@ const (
 // DataClaimName is the name of the PVC of a persistent server.
 func DataClaimName(server string) string {
 	return server + "-" + DataVolumeName
+}
+
+// configVolume is the projected volume both BuildServerPod and BuildProxyPod
+// mount read-only at ConfigMountPath: the group's rendered ConfigMap and the
+// Network's forwarding secret. One function shared by both builders is what
+// stops the two layers from drifting into different answers about where
+// configuration lives.
+func configVolume(groupConfigMap, forwardingSecret string) corev1.Volume {
+	return corev1.Volume{
+		Name: ConfigVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{
+						ConfigMap: &corev1.ConfigMapProjection{
+							LocalObjectReference: corev1.LocalObjectReference{Name: groupConfigMap},
+							Items: []corev1.KeyToPath{
+								{Key: ConfigValuesKey, Path: ConfigValuesKey},
+							},
+						},
+					},
+					{
+						Secret: &corev1.SecretProjection{
+							LocalObjectReference: corev1.LocalObjectReference{Name: forwardingSecret},
+							Items: []corev1.KeyToPath{
+								{Key: ForwardingSecretKey, Path: configSecretFile},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// configOverlayVolume is the volume ConfigOverlayVolumeName when a group
+// declares spec.configOverlay, or nil when it does not — the caller appends
+// it (and its mount) only in the non-nil case, since an always-present
+// volume naming an empty ConfigMap is a pod that never starts, not an
+// absent overlay.
+//
+// No Items: every key of the referenced ConfigMap becomes a file here,
+// whatever its name, so a key internal/render does not recognise still
+// reaches checkOverlayFiles and gets refused there — loudly, by design —
+// instead of being filtered out by the kubelet before the renderer ever
+// runs. See the comment on ConfigOverlayVolumeName for why an enumerated
+// Items list was tried and rejected.
+func configOverlayVolume(overlay *spawneryv1alpha1.ObjectRef) *corev1.Volume {
+	if overlay == nil {
+		return nil
+	}
+	return &corev1.Volume{
+		Name: ConfigOverlayVolumeName,
+		VolumeSource: corev1.VolumeSource{
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: overlay.Name},
+			},
+		},
+	}
 }
 
 // BuildServerPod renders the pod of one Server. The Server owns the pod, so
@@ -147,11 +272,25 @@ func BuildServerPod(
 				},
 			},
 		},
+		configVolume(GroupConfigMapName(group.Name), net.Spec.ForwardingSecretRef.Name),
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: DataVolumeName, MountPath: DataMountPath},
 		{Name: TmpVolumeName, MountPath: TmpMountPath},
 		{Name: AgentVolumeName, MountPath: AgentMountPath, ReadOnly: true},
+		{Name: ConfigVolumeName, MountPath: ConfigMountPath, ReadOnly: true},
+	}
+	// Nested inside ConfigVolumeName's own mount: Kubernetes mounts a
+	// VolumeMount whose path lies under another's without issue, ordering
+	// them itself, and design spec 4.3's own DataMountPath+"/config" example
+	// already relies on the same nesting elsewhere in this package.
+	if vol := configOverlayVolume(group.Spec.ConfigOverlay); vol != nil {
+		volumes = append(volumes, *vol)
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      ConfigOverlayVolumeName,
+			MountPath: path.Join(ConfigMountPath, configOverlayDir),
+			ReadOnly:  true,
+		})
 	}
 
 	for _, m := range group.Spec.Mounts {
@@ -184,7 +323,6 @@ func BuildServerPod(
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: "SPAWNERY_SERVER", Value: srv.Name},
-			{Name: "SPAWNERY_MAX_PLAYERS", Value: strconv.FormatInt(int64(group.Spec.MaxPlayers), 10)},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
 		},
 		VolumeMounts: mounts,
@@ -284,27 +422,29 @@ func dataVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Serve
 // on a duplicate volume name outright — but a colliding path it happily
 // accepts: Kubernetes permits nested mounts.
 //
-// The path check is deliberately asymmetric between the agent mount and the
-// other two, and that asymmetry is not an oversight to "tidy up" later:
+// The path check is deliberately asymmetric between the two mounts below and
+// the other two, and that asymmetry is not an oversight to "tidy up" later:
 //
-//   - AgentMountPath gets the full bidirectional nesting check, equal path,
-//     nested under, or an ancestor of it, all refused. It is the one of the
-//     three that holds something worth shadowing: a user mount at
-//     AgentMountPath+"/token" would silently overlay the exact file the
-//     agent reads its credential from, and nothing but this check stops it.
-//     Nesting under it is never legitimate.
+//   - AgentMountPath and ConfigMountPath each get the full bidirectional
+//     nesting check, equal path, nested under, or an ancestor of it, all
+//     refused. They are the two of the four that hold something worth
+//     shadowing: a user mount at AgentMountPath+"/token" would silently
+//     overlay the exact file the agent reads its credential from, and a
+//     mount at ConfigMountPath+"/forwarding.secret" would do the same to the
+//     file the renderer reads the forwarding secret from. Nothing but this
+//     check stops either. Nesting under either is never legitimate.
 //   - DataMountPath and TmpMountPath only refuse an exact match (after
 //     path.Clean, so a trailing slash does not slip past). Mounting AT
 //     DataMountPath would replace the whole working directory and is
 //     refused; mounting INSIDE it is the documented way to add extra files —
 //     design spec 4.3's own ServerGroup example mounts a ConfigMap at
-//     DataMountPath+"/config" — so unlike the agent mount, a nested path
-//     under these two is a feature, not a collision.
+//     DataMountPath+"/config" — so unlike the other two, a nested path under
+//     these two is a feature, not a collision.
 //
 // Path comparison is on segment boundaries, not raw string prefixes, so
 // "/data-extra" is never mistaken for a child of "/data".
 func checkMountCollision(m spawneryv1alpha1.Mount) error {
-	for _, name := range []string{AgentVolumeName, DataVolumeName, TmpVolumeName} {
+	for _, name := range []string{AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName, TmpVolumeName} {
 		if m.Name == name {
 			return fmt.Errorf("mount %q reuses the reserved volume name %q", m.Name, name)
 		}
@@ -312,14 +452,16 @@ func checkMountCollision(m spawneryv1alpha1.Mount) error {
 
 	user := path.Clean(m.MountPath)
 
-	agent := path.Clean(AgentMountPath)
-	switch {
-	case user == agent:
-		return fmt.Errorf("mount %q targets the reserved mount path %q", m.Name, AgentMountPath)
-	case isPathUnder(user, agent):
-		return fmt.Errorf("mount %q at %q nests inside the reserved mount path %q", m.Name, m.MountPath, AgentMountPath)
-	case isPathUnder(agent, user):
-		return fmt.Errorf("mount %q at %q is an ancestor of the reserved mount path %q", m.Name, m.MountPath, AgentMountPath)
+	for _, reserved := range []string{AgentMountPath, ConfigMountPath} {
+		clean := path.Clean(reserved)
+		switch {
+		case user == clean:
+			return fmt.Errorf("mount %q targets the reserved mount path %q", m.Name, reserved)
+		case isPathUnder(user, clean):
+			return fmt.Errorf("mount %q at %q nests inside the reserved mount path %q", m.Name, m.MountPath, reserved)
+		case isPathUnder(clean, user):
+			return fmt.Errorf("mount %q at %q is an ancestor of the reserved mount path %q", m.Name, m.MountPath, reserved)
+		}
 	}
 
 	for _, reserved := range []string{DataMountPath, TmpMountPath} {

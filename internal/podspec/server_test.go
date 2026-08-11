@@ -17,6 +17,8 @@ limitations under the License.
 package podspec
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -26,6 +28,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/render"
 )
 
 // testEndpoint is what the operator would pass in; the tests below assert it
@@ -281,9 +284,225 @@ func TestEnvironment(t *testing.T) {
 	}
 	if env["SPAWNERY_NETWORK"] != "production" ||
 		env["SPAWNERY_GROUP"] != "lobby" ||
-		env["SPAWNERY_SERVER"] != "lobby-x7k2" ||
-		env["SPAWNERY_MAX_PLAYERS"] != "100" {
-		t.Errorf("env = %v, want network, group, server and max players", env)
+		env["SPAWNERY_SERVER"] != "lobby-x7k2" {
+		t.Errorf("env = %v, want network, group and server", env)
+	}
+}
+
+// SPAWNERY_MAX_PLAYERS travels through the group's rendered ConfigMap now
+// (internal/render.Values, mounted at ConfigMountPath), not through the pod's
+// own environment; Task 8 deleted the last thing on the pod that read it.
+func TestServerPodNoLongerCarriesMaxPlayersAsAnEnvVar(t *testing.T) {
+	pod := build(t, nil)
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == "SPAWNERY_MAX_PLAYERS" {
+			t.Error("SPAWNERY_MAX_PLAYERS is still on the pod; the value travels through the ConfigMap now")
+		}
+	}
+}
+
+// findVolume returns the named volume, or nil if the pod has none by that
+// name.
+func findVolume(pod *corev1.Pod, name string) *corev1.Volume {
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == name {
+			return &pod.Spec.Volumes[i]
+		}
+	}
+	return nil
+}
+
+// findConfigMapSource returns the ConfigMapProjection among sources that
+// names configMap, or nil. Sources are found by content, not by index, so
+// the test does not depend on the order BuildServerPod happens to emit them
+// in.
+func findConfigMapSource(sources []corev1.VolumeProjection, configMap string) *corev1.ConfigMapProjection {
+	for _, s := range sources {
+		if s.ConfigMap != nil && s.ConfigMap.Name == configMap {
+			return s.ConfigMap
+		}
+	}
+	return nil
+}
+
+func findSecretSource(sources []corev1.VolumeProjection, secret string) *corev1.SecretProjection {
+	for _, s := range sources {
+		if s.Secret != nil && s.Secret.Name == secret {
+			return s.Secret
+		}
+	}
+	return nil
+}
+
+// TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret is the base
+// case with no overlay declared: the config volume exists, is read-only at
+// ConfigMountPath, and its two sources are the group's own ConfigMap — named
+// GroupConfigMapName(group), the name Task 10's controller writes — and the
+// Network's forwarding secret, each landing under the bare file name
+// internal/render.Load reads by default.
+func TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *testing.T) {
+	pod := build(t, nil)
+
+	var mounted bool
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == ConfigVolumeName {
+			mounted = true
+			if m.MountPath != ConfigMountPath {
+				t.Errorf("mountPath = %q, want %q", m.MountPath, ConfigMountPath)
+			}
+			if !m.ReadOnly {
+				t.Error("the config volume is writable")
+			}
+		}
+	}
+	if !mounted {
+		t.Fatal("the config volume is not mounted into the container")
+	}
+
+	vol := findVolume(pod, ConfigVolumeName)
+	if vol == nil || vol.Projected == nil {
+		t.Fatalf("volume %q = %+v, want a projected source", ConfigVolumeName, vol)
+	}
+	if len(vol.Projected.Sources) != 2 {
+		t.Fatalf("projected sources = %+v, want exactly 2 with no overlay declared", vol.Projected.Sources)
+	}
+
+	cm := findConfigMapSource(vol.Projected.Sources, GroupConfigMapName("lobby"))
+	if cm == nil {
+		t.Fatalf("sources = %+v, want a configMap source named %q", vol.Projected.Sources, GroupConfigMapName("lobby"))
+	}
+	if len(cm.Items) != 1 || cm.Items[0].Key != ConfigValuesKey || cm.Items[0].Path != "config.yaml" {
+		t.Errorf("configMap items = %+v, want %s mapped to config.yaml", cm.Items, ConfigValuesKey)
+	}
+
+	sec := findSecretSource(vol.Projected.Sources, "velocity-forwarding-secret")
+	if sec == nil {
+		t.Fatalf("sources = %+v, want a secret source named velocity-forwarding-secret", vol.Projected.Sources)
+	}
+	if len(sec.Items) != 1 || sec.Items[0].Key != ForwardingSecretKey || sec.Items[0].Path != "forwarding.secret" {
+		t.Errorf("secret items = %+v, want %s mapped to forwarding.secret", sec.Items, ForwardingSecretKey)
+	}
+}
+
+// TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount is the test
+// the milestone's own standard demands, sharpened after a review caught what
+// the first version of this task missed: mounting the overlay as a third
+// *projected* source, with Items enumerating a closed set of known target
+// names, would have made an unrecognised key in the user's overlay ConfigMap
+// vanish at the kubelet — never reaching internal/render's checkOverlayFiles,
+// never refused, never even logged. That is a worse failure than the one the
+// overlay/ subdirectory redesign in load.go already fixed: not a
+// misdirected file, but total silence.
+//
+// So this asserts the opposite of what an Items-based mount would produce:
+// a *separate*, *plain* ConfigMap volume — not folded into ConfigVolumeName's
+// Projected sources at all — with Items left nil, so every key the user's
+// ConfigMap actually has, recognised or not, becomes a file for
+// internal/render to see and rule on.
+func TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount(t *testing.T) {
+	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.ConfigOverlay = &spawneryv1alpha1.ObjectRef{Name: "lobby-overlay"}
+	})
+
+	base := findVolume(pod, ConfigVolumeName)
+	if base == nil || base.Projected == nil || len(base.Projected.Sources) != 2 {
+		t.Fatalf("volume %q = %+v, want exactly the 2 base sources — the overlay must not be folded in here", ConfigVolumeName, base)
+	}
+
+	overlay := findVolume(pod, ConfigOverlayVolumeName)
+	if overlay == nil {
+		t.Fatalf("volumes = %+v, want a %s volume", pod.Spec.Volumes, ConfigOverlayVolumeName)
+	}
+	if overlay.ConfigMap == nil {
+		t.Fatalf("volume %q = %+v, want a plain configMap source, not Projected", ConfigOverlayVolumeName, overlay)
+	}
+	if overlay.ConfigMap.Name != "lobby-overlay" {
+		t.Errorf("configMap name = %q, want lobby-overlay", overlay.ConfigMap.Name)
+	}
+	if len(overlay.ConfigMap.Items) != 0 {
+		t.Errorf("items = %+v, want none: an enumerated list is exactly what would filter out an unrecognised overlay key before internal/render ever sees it", overlay.ConfigMap.Items)
+	}
+
+	var mount *corev1.VolumeMount
+	for i := range pod.Spec.Containers[0].VolumeMounts {
+		if pod.Spec.Containers[0].VolumeMounts[i].Name == ConfigOverlayVolumeName {
+			mount = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatal("the overlay volume is not mounted into the container")
+	}
+	if mount.MountPath != ConfigMountPath+"/overlay" {
+		t.Errorf("mountPath = %q, want %q, nested inside ConfigMountPath so internal/render finds it at the OverlayDir it already reads",
+			mount.MountPath, ConfigMountPath+"/overlay")
+	}
+	if !mount.ReadOnly {
+		t.Error("the overlay volume is writable")
+	}
+}
+
+// TestConfigOverlayVolumeIsAbsentWhenNoneIsDeclared guards the other side of
+// the same behaviour: a nil spec.configOverlay must add neither the volume
+// nor its mount. Without this test,
+// TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount alone could
+// pass even if the overlay volume were unconditionally present naming an
+// empty ConfigMap.
+func TestConfigOverlayVolumeIsAbsentWhenNoneIsDeclared(t *testing.T) {
+	pod := build(t, nil)
+	if v := findVolume(pod, ConfigOverlayVolumeName); v != nil {
+		t.Errorf("volume %q = %+v, want it absent with no configOverlay declared", ConfigOverlayVolumeName, v)
+	}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == ConfigOverlayVolumeName {
+			t.Errorf("mount %+v present with no configOverlay declared", m)
+		}
+	}
+}
+
+// TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey is the proof
+// the coordinator asked for directly: build the on-disk shape the mount
+// above produces — a plain directory holding every key of the overlay
+// ConfigMap, unfiltered, which is exactly what a plain ConfigMap volume with
+// no Items lays down — put a key in it that no flavour writes, and confirm
+// internal/render refuses it by name instead of silently ignoring it. This
+// is the difference an Items-based mount could not offer: that package has
+// no visibility into which keys existed until this test starts one from a
+// key its own checkOverlayFiles does not recognise.
+func TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, render.ValuesFile), []byte("maxPlayers: 100\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, render.SecretFile), []byte("s3cr3t\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	overlayDir := filepath.Join(dir, render.OverlayDir)
+	if err := os.Mkdir(overlayDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// "paper-world-defaults.yml" is a real Paper file, and precisely the
+	// kind of plausible-looking typo a user could make reaching for
+	// "paper-global.yml" — internal/render.Paper does not write it, so an
+	// overlay ConfigMap naming it must be refused, not silently dropped.
+	const badKey = "paper-world-defaults.yml"
+	if err := os.WriteFile(filepath.Join(overlayDir, badKey), []byte("x: 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	values, secret, overlay, err := render.Load(dir)
+	if err != nil {
+		t.Fatalf("render.Load: %v", err)
+	}
+	if _, ok := overlay[badKey]; !ok {
+		t.Fatalf("overlay = %+v, want the mount to have surfaced %q unfiltered", overlay, badKey)
+	}
+
+	_, err = render.Paper(values, secret, overlay)
+	if err == nil {
+		t.Fatal("render.Paper accepted an overlay naming a file it does not write")
+	}
+	if !strings.Contains(err.Error(), badKey) {
+		t.Errorf("error = %q, want it to name %q", err, badKey)
 	}
 }
 
@@ -529,6 +748,80 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			},
 			want: AgentMountPath,
 		},
+		{
+			name: "same volume name as the config volume",
+			mount: spawneryv1alpha1.Mount{
+				Name:      ConfigVolumeName,
+				MountPath: "/irgendwo",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: ConfigVolumeName,
+		},
+		{
+			name: "same volume name as the config overlay volume",
+			mount: spawneryv1alpha1.Mount{
+				Name:      ConfigOverlayVolumeName,
+				MountPath: "/irgendwo",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: ConfigOverlayVolumeName,
+		},
+		{
+			name: "mounted over the config path",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: ConfigMountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: ConfigMountPath,
+		},
+		{
+			// The case the check exists for on this path too: a mount nested
+			// inside it can shadow the forwarding secret the renderer reads,
+			// and Kubernetes permits nested mounts without complaint.
+			name: "nested inside the config mount, shadowing the forwarding secret",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: ConfigMountPath + "/forwarding.secret",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: ConfigMountPath,
+		},
+		{
+			// ConfigOverlayVolumeName itself nests here when a group declares
+			// spec.configOverlay; a user mount at the same path would shadow
+			// it just as a mount over any other file under ConfigMountPath
+			// would, and the general bidirectional check on ConfigMountPath
+			// is what has to catch this, not a check specific to the overlay.
+			name: "mounted over where the overlay volume nests",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: ConfigMountPath + "/overlay",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: ConfigMountPath,
+		},
+		{
+			name: "mounted over a parent of the config mount",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: "/etc",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: ConfigMountPath,
+		},
 	}
 
 	for _, tc := range cases {
@@ -571,6 +864,10 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 			name:      "a sibling directory that only shares a prefix with /data",
 			mountPath: DataMountPath + "-extra",
 		},
+		{
+			name:      "a sibling directory that only shares a prefix with the config mount",
+			mountPath: ConfigMountPath + "-extra",
+		},
 	}
 
 	for _, tc := range cases {
@@ -588,5 +885,15 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 				t.Fatalf("BuildServerPod rejected mount path %q: %v", tc.mountPath, err)
 			}
 		})
+	}
+}
+
+// GroupConfigMapName is what Task 10's controller names the ConfigMap it
+// renders and what BuildServerPod and BuildProxyPod look for by name; the two
+// sides only agree on a running pod if this one function is the single
+// source both call.
+func TestGroupConfigMapNameIsTheGroupsOwnName(t *testing.T) {
+	if got := GroupConfigMapName("lobby"); got != "lobby" {
+		t.Errorf("GroupConfigMapName(%q) = %q, want the group's own name", "lobby", got)
 	}
 }

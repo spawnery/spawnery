@@ -198,6 +198,145 @@ func TestProxyPodExposesBothPorts(t *testing.T) {
 	}
 }
 
+// TestProxyPodConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret mirrors
+// the server builder's own config-volume test: the two builders share one
+// helper for exactly this volume, and design intent (docs section 4.6) is
+// that they cannot drift into different answers about where configuration
+// lives.
+func TestProxyPodConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *testing.T) {
+	pod := buildProxy(t)
+
+	var mounted bool
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == ConfigVolumeName {
+			mounted = true
+			if m.MountPath != ConfigMountPath {
+				t.Errorf("mountPath = %q, want %q", m.MountPath, ConfigMountPath)
+			}
+			if !m.ReadOnly {
+				t.Error("the config volume is writable")
+			}
+		}
+	}
+	if !mounted {
+		t.Fatal("the config volume is not mounted into the container")
+	}
+
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == ConfigVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil || vol.Projected == nil {
+		t.Fatalf("volume %q = %+v, want a projected source", ConfigVolumeName, vol)
+	}
+	if len(vol.Projected.Sources) != 2 {
+		t.Fatalf("projected sources = %+v, want exactly 2 with no overlay declared", vol.Projected.Sources)
+	}
+
+	var sawGroupConfigMap, sawSecret bool
+	for _, s := range vol.Projected.Sources {
+		if s.ConfigMap != nil && s.ConfigMap.Name == GroupConfigMapName("gateway") {
+			sawGroupConfigMap = true
+			if len(s.ConfigMap.Items) != 1 || s.ConfigMap.Items[0].Key != ConfigValuesKey || s.ConfigMap.Items[0].Path != "config.yaml" {
+				t.Errorf("configMap items = %+v, want %s mapped to config.yaml", s.ConfigMap.Items, ConfigValuesKey)
+			}
+		}
+		if s.Secret != nil && s.Secret.Name == "velocity-forwarding-secret" {
+			sawSecret = true
+			if len(s.Secret.Items) != 1 || s.Secret.Items[0].Key != ForwardingSecretKey || s.Secret.Items[0].Path != "forwarding.secret" {
+				t.Errorf("secret items = %+v, want %s mapped to forwarding.secret", s.Secret.Items, ForwardingSecretKey)
+			}
+		}
+	}
+	if !sawGroupConfigMap {
+		t.Errorf("sources = %+v, want a configMap source named %q", vol.Projected.Sources, GroupConfigMapName("gateway"))
+	}
+	if !sawSecret {
+		t.Errorf("sources = %+v, want a secret source named velocity-forwarding-secret", vol.Projected.Sources)
+	}
+}
+
+// TestProxyPodConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount
+// mirrors the server builder's own version of this test (see the long
+// comment there for why): the overlay must be a separate, plain ConfigMap
+// volume with no Items, not a third Projected source enumerating a closed
+// set of known names — an enumerated list would drop an unrecognised key at
+// the kubelet, before internal/render.checkOverlayFiles ever got a chance to
+// refuse it by name.
+func TestProxyPodConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount(t *testing.T) {
+	group := testProxyGroup()
+	group.Spec.ConfigOverlay = &spawneryv1alpha1.ObjectRef{Name: "gateway-overlay"}
+	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+
+	var base, overlay *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		switch pod.Spec.Volumes[i].Name {
+		case ConfigVolumeName:
+			base = &pod.Spec.Volumes[i]
+		case ConfigOverlayVolumeName:
+			overlay = &pod.Spec.Volumes[i]
+		}
+	}
+	if base == nil || base.Projected == nil || len(base.Projected.Sources) != 2 {
+		t.Fatalf("volume %q = %+v, want exactly the 2 base sources — the overlay must not be folded in here", ConfigVolumeName, base)
+	}
+	if overlay == nil {
+		t.Fatalf("volumes = %+v, want a %s volume", pod.Spec.Volumes, ConfigOverlayVolumeName)
+	}
+	if overlay.ConfigMap == nil {
+		t.Fatalf("volume %q = %+v, want a plain configMap source, not Projected", ConfigOverlayVolumeName, overlay)
+	}
+	if overlay.ConfigMap.Name != "gateway-overlay" {
+		t.Errorf("configMap name = %q, want gateway-overlay", overlay.ConfigMap.Name)
+	}
+	if len(overlay.ConfigMap.Items) != 0 {
+		t.Errorf("items = %+v, want none: an enumerated list would filter out an unrecognised overlay key before internal/render ever sees it", overlay.ConfigMap.Items)
+	}
+
+	var mount *corev1.VolumeMount
+	for i := range pod.Spec.Containers[0].VolumeMounts {
+		if pod.Spec.Containers[0].VolumeMounts[i].Name == ConfigOverlayVolumeName {
+			mount = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatal("the overlay volume is not mounted into the container")
+	}
+	if mount.MountPath != ConfigMountPath+"/overlay" {
+		t.Errorf("mountPath = %q, want %q", mount.MountPath, ConfigMountPath+"/overlay")
+	}
+	if !mount.ReadOnly {
+		t.Error("the overlay volume is writable")
+	}
+}
+
+// TestProxyPodConfigOverlayVolumeIsAbsentWhenNoneIsDeclared guards the nil
+// case: a ProxyGroup that sets no configOverlay must get neither the
+// overlay volume nor its mount, and the base config volume keeps exactly
+// its 2 sources.
+func TestProxyPodConfigOverlayVolumeIsAbsentWhenNoneIsDeclared(t *testing.T) {
+	pod := buildProxy(t)
+	for i := range pod.Spec.Volumes {
+		v := &pod.Spec.Volumes[i]
+		if v.Name == ConfigOverlayVolumeName {
+			t.Errorf("volume %+v present with no configOverlay declared", v)
+		}
+		if v.Name == ConfigVolumeName && (v.Projected == nil || len(v.Projected.Sources) != 2) {
+			t.Errorf("volume %q = %+v, want exactly 2 sources with no overlay declared", ConfigVolumeName, v)
+		}
+	}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == ConfigOverlayVolumeName {
+			t.Errorf("mount %+v present with no configOverlay declared", m)
+		}
+	}
+}
+
 // The drain window is how long existing sessions may run out when a proxy is
 // replaced. A grace period shorter than it would have the kubelet kill the
 // process mid-drain.
