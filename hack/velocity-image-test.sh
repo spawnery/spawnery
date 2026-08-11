@@ -156,6 +156,24 @@ if grep -qE 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container
 fi
 echo "the plugin's own classes load without a linkage error"
 
+# And that it did nothing else. The ready gate is internal/podspec.ProxyReadyPort
+# and the only thing that binds it; a dormant agent must leave it closed, or a
+# proxy with no operator, no server list and nothing to route to would still
+# turn its pod ready and then disconnect every player with "no available
+# server".
+#
+# This is the assertion task 7 has to keep true when it opens the gate for
+# real: the gate belongs behind the first FullSync, not behind plugin load.
+# There is no race to wait out -- ProxyInitializeEvent fires before Velocity
+# logs "Listening on ...:25565", which is what the wait loop above already
+# blocked on, so by here the plugin has run to completion.
+if "$CONTAINER" exec "$NAME" bash -c 'exec 3<>/dev/tcp/127.0.0.1/8081' 2>/dev/null; then
+	echo "the ready gate is open on 8081 with no operator; a dormant agent must not bind it:" >&2
+	grep -iE 'spawnery' <<<"$container_logs" >&2 || true
+	exit 1
+fi
+echo "the ready gate stayed closed, so the pod would not turn ready"
+
 # exec in the entrypoint puts the JVM at PID 1 so it receives SIGTERM
 # directly; without it, a proxy would never see the signal and would drop
 # every player on it instead of draining. "Shutting down the proxy..." is

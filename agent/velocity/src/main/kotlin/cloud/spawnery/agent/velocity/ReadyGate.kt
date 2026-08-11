@@ -96,12 +96,19 @@ class ReadyGate(private val port: Int, private val log: (String, Throwable?) -> 
     /**
      * Accepts and immediately closes, forever.
      *
-     * The loop is not an optimisation. A bound socket with nothing accepting
-     * still completes handshakes until the backlog fills, so a gate without
-     * this would pass every test that probes it a handful of times and would
-     * then start refusing connections minutes into a pod's life, once the
-     * kubelet's five-second probes had filled the queue — surfacing as
-     * readiness flapping with nothing in any log.
+     * The loop is not an optimisation, and the numbers are worth having.
+     * Measured 2026-08-11: a bound socket with nothing accepting still
+     * completes **51** connections — `java.net.ServerSocket(int)` passes a
+     * backlog of 50 and Linux queues one beyond it — and the 52nd is not
+     * refused, it *times out*, because an overflowed accept queue drops the
+     * SYN rather than resetting it.
+     *
+     * So a gate without this loop passes any test that probes it a handful of
+     * times, comes up green in an image test, and then, about four minutes into
+     * a pod's life, starts failing the kubelet's five-second probes on their
+     * three-second timeout — readiness flapping, with nothing in any log and
+     * nothing that ever logged an error. ReadyGateTest's connection count is
+     * chosen against these numbers for exactly that reason.
      */
     private fun accept(bound: ServerSocket) {
         while (!bound.isClosed) {

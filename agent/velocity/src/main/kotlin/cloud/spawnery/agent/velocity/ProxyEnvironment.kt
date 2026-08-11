@@ -81,10 +81,11 @@ sealed interface ProxyEnvironment {
                 )
             }
 
-            val fallbackGroups = split(getenv(FALLBACK_GROUPS))
+            val rawGroups = getenv(FALLBACK_GROUPS)
+            val fallbackGroups = split(rawGroups)
             if (fallbackGroups.isEmpty()) {
                 return Dormant(
-                    "$FALLBACK_GROUPS names no group (${describe(getenv(FALLBACK_GROUPS))}); " +
+                    "$FALLBACK_GROUPS names no group (${describe(rawGroups)}); " +
                         "refusing to route with nowhere to send a player",
                 )
             }

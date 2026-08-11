@@ -17,19 +17,38 @@ import java.nio.file.Path
  * decisions live in [ProxyEnvironment], [ReadyGate] and, from task 7, the
  * session.
  *
- * The annotation is still required even though Velocity reads this plugin's
- * identity out of `velocity-plugin.json`: the descriptor is what makes the jar
- * a plugin, and the annotation is what marks the class Guice instantiates.
+ * Velocity reads this plugin's identity entirely out of
+ * `velocity-plugin.json`; its `main` field is what names this class, and Guice
+ * constructs it from there. Nothing at runtime reads the annotation below —
+ * measured 2026-08-11 by scanning every class in the proxy jar for a reference
+ * to `com/velocitypowered/api/plugin/Plugin`, which found exactly three, all
+ * compile-time machinery: the annotation itself, `PluginAnnotationProcessor`
+ * and `SerializedPluginDescription`. It has `RUNTIME` retention and no reader.
+ *
+ * It is kept anyway, for two reasons that are not "Velocity requires it": it
+ * puts the plugin's identity in the source rather than only in a resource
+ * file, and it is the input the annotation processor would consume if anyone
+ * ever took the kapt route this project declined. See [version].
  */
 @Plugin(
     id = "spawnery",
     name = "Spawnery Agent",
-    // The descriptor in velocity-plugin.json carries the real version,
-    // expanded from -PagentVersion by processResources; Velocity reads it from
-    // there and this value is never consulted. A literal here rather than a
-    // build-time constant, because an annotation argument must be a compile
-    // time constant and a generated one would be a second version to keep in
-    // step with the first.
+    // Never read by anything. The descriptor in velocity-plugin.json carries
+    // the real version, expanded from -PagentVersion by processResources, and
+    // that is the one Velocity reports and the agent sends as Hello.version.
+    // A literal here rather than a build-time constant, because an annotation
+    // argument must be a compile-time constant.
+    //
+    // The trap, for whoever adds kapt: Velocity's annotation processor
+    // generates velocity-plugin.json to this same path from these same
+    // arguments. Adding kapt *alongside* the hand-written resource would ship
+    // a descriptor carrying this literal 0.0.0, no description and no authors
+    // -- and it would not fail anything. Both descriptor guards in
+    // hack/agent-jar-check.sh still pass: a "version": key is present, and no
+    // ${ placeholder remains to be caught. The operator would simply record
+    // every proxy in the fleet as running version 0.0.0. Taking that route
+    // means deleting src/main/resources/velocity-plugin.json and making this
+    // argument the real version, never doing one without the other.
     version = "0.0.0",
 )
 class AgentPlugin @Inject constructor(
