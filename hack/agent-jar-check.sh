@@ -13,9 +13,16 @@
 # The relocation is checked as an invariant and not as a list. A list of
 # packages has to be revisited every time a dependency changes, and the version
 # of this file that had one fell six packages behind without anything noticing,
-# three of them Paper's. So the first check below fails on *any* class outside
-# cloud/spawnery/agent/, named or not; the enumeration that follows exists only
-# to say which of them Paper would actually collide with.
+# three of them Paper's. So the check below fails on *any* class outside
+# cloud/spawnery/agent/, named or not.
+#
+# The per-flavour COLLIDES list is not a second check -- it could not be, since
+# every package it names is also outside cloud/spawnery/agent/ and the
+# invariant fails on it first. It is an explanation printed inside that
+# failure: of the packages that shipped unrelocated, these are the ones the
+# platform has its own copy of, so the symptom is a linkage error at class load
+# rather than a merely oversized jar. It used to sit below the exit, where it
+# could never run.
 set -euo pipefail
 
 JAR="${1:?usage: agent-jar-check.sh <jar> [source-dir [flavour]]}"
@@ -129,20 +136,29 @@ stray="$(
 if [ -n "$stray" ]; then
 	echo "agent-jar-check: these packages ship unrelocated:" >&2
 	sed -e 's|^|  |' <<<"$stray" >&2
+
+	# The enumeration, inside the failure it explains rather than after the
+	# exit. For these the consequence is a linkage error at class load rather
+	# than a merely broken invariant: the platform has its own copy on the
+	# classpath that loads the plugin, and the symptom is a NoSuchMethodError
+	# deep inside gRPC naming neither the plugin nor the conflict. Guava
+	# contributes two top-level packages, and missing the second is exactly how
+	# an earlier list-based version of this check went stale. The list is per
+	# flavour and lives in the case block, because the two platforms bundle
+	# different things.
+	collides=()
+	for pkg in "${COLLIDES[@]}"; do
+		if grep -q "^$pkg/" <<<"$entries"; then
+			collides+=("$pkg")
+		fi
+	done
+	if [ "${#collides[@]}" -gt 0 ]; then
+		echo "agent-jar-check: and $PLATFORM ships its own copy of these, so they fail at class load rather than merely bloating the jar:" >&2
+		printf '  %s\n' "${collides[@]}" >&2
+	fi
+
 	fail "every class the plugin ships must be under cloud/spawnery/agent/ -- add the package to the relocate list in agent/$FLAVOUR/build.gradle.kts"
 fi
-
-# Named separately because for these the consequence is a linkage error rather
-# than a broken invariant: the platform has its own copy on the classpath that
-# loads the plugin. Guava contributes two top-level packages, and missing the
-# second is exactly how the list above went stale. The list is per flavour and
-# lives in the case block, because the two platforms bundle different things --
-# and it is enumeration, which is why it is not what the build relies on.
-for pkg in "${COLLIDES[@]}"; do
-	if grep -q "^$pkg/" <<<"$entries"; then
-		fail "$pkg is present unrelocated; it would meet $PLATFORM's own copy"
-	fi
-done
 
 # Relocated packages must also be present under the prefix -- the checks above
 # pass just as well for a jar that lost the dependency altogether.
