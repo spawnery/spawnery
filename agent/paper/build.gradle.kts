@@ -105,14 +105,14 @@ tasks.withType<AbstractArchiveTask>().configureEach {
     isReproducibleFileOrder = true
 }
 
-// The plain jar keeps building: it is an implicit dependency of :test (present
-// since Task 1, unrelated to shading — :test pulls it in regardless of what
-// gradleBuildTask installs). Left with no classifier, its output filename
-// would be identical to shadowJar's, and since checkPhase invokes `gradle
-// test` after buildPhase already ran shadowJar, it would silently overwrite
-// the shaded jar in build/libs with an unrelocated one under the same name.
-// Giving it a classifier makes that collision impossible rather than
-// order-dependent.
+// The plain jar keeps building: this project's own `test` task depends on it
+// through the test runtime classpath, regardless of what gradleBuildTask
+// installs and of whether anything is shaded. Left with no classifier, its
+// output filename would be identical to shadowJar's, and since checkPhase
+// invokes `gradle test` after buildPhase already ran shadowJar, it would
+// silently overwrite the shaded jar in build/libs with an unrelocated one under
+// the same name. Giving it a classifier makes that collision impossible rather
+// than order-dependent.
 tasks.jar {
     archiveClassifier.set("plain")
 }

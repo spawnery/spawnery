@@ -3,9 +3,10 @@ package cloud.spawnery.agent.paper
 import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.Environment
 import cloud.spawnery.agent.OperatorChannel
-import cloud.spawnery.agent.ServerState
 import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
+import cloud.spawnery.agent.pb.OperatorToServer
+import cloud.spawnery.agent.pb.ServerMessage
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
@@ -27,8 +28,9 @@ import java.util.logging.Level
  */
 class AgentPlugin : JavaPlugin(), Listener {
     private val state = ServerState()
+    private val role = ServerRole(state)
     private lateinit var scheduler: ScheduledExecutorService
-    private var loop: SessionLoop? = null
+    private var loop: SessionLoop<ServerMessage, OperatorToServer>? = null
 
     override fun onEnable() {
         when (val env = Environment.from(System::getenv, Path.of(AGENT_DIR))) {
@@ -51,7 +53,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                         OperatorChannel.build(env.endpoint, Files.readAllBytes(env.caBundlePath))
                     },
                     credentials = BearerCredentials.of(TokenSource(env.tokenPath)),
-                    state = state,
+                    role = role,
                     scheduler = scheduler,
                     version = pluginMeta.version,
                     // SessionLoop never gives up and never escalates a broken stream
@@ -109,7 +111,7 @@ class AgentPlugin : JavaPlugin(), Listener {
         if (event.type != ServerLoadEvent.LoadType.STARTUP) return
         state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
         if (state.markReady()) {
-            loop?.readyChanged()
+            loop?.send(role.ready())
         }
     }
 

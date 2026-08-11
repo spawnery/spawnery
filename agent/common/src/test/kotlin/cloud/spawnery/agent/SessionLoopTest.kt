@@ -105,7 +105,7 @@ class SessionLoopTest {
 
     private fun loopAgainst(
         operator: FakeOperator,
-        state: ServerState,
+        role: FakeRole,
         dir: Path,
         channels: () -> ManagedChannel = { operator.newChannel() },
         // Identity, so a test's delays are the delays it wrote down. The
@@ -117,13 +117,13 @@ class SessionLoopTest {
         // that bound overrides it, and every other test here is answered long
         // before it could matter.
         fallbackAnswerBoundMillis: Long = SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS,
-    ): SessionLoop {
+    ): SessionLoop<ServerMessage, OperatorToServer> {
         val token = dir.resolve("token")
         Files.writeString(token, "test-token")
         return SessionLoop(
             channels = channels,
             credentials = BearerCredentials.of(TokenSource(token)),
-            state = state,
+            role = role,
             scheduler = scheduler,
             version = "26.2-0.2.0",
             log = { _, _ -> },
@@ -135,8 +135,8 @@ class SessionLoopTest {
     @Test
     fun `greets with the version and the current readiness`(@TempDir dir: Path) {
         FakeOperator("greets").use { operator ->
-            val state = ServerState().apply { markReady() }
-            loopAgainst(operator, state, dir).use { loop ->
+            val role = FakeRole().apply { markReady() }
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
 
                 val stream = operator.awaitStream(0)
@@ -152,15 +152,15 @@ class SessionLoopTest {
     @Test
     fun `sends Ready when readiness arrives after the greeting`(@TempDir dir: Path) {
         FakeOperator("ready-later").use { operator ->
-            val state = ServerState()
-            loopAgainst(operator, state, dir).use { loop ->
+            val role = FakeRole()
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val stream = operator.awaitStream(0)
                 val hello = stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
                 assertEquals(false, hello.hello.ready)
 
-                state.markReady()
-                loop.readyChanged()
+                role.markReady()
+                loop.send(role.ready())
 
                 stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.READY }
             }
@@ -170,8 +170,8 @@ class SessionLoopTest {
     @Test
     fun `reports the player count at the interval the operator dictates`(@TempDir dir: Path) {
         FakeOperator("reports").use { operator ->
-            val state = ServerState().apply { sample(players = 3, slots = 100) }
-            loopAgainst(operator, state, dir).use { loop ->
+            val role = FakeRole().apply { sample(players = 3, slots = 100) }
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val stream = operator.awaitStream(0)
                 stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -194,8 +194,8 @@ class SessionLoopTest {
     @Test
     fun `does not report before the operator has dictated an interval`(@TempDir dir: Path) {
         FakeOperator("no-interval").use { operator ->
-            val state = ServerState().apply { sample(players = 3, slots = 100) }
-            loopAgainst(operator, state, dir).use { loop ->
+            val role = FakeRole().apply { sample(players = 3, slots = 100) }
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val stream = operator.awaitStream(0)
                 stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -216,9 +216,9 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("renews").use { operator ->
-            val state = ServerState()
+            val role = FakeRole()
 
-            loopAgainst(operator, state, dir).use { loop ->
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -279,9 +279,9 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("renew").use { operator ->
-            val state = ServerState().apply { markReady() }
+            val role = FakeRole().apply { markReady() }
 
-            loopAgainst(operator, state, dir).use { loop ->
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -348,9 +348,9 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("supersedes").use { operator ->
-            val state = ServerState().apply { markReady() }
+            val role = FakeRole().apply { markReady() }
 
-            loopAgainst(operator, state, dir).use { loop ->
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -412,9 +412,9 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("replacement-dies-late").use { operator ->
-            val state = ServerState().apply { markReady() }
+            val role = FakeRole().apply { markReady() }
 
-            loopAgainst(operator, state, dir).use { loop ->
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -474,9 +474,9 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("mute-operator").use { operator ->
-            val state = ServerState().apply { markReady() }
+            val role = FakeRole().apply { markReady() }
 
-            loopAgainst(operator, state, dir).use { loop ->
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -552,12 +552,12 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("mute-parks-transport").use { operator ->
-            val state = ServerState().apply { markReady() }
+            val role = FakeRole().apply { markReady() }
             val opened = Collections.synchronizedList(mutableListOf<ManagedChannel>())
 
             loopAgainst(
                 operator,
-                state,
+                role,
                 dir,
                 channels = { operator.newChannel().also { opened.add(it) } },
             ).use { loop ->
@@ -631,9 +631,9 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("mute-from-the-start").use { operator ->
-            val state = ServerState().apply { markReady() }
+            val role = FakeRole().apply { markReady() }
 
-            loopAgainst(operator, state, dir, fallbackAnswerBoundMillis = 500).use { loop ->
+            loopAgainst(operator, role, dir, fallbackAnswerBoundMillis = 500).use { loop ->
                 loop.start()
 
                 // Accepted, greeted, and never answered — no ReportInterval and
@@ -663,7 +663,7 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("renew-fails").use { operator ->
-            val state = ServerState().apply { markReady() }
+            val role = FakeRole().apply { markReady() }
             val order = Collections.synchronizedList(mutableListOf<String>())
             var connectCount = 0
 
@@ -676,7 +676,7 @@ class SessionLoopTest {
             // reached by a different route.
             val loop = loopAgainst(
                 operator,
-                state,
+                role,
                 dir,
                 channels = {
                     when (connectCount++) {
@@ -738,8 +738,8 @@ class SessionLoopTest {
     @Test
     fun `reconnects with backoff after the stream breaks`(@TempDir dir: Path) {
         FakeOperator("reconnect").use { operator ->
-            val state = ServerState()
-            loopAgainst(operator, state, dir).use { loop ->
+            val role = FakeRole()
+            loopAgainst(operator, role, dir).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -777,12 +777,12 @@ class SessionLoopTest {
     @Test
     fun `shuts down the channel behind every stream that breaks`(@TempDir dir: Path) {
         FakeOperator("channels-released").use { operator ->
-            val state = ServerState()
+            val role = FakeRole()
             val opened = Collections.synchronizedList(mutableListOf<ManagedChannel>())
 
             loopAgainst(
                 operator,
-                state,
+                role,
                 dir,
                 channels = { operator.newChannel().also { opened.add(it) } },
                 // The backoff sequence is asserted by the test below; here it
@@ -837,7 +837,7 @@ class SessionLoopTest {
         @TempDir dir: Path,
     ) {
         FakeOperator("backoff-sequence").use { operator ->
-            val state = ServerState()
+            val role = FakeRole()
             // The base handed to jitter is backoffMillis(attempt) exactly, so
             // recording it reads the sequence without waiting it out. The
             // return value collapses the wait: what is under test is the number
@@ -847,7 +847,7 @@ class SessionLoopTest {
 
             loopAgainst(
                 operator,
-                state,
+                role,
                 dir,
                 channels = { if (connectCount++ < 3) FailingChannel() else operator.newChannel() },
                 jitter = { base -> bases.add(base); 1L },
@@ -893,7 +893,7 @@ class SessionLoopTest {
     @Test
     fun `reconnects when the stream fails before the session is established`(@TempDir dir: Path) {
         FakeOperator("early-failure").use { operator ->
-            val state = ServerState()
+            val role = FakeRole()
             var connectCount = 0
 
             // The first attempt fails from inside stub.serverSession(), which is
@@ -903,7 +903,7 @@ class SessionLoopTest {
             // than reconnecting too eagerly.
             val loop = loopAgainst(
                 operator,
-                state,
+                role,
                 dir,
                 channels = { if (connectCount++ == 0) FailingChannel() else operator.newChannel() },
             )
@@ -919,7 +919,7 @@ class SessionLoopTest {
     @Test
     fun `retries when the very first connect throws`(@TempDir dir: Path) {
         FakeOperator("first-throws").use { operator ->
-            val state = ServerState()
+            val role = FakeRole()
             var connectCount = 0
 
             // Every other call site of connect() is a scheduled one that
@@ -929,7 +929,7 @@ class SessionLoopTest {
             // never opens a session at all and never says why.
             loopAgainst(
                 operator,
-                state,
+                role,
                 dir,
                 channels = {
                     if (connectCount++ == 0) throw IllegalStateException("the channel could not be built")
@@ -946,14 +946,14 @@ class SessionLoopTest {
     @Test
     fun `does not reconnect after stop`(@TempDir dir: Path) {
         FakeOperator("stopped").use { operator ->
-            val state = ServerState()
+            val role = FakeRole()
             // The delay has to be long enough that stop() lands before the
             // reconnect fires, and short enough that the wait below outlives it:
             // a window that ends before the reconnect was due would pass whether
             // or not stop() suppressed anything. Half a second of headroom
             // against the microseconds stop() needs, and a full second of
             // observation after the reconnect should have opened a stream.
-            loopAgainst(operator, state, dir, jitter = { 500L }).use { loop ->
+            loopAgainst(operator, role, dir, jitter = { 500L }).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -991,8 +991,9 @@ class SessionLoopTest {
     @Test
     fun `leaves no channel running when stop lands mid-connect`(@TempDir dir: Path) {
         FakeOperator("stopped-mid-connect").use { operator ->
-            val state = ServerState()
-            val started = java.util.concurrent.atomic.AtomicReference<SessionLoop?>(null)
+            val role = FakeRole()
+            val started =
+                java.util.concurrent.atomic.AtomicReference<SessionLoop<ServerMessage, OperatorToServer>?>(null)
             val opened = Collections.synchronizedList(mutableListOf<ManagedChannel>())
             var connectCount = 0
 
@@ -1003,7 +1004,7 @@ class SessionLoopTest {
             // it -- and its channel would still be running underneath.
             val loop = loopAgainst(
                 operator,
-                state,
+                role,
                 dir,
                 channels = {
                     val channel = operator.newChannel().also { opened.add(it) }

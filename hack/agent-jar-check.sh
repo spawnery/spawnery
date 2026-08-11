@@ -34,10 +34,8 @@ paper)
 	# directory which has moved or vanished is a failure, and a `find` over
 	# whatever happens to be present cannot tell "moved" from "empty".
 	# :common is here for every flavour -- both agents compile its sources
-	# into their jar. :paper has no test sources yet (its first arrives with
-	# ServerRole), so paper/src/test is deliberately absent from this list
-	# rather than probed for; add the line when the directory appears.
-	SRC_DIRS=(common/src/main common/src/test paper/src/main)
+	# into their jar.
+	SRC_DIRS=(common/src/main common/src/test paper/src/main paper/src/test)
 	DESCRIPTOR="paper-plugin.yml"
 	# The line the descriptor states its version on. Read rather than merely
 	# counted, see below.
