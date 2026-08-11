@@ -144,6 +144,38 @@ class RouterTest {
         assertEquals("lobby-2", chosen?.serverInfo?.name)
     }
 
+    /**
+     * The fall-through from [Router.choose]'s own doc, on the one input that
+     * separates it from the emptiness check it looks like: a first group that
+     * holds a server and still has no *candidate*, because the exclusion took
+     * its only one away.
+     *
+     * The mutant this kills is a line's worth of reordering -- test
+     * `inGroup(group).isEmpty()` and `continue` before applying the exclusion
+     * filter rather than after. Every other test in this class passes under
+     * it, including `the excluded server is never chosen even when it is the
+     * only one`, which has nowhere to fall through to. In a real drain this is
+     * the ordinary case rather than a corner: `Drain` excludes the server it
+     * is emptying, and a single-server group with a second group behind it in
+     * `fallbackGroups` is exactly the shape the runbook builds.
+     */
+    @Test
+    fun `a group the exclusion empties falls through to the next group`() {
+        val registry = FakeRegistry()
+        val directory = ServerDirectory(registry) { _, _ -> }
+        directory.apply(
+            listOf(
+                Backend("lobby-1", "10.0.0.1:25565", "lobby"),
+                Backend("hub-1", "10.0.0.2:25565", "hub"),
+            ),
+        )
+        val router = Router(directory)
+
+        val chosen = router.choose(listOf("lobby", "hub"), excluding = "lobby-1")
+
+        assertEquals("hub-1", chosen?.serverInfo?.name)
+    }
+
     private companion object {
         fun fakeServer(registry: FakeRegistry, name: String): FakeServer =
             registry.server(name) as FakeServer

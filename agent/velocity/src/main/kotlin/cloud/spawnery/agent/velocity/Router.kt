@@ -27,6 +27,13 @@ class Router(private val directory: ServerDirectory) {
         for (group in groups) {
             val candidates = directory.inGroup(group)
                 .filter { excluding == null || !it.serverInfo.name.equals(excluding, ignoreCase = true) }
+            // Emptiness is decided after the exclusion, not before it: a group
+            // whose only member is the server being drained holds no candidate
+            // and has to fall through to the next group. Checking
+            // inGroup(group).isEmpty() first instead would return null there
+            // rather than the fallback -- see RouterTest's "a group the
+            // exclusion empties falls through to the next group", which is the
+            // one test that separates the two orderings.
             if (candidates.isEmpty()) continue
 
             // Ties break by name so the choice is deterministic rather than
