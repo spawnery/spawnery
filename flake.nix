@@ -143,6 +143,21 @@
             env.CGO_ENABLED = 0;
           };
 
+          # Test-only for the same reason as spawnery-stubop, and likewise in
+          # no image: it is the automated half of milestone 3's success
+          # criterion, run from a developer machine or the evidence runbook
+          # against a proxy's NodePort. An image that carried a tool for
+          # logging in as an arbitrary player would be handing an attacker
+          # one.
+          spawnery-join = pkgs.buildGoModule {
+            pname = "spawnery-join";
+            version = "0.2.0";
+            src = ./.;
+            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            subPackages = [ "cmd/spawnery-join" ];
+            env.CGO_ENABLED = 0;
+          };
+
           # Baked into both the Paper and Velocity images; it writes the
           # configuration each JVM actually reads, before the JVM starts. See
           # internal/render and cmd/spawnery-config.
@@ -171,7 +186,7 @@
           paper-repo = paper.repo;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-config agents;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
