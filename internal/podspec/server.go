@@ -272,7 +272,7 @@ func BuildServerPod(
 				},
 			},
 		},
-		configVolume(GroupConfigMapName(group.Name), net.Spec.ForwardingSecretRef.Name),
+		configVolume(GroupConfigMapName(group.Name, RoleServer), net.Spec.ForwardingSecretRef.Name),
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: DataVolumeName, MountPath: DataMountPath},

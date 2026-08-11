@@ -337,7 +337,7 @@ func findSecretSource(sources []corev1.VolumeProjection, secret string) *corev1.
 // TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret is the base
 // case with no overlay declared: the config volume exists, is read-only at
 // ConfigMountPath, and its two sources are the group's own ConfigMap — named
-// GroupConfigMapName(group), the name Task 10's controller writes — and the
+// GroupConfigMapName(group, RoleServer), the name the ServerGroup controller writes — and the
 // Network's forwarding secret, each landing under the bare file name
 // internal/render.Load reads by default.
 func TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *testing.T) {
@@ -367,9 +367,9 @@ func TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *testing.T) {
 		t.Fatalf("projected sources = %+v, want exactly 2 with no overlay declared", vol.Projected.Sources)
 	}
 
-	cm := findConfigMapSource(vol.Projected.Sources, GroupConfigMapName("lobby"))
+	cm := findConfigMapSource(vol.Projected.Sources, GroupConfigMapName("lobby", RoleServer))
 	if cm == nil {
-		t.Fatalf("sources = %+v, want a configMap source named %q", vol.Projected.Sources, GroupConfigMapName("lobby"))
+		t.Fatalf("sources = %+v, want a configMap source named %q", vol.Projected.Sources, GroupConfigMapName("lobby", RoleServer))
 	}
 	if len(cm.Items) != 1 || cm.Items[0].Key != ConfigValuesKey || cm.Items[0].Path != "config.yaml" {
 		t.Errorf("configMap items = %+v, want %s mapped to config.yaml", cm.Items, ConfigValuesKey)
@@ -473,7 +473,7 @@ func TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(dir, render.ValuesFile), []byte("maxPlayers: 100\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, render.SecretFile), []byte("s3cr3t\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, render.SecretFile), []byte("s3cr3t"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	overlayDir := filepath.Join(dir, render.OverlayDir)
@@ -503,6 +503,28 @@ func TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey(t *testing.T) 
 	}
 	if !strings.Contains(err.Error(), badKey) {
 		t.Errorf("error = %q, want it to name %q", err, badKey)
+	}
+}
+
+// TestConfigPathsAgreeWithRender guards the three places podspec and
+// internal/render each name the same path or file independently — by design,
+// per the comments on configSecretFile and configOverlayDir: podspec must
+// stay free of a dependency on internal/render so that building a pod spec
+// never touches the filesystem. That independence only stays safe as long as
+// the two literals actually agree; nothing but this assertion enforces it.
+// A divergence on configOverlayDir in particular is silent at runtime: the
+// overlay mounts at a path loadOverlay never reads, os.ReadDir returns
+// IsNotExist, the overlay is treated as absent, and the pod starts up
+// looking healthy with the user's override silently dropped.
+func TestConfigPathsAgreeWithRender(t *testing.T) {
+	if configOverlayDir != render.OverlayDir {
+		t.Errorf("podspec.configOverlayDir = %q, render.OverlayDir = %q, want them equal", configOverlayDir, render.OverlayDir)
+	}
+	if configSecretFile != render.SecretFile {
+		t.Errorf("podspec.configSecretFile = %q, render.SecretFile = %q, want them equal", configSecretFile, render.SecretFile)
+	}
+	if ConfigMountPath != render.ConfigDir {
+		t.Errorf("podspec.ConfigMountPath = %q, render.ConfigDir = %q, want them equal", ConfigMountPath, render.ConfigDir)
 	}
 }
 
@@ -888,12 +910,32 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 	}
 }
 
-// GroupConfigMapName is what Task 10's controller names the ConfigMap it
-// renders and what BuildServerPod and BuildProxyPod look for by name; the two
+// GroupConfigMapName is what the group controllers name the ConfigMap they
+// render and what BuildServerPod and BuildProxyPod look for by name; the two
 // sides only agree on a running pod if this one function is the single
 // source both call.
-func TestGroupConfigMapNameIsTheGroupsOwnName(t *testing.T) {
-	if got := GroupConfigMapName("lobby"); got != "lobby" {
-		t.Errorf("GroupConfigMapName(%q) = %q, want the group's own name", "lobby", got)
+//
+// This used to pin the bare group name as the whole identity
+// (TestGroupConfigMapNameIsTheGroupsOwnName, before the role argument
+// existed). That was the collision: a ServerGroup and a ProxyGroup are
+// different Kinds and Kubernetes lets them share a name, so two groups named
+// "lobby" produced one ConfigMap name fought over by both controllers, and a
+// user's own ConfigMap named after their group was silently adopted. What
+// this test must now pin is the opposite property — that role changes the
+// name — not a fixed literal.
+func TestGroupConfigMapNameIsScopedByRoleAsWellAsGroup(t *testing.T) {
+	server := GroupConfigMapName("lobby", RoleServer)
+	proxy := GroupConfigMapName("lobby", RoleProxy)
+
+	if server == proxy {
+		t.Fatalf("GroupConfigMapName(%q, RoleServer) = GroupConfigMapName(%q, RoleProxy) = %q, want them to differ: "+
+			"a ServerGroup and a ProxyGroup of the same name would otherwise fight over one ConfigMap", "lobby", "lobby", server)
+	}
+	if server == "lobby" || proxy == "lobby" {
+		t.Errorf("server=%q proxy=%q, want neither to be the bare group name: "+
+			"that identity is what a user's own ConfigMap named after their group could collide with", server, proxy)
+	}
+	if !strings.Contains(server, "lobby") || !strings.Contains(proxy, "lobby") {
+		t.Errorf("server=%q proxy=%q, want both to still carry the group name", server, proxy)
 	}
 }

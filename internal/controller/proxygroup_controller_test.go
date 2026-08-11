@@ -39,7 +39,7 @@ import (
 func (f *fixture) proxyGroupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
 	t.Helper()
 	cm := &corev1.ConfigMap{}
-	key := types.NamespacedName{Name: podspec.GroupConfigMapName(group), Namespace: f.ns}
+	key := types.NamespacedName{Name: podspec.GroupConfigMapName(group, podspec.RoleProxy), Namespace: f.ns}
 	if err := f.c.Get(f.ctx, key, cm); err != nil {
 		t.Fatalf("get ConfigMap for group %s: %v", group, err)
 	}
@@ -346,6 +346,41 @@ func TestProxyGroupRendersConfigMap(t *testing.T) {
 	}
 }
 
+// TestProxyGroupWithNoConfigStillStartsAProxy is the regression test for the
+// gap a per-task review could not see: spec.config is +optional, and
+// spec.config.playerLimit is +optional inside it, so createProxyGroup's own
+// default shape — no mutate function, exactly what "gateway" is above —
+// used to leave the rendered ConfigMap with playerLimit unset. podspec always
+// defaulted the pod's own SPAWNERY_PLAYER_LIMIT env var, so a real cluster
+// showed a ProxyGroup that was Accepted, had its Service, and had pods stuck
+// in CrashLoopBackOff reading "config.yaml: playerLimit is not set" — nothing
+// on the CR said why. This carries the ConfigMap this reconciler actually
+// writes all the way into render.Velocity, the way spawnery-config itself
+// would read it, rather than stopping at "the ConfigMap exists".
+func TestProxyGroupWithNoConfigStillStartsAProxy(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	cm := f.proxyGroupConfigMap(t, "gateway")
+	var values render.Values
+	if err := yaml.Unmarshal([]byte(cm.Data[podspec.ConfigValuesKey]), &values); err != nil {
+		t.Fatalf("%s does not parse as render.Values: %v", podspec.ConfigValuesKey, err)
+	}
+	if values.PlayerLimit == nil {
+		t.Fatal("playerLimit is nil: a ProxyGroup that sets no spec.config must still get the default, not silence")
+	}
+	if *values.PlayerLimit != podspec.DefaultPlayerLimit {
+		t.Errorf("playerLimit = %d, want the default %d", *values.PlayerLimit, podspec.DefaultPlayerLimit)
+	}
+
+	if _, err := render.Velocity(values, "/etc/spawnery/forwarding.secret", nil); err != nil {
+		t.Errorf("render.Velocity refused the ConfigMap a no-config ProxyGroup renders: %v", err)
+	}
+}
+
 // TestProxyGroupConfigMapUpdatesOnSpecChange guards against a renderer that
 // only runs once: correct at creation but never revisited would look
 // identical until the day an operator actually edits spec.config.
@@ -401,7 +436,7 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 
 	f.reconcileProxyGroup(r, "gateway")
 
-	cmIdx := recorder.indexOf(fmt.Sprintf("%T/%s", &corev1.ConfigMap{}, podspec.GroupConfigMapName("gateway")))
+	cmIdx := recorder.indexOf(fmt.Sprintf("%T/%s", &corev1.ConfigMap{}, podspec.GroupConfigMapName("gateway", podspec.RoleProxy)))
 	podIdx := recorder.indexOf(fmt.Sprintf("%T/%s-", &corev1.Pod{}, "gateway"))
 	if cmIdx == -1 {
 		t.Fatalf("no ConfigMap create was recorded")

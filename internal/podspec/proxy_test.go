@@ -237,7 +237,7 @@ func TestProxyPodConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *test
 
 	var sawGroupConfigMap, sawSecret bool
 	for _, s := range vol.Projected.Sources {
-		if s.ConfigMap != nil && s.ConfigMap.Name == GroupConfigMapName("gateway") {
+		if s.ConfigMap != nil && s.ConfigMap.Name == GroupConfigMapName("gateway", RoleProxy) {
 			sawGroupConfigMap = true
 			if len(s.ConfigMap.Items) != 1 || s.ConfigMap.Items[0].Key != ConfigValuesKey || s.ConfigMap.Items[0].Path != "config.yaml" {
 				t.Errorf("configMap items = %+v, want %s mapped to config.yaml", s.ConfigMap.Items, ConfigValuesKey)
@@ -251,7 +251,7 @@ func TestProxyPodConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *test
 		}
 	}
 	if !sawGroupConfigMap {
-		t.Errorf("sources = %+v, want a configMap source named %q", vol.Projected.Sources, GroupConfigMapName("gateway"))
+		t.Errorf("sources = %+v, want a configMap source named %q", vol.Projected.Sources, GroupConfigMapName("gateway", RoleProxy))
 	}
 	if !sawSecret {
 		t.Errorf("sources = %+v, want a secret source named velocity-forwarding-secret", vol.Projected.Sources)

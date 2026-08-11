@@ -78,14 +78,28 @@ func ProxyLabels(network, group string) map[string]string {
 }
 
 // GroupConfigMapName is the ConfigMap a group's controller renders its
-// configuration into, per design section 4.6 — named after the group itself
-// and owned by it, so deletion cascades without a name derived by
-// convention. BuildServerPod and BuildProxyPod call this to know what to
-// project into ConfigVolumeName; Task 10's controllers call it to know what
-// to write, so the two sides can only agree on a running pod if both go
-// through this one function.
-func GroupConfigMapName(group string) string {
-	return group
+// configuration into, per design section 4.6 — owned by the group, so
+// deletion cascades without a name derived by convention.
+//
+// role must be RoleServer or RoleProxy. A ServerGroup and a ProxyGroup are
+// different Kinds, so Kubernetes lets them share a name in the same
+// namespace; a name that was only the group's own name collided the moment
+// that happened — the second controller's SetControllerReference returned
+// AlreadyOwnedError inside its mutate function, so that group's reconcile
+// failed early and it never got its Service or its pods, in an error loop
+// naming neither the group nor the cause. The role suffix also keeps a
+// user's own ConfigMap named after their group — their configOverlay
+// ConfigMap being the likeliest way to do that — from ever coinciding with
+// the one the operator owns and deletes when the group goes: without it, the
+// operator would silently adopt the user's ConfigMap, inject config.yaml
+// into it, and delete it on the group's own deletion.
+//
+// BuildServerPod and BuildProxyPod call this to know what to project into
+// ConfigVolumeName; the group controllers call it to know what to write, so
+// the two sides can only agree on a running pod if both go through this one
+// function.
+func GroupConfigMapName(group, role string) string {
+	return group + "-" + role + "-config"
 }
 
 // ManagedSelector matches every pod Spawnery manages for one network.

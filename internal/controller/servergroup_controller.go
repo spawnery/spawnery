@@ -469,7 +469,7 @@ func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *s
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podspec.GroupConfigMapName(group.Name),
+			Name:      podspec.GroupConfigMapName(group.Name, podspec.RoleServer),
 			Namespace: group.Namespace,
 		},
 	}

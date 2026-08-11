@@ -43,7 +43,7 @@ import (
 func (f *fixture) groupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
 	t.Helper()
 	cm := &corev1.ConfigMap{}
-	key := types.NamespacedName{Name: podspec.GroupConfigMapName(group), Namespace: f.ns}
+	key := types.NamespacedName{Name: podspec.GroupConfigMapName(group, podspec.RoleServer), Namespace: f.ns}
 	if err := f.c.Get(f.ctx, key, cm); err != nil {
 		t.Fatalf("get ConfigMap for group %s: %v", group, err)
 	}
@@ -1289,7 +1289,7 @@ func TestServerGroupConfigMapWrittenBeforeTheServer(t *testing.T) {
 
 	f.reconcileGroup(t, r)
 
-	cmIdx := recorder.indexOf(fmt.Sprintf("%T/%s", &corev1.ConfigMap{}, podspec.GroupConfigMapName(f.group.Name)))
+	cmIdx := recorder.indexOf(fmt.Sprintf("%T/%s", &corev1.ConfigMap{}, podspec.GroupConfigMapName(f.group.Name, podspec.RoleServer)))
 	srvIdx := recorder.indexOf(fmt.Sprintf("%T/%s-", &spawneryv1alpha1.Server{}, f.group.Name))
 	if cmIdx == -1 {
 		t.Fatalf("no ConfigMap create was recorded")

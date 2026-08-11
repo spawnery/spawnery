@@ -206,11 +206,23 @@ that does not get its signal drops every player on it without draining.
 ### 4.6 The operator side
 
 **Rendering.** Both group controllers ensure one ConfigMap per group, named
-after the group and owned by it, so deletion cascades. It carries only what a
-user can influence:
+after the group and its role and owned by the group, so deletion cascades.
+The role is part of the name, not an afterthought: a `ServerGroup` and a
+`ProxyGroup` are different Kinds, so Kubernetes allows them the same name in
+one namespace, and a name that was only the group's own name would then
+collide between the two controllers — or, just as easily, with a user's own
+ConfigMap that happens to be named after their group, which the operator
+would silently adopt. The ConfigMap carries only what a user can influence:
 
-- ServerGroup: `maxPlayers`
-- ProxyGroup: `playerLimit`, `motd`
+- ServerGroup: `maxPlayers`, which the CRD makes required — a `ServerGroup`
+  cannot omit it.
+- ProxyGroup: `playerLimit`, `motd`. Unlike `maxPlayers`, `playerLimit` is
+  `+optional` on the CRD, and the controller defaults an unset one to
+  `podspec.DefaultPlayerLimit` — the exact constant `BuildProxyPod` already
+  defaults the pod's own `SPAWNERY_PLAYER_LIMIT` environment variable from.
+  The two have to agree: a `ProxyGroup` that sets no `spec.config` still gets
+  a workable ConfigMap this way, rather than one `render.Velocity` refuses to
+  start from while the pod's own environment claims a limit already.
 
 Critical fields are deliberately absent. They live in the renderer and nowhere
 else — one truth per fact.

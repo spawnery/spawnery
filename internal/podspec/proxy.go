@@ -142,7 +142,7 @@ func BuildProxyPod(
 				},
 			},
 		},
-		configVolume(GroupConfigMapName(group.Name), net.Spec.ForwardingSecretRef.Name),
+		configVolume(GroupConfigMapName(group.Name, RoleProxy), net.Spec.ForwardingSecretRef.Name),
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: DataVolumeName, MountPath: DataMountPath},

@@ -277,7 +277,7 @@ func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *sp
 
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      podspec.GroupConfigMapName(group.Name),
+			Name:      podspec.GroupConfigMapName(group.Name, podspec.RoleProxy),
 			Namespace: group.Namespace,
 		},
 	}
@@ -296,22 +296,23 @@ func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *sp
 }
 
 // proxyConfigValues builds the neutral document reconcileConfigMap writes
-// from whatever a user set in spec.config. A field spec.config leaves unset —
-// spec.config itself being nil counts as every field unset — stays a nil
-// pointer in the result rather than being defaulted to zero, so
-// render.Values.RequirePlayerLimit can refuse a proxy that never got a
-// capacity instead of silently starting one that reports slots=0 forever.
+// from whatever a user set in spec.config. PlayerLimit is never left nil —
+// spec.config itself being nil counts as PlayerLimit unset, and it defaults
+// to podspec.DefaultPlayerLimit, the exact constant BuildProxyPod defaults
+// SPAWNERY_PLAYER_LIMIT from. The two must agree: if this function left the
+// field nil instead, render.Velocity's RequirePlayerLimit would refuse every
+// ProxyGroup that never set spec.config.playerLimit, while that same
+// ProxyGroup's pods already claim a limit of 500 in their own environment —
+// Accepted, Service up, and every pod in CrashLoopBackOff forever, with
+// nothing on the CR saying why.
 func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 	var values render.Values
-	cfg := group.Spec.Config
-	if cfg == nil {
-		return values
+	limit := podspec.DefaultPlayerLimit
+	if cfg := group.Spec.Config; cfg != nil && cfg.PlayerLimit > 0 {
+		limit = cfg.PlayerLimit
 	}
-	if cfg.PlayerLimit != 0 {
-		limit := cfg.PlayerLimit
-		values.PlayerLimit = &limit
-	}
-	if cfg.Motd != "" {
+	values.PlayerLimit = &limit
+	if cfg := group.Spec.Config; cfg != nil && cfg.Motd != "" {
 		motd := cfg.Motd
 		values.Motd = &motd
 	}
