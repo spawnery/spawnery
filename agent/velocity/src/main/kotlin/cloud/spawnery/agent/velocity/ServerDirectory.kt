@@ -15,6 +15,28 @@ import java.net.InetSocketAddress
  * invisible to it by construction and therefore never at risk of being
  * unregistered.
  *
+ * **Every public method is `@Synchronized`, because the writers and the reader
+ * are on different threads.** Which thread each caller is on:
+ *
+ *  - [apply], [add] and [remove] are called from [ProxyRole.onMessage], which
+ *    `SessionLoop` drives from a gRPC callback thread. Not *one* such thread,
+ *    either: `SessionLoop`'s make-before-break renewal keeps the outgoing and
+ *    the incoming stream alive at once, on two separate `ManagedChannel`s, so
+ *    two callback threads can be inside these methods while the displaced
+ *    stream drains.
+ *  - [inGroup] is called from [Router.choose], and `AgentPlugin`'s
+ *    `onChooseInitialServer` reaches that from **Velocity's event thread**,
+ *    every time a player joins. (`Drain` reaches it from the gRPC side, which
+ *    is why the reader cannot simply be declared "the event thread" either.)
+ *  - [names] is only read from tests today, and iterates the same map.
+ *
+ * So a periodic `FullSync` -- the operator sends one roughly every 30 seconds
+ * -- landing while a player joins is two threads on one `LinkedHashMap`, and
+ * without the locking below the join path throws
+ * `ConcurrentModificationException` out of `inGroup`'s iteration. The write
+ * side is wrapped in `runCatching` by [ProxyRole.onMessage]; the read side has
+ * no guard anywhere between here and Velocity's event loop.
+ *
  * @param log where a skipped or malformed entry is reported. A callback
  *   rather than a logger for the same reason [ReadyGate] takes one: this runs
  *   on a gRPC callback thread, with no proxy-supplied logger in reach.
@@ -27,6 +49,12 @@ class ServerDirectory(
     // case-insensitive lookup -- see upsert(). The value keeps the Backend as
     // last applied, address included, so upsert can tell "same address" from
     // "changed address" without going back to the registry for it.
+    //
+    // A plain LinkedHashMap rather than a concurrent map: insertion order is
+    // what makes a full sync's registrations deterministic, and the lock the
+    // methods below take is what makes the map safe. A ConcurrentHashMap would
+    // give up the order and still not make the read-modify-write in upsert
+    // atomic.
     private val backends = LinkedHashMap<String, Backend>()
 
     /**
@@ -40,6 +68,7 @@ class ServerDirectory(
      * full sync's job is to make the proxy match what was successfully
      * parsed, not to remember a discarded value across syncs.
      */
+    @Synchronized
     fun apply(servers: List<Backend>) {
         val carried = mutableSetOf<String>()
         for (backend in servers) {
@@ -53,6 +82,7 @@ class ServerDirectory(
     }
 
     /** Registers or updates a single backend, as `RegisterServer` carries it. */
+    @Synchronized
     fun add(backend: Backend) {
         upsert(backend)
     }
@@ -63,6 +93,7 @@ class ServerDirectory(
      * registry at all -- so this can never remove a server some other means
      * put there.
      */
+    @Synchronized
     fun remove(name: String) {
         val key = name.lowercase()
         if (key !in backends) return
@@ -76,12 +107,14 @@ class ServerDirectory(
      * later dropped is therefore never handed to a caller -- the router, from
      * task 6 -- as a live target.
      */
+    @Synchronized
     fun inGroup(group: String): List<RegisteredServer> =
         backends.values
             .filter { it.group == group }
             .mapNotNull { registry.server(it.name) }
 
     /** The names this directory has registered, in their original case. */
+    @Synchronized
     fun names(): Set<String> = backends.values.mapTo(mutableSetOf()) { it.name }
 
     /**
@@ -134,7 +167,8 @@ class ServerDirectory(
          *
          * A missing port, an empty host, an unparsable port, and a port
          * outside 1-65535 are all `null` -- a skip, not an exception, because
-         * this runs on the gRPC callback thread the whole session lives on.
+         * this is reached only from the write side, on a gRPC callback thread,
+         * where a throw costs the stream. See [ProxyRole.onMessage].
          */
         fun parseAddress(address: String): InetSocketAddress? {
             val split = address.lastIndexOf(':')

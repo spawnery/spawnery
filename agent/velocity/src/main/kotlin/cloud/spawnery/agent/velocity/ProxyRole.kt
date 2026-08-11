@@ -23,6 +23,16 @@ import cloud.spawnery.agent.pb.RegisteredServer as PbServer
  * exactly here -- and why the player count is read out of [ProxyState] rather
  * than off the proxy.
  *
+ * **What that does not mean is that the state those two carry is single-
+ * threaded.** [ServerDirectory] is `@Synchronized` throughout, and the reason
+ * is on its side of the seam rather than this one: this class is its only
+ * writer, but its reader is [Router.choose], which `AgentPlugin` reaches from
+ * **Velocity's event thread** every time a player joins. A `FullSync` applied
+ * here while a player is being routed there is two threads on one map. (Nor
+ * is the writer itself reliably one thread: `SessionLoop`'s make-before-break
+ * renewal runs two streams on two `ManagedChannel`s at once, so two callback
+ * threads can be inside [onMessage] while the displaced one drains.)
+ *
  * **This agent never sends `Heartbeat`.** The message exists in `ProxyMessage`
  * and internal/agentserver has a branch for it that deliberately does nothing:
  * the stream is its own liveness signal, and the registry's staleness rule
@@ -44,11 +54,11 @@ class ProxyRole(
     private val log: (String, Throwable?) -> Unit,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
-     * Whether a `FullSync` has ever been applied. Not `synchronized`, because
-     * the only writer is the single gRPC callback thread this whole class runs
-     * on -- but atomic anyway, because "the only writer" is a property of
-     * SessionLoop that nothing here can enforce, and a lost transition would
-     * open the gate twice or, worse, never.
+     * Whether a `FullSync` has ever been applied. Atomic rather than a plain
+     * `Boolean`, because during a make-before-break renewal two gRPC callback
+     * threads can be applying a `FullSync` at the same time -- one per live
+     * stream -- and a lost transition would open the gate twice or, worse,
+     * never.
      */
     private val synced = AtomicBoolean(false)
 
