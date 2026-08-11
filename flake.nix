@@ -184,6 +184,11 @@
           # Architecture-independent (it is jars), so this stays available on
           # every system.
           paper-repo = paper.repo;
+          # The paperclip launcher, exposed for the same reason velocity-jar
+          # is: it is what a human runs by hand to measure something out of
+          # the pinned build. internal/render/testdata/paper-global.default.yml
+          # records the command that uses it.
+          paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
           inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents;

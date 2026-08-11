@@ -121,6 +121,52 @@ container_logs="$("$CONTAINER" logs "$NAME" 2>&1)"
 check_no_download "$container_logs"
 echo "no download attempted"
 
+# What Paper made of the file the renderer wrote.
+#
+# /data/config/paper-global.yml is Paper's own writable file: spawnery-config
+# renders it before the JVM starts, and Paper rewrites it on load, filling in
+# every default and keeping whatever it recognised. Reading it back after the
+# server is up is therefore Paper answering the one question no unit test in
+# internal/render can - not "did the renderer write this string" but "did the
+# receiving program consume it".
+#
+# It has to be asked, because Paper does not refuse a key it does not know. It
+# ignores the key, keeps its default for the field the author meant, and writes
+# the stray key back out here so the file still looks like the override took.
+# internal/render wrote the forwarding secret under secret-key rather than
+# secret from milestone 3b until 3c's first end-to-end join, and every test in
+# the repository passed the whole time: the backend came up, answered this
+# script's ping, and rejected every forwarded join.
+#
+# Asserted as a presence check on the value, not as the absence of an error in
+# the log. Paper does log "Velocity is enabled, but no secret key was
+# specified" in the broken case, but a grep for a message that must not appear
+# passes just as happily when the message is reworded upstream.
+#
+# Narrowed to the proxies.velocity block before anything is matched. A bare
+# grep for "enabled: true" over the whole file would pass on Paper's own spark
+# and update-checker sections no matter what the velocity block said - which is
+# exactly the shape of assertion this milestone has already found seven of.
+effective_global="$("$CONTAINER" exec "$NAME" cat /data/config/paper-global.yml)"
+velocity_block="$(awk '
+	/^  velocity:/ { inblock = 1; next }
+	inblock && /^    / { print; next }
+	inblock { exit }
+' <<<"$effective_global")"
+if [ -z "$velocity_block" ]; then
+	echo "Paper wrote no proxies.velocity block at all:" >&2
+	echo "$effective_global" >&2
+	exit 1
+fi
+for want in 'enabled: true' 'secret: test-forwarding-secret'; do
+	if ! grep -qF "$want" <<<"$velocity_block"; then
+		echo "Paper's proxies.velocity does not say \"$want\"; forwarding is off and every join through a proxy is refused with \"Your server did not send a forwarding request to the proxy\":" >&2
+		echo "$velocity_block" >&2
+		exit 1
+	fi
+done
+echo "Paper read the forwarding secret and enabled Velocity forwarding"
+
 # The plugin is in the image but has no operator to reach here. Two things have
 # to be true, and neither is visible from a green ping alone.
 #

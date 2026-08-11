@@ -17,8 +17,12 @@ limitations under the License.
 package render
 
 import (
+	"os"
+	"sort"
 	"strings"
 	"testing"
+
+	"sigs.k8s.io/yaml"
 )
 
 func paperValues() Values {
@@ -60,11 +64,103 @@ func TestPaperEnablesVelocityForwarding(t *testing.T) {
 		t.Fatalf("Paper: %v", err)
 	}
 	global := string(files["config/paper-global.yml"])
-	for _, want := range []string{"enabled: true", "online-mode: true", "s3cret"} {
+	for _, want := range []string{"enabled: true", "online-mode: true", "secret: s3cret"} {
 		if !strings.Contains(global, want) {
 			t.Errorf("paper-global.yml does not contain %q:\n%s", want, global)
 		}
 	}
+}
+
+// paperGlobalDefault is Paper's own config/paper-global.yml, byte for byte as
+// the pinned build writes it on a first start against an otherwise empty data
+// directory. It is a measurement of the receiving program, not of this
+// package, which is the whole reason it exists — every other test in this file
+// asserts that the renderer writes the string the renderer says it writes, and
+// no such test can fail on a key Paper does not read. Reproduce it with:
+//
+//	REPO=$(nix build .#paper-repo --no-link --print-out-paths)
+//	JAR=$(nix build .#paper-jar --no-link --print-out-paths)
+//	JAVA=$(nix build nixpkgs#jdk25_headless --no-link --print-out-paths)/bin/java
+//	mkdir /tmp/paper-defaults && cd /tmp/paper-defaults && echo eula=true >eula.txt
+//	"$JAVA" -Xmx1g -DbundlerRepoDir="$REPO" -jar "$JAR" --nogui
+//	# wait for config/paper-global.yml to appear, then stop the server
+//	cp config/paper-global.yml "$OLDPWD"/internal/render/testdata/paper-global.default.yml
+//
+// (The dev shell's JDK is older than the 25 Paper 26.2 refuses to start
+// without, hence the separate jdk25_headless — the same one nix/paper.nix
+// patches the repo with. -Xmx1g only keeps the measurement off the host's
+// whole memory; it has no bearing on the file.)
+//
+// A Paper bump therefore has to re-run this and update the file, exactly the
+// way nix/velocity.nix's config-version carries the jar xf command that
+// measured it. It is also not the only guard: hack/image-test.sh boots the
+// pinned Paper against a rendered file and reads back what Paper made of it,
+// which needs no fixture to be refreshed and fails on a rename by itself.
+const paperGlobalDefault = "testdata/paper-global.default.yml"
+
+// The keys this renderer writes have to be keys Paper declares.
+//
+// Paper does not refuse a key it does not know. It ignores it, keeps its own
+// default for the field the author meant, and writes the stray key back out on
+// the next save so the file on disk still looks like the override took.
+// Measured against the pinned build: rendering secret-key rather than secret
+// leaves Paper with an empty secret and, through its own postProcess, enabled:
+// false — a backend that starts clean, passes every probe, and rejects every
+// forwarded join with "Your server did not send a forwarding request to the
+// proxy" at the other end. That was true of this renderer from the day it was
+// written until milestone 3c's first end-to-end join.
+func TestPaperWritesTheKeysPaperItselfReads(t *testing.T) {
+	defaults, err := os.ReadFile(paperGlobalDefault)
+	if err != nil {
+		t.Fatalf("read Paper's own defaults: %v", err)
+	}
+	paperKeys := velocityKeysOf(t, defaults, paperGlobalDefault)
+
+	files, err := Paper(paperValues(), "s3cret", nil)
+	if err != nil {
+		t.Fatalf("Paper: %v", err)
+	}
+	rendered := files["config/paper-global.yml"]
+
+	for _, key := range sortedKeys(velocityKeysOf(t, rendered, "the rendered config/paper-global.yml")) {
+		if !paperKeys[key] {
+			t.Errorf("the renderer writes proxies.velocity.%s, which Paper does not declare; Paper reads %v and would silently keep its own defaults for whatever this key was meant to set:\n%s",
+				key, sortedKeys(paperKeys), rendered)
+		}
+	}
+}
+
+// velocityKeysOf reads the proxies.velocity key names out of a paper-global.yml
+// document. It fails rather than returning an empty set when the block is
+// missing, so a fixture that was truncated or a renderer that stopped writing
+// the block at all cannot pass by having nothing to compare.
+func velocityKeysOf(t *testing.T, doc []byte, what string) map[string]bool {
+	t.Helper()
+	var parsed struct {
+		Proxies struct {
+			Velocity map[string]any `json:"velocity"`
+		} `json:"proxies"`
+	}
+	if err := yaml.Unmarshal(doc, &parsed); err != nil {
+		t.Fatalf("%s does not parse as YAML: %v", what, err)
+	}
+	if len(parsed.Proxies.Velocity) == 0 {
+		t.Fatalf("%s has no proxies.velocity mapping:\n%s", what, doc)
+	}
+	keys := make(map[string]bool, len(parsed.Proxies.Velocity))
+	for k := range parsed.Proxies.Velocity {
+		keys[k] = true
+	}
+	return keys
+}
+
+func sortedKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func TestPaperCarriesMaxPlayersThrough(t *testing.T) {
@@ -136,13 +232,13 @@ func TestPaperRefusesAnOverlayForAFileItDoesNotWrite(t *testing.T) {
 // nothing before this test would have caught that swap.
 func TestPaperOverlayCannotMoveVelocityCriticalKeys(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
-		"paper-global.yml": "proxies:\n  velocity:\n    enabled: false\n    online-mode: false\n    secret-key: not-the-real-secret\n",
+		"paper-global.yml": "proxies:\n  velocity:\n    enabled: false\n    online-mode: false\n    secret: not-the-real-secret\n",
 	})
 	if err != nil {
 		t.Fatalf("Paper: %v", err)
 	}
 	global := string(files["config/paper-global.yml"])
-	for _, want := range []string{"enabled: true", "online-mode: true", "secret-key: s3cret"} {
+	for _, want := range []string{"enabled: true", "online-mode: true", "secret: s3cret"} {
 		if !strings.Contains(global, want) {
 			t.Errorf("paper-global.yml does not contain %q, the overlay moved a critical key:\n%s", want, global)
 		}
