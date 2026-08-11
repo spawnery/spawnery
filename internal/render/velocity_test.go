@@ -106,6 +106,56 @@ func TestVelocityShipsNoServers(t *testing.T) {
 	}
 }
 
+// try and forced-hosts have to be spelled out empty, not merely absent: a
+// missing key falls back to Velocity's own built-in example (try = ["lobby"]
+// and three forced hosts naming servers this proxy never declares), which
+// refuses to start against an empty [servers] table rather than warning and
+// continuing. hack/velocity-image-test.sh is what actually caught this — a
+// unit test asserting on the rendered string cannot tell "absent" from
+// "explicitly empty" the way Velocity's own config loader does.
+//
+// This covers only the no-overlay case; see
+// TestVelocityOverlayServersTableKeepsAnEmptyTry for the one where an
+// overlay's own [servers] table would otherwise carry try away with it.
+func TestVelocityDefaultsTryAndForcedHostsEmptyWithNoOverlay(t *testing.T) {
+	files, err := Velocity(velocityValues(), testSecretPath, nil)
+	if err != nil {
+		t.Fatalf("Velocity: %v", err)
+	}
+	toml := string(files["velocity.toml"])
+	if !strings.Contains(toml, "try = []") {
+		t.Errorf("velocity.toml does not spell out an empty try list:\n%s", toml)
+	}
+	if !strings.Contains(toml, "[forced-hosts]") {
+		t.Errorf("velocity.toml has no [forced-hosts] table at all:\n%s", toml)
+	}
+}
+
+// doc[k] = val in velocityToml is whole-key assignment, not a deep merge: an
+// overlay that declares its own [servers] table — to add a server, say —
+// replaces the base table outright, including the try = [] subkey nested
+// inside it. Without the post-overlay check this test guards, that overlay
+// would silently reopen the startup refusal
+// TestVelocityDefaultsTryAndForcedHostsEmptyWithNoOverlay closes: Velocity
+// falls back to try = ["lobby"], which does not exist in this rendered file
+// either.
+func TestVelocityOverlayServersTableKeepsAnEmptyTry(t *testing.T) {
+	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
+		"velocity.toml": "[servers]\n" + `lobby-external = "10.0.0.5:25565"` + "\n",
+	})
+	if err != nil {
+		t.Fatalf("Velocity: %v", err)
+	}
+	toml := string(files["velocity.toml"])
+	if !strings.Contains(toml, "try = []") {
+		t.Errorf("an overlay [servers] table dropped the empty try list:\n%s", toml)
+	}
+	if !strings.Contains(toml, `lobby-external = "10.0.0.5:25565"`) &&
+		!strings.Contains(toml, `lobby-external = '10.0.0.5:25565'`) {
+		t.Errorf("the overlay's own server entry did not reach velocity.toml:\n%s", toml)
+	}
+}
+
 func TestVelocityCarriesTheMotdAndLimit(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, nil)
 	if err != nil {

@@ -93,11 +93,27 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 	// [servers] is added even though it stays empty: the agent registers
 	// backends over the operator channel, and a static try list here would
 	// be a second truth about which servers exist.
+	//
+	// try and [forced-hosts] are spelled out empty for a reason that only
+	// shows up at runtime, not in a unit test of this string: Velocity does
+	// not treat an absent key as "off", it falls back to the same example
+	// values documented in its own default-velocity.toml — try = ["lobby"]
+	// and forced hosts for lobby.example.com, factions.example.com and
+	// minigames.example.com. Against an empty [servers] table those examples
+	// name servers that do not exist, and Velocity refuses to start at all
+	// ("Fallback server lobby is not registered", "Server 'lobby' for forced
+	// host ... does not exist") rather than merely warning. Measured against
+	// the pinned jar while building hack/velocity-image-test.sh, which is the
+	// first thing in this repository to actually boot Velocity against a
+	// rendered file rather than asserting on the string.
 	doc := map[string]any{
 		"config-version":   velocityConfigVersion,
 		"motd":             valueOr(v.Motd, ""),
 		"show-max-players": int64(*v.PlayerLimit),
-		"servers":          map[string]any{},
+		"servers": map[string]any{
+			"try": []string{},
+		},
+		"forced-hosts": map[string]any{},
 	}
 
 	if strings.TrimSpace(overlay) != "" {
@@ -108,6 +124,26 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 		for k, val := range fragment {
 			doc[k] = val
 		}
+	}
+
+	// doc[k] = val above is whole-key assignment, not a deep merge: an
+	// overlay carrying its own [servers] table replaces ours outright and
+	// carries the try = [] above away with it, since try is a subkey of
+	// servers rather than one of the four critical keys reasserted below.
+	// Checked again here rather than assumed to have survived — a missing
+	// try is not the same as an empty one to Velocity, which falls back to
+	// try = ["lobby"] and reopens the exact startup refusal the base case
+	// above exists to close, this time through an ordinary configOverlay.
+	// forced-hosts has no such subkey to lose — an overlay can only replace
+	// it outright, which is a deliberate override, not this hole — but it is
+	// checked too rather than trusted to still be a table at all.
+	if servers, ok := doc["servers"].(map[string]any); ok {
+		if _, hasTry := servers["try"]; !hasTry {
+			servers["try"] = []string{}
+		}
+	}
+	if _, hasForcedHosts := doc["forced-hosts"]; !hasForcedHosts {
+		doc["forced-hosts"] = map[string]any{}
 	}
 
 	// Reasserted last: whatever the overlay said about these four keys is
