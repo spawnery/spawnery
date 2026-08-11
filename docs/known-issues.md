@@ -466,6 +466,92 @@ depends on this, so nothing forces a fix now; whoever next touches
 `internal/render`'s overlay contract should close it with a real key check
 rather than assume the existing refusals already cover it.
 
+**The rendered ConfigMap's name changed, and nothing migrates the old
+one.** `podspec.GroupConfigMapName` used to return the group's own bare
+name; it now returns `<group>-<role>-config`. The rename fixed a real
+collision — a `ServerGroup` and a `ProxyGroup` sharing a name could fight
+over one ConfigMap, and a user's own ConfigMap named after their group
+(their `configOverlay` ConfigMap, most plausibly) would have been adopted,
+owner-reference stamped, and deleted the moment the group was. What the
+rename does not do is carry an already-running cluster across the change: a
+group reconciled under the old code has a ConfigMap at the old bare name,
+nothing renames or deletes it once the new code takes over, and nothing
+warns that it is sitting there orphaned. That is acceptable only for as
+long as nothing is deployed against this code yet, which is true today and
+is exactly the condition milestone 6 (Helm, the first thing that makes a
+running upgrade real) will end.
+
+It is also not fully closed on the receiving end: neither
+`reconcileConfigMap` (`internal/controller/servergroup_controller.go` and
+`internal/controller/proxygroup_controller.go`) checks that a ConfigMap
+already sitting at the *new* name is actually owned by this group before
+mutating it. `controllerutil.CreateOrUpdate`'s mutate closure sets the
+label and `config.yaml` and calls `SetControllerReference` last, and
+`SetControllerReference` only refuses when the object already has a
+*different* controller owner — an object with no owner at all is silently
+given one. A ConfigMap that happens to carry `podspec.LabelManagedBy` (so
+the cache sees it) but was created by something other than this group's
+reconciler is therefore still adoptable. The rename traded a plausible
+collision (bare group name) for an implausible one (the exact rendered
+name, pre-labelled); it did not remove the shape.
+
+**The adoption comment in `internal/podspec/labels.go` overstates how the
+collision actually presents.** `GroupConfigMapName`'s doc comment says that
+without the role suffix "the operator would silently adopt the user's
+ConfigMap, inject config.yaml into it, and delete it on the group's own
+deletion." That is only true when the user's ConfigMap already carries
+`podspec.LabelManagedBy`: `cmd/spawnery-operator/main.go` narrows the
+manager's ConfigMap cache to that label specifically so it does not have to
+hold every ConfigMap in the cluster, so an *unlabelled* ConfigMap of the
+colliding name is invisible to `CreateOrUpdate`'s `Get` — the reconciler
+instead attempts a plain `Create`, which fails with `AlreadyExists`, and the
+reconcile loops on that error rather than adopting anything. Nothing is
+silent about it; it just does not say why on the CR. The comment's other
+half, about `AlreadyOwnedError` on a cross-kind name collision (a
+`ServerGroup` and a `ProxyGroup` sharing a bare name), is accurate — the
+operator's own sibling controller writes the label, so the cache does see
+that object. Whoever next edits the comment should scope the "silently
+adopt" clause to the labelled case instead of stating it as universal.
+
+**The proxy player-limit default is still spelled out twice.**
+`podspec.BuildProxyPod` (`internal/podspec/proxy.go`) and
+`proxyConfigValues` (`internal/controller/proxygroup_controller.go`) each
+write the same guard, `cfg != nil && cfg.PlayerLimit > 0`, before falling
+back to `podspec.DefaultPlayerLimit`. They share the constant but not the
+predicate, and nothing asserts the two decisions agree. That gap is worth
+recording because the disagreement between exactly these two code paths
+*was* this milestone's one Critical finding: the controller used to leave
+the ConfigMap's `playerLimit` nil whenever `spec.config` was nil, while the
+pod's own `SPAWNERY_PLAYER_LIMIT` environment variable already defaulted to
+500 — so a `ProxyGroup` with no `spec.config` came up Accepted, with its
+Service, and every pod crash-looped forever reading `config.yaml:
+playerLimit is not set`, with nothing on the CR explaining why. That
+specific disagreement is fixed and pinned by
+`TestProxyGroupWithNoConfigStillStartsAProxy`, which carries the
+reconciler's own ConfigMap through `render.Velocity` the way
+`spawnery-config` actually reads it. What is not fixed is the shape: the
+default is still decided in two places, by two copies of the same
+condition, with no test that would fail if a future edit changed one
+without the other.
+
+**`TestConfigPathsAgreeWithRender` pins three of the four path constants
+`internal/podspec` and `internal/render` each name independently, not all
+four.** The independence is deliberate — `podspec` must stay free of a
+dependency on `internal/render` so building a pod spec never touches the
+filesystem — and the test exists precisely because the two sides can only
+agree by construction, not by sharing code. It asserts `configOverlayDir ==
+render.OverlayDir`, `configSecretFile == render.SecretFile` and
+`ConfigMountPath == render.ConfigDir`, but never `podspec.ConfigValuesKey
+== render.ValuesFile`; the test's own doc comment still says "the three
+places" where there are four literal pairs today. Both constants happen to
+be `"config.yaml"` right now, so nothing is broken. A divergence here would
+fail loudly — `spawnery-config` would refuse to start reading
+`/etc/spawnery` with `config.yaml: not found` — rather than silently, which
+is why this is a gap and not a hole; it is the same class of duplication as
+`configOverlayDir`, whose divergence the test's own comment already
+documents as silent. Closing it is a one-line addition to the existing
+test.
+
 ## Preconditions for milestone 4 (scaling and drain)
 
 **The PodDisruptionBudget has no counterpart.** Milestone 1 delivers the
@@ -659,3 +745,15 @@ intentional — the following points each concern only one of the two halves.
   Kubernetes event, only a condition.
 - The `deletionTimestamp` skip in `Sweep` is covered by no test; it concerns only
   an already-deleting orphaned pod, where a second `Delete` is harmless.
+- **`make -j image-test` can load the wrong image.** `image` and
+  `velocity-image` (`Makefile`) both run `nix build` with no `--out-link`, so
+  both land in the same default `./result` symlink, and `image-load` /
+  `velocity-image-load` each read `< result` right after their own build.
+  Plain `make image-test` is safe because `make` orders the two prerequisites
+  left to right, but `image-test: image-load velocity-image-load` is what
+  makes both reachable from one command, and a parallel `make -jN` is free to
+  run the two `nix build` invocations at the same time — the two `load`
+  steps that follow can then each read whichever build most recently swapped
+  the shared symlink, up to a half-written one mid-swap. `nix build
+  --out-link` with two distinct names (e.g. `result-paper` and
+  `result-velocity`) closes it; nothing does that today.
