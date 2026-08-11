@@ -836,6 +836,16 @@ class ReadyGateTest {
     @Test fun `the gate accepts more than one connection`() {
         // The kubelet probes every 5 s forever; a gate that served one probe
         // and stopped would turn a pod ready and then not-ready again.
+        //
+        // The count has to exceed the listen backlog, and by enough that it
+        // is obvious why. Measured on this machine: with ServerSocket's
+        // default listen(50) and no accept() at all, 51 connections complete
+        // and the 52nd times out. So `repeat(8)` — the first draft of this
+        // plan — passes against a gate that binds and never starts its
+        // acceptor, which is the one thing this test exists to catch. Use 64,
+        // with an explicit 3000 ms connect timeout to match the pod spec's
+        // own timeoutSeconds; without the timeout a broken gate fails only
+        // after the kernel's two-minute SYN-retry schedule.
     }
 
     @Test fun `close releases the port`() {
@@ -978,10 +988,21 @@ everything else in this class is final as written. The gate is constructed but
 never opened here, so the image test in Step 9 sees a plugin that loads, logs
 and does nothing — which is exactly the claim that step makes.
 
-`logger` is `org.slf4j.Logger`, which Velocity bundles and injects. The
-`@Plugin` annotation is still required — Velocity reads the descriptor from
-JSON, but the class is instantiated through Guice and the annotation is what
-marks it.
+`logger` is `org.slf4j.Logger`, which Velocity bundles and injects.
+
+**The `@Plugin` annotation is inert at runtime, and the comment must say so.**
+The first draft of this plan claimed it is "what marks the class Guice
+instantiates". It is not: the proxy jar holds exactly three references to
+`com/velocitypowered/api/plugin/Plugin` — the annotation, the annotation
+processor and `SerializedPluginDescription` — and all three are compile-time
+machinery. The descriptor's `main` field is what names the class. Keep the
+annotation, because the processor requires it if anyone ever takes the kapt
+fallback, and use its `version` line to record why that fallback is a trap:
+a processor-generated descriptor is written to the same path from the
+annotation, carrying `0.0.0`, no `description` and no `authors`, and both
+descriptor guards in `hack/agent-jar-check.sh` would still pass — a `"version":`
+key is present and no `${` remains. Every proxy would then report version
+`0.0.0` with nothing failing anywhere.
 
 - [ ] **Step 7: Teach `nix/agents.nix` and the image about the second jar**
 
