@@ -13,12 +13,12 @@
 # can only claim it.
 #
 # The first three phases run against the Paper image, one for each of the three
-# things an operator does to an agent. Against the passive stub, everything closed in the trace was closed by
-# the agent, which is what makes the overlap assertion a statement about the
-# agent at all. Against --supersede, the stub retires the displaced stream
-# itself, where and when internal/agentserver does. Against --mute-after it
-# does that and then says nothing, which is an operator blocked between the
-# cancel and its first Send.
+# things an operator does to an agent. Against the passive stub, everything
+# closed in the trace was closed by the agent, which is what makes the overlap
+# assertion a statement about the agent at all. Against --supersede, the stub
+# retires the displaced stream itself, where and when internal/agentserver
+# does. Against --mute-after it does that and then says nothing, which is an
+# operator blocked between the cancel and its first Send.
 #
 # The last two assert the same quantity from opposite sides: the rate at which
 # the agent opens streams. Mistaking the operator's retirement for a breakage
@@ -173,8 +173,24 @@ await_event() {
 # holds. No `|| echo 0` fallback: the stub appends whole lines and fsyncs each
 # one, so a parse failure here is a real one, and answering 0 for it would turn
 # an unreadable trace into a wrong number rather than a loud stop.
+#
+# The `case` is what makes that true rather than intended. jq answering nothing
+# is the shape a failed read takes here, and `[ "" -ne 0 ]` does not fail an
+# assertion: it prints "integer expression expected", returns 2, and every `if`
+# built on it reads that as false. A guard written that way passes exactly when
+# the trace could not be read. Refusing to return a non-number is what stops
+# that, and every caller assigns the result first so `set -e` sees this exit
+# rather than a comparison swallowing it.
 count_events() {
-	jq -rs --arg kind "$1" '[.[] | select(.kind == $kind)] | length' <"$2"
+	local count
+	count="$(jq -rs --arg kind "$1" '[.[] | select(.kind == $kind)] | length' <"$2")"
+	case "$count" in
+	'' | *[!0-9]*)
+		echo "could not count $1 events in $2: jq answered '$count'" >&2
+		exit 1
+		;;
+	esac
+	printf '%s\n' "$count"
 }
 
 # streams_opened <events file> - how many streams the agent has opened so far.
@@ -584,6 +600,7 @@ chmod 0755 "$WORK/agent-proxy"
 	--renew-after 60 \
 	--hard-deadline 240 \
 	--proxy \
+	--require-token \
 	--full-sync-after "$FULL_SYNC_AFTER" \
 	>"$EVENTS4" 2>"$WORK/stub4.log" &
 STUB4_PID=$!
@@ -616,13 +633,25 @@ echo "waiting up to ${DEADLINE}s for the proxy agent to greet..."
 await_event hello "$EVENTS4" "$NAME4"
 echo "the proxy agent connected"
 
-# The same character-for-character check the Paper phase makes, and here it is
-# the only one there is. ProxyRole.open() attaches the call credentials, and
-# deleting that call compiles, passes every JUnit test, and streams
-# unauthenticated -- the stub accepts any bearer token, including none, so
-# nothing about the connection succeeding says the header was sent. This
-# assertion is what covers it.
-expected4="Bearer $(cat "$WORK/agent-proxy/token")"
+# The same character-for-character check the Paper phase makes. ProxyRole.open()
+# attaches the call credentials, and deleting that call compiles and passes
+# every JUnit test, so this level is the only cover it has.
+#
+# The stub is started with --require-token above, so the greeting this phase
+# already waited for is itself the first half of that cover: an uncredentialed
+# stream is refused before it opens and the agent never greets at all. This
+# check is the second half, and the two are not redundant -- the refusal proves
+# some acceptable token arrived, this proves it was the mounted one, byte for
+# byte, in the spelling internal/grpcauth's interceptor matches.
+token4="$(cat "$WORK/agent-proxy/token")"
+if [ -z "$token4" ]; then
+	# Otherwise both sides of the comparison below are "Bearer " and it passes
+	# for an agent that sent no token at all - the assertion this whole phase
+	# exists to keep honest, defeated by an empty file.
+	echo "the stub wrote an empty token file, so the header comparison below would prove nothing" >&2
+	exit 1
+fi
+expected4="Bearer $token4"
 actual4="$(jq -r 'select(.kind == "hello") | .authorization' <"$EVENTS4" | head -1)"
 if [ "$actual4" != "$expected4" ]; then
 	echo "proxy authorization header is $(printf '%q' "$actual4"), want $(printf '%q' "$expected4")" >&2
@@ -660,7 +689,8 @@ echo "25565 answers from inside the container"
 # which makes the result below meaningless rather than merely late - and a
 # closed-gate assertion that is allowed to run after the sync is the exact shape
 # of assertion this milestone has twice found unable to fail.
-if [ "$(count_events full_sync_sent "$EVENTS4")" -ne 0 ]; then
+synced4="$(count_events full_sync_sent "$EVENTS4")"
+if [ "$synced4" -ne 0 ]; then
 	echo "the FullSync went out before the gate could be probed closed; raise FULL_SYNC_AFTER" >&2
 	jq -rs '.' <"$EVENTS4" >&2
 	exit 1
@@ -671,7 +701,8 @@ if port_open "$NAME4" 8081; then
 	"$CONTAINER" logs "$NAME4" 2>&1 | grep -i spawnery >&2 || true
 	exit 1
 fi
-if [ "$(count_events full_sync_sent "$EVENTS4")" -ne 0 ]; then
+synced4="$(count_events full_sync_sent "$EVENTS4")"
+if [ "$synced4" -ne 0 ]; then
 	echo "the FullSync went out while the gate was being probed closed; raise FULL_SYNC_AFTER" >&2
 	jq -rs '.' <"$EVENTS4" >&2
 	exit 1
@@ -752,6 +783,7 @@ chmod 0755 "$WORK/agent-proxy-supersede"
 	--hard-deadline 20 \
 	--supersede \
 	--proxy \
+	--require-token \
 	>"$EVENTS5" 2>"$WORK/stub5.log" &
 STUB5_PID=$!
 
@@ -796,6 +828,18 @@ if [ "$superseded5" -lt 1 ]; then
 	exit 1
 fi
 
+# And the same for --proxy, for exactly the reason above. The comment on this
+# phase's stub claims every stream is a complete proxy session - opened,
+# answered, synced - and without this the flag could be deleted and the phase
+# would pass identically, because everything else here reads only stream_opened
+# and stream_closed.
+synced5="$(count_events full_sync_sent "$EVENTS5")"
+if [ "$synced5" -lt 1 ]; then
+	echo "no stream in this phase was ever sent a server list, so --proxy measured nothing" >&2
+	jq -rs '.' <"$EVENTS5" >&2
+	exit 1
+fi
+
 if [ "$opened5" -gt "$LIMIT" ]; then
 	echo "the proxy opened $opened5 streams in ${WINDOW}s, at most $LIMIT expected from a ${RENEWALS}-renewal window" >&2
 	echo "the operator retiring the displaced stream is being mistaken for a breakage the agent owes a reconnect" >&2
@@ -810,5 +854,22 @@ if [ "$opened5" -lt "$FLOOR" ]; then
 	exit 1
 fi
 echo "the proxy opened $opened5 streams in ${WINDOW}s across $superseded5 supersessions: one per renewal, no reconnect storm"
+
+# The gate is still open, after $superseded5 retirements and $opened5 handovers.
+#
+# Nothing at any level checks this today, and it is true by construction:
+# ReadyGate.close() is reachable only from onShutdown, and ProxyRole opens the
+# gate once and never asks again. "True by construction" is not "measured", and
+# the failure it rules out is the one this whole design exists to prevent - a
+# proxy that dropped out of Ready on every renewal would flap its pod's
+# readiness on the operator's own schedule, taking itself out of the Service
+# endpoints while nothing was wrong with it.
+if ! port_open "$NAME5" 8081; then
+	echo "the ready gate is closed after ${WINDOW}s of supersessions; a renewal took this pod out of Ready" >&2
+	jq -rs '[.[] | select(.kind == "stream_opened" or .kind == "stream_closed" or .kind == "full_sync_sent")]' <"$EVENTS5" >&2
+	"$CONTAINER" logs "$NAME5" 2>&1 | grep -i spawnery >&2 || true
+	exit 1
+fi
+echo "the ready gate stayed open across $synced5 syncs and $superseded5 supersessions"
 
 echo "agent-test: ok"

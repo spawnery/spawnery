@@ -58,9 +58,19 @@ limitations under the License.
 // unconditionally, because refusing one would make an agent that opened the
 // wrong rpc look like a connection failure rather than naming itself.
 //
-// It also accepts any bearer token. It is not testing authentication — that is
-// internal/grpcauth's own tests' job — it is recording, verbatim, what the
-// agent put in the header.
+// It records, verbatim, what the agent put in the authorization header, and by
+// default accepts any of it: what a stream carried is a fact for the test to
+// assert on, not a reason for this process to refuse one.
+//
+// --require-token turns that into a refusal, because for one obligation an
+// assertion on the recorded header is not enough. The Velocity agent attaches
+// its credentials in ProxyRole.open(), and deleting that call compiles, leaves
+// every JUnit test green, and streams unauthenticated — so the only cover it
+// has is at this level. A shell comparison in hack/agent-test.sh does catch it,
+// and is also the single line a later editor is most likely to prune as
+// redundant. Under the flag the uncredentialed stream never opens at all, which
+// is what internal/grpcauth does in a cluster and what leaves the agent
+// reconnecting into a refusal rather than running unauthenticated.
 package main
 
 import (
@@ -68,6 +78,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -160,6 +171,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 			"blocked between the cancel and its first Send does; negative disables")
 	proxy := fs.Bool("proxy", false,
 		"send a FullSync on every proxy stream, the way an operator with a registered backend does")
+	requireToken := fs.Bool("require-token", false,
+		"refuse a stream that does not present the token this stub wrote, the way "+
+			"internal/grpcauth's interceptor does")
 	fullSyncAfter := fs.Int("full-sync-after", 0,
 		"seconds to hold the FullSync back after the opening messages, so a test can "+
 			"probe the readiness gate while the proxy has no server list yet")
@@ -194,8 +208,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Certificates: []tls.Certificate{material.Certificate},
 		MinVersion:   tls.VersionTLS13,
 	})
-	server := grpc.NewServer(grpc.Creds(creds))
-	agentpb.RegisterAgentServiceServer(server, &stub{
+	served := &stub{
 		events:         newRecorder(stdout),
 		reportInterval: int32(*reportInterval),
 		renewAfter:     int32(*renewAfter),
@@ -204,7 +217,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		muteAfter:      *muteAfter,
 		proxy:          *proxy,
 		fullSyncAfter:  time.Duration(*fullSyncAfter) * time.Second,
-	})
+		token:          material.Token,
+	}
+
+	options := []grpc.ServerOption{grpc.Creds(creds)}
+	if *requireToken {
+		options = append(options, grpc.StreamInterceptor(served.requireBearer))
+	}
+	server := grpc.NewServer(options...)
+	agentpb.RegisterAgentServiceServer(server, served)
 
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
@@ -401,6 +422,40 @@ type stub struct {
 	// all, and fullSyncAfter is how long it is held back once it is.
 	proxy         bool
 	fullSyncAfter time.Duration
+
+	// token is what --require-token demands in the header. Set always, read only
+	// by requireBearer, which is only installed under the flag.
+	token string
+}
+
+// requireBearer refuses a stream that does not present this stub's token,
+// before the handler that would have recorded it ever runs. Installed only
+// under --require-token; see the package comment for the one obligation that
+// needs it.
+//
+// The refusal is recorded, so a run that fails this way says why in the trace
+// rather than only through a silent agent: an agent whose credentials are
+// refused reconnects on its backoff, which from the outside is indistinguishable
+// from an agent that never reached the operator at all.
+//
+// The comparison is constant-time for no reason that matters here — nothing is
+// attacking a test double — but a token comparison written the other way is a
+// pattern worth not leaving in the tree to be copied.
+func (s *stub) requireBearer(
+	srv any,
+	ss grpc.ServerStream,
+	info *grpc.StreamServerInfo,
+	handler grpc.StreamHandler,
+) error {
+	authorization := authorizationOf(ss.Context())
+	if subtle.ConstantTimeCompare([]byte(authorization), []byte("Bearer "+s.token)) != 1 {
+		s.events.record("stream_rejected", map[string]any{
+			"authorization": authorization,
+			"rpc":           info.FullMethod,
+		})
+		return status.Error(codes.Unauthenticated, "this stream presented no usable bearer token")
+	}
+	return handler(srv, ss)
 }
 
 // muted reports whether this stream is one the stub accepts and then says
