@@ -53,8 +53,12 @@ var paperOverlayKeys = []string{"server.properties", "paper-global.yml"}
 //     online-mode=false above means no join ever has — left at the default,
 //     every join would fail; turned off, a backend reached directly instead
 //     of through the proxy accepts unsigned chat from an unauthenticated
-//     connection too, which is what the NetworkPolicy restricting backends
-//     to proxies-only exists to make unreachable.
+//     connection too. Nothing in this repository closes that off: there is
+//     no NetworkPolicy anywhere under config/, so today any pod in the
+//     cluster that can reach port 25565 can attempt that connection. See
+//     "A NetworkPolicy restricting backends to proxies-only is now overdue"
+//     in docs/known-issues.md for why that is a real exposure rather than a
+//     formality, and which milestone owns closing it.
 func Paper(v Values, secret string, overlay map[string]string) (map[string][]byte, error) {
 	if err := v.RequireMaxPlayers(); err != nil {
 		return nil, err
