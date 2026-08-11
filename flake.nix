@@ -123,7 +123,7 @@
             pname = "spawnery-slp";
             version = "0.1.0";
             src = ./.;
-            vendorHash = "sha256-robWBPloaxFzyOCEz/V6rw8OQt6K1KvW5NoxPz/rFbo=";
+            vendorHash = "sha256-km8FNaDTk5WO8LVGnV4wcU4Xe7gY5pQJC0KEze2cguw=";
             subPackages = [ "cmd/spawnery-slp" ];
             # Static, because the image carries no libc of its own for it.
             env.CGO_ENABLED = 0;
@@ -137,7 +137,7 @@
             pname = "spawnery-stubop";
             version = "0.2.0";
             src = ./.;
-            vendorHash = "sha256-robWBPloaxFzyOCEz/V6rw8OQt6K1KvW5NoxPz/rFbo=";
+            vendorHash = "sha256-km8FNaDTk5WO8LVGnV4wcU4Xe7gY5pQJC0KEze2cguw=";
             subPackages = [ "cmd/spawnery-stubop" ];
             env.CGO_ENABLED = 0;
           };
