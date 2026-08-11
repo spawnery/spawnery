@@ -1488,9 +1488,20 @@ On `ProxyInitializeEvent`, in this order:
    BearerCredentials.of(TokenSource(env.base.tokenPath)), role = role, …)` and
    `start()` it. The bundle is read per attempt, not once — the kubelet replaces
    both files in place.
-6. Register the plugin for `PlayerChooseInitialServerEvent` and
-   `ServerConnectedEvent`. Velocity discovers `@Subscribe` methods on the plugin
-   instance through `proxy.eventManager.register(this, this)`.
+6. Nothing. **Do not call `proxy.eventManager.register(this, this)`** — the
+   first draft of this plan said to, and it throws. Measured out of the pinned
+   3.5.1-615 jar: `VelocityEventManager.register` compares its two arguments by
+   identity and raises `IllegalArgumentException("The plugin main instance is
+   automatically registered.")`, because `VelocityServer` already calls
+   `registerInternally` for every plugin's own instance — which is how
+   `onInitialize` was being delivered in the first place. The `@Subscribe`
+   methods on the plugin class are live from plugin load and need no
+   registration.
+
+   That has a consequence step 1 assumed away: a dormant agent cannot register
+   *no* events, because the handlers exist before `ProxyEnvironment` is ever
+   consulted. Make them inert with null guards on the fields they touch, and
+   keep the observable behaviour — a dormant agent does nothing — the same.
 
 `PlayerChooseInitialServerEvent`: `router.choose(env.fallbackGroups)`; non-null →
 `event.setInitialServer(it)`; null → log at WARNING naming the groups searched,
