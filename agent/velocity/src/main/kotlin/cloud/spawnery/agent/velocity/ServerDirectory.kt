@@ -81,7 +81,16 @@ class ServerDirectory(
         }
     }
 
-    /** Registers or updates a single backend, as `RegisterServer` carries it. */
+    /**
+     * Registers or updates a single backend, as `RegisterServer` carries it.
+     *
+     * One backend, and nothing about the others: an incremental register says
+     * a server appeared, never that it is now the whole list. Implementing
+     * this as `apply(listOf(backend))` -- which passes every test that starts
+     * from an empty directory -- would unregister every other backend on every
+     * `RegisterServer` the operator sends, and the next periodic `FullSync`
+     * would put them back about thirty seconds later.
+     */
     @Synchronized
     fun add(backend: Backend) {
         upsert(backend)
@@ -91,7 +100,7 @@ class ServerDirectory(
      * Unregisters a single backend, as `UnregisterServer` carries it. A name
      * this directory never registered is ignored -- not looked up in the
      * registry at all -- so this can never remove a server some other means
-     * put there.
+     * put there. One backend here too, for the same reason as [add].
      */
     @Synchronized
     fun remove(name: String) {

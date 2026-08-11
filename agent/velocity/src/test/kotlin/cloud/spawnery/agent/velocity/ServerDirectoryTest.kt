@@ -123,6 +123,64 @@ class ServerDirectoryTest {
         assertEquals(emptySet<String>(), directory.names())
     }
 
+    /**
+     * The two tests below are the only ones in this class that start from a
+     * *non-empty* directory, and that is the whole point of them.
+     *
+     * Every other test that touches [ServerDirectory.add] or
+     * [ServerDirectory.remove] begins with nothing registered, where an
+     * incremental update and a one-element full sync are indistinguishable. So
+     * `fun add(backend: Backend) = apply(listOf(backend))` and `fun
+     * remove(name: String) = apply(emptyList())` pass all of them -- while in
+     * production, where the operator broadcasts `RegisterServer` every time a
+     * `Server` becomes ready, each one would unregister every other backend
+     * this proxy has, and the next periodic `FullSync` would put them back
+     * about thirty seconds later. The level-2 harness cannot see it either:
+     * `cmd/spawnery-stubop` only ever sends `FullSync`.
+     */
+    @Test
+    fun `an incremental register leaves the backends already registered alone`() {
+        val registry = FakeRegistry()
+        val directory = ServerDirectory(registry) { _, _ -> }
+        directory.apply(
+            listOf(
+                Backend("lobby-1", "10.0.0.1:25565", "lobby"),
+                Backend("lobby-2", "10.0.0.2:25565", "lobby"),
+            ),
+        )
+        registry.calls.clear()
+
+        directory.add(Backend("lobby-3", "10.0.0.3:25565", "lobby"))
+
+        assertEquals(setOf("lobby-1", "lobby-2", "lobby-3"), directory.names())
+        assertEquals(
+            listOf(FakeRegistry.Call.Register(serverInfo("lobby-3", "10.0.0.3", 25565))),
+            registry.calls,
+        )
+    }
+
+    @Test
+    fun `an incremental unregister takes only the server it names`() {
+        val registry = FakeRegistry()
+        val directory = ServerDirectory(registry) { _, _ -> }
+        directory.apply(
+            listOf(
+                Backend("lobby-1", "10.0.0.1:25565", "lobby"),
+                Backend("lobby-2", "10.0.0.2:25565", "lobby"),
+                Backend("lobby-3", "10.0.0.3:25565", "lobby"),
+            ),
+        )
+        registry.calls.clear()
+
+        directory.remove("lobby-2")
+
+        assertEquals(setOf("lobby-1", "lobby-3"), directory.names())
+        assertEquals(
+            listOf(FakeRegistry.Call.Unregister(serverInfo("lobby-2", "10.0.0.2", 25565))),
+            registry.calls,
+        )
+    }
+
     @Test
     fun `remove ignores a name this agent never registered`() {
         val registry = FakeRegistry()
