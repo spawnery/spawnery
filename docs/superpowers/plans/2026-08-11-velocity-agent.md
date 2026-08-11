@@ -1305,6 +1305,19 @@ after every periodic `FullSync` — roughly every 30 seconds for as long as the
 server drains — and the sixth test is what proves the repetition is free rather
 than a move-storm.
 
+**None of the seven pins "once per player", and a test has to.** The first
+draft of this plan declared that invariant load-bearing and then listed seven
+tests, none of which can catch it: `FakePlayers.moveTo` only records the move,
+so no `FakeServer`'s player list changes during a `Drain.run`, so
+`Router.choose` is a pure function of state that cannot change mid-loop and
+returns the same answer however often it is called. A "compute the target once
+and reuse it for every player" implementation therefore produces identical
+moves and passes all seven. Add an eighth that measures the call *frequency*
+rather than the outcome — count `ProxyRegistry.server` lookups, which
+`ServerDirectory.inGroup` makes once per backend per call and never caches, so
+three draining players across a two-backend group is six lookups and the
+hoisted mutant is two.
+
 `FakePlayers` records each `moveTo` as `(username, targetName)` in order and
 lets a test set each player's `currentServer`.
 
