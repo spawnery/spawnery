@@ -37,7 +37,7 @@ paper)
 	# into their jar. :paper has no test sources yet (its first arrives with
 	# ServerRole), so paper/src/test is deliberately absent from this list
 	# rather than probed for; add the line when the directory appears.
-	SRC_DIRS="common/src/main common/src/test paper/src/main"
+	SRC_DIRS=(common/src/main common/src/test paper/src/main)
 	DESCRIPTOR="paper-plugin.yml"
 	# The line the descriptor states its version on. Read rather than merely
 	# counted, see below.
@@ -134,8 +134,16 @@ if [ -n "$SRC" ]; then
 	# or an invocation from the wrong directory would each read as "no stray
 	# Java" rather than "nothing was looked at". SRC is now the Gradle root,
 	# so every path is <project>/src/<set>.
+
+	# Unreachable today -- every case above sets a non-empty literal -- and
+	# guarded anyway, because the consequence is quiet rather than loud: with
+	# no paths at all `find` falls back to `.` and scans the whole source
+	# tree, which is neither the check the design intends nor a failure. A
+	# future flavour whose list is mistyped away fails here instead.
+	[ "${#SRC_DIRS[@]}" -gt 0 ] ||
+		fail "flavour '$FLAVOUR' names no source directories, so the no-Java constraint would have checked nothing"
 	dirs=()
-	for dir in $SRC_DIRS; do
+	for dir in "${SRC_DIRS[@]}"; do
 		[ -d "$SRC/$dir" ] || fail "$SRC/$dir does not exist, so the no-Java constraint checked nothing"
 		dirs+=("$SRC/$dir")
 	done

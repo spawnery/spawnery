@@ -1,6 +1,13 @@
 plugins {
     // Version pinned once in agent/build.gradle.kts.
     kotlin("jvm")
+    // For compileOnlyApi below. The Kotlin JVM plugin brings `java` and
+    // registers an `api` configuration of its own, which is why `api` resolves
+    // without this line -- but not `compileOnlyApi`, and the failure is a
+    // Kotlin script "Unresolved reference" that says nothing about plugins.
+    // Applying java-library also means both configurations are the documented
+    // ones, rather than one of each.
+    `java-library`
     // Deliberately not the shadow plugin. This project produces a plain jar;
     // each agent's own shadowJar is what bundles and relocates it, so a shaded
     // artifact here would either be unused or be shaded twice.
@@ -43,8 +50,19 @@ dependencies {
     api("io.grpc:grpc-protobuf:1.83.1")
     api("io.grpc:grpc-stub:1.83.1")
     api("com.google.protobuf:protobuf-java:4.35.1")
-    // The generated stubs carry @javax.annotation.Generated.
-    api("javax.annotation:javax.annotation-api:1.3.2")
+    // The generated stubs carry @javax.annotation.Generated, and
+    // compileOnlyApi rather than api because that is all the annotation is for.
+    // It is a source-retention annotation on generated code: javac needs it to
+    // compile the stubs, a consumer needs it on its compile classpath for the
+    // same reason, and nothing needs it at runtime. On `api` it reaches
+    // :paper's runtime classpath, shadowJar bundles it, and the jar grows by 23
+    // entries -- 15 classes plus their package docs, a META-INF/maven tree and
+    // a licence -- that the single-project build never shipped, because there
+    // the artifact sat on `protoImplementation` and never reached a runtime
+    // classpath at all. Measured, not estimated: 6694 entries with `api`, 6671
+    // with this, against 6669 for the jar before the split. The other four stay
+    // `api` -- those really are in the jar, and always were.
+    compileOnlyApi("javax.annotation:javax.annotation-api:1.3.2")
 
     // The transport, and never grpc-netty: Paper ships its own Netty, and the
     // agent must not meet it. See OperatorChannel.
