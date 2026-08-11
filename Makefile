@@ -4,6 +4,7 @@ CONTAINER ?= docker
 # actually expanded, i.e. by image-test below. A plain `make test` never
 # references it and pays nothing for it.
 IMAGE ?= $(shell nix eval --raw .#paper-image.imageName):$(shell nix eval --raw .#paper-image.imageTag)
+VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix eval --raw .#velocity-image.imageTag)
 STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
 
 .PHONY: all
@@ -86,6 +87,18 @@ image-test: image-load
 agent-test: image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) STUBOP=$(STUBOP) hack/agent-test.sh
 
+.PHONY: velocity-image
+velocity-image:
+	nix build .#velocity-image
+
+.PHONY: velocity-image-load
+velocity-image-load: velocity-image
+	$(CONTAINER) load < result
+
+.PHONY: velocity-image-test
+velocity-image-test: velocity-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(VELOCITY_IMAGE) hack/velocity-image-test.sh
+
 # Not part of `test` or `all`, for the same reason image-test is not: it needs
 # a container runtime's worth of build time and only works on x86_64-linux.
 # Design 5.3 makes bit-reproducibility an acceptance criterion; this is the
@@ -93,3 +106,4 @@ agent-test: image-load
 .PHONY: image-repro
 image-repro:
 	nix build .#paper-image --rebuild
+	nix build .#velocity-image --rebuild

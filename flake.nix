@@ -180,6 +180,13 @@
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
             inherit paper spawnery-slp paper-agent imageVersion oci-common;
           };
+
+          # No spawnery-slp and no agent: a proxy's readiness is the agent's
+          # ready port, not a server list ping, and the agent jar ships in
+          # milestone 3c.
+          velocity-image = pkgs.callPackage ./nix/velocity-image.nix {
+            inherit velocity spawnery-config imageVersion oci-common;
+          };
         });
     };
 }
