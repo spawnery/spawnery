@@ -186,8 +186,9 @@
           paper-repo = paper.repo;
           # The paperclip launcher, exposed for the same reason velocity-jar
           # is: it is what a human runs by hand to measure something out of
-          # the pinned build. internal/render/testdata/paper-global.default.yml
-          # records the command that uses it.
+          # the pinned build. The command that uses it is recorded above
+          # paperGlobalDefault in internal/render/paper_test.go, which
+          # regenerates internal/render/testdata/paper-global.default.yml.
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
