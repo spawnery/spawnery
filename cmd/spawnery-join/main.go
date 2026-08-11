@@ -23,12 +23,12 @@ limitations under the License.
 //
 // It is test-only: no image carries it, and it is of no use against an
 // online-mode proxy, which asks for an encryption handshake this client has
-// no Microsoft account to answer. Note what that rules out today: every
-// Spawnery-rendered proxy is online-mode, because internal/render reasserts
-// online-mode = true after the overlay is merged and no configOverlay can
-// turn it off. Until that changes, this command needs a proxy whose
-// velocity.toml was written or amended outside the renderer — see
-// internal/mcjoin's package comment, which measured it.
+// no Microsoft account to answer. So the proxy it is pointed at needs
+// spec.config.onlineMode: false on its ProxyGroup — that field, and not a
+// configOverlay: internal/render reasserts the keys it owns after merging an
+// overlay, so the custom resource is the only place online-mode can be moved
+// from. Nothing else about the proxy has to be special, and nothing has to be
+// edited by hand.
 //
 // --hold keeps the connection open after a successful join, which is the only
 // way a proxy's status.connectedPlayers can be non-zero when the next line of

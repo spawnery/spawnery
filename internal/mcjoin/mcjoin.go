@@ -32,15 +32,20 @@ limitations under the License.
 // operator endpoint, so the agent stayed dormant and the only routing was a
 // static [servers] entry pointing at 127.0.0.1:25566, where nothing listens.
 //
-// One thing about that rig could not be built out of the shipped renderer, and
-// nothing below is reproducible without it: the proxy had to be in offline
-// mode, and render.Velocity reasserts online-mode = true after the overlay is
-// merged, so no configOverlay can turn it off. The rig ran the real
-// spawnery-config and then rewrote that one line in /data/velocity.toml before
-// starting the JVM. Until render.Velocity gains a way to say it, that rewrite
-// — or a proxy started outside Spawnery — is a precondition of every
-// measurement in this comment, and of using this package against a
-// Spawnery-managed proxy at all.
+// The proxy had to be in offline mode, and it still does: this client
+// authenticates against nothing, so an online-mode proxy answers it with an
+// encryption request it cannot satisfy. What has changed is how that is said.
+// Set spec.config.onlineMode: false on the ProxyGroup — the CRD field, added
+// in 14331b2, which render.Velocity carries into velocity.toml and which no
+// configOverlay can reach, because the renderer reasserts the keys it owns
+// after merging one. That is the whole precondition for using this package
+// against a Spawnery-managed proxy.
+//
+// The measurements below were taken before that field existed, on a rig that
+// ran the real spawnery-config and then rewrote online-mode in
+// /data/velocity.toml by hand before starting the JVM. The hand rewrite is
+// gone; nothing in the packet exchange depends on how the file got its value,
+// so the measurements stand as written.
 //
 // A client that sent handshake and Login Start, received Set Compression and
 // Login Success, and then held the socket open for eight seconds without
@@ -71,15 +76,18 @@ limitations under the License.
 //
 // That the success path really does deliver such a packet, and promptly, was
 // measured the same way, with the pinned Paper image behind the same proxy on
-// a container network — and with a second workaround, for the same reason as
-// the first. render.Paper writes the forwarding secret under proxies.velocity.
-// secret-key, and Paper 26.2 reads proxies.velocity.secret: the rendered node
-// fails to bind, comes back as enabled: false with an empty secret, and the
-// proxy refuses the player with "Your server did not send a forwarding request
-// to the proxy". The backend in this rig had that node corrected by hand.
-// Until render.Paper writes the key Paper reads, a Spawnery-rendered backend
-// cannot accept a forwarded player at all, and the packet below cannot be
-// observed.
+// a container network — and with a second hand edit, since fixed. render.Paper
+// wrote the forwarding secret under proxies.velocity.secret-key while Paper
+// 26.2 reads proxies.velocity.secret: the rendered node failed to bind, came
+// back as enabled: false with an empty secret, and the proxy refused the
+// player with "Your server did not send a forwarding request to the proxy".
+// The backend in this rig had that node corrected by hand because the
+// measurement predates 494fa47, which made render.Paper write the key Paper
+// reads. A Spawnery-rendered backend now accepts a forwarded player as
+// rendered, and two guards keep it that way:
+// TestPaperWritesTheKeysPaperItselfReads checks the renderer's key names
+// against a fixture of Paper's own defaults, and hack/image-test.sh reads the
+// file back out of a running Paper.
 //
 // The packet after Login Acknowledged arrived at once and was a
 // configuration-state Plugin Message carrying minecraft:brand — whose value
