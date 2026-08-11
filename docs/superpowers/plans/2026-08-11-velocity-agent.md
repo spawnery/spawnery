@@ -157,7 +157,17 @@ proof is that every existing test still passes and the Paper image still works.
   installing `$out/share/spawnery/paper/spawnery-agent.jar`. Flake attribute
   `agents`.
 - Produces: Kotlin package `cloud.spawnery.agent` for the shared classes,
-  `cloud.spawnery.agent.paper` for `AgentPlugin` and `ServerState`.
+  `cloud.spawnery.agent.paper` for `AgentPlugin`.
+
+**`ServerState` stays in `:common` for this task.** The first draft of this
+plan moved it to `:paper` here, which cannot build: `SessionLoop` takes
+`state: ServerState` in its constructor and `SessionLoopTest` constructs one in
+seventeen places, so `:common` would depend on `:paper` while `:paper` already
+depends on `:common` — a project-graph cycle, not an import problem. Task 3 is
+what removes the reason for the dependency, by replacing that constructor
+parameter with a role, and Task 3 therefore performs the move in the same
+commit. Leaving it here would make Task 1 a rewrite, which is the one thing it
+must not be.
 
 - [ ] **Step 1: Read the two things that make this task non-mechanical**
 
@@ -474,9 +484,21 @@ is 1046 lines that pin them.
 - Create: `agent/paper/src/main/kotlin/cloud/spawnery/agent/paper/ServerRole.kt`
 - Create: `agent/common/src/test/kotlin/cloud/spawnery/agent/FakeRole.kt`
 - Create: `agent/common/src/test/kotlin/cloud/spawnery/agent/AgentRoleSeamTest.kt`
+- Create: `agent/paper/src/test/kotlin/cloud/spawnery/agent/paper/ServerRoleTest.kt`
+- Move: `ServerState.kt` and `ServerStateTest.kt` from `:common` to
+  `agent/paper/src/{main,test}/kotlin/cloud/spawnery/agent/paper/`, package
+  `cloud.spawnery.agent.paper`
 - Modify: `agent/common/src/main/kotlin/cloud/spawnery/agent/SessionLoop.kt`
 - Modify: `agent/common/src/test/kotlin/cloud/spawnery/agent/SessionLoopTest.kt`
 - Modify: `agent/paper/src/main/kotlin/cloud/spawnery/agent/paper/AgentPlugin.kt`
+
+**Why the `ServerState` move is in this task and not in Task 1.** Task 1 left
+it in `:common` because `SessionLoop`'s constructor takes one, and moving it
+while that was true would have made `:common` depend on `:paper` — a
+project-graph cycle. Step 2 removes that parameter. The move belongs in the
+same commit as its own justification, and `FakeRole` (Step 5) carries its own
+counters rather than reusing `ServerState`, so `:common`'s tests do not
+reintroduce the dependency by the back door.
 
 **Interfaces:**
 - Produces: `AgentRole<Req, Resp>` and `Directive` exactly as written in Step 1.
