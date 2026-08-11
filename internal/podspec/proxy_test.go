@@ -358,3 +358,19 @@ func TestProxyPodGracePeriodComesFromTheDrainWindow(t *testing.T) {
 			unset.Spec.TerminationGracePeriodSeconds, DefaultDrainTimeoutSeconds)
 	}
 }
+
+func TestProxyPodCarriesTheFallbackGroups(t *testing.T) {
+	net := testNetwork()
+	group := testProxyGroup()
+	group.Spec.Routing.FallbackGroups = []string{"lobby", "hub"}
+
+	pod, err := BuildProxyPod(net, group, "edge-0", "operator:9443")
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+
+	got := proxyEnv(pod, EnvFallbackGroups)
+	if got != "lobby,hub" {
+		t.Fatalf("%s = %q, want %q", EnvFallbackGroups, got, "lobby,hub")
+	}
+}
