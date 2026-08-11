@@ -30,6 +30,8 @@ import (
 	"io"
 	"net"
 	"strconv"
+
+	"github.com/spawnery/spawnery/internal/mcproto"
 )
 
 // handshakeProtocolVersion is the protocol version announced in the handshake.
@@ -38,11 +40,6 @@ import (
 // therefore never has to track Minecraft versions, which is measured, not
 // hoped for — see section 7 of the design.
 const handshakeProtocolVersion = 771
-
-// maxPacketLen bounds what we are willing to allocate for one response. A
-// status document is a few hundred bytes; anything near this is a broken or
-// hostile peer, and reading it would be the only unbounded allocation here.
-const maxPacketLen = 2 << 20
 
 // Version is the part of the status document that proves a server answered
 // rather than merely accepted.
@@ -81,7 +78,7 @@ func Ping(ctx context.Context, host string, port int) (*Status, error) {
 		return nil, fmt.Errorf("write handshake: %w", err)
 	}
 	// The status request itself is an empty packet 0x00.
-	if err := writePacket(conn, 0x00, nil); err != nil {
+	if err := mcproto.WritePacket(conn, 0x00, nil); err != nil {
 		return nil, fmt.Errorf("write status request: %w", err)
 	}
 
@@ -90,55 +87,25 @@ func Ping(ctx context.Context, host string, port int) (*Status, error) {
 
 func writeHandshake(w io.Writer, host string, port int) error {
 	var payload []byte
-	payload = appendVarInt(payload, handshakeProtocolVersion)
-	payload = appendString(payload, host)
+	payload = mcproto.AppendVarInt(payload, handshakeProtocolVersion)
+	payload = mcproto.AppendString(payload, host)
 	payload = binary.BigEndian.AppendUint16(payload, uint16(port))
-	payload = appendVarInt(payload, 1) // next state: status
-	return writePacket(w, 0x00, payload)
-}
-
-// writePacket frames one uncompressed packet. Compression is negotiated during
-// login, which the status path never reaches, so the framing stays this simple.
-func writePacket(w io.Writer, id int32, payload []byte) error {
-	var body []byte
-	body = appendVarInt(body, id)
-	body = append(body, payload...)
-
-	var frame []byte
-	frame = appendVarInt(frame, int32(len(body)))
-	frame = append(frame, body...)
-
-	_, err := w.Write(frame)
-	return err
+	payload = mcproto.AppendVarInt(payload, 1) // next state: status
+	return mcproto.WritePacket(w, 0x00, payload)
 }
 
 func readStatusResponse(r io.Reader) (*Status, error) {
-	byteReader := &singleByteReader{r: r}
-
-	length, err := readVarInt(byteReader)
+	id, payload, err := mcproto.ReadPacket(r)
 	if err != nil {
-		return nil, fmt.Errorf("read packet length: %w", err)
-	}
-	if length <= 0 || length > maxPacketLen {
-		return nil, fmt.Errorf("read packet length: implausible value %d", length)
-	}
-
-	body := make([]byte, length)
-	if _, err := io.ReadFull(r, body); err != nil {
-		return nil, fmt.Errorf("read packet body: %w", err)
-	}
-
-	rest := bytes.NewReader(body)
-
-	id, err := readVarInt(rest)
-	if err != nil {
-		return nil, fmt.Errorf("read packet id: %w", err)
+		return nil, err
 	}
 	if id != 0x00 {
 		return nil, fmt.Errorf("unexpected packet id %d", id)
 	}
 
-	docLen, err := readVarInt(rest)
+	rest := bytes.NewReader(payload)
+
+	docLen, err := mcproto.ReadVarInt(rest)
 	if err != nil {
 		return nil, fmt.Errorf("read document length: %w", err)
 	}
@@ -167,51 +134,4 @@ func readStatusResponse(r io.Reader) (*Status, error) {
 		return nil, fmt.Errorf("decode status document: %w", err)
 	}
 	return &status, nil
-}
-
-func appendVarInt(b []byte, v int32) []byte {
-	u := uint32(v)
-	for {
-		if u&^0x7F == 0 {
-			return append(b, byte(u))
-		}
-		b = append(b, byte(u&0x7F)|0x80)
-		u >>= 7
-	}
-}
-
-func appendString(b []byte, s string) []byte {
-	b = appendVarInt(b, int32(len(s)))
-	return append(b, s...)
-}
-
-func readVarInt(r io.ByteReader) (int32, error) {
-	var value uint32
-	for i := 0; i < 5; i++ {
-		b, err := r.ReadByte()
-		if err != nil {
-			return 0, err
-		}
-		value |= uint32(b&0x7F) << (7 * i)
-		if b&0x80 == 0 {
-			return int32(value), nil
-		}
-	}
-	return 0, errors.New("varint longer than five bytes")
-}
-
-// singleByteReader adapts a plain io.Reader to io.ByteReader without buffering.
-// Buffering would be wrong here: the length prefix is followed by exactly that
-// many bytes, and a bufio.Reader could swallow part of them into its buffer
-// where io.ReadFull on the underlying connection would not find them.
-type singleByteReader struct {
-	r   io.Reader
-	buf [1]byte
-}
-
-func (s *singleByteReader) ReadByte() (byte, error) {
-	if _, err := io.ReadFull(s.r, s.buf[:]); err != nil {
-		return 0, err
-	}
-	return s.buf[0], nil
 }

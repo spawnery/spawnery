@@ -17,13 +17,14 @@ limitations under the License.
 package slp
 
 import (
-	"bytes"
 	"context"
 	"io"
 	"net"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spawnery/spawnery/internal/mcproto"
 )
 
 // serve starts a one-shot fake Minecraft server on a loopback port and hands
@@ -61,11 +62,11 @@ func drainRequest(c net.Conn) {
 // statusResponse frames a status document the way a server does.
 func statusResponse(doc string) []byte {
 	var body []byte
-	body = appendVarInt(body, 0x00)
-	body = appendString(body, doc)
+	body = mcproto.AppendVarInt(body, 0x00)
+	body = mcproto.AppendString(body, doc)
 
 	var frame []byte
-	frame = appendVarInt(frame, int32(len(body)))
+	frame = mcproto.AppendVarInt(frame, int32(len(body)))
 	return append(frame, body...)
 }
 
@@ -106,7 +107,7 @@ func TestPingRejects(t *testing.T) {
 			respond: func(c net.Conn) {
 				drainRequest(c)
 				var frame []byte
-				frame = appendVarInt(frame, 100)
+				frame = mcproto.AppendVarInt(frame, 100)
 				_, _ = c.Write(append(frame, 0x00, 0x01))
 			},
 			wantErr: "read packet body",
@@ -116,10 +117,10 @@ func TestPingRejects(t *testing.T) {
 			respond: func(c net.Conn) {
 				drainRequest(c)
 				var body []byte
-				body = appendVarInt(body, 0x01)
-				body = appendString(body, `{"version":{}}`)
+				body = mcproto.AppendVarInt(body, 0x01)
+				body = mcproto.AppendString(body, `{"version":{}}`)
 				var frame []byte
-				frame = appendVarInt(frame, int32(len(body)))
+				frame = mcproto.AppendVarInt(frame, int32(len(body)))
 				_, _ = c.Write(append(frame, body...))
 			},
 			wantErr: "unexpected packet id",
@@ -197,18 +198,5 @@ func TestPingReportsAClosedPort(t *testing.T) {
 
 	if _, err := Ping(ctx, "127.0.0.1", port); err == nil {
 		t.Fatal("Ping succeeded against a closed port, want an error")
-	}
-}
-
-func TestVarIntRoundTrip(t *testing.T) {
-	for _, v := range []int32{0, 1, 127, 128, 255, 25565, 2097151, 2147483647} {
-		encoded := appendVarInt(nil, v)
-		decoded, err := readVarInt(bytes.NewReader(encoded))
-		if err != nil {
-			t.Fatalf("readVarInt(%d): %v", v, err)
-		}
-		if decoded != v {
-			t.Errorf("round trip of %d gave %d", v, decoded)
-		}
 	}
 }
