@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 
@@ -25,11 +26,25 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/render"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
+
+// proxyGroupConfigMap re-reads the ConfigMap a ProxyGroupReconciler renders
+// for the named group.
+func (f *fixture) proxyGroupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
+	t.Helper()
+	cm := &corev1.ConfigMap{}
+	key := types.NamespacedName{Name: podspec.GroupConfigMapName(group), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, key, cm); err != nil {
+		t.Fatalf("get ConfigMap for group %s: %v", group, err)
+	}
+	return cm
+}
 
 // createProxyGroup adds a ProxyGroup to the fixture's network. Task 8's sweep
 // tests use it too — both files are in package controller.
@@ -282,5 +297,120 @@ func TestProxyGroupBootstrapsTheNamespace(t *testing.T) {
 	key := types.NamespacedName{Name: podspec.ProxyServiceAccountName, Namespace: f.ns}
 	if err := f.c.Get(f.ctx, key, sa); err != nil {
 		t.Fatalf("the proxy ServiceAccount was not bootstrapped: %v", err)
+	}
+}
+
+// TestProxyGroupRendersConfigMap covers design section 5.4's promise for the
+// proxy side: one ConfigMap per group, owned by it, carrying the label the
+// manager's restricted cache requires, and holding exactly what spec.config
+// says — not merely a ConfigMap that exists under the right name.
+func TestProxyGroupRendersConfigMap(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 500, Motd: "Welcome to Spawnery"}
+	})
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	cm := f.proxyGroupConfigMap(t, "gateway")
+	if cm.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+		t.Errorf("labels = %+v, want %s=%s so the restricted cache can see this ConfigMap",
+			cm.Labels, podspec.LabelManagedBy, podspec.ManagedByValue)
+	}
+	if len(cm.OwnerReferences) != 1 ||
+		cm.OwnerReferences[0].Kind != "ProxyGroup" ||
+		cm.OwnerReferences[0].Controller == nil || !*cm.OwnerReferences[0].Controller {
+		t.Errorf("owner references = %+v, want a ProxyGroup controller ref", cm.OwnerReferences)
+	}
+
+	raw, ok := cm.Data[podspec.ConfigValuesKey]
+	if !ok {
+		t.Fatalf("data = %+v, want a %s key", cm.Data, podspec.ConfigValuesKey)
+	}
+	var values render.Values
+	if err := yaml.Unmarshal([]byte(raw), &values); err != nil {
+		t.Fatalf("%s does not parse as render.Values: %v", podspec.ConfigValuesKey, err)
+	}
+	if values.PlayerLimit == nil || *values.PlayerLimit != 500 {
+		t.Errorf("playerLimit = %v, want 500", values.PlayerLimit)
+	}
+	if values.Motd == nil || *values.Motd != "Welcome to Spawnery" {
+		t.Errorf("motd = %v, want %q", values.Motd, "Welcome to Spawnery")
+	}
+	// Nothing in ProxyGroupSpec could produce maxPlayers, but a future change
+	// reaching for a critical field directly on Values would slip past a
+	// test that only checked playerLimit and motd.
+	if values.MaxPlayers != nil {
+		t.Errorf("values = %+v, want maxPlayers unset — a ProxyGroup has no maxPlayers", values)
+	}
+}
+
+// TestProxyGroupConfigMapUpdatesOnSpecChange guards against a renderer that
+// only runs once: correct at creation but never revisited would look
+// identical until the day an operator actually edits spec.config.
+func TestProxyGroupConfigMapUpdatesOnSpecChange(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 500, Motd: "Welcome"}
+	})
+	f.reconcileProxyGroup(r, "gateway")
+
+	group := f.proxyGroup("gateway")
+	group.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 750, Motd: "Now hiring"}
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("update ProxyGroup: %v", err)
+	}
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	cm := f.proxyGroupConfigMap(t, "gateway")
+	var values render.Values
+	if err := yaml.Unmarshal([]byte(cm.Data[podspec.ConfigValuesKey]), &values); err != nil {
+		t.Fatalf("unmarshal after update: %v", err)
+	}
+	if values.PlayerLimit == nil || *values.PlayerLimit != 750 {
+		t.Errorf("playerLimit after the edit = %v, want 750", values.PlayerLimit)
+	}
+	if values.Motd == nil || *values.Motd != "Now hiring" {
+		t.Errorf("motd after the edit = %v, want %q", values.Motd, "Now hiring")
+	}
+}
+
+// TestProxyGroupConfigMapWrittenBeforeThePods proves the ordering the design
+// depends on: a proxy pod's projected volume names this ConfigMap by group,
+// so the ConfigMap must exist before the first proxy pod. Reading back the
+// final state after a reconcile cannot distinguish "written first" from
+// "written at some point" — both leave the same objects sitting there.
+// Recording the actual Create calls can.
+func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
+	f := newFixture(t)
+	recorder := &createOrderRecorder{Client: f.c}
+	r := &ProxyGroupReconciler{
+		Client: recorder,
+		Scheme: testenv.Scheme(t),
+		Agents: f.agents,
+		Bootstrap: &Bootstrapper{
+			Client: recorder, Reader: f.c,
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
+	}
+	f.createProxyGroup("gateway")
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	cmIdx := recorder.indexOf(fmt.Sprintf("%T/%s", &corev1.ConfigMap{}, podspec.GroupConfigMapName("gateway")))
+	podIdx := recorder.indexOf(fmt.Sprintf("%T/%s-", &corev1.Pod{}, "gateway"))
+	if cmIdx == -1 {
+		t.Fatalf("no ConfigMap create was recorded")
+	}
+	if podIdx == -1 {
+		t.Fatalf("no pod create was recorded")
+	}
+	if cmIdx >= podIdx {
+		t.Errorf("ConfigMap created at position %d, pod at %d — want the ConfigMap first: "+
+			"a pod's projected volume names it, and does not start if it is missing", cmIdx, podIdx)
 	}
 }

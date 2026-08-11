@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -29,11 +30,25 @@ import (
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/render"
 )
+
+// groupConfigMap re-reads the ConfigMap a ServerGroupReconciler renders for
+// the fixture's group.
+func (f *fixture) groupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
+	t.Helper()
+	cm := &corev1.ConfigMap{}
+	key := types.NamespacedName{Name: podspec.GroupConfigMapName(group), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, key, cm); err != nil {
+		t.Fatalf("get ConfigMap for group %s: %v", group, err)
+	}
+	return cm
+}
 
 // groupReconciler wires a ServerGroup reconciler onto an existing fixture.
 func groupReconciler(f *fixture) *ServerGroupReconciler {
@@ -1172,5 +1187,119 @@ func TestGroupResumesOnceItsNetworkIsAccepted(t *testing.T) {
 	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
 		metav1.ConditionTrue, spawneryv1alpha1.ReasonAccepted) {
 		t.Errorf("conditions = %+v, want Accepted=True again after recovery", got.Status.Conditions)
+	}
+}
+
+// TestServerGroupRendersConfigMap covers design section 5.4's promise: one
+// ConfigMap per group, owned by it, carrying the label the manager's
+// restricted cache requires, and holding exactly what spec.maxPlayers says —
+// not merely a ConfigMap that exists under the right name, which a renderer
+// that wrote an empty document or the wrong key would also produce.
+func TestServerGroupRendersConfigMap(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+
+	cm := f.groupConfigMap(t, "lobby")
+	if cm.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+		t.Errorf("labels = %+v, want %s=%s so the restricted cache can see this ConfigMap",
+			cm.Labels, podspec.LabelManagedBy, podspec.ManagedByValue)
+	}
+	if len(cm.OwnerReferences) != 1 ||
+		cm.OwnerReferences[0].Kind != "ServerGroup" ||
+		cm.OwnerReferences[0].Controller == nil || !*cm.OwnerReferences[0].Controller {
+		t.Errorf("owner references = %+v, want a ServerGroup controller ref", cm.OwnerReferences)
+	}
+
+	raw, ok := cm.Data[podspec.ConfigValuesKey]
+	if !ok {
+		t.Fatalf("data = %+v, want a %s key", cm.Data, podspec.ConfigValuesKey)
+	}
+	var values render.Values
+	if err := yaml.Unmarshal([]byte(raw), &values); err != nil {
+		t.Fatalf("%s does not parse as render.Values: %v", podspec.ConfigValuesKey, err)
+	}
+	if values.MaxPlayers == nil || *values.MaxPlayers != f.group.Spec.MaxPlayers {
+		t.Errorf("maxPlayers = %v, want %d", values.MaxPlayers, f.group.Spec.MaxPlayers)
+	}
+	// The critical fields never travel through this document — there is
+	// nothing in ServerGroupSpec that could even populate them, but a future
+	// change that reached for one directly on Values would slip past a test
+	// that only checked maxPlayers.
+	if values.PlayerLimit != nil || values.Motd != nil {
+		t.Errorf("values = %+v, want only maxPlayers set — a ServerGroup has no playerLimit or motd", values)
+	}
+}
+
+// TestServerGroupConfigMapUpdatesOnSpecChange guards against a renderer that
+// only runs once: a ConfigMap that gets created correctly but never revisited
+// would be indistinguishable from a working one until the day an operator
+// actually edits maxPlayers.
+func TestServerGroupConfigMapUpdatesOnSpecChange(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+	before := f.groupConfigMap(t, "lobby")
+	var beforeValues render.Values
+	if err := yaml.Unmarshal([]byte(before.Data[podspec.ConfigValuesKey]), &beforeValues); err != nil {
+		t.Fatalf("unmarshal before update: %v", err)
+	}
+	if beforeValues.MaxPlayers == nil || *beforeValues.MaxPlayers != 100 {
+		t.Fatalf("maxPlayers before the edit = %v, want the fixture's 100", beforeValues.MaxPlayers)
+	}
+
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.MaxPlayers = 55
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	after := f.groupConfigMap(t, "lobby")
+	var afterValues render.Values
+	if err := yaml.Unmarshal([]byte(after.Data[podspec.ConfigValuesKey]), &afterValues); err != nil {
+		t.Fatalf("unmarshal after update: %v", err)
+	}
+	if afterValues.MaxPlayers == nil || *afterValues.MaxPlayers != 55 {
+		t.Errorf("maxPlayers after the edit = %v, want 55", afterValues.MaxPlayers)
+	}
+}
+
+// TestServerGroupConfigMapWrittenBeforeTheServer proves the ordering the
+// design depends on: a pod's projected volume names this ConfigMap by group,
+// so the ConfigMap must exist before the Server that will eventually get a
+// pod. Reading back the final state after a reconcile cannot tell "written
+// first" apart from "written at some point" — both leave the same two objects
+// sitting there. Recording the actual Create calls can.
+func TestServerGroupConfigMapWrittenBeforeTheServer(t *testing.T) {
+	f := newFixture(t)
+	recorder := &createOrderRecorder{Client: f.c}
+	r := &ServerGroupReconciler{
+		Client:   recorder,
+		Scheme:   f.reconc.Scheme,
+		Recorder: record.NewFakeRecorder(100),
+		Agents:   f.agents,
+		Clock:    f.clock.Now,
+	}
+
+	f.reconcileGroup(t, r)
+
+	cmIdx := recorder.indexOf(fmt.Sprintf("%T/%s", &corev1.ConfigMap{}, podspec.GroupConfigMapName(f.group.Name)))
+	srvIdx := recorder.indexOf(fmt.Sprintf("%T/%s-", &spawneryv1alpha1.Server{}, f.group.Name))
+	if cmIdx == -1 {
+		t.Fatalf("no ConfigMap create was recorded")
+	}
+	if srvIdx == -1 {
+		t.Fatalf("no Server create was recorded")
+	}
+	if cmIdx >= srvIdx {
+		t.Errorf("ConfigMap created at position %d, Server at %d — want the ConfigMap first: "+
+			"ServerReconciler can only build a pod for a Server that already exists, so a ConfigMap "+
+			"written before the Server is written before any pod that could reference it", cmIdx, srvIdx)
 	}
 }

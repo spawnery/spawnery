@@ -35,11 +35,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/render"
 )
 
 // nameSuffixAlphabet avoids characters that are easy to misread in a terminal.
@@ -149,6 +151,18 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Message: "persistent groups arrive in milestone 5",
 		})
 		requeue = time.Minute
+	}
+
+	// Rendered before anything that can create a Server, and unconditionally —
+	// not gated on networkUsable, because the ConfigMap has nothing to do with
+	// the Network, and a spec.maxPlayers edit has to reach it even on a
+	// resync that creates no new server. A pod's projected volume names this
+	// ConfigMap by group (podspec.GroupConfigMapName), so it must exist
+	// before the first pod; failing here returns before createServer runs,
+	// which is what makes that a guarantee and not just where the calls
+	// happen to be written.
+	if err := r.reconcileConfigMap(ctx, group); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	views, servers, err := r.collectViews(ctx, group)
@@ -433,12 +447,53 @@ func (r *ServerGroupReconciler) reconcilePDB(
 	return err
 }
 
+// reconcileConfigMap keeps the group's rendered ConfigMap — design section
+// 5.4's one ConfigMap per group — in step with the fields spec.maxPlayers
+// exposes to a user. It carries only that: online-mode, the forwarding mode
+// and the ports are operationally critical and live in internal/render's
+// critical layer and nowhere else, so there is exactly one place that can be
+// wrong about any of them.
+//
+// It marshals a render.Values document under podspec.ConfigValuesKey, the
+// same key BuildServerPod projects into ConfigDir, and it carries
+// podspec.LabelManagedBy for the reason podspec.GroupConfigMapName and
+// Bootstrapper.ensureConfigMap both document: cmd/spawnery-operator narrows
+// the manager's cache for ConfigMaps to that label, so an unlabelled one this
+// reconciler just wrote would be invisible to it on the very next Get.
+func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ServerGroup) error {
+	maxPlayers := group.Spec.MaxPlayers
+	data, err := yaml.Marshal(render.Values{MaxPlayers: &maxPlayers})
+	if err != nil {
+		return fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
+	}
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podspec.GroupConfigMapName(group.Name),
+			Namespace: group.Namespace,
+		},
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		if cm.Labels == nil {
+			cm.Labels = map[string]string{}
+		}
+		cm.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		cm.Data[podspec.ConfigValuesKey] = string(data)
+		return controllerutil.SetControllerReference(group, cm, r.Scheme)
+	})
+	return err
+}
+
 // SetupWithManager registers the controller.
 func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.ServerGroup{}).
 		Owns(&spawneryv1alpha1.Server{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		Owns(&corev1.ConfigMap{}).
 		Named("servergroup").
 		Complete(r)
 }

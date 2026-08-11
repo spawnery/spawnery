@@ -31,11 +31,13 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/render"
 )
 
 // NewProxyName builds a unique proxy pod name below the group prefix. Same
@@ -131,6 +133,14 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if err := r.Bootstrap.Ensure(ctx, group.Namespace); err != nil {
+		return ctrl.Result{}, err
+	}
+	// Rendered here, beside Bootstrap.Ensure and before reconcileReplicas can
+	// create the first proxy pod: that pod's projected volume names this
+	// ConfigMap by group (podspec.GroupConfigMapName), and returning on error
+	// stops the reconcile before reconcileReplicas runs — the guarantee is
+	// the early return, not the order these lines happen to be written in.
+	if err := r.reconcileConfigMap(ctx, group); err != nil {
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileService(ctx, group); err != nil {
@@ -246,6 +256,68 @@ func (r *ProxyGroupReconciler) reconcileService(ctx context.Context, group *spaw
 	return err
 }
 
+// reconcileConfigMap keeps the group's rendered ConfigMap — design section
+// 5.4's one ConfigMap per group — in step with the fields spec.config exposes
+// to a user. It carries only playerLimit and motd: online-mode, the
+// forwarding mode and the ports are operationally critical and live in
+// internal/render's critical layer and nowhere else, so there is exactly one
+// place that can be wrong about any of them.
+//
+// It marshals a render.Values document under podspec.ConfigValuesKey, the
+// same key BuildProxyPod projects into ConfigDir, and it carries
+// podspec.LabelManagedBy for the reason podspec.GroupConfigMapName and
+// Bootstrapper.ensureConfigMap both document: cmd/spawnery-operator narrows
+// the manager's cache for ConfigMaps to that label, so an unlabelled one this
+// reconciler just wrote would be invisible to it on the very next Get.
+func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
+	data, err := yaml.Marshal(proxyConfigValues(group))
+	if err != nil {
+		return fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
+	}
+
+	cm := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podspec.GroupConfigMapName(group.Name),
+			Namespace: group.Namespace,
+		},
+	}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		if cm.Labels == nil {
+			cm.Labels = map[string]string{}
+		}
+		cm.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		cm.Data[podspec.ConfigValuesKey] = string(data)
+		return controllerutil.SetControllerReference(group, cm, r.Scheme)
+	})
+	return err
+}
+
+// proxyConfigValues builds the neutral document reconcileConfigMap writes
+// from whatever a user set in spec.config. A field spec.config leaves unset —
+// spec.config itself being nil counts as every field unset — stays a nil
+// pointer in the result rather than being defaulted to zero, so
+// render.Values.RequirePlayerLimit can refuse a proxy that never got a
+// capacity instead of silently starting one that reports slots=0 forever.
+func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
+	var values render.Values
+	cfg := group.Spec.Config
+	if cfg == nil {
+		return values
+	}
+	if cfg.PlayerLimit != 0 {
+		limit := cfg.PlayerLimit
+		values.PlayerLimit = &limit
+	}
+	if cfg.Motd != "" {
+		motd := cfg.Motd
+		values.Motd = &motd
+	}
+	return values
+}
+
 // setStatus writes what is observably true of the group's pods.
 func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod) {
 	var ready int32
@@ -328,5 +400,6 @@ func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&spawneryv1alpha1.ProxyGroup{}).
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.ConfigMap{}).
 		Complete(r)
 }

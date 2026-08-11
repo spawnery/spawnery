@@ -18,8 +18,11 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"slices"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,6 +53,42 @@ func containsString(haystack []string, needle string) bool {
 
 // ctrlclientInNamespace is a shorthand for the list option.
 func ctrlclientInNamespace(ns string) client.ListOption { return client.InNamespace(ns) }
+
+// createOrderRecorder wraps a client.Client and remembers, in the order they
+// actually committed to the API server, the kind and name of every object it
+// created. A test that only reads back the final state after a Reconciler
+// call cannot tell "the ConfigMap was written before the pod" apart from "the
+// ConfigMap happened to already exist" — both leave the same two objects
+// sitting there afterwards. Recording the Create calls themselves is what
+// lets a test assert the actual order, not just the end state.
+type createOrderRecorder struct {
+	client.Client
+	mu    sync.Mutex
+	order []string
+}
+
+func (r *createOrderRecorder) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if err := r.Client.Create(ctx, obj, opts...); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	r.order = append(r.order, fmt.Sprintf("%T/%s", obj, obj.GetName()))
+	r.mu.Unlock()
+	return nil
+}
+
+// indexOf returns the position of the first recorded entry with the given
+// prefix, or -1 if none was recorded.
+func (r *createOrderRecorder) indexOf(prefix string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i, entry := range r.order {
+		if strings.HasPrefix(entry, prefix) {
+			return i
+		}
+	}
+	return -1
+}
 
 // agentRoleServer avoids importing the agent package into every test file.
 func agentRoleServer() agent.Role { return agent.RoleServer }
