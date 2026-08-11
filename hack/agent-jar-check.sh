@@ -3,10 +3,12 @@
 # the stubs present, and the descriptor expanded.
 #
 # Paper carries its own protobuf-java 4.29.0, guava 33.6.0, gson 2.14.0 and
-# netty 4.2.15 (see <paper-repo>/libraries). A plugin that ships any of those at
-# their original coordinates meets Paper's copy at class load, and the symptom
-# is a NoSuchMethodError deep inside gRPC that names neither the plugin nor the
-# conflict. This check is what keeps that from being discovered in a pod.
+# netty 4.2.15 (see <paper-repo>/libraries); Velocity's fat jar carries guava,
+# gson, guice, netty, log4j, adventure and brigadier. A plugin that ships any of
+# those at their original coordinates meets the platform's copy at class load,
+# and the symptom is a NoSuchMethodError deep inside gRPC that names neither the
+# plugin nor the conflict. This check is what keeps that from being discovered
+# in a pod.
 #
 # The relocation is checked as an invariant and not as a list. A list of
 # packages has to be revisited every time a dependency changes, and the version
@@ -49,6 +51,57 @@ paper)
 	# The line the descriptor states its version on. Read rather than merely
 	# counted, see below.
 	DESCRIPTOR_VERSION='^version:'
+	# The platform's own name, for the message the collision check prints.
+	PLATFORM="Paper"
+	# What this platform ships itself, out of <paper-repo>/libraries:
+	# protobuf-java, guava (both top-level packages), gson, netty and the
+	# three annotation-only artifacts guava drags along.
+	COLLIDES=(
+		com/google/protobuf
+		com/google/common
+		com/google/thirdparty
+		com/google/gson
+		com/google/errorprone
+		com/google/j2objc
+		io/netty
+	)
+	;;
+velocity)
+	SRC_DIRS=(common/src/main common/src/test velocity/src/main velocity/src/test)
+	DESCRIPTOR="velocity-plugin.json"
+	# JSON, so the version is a quoted key and not a line start. Anchoring
+	# on the quotes rather than the bare word keeps this from matching a
+	# "version" that turned up inside a description.
+	DESCRIPTOR_VERSION='"version"[[:space:]]*:'
+	PLATFORM="Velocity"
+	# Velocity ships as a fat jar, so this list is read out of the jar
+	# itself rather than a libraries tree. Measured 2026-08-11 against
+	# velocity 3.5.1 build 615 with:
+	#
+	#   JAR=$(nix build .#velocity-jar --no-link --print-out-paths)
+	#   python3 -c "
+	#   import zipfile, collections
+	#   z = zipfile.ZipFile('$JAR')
+	#   names = [n for n in z.namelist() if n.endswith('.class')]
+	#   c = collections.Counter('/'.join(n.split('/')[:3]) for n in names)
+	#   [print(v, k) for k, v in sorted(c.items())]"
+	#
+	# 11 418 classes, of which these are the packages this plugin could
+	# also ship. Note what is absent and is the whole reason this list
+	# differs from Paper's: the jar carries no protobuf, no gRPC, no
+	# okhttp/okio and no Kotlin.
+	COLLIDES=(
+		com/google/common
+		com/google/thirdparty
+		com/google/gson
+		com/google/errorprone
+		com/google/j2objc
+		com/google/inject
+		io/netty
+		org/apache/logging
+		net/kyori
+		com/mojang/brigadier
+	)
 	;;
 *)
 	echo "agent-jar-check: unknown flavour '$FLAVOUR'" >&2
@@ -80,13 +133,14 @@ if [ -n "$stray" ]; then
 fi
 
 # Named separately because for these the consequence is a linkage error rather
-# than a broken invariant: Paper has its own copy on the classpath that loads
-# the plugin. Guava contributes two top-level packages, and missing the second
-# is exactly how the list above went stale.
-for pkg in com/google/protobuf com/google/common com/google/thirdparty com/google/gson \
-	com/google/errorprone com/google/j2objc io/netty; do
+# than a broken invariant: the platform has its own copy on the classpath that
+# loads the plugin. Guava contributes two top-level packages, and missing the
+# second is exactly how the list above went stale. The list is per flavour and
+# lives in the case block, because the two platforms bundle different things --
+# and it is enumeration, which is why it is not what the build relies on.
+for pkg in "${COLLIDES[@]}"; do
 	if grep -q "^$pkg/" <<<"$entries"; then
-		fail "$pkg is present unrelocated; it would meet Paper's own copy"
+		fail "$pkg is present unrelocated; it would meet $PLATFORM's own copy"
 	fi
 done
 

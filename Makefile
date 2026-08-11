@@ -115,3 +115,9 @@ velocity-image-test: velocity-image-load
 image-repro:
 	nix build .#paper-image --rebuild
 	nix build .#velocity-image --rebuild
+	# The agent jars, directly. Both images embed them, so a non-reproducible
+	# jar would eventually show up above -- but as a diff in an image layer,
+	# which says nothing about which of the two agents moved. Rebuilding the
+	# derivation that produces both is what turns that into a message naming
+	# the jar.
+	nix build .#agents --rebuild

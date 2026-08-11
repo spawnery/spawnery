@@ -157,12 +157,12 @@
             ldflags = [ "-s" "-w" ];
           };
 
-          # `paper` stays an explicit argument even though it is no longer part
-          # of the version string: pkgs.callPackage fills arguments from pkgs
-          # only, and `paper` is a local let binding. What it is for now is the
-          # postPatch symlink that hands Gradle the Paper API.
+          # `paper` and `velocity` stay explicit arguments even though neither
+          # is part of the version string: pkgs.callPackage fills arguments
+          # from pkgs only, and both are local let bindings. What they are for
+          # is the postPatch symlinks that hand Gradle each platform's API.
           agents = pkgs.callPackage ./nix/agents.nix {
-            inherit paper imageVersion;
+            inherit paper velocity imageVersion;
           };
         in
         {
@@ -186,11 +186,11 @@
             inherit paper spawnery-slp spawnery-config agents imageVersion oci-common;
           };
 
-          # No spawnery-slp and no agent: a proxy's readiness is the agent's
-          # ready port, not a server list ping, and the agent jar ships in
-          # milestone 3c.
+          # No spawnery-slp: a proxy's readiness is the agent's ready port,
+          # not a server list ping, so the image needs no pinger. The agent
+          # itself now ships -- it is the thing that binds that port.
           velocity-image = pkgs.callPackage ./nix/velocity-image.nix {
-            inherit velocity spawnery-config imageVersion oci-common;
+            inherit velocity spawnery-config agents imageVersion oci-common;
           };
         });
     };

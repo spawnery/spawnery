@@ -8,12 +8,13 @@
 #
 # Dependencies come through the nixpkgs Gradle setup hook, whose lockfile
 # (agent/deps.json) carries one SHA-256 per artifact and is checked in.
-# The Paper API does not: it is symlinked in from the already-pinned Paper
-# bundle, so it can never drift from the server that loads the plugin.
+# The platform APIs do not: each is symlinked in from the already-pinned bundle
+# or jar, so neither plugin can drift from the thing that loads it.
 { lib
 , stdenv
 , gradle
 , paper
+, velocity
 , unzip
 , imageVersion
 }:
@@ -38,12 +39,18 @@ stdenv.mkDerivation (finalAttrs: {
     data = ../agent/deps.json;
   };
 
-  # Gradle resolves the Paper API through this link, not through a repository.
-  # It goes inside the :paper subproject and not at the source root, because
-  # the fileTree in agent/paper/build.gradle.kts is resolved relative to the
-  # subproject directory.
+  # Gradle resolves each platform API through these links, not through a
+  # repository. They go inside their own subprojects and not at the source
+  # root, because the fileTree in agent/paper/build.gradle.kts and the
+  # files("velocity.jar") in agent/velocity/build.gradle.kts are both resolved
+  # relative to the subproject directory.
+  #
+  # Paper needs a whole repo tree because its API is spread over a libraries
+  # directory; Velocity's fat jar contains its own plugin API, so one file is
+  # the whole of it.
   postPatch = ''
     ln -sfn ${paper.repo} paper/paper-repo
+    ln -sfn ${velocity.jar} velocity/velocity.jar
   '';
 
   gradleFlags = [ "-PagentVersion=${finalAttrs.version}" ];
@@ -58,10 +65,17 @@ stdenv.mkDerivation (finalAttrs: {
 
   doCheck = true;
 
+  # One directory per flavour, and the same file name inside each. The
+  # consumers -- nix/paper-image.nix and nix/velocity-image.nix -- therefore
+  # name the platform they want in the path rather than distinguishing two jars
+  # by their Gradle archivesName, which is a build detail neither image should
+  # have to know.
   installPhase = ''
     runHook preInstall
     install -Dm644 paper/build/libs/spawnery-paper-agent-${finalAttrs.version}.jar \
       $out/share/spawnery/paper/spawnery-agent.jar
+    install -Dm644 velocity/build/libs/spawnery-velocity-agent-${finalAttrs.version}.jar \
+      $out/share/spawnery/velocity/spawnery-agent.jar
     runHook postInstall
   '';
 
@@ -78,6 +92,7 @@ stdenv.mkDerivation (finalAttrs: {
     # flavour's. The third names the flavour, which is what tells the check
     # which subproject and which plugin descriptor belong to this jar.
     bash ${../hack/agent-jar-check.sh} $out/share/spawnery/paper/spawnery-agent.jar "$PWD" paper
+    bash ${../hack/agent-jar-check.sh} $out/share/spawnery/velocity/spawnery-agent.jar "$PWD" velocity
     runHook postInstallCheck
   '';
 

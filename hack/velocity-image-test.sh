@@ -118,6 +118,44 @@ if ! grep -qE "player-info-forwarding-mode = .modern." <<<"$rendered"; then
 fi
 echo "velocity.toml renders online-mode = true, modern forwarding, and the mounted secret path"
 
+# The plugin is in the image but has no operator to reach here, exactly as in
+# hack/image-test.sh. Two things have to be true, and neither is visible from a
+# green port probe alone.
+#
+# That it loaded at all: a velocity-plugin.json naming a class that is not
+# there, a malformed descriptor, or a main class Guice cannot construct each
+# produce a proxy that starts perfectly and silently has no agent. The
+# dormancy line names SPAWNERY_OPERATOR_ENDPOINT because none of the three
+# proxy variables is set in this run and ProxyEnvironment checks the endpoint
+# first -- so this assertion also pins that ordering, which is the only reason
+# the message here is about an operator rather than about a player limit
+# nobody set.
+container_logs="$("$CONTAINER" logs "$NAME" 2>&1)"
+if ! grep -q 'spawnery agent dormant.*SPAWNERY_OPERATOR_ENDPOINT' <<<"$container_logs"; then
+	echo "the agent plugin did not load, or did not report why it stayed dormant:" >&2
+	grep -iE 'spawnery|plugin' <<<"$container_logs" >&2 || true
+	exit 1
+fi
+echo "the agent plugin loaded and stayed dormant without an operator"
+
+# And that nothing broke at class load. The dormancy line is itself most of
+# that proof: it is printed from the plugin's own code, after Velocity read the
+# descriptor, loaded the class and Guice constructed it with an injected
+# ProxyServer and Logger.
+#
+# Note what this does NOT prove, the same caveat hack/image-test.sh carries:
+# with no operator endpoint the plugin goes dormant before SessionLoop,
+# OperatorChannel or BearerCredentials are ever constructed, and those are the
+# classes that import io.grpc. Class loading is lazy, so the shaded gRPC tree
+# is never touched in this run, and a shading regression confined to the
+# operator-connection path would pass here.
+if grep -qE 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs"; then
+	echo "a linkage error appeared while loading the plugin:" >&2
+	grep -B2 -A10 -E 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs" >&2
+	exit 1
+fi
+echo "the plugin's own classes load without a linkage error"
+
 # exec in the entrypoint puts the JVM at PID 1 so it receives SIGTERM
 # directly; without it, a proxy would never see the signal and would drop
 # every player on it instead of draining. "Shutting down the proxy..." is
