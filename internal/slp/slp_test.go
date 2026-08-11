@@ -17,6 +17,7 @@ limitations under the License.
 package slp
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"net"
@@ -88,6 +89,69 @@ func TestPingReadsTheStatusDocument(t *testing.T) {
 	}
 	if status.Version.Protocol != 776 {
 		t.Errorf("protocol is %d, want 776", status.Version.Protocol)
+	}
+}
+
+func TestPingVersionAnnouncesTheVersionItWasGiven(t *testing.T) {
+	// A proxy answers a status request with the version it was asked about
+	// when it supports it, so the caller that has to log in afterwards
+	// (internal/mcjoin) depends on this field being exactly what it passed.
+	announced := make(chan int32, 1)
+	host, port := serve(t, func(c net.Conn) {
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, payload, err := mcproto.ReadPacket(c)
+		if err != nil {
+			announced <- 0
+			return
+		}
+		protocol, err := mcproto.ReadVarInt(bytes.NewReader(payload))
+		if err != nil {
+			announced <- 0
+			return
+		}
+		announced <- protocol
+		drainRequest(c)
+		_, _ = c.Write(statusResponse(`{"version":{"name":"fake","protocol":776}}`))
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := PingVersion(ctx, host, port, -1); err != nil {
+		t.Fatalf("PingVersion: %v", err)
+	}
+	if got := <-announced; got != -1 {
+		t.Errorf("the handshake announced protocol %d, want -1", got)
+	}
+}
+
+func TestPingAnnouncesTheDefaultVersion(t *testing.T) {
+	announced := make(chan int32, 1)
+	host, port := serve(t, func(c net.Conn) {
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, payload, err := mcproto.ReadPacket(c)
+		if err != nil {
+			announced <- 0
+			return
+		}
+		protocol, err := mcproto.ReadVarInt(bytes.NewReader(payload))
+		if err != nil {
+			announced <- 0
+			return
+		}
+		announced <- protocol
+		drainRequest(c)
+		_, _ = c.Write(statusResponse(`{"version":{"name":"fake","protocol":776}}`))
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := Ping(ctx, host, port); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	if got := <-announced; got != handshakeProtocolVersion {
+		t.Errorf("the handshake announced protocol %d, want %d", got, handshakeProtocolVersion)
 	}
 }
 

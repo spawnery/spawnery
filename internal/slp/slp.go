@@ -35,10 +35,16 @@ import (
 )
 
 // handshakeProtocolVersion is the protocol version announced in the handshake.
-// For a status request it does not have to match the server: a Paper 26.2
-// server (protocol 776) answers a handshake announcing 771. This tool
+// For a status request against a server it does not have to match: a Paper
+// 26.2 server (protocol 776) answers a handshake announcing 771. This tool
 // therefore never has to track Minecraft versions, which is measured, not
 // hoped for — see section 7 of the design.
+//
+// A proxy is the exception, and it is why PingVersion exists: Velocity 3.5.1
+// answers with the version the handshake announced whenever it supports it,
+// so a caller that needs the version the proxy would really speak has to
+// announce one it does not support. See PingVersion, and internal/mcjoin,
+// which is that caller.
 const handshakeProtocolVersion = 771
 
 // Version is the part of the status document that proves a server answered
@@ -61,6 +67,19 @@ type Status struct {
 // is applied to the connection, but plain cancellation with no deadline set
 // is not otherwise observed, so it will not abort an in-flight read or write.
 func Ping(ctx context.Context, host string, port int) (*Status, error) {
+	return PingVersion(ctx, host, port, handshakeProtocolVersion)
+}
+
+// PingVersion is Ping with the protocol version the handshake announces made
+// explicit. The readiness probe has no use for it — every server answers a
+// status request whatever it is told — but a client that has to log in
+// afterwards does: Velocity echoes a version it supports back at the asker,
+// so announcing 771 to the pinned proxy is answered "771" and the login that
+// follows is then refused by a Paper 26.2 backend with "Outdated client!
+// Please use 26.2". Announcing something no server supports is what makes the
+// answer the proxy's own maximum instead. See internal/mcjoin for the
+// measurement.
+func PingVersion(ctx context.Context, host string, port int, protocol int32) (*Status, error) {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
@@ -74,7 +93,7 @@ func Ping(ctx context.Context, host string, port int) (*Status, error) {
 		}
 	}
 
-	if err := writeHandshake(conn, host, port); err != nil {
+	if err := writeHandshake(conn, host, port, protocol); err != nil {
 		return nil, fmt.Errorf("write handshake: %w", err)
 	}
 	// The status request itself is an empty packet 0x00.
@@ -85,9 +104,9 @@ func Ping(ctx context.Context, host string, port int) (*Status, error) {
 	return readStatusResponse(conn)
 }
 
-func writeHandshake(w io.Writer, host string, port int) error {
+func writeHandshake(w io.Writer, host string, port int, protocol int32) error {
 	var payload []byte
-	payload = mcproto.AppendVarInt(payload, handshakeProtocolVersion)
+	payload = mcproto.AppendVarInt(payload, protocol)
 	payload = mcproto.AppendString(payload, host)
 	payload = binary.BigEndian.AppendUint16(payload, uint16(port))
 	payload = mcproto.AppendVarInt(payload, 1) // next state: status
