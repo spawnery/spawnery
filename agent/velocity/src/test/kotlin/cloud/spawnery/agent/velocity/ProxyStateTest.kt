@@ -39,4 +39,26 @@ class ProxyStateTest {
         state.sample(players = 1)
         assertEquals(1, state.players)
     }
+
+    @Test
+    fun `reading the count does not consume it`() {
+        val state = ProxyState(slots = 500)
+        state.sample(players = 4)
+
+        assertEquals(4, state.players)
+        // Read twice with no sample in between, which is the only way to tell
+        // a gauge from a counter and the one thing the two tests above cannot
+        // see: every read they make is preceded by a write, so a destructive
+        // read -- getAndSet(0) in place of get() -- passes both.
+        //
+        // The two clocks are what make that reachable rather than theoretical.
+        // Velocity's sampler and SessionLoop's reporting timer run
+        // independently, at one second and at whatever interval the operator
+        // dictates (30 s today), so two reports between two samples is the
+        // ordinary case the moment the operator slows reporting down or the
+        // proxy's scheduler is briefly busy. A destructive read would put a
+        // zero on the wire for a proxy with players on it, and the 1 s sampler
+        // would paper over it well enough that it survived a long time.
+        assertEquals(4, state.players, "reading the player count consumed it")
+    }
 }

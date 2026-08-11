@@ -242,6 +242,16 @@ class ProxyRoleTest {
             role.onMessage(fullSync(backend("lobby-1", "10.0.0.1:25565", "lobby"))),
         )
 
+        // The gate stays shut, and this is the assertion that pins the
+        // ordering inside the FULL_SYNC branch rather than merely its outcome.
+        // The obvious wrong implementation -- claiming the latch before
+        // directory.apply rather than after it -- is invisible to the final
+        // count below: it would open the gate here, the second sync would find
+        // the latch already set, and `syncs` would still be 1 at the end. Right
+        // number, wrong reason, and a proxy that had spent its one chance to
+        // become ready on the sync that failed.
+        assertEquals(0, syncs, "a sync that threw opened the gate anyway")
+
         assertEquals(1, logs.size, "the swallowed failure left no trace")
         assertTrue(
             logs[0].first.contains("FULL_SYNC"),
