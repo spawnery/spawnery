@@ -1,15 +1,17 @@
 # Known issues and carry-overs for later milestones
 
-Status: end of milestone 3b, the Velocity image (2026-08-11).
+Status: end of milestone 3c, the Velocity agent (2026-08-11).
 
 This list collects what was deliberately left open during the implementation and
 the reviews of milestone 1, milestone 2a, milestone 2b, milestone 2c, milestone
-3a and milestone 3b. It does not replace a spec — the design decisions live in
+3a, milestone 3b and milestone 3c. It does not replace a spec — the design
+decisions live in
 `superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md`, in
 `superpowers/specs/2026-08-08-agent-channel-design.md`, in
 `superpowers/specs/2026-08-09-paper-agent-design.md`, in
-`superpowers/specs/2026-08-10-proxy-channel-design.md` and in
-`superpowers/specs/2026-08-10-velocity-image-design.md`.
+`superpowers/specs/2026-08-10-proxy-channel-design.md`, in
+`superpowers/specs/2026-08-10-velocity-image-design.md` and in
+`superpowers/specs/2026-08-11-velocity-agent-design.md`.
 
 ## Preconditions for milestone 2c (the Kotlin agent) — met
 
@@ -28,9 +30,12 @@ section 7.1). `internal/agentserver` only supplies the operator half of this
 (`Registry.Supersede` carries the readiness of a superseding stream over);
 without an agent that actually reconnects before the deadline it has no effect.
 
-*Met* by `SessionLoop` in `agent/paper/src/main/kotlin`, which opens the
-replacement stream and only retires the outgoing one once the operator has
-answered on the replacement. That last clause is not decoration: an earlier
+*Met* by `SessionLoop`, which opens the replacement stream and only retires
+the outgoing one once the operator has answered on the replacement. It lived
+in `agent/paper/src/main/kotlin` when this precondition was written; milestone
+3c's Gradle split moved it to `agent/common/src/main/kotlin` so the Velocity
+agent could run the identical loop rather than a copy of it, and every claim
+below about its behaviour still holds of the shared class. That last clause is not decoration: an earlier
 version retired on the local `Hello` call, which travels an established
 connection and therefore beats a greeting that still needs TCP and TLS, so the
 operator saw `leave()` then `enter()` — a `Disconnect` followed by a `Connect`
@@ -273,16 +278,20 @@ documents the relay container that works. Milestone 6 wires this flow into CI an
 will meet the same wall, and the durable answer there is to run the operator
 inside the cluster from its own image, where the Service is a Service.
 
-## Preconditions for milestone 3 (proxy integration)
+## Preconditions for milestone 3 (proxy integration) — fully discharged
 
-All five original preconditions below are now discharged: three by milestone
-3a (the operator's proxy side, 2026-08-10), and the remaining two — the
+All five original preconditions below are discharged: three by milestone 3a
+(the operator's proxy side, 2026-08-10), and the remaining two — the
 image-layer items — by milestone 3b (the Velocity image, 2026-08-11). They are
 kept rather than deleted for the same reason milestone 2c's closed
-preconditions are: the reasoning is what the next sub-project — 3c, the
-Velocity agent — inherits, and only the reasoning makes it legible. What 3a
-itself discovered while closing its three follows after them, and what 3b
-discovered while closing its own two follows after that.
+preconditions are: the reasoning is what the next sub-project inherits, and
+only the reasoning makes it legible. That next sub-project was 3c, the
+Velocity agent, and it has now also landed (2026-08-11) — its own discoveries
+are their own section, "From milestone 3c", below, in the same shape as "From
+milestone 2c" above rather than folded into this one, because unlike 3a and
+3b it is not itself a precondition of anything later. What 3a itself
+discovered while closing its three follows after them, and what 3b discovered
+while closing its own two follows after that.
 
 **Factor the shared image Nix while there is still exactly one consumer.**
 `nix/paper-image.nix` holds four things the Velocity image will need verbatim:
@@ -551,6 +560,114 @@ is why this is a gap and not a hole; it is the same class of duplication as
 `configOverlayDir`, whose divergence the test's own comment already
 documents as silent. Closing it is a one-line addition to the existing
 test.
+
+## From milestone 3c (the Velocity agent)
+
+Design `2026-08-11-velocity-agent-design.md` §11 named five of these before
+the milestone started; what follows carries them and adds what building it
+actually found. The one that matters most is first.
+
+**`internal/render/paper.go` wrote the Velocity forwarding secret under the
+key `secret-key`; Paper reads `secret`.** Paper does not reject the unknown
+key — it ignores it, preserves it verbatim on the next save so the file looks
+correct, keeps `secret: ''`, and disables forwarding in its own
+post-processing while logging *"Velocity is enabled, but no secret key was
+specified. A secret key is required. Disabling velocity..."*. That line was
+printed in every Paper container from the moment milestone 3b shipped, and
+nothing read it. Backend-side forwarding had never worked. It was found only
+by the first real end-to-end join, ten tasks into this milestone.
+
+The portable lesson is bigger than the fix: **no test in this repository
+measured the receiving program.** The render tests assert that the renderer
+writes the string the renderer says it writes, which cannot fail on a key the
+receiver ignores; and until this milestone no test had ever put a proxy in
+front of a Paper server. Both halves are now closed — a fixture of Paper's
+own default config checked against the renderer's key names
+(`TestPaperWritesTheKeysPaperItselfReads`, against
+`internal/render/testdata/paper-global.default.yml`), and an image test that
+reads the file back out of the running container
+(`hack/image-test.sh`) — but the class is what the next person needs to
+carry forward: a green render test proves what was written, never what was
+read.
+
+**`online-mode` moved to the CRD.** `ProxyGroup.spec.config.onlineMode`,
+defaulting `true`. It could not be set by a `configOverlay` because
+`render.Velocity` reasserts the keys it owns after the merge, and the ruling
+was that a security property switchable in a YAML file nobody reads is worse
+than one visible on the custom resource. Turning it off means the proxy
+stops authenticating players.
+
+**Paper 26.2 accepts the forwarding secret from the environment**
+(`PAPER_VELOCITY_SECRET`), so the plaintext need not be written into
+`/data/config/paper-global.yml` in the writable layer at all. Not done; a
+smaller attack surface for whoever next opens the Paper renderer.
+
+**A `configOverlay` can still inject unknown keys** into `proxies.velocity`.
+`TestPaperWritesTheKeysPaperItselfReads` renders with a nil overlay, so the
+"keys Paper reads" invariant is asserted for the base render only. The three
+critical keys (`enabled`, `online-mode`, `secret`) are reasserted over the
+overlay, so it is defensible — but it is the one path a `secret-key`-shaped
+key can still take, and nothing would catch a second one arriving the same
+way this one did.
+
+**The ready port is spelled in two languages** —
+`internal/podspec.ProxyReadyPort` and a Kotlin constant in
+`agent/velocity/src/main/kotlin/cloud/spawnery/agent/velocity/AgentPlugin.kt`
+— with no test that can compare them. Only the level-2 harness
+(`hack/agent-test.sh`, phase four) catches a divergence, and only when it
+runs.
+
+**A proxy that cannot bind its ready port is silent on the CR.** It stays
+`Pending` with the reason only in the container log
+(`ReadyGate.open`'s own `log(...)` call). This is the same shape as the
+`playerLimit` defect milestone 3b found and fixed, in a place where the
+operator has nothing to write to.
+
+**`SPAWNERY_FALLBACK_GROUPS` is a third spelling of the fallback list**,
+after the CRD field `ProxyGroup.spec.routing.fallbackGroups` and
+`DrainPlayers.toGroups`. `internal/podspec.BuildProxyPod` builds the
+environment variable from the same CRD field the operator's own
+`DrainPlayers` sender reads, so it cannot disagree today; nothing pins that
+it will not.
+
+**Per-proxy load balancing.** With several proxies, placement is even per
+proxy and not necessarily across the network — `Router` counts only the
+players Velocity itself can see, not what any other proxy in the same
+`ProxyGroup` is carrying.
+
+**Proxy drain still needs a lowerable readiness** in
+`internal/agent/registry.go`. That is a milestone 2a contract change and
+belongs to milestone 4, which owns proxy drain — see
+`docs/handover-milestone-4.md` for what the change has to do.
+
+**The NetworkPolicy is overdue, not deferred.** With `online-mode=false` on
+the backends and forwarding now actually working, a Paper server
+authenticates no one and trusts whatever completes the handshake with the
+right secret — and nothing restricts who may attempt it. Milestone 6 owns
+NetworkPolicies as a group. This entry is the one most likely to be read as a
+formality; it is not.
+
+**Smaller ones**, each worth a sentence: `hack/agent-test.sh` phase 1 carries
+an empty-token comparison that would pass vacuously if the token file were
+ever empty; phase 5 reuses phase 2's window constants declared 400 lines
+earlier, both derived from a hard-coded renewal interval; `streams_opened`
+counts what the operator saw, so a proxy leaking a gRPC channel per reconnect
+is still measured nowhere — the standing blind spot inherited from milestone
+2c; `ServerDirectory`'s stale-removal path (`unregisterTracked`) logs nothing
+at the point of removal, unlike every other mutation in the same class; and
+`Router.choose` falls through to the next group when exclusion empties the
+first, which no test exercises. Separately: `cmd/spawnery-join` asks a
+server for its protocol version by announcing an unsupported one
+(`announceUnsupported = -1`) and trusts that the proxy's newest supported
+version and the backend's actual version agree — true of every pinned pair
+this repository ships and not guaranteed generally; `internal/mcjoin`'s own
+package comment names the failure mode (a loud "Outdated client!" naming the
+version to fix it to), so it fails loud rather than silent, but the runbook
+that depends on this tool inherits the same assumption. And
+`config/samples/network.yaml`'s own top comment still describes a `ProxyGroup`
+whose pod never turns `Ready` because "milestone 3c's Velocity agent" does not
+exist — false as of this milestone; nobody has updated the sample's comment
+to match.
 
 ## Preconditions for milestone 4 (scaling and drain)
 

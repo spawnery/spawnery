@@ -79,11 +79,46 @@ anything missing or malformed. `online-mode` is now `false` on the backends
 and `true` on the proxy, which is what modern player-info forwarding actually
 requires.
 
-What is still missing is the agent that makes any of this move: milestone 3c,
-the Velocity plugin. The proxy image starts, `ProxySession` will accept a
-stream, and the rendered configuration is correct on disk — but nothing
-inside a Velocity pod opens that stream yet, so a `ProxyGroup` never reaches
-phase `Ready` and no player can be routed to a backend.
+Milestone 3c is done: the Velocity agent. `nix build .#agents` produces both
+shaded plugin jars — Paper's and Velocity's, sharing one session loop in
+`agent/common` since this milestone's Gradle split. The Velocity plugin opens
+an authenticated `ProxySession`, mirrors the operator's server list into
+Velocity's own registry, binds its readiness port only once a server list has
+arrived so a proxy pod cannot turn ready before it can route anyone, routes a
+joining player through the group's `fallbackGroups` try-list, and moves
+players off a backend the operator is draining onto whatever that try-list
+offers next. A `ProxyGroup` now reaches phase `Ready` the way a `Server`
+already did, and milestone 3's whole point — a player can join — has code
+behind it.
+
+Getting there found the milestone's one Critical defect, and it is worth
+stating plainly rather than passed over: the paragraph above about milestone
+3b claimed the rendered configuration was correct on disk, and that was not
+true. `internal/render` wrote Paper's forwarding secret under the key
+`secret-key`; Paper reads `secret`, silently ignores the one nobody asked
+for, and disables forwarding in its own log — a line nothing had ever read.
+Every backend this operator rendered came up healthy and refused every
+forwarded join. It was found by the first real end-to-end join attempt, ten
+tasks into this milestone, and no test until then could have caught it: every
+render test asserts what the renderer wrote, none of them asked what Paper
+read back. Both are now checked. `docs/known-issues.md`'s "From milestone
+3c" section has the rest of what this milestone leaves open, in particular
+that a NetworkPolicy restricting backends to proxies-only is now overdue
+rather than deferred, and that proxy drain needs a readiness
+`internal/agent/registry.go` cannot yet lower.
+
+What is measured so far is at the harness level: `make agent-test` runs both
+plugins, in the real images, against a real operator-shaped gRPC server —
+including, for the proxy, that its ready port stays closed until a server
+list arrives and opens once one does. The cluster-level proof — a real
+`kind` cluster, an automated join through `cmd/spawnery-join`, a manual join
+with a real Microsoft account, and a drain that moves a connected player off
+a deleted `Server` — is written down as
+[`docs/runbook-milestone-3-evidence.md`](docs/runbook-milestone-3-evidence.md)
+and its result belongs in
+[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md), which
+currently records that run as pending rather than claiming a result nobody
+has measured yet.
 
 Carry-overs and preconditions for later milestones — CA rotation, the
 NetworkPolicy restricting backends to proxies-only that `online-mode=false`
@@ -94,10 +129,11 @@ milestones leave open — are in
 The design lives under [`docs/superpowers/specs/`](docs/superpowers/specs/), the
 plans under [`docs/superpowers/plans/`](docs/superpowers/plans/).
 
-Anyone starting milestone 3 begins at
-[`docs/handover-milestone-3.md`](docs/handover-milestone-3.md): it says where 2c
-stopped, what a Velocity agent finds already built, which parts of the Paper
-agent apply again almost unchanged, and what has to be settled before code.
+Anyone starting milestone 4 begins at
+[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md): it says where
+3c stopped, the one milestone 2a contract change proxy drain needs in
+`internal/agent/registry.go`, and what 3c leaves in place for milestone 4 to
+build on. [`docs/handover-milestone-3.md`](docs/handover-milestone-3.md),
 [`docs/handover-milestone-2c.md`](docs/handover-milestone-2c.md) and
 [`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md) are its
 predecessors, kept as the record of what those milestones started from.
@@ -109,7 +145,7 @@ nix develop            # Go, controller-gen, envtest assets, kubectl, kind, k3d,
                        # protoc with its Go and Java plugins, JDK 21, Gradle
 make test              # unit and envtest tests
 make build             # bin/spawnery-operator
-make agent             # the Paper agent plugin and its JUnit suite
+make agent             # both agent plugins (Paper and Velocity) and their JUnit suites
 ```
 
 `make proto` regenerates the Go code under `internal/agentpb` from
@@ -118,19 +154,24 @@ like `zz_generated.deepcopy.go` — after a change to the `.proto`, run `make
 proto` and commit the diff with it; `make test` does not regenerate it on its
 own.
 
-`make agent` builds the Paper agent plugin (`nix build .#paper-agent`) and runs
-its JUnit suite as the derivation's check phase — the target to reach for after
-any change under `agent/paper/`. `make agent-deps` regenerates
-`agent/paper/deps.json`, the checked-in lockfile that pins every Maven artifact
-by hash; it is needed only when `agent/paper/build.gradle.kts` changes a
-dependency, and it is deliberately part of no other target, not even `make
-all`, because it reaches Maven Central — a dependency change is an explicit act
-and a Nix build must never depend on the network. `make agent-test` runs the
-real image against the Go stub operator in `cmd/spawnery-stubop` and checks the
-handshake, the authorization header, the player reports, the overlapping
-renewal and the bound on a session the operator never answers; it is the target
-to run after any change to the agent's session handling, and like the image
-targets below it needs a container runtime and only works on `x86_64-linux`.
+`make agent` builds both agent plugins (`nix build .#agents`) — Paper's and
+Velocity's, sharing the session loop, token source and channel construction in
+`agent/common` since milestone 3c's Gradle split — and runs both JUnit suites
+as the derivations' check phases; it is the target to reach for after any
+change under `agent/`. `make agent-deps` regenerates `agent/deps.json`, the
+checked-in lockfile that pins every Maven artifact by hash across all three
+Gradle subprojects; it is needed only when a `build.gradle.kts` under `agent/`
+changes a dependency, and it is deliberately part of no other target, not even
+`make all`, because it reaches Maven Central — a dependency change is an
+explicit act and a Nix build must never depend on the network. `make
+agent-test` runs both real images against
+the Go stub operator in `cmd/spawnery-stubop` and checks the handshake, the
+authorization header, the player reports, the overlapping renewal and the
+bound on a session the operator never answers — and, for the Velocity image,
+that its readiness port stays closed until a server list has arrived and
+opens once one does; it is the target to run after any change to either
+agent's session handling, and like the image targets below it needs a
+container runtime and only works on `x86_64-linux`.
 
 `make image` builds the Paper base image, `make image-load` hands it to the
 local container runtime, and `make image-test` runs both the Paper and the
