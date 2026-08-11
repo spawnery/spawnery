@@ -1,5 +1,11 @@
-package cloud.spawnery.agent
+package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.BearerCredentials
+import cloud.spawnery.agent.Environment
+import cloud.spawnery.agent.OperatorChannel
+import cloud.spawnery.agent.ServerState
+import cloud.spawnery.agent.SessionLoop
+import cloud.spawnery.agent.TokenSource
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener

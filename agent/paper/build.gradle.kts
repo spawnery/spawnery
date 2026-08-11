@@ -1,14 +1,21 @@
 plugins {
-    // 2.4.10 and not lower: that is the version measured to read the
-    // class-file-major-69 Paper jars on the compile classpath. An older Kotlin
-    // may not, and the failure is an UnsupportedClassVersionError that names
-    // the jar rather than the compiler.
-    kotlin("jvm") version "2.4.10"
-    id("com.gradleup.shadow") version "9.0.0"
+    // Both versions are pinned once in agent/build.gradle.kts, including the
+    // reason the Kotlin one may not go lower.
+    kotlin("jvm")
+    id("com.gradleup.shadow")
 }
 
 group = "cloud.spawnery"
 version = providers.gradleProperty("agentVersion").getOrElse("0.0.0-dev")
+
+// Named explicitly rather than taken from the subproject directory, because
+// nix/agents.nix installs this jar by its file name: with two agents in one
+// build, "the directory it came from" stops being enough to tell them apart in
+// build/libs, and a rename of the directory would silently change what the
+// derivation looks for.
+base {
+    archivesName = "spawnery-paper-agent"
+}
 
 repositories {
     mavenCentral()
@@ -16,8 +23,10 @@ repositories {
 
 // The Paper API comes from the pinned Paper bundle, never from a Maven
 // repository, so the plugin cannot compile against a different API than the
-// server that loads it. nix/paper-agent.nix symlinks packages.paper-repo here
-// before the build; a developer running Gradle by hand creates the same link:
+// server that loads it. nix/agents.nix symlinks packages.paper-repo here
+// before the build -- into this subproject, not the Gradle root, which is what
+// keeps the relative path below correct; a developer running Gradle by hand
+// creates the same link:
 //
 //   ln -sfn "$(nix build .#paper-repo --no-link --print-out-paths)" agent/paper/paper-repo
 //
@@ -35,59 +44,26 @@ val paperLibraries = fileTree("paper-repo/libraries") {
     exclude("**/protobuf-java-*.jar")
 }
 
-// The generated protobuf and gRPC stubs live in their own source set. Its
-// compile classpath must never contain paperLibraries: those jars are class
-// file major 69, and javac 21 fails the moment it has to resolve a class out
-// of one. Keeping them apart makes that impossible rather than unlikely.
-val proto: SourceSet by sourceSets.creating {
-    java.srcDir("src/proto/java")
-}
-
-val protoImplementation: Configuration by configurations.getting
-
-// proto's classes reach main's compile and runtime classpath directly, not
-// through a dependency configuration. shadowJar bundles every configuration
-// it is told about by resolving its artifacts and calling zipTree() on each,
-// assuming a jar; proto.output is a raw classes directory (a self-resolving
-// dependency, not a published artifact), and zipTree() on a directory fails
-// with "Cannot expand ZIP ... as it is not a file." Wiring it in here keeps
-// it off any Configuration shadowJar inspects, while still making the proto
-// classes available to compileKotlin and to the running plugin.
-sourceSets.main {
-    compileClasspath += proto.output
-    runtimeClasspath += proto.output
-}
-
-// protobuf-java's version tracks protoc's one-for-one (protoc 35.1 generates
-// code that calls APIs only present from protobuf-java 4.35.1 on): the
-// project unified its per-language version numbers, so the Java artifact's
-// "4." prefix is followed by the same X.Y as protoc itself. This must move
-// in lockstep with the protobuf package pinned in flake.nix.
+// The session machinery and the generated stubs live in :common. The stub
+// artifacts reach this project's compile classpath through :common's `api`
+// configuration, which is why they are not repeated here; grpc-okhttp is on
+// :common's `implementation` and reaches only the runtime classpath, which is
+// all shadowJar needs to bundle it.
+//
+// There is no `proto` source set here any more, and no Java at all: the
+// generated stubs compile in :common, against a classpath that has never seen
+// Paper's class-file-major-69 jars. See agent/common/build.gradle.kts.
 dependencies {
-    protoImplementation("io.grpc:grpc-api:1.83.1")
-    protoImplementation("io.grpc:grpc-protobuf:1.83.1")
-    protoImplementation("io.grpc:grpc-stub:1.83.1")
-    protoImplementation("com.google.protobuf:protobuf-java:4.35.1")
-    // The generated stubs carry @javax.annotation.Generated.
-    protoImplementation("javax.annotation:javax.annotation-api:1.3.2")
-
-    implementation("io.grpc:grpc-okhttp:1.83.1")
-    implementation("io.grpc:grpc-protobuf:1.83.1")
-    implementation("io.grpc:grpc-stub:1.83.1")
-    implementation("com.google.protobuf:protobuf-java:4.35.1")
+    implementation(project(":common"))
 
     compileOnly(paperLibraries)
 
-    testImplementation(proto.output)
     testImplementation(kotlin("test"))
     // The BOM, not just the aggregate artifact: junit-jupiter alone does not
     // constrain junit-platform-launcher, and Gradle refuses a dependency with
     // no version rather than guessing one.
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-    testImplementation("io.grpc:grpc-inprocess:1.83.1")
-    testImplementation("io.grpc:grpc-testing:1.83.1")
-    testImplementation("org.bouncycastle:bcpkix-jdk18on:1.79")
     testImplementation(paperLibraries)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
@@ -144,11 +120,6 @@ tasks.jar {
 tasks.shadowJar {
     archiveClassifier.set("")
 
-    // The proto classes live in their own source set (see the compileClasspath
-    // comment above) and are not part of sourceSets.main.output, so they need
-    // to be added explicitly for the compiled stubs to end up in the jar.
-    from(proto.output)
-
     // Everything the plugin brings is relocated, without exception. The rule
     // is "relocate all of it" rather than "relocate what currently conflicts",
     // because the second list has to be revisited every time Paper changes a
@@ -164,6 +135,10 @@ tasks.shadowJar {
     // cloud/spawnery/agent/, whether or not it is named here. Adding a
     // dependency that brings a new package therefore fails at build time with
     // the package named, rather than in a pod months later.
+    //
+    // :common needs no entry of its own: its classes are already under
+    // cloud.spawnery.agent, which is the prefix everything else is relocated
+    // into.
     listOf(
         // gRPC and its transport.
         "io.grpc",

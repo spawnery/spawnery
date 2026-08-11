@@ -4,6 +4,13 @@ cover.out
 result
 result-*
 .direnv/
+# The Paper API is symlinked into the Paper subproject before the build; see
+# nix/agents.nix. The Gradle root is agent/, so .gradle/ and build/ now appear
+# once at the root and once per subproject -- and Nix builds from the git
+# index, so an ignore that missed one would stage build output into the tree
+# the build reads.
 agent/paper/paper-repo
-agent/paper/.gradle/
-agent/paper/build/
+agent/.gradle/
+agent/build/
+agent/**/.gradle/
+agent/**/build/

@@ -27,12 +27,12 @@ proto:
 		--go_out=. --go_opt=module=github.com/spawnery/spawnery \
 		--go-grpc_out=. --go-grpc_opt=module=github.com/spawnery/spawnery \
 		proto/spawnery/agent/v1alpha1/agent.proto
-	rm -rf agent/paper/src/proto/java
-	mkdir -p agent/paper/src/proto/java
+	rm -rf agent/common/src/proto/java
+	mkdir -p agent/common/src/proto/java
 	protoc \
 		--proto_path=proto \
-		--java_out=agent/paper/src/proto/java \
-		--grpc-java_out=agent/paper/src/proto/java \
+		--java_out=agent/common/src/proto/java \
+		--grpc-java_out=agent/common/src/proto/java \
 		proto/spawnery/agent/v1alpha1/agent.proto
 
 .PHONY: fmt
@@ -57,16 +57,16 @@ lint:
 
 .PHONY: agent
 agent:
-	nix build .#paper-agent
+	nix build .#agents
 
-# Regenerates agent/paper/deps.json. Runs outside the Nix sandbox because it
+# Regenerates agent/deps.json. Runs outside the Nix sandbox because it
 # has to reach Maven Central, so it is deliberately in no other target: a
 # dependency change is an explicit act, not a side effect of `make all`.
 # The output path in the lockfile is relative to the working directory, so this
 # only does the right thing from the repository root.
 .PHONY: agent-deps
 agent-deps:
-	"$$(nix build --no-link --print-out-paths .#paper-agent.mitmCache.updateScript)"
+	"$$(nix build --no-link --print-out-paths .#agents.mitmCache.updateScript)"
 
 .PHONY: image
 image:
