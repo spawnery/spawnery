@@ -71,6 +71,18 @@ trap cleanup EXIT INT TERM
 mkdir -p "$WORK/agent"
 chmod 0755 "$WORK/agent"
 
+# The renderer refuses to start without both files, for the same reason and
+# in the same shape as hack/image-test.sh's fixture: see there for why
+# maxPlayers has to be a real positive number rather than an arbitrary one -
+# it also has to be exactly 100 here, to match the slots assertion below.
+# Built once and mounted read-only into all three phases below: nothing ever
+# writes to it, and none of the three needs a value the others don't.
+mkdir -p "$WORK/config"
+printf 'maxPlayers: 100\n' >"$WORK/config/config.yaml"
+printf 'test-forwarding-secret\n' >"$WORK/config/forwarding.secret"
+chmod 0755 "$WORK/config"
+chmod 0644 "$WORK/config/config.yaml" "$WORK/config/forwarding.secret"
+
 # host-gateway is understood by both Docker and Podman, so the container
 # reaches the stub the same way under either runtime, and the SAN below is the
 # name it dials.
@@ -100,7 +112,7 @@ fi
 	--memory 2g \
 	-v "$VOLUME:/data" \
 	-v "$WORK/agent:/var/run/spawnery:ro" \
-	-e SPAWNERY_MAX_PLAYERS=100 \
+	-v "$WORK/config:/etc/spawnery:ro" \
 	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19443 \
 	"$IMAGE" >/dev/null
 
@@ -315,7 +327,7 @@ fi
 	--memory 2g \
 	-v "$VOLUME2:/data" \
 	-v "$WORK/agent-supersede:/var/run/spawnery:ro" \
-	-e SPAWNERY_MAX_PLAYERS=100 \
+	-v "$WORK/config:/etc/spawnery:ro" \
 	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19444 \
 	"$IMAGE" >/dev/null
 
@@ -423,7 +435,7 @@ fi
 	--memory 2g \
 	-v "$VOLUME3:/data" \
 	-v "$WORK/agent-mute:/var/run/spawnery:ro" \
-	-e SPAWNERY_MAX_PLAYERS=100 \
+	-v "$WORK/config:/etc/spawnery:ro" \
 	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19445 \
 	"$IMAGE" >/dev/null
 
