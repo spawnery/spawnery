@@ -81,8 +81,22 @@ class FakeRole(
 }
 
 /**
- * The production mapping, repeated here because `ServerRole` is in `:paper` and
- * out of this project's reach. `ServerRoleTest` is what pins the two together.
+ * A hand-maintained copy of `ServerRole.onMessage`, repeated here because
+ * `ServerRole` is in `:paper` and out of this project's reach.
+ *
+ * Nothing enforces the copy. `ServerRoleTest` pins `ServerRole` to an
+ * expectation table of its own and never sees this function, so the two are
+ * coupled only by whoever remembers. Twenty [SessionLoopTest] cases assert
+ * against the mapping below, which production does not execute: a case added to
+ * one and not the other fails no test, and the suite goes on reading as though
+ * it were a fact about `ReportInterval` and `SessionDeadline`.
+ *
+ * Which is exactly what [AgentRole]'s own KDoc warns about -- "two readers of
+ * the same messageCase in two files is how the two halves drift" -- now true of
+ * the test double rather than of the loop. It is the price of keeping the loop's
+ * tests in the project the loop lives in; see the plan's Step 5 for the
+ * alternative that was rejected. `ServerRole.onMessage` carries a note pointing
+ * back here.
  */
 private fun asServerRoleWould(message: OperatorToServer): Directive =
     when (message.messageCase) {

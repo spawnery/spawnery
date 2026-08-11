@@ -29,12 +29,21 @@ FLAVOUR="${3:-paper}"
 
 case "$FLAVOUR" in
 paper)
-	# The source directories this jar is built from. Listed rather than
-	# discovered: the whole value of the no-Java check below is that a
+	# Every hand-written source directory the no-Java constraint below is
+	# checked over. Not the jar's inputs: the test directories are here and
+	# neither of them reaches any jar. What the list enumerates is where a
+	# human may write source at all, because the constraint is that all of
+	# it is Kotlin and the only Java in this build is generated, under
+	# common/src/proto/java. A directory left out is a directory where a
+	# stray .java would pass silently -- see the failure modes at the check
+	# itself -- so a new source set belongs here whether or not it ships.
+	#
+	# Listed rather than discovered: the whole value of the check is that a
 	# directory which has moved or vanished is a failure, and a `find` over
 	# whatever happens to be present cannot tell "moved" from "empty".
-	# :common is here for every flavour -- both agents compile its sources
-	# into their jar.
+	# :common's two are here for every flavour -- both agents compile its
+	# sources, and its test sources are the ones a second agent is most
+	# likely to reach for.
 	SRC_DIRS=(common/src/main common/src/test paper/src/main paper/src/test)
 	DESCRIPTOR="paper-plugin.yml"
 	# The line the descriptor states its version on. Read rather than merely

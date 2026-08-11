@@ -33,6 +33,13 @@ class ServerRole(private val state: ServerState) : AgentRole<ServerMessage, Oper
             )
             .build()
 
+    /**
+     * `:common`'s test double copies this `when` by hand, as
+     * `FakeRole.asServerRoleWould`, because `SessionLoopTest` drives the loop
+     * from `:common` and cannot see this class. Nothing enforces the copy, so a
+     * case added here has to be added there too or twenty of those tests go on
+     * asserting against a mapping that no longer matches production.
+     */
     override fun onMessage(message: OperatorToServer): Directive =
         when (message.messageCase) {
             OperatorToServer.MessageCase.REPORT_INTERVAL ->

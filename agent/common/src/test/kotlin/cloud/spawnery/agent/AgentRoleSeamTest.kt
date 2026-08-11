@@ -35,8 +35,6 @@ class AgentRoleSeamTest {
         operator: FakeOperator,
         role: FakeRole,
         dir: Path,
-        // See SessionLoopTest.loopAgainst: identity jitter, so a test's delays
-        // are the delays it wrote down.
         fallbackAnswerBoundMillis: Long = SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS,
     ): SessionLoop<ServerMessage, OperatorToServer> {
         val token = dir.resolve("token")
@@ -48,6 +46,8 @@ class AgentRoleSeamTest {
             scheduler = scheduler,
             version = "26.2-0.2.0",
             log = { _, _ -> },
+            // See SessionLoopTest.loopAgainst: identity jitter, so a test's
+            // delays are the delays it wrote down.
             jitter = { it },
             fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
         )
