@@ -10,7 +10,11 @@ VELOCITY_HOME="${VELOCITY_HOME:-/opt/velocity}"
 
 # The configuration Velocity actually reads, written from the operator's
 # rendered ConfigMap, the user's overlay and the fields neither may move.
-/usr/local/bin/spawnery-config --flavor velocity
+# Invoked unqualified, the same way java is below and the same way
+# image/entrypoint.sh already invokes it — /usr/local/bin is already ahead on
+# this image's PATH, and going through PATH rather than a hardcoded path is
+# what lets a test double stand in for it in image/entrypoint_test.go.
+spawnery-config --flavor velocity
 
 # The agent plugin. It ships in the read-only part of the image and is copied
 # out on every start, unconditionally: the image is the truth, not whatever a

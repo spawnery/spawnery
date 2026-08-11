@@ -38,7 +38,7 @@ var paperOverlayKeys = []string{"server.properties", "paper-global.yml"}
 
 // Paper renders the two files a Spawnery-managed Paper server reads.
 //
-// The three fields in server.properties that the operator relies on are in the
+// The four fields in server.properties that the operator relies on are in the
 // critical layer and no overlay can move them:
 //
 //   - server-port, because internal/podspec names 25565 and a pod whose
@@ -47,7 +47,14 @@ var paperOverlayKeys = []string{"server.properties", "paper-global.yml"}
 //     the result — with it on, modern forwarding fails every join;
 //   - enable-status, because with it off the server answers no server list
 //     ping, the readiness probe stays red forever, and nothing in the log says
-//     why.
+//     why;
+//   - enforce-secure-profile=false, because Paper's own default of true
+//     refuses any join lacking a Mojang-signed chat session, which
+//     online-mode=false above means no join ever has — left at the default,
+//     every join would fail; turned off, a backend reached directly instead
+//     of through the proxy accepts unsigned chat from an unauthenticated
+//     connection too, which is what the NetworkPolicy restricting backends
+//     to proxies-only exists to make unreachable.
 func Paper(v Values, secret string, overlay map[string]string) (map[string][]byte, error) {
 	if err := v.RequireMaxPlayers(); err != nil {
 		return nil, err

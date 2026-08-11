@@ -35,7 +35,11 @@ trap cleanup EXIT
 # bind mount legible from inside, the same way a projected ConfigMap volume
 # would be in the cluster.
 printf 'maxPlayers: 100\n' >"$CONFDIR/config.yaml"
-printf 'test-forwarding-secret\n' >"$CONFDIR/forwarding.secret"
+# No trailing newline: internal/render.Load now refuses a secret whose raw
+# bytes are not already its own trimmed form, rather than trimming it away —
+# see the comment on that check for why. A `printf` with `\n` is exactly what
+# used to produce that mismatch.
+printf 'test-forwarding-secret' >"$CONFDIR/forwarding.secret"
 chmod 755 "$CONFDIR"
 chmod 644 "$CONFDIR/config.yaml" "$CONFDIR/forwarding.secret"
 

@@ -78,9 +78,28 @@ func Load(dir string) (Values, string, map[string]string, error) {
 		}
 		return Values{}, "", nil, fmt.Errorf("%s: %w", secretPath, err)
 	}
-	secret := strings.TrimSpace(string(secretData))
-	if secret == "" {
+	// Refused, not normalised, on surrounding whitespace: Paper gets this
+	// package's own strings.TrimSpace result written into paper-global.yml,
+	// but Velocity is handed secretPath and reads the file itself — and the
+	// pinned 3.5.1-615 jar joins the file's lines with Files.readAllLines and
+	// "", which strips no leading or trailing space but does delete an
+	// internal newline. A secret with edge whitespace would therefore trim on
+	// one side of forwarding and not the other, and one with an internal
+	// newline would do the reverse; either way Paper and Velocity end up
+	// holding different secrets, every join fails with "Unable to verify
+	// player details", and nothing in this milestone can observe why. Two
+	// normalisation rules can only be made to agree by refusing the input
+	// they disagree about, consistent with this package's own refusal
+	// philosophy elsewhere: an operator-authored Secret with clean edges is
+	// no burden to require.
+	secret := string(secretData)
+	trimmed := strings.TrimSpace(secret)
+	if trimmed == "" {
 		return Values{}, "", nil, fmt.Errorf("%s: forwarding secret is empty", secretPath)
+	}
+	if trimmed != secret {
+		return Values{}, "", nil, fmt.Errorf(
+			"%s: forwarding secret must not carry surrounding whitespace", secretPath)
 	}
 
 	overlay, err := loadOverlay(filepath.Join(dir, OverlayDir))

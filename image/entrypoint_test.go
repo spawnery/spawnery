@@ -59,22 +59,32 @@ func stubTools(t *testing.T, configExit int) string {
 	return dir
 }
 
-// runEntrypoint runs the script in workDir and returns its combined output.
+// runScript runs repoScript in workDir and returns its combined output.
 // configExit controls whether the spawnery-config stub succeeds (0, what
-// every test wants except the refusal one) or fails.
-func runEntrypoint(t *testing.T, workDir string, configExit int, env ...string) (string, error) {
+// every test wants except the refusal one) or fails. Shared by
+// image/entrypoint_test.go and image/velocity_entrypoint_test.go: both
+// scripts invoke spawnery-config unqualified — deliberately, so a PATH stub
+// can stand in for it — and this is that stub's one harness.
+func runScript(t *testing.T, repoScript, workDir string, configExit int, env ...string) (string, error) {
 	t.Helper()
-	script := testenv.RepoPath(t, "image/entrypoint.sh")
+	script := testenv.RepoPath(t, repoScript)
 
 	cmd := exec.Command("sh", script)
 	cmd.Dir = workDir
 	cmd.Env = append([]string{
 		"PATH=" + stubTools(t, configExit) + ":" + os.Getenv("PATH"),
-		"PAPER_HOME=/opt/paper",
 	}, env...)
 
 	out, err := cmd.CombinedOutput()
 	return string(out), err
+}
+
+// runEntrypoint runs the Paper entrypoint. PAPER_HOME defaults to /opt/paper,
+// overridable through env the same way runScript passes any other variable.
+func runEntrypoint(t *testing.T, workDir string, configExit int, env ...string) (string, error) {
+	t.Helper()
+	return runScript(t, "image/entrypoint.sh", workDir, configExit,
+		append([]string{"PAPER_HOME=/opt/paper"}, env...)...)
 }
 
 func TestEntrypointAcceptsTheEula(t *testing.T) {

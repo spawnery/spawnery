@@ -16,9 +16,14 @@ limitations under the License.
 
 // Command spawnery-config turns the operator's rendered configuration into
 // the files Paper or Velocity actually read, before the JVM starts. It is
-// baked into both images and internal/podspec runs it as an init container
-// ahead of the main one, so it must exit non-zero — not just log — on
-// anything that would otherwise let the JVM start against bad configuration.
+// baked into both images, and image/entrypoint.sh and
+// image/velocity-entrypoint.sh each run it inside the main container, ahead
+// of the exec that replaces the shell with the JVM — there is no init
+// container anywhere in this repository. That placement is why it must exit
+// non-zero, not just log, on anything that would otherwise let the JVM start
+// against bad configuration: a failure here surfaces as this same
+// container's CrashLoopBackOff, not as an Init:Error the kubelet would report
+// separately.
 package main
 
 import (

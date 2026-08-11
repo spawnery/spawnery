@@ -41,8 +41,13 @@ func writeFile(t *testing.T, path, content string) {
 // unless the test is specifically about that input's absence — so each test
 // isolates the one refusal it names rather than tripping over an unrelated
 // one.
+//
+// validSecret carries no trailing newline on purpose: Load refuses a secret
+// whose raw bytes are not already their own trimmed form (see
+// TestLoadRefusesASecretWithSurroundingWhitespace), so a fixture meant to be
+// accepted has to already be in that form.
 const validConfig = "maxPlayers: 100\n"
-const validSecret = "s3cret\n"
+const validSecret = "s3cret"
 
 func TestLoadRefusesAMissingValuesFile(t *testing.T) {
 	dir := t.TempDir()
@@ -167,12 +172,12 @@ func TestLoadTreatsAMissingOverlayDirectoryAsOptional(t *testing.T) {
 }
 
 // The happy path: every value Load reads reaches the caller, and the secret
-// arrives trimmed since Paper and Velocity both refuse an empty one and a
-// trailing newline must not count as content.
+// arrives exactly as written — Load no longer trims a secret into shape, it
+// only ever passes one through unchanged or refuses it.
 func TestLoadReadsValuesSecretAndOverlay(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), "maxPlayers: 100\nmotd: hello\n")
-	writeFile(t, filepath.Join(dir, SecretFile), "s3cret\n")
+	writeFile(t, filepath.Join(dir, SecretFile), "s3cret")
 	writeFile(t, filepath.Join(dir, OverlayDir, "server.properties"), "difficulty=hard\n")
 
 	v, secret, overlay, err := Load(dir)
@@ -186,10 +191,39 @@ func TestLoadReadsValuesSecretAndOverlay(t *testing.T) {
 		t.Errorf("Motd = %v, want %q", v.Motd, "hello")
 	}
 	if secret != "s3cret" {
-		t.Errorf("secret = %q, want it trimmed to %q", secret, "s3cret")
+		t.Errorf("secret = %q, want %q", secret, "s3cret")
 	}
 	if overlay["server.properties"] != "difficulty=hard\n" {
 		t.Errorf("overlay[server.properties] = %q, want %q", overlay["server.properties"], "difficulty=hard\n")
+	}
+}
+
+// TestLoadRefusesASecretWithSurroundingWhitespace is the fix for the
+// divergence a per-task review could not see: Load used to hand Paper
+// strings.TrimSpace's result, which Paper writes verbatim into
+// paper-global.yml, while Velocity is handed secretPath and reads the file
+// itself — and the pinned 3.5.1-615 jar does not trim leading or trailing
+// spaces on the line it reads. A secret with edge whitespace therefore used
+// to reach Paper trimmed and Velocity untrimmed: two different secrets, every
+// join failing with "Unable to verify player details", and nothing in this
+// milestone able to observe why. Refusing it here — before either flavour
+// ever sees it — is cheaper than reconciling two independent trimming rules,
+// and consistent with this package's own refusal philosophy elsewhere.
+func TestLoadRefusesASecretWithSurroundingWhitespace(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
+	writeFile(t, filepath.Join(dir, SecretFile), " s3cret\n")
+
+	_, _, _, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load accepted a forwarding secret with surrounding whitespace")
+	}
+	if !strings.Contains(err.Error(), SecretFile) {
+		t.Errorf("error = %q, want it to name %s", err, SecretFile)
+	}
+	if !strings.Contains(err.Error(), "whitespace") {
+		t.Errorf("error = %q, want it to say the secret carries surrounding whitespace, not something else — "+
+			"an empty secret and one with stray whitespace must read differently", err)
 	}
 }
 
