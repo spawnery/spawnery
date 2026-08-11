@@ -21,7 +21,8 @@ interface ProxyRegistry {
 
 /**
  * The operator's view of one backend: a `Server` custom resource, as the
- * `FullSync`/`RegisterServer` messages of task 7 will carry it.
+ * `FullSync` and `RegisterServer` messages carry it. [ProxyRole] holds the one
+ * place the proto's `RegisteredServer` becomes one of these.
  *
  * [address] is the raw `host:port` string rather than a parsed
  * [java.net.InetSocketAddress]: parsing can fail — a malformed value from a

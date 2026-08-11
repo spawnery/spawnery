@@ -24,6 +24,18 @@ class FakeRegistry : ProxyRegistry {
 
     val calls = mutableListOf<Call>()
 
+    /**
+     * When set, thrown by [register] instead of registering anything.
+     *
+     * [ServerDirectory] does not catch it — it has no reason to, every
+     * decision it makes about a bad entry is made before the registry is
+     * touched — so this is how [ProxyRoleTest] produces a real exception on
+     * the path a `FullSync` takes, which is the only way to show that
+     * [ProxyRole]'s guard covers the branches that do work rather than only
+     * the ones that return a directive.
+     */
+    var failRegisterWith: Throwable? = null
+
     sealed interface Call {
         data class Register(val info: ServerInfo) : Call
         data class Unregister(val info: ServerInfo) : Call
@@ -44,6 +56,7 @@ class FakeRegistry : ProxyRegistry {
     override fun server(name: String): RegisteredServer? = servers[name.lowercase()]
 
     override fun register(info: ServerInfo): RegisteredServer {
+        failRegisterWith?.let { throw it }
         calls += Call.Register(info)
         val server = FakeServer(info)
         servers[info.name.lowercase()] = server
