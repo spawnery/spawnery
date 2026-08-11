@@ -133,9 +133,14 @@ to run after any change to the agent's session handling, and like the image
 targets below it needs a container runtime and only works on `x86_64-linux`.
 
 `make image` builds the Paper base image, `make image-load` hands it to the
-local container runtime, and `make image-test` runs it offline under the same
-constraints the podspec imposes. All three need Docker or Podman and only work
-on `x86_64-linux`. Pass `CONTAINER=podman` if `docker` is not your runtime.
+local container runtime, and `make image-test` runs both the Paper and the
+Velocity images offline under the same constraints the podspec imposes —
+loading both first, so the target needs no separate `make velocity-image`
+step of its own. All three need Docker or Podman and only work on
+`x86_64-linux`. Pass `CONTAINER=podman` if `docker` is not your runtime.
+`make velocity-image`, `make velocity-image-load` and `make
+velocity-image-test` are the same three steps scoped to only the Velocity
+image, for when a change is known to touch nothing on the Paper side.
 
 `make image-repro` rebuilds the image with `nix build .#paper-image --rebuild`
 and fails if the two builds do not produce the same bytes. Design §5.3 makes

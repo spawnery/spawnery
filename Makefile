@@ -77,8 +77,16 @@ image-load: image
 	$(CONTAINER) load < result
 
 .PHONY: image-test
-image-test: image-load
+# Design §9's test-strategy table promises "both images, offline" under this
+# one name; velocity-image-test below used to be the only way to actually run
+# the Velocity half, and nothing — not this target, not `all`, not the
+# README — ever called it. Depending on both loads and running both scripts
+# is what makes that table row true rather than aspirational, and it keeps
+# one command as the single gate for "did I break either image", the same way
+# `go build ./...` is for compilation.
+image-test: image-load velocity-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) hack/image-test.sh
+	CONTAINER=$(CONTAINER) IMAGE=$(VELOCITY_IMAGE) hack/velocity-image-test.sh
 
 # The level-2 proof from design section 9. Not part of `test` or `all`, for the
 # same reason image-test is not: it needs a container runtime and only works on
