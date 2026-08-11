@@ -42,17 +42,25 @@ not**, established only by tasks 10 and 10b, late in this milestone:
    `kubectl get`, the player has already left. Every use of `spawnery-join`
    below that expects `status.connectedPlayers` to be non-zero passes
    `--hold`.
-4. **Whether a held connection is *counted* in `status.connectedPlayers` is
-   unmeasured going into this run.** `spawnery-join --hold` stops one packet
-   after `Login Acknowledged`, in the configuration state; nothing in this
-   milestone measured whether Velocity's own player registry — which is what
-   `ProxyState` samples — already carries a player who has not yet reached
-   the play state. §9's automated-proof step below is written as a fork for
-   exactly that reason: if the count reads 1, record it and move on; if it
-   reads 0, that is not necessarily a broken proxy — see the fork for what to
-   check before concluding that, and for the small, scoped fix if it turns
-   out to be real (two packet-id constants and a `case` in
-   `mcjoin`'s `holdOpen`, not a rewrite).
+4. **A held connection *is* counted in `status.connectedPlayers`, and no
+   configuration-phase play-through is needed.** `spawnery-join --hold` stops
+   one packet after `Login Acknowledged`, in the configuration state, and an
+   earlier draft of this runbook forked on whether Velocity's own registry —
+   which is what `ProxyState` samples through `proxy.playerCount` — carries a
+   player who has not reached the play state. It does. Disassembled out of the
+   pinned jar (3.5.1 build 615, 2026-08-11):
+   `AuthSessionHandler.completeLoginProtocolPhaseAndInitialize` calls
+   `VelocityServer.registerConnection` in its `LoginEvent` continuation,
+   *before* it writes `ServerLoginSuccessPacket` to the client — so before
+   Login Acknowledged, before `PostLoginEvent` and before
+   `connectToInitialServer` — and `VelocityServer.getPlayerCount()` is
+   `connectionsByUuid.size()`. The player is in that map from login success
+   onwards.
+
+   One thing still has to line up, and it is about the operator rather than
+   the proxy: `status.connectedPlayers` is only current if a report and a
+   reconcile happen *inside* the hold. That is why the holds below are 60
+   seconds and not 20.
 
 ## 0. Prerequisites
 
@@ -194,9 +202,17 @@ point the `Endpoints` at the bridge gateway (`172.17.0.1`) directly, the way
 
 ## 5. Apply the network
 
-One `Network`, one forwarding-secret `Secret`, one `ServerGroup` (`lobby`,
-one replica to start — §6 below scales it), and two `ProxyGroup`s that share
-the same `fallbackGroups` and differ only in `onlineMode` and their NodePort.
+One `Network`, one forwarding-secret `Secret`, two `ServerGroup`s (`lobby` and
+`hub`, one replica each to start — §8 scales `lobby`), and two `ProxyGroup`s
+that share the same `fallbackGroups` and differ only in `onlineMode` and their
+NodePort.
+
+**Two groups, in that order, on purpose.** `fallbackGroups` is a try list:
+`agent/velocity/.../Router.choose` takes the first group that holds a
+candidate and never looks at a later one, so with `lobby` ahead of `hub` every
+ordinary join lands in `lobby` and `hub` is only reached when `lobby` offers
+nothing. That second path is exactly what §8 drains into, and with a
+single-group list it could not be observed at all.
 
 ```bash
 nix develop -c kubectl apply -f - <<'EOF'
@@ -244,6 +260,24 @@ spec:
     spareSlots: 40
 ---
 apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: hub
+  namespace: minecraft
+spec:
+  networkRef:
+    name: evidence
+  type: Ephemeral
+  image: ghcr.io/spawnery/paper:26.2-0.2.0
+  maxPlayers: 100
+  drain:
+    timeoutSeconds: 60
+  scaling:
+    minReplicas: 1
+    maxReplicas: 10
+    spareSlots: 40
+---
+apiVersion: spawnery.cloud/v1alpha1
 kind: ProxyGroup
 metadata:
   name: gateway-auto
@@ -260,6 +294,7 @@ spec:
   routing:
     fallbackGroups:
       - lobby
+      - hub
   config:
     playerLimit: 100
     motd: "spawnery-join, automated"
@@ -282,6 +317,7 @@ spec:
   routing:
     fallbackGroups:
       - lobby
+      - hub
   config:
     playerLimit: 100
     motd: "manual join, online-mode default"
@@ -310,6 +346,7 @@ network.spawnery.cloud/evidence           True       1
 
 NAME                                PHASE   READY   FREE SLOTS
 servergroup.spawnery.cloud/lobby    Ready   1       100
+servergroup.spawnery.cloud/hub      Ready   1       100
 
 NAME                                        PHASE   READY   ADDRESS
 proxygroup.spawnery.cloud/gateway-auto      Ready   1       <nodeIP>:30565
@@ -317,9 +354,11 @@ proxygroup.spawnery.cloud/gateway-manual    Ready   1       <nodeIP>:30566
 
 NAME                              PHASE   SLOTS   PLAYERS   REGISTERED
 server.spawnery.cloud/lobby-xxxx  Ready   100     0         true
+server.spawnery.cloud/hub-wwww    Ready   100     0         true
 
 NAME              READY   STATUS
 pod/lobby-xxxx     1/1    Running
+pod/hub-wwww       1/1    Running
 pod/gateway-auto-yyyy      1/1    Running
 pod/gateway-manual-zzzz    1/1    Running
 ```
@@ -337,7 +376,7 @@ Velocity's own log, then `status.connectedPlayers`.
 
 ```bash
 nix develop -c go build -o /tmp/spawnery-join ./cmd/spawnery-join
-/tmp/spawnery-join --host 127.0.0.1 --port 30565 --hold 20s
+/tmp/spawnery-join --host 127.0.0.1 --port 30565 --hold 60s
 ```
 
 Expect exit code 0 and one line of JSON on stdout, of the shape
@@ -349,34 +388,29 @@ Expect exit code 0 and one line of JSON on stdout, of the shape
 `protocol` is whatever the pinned Velocity build announces (776 was measured
 against 3.5.1 build 615 in `internal/mcjoin`'s package comment; a Velocity
 bump moves this number, not this runbook). While the process is still
-inside its 20-second hold, in a second shell:
+inside its 60-second hold, in a second shell, and not in the first ten
+seconds of it — the agent samples once a second but the operator's report
+interval and the `ProxyGroup` reconcile that writes the status are what
+decide when it appears:
 
 ```bash
+sleep 15
 nix develop -c kubectl get proxygroup gateway-auto -n minecraft \
   -o jsonpath='{.status.connectedPlayers}'
 ```
 
-**Two outcomes, both worth recording, and neither is "the run failed":**
+**Expect `1`.** Item 4 above is why this is an expectation and not a fork: a
+held player sits in Velocity's `connectionsByUuid` from login success
+onwards, which is what `proxy.playerCount` counts and what the agent reports.
 
-- **Reads `1`.** The unmeasured question in item 4 above is answered: a
-  held, configuration-state connection is counted. Record the value and the
-  timestamp in `docs/handover-milestone-4.md` and move on.
-- **Reads `0`.** Before concluding the proxy under-reports, check
-  `kubectl logs` on the `gateway-auto` pod for a `player_count` line (or
-  restart the phase-4 style check from `hack/agent-test.sh` against this
-  proxy) to see whether Velocity's own player registry saw the connection at
-  all. If it did and the operator's own count is still zero, the gap is real
-  and belongs in `docs/known-issues.md`; if Velocity's registry itself did
-  not count a configuration-state player, the fix is scoped and small — two
-  packet-id constants (`idFinishConfiguration`,
-  `idAcknowledgeFinishConfiguration`) and one `case` in `mcjoin`'s
-  `holdOpen` that answers the finish-configuration handshake, not a rewrite
-  of the client. Do not spend more than this runbook's own budget chasing it
-  by hand; file it and move on to the manual proof, which does not depend on
-  this count.
+A `0` here is therefore a real defect, not an artifact of stopping in the
+configuration state, and the place to look is the path between the proxy and
+the CR rather than the client: `kubectl logs` on the `gateway-auto` pod for
+what the agent reported, then whether a reconcile has run since. Record it in
+`docs/known-issues.md` and carry on to the manual proof, which does not depend
+on this count.
 
-Then the logs, which are the primary evidence regardless of which branch
-above was hit:
+Then the logs, which are the primary evidence either way:
 
 ```bash
 nix develop -c kubectl logs -n minecraft -l spawnery.cloud/group=lobby | grep -i 'spawnery_probe\|UUID of player'
@@ -427,24 +461,22 @@ whoever reviews this), the timestamps, and the log lines in
 Design §10 criterion 9: deleting a `Server` with a player on it moves that
 player to a fallback rather than disconnecting them.
 
-The `lobby` group needs a second server for the move to land on —
-`agent/velocity/.../Router.choose` excludes the server being drained from its
-own candidate list, so with only one server in the group there is nowhere to
-move to and the drain would correctly strand the player rather than prove
-anything. Scale it up first:
+There are two ways the move can land, and this section proves both, in this
+order. `agent/velocity/.../Router.choose` excludes the server being drained
+from its own candidate list, so with `lobby` still at one replica the
+exclusion empties the first group entirely and the try list has to fall
+through to `hub`. Scaling `lobby` up afterwards gives the second shape, where
+the first group still holds a candidate and `hub` is never consulted. Only the
+first is new to this milestone's coverage, and it is the one a single-group
+`fallbackGroups` could not have shown at all.
 
-```bash
-nix develop -c kubectl patch servergroup lobby -n minecraft --type=merge \
-  -p '{"spec":{"scaling":{"minReplicas":2,"maxReplicas":10,"spareSlots":40}}}'
-sleep 40
-nix develop -c kubectl get servers -n minecraft
-```
+### 8a. The move that falls through to the second group
 
-Expect two `Ready` servers, e.g. `lobby-aaaaa` and `lobby-bbbbb`. Join and
-hold long enough to survive the drain — the operator repeats `DrainPlayers`
-on roughly a 30-second cadence alongside its periodic `FullSync`
+`lobby` still has exactly one server here — do not scale it yet. Join and hold
+long enough to survive the drain: the operator repeats `DrainPlayers` on
+roughly a 30-second cadence alongside its periodic `FullSync`
 (`internal/proxyreg/fleet.go`), so the hold has to clear at least one of
-those:
+those.
 
 ```bash
 /tmp/spawnery-join --host 127.0.0.1 --port 30565 --hold 60s &
@@ -452,11 +484,12 @@ sleep 5
 nix develop -c kubectl logs -n minecraft -l spawnery.cloud/group=gateway-auto --tail=5
 ```
 
-Note which of the two servers the log names — that is the one to delete.
-Then, while the hold is still running:
+Expect the log to name the one `lobby` server — `lobby` is first in
+`fallbackGroups` and has a candidate, so `hub` is not consulted on the join.
+Then, while the hold is still running, delete it:
 
 ```bash
-nix develop -c kubectl delete server lobby-aaaaa -n minecraft   # whichever one it joined
+nix develop -c kubectl delete server lobby-xxxx -n minecraft
 nix develop -c kubectl logs -n minecraft -l spawnery.cloud/group=gateway-auto -f
 ```
 
@@ -466,16 +499,47 @@ failure — no target available, or a move that threw — and stays silent on
 success by design, so its comment reads: "[Drain] itself remembers nothing
 between calls — the proxy's own connection state is the only memory this
 needs." The proof of a successful move is the same shape of line §6 already
-established, twice: a disconnect-and-reconnect for `spawnery_probe`, ending
-on the server that was not deleted:
+established, this time ending on a server in the *other* group:
+
+```
+[server connection] spawnery_probe -> hub-wwww has connected
+```
+
+That line is the fall-through: `lobby` held one server, the exclusion took it
+away, and the router went on to `hub` instead of giving up. A `no target
+available` line here instead means the router stopped at the emptied group,
+which is the defect `RouterTest`'s "a group the exclusion empties falls
+through to the next group" pins in the unit suite.
+
+The `ServerGroup` will bring `lobby` back to its `minReplicas` on its own;
+wait for it before 8b.
+
+### 8b. The move that stays inside the first group
+
+Scale `lobby` to two so the exclusion leaves a candidate behind:
+
+```bash
+nix develop -c kubectl patch servergroup lobby -n minecraft --type=merge \
+  -p '{"spec":{"scaling":{"minReplicas":2,"maxReplicas":10,"spareSlots":40}}}'
+sleep 40
+nix develop -c kubectl get servers -n minecraft
+```
+
+Expect two `Ready` lobby servers, e.g. `lobby-aaaaa` and `lobby-bbbbb`, plus
+the one `hub` server. Repeat the join, the five-second wait and the delete
+from 8a against whichever lobby server the log names. This time the move must
+stay in the first group:
 
 ```
 [server connection] spawnery_probe -> lobby-bbbbb has connected
 ```
 
-If nothing moves within about 40 seconds of the delete, check the proxy log
+`hub` appearing here instead would mean the try list is being searched rather
+than walked in order.
+
+If nothing moves within about 40 seconds of either delete, check the proxy log
 for `no target available` first — that names the actual failure (an empty
-`toGroups`, or the second server not yet `Ready`) rather than leaving a
+`toGroups`, or the surviving server not yet `Ready`) rather than leaving a
 silent hang to debug from nothing.
 
 ## 9. Clean up
