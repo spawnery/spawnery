@@ -23,7 +23,7 @@ import (
 )
 
 func TestVarIntRoundTrip(t *testing.T) {
-	for _, v := range []int32{0, 1, 127, 128, 255, 2097151, 2147483647, -1} {
+	for _, v := range []int32{0, 1, 127, 128, 255, 25565, 2097151, 2147483647, -1} {
 		encoded := AppendVarInt(nil, v)
 		decoded, err := ReadVarInt(bytes.NewReader(encoded))
 		if err != nil {
