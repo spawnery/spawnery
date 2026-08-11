@@ -86,10 +86,13 @@ class FakeRole(
  *
  * Nothing enforces the copy. `ServerRoleTest` pins `ServerRole` to an
  * expectation table of its own and never sees this function, so the two are
- * coupled only by whoever remembers. Twenty [SessionLoopTest] cases assert
- * against the mapping below, which production does not execute: a case added to
- * one and not the other fails no test, and the suite goes on reading as though
- * it were a fact about `ReportInterval` and `SessionDeadline`.
+ * coupled only by whoever remembers. A case added to `ServerRole.onMessage` and
+ * not to this one therefore fails no test anywhere: the [SessionLoopTest] cases
+ * that drive a report interval or a session deadline execute the two branches
+ * below and assert nothing about which branches exist, so they would go on
+ * passing against a mapping production had already left behind -- and go on
+ * reading as though they were facts about `ReportInterval` and
+ * `SessionDeadline` rather than about this copy of them.
  *
  * Which is exactly what [AgentRole]'s own KDoc warns about -- "two readers of
  * the same messageCase in two files is how the two halves drift" -- now true of
