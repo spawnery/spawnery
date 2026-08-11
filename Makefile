@@ -92,8 +92,9 @@ image-test: image-load velocity-image-load
 # same reason image-test is not: it needs a container runtime and only works on
 # x86_64-linux.
 .PHONY: agent-test
-agent-test: image-load
-	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) STUBOP=$(STUBOP) hack/agent-test.sh
+agent-test: image-load velocity-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
+		STUBOP=$(STUBOP) hack/agent-test.sh
 
 .PHONY: velocity-image
 velocity-image:

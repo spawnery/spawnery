@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Paper agent, proven against a real operator-shaped counterpart.
+# The agents, proven against a real operator-shaped counterpart.
 #
 # This is the level that the unit tests structurally cannot reach. Three of the
 # agent's obligations only exist inside a real JVM with Paper's classloader, a
@@ -12,8 +12,8 @@
 # The last one is what docs/known-issues.md calls non-optional, and a unit test
 # can only claim it.
 #
-# It runs in three phases, against the three things an operator does to an
-# agent. Against the passive stub, everything closed in the trace was closed by
+# The first three phases run against the Paper image, one for each of the three
+# things an operator does to an agent. Against the passive stub, everything closed in the trace was closed by
 # the agent, which is what makes the overlap assertion a statement about the
 # agent at all. Against --supersede, the stub retires the displaced stream
 # itself, where and when internal/agentserver does. Against --mute-after it
@@ -26,10 +26,18 @@
 # operator accepted and never answered makes it zero. Both bounds are on both
 # phases, because a phase that only fails upwards reads a dead agent as a
 # healthy one.
+#
+# Phases four and five run against the Velocity image, and add the one
+# obligation only a proxy has: the pod's readiness gate opens on the first
+# FullSync and not before. That pair of probes - 8081 closed while the agent is
+# connected and has deliberately not been given a server list, open once one has
+# arrived - is the whole reason this script grew a proxy half. A unit test can
+# see that bind() was called; only a container can see a port.
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-docker}"
 IMAGE="${IMAGE:?IMAGE must be set}"
+VELOCITY_IMAGE="${VELOCITY_IMAGE:?VELOCITY_IMAGE must be set}"
 STUBOP="${STUBOP:?STUBOP must be set}"
 DEADLINE="${DEADLINE:-240}"
 
@@ -39,27 +47,38 @@ NAME2="spawnery-agent-test-supersede-$$"
 VOLUME2="spawnery-agent-test-supersede-$$"
 NAME3="spawnery-agent-test-mute-$$"
 VOLUME3="spawnery-agent-test-mute-$$"
+NAME4="spawnery-agent-test-proxy-$$"
+VOLUME4="spawnery-agent-test-proxy-$$"
+NAME5="spawnery-agent-test-proxy-supersede-$$"
+VOLUME5="spawnery-agent-test-proxy-supersede-$$"
 WORK="$(mktemp -d)"
 EVENTS="$WORK/events.jsonl"
 EVENTS2="$WORK/events-supersede.jsonl"
 EVENTS3="$WORK/events-mute.jsonl"
+EVENTS4="$WORK/events-proxy.jsonl"
+EVENTS5="$WORK/events-proxy-supersede.jsonl"
 STUB_PID=""
 STUB2_PID=""
 STUB3_PID=""
+STUB4_PID=""
+STUB5_PID=""
 
 cleanup() {
 	[ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
 	[ -n "$STUB2_PID" ] && kill "$STUB2_PID" 2>/dev/null || true
 	[ -n "$STUB3_PID" ] && kill "$STUB3_PID" 2>/dev/null || true
-	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" >/dev/null 2>&1 || true
-	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" >/dev/null 2>&1 || true
+	[ -n "$STUB4_PID" ] && kill "$STUB4_PID" 2>/dev/null || true
+	[ -n "$STUB5_PID" ] && kill "$STUB5_PID" 2>/dev/null || true
+	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" >/dev/null 2>&1 || true
+	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" "$VOLUME4" "$VOLUME5" \
+		>/dev/null 2>&1 || true
 	rm -rf "$WORK"
 }
 # INT and TERM as well as EXIT: an untrapped SIGINT kills the shell without
 # running the handler, and a run that takes several minutes gets interrupted.
-# That used to leave three containers, three volumes, up to three stub processes
-# and a temp directory behind, on a machine where the next run would then hit
-# them.
+# That used to leave every container, volume and stub process this script has
+# started, plus a temp directory, behind on a machine where the next run would
+# then hit them.
 trap cleanup EXIT INT TERM
 
 # 0755 on the directory rather than on what the stub writes into it: the
@@ -150,11 +169,33 @@ await_event() {
 	done
 }
 
+# count_events <kind> <events file> - how many events of one kind the trace
+# holds. No `|| echo 0` fallback: the stub appends whole lines and fsyncs each
+# one, so a parse failure here is a real one, and answering 0 for it would turn
+# an unreadable trace into a wrong number rather than a loud stop.
+count_events() {
+	jq -rs --arg kind "$1" '[.[] | select(.kind == $kind)] | length' <"$2"
+}
+
 # streams_opened <events file> - how many streams the agent has opened so far.
 # The two rate assertions below are this measurement taken at both ends of a
 # window; the difference is what they bound, from above and from below.
 streams_opened() {
-	jq -rs '[.[] | select(.kind == "stream_opened")] | length' <"$1"
+	count_events stream_opened "$1"
+}
+
+# port_open <container> <port> - whether something inside the container accepts
+# a connection on that port.
+#
+# From inside, never through a published port. A rootless podman port forwarder
+# accepts on the host and only then dials the container, so it can complete the
+# host-side handshake with nothing listening inside - which would make the
+# closed-gate assertion below pass for a reason that has nothing to do with the
+# agent. /dev/tcp is a bash builtin rather than a tool added to the image for
+# this probe's convenience; bash already ships because the entrypoint's shebang
+# points at it.
+port_open() {
+	"$CONTAINER" exec "$1" bash -c "exec 3<>/dev/tcp/127.0.0.1/$2" >/dev/null 2>&1
 }
 
 echo "waiting up to ${DEADLINE}s for the agent to greet..."
@@ -486,5 +527,288 @@ if [ "$opened3" -gt "$MUTE_LIMIT" ]; then
 	exit 1
 fi
 echo "the agent opened $opened3 streams in ${WINDOW3}s while the operator said nothing: an unanswered session is bounded by the operator's hard deadline"
+
+# ---------------------------------------------------------------------------
+# Phase four: the proxy, and the gate that must not open early.
+#
+# internal/podspec gives the proxy container a tcpSocket readiness probe on 8081
+# and nothing else, so "this pod is ready" means exactly "the agent bound that
+# port". The agent binds it on the first FullSync and never before, because a
+# proxy that turned ready without a server list would take traffic it can only
+# answer with "no available server".
+#
+# Both halves of that have to be measured, and only here can either be: the
+# port is closed while the agent is connected and unsynced, and open once a
+# server list has arrived. The closed half is what makes the open half mean
+# anything, so the stub holds its FullSync back rather than sending it with the
+# opening messages, and the guards below fail the phase if it went out before
+# the probe ran anyway.
+echo
+echo "starting the proxy against an operator that holds its server list back..."
+"$CONTAINER" rm -f "$NAME3" >/dev/null 2>&1 || true
+kill "$STUB3_PID" 2>/dev/null || true
+STUB3_PID=""
+
+# The renderer refuses to start without both files, the same shape
+# hack/velocity-image-test.sh builds -- a proxy's own config, which is not the
+# file the Paper phases mount. playerLimit is the proxy's capacity and
+# SPAWNERY_PLAYER_LIMIT below is what the agent reports as slots; in a cluster
+# internal/podspec derives both from the one ProxyGroup field, so they are one
+# number here too rather than two that happen to agree.
+PROXY_LIMIT=100
+mkdir -p "$WORK/velocity-config"
+printf 'playerLimit: %s\n' "$PROXY_LIMIT" >"$WORK/velocity-config/config.yaml"
+printf 'test-forwarding-secret\n' >"$WORK/velocity-config/forwarding.secret"
+chmod 0755 "$WORK/velocity-config"
+chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding.secret"
+
+# How long the stub holds the FullSync back, counted from the stream opening.
+# Everything between the agent's Hello and the sync has to fit inside it: the
+# poll that notices the greeting, the control probe below, and the closed-gate
+# probe itself. Generous rather than tight, because the cost of overrunning it
+# is a failed run and the cost of a long hold is 45 seconds.
+FULL_SYNC_AFTER=45
+
+# renew-after is 60 rather than the 5 the phases above use, so exactly one
+# stream exists while the gate is being probed. Under a 5s renewal each new
+# stream would start a hold of its own and the trace would carry a
+# full_sync_sent per stream; nothing about the gate would change, but the two
+# events this phase orders its probes against would stop being one pair.
+mkdir -p "$WORK/agent-proxy"
+chmod 0755 "$WORK/agent-proxy"
+"$STUBOP" \
+	--dir "$WORK/agent-proxy" \
+	--san stubop \
+	--listen ":19446" \
+	--report-interval 1 \
+	--renew-after 60 \
+	--hard-deadline 240 \
+	--proxy \
+	--full-sync-after "$FULL_SYNC_AFTER" \
+	>"$EVENTS4" 2>"$WORK/stub4.log" &
+STUB4_PID=$!
+
+sleep 1
+if ! kill -0 "$STUB4_PID" 2>/dev/null; then
+	echo "the proxy stub operator did not stay up:" >&2
+	cat "$WORK/stub4.log" >&2
+	exit 1
+fi
+
+# The two proxy-only variables are not decoration: without either one the agent
+# goes dormant and never connects at all, naming the variable it did not get.
+"$CONTAINER" volume create "$VOLUME4" >/dev/null
+"$CONTAINER" run -d --name "$NAME4" \
+	--add-host stubop:host-gateway \
+	--read-only --tmpfs /tmp:rw,exec,size=256m \
+	--cap-drop ALL \
+	--security-opt no-new-privileges \
+	--memory 2g \
+	-v "$VOLUME4:/data" \
+	-v "$WORK/agent-proxy:/var/run/spawnery:ro" \
+	-v "$WORK/velocity-config:/etc/spawnery:ro" \
+	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19446 \
+	-e SPAWNERY_PLAYER_LIMIT="$PROXY_LIMIT" \
+	-e SPAWNERY_FALLBACK_GROUPS=lobby \
+	"$VELOCITY_IMAGE" >/dev/null
+
+echo "waiting up to ${DEADLINE}s for the proxy agent to greet..."
+await_event hello "$EVENTS4" "$NAME4"
+echo "the proxy agent connected"
+
+# The same character-for-character check the Paper phase makes, and here it is
+# the only one there is. ProxyRole.open() attaches the call credentials, and
+# deleting that call compiles, passes every JUnit test, and streams
+# unauthenticated -- the stub accepts any bearer token, including none, so
+# nothing about the connection succeeding says the header was sent. This
+# assertion is what covers it.
+expected4="Bearer $(cat "$WORK/agent-proxy/token")"
+actual4="$(jq -r 'select(.kind == "hello") | .authorization' <"$EVENTS4" | head -1)"
+if [ "$actual4" != "$expected4" ]; then
+	echo "proxy authorization header is $(printf '%q' "$actual4"), want $(printf '%q' "$expected4")" >&2
+	echo "a proxy stream that presents no credentials is accepted by this stub and refused by the operator" >&2
+	exit 1
+fi
+echo "the proxy's authorization header is exact"
+
+# A control probe, and the reason the closed-gate assertion below is an
+# assertion rather than a decoration. `port_open` answers false for every way an
+# exec can fail - a container that is gone, a bash that is not there, a runtime
+# that refuses - and all of those would read as "the gate is closed". 25565 is
+# the port the proxy binds on its own, with no help from the agent, so a
+# connection accepted there proves the probe mechanism works inside this
+# container at this moment.
+echo "waiting for the proxy's own listener, to prove the probe works at all..."
+start=$SECONDS
+until port_open "$NAME4" 25565; do
+	if [ -z "$("$CONTAINER" ps -q --filter "name=^${NAME4}$")" ]; then
+		echo "the proxy container exited before binding 25565:" >&2
+		"$CONTAINER" logs "$NAME4" >&2
+		exit 1
+	fi
+	if [ $((SECONDS - start)) -gt 30 ]; then
+		echo "the proxy did not accept a connection on 25565 within 30s, so the gate probe below would prove nothing" >&2
+		"$CONTAINER" logs "$NAME4" | tail -40 >&2
+		exit 1
+	fi
+	sleep 1
+done
+echo "25565 answers from inside the container"
+
+# Nothing has been synced yet, checked before and after the probe. Either check
+# failing means the hold above expired while this phase was still getting ready,
+# which makes the result below meaningless rather than merely late - and a
+# closed-gate assertion that is allowed to run after the sync is the exact shape
+# of assertion this milestone has twice found unable to fail.
+if [ "$(count_events full_sync_sent "$EVENTS4")" -ne 0 ]; then
+	echo "the FullSync went out before the gate could be probed closed; raise FULL_SYNC_AFTER" >&2
+	jq -rs '.' <"$EVENTS4" >&2
+	exit 1
+fi
+if port_open "$NAME4" 8081; then
+	echo "the ready gate is open on 8081 before any server list arrived" >&2
+	echo "a proxy that turns ready without one takes traffic it can only answer with 'no available server'" >&2
+	"$CONTAINER" logs "$NAME4" 2>&1 | grep -i spawnery >&2 || true
+	exit 1
+fi
+if [ "$(count_events full_sync_sent "$EVENTS4")" -ne 0 ]; then
+	echo "the FullSync went out while the gate was being probed closed; raise FULL_SYNC_AFTER" >&2
+	jq -rs '.' <"$EVENTS4" >&2
+	exit 1
+fi
+echo "the ready gate is closed while the agent is connected and unsynced"
+
+echo "waiting for the operator to release the server list..."
+await_event full_sync_sent "$EVENTS4" "$NAME4"
+
+# Retried rather than probed once: the gate binds from a gRPC callback thread,
+# and the stub records full_sync_sent the moment its own Send returned, which is
+# before the bytes have crossed the loopback and been applied.
+GATE_WITHIN=30
+start=$SECONDS
+until port_open "$NAME4" 8081; do
+	if [ $((SECONDS - start)) -gt "$GATE_WITHIN" ]; then
+		echo "8081 was still closed ${GATE_WITHIN}s after the operator sent a server list" >&2
+		echo "this pod would never turn ready, and the proxy would never receive a player" >&2
+		jq -rs '.' <"$EVENTS4" >&2
+		"$CONTAINER" logs "$NAME4" 2>&1 | grep -i spawnery >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+echo "the ready gate opened $((SECONDS - start))s after the first FullSync"
+
+# The proxy's own capacity, on the wire. internal/agent/registry.go discards any
+# report where players exceed slots, so a proxy that reported zero slots would
+# have every count with a player online silently thrown away - and this is the
+# only level where the number that crosses the seam comes from a real
+# SPAWNERY_PLAYER_LIMIT rather than from a test's constructor argument.
+await_event player_count "$EVENTS4" "$NAME4"
+start=$SECONDS
+until proxy_slots="$(jq -rs '[.[] | select(.kind == "player_count")] | first | .slots' <"$EVENTS4" 2>/dev/null)" &&
+	[ -n "$proxy_slots" ] && [ "$proxy_slots" != "null" ]; do
+	if [ $((SECONDS - start)) -gt 30 ]; then
+		echo "no complete player count event within 30s" >&2
+		cat "$EVENTS4" >&2
+		exit 1
+	fi
+	sleep 1
+done
+if [ "$proxy_slots" != "$PROXY_LIMIT" ]; then
+	echo "the proxy reported slots = $proxy_slots, want the $PROXY_LIMIT of SPAWNERY_PLAYER_LIMIT" >&2
+	echo "the registry discards any report where players exceed slots, so this proxy's counts would be dropped" >&2
+	jq -rs '[.[] | select(.kind == "player_count")]' <"$EVENTS4" >&2
+	exit 1
+fi
+echo "the proxy reports its configured player limit as slots"
+
+# ---------------------------------------------------------------------------
+# Phase five: the operator's retirement order, against the proxy.
+#
+# The same measurement as phase two, on the other agent. The renewal loop is
+# shared code from task 3 and the Paper phase already drives it, which is the
+# argument for not repeating this - and it is the same argument that would have
+# excused every one of milestone 2c's five defects, all of which lived in an
+# assumption about the harness rather than in the loop. The proxy dials a
+# different rpc, on a different classloader, holding a server list it reapplies
+# on every reconnect; none of that is what phase two measured.
+echo
+echo "restarting the proxy against a superseding operator..."
+"$CONTAINER" rm -f "$NAME4" >/dev/null 2>&1 || true
+kill "$STUB4_PID" 2>/dev/null || true
+STUB4_PID=""
+
+# --proxy with no hold, so every stream is a complete proxy session: opened,
+# answered, synced. A supersession that retired a stream the proxy had never
+# been synced on would be a shape the operator does not produce.
+mkdir -p "$WORK/agent-proxy-supersede"
+chmod 0755 "$WORK/agent-proxy-supersede"
+"$STUBOP" \
+	--dir "$WORK/agent-proxy-supersede" \
+	--san stubop \
+	--listen ":19447" \
+	--report-interval 1 \
+	--renew-after 5 \
+	--hard-deadline 20 \
+	--supersede \
+	--proxy \
+	>"$EVENTS5" 2>"$WORK/stub5.log" &
+STUB5_PID=$!
+
+sleep 1
+if ! kill -0 "$STUB5_PID" 2>/dev/null; then
+	echo "the superseding proxy stub operator did not stay up:" >&2
+	cat "$WORK/stub5.log" >&2
+	exit 1
+fi
+
+"$CONTAINER" volume create "$VOLUME5" >/dev/null
+"$CONTAINER" run -d --name "$NAME5" \
+	--add-host stubop:host-gateway \
+	--read-only --tmpfs /tmp:rw,exec,size=256m \
+	--cap-drop ALL \
+	--security-opt no-new-privileges \
+	--memory 2g \
+	-v "$VOLUME5:/data" \
+	-v "$WORK/agent-proxy-supersede:/var/run/spawnery:ro" \
+	-v "$WORK/velocity-config:/etc/spawnery:ro" \
+	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19447 \
+	-e SPAWNERY_PLAYER_LIMIT="$PROXY_LIMIT" \
+	-e SPAWNERY_FALLBACK_GROUPS=lobby \
+	"$VELOCITY_IMAGE" >/dev/null
+
+echo "waiting up to ${DEADLINE}s for the proxy agent to greet the superseding operator..."
+await_event hello "$EVENTS5" "$NAME5"
+
+# The same two-sided bound, for the same reasons, as phase two: above it is a
+# reconnect storm, below it is an agent that stopped renewing and would have
+# printed the upper bound's success message on the strength of having died.
+before5="$(streams_opened "$EVENTS5")"
+echo "counting the streams the proxy opens over ${WINDOW}s of renewals..."
+sleep "$WINDOW"
+after5="$(streams_opened "$EVENTS5")"
+opened5=$((after5 - before5))
+
+superseded5="$(jq -rs '[.[] | select(.kind == "stream_closed" and .error == "superseded")] | length' <"$EVENTS5")"
+if [ "$superseded5" -lt 1 ]; then
+	echo "the stub never retired a displaced proxy stream, so this phase measured nothing" >&2
+	jq -rs '.' <"$EVENTS5" >&2
+	exit 1
+fi
+
+if [ "$opened5" -gt "$LIMIT" ]; then
+	echo "the proxy opened $opened5 streams in ${WINDOW}s, at most $LIMIT expected from a ${RENEWALS}-renewal window" >&2
+	echo "the operator retiring the displaced stream is being mistaken for a breakage the agent owes a reconnect" >&2
+	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS5" >&2
+	exit 1
+fi
+if [ "$opened5" -lt "$FLOOR" ]; then
+	echo "the proxy opened $opened5 streams in ${WINDOW}s, at least $FLOOR expected from a ${RENEWALS}-renewal window" >&2
+	echo "the agent stopped renewing during the window, so the count above measured a stopped agent rather than a quiet one" >&2
+	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS5" >&2
+	"$CONTAINER" logs "$NAME5" 2>&1 | tail -20 >&2 || true
+	exit 1
+fi
+echo "the proxy opened $opened5 streams in ${WINDOW}s across $superseded5 supersessions: one per renewal, no reconnect storm"
 
 echo "agent-test: ok"

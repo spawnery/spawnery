@@ -45,6 +45,19 @@ limitations under the License.
 // its own stops opening streams entirely, which is the one failure an upper
 // bound reads as success.
 //
+// --proxy adds the one thing the proxy direction has that the server direction
+// does not: a FullSync after the two opening messages, which is what opens the
+// proxy's readiness gate. --full-sync-after holds it back by that many seconds,
+// so hack/agent-test.sh can probe the gate's port while the agent is connected
+// and has deliberately not been given a server list yet. That pair of probes —
+// closed before, open after — is the only place the gate's precondition is
+// observable at all; a unit test can see that bind() was called and nothing
+// more.
+//
+// --proxy gates the FullSync and nothing else. Both rpcs are served
+// unconditionally, because refusing one would make an agent that opened the
+// wrong rpc look like a connection failure rather than naming itself.
+//
 // It also accepts any bearer token. It is not testing authentication — that is
 // internal/grpcauth's own tests' job — it is recording, verbatim, what the
 // agent put in the header.
@@ -100,6 +113,13 @@ const (
 	// retirementHeadStart is how long enter holds the replacement back after
 	// the displaced stream is gone. See enter for why it is not zero.
 	retirementHeadStart = 250 * time.Millisecond
+
+	// The one backend --proxy syncs. The address is deliberately unroutable:
+	// nothing in this harness is supposed to connect to it, and a reachable one
+	// would invite a later test to depend on a backend that is not there.
+	syncedName    = "lobby-0"
+	syncedAddress = "10.255.255.1:25565"
+	syncedGroup   = "lobby"
 )
 
 func main() {
@@ -138,6 +158,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	muteAfter := fs.Int("mute-after", -1,
 		"accept streams from this index on and never answer them, the way an operator "+
 			"blocked between the cancel and its first Send does; negative disables")
+	proxy := fs.Bool("proxy", false,
+		"send a FullSync on every proxy stream, the way an operator with a registered backend does")
+	fullSyncAfter := fs.Int("full-sync-after", 0,
+		"seconds to hold the FullSync back after the opening messages, so a test can "+
+			"probe the readiness gate while the proxy has no server list yet")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -177,6 +202,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		hardDeadline:   int32(*hardDeadline),
 		supersede:      *supersede,
 		muteAfter:      *muteAfter,
+		proxy:          *proxy,
+		fullSyncAfter:  time.Duration(*fullSyncAfter) * time.Second,
 	})
 
 	signals := make(chan os.Signal, 1)
@@ -369,6 +396,11 @@ type stub struct {
 	muteAfter int
 	mu        sync.Mutex
 	current   *live
+
+	// proxy is the --proxy half: whether a proxy stream is sent a FullSync at
+	// all, and fullSyncAfter is how long it is held back once it is.
+	proxy         bool
+	fullSyncAfter time.Duration
 }
 
 // muted reports whether this stream is one the stub accepts and then says
@@ -438,6 +470,83 @@ func (s *stub) enter(current *live) {
 }
 
 func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) error {
+	return serveSession(s, stream, []*agentpb.OperatorToServer{
+		{Message: &agentpb.OperatorToServer_ReportInterval{
+			ReportInterval: &agentpb.ReportInterval{Seconds: s.reportInterval},
+		}},
+		{Message: &agentpb.OperatorToServer_SessionDeadline{
+			SessionDeadline: &agentpb.SessionDeadline{
+				RenewAfterSeconds:   s.renewAfter,
+				HardDeadlineSeconds: s.hardDeadline,
+			},
+		}},
+	}, nil, s.observeServer)
+}
+
+// ProxySession is ServerSession's counterpart, and structurally the same: the
+// same opening messages, the same receive loops, the same events. The one
+// difference is the FullSync, which has no equivalent on the server side —
+// see the package comment.
+func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) error {
+	var later *delayed[agentpb.OperatorToProxy]
+	if s.proxy {
+		later = &delayed[agentpb.OperatorToProxy]{
+			message: &agentpb.OperatorToProxy{
+				Message: &agentpb.OperatorToProxy_FullSync{
+					FullSync: &agentpb.FullSync{
+						Servers: []*agentpb.RegisteredServer{
+							{Name: syncedName, Address: syncedAddress, Group: syncedGroup},
+						},
+					},
+				},
+			},
+			after:   s.fullSyncAfter,
+			kind:    "full_sync_sent",
+			failure: "full_sync_failed",
+		}
+	}
+	return serveSession(s, stream, []*agentpb.OperatorToProxy{
+		{Message: &agentpb.OperatorToProxy_ReportInterval{
+			ReportInterval: &agentpb.ReportInterval{Seconds: s.reportInterval},
+		}},
+		{Message: &agentpb.OperatorToProxy_SessionDeadline{
+			SessionDeadline: &agentpb.SessionDeadline{
+				RenewAfterSeconds:   s.renewAfter,
+				HardDeadlineSeconds: s.hardDeadline,
+			},
+		}},
+	}, later, s.observeProxy)
+}
+
+// delayed is a message the stub sends on a schedule of its own rather than in
+// answer to anything: what to send, how long to wait first, and the event kinds
+// recorded once the send has returned or failed.
+//
+// kind is recorded *after* Send returns, never before, because the whole point
+// of the flag is that a test can order its own observations against it.
+type delayed[Out any] struct {
+	message *Out
+	after   time.Duration
+	kind    string
+	failure string
+}
+
+// serveSession is the body both rpcs share.
+//
+// One body rather than two copies, and that is the milestone's own lesson
+// applied to the harness: everything asserted about reconnect rates, retirement
+// order and silence is measured through this code, so a second copy that drifted
+// from it would make the proxy phases quietly measure something else than the
+// server phases claim to. What genuinely differs between the two rpcs — the
+// message types, the opening messages, the FullSync, how a message is recorded —
+// arrives as arguments.
+func serveSession[In, Out any](
+	s *stub,
+	stream grpc.BidiStreamingServer[In, Out],
+	opening []*Out,
+	later *delayed[Out],
+	observe func(func(map[string]any) map[string]any, *In),
+) error {
 	index := s.streams.Add(1) - 1
 	// Verbatim. The script compares this against "Bearer <token>" character for
 	// character, the way internal/grpcauth's interceptor does, so nothing here
@@ -462,28 +571,52 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 		s.enter(&live{cancel: cancel, done: done})
 	}
 
-	// A muted stream skips both Sends and nothing else: it is registered, it
+	// A muted stream skips every Send and nothing else: it is registered, it
 	// displaced whatever came before it, and it stays open. That is the point —
-	// the agent holds a stream the operator accepted and will never answer.
+	// the agent holds a stream the operator accepted and will never answer. The
+	// FullSync is skipped with them, because a muted operator that still handed
+	// out a server list would not be silent.
 	if !muted {
-		if err := stream.Send(&agentpb.OperatorToServer{
-			Message: &agentpb.OperatorToServer_ReportInterval{
-				ReportInterval: &agentpb.ReportInterval{Seconds: s.reportInterval},
-			},
-		}); err != nil {
-			s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
-			return nil
+		for _, message := range opening {
+			if err := stream.Send(message); err != nil {
+				s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
+				return nil
+			}
 		}
-		if err := stream.Send(&agentpb.OperatorToServer{
-			Message: &agentpb.OperatorToServer_SessionDeadline{
-				SessionDeadline: &agentpb.SessionDeadline{
-					RenewAfterSeconds:   s.renewAfter,
-					HardDeadlineSeconds: s.hardDeadline,
-				},
-			},
-		}); err != nil {
-			s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
-			return nil
+
+		if later != nil {
+			// Its own goroutine, because the hold has to overlap the receive
+			// loop below rather than precede it. The agent's Hello arrives
+			// while the timer runs, and a stub that slept before its first Recv
+			// would record the greeting only once the FullSync had already gone
+			// out — collapsing the two events the test needs to probe between
+			// into one moment.
+			//
+			// It is the only sender left once the messages above are on the
+			// wire, so nothing here ever calls Send concurrently. The deferred
+			// stop-and-wait is what keeps that true through the handler's
+			// return: grpc-go finishes the stream when the handler returns, and
+			// a goroutine still holding it would be sending on a stream that no
+			// longer exists.
+			sendCtx, stopSending := context.WithCancel(ctx)
+			sent := make(chan struct{})
+			go func() {
+				defer close(sent)
+				select {
+				case <-time.After(later.after):
+				case <-sendCtx.Done():
+					return
+				}
+				if err := stream.Send(later.message); err != nil {
+					s.events.record(later.failure, of(map[string]any{"error": err.Error()}))
+					return
+				}
+				s.events.record(later.kind, of(map[string]any{}))
+			}()
+			defer func() {
+				stopSending()
+				<-sent
+			}()
 		}
 	}
 
@@ -500,14 +633,14 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 				// the expected outcome here, not a failure of the stub.
 				return nil
 			}
-			s.observe(of, message)
+			observe(of, message)
 		}
 	}
 
 	// Receiving blocks, so under --supersede it runs in its own goroutine and
 	// the context does the cancelling — the same shape, for the same reason, as
 	// internal/agentserver's ServerSession.
-	received := make(chan *agentpb.ServerMessage)
+	received := make(chan *In)
 	errs := make(chan error, 1)
 	go func() {
 		defer close(received)
@@ -534,29 +667,64 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 			s.events.record("stream_closed", of(map[string]any{"error": closeReason(err)}))
 			return nil
 		case message := <-received:
-			s.observe(of, message)
+			observe(of, message)
 		}
 	}
 }
 
-// observe records one message from the agent.
-func (s *stub) observe(of func(map[string]any) map[string]any, message *agentpb.ServerMessage) {
+// observeServer records one message from a server agent.
+func (s *stub) observeServer(of func(map[string]any) map[string]any, message *agentpb.ServerMessage) {
 	switch body := message.Message.(type) {
 	case *agentpb.ServerMessage_Hello:
-		s.events.record("hello", of(map[string]any{
-			"version": body.Hello.GetVersion(),
-			"ready":   body.Hello.GetReady(),
-		}))
+		s.hello(of, body.Hello)
 	case *agentpb.ServerMessage_Ready:
 		s.events.record("ready", of(map[string]any{}))
 	case *agentpb.ServerMessage_PlayerCount:
-		s.events.record("player_count", of(map[string]any{
-			"players": body.PlayerCount.GetPlayers(),
-			"slots":   body.PlayerCount.GetSlots(),
-		}))
+		s.playerCount(of, body.PlayerCount)
 	default:
 		s.events.record("unknown", of(map[string]any{}))
 	}
+}
+
+// observeProxy records one message from a proxy agent.
+//
+// There is no Ready: a proxy's readiness reaches the operator through the
+// kubelet's probe on the agent's own port and nowhere else, which is why
+// hack/agent-test.sh probes that port rather than reading this trace for it.
+func (s *stub) observeProxy(of func(map[string]any) map[string]any, message *agentpb.ProxyMessage) {
+	switch body := message.Message.(type) {
+	case *agentpb.ProxyMessage_Hello:
+		s.hello(of, body.Hello)
+	case *agentpb.ProxyMessage_PlayerCount:
+		s.playerCount(of, body.PlayerCount)
+	case *agentpb.ProxyMessage_PlayerJoinedServer:
+		s.events.record("player_joined_server", of(map[string]any{
+			"player": body.PlayerJoinedServer.GetPlayer(),
+			"server": body.PlayerJoinedServer.GetServer(),
+		}))
+	case *agentpb.ProxyMessage_Heartbeat:
+		s.events.record("heartbeat", of(map[string]any{}))
+	default:
+		s.events.record("unknown", of(map[string]any{}))
+	}
+}
+
+// hello and playerCount are what the two observers share. The field names are
+// the ones hack/agent-test.sh's jq reads, and it reads them the same way in
+// both directions — so recording them in one place is what keeps a proxy phase's
+// assertion about `slots` meaning what the server phase's does.
+func (s *stub) hello(of func(map[string]any) map[string]any, hello *agentpb.Hello) {
+	s.events.record("hello", of(map[string]any{
+		"version": hello.GetVersion(),
+		"ready":   hello.GetReady(),
+	}))
+}
+
+func (s *stub) playerCount(of func(map[string]any) map[string]any, count *agentpb.PlayerCount) {
+	s.events.record("player_count", of(map[string]any{
+		"players": count.GetPlayers(),
+		"slots":   count.GetSlots(),
+	}))
 }
 
 // closeReason is empty for the agent's own clean half-close, which is what a
