@@ -39,8 +39,7 @@ process accepts TLS connections from game server pods, identifies them through a
 pod-bound ServiceAccount token, and the registry behind it feeds the two-stage
 ready gate and `status.players` that milestone 1 had left unwired. The channel
 is proven end to end in envtest — a test agent brings a `Server` with green pod
-readiness all the way to phase `Ready`. `ProxySession`, the other half of the
-same contract, still answers `Unimplemented`; it belongs to milestone 3.
+readiness all the way to phase `Ready`.
 
 Milestone 2b is done: the Paper base image. `nix build .#paper-image` produces
 a reproducible image holding Paper 26.2, a headless JDK 25 and `spawnery-slp`, the tool
@@ -60,15 +59,36 @@ Both halves of the ready gate now close. Measured in a local kind cluster, a
 and `status.players` and `status.slots` carry what the agent read off the
 running server rather than a placeholder.
 
-What is still missing is the whole reason a player would care: the Velocity
-proxy layer of milestone 3. Nothing routes a client to a backend,
-`ProxySession` still answers `Unimplemented`, and no proxy pod has a
-ServiceAccount to identify itself with — so a player still cannot connect to a
-network that is otherwise fully ready.
+Milestone 3a is done: the operator's proxy side. `ProxySession` joins
+`ServerSession` in the fan-out instead of answering `Unimplemented`, the
+bootstrap creates a `spawnery-proxy` ServiceAccount in every namespace it
+touches alongside `spawnery-server`, and the orphan sweep no longer discards a
+connected proxy's registry entry. None of it has an agent to drive it yet, so
+this closes the operator's half of the contract without anything reaching
+phase `Ready` for a proxy.
 
-Carry-overs and preconditions for later milestones — CA rotation, the missing
-`spawnery-proxy` ServiceAccount, the orphan sweep that would discard a proxy
-agent, and what milestones 2b and 2c leave open — are in
+Milestone 3b is done: the Velocity image and configuration rendering.
+`nix build .#velocity-image` produces a reproducible image holding Velocity
+3.5.1 on the same JDK 25 and non-root base `nix/oci-common.nix` now shares
+with the Paper image. `cmd/spawnery-config`, baked into both images, replaces
+what the Paper entrypoint used to rewrite by hand: it resolves the operator's
+rendered ConfigMap, a user overlay and a handful of fields neither may move
+into `server.properties`, `config/paper-global.yml` and `velocity.toml`, and
+refuses to start — naming the file and the key — rather than guess at
+anything missing or malformed. `online-mode` is now `false` on the backends
+and `true` on the proxy, which is what modern player-info forwarding actually
+requires.
+
+What is still missing is the agent that makes any of this move: milestone 3c,
+the Velocity plugin. The proxy image starts, `ProxySession` will accept a
+stream, and the rendered configuration is correct on disk — but nothing
+inside a Velocity pod opens that stream yet, so a `ProxyGroup` never reaches
+phase `Ready` and no player can be routed to a backend.
+
+Carry-overs and preconditions for later milestones — CA rotation, the
+NetworkPolicy restricting backends to proxies-only that `online-mode=false`
+now makes a real invariant rather than a deferred one, and what earlier
+milestones leave open — are in
 [`docs/known-issues.md`](docs/known-issues.md).
 
 The design lives under [`docs/superpowers/specs/`](docs/superpowers/specs/), the

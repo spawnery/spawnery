@@ -1,14 +1,15 @@
 # Known issues and carry-overs for later milestones
 
-Status: end of milestone 3a, the operator's proxy side (2026-08-10).
+Status: end of milestone 3b, the Velocity image (2026-08-11).
 
 This list collects what was deliberately left open during the implementation and
-the reviews of milestone 1, milestone 2a, milestone 2b, milestone 2c and
-milestone 3a. It does not replace a spec — the design decisions live in
+the reviews of milestone 1, milestone 2a, milestone 2b, milestone 2c, milestone
+3a and milestone 3b. It does not replace a spec — the design decisions live in
 `superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md`, in
 `superpowers/specs/2026-08-08-agent-channel-design.md`, in
-`superpowers/specs/2026-08-09-paper-agent-design.md` and in
-`superpowers/specs/2026-08-10-proxy-channel-design.md`.
+`superpowers/specs/2026-08-09-paper-agent-design.md`, in
+`superpowers/specs/2026-08-10-proxy-channel-design.md` and in
+`superpowers/specs/2026-08-10-velocity-image-design.md`.
 
 ## Preconditions for milestone 2c (the Kotlin agent) — met
 
@@ -149,14 +150,20 @@ narrower mount (a `subPath` per file, or a different target directory
 entirely) is the likely shape of the fix, since `Mount`
 (`api/v1alpha1/common_types.go:89-105`) has no `subPath` today.
 
-**`set_property` in `image/entrypoint.sh` assumes `server.properties` is
-writable.** It rewrites the file via `grep -v ... >server.properties.tmp` and
-`mv server.properties.tmp server.properties`. If a mount ever makes
-`server.properties` (or its directory) read-only, that `mv` fails under
-`set -eu` with a bare `mv:` message that says nothing about why. Design §8
-claims the entrypoint survives "a user mount overwrites `server.properties` →
-the entrypoint rewrites the three enforced fields afterwards" — it does not,
-once the mount is read-only, and nothing today exercises that case.
+*Met* by construction, not by a narrower mount. Design §5.4's rendering lands
+the operator's own ConfigMap at `/etc/spawnery`
+(`internal/podspec.ConfigMountPath`) — a path neither Paper nor Velocity ever
+writes to — rather than at `/data/config`, which was the mount §4.3's old
+sketch proposed and which this entry warned against. `spawnery-config` writes
+`server.properties` and `config/paper-global.yml` straight into `/data`,
+which Paper already owns and writes to itself; nothing renders a ConfigMap
+there any more. The `subPath` fix this entry expected was never needed: the
+mechanism that would have collided was replaced, not narrowed. A user is
+still free to mount something of their own at `/data/config` —
+`checkMountCollision` does not single that path out, only the exact `/data`
+and `/tmp` roots and the reserved agent and config mounts — but that is now
+an arbitrary user choice, not something the design's own documented override
+path walks into.
 
 ## From milestone 2c (the Paper agent)
 
@@ -171,6 +178,15 @@ sets `ReadOnly: true` on every user mount unconditionally). So a mount at
 that says nothing about why. This is the same shape as the `/data/config`
 collision above and wants the same fix; the entrypoint already points here for
 it.
+
+**This entry still stands.** Unlike `/data/config`, milestone 3b did not
+resolve it, and could not have with the same move: `/data/config` was
+avoided by relocating the operator's *own* mount target to `/etc/spawnery`
+(see above), but `/data/plugins` is not the operator's choice to relocate —
+it is Paper's own plugins directory, and the agent jar has to land inside it
+regardless of what a user mounts there. A user mount that names
+`/data/plugins` — permitted, since `checkMountCollision` does not single it
+out either — still breaks the start with the same bare `cp:` message.
 
 **The operator's hard-deadline rescue is armed after its first two `Send`s, and
 moving it up is necessary but not sufficient.** `internal/agentserver/server.go`
@@ -259,13 +275,14 @@ inside the cluster from its own image, where the Service is a Service.
 
 ## Preconditions for milestone 3 (proxy integration)
 
-Three of the five original preconditions below are discharged by milestone 3a
-(the operator's proxy side, 2026-08-10). They are kept rather than deleted for
-the same reason milestone 2c's closed preconditions are: the reasoning is what
-the next sub-project — 3b, the Velocity image — inherits, and only the
-reasoning makes it legible. The two image-layer items stay open; they belong
-to 3b. What 3a itself discovered while closing the other three follows after
-them.
+All five original preconditions below are now discharged: three by milestone
+3a (the operator's proxy side, 2026-08-10), and the remaining two — the
+image-layer items — by milestone 3b (the Velocity image, 2026-08-11). They are
+kept rather than deleted for the same reason milestone 2c's closed
+preconditions are: the reasoning is what the next sub-project — 3c, the
+Velocity agent — inherits, and only the reasoning makes it legible. What 3a
+itself discovered while closing its three follows after them, and what 3b
+discovered while closing its own two follows after that.
 
 **Factor the shared image Nix while there is still exactly one consumer.**
 `nix/paper-image.nix` holds four things the Velocity image will need verbatim:
@@ -278,6 +295,19 @@ exists is much cheaper than reconciling two copies after they have drifted, and
 the drift is the kind nobody notices — an image that starts fine while its user
 or its paths quietly differ from the other one's.
 
+*Met* by `nix/oci-common.nix`, extracted before `nix/velocity-image.nix`
+existed at all. Both `nix/paper-image.nix` and `nix/velocity-image.nix` now
+build on its `passwd`, `group`, `entrypointFrom`, `binIn` and `layeredImage`.
+The store-path proof this entry originally expected turned out to be
+structurally impossible in this repository — `spawnery-slp` is built with
+`src = ./.`, so every tracked-file change moves every derivation's input
+hash, including the extraction's own edits, and an identical path would have
+been the surprise rather than the proof. What stands as evidence instead: the
+pre- and post-extraction Paper image tarballs list identically, and the four
+files `oci-common.nix` took over — `usr/local/bin/spawnery-slp`,
+`usr/local/bin/spawnery-entrypoint`, `etc/passwd` and `etc/group` — have
+matching `sha256sum` values across both images.
+
 **Do not extend `set_property` for the forwarding mode.** It is a
 `.properties` helper and it does not generalise: the forwarding secret and
 `online-mode` live in `config/paper-global.yml`, which is YAML, and design §5.4
@@ -288,6 +318,16 @@ already establishes, it is testable the way `internal/slp` is, and it is the
 natural home for §5.4's per-group ConfigMap rendering when that arrives. It is
 also where the `/data/config` collision above has to be resolved, since that is
 the directory the rendered configuration would land in.
+
+*Met* by `cmd/spawnery-config`, a Go program baked into both images with its
+logic in `internal/render`, tested the way `internal/slp` is. It resolves the
+operator's rendered ConfigMap, a user overlay and the fields neither may move
+into `server.properties` and `config/paper-global.yml` on the Paper side and
+`velocity.toml` on the Velocity side, and refuses to start rather than guess
+at a missing secret, a missing `maxPlayers` or an overlay that fails to
+parse — naming the file and the key in every case. `set_property` and the
+`mv`-based rewrite it used are deleted from `image/entrypoint.sh` outright,
+not extended.
 
 **The orphan sweep discarded proxy agents — met.** `OrphanReconciler.Sweep`
 used to list pods with `spawnery.cloud/role=server` and then forget every
@@ -337,15 +377,26 @@ readiness that was already reported, and the registry cannot do that today.
 Milestone 4, which owns proxy drain, is where this becomes a change to the
 milestone 2a contract rather than something worked around.
 
-**A NetworkPolicy restricting backends to proxies-only is deferred until
-`online-mode` is actually off.** Design §7 leaves it out of 3a on purpose:
-built now, before 3b flips `online-mode=false`, the policy would guard an
-invariant nothing yet relies on, and a green NetworkPolicy test would look
-like proof of an isolation guarantee the servers do not actually have — they
-still trust connections directly. Milestone 6 owns NetworkPolicies generally
-(see the availability precondition below); 3b is where pairing this one with
-`online-mode` first becomes checkable, and that is the point at which leaving
-it out stops being safe.
+**A NetworkPolicy restricting backends to proxies-only is now overdue, not
+merely deferred.** Design §7 left it out of 3a on purpose: built then, before
+`online-mode` was off anywhere, the policy would have guarded an invariant
+nothing yet relied on, and a green NetworkPolicy test would have looked like
+proof of an isolation guarantee the servers did not actually have — they
+still trusted whatever connected to them directly.
+
+**As of this milestone that is no longer true.** `online-mode` is `false` on
+the backend and `true` on the proxy (`internal/render.Paper` and
+`internal/render.Velocity`, both asserted in one test per the design). The
+invariant the policy would guard is real now: a Paper server authenticates no
+one itself, so it trusts whatever opens a connection and completes the
+modern-forwarding handshake with the right secret — and nothing today
+restricts *who* can attempt that handshake to begin with. The only thing
+still keeping the NetworkPolicy out is that milestone 6 owns NetworkPolicies
+as a group (see the availability precondition below), not any remaining
+reason to wait on `online-mode`. This is the entry in this file most likely
+to be read as a formality — it is not. Until the NetworkPolicy lands, a
+backend pod accepts a connection attempt from any pod in the cluster that can
+reach port 25565, proxy or not.
 
 **A proxy must report its configured player limit as `slots`, not zero.**
 `Registry.ReportPlayers` rejects any report where `players > slots`; the
@@ -373,8 +424,10 @@ points `forwarding-secret-file` directly at the mount; on the Paper side, a
 Go program baked into the image merges `online-mode` and the secret into
 `config/paper-global.yml`, reusing the `buildGoModule` path `spawnery-slp`
 already establishes. This is the concrete answer to "do not extend
-`set_property`" above — 3b is where it has to be built, since that is also
-where the `/data/config` collision has to be resolved.
+`set_property`" above, and 3b built it: `cmd/spawnery-config` is the Go
+program, `internal/render` is where its logic lives, and the `/data/config`
+collision above is resolved by moving the rendered ConfigMap's mount target
+to `/etc/spawnery` rather than by narrowing the old one.
 
 **Whether the operator runs inside the cluster for the E2E flow is still
 open, and 3c's evidence run is where it starts to cost.** Today it runs
@@ -384,6 +437,34 @@ nothing creates" above) — workable for one person at a terminal, a wall for
 milestone 6's CI. An operator image is out of scope for all of milestone 3,
 but 3c is where its absence first has to be worked around a second time
 rather than once.
+
+What follows is what 3b discovered while closing its own two preconditions,
+and what 3c inherits as a result.
+
+**The overlay's "refuse rather than guess" philosophy covers a parse failure
+and a couple of named shapes, not the whole surface.** Both flavours refuse
+an overlay that does not parse — bad YAML, bad TOML — and `paperGlobal`
+refuses one whose `proxies` or `proxies.velocity` key parses to something
+other than a mapping, "rather than treating either as an absent overlay" (its
+own doc comment). Two shapes still slip through silently:
+
+- A `paper-global.yml` overlay with `proxies` present but misspelled, or any
+  other unrecognized top-level key, is valid YAML, matches nothing in
+  `paperGlobal`, and does nothing. `server.properties` has the symmetric gap
+  by construction: `parseProperties` accepts any `key=value` line, so a
+  mistyped key just adds an unused one instead of being refused.
+- A `velocity.toml` overlay whose `servers` key parses to something other
+  than a table fails the `doc["servers"].(map[string]any)` type assertion in
+  `velocityToml` and silently skips the `try` re-defaulting, rather than
+  refusing the way `paperGlobal` refuses an equivalent wrong-shaped
+  `proxies.velocity`.
+
+In both cases the operator believes the override applied and the rendered
+file does not reflect it — the exact failure this design's refusal exists to
+rule out, just not ruled out everywhere it could be. No agent-side code in 3c
+depends on this, so nothing forces a fix now; whoever next touches
+`internal/render`'s overlay contract should close it with a real key check
+rather than assume the existing refusals already cover it.
 
 ## Preconditions for milestone 4 (scaling and drain)
 
@@ -544,6 +625,14 @@ intentional — the following points each concern only one of the two halves.
   `--startup-deadline=20s` for level B; no test guards that so far.
 - **Nothing enforces that `Why` is filled in and `Required` is free of
   duplicates.** `Compare` collects duplicates, and the last one wins.
+- **The `configmaps` grant's `Why` no longer names everything that uses it.**
+  `internal/rbacaudit/required.go` documents `get`/`list`/`watch`/`create`/
+  `update` on `configmaps` as `Bootstrapper.Ensure`'s CA ConfigMap alone.
+  Since milestone 3b, `ServerGroupReconciler` and `ProxyGroupReconciler`
+  create and update the same kind of object under the same grant. The
+  permission itself is correct — the group ConfigMaps and the CA ConfigMap
+  really do share one verb set — only the documentation trailed behind the
+  second consumer.
 
 ## Small things
 
