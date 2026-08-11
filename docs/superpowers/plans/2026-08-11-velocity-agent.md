@@ -1885,17 +1885,35 @@ Every command, in order, from an empty machine to the two proofs. It covers:
   a mistake;
 - the manifests: a `Network`, a forwarding-secret `Secret`, a `ServerGroup`
   named `lobby` with one replica, and a `ProxyGroup` with
-  `routing.fallbackGroups: ["lobby"]`, NodePort expose, and a `configOverlay`
-  ConfigMap setting `online-mode = false`;
-- the automated proof: `spawnery-join` against `nodeIP:nodePort`, then
-  `kubectl get proxygroup -o jsonpath` for `status.connectedPlayers`, then the
-  proxy and backend logs;
+  `routing.fallbackGroups: ["lobby"]`, NodePort expose, and
+  `spec.config.onlineMode: false`;
+- the automated proof: `spawnery-join --host <nodeIP> --port <nodePort>`
+  against that group, then `kubectl get proxygroup -o jsonpath` for
+  `status.connectedPlayers`, then the proxy and backend logs;
 - the manual proof: the same network without the `online-mode` overlay, joined
   from a real client with a Microsoft account;
 - the drain proof: `kubectl delete server` with a player connected, and the
   proxy log line showing the move.
 
 Each step states what to expect, so a deviation is recognisable as one.
+
+**Four things the runbook has to get right that this plan originally got
+wrong**, all established by tasks 10 and 10b:
+
+- `online-mode` is turned off through `spec.config.onlineMode: false` on the
+  `ProxyGroup`, not through a `configOverlay`. The renderer reasserts the four
+  keys it owns after merging an overlay, so an overlay never could have
+  reached it; the field exists because the automated proof needs it and
+  because a security switch belongs on the custom resource.
+- The probe's username is `spawnery_probe`. A hyphen is not a legal Minecraft
+  username: Velocity accepts it and Paper then kills the forwarded connection.
+- `spawnery-join` closes its connection when it returns, so the
+  `status.connectedPlayers` assertion needs `--hold`.
+- Whether a held connection is *counted* is unmeasured. It sits in the
+  configuration state, and the rig that measured the routing had no operator.
+  If the count reads zero, the fix is to play the configuration phase through
+  — two packet-id constants and one `case` in `holdOpen`, not a rewrite. Write
+  the runbook so that outcome is a recognisable branch rather than a puzzle.
 
 - [ ] **Step 2: Perform the runbook and record what happened**
 
