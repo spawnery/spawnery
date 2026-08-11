@@ -224,7 +224,18 @@ echo "the agent connected"
 # classloader, which is what make image-test explicitly cannot show.
 
 # The header the operator's interceptor matches character for character.
-expected="Bearer $(cat "$WORK/agent/token")"
+#
+# The same guard phase 4 carries, and it matters more here: this phase's stub
+# runs without --require-token, so nothing refuses an uncredentialed stream and
+# this string comparison is the phase's only credential check. With an empty
+# token file both sides would read "Bearer " and it would pass for an agent
+# that sent no token at all.
+token1="$(cat "$WORK/agent/token")"
+if [ -z "$token1" ]; then
+	echo "the stub wrote an empty token file, so the header comparison below would prove nothing" >&2
+	exit 1
+fi
+expected="Bearer $token1"
 actual="$(jq -r 'select(.kind == "hello") | .authorization' <"$EVENTS" | head -1)"
 if [ "$actual" != "$expected" ]; then
 	echo "authorization header is $(printf '%q' "$actual"), want $(printf '%q' "$expected")" >&2
