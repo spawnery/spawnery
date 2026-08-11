@@ -39,7 +39,16 @@ trap cleanup EXIT
 # - it is the property that authenticates players, and the operator always
 # writes the key. true here: nothing in this test joins the proxy, so the
 # offline-mode case has no bearing on what it measures.
-printf 'playerLimit: 500\nonlineMode: true\n' >"$CONFDIR/config.yaml"
+#
+# playerLimit is 137 and not 500 on purpose, and the motd is a string nothing
+# else in this repository writes. Both come back out of the status ping below,
+# which is the only way this script can see what Velocity parsed rather than
+# what the renderer wrote - and 500 would be invisible there, because it is
+# both Velocity's own default for show-max-players and
+# internal/podspec.DefaultPlayerLimit.
+PLAYER_LIMIT=137
+MOTD="spawnery image test motd"
+printf 'playerLimit: %s\nonlineMode: true\nmotd: "%s"\n' "$PLAYER_LIMIT" "$MOTD" >"$CONFDIR/config.yaml"
 printf 'test-forwarding-secret\n' >"$CONFDIR/forwarding.secret"
 chmod 755 "$CONFDIR"
 chmod 644 "$CONFDIR/config.yaml" "$CONFDIR/forwarding.secret"
@@ -93,16 +102,30 @@ until "$CONTAINER" exec "$NAME" bash -c 'exec 3<>/dev/tcp/127.0.0.1/25565' 2>/de
 done
 echo "the port answered after $((SECONDS - start))s"
 
-# online-mode = true alone is not a renderer-unique marker: Velocity's own
-# generated default-velocity.toml carries the identical line, so a broken
-# entrypoint that skipped spawnery-config entirely and let Velocity write its
-# own defaults would still pass this one check - and would then be caught
-# only at the port probe above, 120 seconds later, with a message that names
-# the wrong cause. forwarding-secret-file and forced modern forwarding are
-# both strings only the renderer writes; checking all three in the file
-# Velocity actually parsed is what makes this the one place the paired
-# invariant - the proxy authenticates players, the backends trust what it
-# forwards - is checked against reality rather than a unit test's output.
+# What is on disk at the path Velocity opens - and no more than that.
+#
+# This block used to claim it checked "the file Velocity actually parsed". It
+# does not, and cannot: Velocity never rewrites velocity.toml here.
+# VelocityConfiguration.read loads it through night-config's .autosave(), which
+# writes only when something in the config changes, and nothing changes it.
+# Disassembled out of the pinned jar, 2026-08-11: five of its six migrations
+# are version-gated with `configVersion < threshold` for thresholds 2.0, 2.0,
+# 2.6, 2.7 and 2.8, and the renderer writes exactly "2.8", so none of them
+# fires; the sixth, MiniMessageTranslationsMigration, always says it should run
+# but only ever rewrites files under lang/ and never touches the config.
+# Measured the same day against the pinned image: /data/velocity.toml after a
+# clean start is byte for byte spawnery-config's own 255-byte output,
+# comment-free and in go-toml's key order, where a file Velocity had written
+# would carry its own comments and its [advanced], [query] and [packet-limiter]
+# tables.
+#
+# So what the three greps below establish is that spawnery-config ran, wrote
+# all three critical strings, and put them where Velocity opens them. That is
+# worth asserting - a broken entrypoint that skipped the renderer would leave
+# Velocity to generate its own defaults here, which is a different file
+# entirely, and would otherwise be caught only at the port probe above with a
+# message naming the wrong cause. What it does not establish is that Velocity
+# read any of it. Everything after this block is what does.
 rendered="$("$CONTAINER" exec "$NAME" cat /data/velocity.toml)"
 if ! grep -qE '^online-mode = true$' <<<"$rendered"; then
 	echo "velocity.toml does not set online-mode = true:" >&2
@@ -122,6 +145,72 @@ if ! grep -qE "player-info-forwarding-mode = .modern." <<<"$rendered"; then
 	exit 1
 fi
 echo "velocity.toml renders online-mode = true, modern forwarding, and the mounted secret path"
+
+# The same file, as Velocity parsed it.
+#
+# A server list ping is the whole of what a proxy with no operator and no
+# backends will tell an outsider, and two of the renderer's keys come back out
+# of it: show-max-players as players.max and motd as description. That is the
+# measurement of the receiving program this script was missing - the failure it
+# closes is a misspelled key, which velocity.toml carries as happily as a
+# correct one and which Velocity answers by silently keeping its own default.
+# internal/render's TestVelocityWritesTheKeysVelocityItselfReads is the
+# fixture-based half of the same guard; this half needs no fixture refreshed
+# and would also catch a spawnery-config that wrote a correct file to the wrong
+# place.
+#
+# The handshake is written by hand because the image carries no ping client
+# (spawnery-slp is in the Paper image, not this one): a 15-byte handshake -
+# packet id 0x00, protocol version 0, host "localhost", port 25565 (0x63dd),
+# next state 1 - followed by the 1-byte status request. `timeout 5 cat` rather
+# than `head -c N` because the response length is not known in advance and
+# Velocity holds the connection open afterwards, waiting for a ping packet this
+# probe never sends. `|| true` because that is exactly why timeout exits 124
+# every time, and this script runs under `set -o pipefail`. tr strips the
+# packet framing around the JSON.
+echo "asking the proxy for its status, to see what Velocity made of velocity.toml..."
+ping_json="$("$CONTAINER" exec "$NAME" bash -c '
+	exec 3<>/dev/tcp/127.0.0.1/25565
+	printf "\x0f\x00\x00\x09localhost\x63\xdd\x01\x01\x00" >&3
+	timeout 5 cat <&3 || true
+' 2>/dev/null | LC_ALL=C tr -cd '[:print:]')"
+if ! grep -q "\"max\":$PLAYER_LIMIT" <<<"$ping_json"; then
+	echo "the proxy reports a maximum other than the rendered show-max-players = $PLAYER_LIMIT; Velocity did not read the key the renderer wrote:" >&2
+	echo "$ping_json" >&2
+	exit 1
+fi
+if ! grep -qF "$MOTD" <<<"$ping_json"; then
+	echo "the proxy's status does not carry the rendered motd; Velocity did not read the key the renderer wrote:" >&2
+	echo "$ping_json" >&2
+	exit 1
+fi
+echo "Velocity answers with the rendered show-max-players and motd, so it parsed the file"
+
+# The third critical key, checked by what Velocity did not do.
+#
+# forwarding-secret-file cannot be read back out of anything: no log line names
+# the secret, and only a forwarded join would exercise it. What can be observed
+# is the branch a misspelled key takes. VelocityConfiguration.read looks the key
+# up, falls back to the relative path "forwarding.secret" when it is absent,
+# and - finding no such file - creates it in the working directory, fills it
+# with twelve random characters, logs "The forwarding-secret-file does not
+# exist. A new file has been created at {}", and starts perfectly. /data is the
+# working directory and is the one writable place in this container, so the file
+# really would appear. Every other check in this script stays green in that
+# state, the port probe passes, and every forwarded join is refused with a
+# secret neither backend shares - the same shape of silent failure milestone 3c
+# found on the Paper side.
+if "$CONTAINER" exec "$NAME" test -e /data/forwarding.secret; then
+	echo "Velocity generated its own /data/forwarding.secret, so it did not resolve forwarding-secret-file to the mounted one; every forwarded join would be refused:" >&2
+	"$CONTAINER" exec "$NAME" cat /data/forwarding.secret >&2 || true
+	exit 1
+fi
+if grep -q 'forwarding-secret-file does not exist' <<<"$("$CONTAINER" logs "$NAME" 2>&1)"; then
+	echo "Velocity says the forwarding-secret-file it looked for does not exist:" >&2
+	"$CONTAINER" logs "$NAME" 2>&1 | grep -i 'forwarding' >&2 || true
+	exit 1
+fi
+echo "Velocity resolved forwarding-secret-file to the mount and generated no secret of its own"
 
 # The plugin is in the image but has no operator to reach here, exactly as in
 # hack/image-test.sh. Two things have to be true, and neither is visible from a
