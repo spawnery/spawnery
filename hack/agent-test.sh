@@ -79,10 +79,7 @@ chmod 0755 "$WORK/agent"
 # writes to it, and none of the three needs a value the others don't.
 mkdir -p "$WORK/config"
 printf 'maxPlayers: 100\n' >"$WORK/config/config.yaml"
-# No trailing newline: internal/render.Load now refuses a secret whose raw
-# bytes are not already its own trimmed form, rather than trimming it away —
-# see hack/image-test.sh for why, and internal/render/load.go for the check.
-printf 'test-forwarding-secret' >"$WORK/config/forwarding.secret"
+printf 'test-forwarding-secret\n' >"$WORK/config/forwarding.secret"
 chmod 0755 "$WORK/config"
 chmod 0644 "$WORK/config/config.yaml" "$WORK/config/forwarding.secret"
 

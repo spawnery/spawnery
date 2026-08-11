@@ -473,7 +473,7 @@ func TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey(t *testing.T) 
 	if err := os.WriteFile(filepath.Join(dir, render.ValuesFile), []byte("maxPlayers: 100\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, render.SecretFile), []byte("s3cr3t"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, render.SecretFile), []byte("s3cr3t\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	overlayDir := filepath.Join(dir, render.OverlayDir)

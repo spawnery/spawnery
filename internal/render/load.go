@@ -78,29 +78,49 @@ func Load(dir string) (Values, string, map[string]string, error) {
 		}
 		return Values{}, "", nil, fmt.Errorf("%s: %w", secretPath, err)
 	}
-	// Refused, not normalised, on surrounding whitespace: Paper gets this
-	// package's own strings.TrimSpace result written into paper-global.yml,
-	// but Velocity is handed secretPath and reads the file itself — and the
-	// pinned 3.5.1-615 jar joins the file's lines with Files.readAllLines and
-	// "", which strips no leading or trailing space but does delete an
-	// internal newline. A secret with edge whitespace would therefore trim on
-	// one side of forwarding and not the other, and one with an internal
-	// newline would do the reverse; either way Paper and Velocity end up
-	// holding different secrets, every join fails with "Unable to verify
-	// player details", and nothing in this milestone can observe why. Two
-	// normalisation rules can only be made to agree by refusing the input
-	// they disagree about, consistent with this package's own refusal
-	// philosophy elsewhere: an operator-authored Secret with clean edges is
-	// no burden to require.
+	// Canonicalise, then refuse. Paper gets this package's own return value
+	// written verbatim into paper-global.yml, but Velocity is handed
+	// secretPath and reads the file itself — and the pinned 3.5.1-615 jar
+	// joins the file's lines with Files.readAllLines and "", which drops
+	// exactly one trailing \n or \r\n (readAllLines never emits a further
+	// empty line for it) and would delete an internal one too. A single
+	// trailing line terminator is therefore not a divergence — both this
+	// function's TrimSpace-based history and Velocity's own read have always
+	// discarded it the same way — but treating a raw byte comparison as the
+	// refusal predicate did, and that refused every operator-authored Secret
+	// this repository's own config/samples/network.yaml documents producing
+	// (`head -c 32 /dev/urandom | base64`, which `kubectl create secret
+	// generic --from-file` carries into the mount terminator and all).
+	//
+	// So: strip exactly one trailing terminator first, then apply the actual
+	// refusal — edge whitespace (Velocity's read would keep it, Paper's
+	// write already has it, so it never disagrees on its own, but it is
+	// exactly the shape an operator-authored Secret should never need) and
+	// any interior \n or \r (Velocity's read deletes it, Paper's does not,
+	// which is a real divergence). What is left after that strip is what
+	// Velocity's own read produces from the raw file, so returning it here
+	// is what keeps Paper's copy and Velocity's read of the same Secret
+	// equal.
 	secret := string(secretData)
-	trimmed := strings.TrimSpace(secret)
-	if trimmed == "" {
+	canonical := secret
+	switch {
+	case strings.HasSuffix(canonical, "\r\n"):
+		canonical = canonical[:len(canonical)-2]
+	case strings.HasSuffix(canonical, "\n"):
+		canonical = canonical[:len(canonical)-1]
+	}
+	if strings.TrimSpace(canonical) == "" {
 		return Values{}, "", nil, fmt.Errorf("%s: forwarding secret is empty", secretPath)
 	}
-	if trimmed != secret {
+	if strings.TrimSpace(canonical) != canonical {
 		return Values{}, "", nil, fmt.Errorf(
 			"%s: forwarding secret must not carry surrounding whitespace", secretPath)
 	}
+	if strings.ContainsAny(canonical, "\n\r") {
+		return Values{}, "", nil, fmt.Errorf(
+			"%s: forwarding secret must not contain an interior line break", secretPath)
+	}
+	secret = canonical
 
 	overlay, err := loadOverlay(filepath.Join(dir, OverlayDir))
 	if err != nil {

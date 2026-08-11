@@ -41,13 +41,8 @@ func writeFile(t *testing.T, path, content string) {
 // unless the test is specifically about that input's absence — so each test
 // isolates the one refusal it names rather than tripping over an unrelated
 // one.
-//
-// validSecret carries no trailing newline on purpose: Load refuses a secret
-// whose raw bytes are not already their own trimmed form (see
-// TestLoadRefusesASecretWithSurroundingWhitespace), so a fixture meant to be
-// accepted has to already be in that form.
 const validConfig = "maxPlayers: 100\n"
-const validSecret = "s3cret"
+const validSecret = "s3cret\n"
 
 func TestLoadRefusesAMissingValuesFile(t *testing.T) {
 	dir := t.TempDir()
@@ -172,12 +167,12 @@ func TestLoadTreatsAMissingOverlayDirectoryAsOptional(t *testing.T) {
 }
 
 // The happy path: every value Load reads reaches the caller, and the secret
-// arrives exactly as written — Load no longer trims a secret into shape, it
-// only ever passes one through unchanged or refuses it.
+// arrives trimmed of the one trailing line terminator Velocity's own read
+// would also drop — Paper and Velocity must end up holding the same string.
 func TestLoadReadsValuesSecretAndOverlay(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), "maxPlayers: 100\nmotd: hello\n")
-	writeFile(t, filepath.Join(dir, SecretFile), "s3cret")
+	writeFile(t, filepath.Join(dir, SecretFile), "s3cret\n")
 	writeFile(t, filepath.Join(dir, OverlayDir, "server.properties"), "difficulty=hard\n")
 
 	v, secret, overlay, err := Load(dir)
@@ -198,32 +193,114 @@ func TestLoadReadsValuesSecretAndOverlay(t *testing.T) {
 	}
 }
 
-// TestLoadRefusesASecretWithSurroundingWhitespace is the fix for the
-// divergence a per-task review could not see: Load used to hand Paper
-// strings.TrimSpace's result, which Paper writes verbatim into
-// paper-global.yml, while Velocity is handed secretPath and reads the file
-// itself — and the pinned 3.5.1-615 jar does not trim leading or trailing
-// spaces on the line it reads. A secret with edge whitespace therefore used
-// to reach Paper trimmed and Velocity untrimmed: two different secrets, every
-// join failing with "Unable to verify player details", and nothing in this
-// milestone able to observe why. Refusing it here — before either flavour
-// ever sees it — is cheaper than reconciling two independent trimming rules,
-// and consistent with this package's own refusal philosophy elsewhere.
-func TestLoadRefusesASecretWithSurroundingWhitespace(t *testing.T) {
+// TestLoadAcceptsASecretWithATrailingNewline pins the case this predicate
+// exists to stop refusing: `head -c 32 /dev/urandom | base64`, the command
+// config/samples/network.yaml documents for generating this secret, emits a
+// trailing newline, and `kubectl create secret generic --from-file` carries
+// it verbatim into the mount. Velocity's own read
+// (Files.readAllLines().join("")) drops that exact terminator, so a single
+// trailing "\n" is not a divergence between Paper and Velocity — it must not
+// be refused, and the value returned must be the newline-stripped form both
+// runtimes agree on.
+func TestLoadAcceptsASecretWithATrailingNewline(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
-	writeFile(t, filepath.Join(dir, SecretFile), " s3cret\n")
+	writeFile(t, filepath.Join(dir, SecretFile), "s3cret\n")
+
+	_, secret, _, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load refused a secret with only a trailing newline: %v", err)
+	}
+	if secret != "s3cret" {
+		t.Errorf("secret = %q, want %q — the trailing newline must be stripped, "+
+			"not merely tolerated", secret, "s3cret")
+	}
+}
+
+// TestLoadAcceptsASecretWithATrailingCRLF is the same case with the other
+// line terminator "\n or \r\n" names: a CRLF-saved secret file is exactly as
+// legitimate as an LF one, and readAllLines drops it the same way.
+func TestLoadAcceptsASecretWithATrailingCRLF(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
+	writeFile(t, filepath.Join(dir, SecretFile), "s3cret\r\n")
+
+	_, secret, _, err := Load(dir)
+	if err != nil {
+		t.Fatalf("Load refused a secret with only a trailing CRLF: %v", err)
+	}
+	if secret != "s3cret" {
+		t.Errorf("secret = %q, want %q — the trailing CRLF must be stripped as one terminator, "+
+			"not just the final \\n", secret, "s3cret")
+	}
+}
+
+// TestLoadRefusesASecretWithLeadingSpaces carries a legal trailing newline
+// alongside the leading spaces, so a failure here can only be caused by the
+// leading spaces surviving canonicalisation — not by the newline, which
+// TestLoadAcceptsASecretWithATrailingNewline already proves is not itself a
+// refusal cause.
+func TestLoadRefusesASecretWithLeadingSpaces(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
+	writeFile(t, filepath.Join(dir, SecretFile), "  s3cret\n")
 
 	_, _, _, err := Load(dir)
 	if err == nil {
-		t.Fatal("Load accepted a forwarding secret with surrounding whitespace")
+		t.Fatal("Load accepted a forwarding secret with leading spaces")
 	}
 	if !strings.Contains(err.Error(), SecretFile) {
 		t.Errorf("error = %q, want it to name %s", err, SecretFile)
 	}
 	if !strings.Contains(err.Error(), "whitespace") {
 		t.Errorf("error = %q, want it to say the secret carries surrounding whitespace, not something else — "+
-			"an empty secret and one with stray whitespace must read differently", err)
+			"an empty secret and an interior line break must read differently", err)
+	}
+}
+
+// TestLoadRefusesASecretWithTrailingTabs is the same isolation as leading
+// spaces above, for the other edge and the other whitespace character:
+// tabs after the last non-space byte survive stripping one trailing line
+// terminator and must still be refused.
+func TestLoadRefusesASecretWithTrailingTabs(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
+	writeFile(t, filepath.Join(dir, SecretFile), "s3cret\t\t\n")
+
+	_, _, _, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load accepted a forwarding secret with trailing tabs")
+	}
+	if !strings.Contains(err.Error(), SecretFile) {
+		t.Errorf("error = %q, want it to name %s", err, SecretFile)
+	}
+	if !strings.Contains(err.Error(), "whitespace") {
+		t.Errorf("error = %q, want it to say the secret carries surrounding whitespace, not something else — "+
+			"an empty secret and an interior line break must read differently", err)
+	}
+}
+
+// TestLoadRefusesASecretWithAnInteriorNewline is the divergence the
+// canonicalisation step must still catch: a legal trailing newline is
+// stripped first, but the interior one survives that strip untouched, so
+// only the interior-line-break branch — not the whitespace branch, since
+// neither edge of "s3\ncret" carries whitespace once the trailing newline is
+// gone — can be the cause of the refusal.
+func TestLoadRefusesASecretWithAnInteriorNewline(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
+	writeFile(t, filepath.Join(dir, SecretFile), "s3\ncret\n")
+
+	_, _, _, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load accepted a forwarding secret with an interior newline")
+	}
+	if !strings.Contains(err.Error(), SecretFile) {
+		t.Errorf("error = %q, want it to name %s", err, SecretFile)
+	}
+	if !strings.Contains(err.Error(), "interior line break") {
+		t.Errorf("error = %q, want it to say the secret contains an interior line break, not something else — "+
+			"an empty secret and surrounding whitespace must read differently", err)
 	}
 }
 
