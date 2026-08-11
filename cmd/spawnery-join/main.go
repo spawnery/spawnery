@@ -23,7 +23,16 @@ limitations under the License.
 //
 // It is test-only: no image carries it, and it is of no use against an
 // online-mode proxy, which asks for an encryption handshake this client has
-// no Microsoft account to answer.
+// no Microsoft account to answer. Note what that rules out today: every
+// Spawnery-rendered proxy is online-mode, because internal/render reasserts
+// online-mode = true after the overlay is merged and no configOverlay can
+// turn it off. Until that changes, this command needs a proxy whose
+// velocity.toml was written or amended outside the renderer — see
+// internal/mcjoin's package comment, which measured it.
+//
+// --hold keeps the connection open after a successful join, which is the only
+// way a proxy's status.connectedPlayers can be non-zero when the next line of
+// a runbook reads it.
 package main
 
 import (
@@ -63,15 +72,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 	port := fs.Int("port", defaultPort, "TCP port to join")
 	username := fs.String("username", defaultUsername, "username to log in as")
 	timeout := fs.Duration("timeout", defaultTimeout, "deadline for the whole join")
+	hold := fs.Duration("hold", 0, "how long to stay connected after a successful join")
 
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	// Caught here rather than in mcjoin, where it is also caught, because
+	// this one can name the two flags that disagree. Both have defaults, so
+	// asking for a hold at all is what usually produces it.
+	if *hold >= *timeout {
+		fmt.Fprintf(stderr, "spawnery-join: --hold %s does not fit inside --timeout %s\n", *hold, *timeout)
 		return 2
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 
-	result, err := mcjoin.Join(ctx, *host, *port, *username)
+	result, err := mcjoin.JoinAndHold(ctx, *host, *port, *username, *hold)
 	if err != nil {
 		fmt.Fprintf(stderr, "spawnery-join: %v\n", err)
 		return 1

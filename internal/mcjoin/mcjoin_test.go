@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -79,10 +80,19 @@ type fake struct {
 	afterAckPayload []byte
 	// closeAfterAck hangs up instead of sending afterAck.
 	closeAfterAck bool
+	// keepAlives is how many configuration-state keep alives to send once the
+	// join is done, each of which the client has to echo back before the next
+	// one is sent. After them the connection is held open until the client
+	// closes it, which is what a hold needs to have something to hold.
+	keepAlives int
+	// holdDisconnect, when set, is sent right after afterAck: a player thrown
+	// out during the hold rather than during the join.
+	holdDisconnect []byte
 
 	mu              sync.Mutex
 	handshake       handshakeFields
 	statusHandshake handshakeFields
+	answered        int
 	loginName       string
 	loginUUID       [16]byte
 	gotLoginAck     bool
@@ -121,6 +131,12 @@ func (f *fake) sawHandshake() handshakeFields {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.handshake
+}
+
+func (f *fake) keepAlivesAnswered() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.answered
 }
 
 func (f *fake) sawStatusHandshake() handshakeFields {
@@ -281,7 +297,38 @@ func (f *fake) serveLogin(conn net.Conn) error {
 	if f.closeAfterAck {
 		return nil
 	}
-	return writeFrame(conn, threshold, f.afterAckID, f.afterAckPayload)
+	if err := writeFrame(conn, threshold, f.afterAckID, f.afterAckPayload); err != nil {
+		return err
+	}
+
+	if f.holdDisconnect != nil {
+		return writeFrame(conn, threshold, 0x02, f.holdDisconnect)
+	}
+	for i := 0; i < f.keepAlives; i++ {
+		sent := []byte{0, 0, 0, 0, 0, 0, 0, byte(i + 1)}
+		if err := writeFrame(conn, threshold, 0x04, sent); err != nil {
+			return err
+		}
+		id, echoed, err := readFrame(conn, threshold)
+		if err != nil {
+			return err
+		}
+		if id != 0x04 {
+			return fmt.Errorf("expected a keep alive answer, got packet 0x%02x", id)
+		}
+		if !bytes.Equal(echoed, sent) {
+			return fmt.Errorf("keep alive answered with %x, want %x", echoed, sent)
+		}
+		f.mu.Lock()
+		f.answered++
+		f.mu.Unlock()
+	}
+	if f.keepAlives > 0 {
+		// Stay open until the client goes away, so the hold has a live
+		// connection to hold rather than an EOF to trip over.
+		_, _ = conn.Read(make([]byte, 1))
+	}
+	return nil
 }
 
 func parseHandshake(payload []byte) (handshakeFields, error) {
@@ -446,8 +493,11 @@ func TestJoinCompletesAnOfflineLogin(t *testing.T) {
 	if name != "spawnery_probe" {
 		t.Errorf("login start carried username %q", name)
 	}
-	if uuid != OfflineUUID("spawnery_probe") {
-		t.Errorf("login start carried UUID %x, want the offline-mode one %x", uuid, OfflineUUID("spawnery_probe"))
+	// Against the measured literal, not against OfflineUUID: comparing the
+	// wire to the function that put it there passes whatever that function
+	// computes.
+	if got := formatUUID(uuid[:]); got != want {
+		t.Errorf("login start carried UUID %s, want the offline-mode one %s", got, want)
 	}
 	if errs := f.errorsSeen(); len(errs) != 0 {
 		t.Errorf("the server half reported %v", errs)
@@ -552,6 +602,47 @@ func TestJoinHandlesSetCompression(t *testing.T) {
 	}
 }
 
+func TestJoinReadsPacketsSentWithAZeroDataLength(t *testing.T) {
+	// The branch a real proxy always takes, and the one the threshold-of-8
+	// test above never reaches. Velocity's threshold is 256 and everything
+	// this client reads after the switch is smaller than that — Login Success
+	// was 44 bytes and the configuration Disconnect 84 — so every one of them
+	// arrives compressed-framed with a data length of zero and no zlib stream
+	// at all. 4096 puts every packet in this test on that branch.
+	f := &fake{compressAt: 4096}
+	result, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second)
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	if !result.Compressed {
+		t.Error("Compressed is false although the server sent Set Compression")
+	}
+	if result.Username != "spawnery_probe" {
+		t.Errorf("Username = %q; a client that mishandled the zero data length would read nonsense here", result.Username)
+	}
+	if !f.sawLoginAck() {
+		t.Error("the server never received a readable Login Acknowledged")
+	}
+	if errs := f.errorsSeen(); len(errs) != 0 {
+		t.Errorf("the server half reported %v", errs)
+	}
+}
+
+func TestJoinReportsAFailureToRouteUnderCompression(t *testing.T) {
+	// The milestone's headline failure, in the framing it really arrives in.
+	// Against a real proxy that Disconnect is always compressed-framed, and
+	// the uncompressed version of this test below would not notice a client
+	// that could not read it.
+	f := &fake{compressAt: 4096, afterAckID: 0x02, afterAckPayload: configurationDisconnectNBT}
+	result, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second)
+	if err == nil {
+		t.Fatalf("Join succeeded with %+v, want the routing failure reported", result)
+	}
+	if !strings.Contains(err.Error(), "Unable to connect you to unroutable") {
+		t.Errorf("error is %q, want it to carry the proxy's own reason", err)
+	}
+}
+
 func TestJoinReportsADisconnectReason(t *testing.T) {
 	const reason = `{"translate":"multiplayer.disconnect.outdated_client","with":[{"text":"1.7.2-26.2"}]}`
 	f := &fake{loginDisconnect: reason}
@@ -610,6 +701,79 @@ func TestJoinFailsCleanlyOnAHangupAfterTheAcknowledgement(t *testing.T) {
 		t.Fatal("Join succeeded although nothing followed Login Acknowledged")
 	} else if !strings.Contains(err.Error(), "login acknowledged") {
 		t.Errorf("error is %q, want it to say where the connection died", err)
+	}
+}
+
+func TestJoinAndHoldStaysConnectedAndAnswersKeepAlives(t *testing.T) {
+	// Two things at once, because they are the same claim: the connection is
+	// still there when the hold ends, and it is still there because the keep
+	// alives were answered. The fake refuses to send the second one until the
+	// first has come back.
+	f := &fake{keepAlives: 2}
+	host, port := start(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	began := time.Now()
+	result, err := JoinAndHold(ctx, host, port, "spawnery_probe", 400*time.Millisecond)
+	elapsed := time.Since(began)
+	if err != nil {
+		t.Fatalf("JoinAndHold: %v", err)
+	}
+	if result.Username != "spawnery_probe" {
+		t.Errorf("Username = %q", result.Username)
+	}
+	if elapsed < 400*time.Millisecond {
+		t.Errorf("JoinAndHold returned after %s, before the 400ms hold was up", elapsed)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("JoinAndHold took %s for a 400ms hold", elapsed)
+	}
+	if got := f.keepAlivesAnswered(); got != 2 {
+		t.Errorf("the server got %d keep alive answers, want 2", got)
+	}
+	if errs := f.errorsSeen(); len(errs) != 0 {
+		t.Errorf("the server half reported %v", errs)
+	}
+}
+
+func TestJoinAndHoldReportsADisconnectDuringTheHold(t *testing.T) {
+	// A player who was thrown out two seconds after arriving did not stay,
+	// and a hold that swallowed that would be exactly the false green the
+	// read past Login Acknowledged exists to prevent, one packet later.
+	f := &fake{holdDisconnect: configurationDisconnectNBT}
+	host, port := start(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := JoinAndHold(ctx, host, port, "spawnery_probe", 3*time.Second)
+	if err == nil {
+		t.Fatalf("JoinAndHold succeeded with %+v although the player was disconnected", result)
+	}
+	if !strings.Contains(err.Error(), "during the hold") {
+		t.Errorf("error is %q, want it to say the player did not stay", err)
+	}
+	if !strings.Contains(err.Error(), "Unable to connect you to unroutable") {
+		t.Errorf("error is %q, want it to carry the server's own reason", err)
+	}
+}
+
+func TestJoinAndHoldRefusesAHoldTheDeadlineCannotCover(t *testing.T) {
+	// Refused up front rather than truncated, because a truncated hold ends
+	// in the same read timeout a completed one does and the caller would be
+	// told the player stayed for ten seconds when they stayed for one.
+	f := &fake{}
+	host, port := start(t, f)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	if _, err := JoinAndHold(ctx, host, port, "spawnery_probe", 10*time.Second); err == nil {
+		t.Fatal("JoinAndHold accepted a hold longer than the deadline")
+	} else if !strings.Contains(err.Error(), "does not fit") {
+		t.Errorf("error is %q, want it to name the mismatch", err)
+	}
+	if f.sawLoginAck() {
+		t.Error("JoinAndHold logged in anyway")
 	}
 }
 

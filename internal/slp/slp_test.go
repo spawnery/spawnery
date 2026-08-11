@@ -150,8 +150,13 @@ func TestPingAnnouncesTheDefaultVersion(t *testing.T) {
 	if _, err := Ping(ctx, host, port); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
-	if got := <-announced; got != handshakeProtocolVersion {
-		t.Errorf("the handshake announced protocol %d, want %d", got, handshakeProtocolVersion)
+	// 771 written out rather than compared against handshakeProtocolVersion:
+	// an assertion phrased in terms of the constant it is pinning passes
+	// whatever that constant is changed to, and this test's whole purpose is
+	// that Ping's own version does not move. The value is the one measured in
+	// milestone 2b — a Paper 26.2 server answers it with 776.
+	if got := <-announced; got != 771 {
+		t.Errorf("the handshake announced protocol %d, want 771", got)
 	}
 }
 

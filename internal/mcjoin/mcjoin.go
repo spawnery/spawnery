@@ -31,6 +31,17 @@ limitations under the License.
 // ghcr.io/spawnery/velocity:3.5.1-0.2.0 (Velocity 3.5.1 build 615) with no
 // operator endpoint, so the agent stayed dormant and the only routing was a
 // static [servers] entry pointing at 127.0.0.1:25566, where nothing listens.
+//
+// One thing about that rig could not be built out of the shipped renderer, and
+// nothing below is reproducible without it: the proxy had to be in offline
+// mode, and render.Velocity reasserts online-mode = true after the overlay is
+// merged, so no configOverlay can turn it off. The rig ran the real
+// spawnery-config and then rewrote that one line in /data/velocity.toml before
+// starting the JVM. Until render.Velocity gains a way to say it, that rewrite
+// — or a proxy started outside Spawnery — is a precondition of every
+// measurement in this comment, and of using this package against a
+// Spawnery-managed proxy at all.
+//
 // A client that sent handshake and Login Start, received Set Compression and
 // Login Success, and then held the socket open for eight seconds without
 // answering produced exactly one line and no backend attempt at all:
@@ -60,9 +71,19 @@ limitations under the License.
 //
 // That the success path really does deliver such a packet, and promptly, was
 // measured the same way, with the pinned Paper image behind the same proxy on
-// a container network. The packet after Login Acknowledged arrived at once
-// and was a configuration-state Plugin Message carrying minecraft:brand —
-// whose value says where it came from:
+// a container network — and with a second workaround, for the same reason as
+// the first. render.Paper writes the forwarding secret under proxies.velocity.
+// secret-key, and Paper 26.2 reads proxies.velocity.secret: the rendered node
+// fails to bind, comes back as enabled: false with an empty secret, and the
+// proxy refuses the player with "Your server did not send a forwarding request
+// to the proxy". The backend in this rig had that node corrected by hand.
+// Until render.Paper writes the key Paper reads, a Spawnery-rendered backend
+// cannot accept a forwarded player at all, and the packet below cannot be
+// observed.
+//
+// The packet after Login Acknowledged arrived at once and was a
+// configuration-state Plugin Message carrying minecraft:brand — whose value
+// says where it came from:
 //
 //	packet id=0x01 hex=0f6d696e6563726166743a6272616e64105061706572202856656c6f63697479 29
 //	                    m i n e c r a f t : b r a n d          Paper (Velocity)
@@ -95,6 +116,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/spawnery/spawnery/internal/mcproto"
@@ -116,8 +138,10 @@ const (
 	idLoginSuccess       = 0x02
 	idSetCompression     = 0x03
 	idLoginPluginRequest = 0x04
-	// Clientbound, configuration state.
+	// Configuration state. Disconnect is clientbound only; keep alive has the
+	// same id in both directions and is answered by echoing its payload.
 	idConfigurationDisconnect = 0x02
+	idConfigurationKeepAlive  = 0x04
 )
 
 // nextStateLogin is the handshake's final field. internal/slp sends 1 for a
@@ -190,6 +214,32 @@ type Result struct {
 // cancellation with no deadline set is not otherwise observed, the same
 // caveat slp.Ping carries.
 func Join(ctx context.Context, host string, port int, username string) (*Result, error) {
+	return JoinAndHold(ctx, host, port, username, 0)
+}
+
+// JoinAndHold is Join with the connection kept open for hold once the join has
+// succeeded, which is the only way anything outside this process can observe
+// the player: Join closes the socket as it returns, and a proxy's
+// status.connectedPlayers is back to zero before a kubectl in the next line of
+// a runbook could read it.
+//
+// During the hold this client answers configuration-state keep alives, because
+// a server that gets no answer disconnects. It returns early, with an error, if
+// the server disconnects the player anyway — a hold that ended in a disconnect
+// is not a player who stayed.
+//
+// hold must fit inside ctx's deadline. A hold that would outlast it is refused
+// rather than silently truncated, because a truncated hold and a completed one
+// end with the same read timeout and would be indistinguishable here.
+func JoinAndHold(ctx context.Context, host string, port int, username string, hold time.Duration) (*Result, error) {
+	if hold < 0 {
+		return nil, fmt.Errorf("a hold of %s is negative", hold)
+	}
+	if deadline, ok := ctx.Deadline(); ok && hold > 0 && !time.Now().Add(hold).Before(deadline) {
+		return nil, fmt.Errorf("a hold of %s does not fit inside the %s left on the deadline",
+			hold, time.Until(deadline).Round(time.Millisecond))
+	}
+
 	// Checked here rather than left to the server, because the two disagree
 	// and the second one is late. Velocity 3.5.1 in offline mode accepted
 	// "spawnery-probe" and logged it in; Paper 26.2 then dropped the forwarded
@@ -293,9 +343,53 @@ func Join(ctx context.Context, host string, port int, username string) (*Result,
 			if err := conn.awaitRouting(); err != nil {
 				return nil, err
 			}
+			if hold > 0 {
+				// The read timeout is how the hold ends, so the deadline is
+				// moved in from ctx's to the end of the hold. The check at the
+				// top of this function is what makes that a shortening.
+				if err := c.SetDeadline(time.Now().Add(hold)); err != nil {
+					return nil, fmt.Errorf("set hold deadline: %w", err)
+				}
+				if err := conn.holdOpen(); err != nil {
+					return nil, err
+				}
+			}
 			return result, nil
 		default:
 			return nil, fmt.Errorf("unexpected packet id 0x%02x during login", id)
+		}
+	}
+}
+
+// holdOpen reads until the connection's deadline expires, which is how a
+// successful hold ends: there is nothing this client wants from those packets
+// except the two it has to act on.
+func (c *framedConn) holdOpen() error {
+	for {
+		id, payload, err := c.readPacket()
+		if err != nil {
+			var timeout net.Error
+			if errors.As(err, &timeout) && timeout.Timeout() {
+				return nil
+			}
+			return fmt.Errorf("hold the connection open: %w", err)
+		}
+		switch id {
+		case idConfigurationDisconnect:
+			return fmt.Errorf("the player was disconnected during the hold: %s", nbtText(payload))
+		case idConfigurationKeepAlive:
+			// Echoed whole: the payload is the id the server wants back, and
+			// a server that does not get it drops the connection. Measured
+			// against the pinned pair — which sends one about every second —
+			// by holding a real join open for 40 seconds, several times any
+			// keep-alive timeout: the proxy logged the disconnect only when
+			// this client closed the socket, 40s after the connect.
+			//
+			//	[19:04:13 INFO]: [server connection] spawnery_probe -> lobby has connected
+			//	[19:04:54 INFO]: [connected player] spawnery_probe has disconnected
+			if err := c.writePacket(idConfigurationKeepAlive, payload); err != nil {
+				return fmt.Errorf("answer a keep alive: %w", err)
+			}
 		}
 	}
 }
