@@ -123,7 +123,7 @@
             pname = "spawnery-slp";
             version = "0.1.0";
             src = ./.;
-            vendorHash = "sha256-km8FNaDTk5WO8LVGnV4wcU4Xe7gY5pQJC0KEze2cguw=";
+            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
             subPackages = [ "cmd/spawnery-slp" ];
             # Static, because the image carries no libc of its own for it.
             env.CGO_ENABLED = 0;
@@ -137,9 +137,23 @@
             pname = "spawnery-stubop";
             version = "0.2.0";
             src = ./.;
-            vendorHash = "sha256-km8FNaDTk5WO8LVGnV4wcU4Xe7gY5pQJC0KEze2cguw=";
+            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
             subPackages = [ "cmd/spawnery-stubop" ];
             env.CGO_ENABLED = 0;
+          };
+
+          # Baked into both the Paper and Velocity images; it writes the
+          # configuration each JVM actually reads, before the JVM starts. See
+          # internal/render and cmd/spawnery-config.
+          spawnery-config = pkgs.buildGoModule {
+            pname = "spawnery-config";
+            version = "0.1.0";
+            src = ./.;
+            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            subPackages = [ "cmd/spawnery-config" ];
+            # Static, because neither image carries a libc of its own for it.
+            env.CGO_ENABLED = 0;
+            ldflags = [ "-s" "-w" ];
           };
 
           paper-agent = pkgs.callPackage ./nix/paper-agent.nix {
@@ -152,7 +166,7 @@
           paper-repo = paper.repo;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop paper-agent;
+          inherit spawnery-slp spawnery-stubop spawnery-config paper-agent;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
