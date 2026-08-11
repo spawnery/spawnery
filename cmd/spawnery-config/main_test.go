@@ -32,7 +32,7 @@ import (
 func writeConfigDir(t *testing.T, dir, secret string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, render.ValuesFile),
-		[]byte("maxPlayers: 100\nplayerLimit: 500\n"), 0o644); err != nil {
+		[]byte("maxPlayers: 100\nplayerLimit: 500\nonlineMode: true\n"), 0o644); err != nil {
 		t.Fatalf("fixture: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, render.SecretFile), []byte(secret), 0o644); err != nil {

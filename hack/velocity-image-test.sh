@@ -34,7 +34,12 @@ trap cleanup EXIT
 # override to bridge the two. World-readable permissions are what make the
 # bind mount legible from inside, the same way a projected ConfigMap volume
 # would be in the cluster.
-printf 'playerLimit: 500\n' >"$CONFDIR/config.yaml"
+#
+# onlineMode is written explicitly because render.Velocity refuses to guess it
+# - it is the property that authenticates players, and the operator always
+# writes the key. true here: nothing in this test joins the proxy, so the
+# offline-mode case has no bearing on what it measures.
+printf 'playerLimit: 500\nonlineMode: true\n' >"$CONFDIR/config.yaml"
 printf 'test-forwarding-secret\n' >"$CONFDIR/forwarding.secret"
 chmod 755 "$CONFDIR"
 chmod 644 "$CONFDIR/config.yaml" "$CONFDIR/forwarding.secret"

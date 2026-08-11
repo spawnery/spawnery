@@ -19,6 +19,7 @@ package controller
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -376,8 +377,80 @@ func TestProxyGroupWithNoConfigStillStartsAProxy(t *testing.T) {
 		t.Errorf("playerLimit = %d, want the default %d", *values.PlayerLimit, podspec.DefaultPlayerLimit)
 	}
 
-	if _, err := render.Velocity(values, "/etc/spawnery/forwarding.secret", nil); err != nil {
-		t.Errorf("render.Velocity refused the ConfigMap a no-config ProxyGroup renders: %v", err)
+	// The same gap on the field where landing in it would be a security
+	// failure rather than a crash loop. spec.config.onlineMode carries a CRD
+	// default of true, but a nil spec.config never reaches that default at
+	// all, so the only thing standing between "a user wrote no config block"
+	// and "the proxy authenticates nobody" is proxyConfigValues writing the
+	// key itself. render.Velocity refuses a nil rather than guessing, so a
+	// regression here is at least loud — but loud in a CrashLoopBackOff, which
+	// is exactly the failure the playerLimit half of this test already
+	// documents as invisible from the CR.
+	if values.OnlineMode == nil {
+		t.Fatal("onlineMode is nil: a ProxyGroup that sets no spec.config must still say whether its proxy authenticates players")
+	}
+	if !*values.OnlineMode {
+		t.Error("onlineMode = false for a ProxyGroup that never asked for it; the proxy authenticates nobody and anyone may connect under any name")
+	}
+
+	rendered, err := render.Velocity(values, "/etc/spawnery/forwarding.secret", nil)
+	if err != nil {
+		t.Fatalf("render.Velocity refused the ConfigMap a no-config ProxyGroup renders: %v", err)
+	}
+	if !strings.Contains(string(rendered["velocity.toml"]), "online-mode = true") {
+		t.Errorf("velocity.toml does not authenticate players:\n%s", rendered["velocity.toml"])
+	}
+}
+
+// The CRD default, exercised through a real API server rather than read off
+// the marker. spec.config exists but names only playerLimit, which is the
+// shape every sample and every pre-existing ProxyGroup has: the +kubebuilder
+// default is what has to put onlineMode: true in it, and a marker that was
+// dropped or written on the wrong field would leave this nil.
+func TestProxyGroupDefaultsOnlineModeOnAPartialConfig(t *testing.T) {
+	f := newFixture(t)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 500}
+	})
+
+	group := f.proxyGroup("gateway")
+	if group.Spec.Config.OnlineMode == nil {
+		t.Fatal("spec.config.onlineMode is nil after a round trip through the API server; the CRD default did not apply")
+	}
+	if !*group.Spec.Config.OnlineMode {
+		t.Error("spec.config.onlineMode defaulted to false; a ProxyGroup that never mentioned it must authenticate players")
+	}
+}
+
+// And the field is a switch, not decoration: what a user sets has to reach
+// velocity.toml. A ProxyGroup that asks for an offline-mode proxy and gets an
+// authenticating one is the failure that makes the milestone's automated join
+// proof impossible, because a Go client cannot authenticate against Microsoft.
+func TestProxyGroupCarriesOnlineModeFalseIntoTheRenderedProxy(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	off := false
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 500, OnlineMode: &off}
+	})
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	cm := f.proxyGroupConfigMap(t, "gateway")
+	var values render.Values
+	if err := yaml.Unmarshal([]byte(cm.Data[podspec.ConfigValuesKey]), &values); err != nil {
+		t.Fatalf("%s does not parse as render.Values: %v", podspec.ConfigValuesKey, err)
+	}
+	if values.OnlineMode == nil || *values.OnlineMode {
+		t.Fatalf("onlineMode = %v, want false: spec.config.onlineMode did not reach the ConfigMap", values.OnlineMode)
+	}
+
+	rendered, err := render.Velocity(values, "/etc/spawnery/forwarding.secret", nil)
+	if err != nil {
+		t.Fatalf("render.Velocity: %v", err)
+	}
+	if !strings.Contains(string(rendered["velocity.toml"]), "online-mode = false") {
+		t.Errorf("velocity.toml still authenticates players:\n%s", rendered["velocity.toml"])
 	}
 }
 

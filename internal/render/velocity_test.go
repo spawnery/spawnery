@@ -26,7 +26,8 @@ import (
 func velocityValues() Values {
 	n := int32(500)
 	m := "A Spawnery network"
-	return Values{PlayerLimit: &n, Motd: &m}
+	online := true
+	return Values{PlayerLimit: &n, Motd: &m, OnlineMode: &online}
 }
 
 const testSecretPath = "/etc/spawnery/forwarding.secret"
@@ -51,6 +52,77 @@ func TestVelocityKeepsOnlineModeOn(t *testing.T) {
 	toml := string(files["velocity.toml"])
 	if !strings.Contains(toml, "online-mode = true") {
 		t.Errorf("velocity.toml does not keep online-mode on:\n%s", toml)
+	}
+}
+
+// And the value actually travels, rather than the renderer reading
+// v.OnlineMode and writing true anyway. Without this the field would be a
+// setting that exists on the CRD, appears in config.yaml, and does nothing —
+// which is the failure mode the caller would only find by trying to join with
+// an unauthenticated client and being told to log in.
+func TestVelocityTurnsOnlineModeOffWhenTheValueSaysSo(t *testing.T) {
+	v := velocityValues()
+	off := false
+	v.OnlineMode = &off
+
+	files, err := Velocity(v, testSecretPath, nil)
+	if err != nil {
+		t.Fatalf("Velocity: %v", err)
+	}
+	toml := string(files["velocity.toml"])
+	if !strings.Contains(toml, "online-mode = false") {
+		t.Errorf("velocity.toml does not carry onlineMode: false through; the proxy still authenticates and no offline client can join:\n%s", toml)
+	}
+}
+
+// A config.yaml that says nothing about online-mode is refused rather than
+// guessed at, the way an absent playerLimit is. Both defaults would be wrong:
+// true silently overrides an operator who chose false, false silently opens
+// the network to anyone under any name.
+func TestVelocityRefusesAnUnsetOnlineMode(t *testing.T) {
+	v := velocityValues()
+	v.OnlineMode = nil
+
+	_, err := Velocity(v, testSecretPath, nil)
+	if err == nil {
+		t.Fatal("an unset onlineMode was accepted")
+	}
+	if !strings.Contains(err.Error(), "onlineMode") {
+		t.Errorf("error = %q, want it to name the key", err)
+	}
+}
+
+// The overlay still cannot reach online-mode, and the direction that matters
+// most is the one the four-key test above cannot cover: with the value set to
+// false, an overlay must not be able to turn authentication back on either.
+// online-mode moved from a literal to a value read out of Values, and a
+// renderer that set it in the base document instead of after the merge would
+// pass every other test in this file while handing a configOverlay control of
+// whether the network authenticates anyone.
+func TestVelocityOverlayCannotMoveOnlineModeInEitherDirection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		value        bool
+		overlaySays  string
+		wantRendered string
+	}{
+		{"an overlay cannot turn it off", true, "online-mode = false\n", "online-mode = true"},
+		{"an overlay cannot turn it on", false, "online-mode = true\n", "online-mode = false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := velocityValues()
+			value := tc.value
+			v.OnlineMode = &value
+
+			files, err := Velocity(v, testSecretPath, map[string]string{"velocity.toml": tc.overlaySays})
+			if err != nil {
+				t.Fatalf("Velocity: %v", err)
+			}
+			rendered := string(files["velocity.toml"])
+			if !strings.Contains(rendered, tc.wantRendered) {
+				t.Errorf("velocity.toml does not contain %q; the overlay moved online-mode:\n%s", tc.wantRendered, rendered)
+			}
+		})
 	}
 }
 
@@ -242,9 +314,10 @@ func TestVelocityRefusesAnOverlayForAFileItDoesNotWrite(t *testing.T) {
 // asserting anything about which quote character was used, this parses the
 // rendered file back with the same library and checks the motd survives.
 func TestVelocityEscapesAMotdThatCannotBeALiteralString(t *testing.T) {
-	n := int32(500)
+	v := velocityValues()
 	m := "A 'Spawnery' network\\with a backslash\nand a newline"
-	files, err := Velocity(Values{PlayerLimit: &n, Motd: &m}, testSecretPath, nil)
+	v.Motd = &m
+	files, err := Velocity(v, testSecretPath, nil)
 	if err != nil {
 		t.Fatalf("Velocity: %v", err)
 	}

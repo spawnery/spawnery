@@ -573,7 +573,12 @@ STUB3_PID=""
 # number here too rather than two that happen to agree.
 PROXY_LIMIT=100
 mkdir -p "$WORK/velocity-config"
-printf 'playerLimit: %s\n' "$PROXY_LIMIT" >"$WORK/velocity-config/config.yaml"
+#
+# onlineMode is written explicitly because render.Velocity refuses to guess it.
+# true here: no phase of this script joins the proxy as a player, so an
+# authenticating proxy costs nothing. The phase that does join needs it off,
+# because a Go client cannot authenticate against Microsoft.
+printf 'playerLimit: %s\nonlineMode: true\n' "$PROXY_LIMIT" >"$WORK/velocity-config/config.yaml"
 printf 'test-forwarding-secret\n' >"$WORK/velocity-config/forwarding.secret"
 chmod 0755 "$WORK/velocity-config"
 chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding.secret"
