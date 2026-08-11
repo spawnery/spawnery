@@ -13,12 +13,31 @@ DEADLINE="${DEADLINE:-180}"
 
 NAME="spawnery-image-test-$$"
 VOLUME="spawnery-image-test-$$"
+CONFDIR="$(mktemp -d)"
 
 cleanup() {
 	"$CONTAINER" rm -f "$NAME" >/dev/null 2>&1 || true
 	"$CONTAINER" volume rm -f "$VOLUME" >/dev/null 2>&1 || true
+	rm -rf "$CONFDIR"
 }
 trap cleanup EXIT
+
+# The renderer refuses to start without both files - a server that came up
+# with online-mode=false and no forwarding secret would trust anyone claiming
+# to be a proxy. Built on the host and mounted read-only, so the container
+# never needs to write to /etc/spawnery at all. See
+# hack/velocity-image-test.sh, which builds the identical fixture shape for
+# the same reason.
+#
+# mktemp -d makes the directory 0700, readable only by the host user; the
+# container reads it as uid 10001, a different identity with no --user
+# override to bridge the two. World-readable permissions are what make the
+# bind mount legible from inside, the same way a projected ConfigMap volume
+# would be in the cluster.
+printf 'maxPlayers: 100\n' >"$CONFDIR/config.yaml"
+printf 'test-forwarding-secret\n' >"$CONFDIR/forwarding.secret"
+chmod 755 "$CONFDIR"
+chmod 644 "$CONFDIR/config.yaml" "$CONFDIR/forwarding.secret"
 
 # A named volume rather than a host directory: the container writes as uid
 # 10001, and cleaning those files up from the host afterwards is a fight that
@@ -43,7 +62,7 @@ trap cleanup EXIT
 	--security-opt no-new-privileges \
 	--memory 2g \
 	-v "$VOLUME:/data" \
-	-e SPAWNERY_MAX_PLAYERS=100 \
+	-v "$CONFDIR:/etc/spawnery:ro" \
 	"$IMAGE" >/dev/null
 
 identity="$("$CONTAINER" exec "$NAME" id -u)"

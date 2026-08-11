@@ -6,11 +6,11 @@
 { bash
 , buildEnv
 , coreutils
-, gnugrep
 , jdk25_headless
 , runCommand
 , paper
 , spawnery-slp
+, spawnery-config
 , paper-agent
 , imageVersion
 , oci-common
@@ -47,9 +47,10 @@ oci-common.layeredImage {
   contents = [
     (buildEnv {
       name = "paper-tools";
-      # grep and mv come from coreutils and gnugrep because the entrypoint uses
-      # them; bash because the entrypoint's shebang points at it.
-      paths = [ bash coreutils gnugrep jdk25_headless ];
+      # coreutils for the mkdir/cp the entrypoint uses to place the agent
+      # jar; bash because the entrypoint's shebang points at it. grep is
+      # gone with set_property, the only thing that ever used it.
+      paths = [ bash coreutils jdk25_headless ];
       pathsToLink = [ "/bin" ];
     })
     oci-common.passwd
@@ -57,6 +58,7 @@ oci-common.layeredImage {
     paperHome
     agent
     (oci-common.binIn { package = spawnery-slp; name = "spawnery-slp"; })
+    (oci-common.binIn { package = spawnery-config; name = "spawnery-config"; })
     (oci-common.entrypointFrom ../image/entrypoint.sh)
   ];
 

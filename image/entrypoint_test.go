@@ -20,6 +20,7 @@ limitations under the License.
 package image
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,28 +30,46 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// stubJava puts a fake java on PATH that prints its arguments instead of
-// starting a JVM. The entrypoint ends in exec, so whatever it prints is the
-// command line the image would really run.
-func stubJava(t *testing.T) string {
+// stubTools puts fake java and spawnery-config binaries on PATH, in place of
+// the real ones. The entrypoint invokes both unqualified rather than by a
+// hardcoded path — spawnery-config the same way it already invoked java —
+// specifically so a double can stand in for either one here without writing
+// anything outside the test's own temp directory. What Paper and Velocity
+// actually read once spawnery-config runs for real is proven in
+// internal/render and cmd/spawnery-config, not here; this package only owns
+// the shell that wires the two real programs together.
+//
+// configExit is the exit code the spawnery-config stub returns, so the
+// caller can simulate the renderer refusing without needing a real,
+// unmounted /etc/spawnery to make it refuse on its own.
+func stubTools(t *testing.T, configExit int) string {
 	t.Helper()
 	dir := t.TempDir()
-	script := "#!/bin/sh\nprintf 'JAVA_ARGV: %s\\n' \"$*\"\n"
-	if err := os.WriteFile(filepath.Join(dir, "java"), []byte(script), 0o755); err != nil {
-		t.Fatalf("write stub java: %v", err)
+
+	javaScript := "#!/bin/sh\nprintf 'JAVA_ARGV: %s\\n' \"$*\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "java"), []byte(javaScript), 0o755); err != nil {
+		t.Fatalf("write java stub: %v", err)
 	}
+
+	configScript := fmt.Sprintf("#!/bin/sh\nprintf 'SPAWNERY_CONFIG_ARGV: %%s\\n' \"$*\"\nexit %d\n", configExit)
+	if err := os.WriteFile(filepath.Join(dir, "spawnery-config"), []byte(configScript), 0o755); err != nil {
+		t.Fatalf("write spawnery-config stub: %v", err)
+	}
+
 	return dir
 }
 
 // runEntrypoint runs the script in workDir and returns its combined output.
-func runEntrypoint(t *testing.T, workDir string, env ...string) (string, error) {
+// configExit controls whether the spawnery-config stub succeeds (0, what
+// every test wants except the refusal one) or fails.
+func runEntrypoint(t *testing.T, workDir string, configExit int, env ...string) (string, error) {
 	t.Helper()
 	script := testenv.RepoPath(t, "image/entrypoint.sh")
 
 	cmd := exec.Command("sh", script)
 	cmd.Dir = workDir
 	cmd.Env = append([]string{
-		"PATH=" + stubJava(t) + ":" + os.Getenv("PATH"),
+		"PATH=" + stubTools(t, configExit) + ":" + os.Getenv("PATH"),
 		"PAPER_HOME=/opt/paper",
 	}, env...)
 
@@ -61,7 +80,7 @@ func runEntrypoint(t *testing.T, workDir string, env ...string) (string, error) 
 func TestEntrypointAcceptsTheEula(t *testing.T) {
 	dir := t.TempDir()
 
-	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100"); err != nil {
+	if _, err := runEntrypoint(t, dir, 0); err != nil {
 		t.Fatalf("entrypoint: %v", err)
 	}
 
@@ -74,63 +93,28 @@ func TestEntrypointAcceptsTheEula(t *testing.T) {
 	}
 }
 
-func TestEntrypointEnforcesTheOperationalFieldsAndKeepsTheRest(t *testing.T) {
+func TestEntrypointInvokesSpawneryConfigWithThePaperFlavor(t *testing.T) {
 	dir := t.TempDir()
 
-	// What a user mount might have put there: two settings of their own, and
-	// two the operator has to be able to rely on, set wrongly.
-	existing := "motd=Hello\nview-distance=6\nmax-players=20\nenable-status=false\n"
-	if err := os.WriteFile(filepath.Join(dir, "server.properties"), []byte(existing), 0o644); err != nil {
-		t.Fatalf("write server.properties: %v", err)
-	}
-
-	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100"); err != nil {
+	// The one thing this script alone is responsible for getting right about
+	// spawnery-config: passing --flavor paper rather than, say, copying
+	// --flavor velocity from image/velocity-entrypoint.sh by accident. What
+	// spawnery-config does with that flag — the files it writes, the layering
+	// of ConfigMap, overlay and critical fields — is internal/render's and
+	// cmd/spawnery-config's own coverage, not this package's.
+	out, err := runEntrypoint(t, dir, 0)
+	if err != nil {
 		t.Fatalf("entrypoint: %v", err)
 	}
-
-	raw, err := os.ReadFile(filepath.Join(dir, "server.properties"))
-	if err != nil {
-		t.Fatalf("read server.properties: %v", err)
-	}
-	props := parseProperties(string(raw))
-
-	enforced := map[string]string{
-		"server-port":   "25565",
-		"max-players":   "100",
-		"enable-status": "true",
-	}
-	for key, want := range enforced {
-		if got := props[key]; got != want {
-			t.Errorf("%s is %q, want %q — the operator relies on this one", key, got, want)
-		}
-	}
-
-	kept := map[string]string{"motd": "Hello", "view-distance": "6"}
-	for key, want := range kept {
-		if got := props[key]; got != want {
-			t.Errorf("%s is %q, want %q — user settings must survive", key, got, want)
-		}
-	}
-
-	// No key may appear twice; Paper would take the last one and the file
-	// would drift further apart on every restart.
-	seen := map[string]int{}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if key, _, ok := strings.Cut(line, "="); ok {
-			seen[key]++
-		}
-	}
-	for key, count := range seen {
-		if count > 1 {
-			t.Errorf("%s appears %d times, want once", key, count)
-		}
+	if !strings.Contains(out, "SPAWNERY_CONFIG_ARGV: --flavor paper") {
+		t.Errorf("spawnery-config was not invoked with --flavor paper; got: %s", out)
 	}
 }
 
 func TestEntrypointExecsJavaWithTheBundlerRepo(t *testing.T) {
 	dir := t.TempDir()
 
-	out, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100")
+	out, err := runEntrypoint(t, dir, 0)
 	if err != nil {
 		t.Fatalf("entrypoint: %v", err)
 	}
@@ -148,26 +132,44 @@ func TestEntrypointExecsJavaWithTheBundlerRepo(t *testing.T) {
 	}
 }
 
-func TestEntrypointRefusesAnUnusableMaxPlayers(t *testing.T) {
-	tests := []struct {
-		name string
-		env  []string
-	}{
-		{name: "unset", env: nil},
-		{name: "not a number", env: []string{"SPAWNERY_MAX_PLAYERS=lots"}},
-		{name: "empty", env: []string{"SPAWNERY_MAX_PLAYERS="}},
+func TestEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
+	dir := t.TempDir()
+
+	// PAPER_HOME points at a real jar, so a script that pressed on regardless
+	// of spawnery-config's exit code would still manage to copy the plugin
+	// and start java — the two assertions below are what tell that apart from
+	// a script that actually stopped.
+	paperHome := filepath.Join(dir, "opt", "paper")
+	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paperHome, "agent", "spawnery-agent.jar"), []byte("fresh"), 0o444); err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			out, err := runEntrypoint(t, t.TempDir(), tt.env...)
-			if err == nil {
-				t.Fatalf("entrypoint succeeded, want a failure; output: %s", out)
-			}
-			if strings.Contains(out, "JAVA_ARGV:") {
-				t.Errorf("java was started anyway; output: %s", out)
-			}
-		})
+	out, err := runEntrypoint(t, dir, 1, "PAPER_HOME="+paperHome)
+	if err == nil {
+		t.Fatalf("entrypoint succeeded, want a failure; output: %s", out)
+	}
+
+	// It was actually reached and actually refused, not skipped by some
+	// unrelated shell error earlier in the script.
+	if !strings.Contains(out, "SPAWNERY_CONFIG_ARGV: --flavor paper") {
+		t.Errorf("spawnery-config was never invoked; output: %s", out)
+	}
+	if strings.Contains(out, "JAVA_ARGV:") {
+		t.Errorf("java was started anyway; output: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plugins", "spawnery-agent.jar")); err == nil {
+		t.Error("the agent plugin was copied anyway, after the renderer refused")
+	}
+
+	// The EULA write comes before spawnery-config on purpose: accepting
+	// Mojang's EULA is not conditional on the renderer's opinion of the
+	// operator's configuration, and a refusal here must not silently undo it
+	// on a restart that later succeeds.
+	if _, err := os.ReadFile(filepath.Join(dir, "eula.txt")); err != nil {
+		t.Errorf("eula.txt was not written before the refusal: %v", err)
 	}
 }
 
@@ -195,7 +197,7 @@ func TestCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100", "PAPER_HOME="+paperHome); err != nil {
+	if _, err := runEntrypoint(t, dir, 0, "PAPER_HOME="+paperHome); err != nil {
 		t.Fatalf("entrypoint: %v", err)
 	}
 
@@ -224,7 +226,7 @@ func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *t
 		t.Fatal(err)
 	}
 
-	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100", "PAPER_HOME="+paperHome); err != nil {
+	if _, err := runEntrypoint(t, dir, 0, "PAPER_HOME="+paperHome); err != nil {
 		t.Fatalf("first entrypoint run: %v", err)
 	}
 
@@ -247,7 +249,7 @@ func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *t
 		t.Fatal(err)
 	}
 
-	if _, err := runEntrypoint(t, dir, "SPAWNERY_MAX_PLAYERS=100", "PAPER_HOME="+paperHome); err != nil {
+	if _, err := runEntrypoint(t, dir, 0, "PAPER_HOME="+paperHome); err != nil {
 		t.Fatalf("second entrypoint run: %v", err)
 	}
 
@@ -258,14 +260,4 @@ func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *t
 	if string(got) != "v2" {
 		t.Errorf("plugins/spawnery-agent.jar = %q after the second run, want %q — cp -f alone must replace a read-only leftover, with no chmod in between", got, "v2")
 	}
-}
-
-func parseProperties(raw string) map[string]string {
-	props := map[string]string{}
-	for _, line := range strings.Split(raw, "\n") {
-		if key, value, ok := strings.Cut(line, "="); ok {
-			props[key] = value
-		}
-	}
-	return props
 }

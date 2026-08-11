@@ -178,7 +178,7 @@
           # mislabelled image. `nix flake show` and `nix develop` stay
           # unaffected elsewhere.
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
-            inherit paper spawnery-slp paper-agent imageVersion oci-common;
+            inherit paper spawnery-slp spawnery-config paper-agent imageVersion oci-common;
           };
 
           # No spawnery-slp and no agent: a proxy's readiness is the agent's
