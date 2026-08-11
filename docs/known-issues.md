@@ -590,6 +590,23 @@ reads the file back out of the running container
 carry forward: a green render test proves what was written, never what was
 read.
 
+**And the same two for Velocity**, which the whole-branch review found had
+been missed: the lesson had been applied only to the flavour it was learned
+on. `TestVelocityWritesTheKeysVelocityItselfReads` checks the renderer's key
+names against `internal/render/testdata/velocity.default.toml`, extracted from
+the pinned jar's own `default-velocity.toml`, and `hack/velocity-image-test.sh`
+now asks the running proxy for a server list ping and reads `show-max-players`
+and the motd back out of the answer. That script's readback of
+`/data/velocity.toml` had been asserting over the renderer's own bytes:
+Velocity never rewrites that file (`.autosave()`, and no migration fires at
+`config-version = "2.8"`), which the script's own comment claimed the opposite
+of. Its `playerLimit` fixture moved off 500 in the same change, because 500 is
+both Velocity's default and `podspec.DefaultPlayerLimit`, so a misspelled
+`show-max-players` is invisible against it. The one key still not read back
+from Velocity is `forwarding-secret-file`, which nothing but a forwarded join
+exercises; it is checked instead by the absence of the `/data/forwarding.secret`
+Velocity generates when it cannot find the configured one.
+
 **`online-mode` moved to the CRD.** `ProxyGroup.spec.config.onlineMode`,
 defaulting `true`. It could not be set by a `configOverlay` because
 `render.Velocity` reasserts the keys it owns after the merge, and the ruling
@@ -647,16 +664,18 @@ right secret — and nothing restricts who may attempt it. Milestone 6 owns
 NetworkPolicies as a group. This entry is the one most likely to be read as a
 formality; it is not.
 
-**Smaller ones**, each worth a sentence: `hack/agent-test.sh` phase 1 carries
-an empty-token comparison that would pass vacuously if the token file were
-ever empty; phase 5 reuses phase 2's window constants declared 400 lines
+**Smaller ones**, each worth a sentence: phase 5 of `hack/agent-test.sh`
+reuses phase 2's window constants declared 400 lines
 earlier, both derived from a hard-coded renewal interval; `streams_opened`
 counts what the operator saw, so a proxy leaking a gRPC channel per reconnect
 is still measured nowhere — the standing blind spot inherited from milestone
 2c; `ServerDirectory`'s stale-removal path (`unregisterTracked`) logs nothing
-at the point of removal, unlike every other mutation in the same class; and
-`Router.choose` falls through to the next group when exclusion empties the
-first, which no test exercises. Separately: `cmd/spawnery-join` asks a
+at the point of removal, unlike every other mutation in the same class. Two
+entries that stood here are closed: phase 1's empty-token comparison now
+carries the same guard phase 4 does, and `Router.choose`'s fall-through when
+the exclusion empties the first group is covered both by a unit test and by
+the second fallback group `docs/runbook-milestone-3-evidence.md` §8a drains
+into. Separately: `cmd/spawnery-join` asks a
 server for its protocol version by announcing an unsupported one
 (`announceUnsupported = -1`) and trusts that the proxy's newest supported
 version and the backend's actual version agree — true of every pinned pair
