@@ -105,8 +105,8 @@ so `Server.status.players` reads zero for a connection the proxy is still
 holding, and the drain's own exit condition
 (`internal/phase/phase.go:224`, `if !in.Occupied()`) reads that zero and
 deletes the pod. Full diagnosis, the measured Kubernetes events, and why
-thirteen prior reviews missed it are in `docs/known-issues.md`, "From the
-milestone 3c evidence run (2026-08-12)". Two things follow from it, kept
+prior reviews missed it are in `docs/known-issues.md`, "From the milestone 3c
+evidence run (2026-08-12)". Two things follow from it, kept
 separate there: criterion 9 can only be proven manually until
 `cmd/spawnery-join` plays the configuration phase through, and a narrower
 product finding — a player connected at the proxy but not yet counted by the

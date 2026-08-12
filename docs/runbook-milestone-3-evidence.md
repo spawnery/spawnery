@@ -795,7 +795,8 @@ proved its session to Mojang and the proxy verified it — so seeing it in
 Paper's log is what shows the proxy actually authenticated the player, rather
 than merely trusting whatever name arrived.
 
-**Criterion 9, folded into this same session, on this same real player.**
+### Criterion 9, folded into this same session, on this same real player
+
 This is the part the automated run could not do at all — see
 `docs/known-issues.md`'s "From the milestone 3c evidence run (2026-08-12)"
 section for the full diagnosis of why `spawnery-join --hold` cannot stand in
