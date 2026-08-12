@@ -757,15 +757,17 @@ under a player the proxy was still counting.
    this is the milestone to decide whether `Occupied()` should ever
    incorporate what the proxy side reports.
 
-**Thirteen reviews of this branch did not catch this**, and it is worth
-saying plainly why not, rather than filing it away as bad luck. The
-whole-branch review correctly predicted that a held connection would be
-*counted* — on the proxy side, in `status.connectedPlayers`, which is exactly
-right and is what §6 of the runbook now proves. Nobody in those thirteen
-reviews asked the complementary question: which side does the *drain's own*
-exit condition read? The two counts live in different structs, are populated
-by different agents, and were never checked against each other until an
+**None of this branch's many reviews caught this**, and it is worth saying
+plainly why not, rather than filing it away as bad luck. The whole-branch
+review correctly predicted that a held connection would be *counted* — on
+the proxy side, in `status.connectedPlayers`, which is exactly right and is
+what §6 of the runbook now proves. Nobody in any of those reviews asked the
+complementary question: which side does the *drain's own* exit condition
+read? The two counts live in different structs, are populated by different
+agents, and were never checked against each other until an
 actual `kubectl delete` on an actual held connection forced the question.
+
+## Preconditions for milestone 4 (scaling and drain)
 
 **The PodDisruptionBudget has no counterpart.** Milestone 1 delivers the
 protection of occupied pods, but not the detection of nodes that have become

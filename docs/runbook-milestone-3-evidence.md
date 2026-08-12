@@ -536,6 +536,14 @@ far side shows the join whether or not the operator's own counter agrees.
 
 ## 7. The manual proof
 
+**This section proves criterion 8 only, and stopping here leaves criterion 9
+unclosed.** §8's automated drain proof cannot succeed as this runbook stands
+— see §8's own warning and `docs/known-issues.md` — so the real client
+logged in here is also the only way left to prove criterion 9: continue to
+§10, which folds a manual drain retry into the same real-account session
+this section starts. Do not treat a completed §7 as this runbook's manual
+proof in full; read §10 before disconnecting the client.
+
 Design §10 criterion 8: one join with a real Microsoft account against
 `online-mode: true`, which needs a client that can answer an encryption
 request — `spawnery-join` explicitly cannot (`mcjoin.Join` returns an error
@@ -568,14 +576,37 @@ whoever reviews this), the timestamps, and the log lines in
 Design §10 criterion 9: deleting a `Server` with a player on it moves that
 player to a fallback rather than disconnecting them.
 
+**§8a and §8b cannot be completed with `spawnery-join` as it stands — do not
+expect the outcome described below from a real run of this section today.**
+Measured on 2026-08-12: deleting a `Server` under a `spawnery-join --hold`
+connection disconnects the player instead of moving them. The cause is not
+the drain logic these sections mean to exercise; it is that `--hold` stops
+one packet after `Login Acknowledged`, before Paper ever counts the
+connection as an online player, so `Server.status.players` reads zero for a
+session the proxy is still holding open, and the drain's own exit condition —
+`internal/phase/phase.go:224`, `if !in.Occupied()` — reads that zero and
+deletes the pod under the player. Full diagnosis in `docs/known-issues.md`,
+"From the milestone 3c evidence run (2026-08-12)". Closing criterion 9 today
+means running §10's manual retry with a real client instead, which plays the
+configuration phase through and so is actually counted.
+
+The two sections below are kept rather than removed, because they describe
+what a real client's drain looks like and become literally correct the
+moment `spawnery-join` is extended to play the configuration phase through —
+already scoped as two packet-id constants and one `case` in `holdOpen`
+(`docs/known-issues.md`, same entry). Until then, treat every "Expect" below
+as the target behaviour this milestone owes, not as what this run will
+actually show.
+
 There are two ways the move can land, and this section proves both, in this
-order. `agent/velocity/.../Router.choose` excludes the server being drained
-from its own candidate list, so with `lobby` still at one replica the
-exclusion empties the first group entirely and the try list has to fall
-through to `hub`. Scaling `lobby` up afterwards gives the second shape, where
-the first group still holds a candidate and `hub` is never consulted. Only the
-first is new to this milestone's coverage, and it is the one a single-group
-`fallbackGroups` could not have shown at all.
+order, once the tool above is extended. `agent/velocity/.../Router.choose`
+excludes the server being drained from its own candidate list, so with
+`lobby` still at one replica the exclusion empties the first group entirely
+and the try list has to fall through to `hub`. Scaling `lobby` up afterwards
+gives the second shape, where the first group still holds a candidate and
+`hub` is never consulted. Only the first is new to this milestone's coverage,
+and it is the one a single-group `fallbackGroups` could not have shown at
+all.
 
 ### 8a. The move that falls through to the second group
 
@@ -679,15 +710,28 @@ in `docs/known-issues.md`'s "From the milestone 3c evidence run (2026-08-12)"
 section. Criterion 8 — a real Microsoft account joining against
 `online-mode: true` — was not attempted that day: it needs a licensed
 Minecraft Java client and a person to drive it, neither of which was
-available in that session. This section is written for whoever does have
-both, in a session with no memory of the one that wrote it. Start by reading
-`docs/known-issues.md`'s criterion-9 entry before running anything below —
-it explains why the automated proof cannot cover this section's second half.
+available in that session. Start by reading `docs/known-issues.md`'s
+criterion-9 entry before running anything below — it explains why the
+automated proof cannot cover this section's second half.
+
+**Two ways to arrive here.** If you just finished §7 in this same session,
+the cluster is already up, the real client is already logged in, and
+`config.onlineMode` is already `true` on `gateway-manual` — skip straight to
+"Criterion 9, folded into this same session, on this same real player" below
+and use the connection you already have; nothing before that heading applies
+to you. Everything above that heading is written instead for a later
+session, quite possibly a different machine, run by someone with no memory
+of the one that wrote it — that is the harder case, and it is the one the
+rest of this section is ordered for.
 
 **The cluster from the automated run is gone.** `spawnery-evidence` was torn
 down by §9's cleanup at the end of that session; nothing here can reuse its
-state, its images, or its NodePort mapping. Start over from §1: build and
-load both images, create a fresh `kind` cluster with §2's `extraPortMappings`
+state, its images, or its NodePort mapping. Start over from §0: the shell
+environment §0 sets up — `CONTAINER=podman`, `TMPDIR`, and the D-Bus
+variables `systemd-run --scope --user` needs — is a fresh machine's first two
+defects waiting to happen, not a formality to skip because it looks like
+prose rather than a command. Then build and load both images, create a fresh
+`kind` cluster with §2's `extraPortMappings`
 (30565 and 30566 published to the cluster host's loopback), load both images
 per the corrected §3, run the operator and its relay per §4, and apply the
 network manifests — with the `ProxyGroup` resource requests §5 now

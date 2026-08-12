@@ -1,6 +1,8 @@
 # Handover to milestone 4
 
-Status: end of milestone 3c, the Velocity agent (2026-08-11).
+Status: end of milestone 3c, the Velocity agent (2026-08-11). Updated
+2026-08-12 with what the evidence run below actually measured against a real
+cluster; nothing before that section changed.
 
 This document is not a spec. It says where 3c stopped and what milestone 4 —
 scaling and drain — already finds in place. The design decisions live in
