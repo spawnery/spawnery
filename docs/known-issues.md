@@ -688,7 +688,84 @@ whose pod never turns `Ready` because "milestone 3c's Velocity agent" does not
 exist — false as of this milestone; nobody has updated the sample's comment
 to match.
 
-## Preconditions for milestone 4 (scaling and drain)
+## From the milestone 3c evidence run (2026-08-12)
+
+`docs/runbook-milestone-3-evidence.md` was finally run against a real `kind`
+cluster. Criterion 7 (a player can join, automated) is now proven — see
+`docs/handover-milestone-4.md`. Criterion 9 (deleting a `Server` moves its
+player rather than disconnecting them) is not, and the reason why is the most
+important finding of this run.
+
+**Deleting a `Server` with a `spawnery-join --hold` player on it disconnected
+the player instead of moving them.** The diagnosis is measured end to end,
+and the defect sits in the evidence tool's fit for this criterion, not in the
+drain logic itself:
+
+- `--hold` stops the join one packet after `Login Acknowledged`, in the
+  configuration state — `internal/mcjoin`'s own package comment documents
+  this as deliberate, because that is as far as Velocity itself needs before
+  it dials a backend.
+- Paper's `getOnlinePlayers()` never contains such a client, because it never
+  finishes the configuration phase Paper is waiting for. So the Paper agent
+  reports zero players, and `Server.status.players` reads zero for a
+  connection the proxy is actively holding open.
+- The drain's own exit condition is `internal/phase/phase.go:224`, inside the
+  `Draining` case: `if !in.Occupied() { ... Reason: ReasonDrained, Message:
+  "no players left" ... }`. `Occupied()` (`internal/phase/phase.go:146`) is
+  `in.PlayersStale || in.PlayersOnline > 0` — and with a stale-held client
+  Paper never counted, `PlayersOnline` is exactly zero.
+- Measured directly, in one `kubectl get` against the running cluster:
+  `proxygroup/gateway-auto` showed `PLAYERS 1` in the same instant
+  `server/lobby-bsvg` showed `PLAYERS 0`. Same player, same second, two
+  different counts, and the drain reads the one that says nobody is there.
+- The Kubernetes events, all in the same second, show the operator acting on
+  the wrong count rather than hanging or erroring:
+
+  ```
+  DeletionRequested  server/lobby-5wv2  phase Ready -> Draining: deletion requested, moving players off
+  Killing            pod/lobby-5wv2     Stopping container minecraft
+  PodDeleted         server/lobby-5wv2  deleted pod lobby-5wv2: no players left
+  Drained            server/lobby-5wv2  phase Draining -> Terminating: no players left
+  ```
+
+- Velocity then reported `disconnected while connecting to lobby-5wv2: An
+  internal server connection error occurred.` — the player lost the
+  connection Velocity itself was still holding, because the pod it was about
+  to be moved off was already gone.
+
+So: the operator concluded the server was empty and deleted the pod out from
+under a player the proxy was still counting.
+
+**This is two separable findings, and they should stay separate:**
+
+1. **Criterion 9 is not provable with `spawnery-join` as it stands.** Closing
+   this needs the client to play the configuration phase through to the point
+   Paper starts counting it — the whole-branch review already on file
+   established that this is two packet-id constants and one `case` in
+   `holdOpen`, not a rewrite of the tool. Until that lands, criterion 9 can
+   only be proven manually, with a real client — see
+   `docs/runbook-milestone-3-evidence.md` §10 for that session — or not at
+   all.
+2. **A narrower product finding, and this half belongs to milestone 4, not
+   to the evidence tool.** A player who is connected at the proxy but not yet
+   counted by the backend sits outside the drain's protection: `Occupied()`
+   only sees what the backend has reported, and the proxy's own count is not
+   consulted at all. In production this window is real but small — a real
+   client completes the configuration phase within the same round trip, well
+   under the second `--hold` freezes it at deliberately to make the gap
+   visible. Small is not the same as absent, and milestone 4 owns drain, so
+   this is the milestone to decide whether `Occupied()` should ever
+   incorporate what the proxy side reports.
+
+**Thirteen reviews of this branch did not catch this**, and it is worth
+saying plainly why not, rather than filing it away as bad luck. The
+whole-branch review correctly predicted that a held connection would be
+*counted* — on the proxy side, in `status.connectedPlayers`, which is exactly
+right and is what §6 of the runbook now proves. Nobody in those thirteen
+reviews asked the complementary question: which side does the *drain's own*
+exit condition read? The two counts live in different structs, are populated
+by different agents, and were never checked against each other until an
+actual `kubectl delete` on an actual held connection forced the question.
 
 **The PodDisruptionBudget has no counterpart.** Milestone 1 delivers the
 protection of occupied pods, but not the detection of nodes that have become

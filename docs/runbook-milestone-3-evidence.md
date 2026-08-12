@@ -2,7 +2,10 @@
 
 Status: written at the end of milestone 3c (2026-08-11), for a `x86_64-linux`
 machine with rootless Podman, the same shape `README.md`'s local-cluster
-section documents.
+section documents. Corrected 2026-08-12 after the first real run against a
+`kind` cluster: six defects in the procedure below stopped that run at
+various points and are fixed in place rather than noted as a fork, and §10 is
+new, added for the manual proof this run could not attempt.
 
 Design §10 states milestone 3's acceptance in two sentences: a player can
 join, automated, and a player can join, manually, with a real Microsoft
@@ -67,18 +70,54 @@ not**, established only by tasks 10 and 10b, late in this milestone:
 - `x86_64-linux`. The image targets do not build on Darwin (`docs/known-issues.md`,
   "From milestone 2b").
 - Rootless Podman, with `docker` aliased to it or `CONTAINER=podman` passed
-  explicitly below.
+  explicitly below. On a machine with no `docker` binary at all — measured on
+  2026-08-12 — `CONTAINER=podman` is not optional: the Makefile defaults to
+  `docker`, and every target below has to carry the override.
+- `TMPDIR` pointed at a real filesystem, not the default `/tmp`. Where `/tmp`
+  is a tmpfs, Podman's OCI-archive extraction runs out of room silently
+  enough to look like a hang. `mkdir -p "$HOME/.cache/spawnery-tmp"` once,
+  and pass `env TMPDIR="$HOME/.cache/spawnery-tmp"` on every command below
+  that builds or loads an image.
+- A shell with `XDG_RUNTIME_DIR` and `DBUS_SESSION_BUS_ADDRESS` set — true of
+  an interactive login shell, not true of every other shell a terminal
+  multiplexer or a remote session hands you. Every `systemd-run --scope
+  --user` command below needs both; without them it fails with `Failed to
+  connect to user scope bus via local transport: $DBUS_SESSION_BUS_ADDRESS
+  and $XDG_RUNTIME_DIR not defined`. Fix it once, before the first
+  `systemd-run` command in §2:
+
+  ```bash
+  export XDG_RUNTIME_DIR=/run/user/$(id -u)
+  export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus
+  ```
+
+  This does not change Podman's own storage — measured, the runroot and
+  graphroot are identical whether the export ran first or not, so an image
+  loaded before the export stays visible to a `systemd-run` command that
+  comes after it.
 - A clone of this repository, `nix develop` available.
-- For the manual proof (§4): a second machine or a real Minecraft client
+- The images carry no `grep` or `awk`. Any `kubectl exec` that inspects a
+  file inside a pod has to `cat` it and filter on the host instead.
+- For the manual proof (§7): a second machine or a real Minecraft client
   capable of a Microsoft login, and a NodePort this runbook's cluster
-  publishes to somewhere that client can reach — see §4 for the local case.
+  publishes to somewhere that client can reach — see "The manual proof, for a
+  later session" at the end of this document for the case where that machine
+  is not this one.
 
 ## 1. Build and load both images
 
+The Makefile's `CONTAINER` defaults to `docker`; where there is no `docker`
+binary at all, it has to be overridden rather than relied on to fall back.
+`TMPDIR` matters for the same reason it is in the prerequisites: Podman
+extracts the OCI archive there, and the default `/tmp` on this machine is a
+tmpfs too small for it.
+
 ```bash
 cd /path/to/spawnery
-nix develop -c make image-load          # builds .#paper-image, podman load
-nix develop -c make velocity-image-load # builds .#velocity-image, podman load
+nix develop -c env TMPDIR="$HOME/.cache/spawnery-tmp" \
+  make image-load CONTAINER=podman          # builds .#paper-image, podman load
+nix develop -c env TMPDIR="$HOME/.cache/spawnery-tmp" \
+  make velocity-image-load CONTAINER=podman # builds .#velocity-image, podman load
 ```
 
 Expect two image loads to report their tags:
@@ -114,6 +153,8 @@ nodes:
         hostPort: 30566
 EOF
 
+# Needs XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS set — see §0 — or this
+# fails with "Failed to connect to user scope bus via local transport".
 systemd-run --scope --user --property=Delegate=yes \
   env KIND_EXPERIMENTAL_PROVIDER=podman \
   nix develop -c kind create cluster --name spawnery-evidence \
@@ -122,18 +163,41 @@ systemd-run --scope --user --property=Delegate=yes \
 
 ## 3. Load the images into the cluster and apply the CRDs
 
+**`kind load docker-image` does not work under Podman, no matter what
+`KIND_EXPERIMENTAL_PROVIDER` says.** It shells out to the `docker` binary
+unconditionally, so on a machine with no `docker` at all it fails with
+`ERROR: image: "ghcr.io/spawnery/paper:26.2-0.2.0" not present locally` —
+even though `podman image inspect` on the exact same name returns an ID at
+that moment. This is the single most misleading failure in this runbook,
+because the error blames the image rather than the tool. The supported path
+under Podman is `kind load image-archive`, and `nix build` already produces
+an archive shaped for it — no separate export step needed:
+
 ```bash
-systemd-run --scope --user --property=Delegate=yes \
-  env KIND_EXPERIMENTAL_PROVIDER=podman \
-  nix develop -c kind load docker-image ghcr.io/spawnery/paper:26.2-0.2.0 \
-  --name spawnery-evidence
-systemd-run --scope --user --property=Delegate=yes \
-  env KIND_EXPERIMENTAL_PROVIDER=podman \
-  nix develop -c kind load docker-image ghcr.io/spawnery/velocity:3.5.1-0.2.0 \
-  --name spawnery-evidence
+nix build .#paper-image --out-link "$HOME/.cache/spawnery-tmp/paper-img"
+nix build .#velocity-image --out-link "$HOME/.cache/spawnery-tmp/velocity-img"
+
+systemd-run --scope --user --property=Delegate=yes --quiet \
+  env KIND_EXPERIMENTAL_PROVIDER=podman TMPDIR="$HOME/.cache/spawnery-tmp" \
+  nix develop -c kind load image-archive \
+  "$HOME/.cache/spawnery-tmp/paper-img" --name spawnery-evidence
+systemd-run --scope --user --property=Delegate=yes --quiet \
+  env KIND_EXPERIMENTAL_PROVIDER=podman TMPDIR="$HOME/.cache/spawnery-tmp" \
+  nix develop -c kind load image-archive \
+  "$HOME/.cache/spawnery-tmp/velocity-img" --name spawnery-evidence
 
 nix develop -c kubectl apply -f config/crd/bases
 ```
+
+Verify both landed, since the load itself prints nothing that names the
+image:
+
+```bash
+podman exec spawnery-evidence-control-plane crictl images
+```
+
+Expect both `ghcr.io/spawnery/paper:26.2-0.2.0` and
+`ghcr.io/spawnery/velocity:3.5.1-0.2.0` listed.
 
 ## 4. Run the operator outside the cluster, and hand-build what its pods dial
 
@@ -200,12 +264,27 @@ With a real Docker daemon instead of rootless Podman, skip the relay and
 point the `Endpoints` at the bridge gateway (`172.17.0.1`) directly, the way
 `README.md` notes.
 
+**`v1 Endpoints` is deprecated as of Kubernetes 1.36**, in favour of
+`discovery.k8s.io/v1 EndpointSlice`. It still works — measured, applying it
+verbatim above still worked and the pod still routed through the relay — but
+`kubectl apply` prints a deprecation warning, and this section will need
+rewriting to `EndpointSlice` once that stops being merely a warning.
+
 ## 5. Apply the network
 
 One `Network`, one forwarding-secret `Secret`, two `ServerGroup`s (`lobby` and
 `hub`, one replica each to start — §8 scales `lobby`), and two `ProxyGroup`s
 that share the same `fallbackGroups` and differ only in `onlineMode` and their
 NodePort.
+
+**Give both `ProxyGroup`s their own, smaller `spec.resources`.** This
+runbook's four pods (two backends inheriting `Network.defaults.resources` at
+2Gi request/limit, plus two proxies) ask for 8Gi on a node with roughly 8Gi
+allocatable — measured: the fourth pod sits in `Pending` with `0/1 nodes are
+available: 1 Insufficient memory`. Velocity does not need a backend's heap.
+Both `ProxyGroup` manifests below carry `requests: cpu 500m, memory 1Gi;
+limits: memory 1Gi` for exactly this reason, rather than as an optional
+tuning note — without it this section does not fit an 8Gi machine.
 
 **Two groups, in that order, on purpose.** `fallbackGroups` is a try list:
 `agent/velocity/.../Router.choose` takes the first group that holds a
@@ -287,6 +366,12 @@ spec:
     name: evidence
   replicas: 1
   image: ghcr.io/spawnery/velocity:3.5.1-0.2.0
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 1Gi
   expose:
     type: NodePort
     nodePort:
@@ -310,6 +395,12 @@ spec:
     name: evidence
   replicas: 1
   image: ghcr.io/spawnery/velocity:3.5.1-0.2.0
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 1Gi
   expose:
     type: NodePort
     nodePort:
@@ -363,6 +454,16 @@ pod/gateway-auto-yyyy      1/1    Running
 pod/gateway-manual-zzzz    1/1    Running
 ```
 
+**The operator does not re-spec an existing pod.** If a pod is already
+`Pending` on insufficient memory when its `ProxyGroup`'s `spec.resources` is
+patched — for instance because an earlier attempt at this section used
+`Network.defaults.resources` for the proxies too, before finding the fit
+problem above — the patch alone does not fix it: the already-created pod
+keeps the spec it was born with, and only `kubectl delete pod` on it lets the
+operator recreate it with the new one. Rolling updates that would do this
+automatically are milestone 4's, not this milestone's — see
+`docs/handover-milestone-4.md`.
+
 If a `ProxyGroup` stops in `Pending` with its pod `Running` and `READY 0/1`,
 the ready gate did not bind — `docs/known-issues.md`'s "From milestone 3c"
 entry on a silent bind failure applies: `kubectl logs` on the pod is the only
@@ -374,9 +475,15 @@ Design §10 criterion 7: `spawnery-join` reaches the point where Velocity
 connects it to a backend, and the far side shows it — Paper's own log, then
 Velocity's own log, then `status.connectedPlayers`.
 
+`--hold` has to fit inside `--timeout`, and the default `--timeout` is 30s:
+`--hold 60s` with no `--timeout` is refused outright —
+`spawnery-join: --hold 1m0s does not fit inside --timeout 30s` — naming both
+flags in the same line. That refusal is correct behaviour, not a bug to work
+around quietly; the fix is to widen the deadline explicitly:
+
 ```bash
 nix develop -c go build -o /tmp/spawnery-join ./cmd/spawnery-join
-/tmp/spawnery-join --host 127.0.0.1 --port 30565 --hold 60s
+/tmp/spawnery-join --host 127.0.0.1 --port 30565 --hold 60s --timeout 90s
 ```
 
 Expect exit code 0 and one line of JSON on stdout, of the shape
@@ -478,8 +585,18 @@ roughly a 30-second cadence alongside its periodic `FullSync`
 (`internal/proxyreg/fleet.go`), so the hold has to clear at least one of
 those.
 
+**Use a username other than the default here.** If §6's own held connection
+has not fully closed yet — measured, on a machine going through this runbook
+top to bottom without pausing between sections — this join collides with it:
+both would be `spawnery_probe`, and Velocity refuses the second one with
+`disconnected: You are already connected to this proxy!`. Give this join its
+own identity, `drain_probe` (underscore, for the same reason item 2 of this
+document's own preamble gives for `spawnery_probe`'s underscore — a hyphen is
+not a legal Minecraft username):
+
 ```bash
-/tmp/spawnery-join --host 127.0.0.1 --port 30565 --hold 60s &
+/tmp/spawnery-join --host 127.0.0.1 --port 30565 --username drain_probe \
+  --hold 60s --timeout 90s &
 sleep 5
 nix develop -c kubectl logs -n minecraft -l spawnery.cloud/group=gateway-auto --tail=5
 ```
@@ -502,7 +619,7 @@ needs." The proof of a successful move is the same shape of line §6 already
 established, this time ending on a server in the *other* group:
 
 ```
-[server connection] spawnery_probe -> hub-wwww has connected
+[server connection] drain_probe -> hub-wwww has connected
 ```
 
 That line is the fall-through: `lobby` held one server, the exclusion took it
@@ -526,12 +643,13 @@ nix develop -c kubectl get servers -n minecraft
 ```
 
 Expect two `Ready` lobby servers, e.g. `lobby-aaaaa` and `lobby-bbbbb`, plus
-the one `hub` server. Repeat the join, the five-second wait and the delete
-from 8a against whichever lobby server the log names. This time the move must
-stay in the first group:
+the one `hub` server. Repeat the join (still `--username drain_probe`, still
+`--timeout 90s`), the five-second wait and the delete from 8a against
+whichever lobby server the log names. This time the move must stay in the
+first group:
 
 ```
-[server connection] spawnery_probe -> lobby-bbbbb has connected
+[server connection] drain_probe -> lobby-bbbbb has connected
 ```
 
 `hub` appearing here instead would mean the try list is being searched rather
@@ -553,9 +671,132 @@ systemd-run --scope --user --property=Delegate=yes \
 rm -f /tmp/spawnery-evidence-kind.yaml /tmp/spawnery-join
 ```
 
+## 10. The manual proof, for a later session
+
+Written 2026-08-12, after an automated run of §1–§6 and §8 against a real
+`kind` cluster proved criterion 7 and found the criterion-9 defect recorded
+in `docs/known-issues.md`'s "From the milestone 3c evidence run (2026-08-12)"
+section. Criterion 8 — a real Microsoft account joining against
+`online-mode: true` — was not attempted that day: it needs a licensed
+Minecraft Java client and a person to drive it, neither of which was
+available in that session. This section is written for whoever does have
+both, in a session with no memory of the one that wrote it. Start by reading
+`docs/known-issues.md`'s criterion-9 entry before running anything below —
+it explains why the automated proof cannot cover this section's second half.
+
+**The cluster from the automated run is gone.** `spawnery-evidence` was torn
+down by §9's cleanup at the end of that session; nothing here can reuse its
+state, its images, or its NodePort mapping. Start over from §1: build and
+load both images, create a fresh `kind` cluster with §2's `extraPortMappings`
+(30565 and 30566 published to the cluster host's loopback), load both images
+per the corrected §3, run the operator and its relay per §4, and apply the
+network manifests — with the `ProxyGroup` resource requests §5 now
+carries — per §5. Do not skip §6 in the automated form either: confirming
+criterion 7 still holds on this machine, cheaply, before spending a real
+account's login on the manual proof, catches an environment problem before
+it looks like a product one.
+
+**What this needs beyond the earlier sections:**
+
+- A Minecraft Java Edition client at **26.2**, protocol 776 — the exact
+  number `spawnery-join`'s own JSON output printed in the automated proof
+  (`{"protocol":776,...}`), and Paper 26.2 will refuse any client that
+  announces a different one with a loud "Outdated client!" naming the
+  version to install instead. This is not a number to approximate.
+- A Microsoft account that owns the game, able to complete a normal
+  Minecraft login.
+- Network reach from the machine running that client to the cluster host's
+  NodePort 30566 (`gateway-manual`, the `ProxyGroup` that leaves
+  `config.onlineMode` at its CRD default of `true`).
+
+**Reaching the NodePort from a different host.** `kind`'s
+`extraPortMappings` publishes a NodePort to the *cluster host's own*
+loopback, `127.0.0.1:30566` — nothing else, by default. If the client runs on
+the same machine that ran §1–§5, point it at `127.0.0.1:30566` directly and
+skip the rest of this paragraph. If the client is on a different machine —
+the expected case, since a session with no Minecraft client available is
+exactly why this section exists — the two options are opening 30566 on the
+cluster host's LAN address in whatever firewall sits in front of it, or an
+SSH tunnel, which needs nothing changed on the host at all. From the
+client's machine, with SSH access to the cluster host:
+
+```bash
+ssh -N -L 30566:127.0.0.1:30566 <user>@<cluster-host>
+```
+
+Then point the Minecraft client at `127.0.0.1:30566` on the client's own
+machine; the tunnel forwards it to the cluster host's published NodePort from
+there.
+
+**The join itself.** Log in with the Microsoft account, normally, against
+`127.0.0.1:30566` (or the LAN address, if that path was used instead).
+`gateway-manual` deliberately omits `config.onlineMode` in §5's manifest, so
+the CRD's `+kubebuilder:default=true` applies and the proxy issues a real
+encryption request the client answers with a genuine Mojang session — this
+is what `spawnery-join` cannot do, by design (`internal/mcjoin`'s own package
+comment names the limitation). Expect the same two log lines §6 already
+established for the automated proof, this time carrying the real account's
+username and its real Mojang UUID rather than `spawnery_probe`'s offline-mode
+one:
+
+```bash
+nix develop -c kubectl logs -n minecraft -l spawnery.cloud/group=gateway-manual | tail -20
+nix develop -c kubectl logs -n minecraft -l spawnery.cloud/group=lobby | tail -20
+```
+
+**The UUID being a real one is the point, not an incidental detail.** An
+offline-mode UUID is derived from the username alone and proves nothing about
+who is connecting; a real Mojang UUID is only handed back after the client
+proved its session to Mojang and the proxy verified it — so seeing it in
+Paper's log is what shows the proxy actually authenticated the player, rather
+than merely trusting whatever name arrived.
+
+**Criterion 9, folded into this same session, on this same real player.**
+This is the part the automated run could not do at all — see
+`docs/known-issues.md`'s "From the milestone 3c evidence run (2026-08-12)"
+section for the full diagnosis of why `spawnery-join --hold` cannot stand in
+for a real client here: it stops one packet after `Login
+Acknowledged`, before Paper's own player list ever contains it, so
+`Server.status.players` reads zero for a connection the proxy is still
+counting, and the operator's drain reads that zero and deletes the pod out
+from under an occupied session. A real client completes the configuration
+phase on its own, Paper counts it, and the drain that depends on that count
+actually waits. While the real player from the join above is still connected
+and still in `lobby`, find and delete the `Server` they are on:
+
+```bash
+nix develop -c kubectl get servers -n minecraft          # find the one the proxy log named
+nix develop -c kubectl delete server lobby-xxxx -n minecraft
+```
+
+Expect the proxy to log a move to the *other* fallback group, the same shape
+of line established throughout this runbook:
+
+```
+[server connection] <player> -> hub-xxxx has connected
+```
+
+— a move to `hub` rather than another `lobby` server, because §5's `lobby`
+`ServerGroup` starts at one replica and the drain's own exclusion empties it,
+the same fall-through §8a already exercised with the held probe. Expect the
+player to stay in the game throughout, landing in a different world with no
+visible disconnect. A disconnect instead, or a `spawnery:` line reading `no
+target available`, is a real defect distinct from the one criterion 9's
+automated attempt already found — the automated failure was the operator
+acting on a stale player count, not the move logic itself, so a failure here
+implicates `agent/velocity/.../Drain.kt` or `Router.kt` directly and is worth
+its own investigation rather than being folded into the known criterion-9
+entry.
+
+**What to record**, all of it into `docs/handover-milestone-4.md` under the
+same heading the automated evidence occupies: the two log lines from each
+side of the join (proxy and backend), the player's real Mojang UUID, and the
+drain's move line from the criterion-9 step above, each with its timestamp.
+
 ## Where this goes
 
-The output of §6 through §8 — exit codes, JSON lines, `status` fields, log
-lines, timestamps — belongs in `docs/handover-milestone-4.md`, in the
-section that document leaves for it. This runbook is the procedure; that
-document is the record of what running it actually produced.
+The output of §6 through §8, and of §10 once it is run — exit codes, JSON
+lines, `status` fields, log lines, timestamps — belongs in
+`docs/handover-milestone-4.md`, in the section that document leaves for it.
+This runbook is the procedure; that document is the record of what running
+it actually produced.

@@ -107,18 +107,26 @@ that a NetworkPolicy restricting backends to proxies-only is now overdue
 rather than deferred, and that proxy drain needs a readiness
 `internal/agent/registry.go` cannot yet lower.
 
-What is measured so far is at the harness level: `make agent-test` runs both
-plugins, in the real images, against a real operator-shaped gRPC server —
-including, for the proxy, that its ready port stays closed until a server
-list arrives and opens once one does. The cluster-level proof — a real
-`kind` cluster, an automated join through `cmd/spawnery-join`, a manual join
-with a real Microsoft account, and a drain that moves a connected player off
-a deleted `Server` — is written down as
-[`docs/runbook-milestone-3-evidence.md`](docs/runbook-milestone-3-evidence.md)
-and its result belongs in
-[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md), which
-currently records that run as pending rather than claiming a result nobody
-has measured yet.
+`make agent-test` runs both plugins, in the real images, against a real
+operator-shaped gRPC server — including, for the proxy, that its ready port
+stays closed until a server list arrives and opens once one does. The
+cluster-level proof beyond that harness is written down as
+[`docs/runbook-milestone-3-evidence.md`](docs/runbook-milestone-3-evidence.md),
+and it has now been run once, against a real `kind` cluster (2026-08-12): an
+automated join through `cmd/spawnery-join` reached a backend, and Paper's own
+log and Velocity's own log confirmed it — the first time the forwarding chain
+built in 3b and 3c was observed working end to end rather than merely
+rendered correctly on disk. A manual join with a real Microsoft account still
+needs a licensed client and a person to drive it, and has not been done. The
+drain proof surfaced a real finding instead of a clean result: deleting a
+`Server` under a player held open by the evidence tool disconnected them
+rather than moving them, traced to the tool stopping short of the point Paper
+counts a player as online rather than to the drain logic itself — full
+diagnosis in [`docs/known-issues.md`](docs/known-issues.md), "From the
+milestone 3c evidence run". Neither the manual join nor a real drain is
+proven yet; both are what
+[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md) records as
+still open, along with what running the automated half found.
 
 Carry-overs and preconditions for later milestones — CA rotation, the
 NetworkPolicy restricting backends to proxies-only that `online-mode=false`

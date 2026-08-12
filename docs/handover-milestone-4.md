@@ -21,15 +21,100 @@ cluster is what the evidence run below measures.
 
 ## The evidence run
 
-`docs/runbook-milestone-3-evidence.md` has not been executed yet. The
-automated join, the manual join with a real Microsoft account, and the drain
-proof it walks through have not been performed against a real cluster, and
-this section carries no measured output because none exists yet.
+`docs/runbook-milestone-3-evidence.md` was run against a real `kind` cluster
+on 2026-08-12: kind v0.32.0, Kubernetes v1.36.1, rootless Podman, one
+control-plane node, 8 GiB RAM and 8 vCPU, images
+`ghcr.io/spawnery/paper:26.2-0.2.0` and `ghcr.io/spawnery/velocity:3.5.1-0.2.0`,
+operator run outside the cluster through `go run` with a socat relay on the
+kind network. Six defects in the runbook itself stopped the run at various
+points and are now corrected there; they are not repeated here.
 
-<!-- The session controller appends the runbook's measured output here once
-     it has been run: exit codes, the spawnery-join JSON line,
-     status.connectedPlayers, and the proxy and backend log lines for each of
-     the three proofs. -->
+**Criterion 7 — a player can join, automated. PROVEN.** Clean run, exit 0:
+
+```
+$ spawnery-join --host 127.0.0.1 --port 30565 --hold 45s --timeout 75s
+{"protocol":776,"username":"spawnery_probe","uuid":"bcc1dc19-a5eb-33a1-aa1b-4e3907d5e22f","compressed":true}
+```
+
+Velocity's own log (`gateway-auto`) and Paper's (`lobby-q7mv`), the same
+second:
+
+```
+[06:01:39 INFO]: [server connection] spawnery_probe -> lobby-q7mv has connected
+[06:01:39 INFO]: UUID of player spawnery_probe is bcc1dc19-a5eb-33a1-aa1b-4e3907d5e22f
+```
+
+On an earlier run in the same cluster, `kubectl get proxygroup gateway-auto
+-o jsonpath='{.status.connectedPlayers}'` read **`1`** during the hold,
+confirming the whole-branch review's prediction that a held connection is
+counted.
+
+Routing honoured the try list: `fallbackGroups: [lobby, hub]`, and the player
+landed in `lobby`.
+
+**The forwarding chain is proven live**, read directly out of the running
+pods rather than inferred. Velocity's `/data/velocity.toml`:
+
+```
+bind = '0.0.0.0:25565'
+config-version = '2.8'
+forwarding-secret-file = '/etc/spawnery/forwarding.secret'
+online-mode = false
+player-info-forwarding-mode = 'modern'
+show-max-players = 100
+```
+
+Paper's `/data/config/paper-global.yml`, under `proxies.velocity`, **as
+Paper itself wrote it back**:
+
+```
+    enabled: true
+    online-mode: true
+    secret: <redacted>
+```
+
+and `server.properties` carries `online-mode=false`.
+
+That `enabled: true` is the milestone's most important single artifact and
+deserves to be called out as such: before `494fa47` fixed the rendered key
+from `secret-key` to `secret`, Paper's own post-processing set this to
+`false` and logged why in every container since milestone 3b (see
+`docs/known-issues.md`, "From milestone 3c"). This is the first time the
+forwarding chain has been observed working end to end, not merely rendered
+correctly on disk.
+
+`spec.config.onlineMode: false` reaching `online-mode = false` in the
+rendered TOML is the second artifact worth naming: it is the CRD field added
+in `14331b2`, doing exactly what it was added to do.
+
+**Criterion 8 — a player can join manually, with a real Microsoft account —
+is NOT proven.** It needs a licensed Minecraft client and a person to drive
+it, neither available in this session. `docs/runbook-milestone-3-evidence.md`
+§10, "The manual proof, for a later session", is written for whoever runs it
+next, from a different machine, starting from an empty cluster.
+
+**Criterion 9 — deleting a `Server` moves a connected player rather than
+disconnecting them — is NOT proven, and the reason is the most important
+finding of this run.** Deleting a `Server` with a `spawnery-join --hold`
+player on it disconnected the player instead of moving them. The defect is
+in the evidence tool's fit for this criterion, not in the drain logic: a
+held join never reaches the point where Paper counts it as an online player,
+so `Server.status.players` reads zero for a connection the proxy is still
+holding, and the drain's own exit condition
+(`internal/phase/phase.go:224`, `if !in.Occupied()`) reads that zero and
+deletes the pod. Full diagnosis, the measured Kubernetes events, and why
+thirteen prior reviews missed it are in `docs/known-issues.md`, "From the
+milestone 3c evidence run (2026-08-12)". Two things follow from it, kept
+separate there: criterion 9 can only be proven manually until
+`cmd/spawnery-join` plays the configuration phase through, and a narrower
+product finding — a player connected at the proxy but not yet counted by the
+backend sits outside the drain's protection today — that belongs to
+milestone 4's own design work on drain, not to this evidence tool.
+
+The manual session that still owes criterion 8 and a manual re-run of
+criterion 9 (`docs/runbook-milestone-3-evidence.md` §10) should record its
+own two log lines per side, the player's real UUID, and the drain's move
+line under this same heading when it runs.
 
 ## The one contract change milestone 4 has to make
 
