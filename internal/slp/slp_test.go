@@ -24,6 +24,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spawnery/spawnery/internal/mcproto"
 )
 
 // serve starts a one-shot fake Minecraft server on a loopback port and hands
@@ -61,11 +63,11 @@ func drainRequest(c net.Conn) {
 // statusResponse frames a status document the way a server does.
 func statusResponse(doc string) []byte {
 	var body []byte
-	body = appendVarInt(body, 0x00)
-	body = appendString(body, doc)
+	body = mcproto.AppendVarInt(body, 0x00)
+	body = mcproto.AppendString(body, doc)
 
 	var frame []byte
-	frame = appendVarInt(frame, int32(len(body)))
+	frame = mcproto.AppendVarInt(frame, int32(len(body)))
 	return append(frame, body...)
 }
 
@@ -90,6 +92,74 @@ func TestPingReadsTheStatusDocument(t *testing.T) {
 	}
 }
 
+func TestPingVersionAnnouncesTheVersionItWasGiven(t *testing.T) {
+	// A proxy answers a status request with the version it was asked about
+	// when it supports it, so the caller that has to log in afterwards
+	// (internal/mcjoin) depends on this field being exactly what it passed.
+	announced := make(chan int32, 1)
+	host, port := serve(t, func(c net.Conn) {
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, payload, err := mcproto.ReadPacket(c)
+		if err != nil {
+			announced <- 0
+			return
+		}
+		protocol, err := mcproto.ReadVarInt(bytes.NewReader(payload))
+		if err != nil {
+			announced <- 0
+			return
+		}
+		announced <- protocol
+		drainRequest(c)
+		_, _ = c.Write(statusResponse(`{"version":{"name":"fake","protocol":776}}`))
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := PingVersion(ctx, host, port, -1); err != nil {
+		t.Fatalf("PingVersion: %v", err)
+	}
+	if got := <-announced; got != -1 {
+		t.Errorf("the handshake announced protocol %d, want -1", got)
+	}
+}
+
+func TestPingAnnouncesTheDefaultVersion(t *testing.T) {
+	announced := make(chan int32, 1)
+	host, port := serve(t, func(c net.Conn) {
+		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		_, payload, err := mcproto.ReadPacket(c)
+		if err != nil {
+			announced <- 0
+			return
+		}
+		protocol, err := mcproto.ReadVarInt(bytes.NewReader(payload))
+		if err != nil {
+			announced <- 0
+			return
+		}
+		announced <- protocol
+		drainRequest(c)
+		_, _ = c.Write(statusResponse(`{"version":{"name":"fake","protocol":776}}`))
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := Ping(ctx, host, port); err != nil {
+		t.Fatalf("Ping: %v", err)
+	}
+	// 771 written out rather than compared against handshakeProtocolVersion:
+	// an assertion phrased in terms of the constant it is pinning passes
+	// whatever that constant is changed to, and this test's whole purpose is
+	// that Ping's own version does not move. The value is the one measured in
+	// milestone 2b — a Paper 26.2 server answers it with 776.
+	if got := <-announced; got != 771 {
+		t.Errorf("the handshake announced protocol %d, want 771", got)
+	}
+}
+
 func TestPingRejects(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -106,7 +176,7 @@ func TestPingRejects(t *testing.T) {
 			respond: func(c net.Conn) {
 				drainRequest(c)
 				var frame []byte
-				frame = appendVarInt(frame, 100)
+				frame = mcproto.AppendVarInt(frame, 100)
 				_, _ = c.Write(append(frame, 0x00, 0x01))
 			},
 			wantErr: "read packet body",
@@ -116,10 +186,10 @@ func TestPingRejects(t *testing.T) {
 			respond: func(c net.Conn) {
 				drainRequest(c)
 				var body []byte
-				body = appendVarInt(body, 0x01)
-				body = appendString(body, `{"version":{}}`)
+				body = mcproto.AppendVarInt(body, 0x01)
+				body = mcproto.AppendString(body, `{"version":{}}`)
 				var frame []byte
-				frame = appendVarInt(frame, int32(len(body)))
+				frame = mcproto.AppendVarInt(frame, int32(len(body)))
 				_, _ = c.Write(append(frame, body...))
 			},
 			wantErr: "unexpected packet id",
@@ -197,18 +267,5 @@ func TestPingReportsAClosedPort(t *testing.T) {
 
 	if _, err := Ping(ctx, "127.0.0.1", port); err == nil {
 		t.Fatal("Ping succeeded against a closed port, want an error")
-	}
-}
-
-func TestVarIntRoundTrip(t *testing.T) {
-	for _, v := range []int32{0, 1, 127, 128, 255, 25565, 2097151, 2147483647} {
-		encoded := appendVarInt(nil, v)
-		decoded, err := readVarInt(bytes.NewReader(encoded))
-		if err != nil {
-			t.Fatalf("readVarInt(%d): %v", v, err)
-		}
-		if decoded != v {
-			t.Errorf("round trip of %d gave %d", v, decoded)
-		}
 	}
 }

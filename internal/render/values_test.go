@@ -81,3 +81,28 @@ func TestValuesAcceptsAPositivePlayerLimit(t *testing.T) {
 		t.Fatalf("RequirePlayerLimit: %v", err)
 	}
 }
+
+// onlineMode has no zero to reject — false is a legitimate answer, and the
+// point of the refusal is that there is no safe direction to guess in. So the
+// three cases are absent, false and true, and the two present ones must both
+// be accepted rather than one of them quietly treated as unset.
+func TestValuesRejectsAnAbsentOnlineMode(t *testing.T) {
+	var v Values
+	err := v.RequireOnlineMode()
+	if err == nil {
+		t.Fatal("an absent onlineMode was accepted")
+	}
+	if !strings.Contains(err.Error(), "onlineMode") {
+		t.Errorf("error = %q, want it to name the key", err)
+	}
+}
+
+func TestValuesAcceptsOnlineModeEitherWay(t *testing.T) {
+	for _, want := range []bool{false, true} {
+		value := want
+		v := Values{OnlineMode: &value}
+		if err := v.RequireOnlineMode(); err != nil {
+			t.Errorf("RequireOnlineMode with onlineMode: %v: %v", want, err)
+		}
+	}
+}

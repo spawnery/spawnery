@@ -11,7 +11,7 @@
 , paper
 , spawnery-slp
 , spawnery-config
-, paper-agent
+, agents
 , imageVersion
 , oci-common
 }:
@@ -28,7 +28,7 @@ let
   # Paper repo above it do not.
   agent = runCommand "paper-agent-image-path" { } ''
     mkdir -p $out/opt/paper/agent
-    cp ${paper-agent}/share/spawnery/spawnery-agent.jar $out/opt/paper/agent/spawnery-agent.jar
+    cp ${agents}/share/spawnery/paper/spawnery-agent.jar $out/opt/paper/agent/spawnery-agent.jar
   '';
 in
 oci-common.layeredImage {

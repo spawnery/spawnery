@@ -63,7 +63,7 @@
               kind
               k3d
               # Both of these are pinned a second time, by version, in
-              # agent/paper/build.gradle.kts -- and only this half moves when
+              # agent/common/build.gradle.kts -- and only this half moves when
               # nixpkgs does. `protobuf` here is protoc, whose X.Y the
               # `protobuf-java` artifact tracks one for one (protoc 35.1 <->
               # protobuf-java 4.35.1); `protoc-gen-grpc-java` here is the
@@ -75,7 +75,8 @@
               # ProtobufRuntimeVersionException at class init) appears nowhere
               # near this line. After a flake update, read both new versions
               # from the repository root and move the literals in
-              # build.gradle.kts:67-77 to match. protoc answers for itself:
+              # agent/common/build.gradle.kts's dependencies block to match.
+              # protoc answers for itself:
               #
               #   nix develop -c protoc --version
               #
@@ -115,8 +116,8 @@
           # The one place this version is written down. It reaches both the
           # plugin's paper-plugin.yml (which the agent reports to the
           # operator as Hello.version) and the image tag, so the two can
-          # never drift apart the way paper-agent.nix and paper-image.nix's
-          # separate defaults once could.
+          # never drift apart the way the agent derivation's and
+          # paper-image.nix's separate defaults once could.
           imageVersion = "0.2.0";
 
           spawnery-slp = pkgs.buildGoModule {
@@ -142,6 +143,21 @@
             env.CGO_ENABLED = 0;
           };
 
+          # Test-only for the same reason as spawnery-stubop, and likewise in
+          # no image: it is the automated half of milestone 3's success
+          # criterion, run from a developer machine or the evidence runbook
+          # against a proxy's NodePort. An image that carried a tool for
+          # logging in as an arbitrary player would be handing an attacker
+          # one.
+          spawnery-join = pkgs.buildGoModule {
+            pname = "spawnery-join";
+            version = "0.2.0";
+            src = ./.;
+            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            subPackages = [ "cmd/spawnery-join" ];
+            env.CGO_ENABLED = 0;
+          };
+
           # Baked into both the Paper and Velocity images; it writes the
           # configuration each JVM actually reads, before the JVM starts. See
           # internal/render and cmd/spawnery-config.
@@ -156,17 +172,27 @@
             ldflags = [ "-s" "-w" ];
           };
 
-          paper-agent = pkgs.callPackage ./nix/paper-agent.nix {
-            inherit paper imageVersion;
+          # `paper` and `velocity` stay explicit arguments even though neither
+          # is part of the version string: pkgs.callPackage fills arguments
+          # from pkgs only, and both are local let bindings. What they are for
+          # is the postPatch symlinks that hand Gradle each platform's API.
+          agents = pkgs.callPackage ./nix/agents.nix {
+            inherit paper velocity imageVersion;
           };
         in
         {
           # Architecture-independent (it is jars), so this stays available on
           # every system.
           paper-repo = paper.repo;
+          # The paperclip launcher, exposed for the same reason velocity-jar
+          # is: it is what a human runs by hand to measure something out of
+          # the pinned build. The command that uses it is recorded above
+          # paperGlobalDefault in internal/render/paper_test.go, which
+          # regenerates internal/render/testdata/paper-global.default.yml.
+          paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-config paper-agent;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
@@ -178,14 +204,14 @@
           # mislabelled image. `nix flake show` and `nix develop` stay
           # unaffected elsewhere.
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
-            inherit paper spawnery-slp spawnery-config paper-agent imageVersion oci-common;
+            inherit paper spawnery-slp spawnery-config agents imageVersion oci-common;
           };
 
-          # No spawnery-slp and no agent: a proxy's readiness is the agent's
-          # ready port, not a server list ping, and the agent jar ships in
-          # milestone 3c.
+          # No spawnery-slp: a proxy's readiness is the agent's ready port,
+          # not a server list ping, so the image needs no pinger. The agent
+          # itself now ships -- it is the thing that binds that port.
           velocity-image = pkgs.callPackage ./nix/velocity-image.nix {
-            inherit velocity spawnery-config imageVersion oci-common;
+            inherit velocity spawnery-config agents imageVersion oci-common;
           };
         });
     };

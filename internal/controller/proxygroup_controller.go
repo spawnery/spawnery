@@ -258,10 +258,13 @@ func (r *ProxyGroupReconciler) reconcileService(ctx context.Context, group *spaw
 
 // reconcileConfigMap keeps the group's rendered ConfigMap — design section
 // 5.4's one ConfigMap per group — in step with the fields spec.config exposes
-// to a user. It carries only playerLimit and motd: online-mode, the
-// forwarding mode and the ports are operationally critical and live in
-// internal/render's critical layer and nowhere else, so there is exactly one
-// place that can be wrong about any of them.
+// to a user. It carries playerLimit, motd and onlineMode: the forwarding mode
+// and the ports are operationally critical, and live in internal/render's
+// critical layer and nowhere else, so there is exactly one place that can be
+// wrong about either. onlineMode is written here too, and is still critical in
+// the sense that matters — no configOverlay can reach it — but its value is a
+// deliberate choice a user makes on the ProxyGroup, so it travels as a value
+// rather than as a constant in the renderer.
 //
 // It marshals a render.Values document under podspec.ConfigValuesKey, the
 // same key BuildProxyPod projects into ConfigDir, and it carries
@@ -305,6 +308,12 @@ func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *sp
 // ProxyGroup's pods already claim a limit of 500 in their own environment —
 // Accepted, Service up, and every pod in CrashLoopBackOff forever, with
 // nothing on the CR saying why.
+// OnlineMode is never left nil for the same reason and with a sharper edge:
+// render.Velocity's RequireOnlineMode refuses to guess, and the value decides
+// whether the proxy authenticates players at all. The default here is true —
+// the same default the CRD stamps on spec.config.onlineMode — so a ProxyGroup
+// whose spec.config is nil, or one created before the field existed and never
+// defaulted, renders an authenticating proxy rather than an open one.
 func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 	var values render.Values
 	limit := podspec.DefaultPlayerLimit
@@ -312,6 +321,11 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 		limit = cfg.PlayerLimit
 	}
 	values.PlayerLimit = &limit
+	onlineMode := true
+	if cfg := group.Spec.Config; cfg != nil && cfg.OnlineMode != nil {
+		onlineMode = *cfg.OnlineMode
+	}
+	values.OnlineMode = &onlineMode
 	if cfg := group.Spec.Config; cfg != nil && cfg.Motd != "" {
 		motd := cfg.Motd
 		values.Motd = &motd

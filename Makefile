@@ -27,12 +27,12 @@ proto:
 		--go_out=. --go_opt=module=github.com/spawnery/spawnery \
 		--go-grpc_out=. --go-grpc_opt=module=github.com/spawnery/spawnery \
 		proto/spawnery/agent/v1alpha1/agent.proto
-	rm -rf agent/paper/src/proto/java
-	mkdir -p agent/paper/src/proto/java
+	rm -rf agent/common/src/proto/java
+	mkdir -p agent/common/src/proto/java
 	protoc \
 		--proto_path=proto \
-		--java_out=agent/paper/src/proto/java \
-		--grpc-java_out=agent/paper/src/proto/java \
+		--java_out=agent/common/src/proto/java \
+		--grpc-java_out=agent/common/src/proto/java \
 		proto/spawnery/agent/v1alpha1/agent.proto
 
 .PHONY: fmt
@@ -57,16 +57,16 @@ lint:
 
 .PHONY: agent
 agent:
-	nix build .#paper-agent
+	nix build .#agents
 
-# Regenerates agent/paper/deps.json. Runs outside the Nix sandbox because it
+# Regenerates agent/deps.json. Runs outside the Nix sandbox because it
 # has to reach Maven Central, so it is deliberately in no other target: a
 # dependency change is an explicit act, not a side effect of `make all`.
 # The output path in the lockfile is relative to the working directory, so this
 # only does the right thing from the repository root.
 .PHONY: agent-deps
 agent-deps:
-	"$$(nix build --no-link --print-out-paths .#paper-agent.mitmCache.updateScript)"
+	"$$(nix build --no-link --print-out-paths .#agents.mitmCache.updateScript)"
 
 .PHONY: image
 image:
@@ -92,8 +92,9 @@ image-test: image-load velocity-image-load
 # same reason image-test is not: it needs a container runtime and only works on
 # x86_64-linux.
 .PHONY: agent-test
-agent-test: image-load
-	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) STUBOP=$(STUBOP) hack/agent-test.sh
+agent-test: image-load velocity-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
+		STUBOP=$(STUBOP) hack/agent-test.sh
 
 .PHONY: velocity-image
 velocity-image:
@@ -115,3 +116,9 @@ velocity-image-test: velocity-image-load
 image-repro:
 	nix build .#paper-image --rebuild
 	nix build .#velocity-image --rebuild
+	# The agent jars, directly. Both images embed them, so a non-reproducible
+	# jar would eventually show up above -- but as a diff in an image layer,
+	# which says nothing about which of the two agents moved. Rebuilding the
+	# derivation that produces both is what turns that into a message naming
+	# the jar.
+	nix build .#agents --rebuild

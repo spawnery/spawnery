@@ -1,4 +1,4 @@
-package cloud.spawnery.agent
+package cloud.spawnery.agent.paper
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse

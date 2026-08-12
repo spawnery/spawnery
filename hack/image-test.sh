@@ -121,6 +121,79 @@ container_logs="$("$CONTAINER" logs "$NAME" 2>&1)"
 check_no_download "$container_logs"
 echo "no download attempted"
 
+# What Paper made of the file the renderer wrote.
+#
+# /data/config/paper-global.yml is Paper's own writable file: spawnery-config
+# renders it before the JVM starts, and Paper rewrites it on load, filling in
+# every default and keeping whatever it recognised. Reading it back after the
+# server is up is therefore Paper answering the one question no unit test in
+# internal/render can - not "did the renderer write this string" but "did the
+# receiving program consume it". That reading only holds because the check
+# first establishes the file is Paper's rewrite; see the marker loop below,
+# without which the whole thing is satisfied by the renderer's own bytes.
+#
+# It has to be asked, because Paper does not refuse a key it does not know. It
+# ignores the key, keeps its default for the field the author meant, and writes
+# the stray key back out here so the file still looks like the override took.
+# internal/render wrote the forwarding secret under secret-key rather than
+# secret from milestone 3b until 3c's first end-to-end join, and every test in
+# the repository passed the whole time: the backend came up, answered this
+# script's ping, and rejected every forwarded join.
+#
+# Asserted as a presence check on the value, not as the absence of an error in
+# the log. Paper does log "Velocity is enabled, but no secret key was
+# specified" in the broken case, but a grep for a message that must not appear
+# passes just as happily when the message is reworded upstream.
+effective_global="$("$CONTAINER" exec "$NAME" cat /data/config/paper-global.yml)"
+
+# First, proof that this file is Paper's rewrite and not the renderer's own
+# output still sitting on the path untouched.
+#
+# The two greps below cannot tell those apart on their own. In the healthy case
+# internal/render.paperGlobal writes the same three keys with the same three
+# values Paper writes back, so its own output satisfies them - which means a
+# Paper bump that moved the config path, or stopped rewriting the file, would
+# leave this check green while forwarding was off. That is precisely the
+# regression class this assertion exists to catch without a fixture to refresh,
+# so it has to be closed here rather than argued about in the comment.
+#
+# _version is Paper's config schema version and bungee-cord is its sibling
+# proxy backend; the renderer has no notion of either and writes neither.
+# bungee-cord is checked as well as _version because it sits inside the very
+# node being read below - it says Paper rewrote proxies, not merely that some
+# Paper-authored file exists somewhere in this path.
+for want in '_version:' '  bungee-cord:'; do
+	if ! grep -qF "$want" <<<"$effective_global"; then
+		echo "/data/config/paper-global.yml carries no \"$want\", so Paper never rewrote it; what follows is the renderer's own output and proves nothing about what Paper read:" >&2
+		echo "$effective_global" >&2
+		exit 1
+	fi
+done
+
+# Then narrowed to the proxies.velocity block before anything is matched. A
+# bare grep for "enabled: true" over the whole file would pass on Paper's own
+# spark and update-checker sections no matter what the velocity block said -
+# which is exactly the shape of assertion this milestone has already found
+# seven of.
+velocity_block="$(awk '
+	/^  velocity:/ { inblock = 1; next }
+	inblock && /^    / { print; next }
+	inblock { exit }
+' <<<"$effective_global")"
+if [ -z "$velocity_block" ]; then
+	echo "Paper wrote no proxies.velocity block at all:" >&2
+	echo "$effective_global" >&2
+	exit 1
+fi
+for want in 'enabled: true' 'secret: test-forwarding-secret'; do
+	if ! grep -qF "$want" <<<"$velocity_block"; then
+		echo "Paper's proxies.velocity does not say \"$want\"; forwarding is off and every join through a proxy is refused with \"Your server did not send a forwarding request to the proxy\":" >&2
+		echo "$velocity_block" >&2
+		exit 1
+	fi
+done
+echo "Paper read the forwarding secret and enabled Velocity forwarding"
+
 # The plugin is in the image but has no operator to reach here. Two things have
 # to be true, and neither is visible from a green ping alone.
 #

@@ -33,4 +33,10 @@ rec {
   # file; a version bump that does not re-run the command above and update
   # this comment produces a config Velocity migrates out from under the
   # renderer on first start.
+  #
+  # That same extracted file is checked in as
+  # internal/render/testdata/velocity.default.toml, which is what
+  # TestVelocityWritesTheKeysVelocityItselfReads compares the renderer's key
+  # names against and what TestVelocityWritesThePinnedConfigVersion compares
+  # this version to. A bump has to refresh it in the same change.
 }

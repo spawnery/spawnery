@@ -1,4 +1,4 @@
-package cloud.spawnery.agent
+package cloud.spawnery.agent.paper
 
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger

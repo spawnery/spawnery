@@ -106,6 +106,27 @@ type ProxyConfigSpec struct {
 	// Motd is shown in the server list.
 	// +optional
 	Motd string `json:"motd,omitempty"`
+
+	// OnlineMode is whether the proxy authenticates players with Mojang.
+	//
+	// Turning it off means the proxy stops authenticating anyone: any client
+	// may connect under any name, including the name of a player who has
+	// paid for the game and owns things on this network, and the network is
+	// only as protected as whatever sits in front of it. There is nothing
+	// further down that catches it — the backends run online-mode=false by
+	// design, because the proxy is the layer that was supposed to do this.
+	//
+	// It is a field on the custom resource rather than something reachable
+	// through configOverlay so that turning it off is a visible edit to the
+	// object an operator reviews, not a line in a ConfigMap nobody reads.
+	//
+	// This is the proxy's own online-mode, not the backends'
+	// proxies.velocity.online-mode in paper-global.yml, which means "trust
+	// what the proxy forwards" and stays true either way: modern forwarding
+	// works the same whether the proxy authenticated the player or not.
+	// +kubebuilder:default=true
+	// +optional
+	OnlineMode *bool `json:"onlineMode,omitempty"`
 }
 
 // ProxyGroupSpec describes the Velocity layer of a network.

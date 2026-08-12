@@ -42,7 +42,12 @@ const velocityConfigVersion = "2.8"
 //   - online-mode, because the proxy is the layer that authenticates players
 //     with Mojang and forwards the result — the mirror image of Paper's
 //     online-mode=false, and turning it off makes the whole network
-//     offline-mode;
+//     offline-mode. Critical here means "no configOverlay may reach it", not
+//     "constant": its value comes from v.OnlineMode, which is
+//     ProxyGroup.spec.config.onlineMode, so switching it off is an edit to
+//     the custom resource that an operator reviews rather than a line in a
+//     ConfigMap. It is still reasserted after the overlay merge below, so the
+//     overlay cannot move it either way;
 //   - player-info-forwarding-mode, because anything but "modern" leaves the
 //     backends unable to verify a forwarded player;
 //   - forwarding-secret-file, so the secret is read from its mount rather
@@ -55,6 +60,9 @@ const velocityConfigVersion = "2.8"
 // writes it into velocity.toml in plaintext where the path belongs.
 func Velocity(v Values, secretPath string, overlay map[string]string) (map[string][]byte, error) {
 	if err := v.RequirePlayerLimit(); err != nil {
+		return nil, err
+	}
+	if err := v.RequireOnlineMode(); err != nil {
 		return nil, err
 	}
 	if secretPath == "" {
@@ -157,8 +165,18 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 
 	// Reasserted last: whatever the overlay said about these four keys is
 	// overwritten rather than merged around.
+	//
+	// online-mode takes its value from Values rather than a literal, and is
+	// still written here rather than in the base document above, so a
+	// configOverlay cannot reach it in either direction — the switch is
+	// ProxyGroup.spec.config.onlineMode and nothing else. Nothing on the Paper
+	// side moves with it: paper-global.yml's proxies.velocity.online-mode is a
+	// different setting under an almost identical name ("trust what the proxy
+	// forwards", see paperGlobal's comment) and stays true, because modern
+	// forwarding works the same whether the proxy authenticated the player or
+	// just made a UUID up.
 	doc["bind"] = "0.0.0.0:25565"
-	doc["online-mode"] = true
+	doc["online-mode"] = *v.OnlineMode
 	doc["player-info-forwarding-mode"] = "modern"
 	doc["forwarding-secret-file"] = secretPath
 

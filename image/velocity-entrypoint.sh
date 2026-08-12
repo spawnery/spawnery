@@ -18,8 +18,10 @@ spawnery-config --flavor velocity
 
 # The agent plugin. It ships in the read-only part of the image and is copied
 # out on every start, unconditionally: the image is the truth, not whatever a
-# previous start left in the volume. Milestone 3c is what puts a jar here; the
-# copy is written now so the image contract does not change under 3c.
+# previous start left in the volume. The copy predates the jar -- it was written
+# in 3b so that the image contract would not change under 3c, which is what put
+# a jar here. The guard therefore stays: it is what lets the entrypoint be
+# tested, and run, against an image built without an agent.
 if [ -f "$VELOCITY_HOME/agent/spawnery-agent.jar" ]; then
 	mkdir -p plugins
 	cp -f "$VELOCITY_HOME/agent/spawnery-agent.jar" plugins/spawnery-agent.jar

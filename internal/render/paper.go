@@ -175,9 +175,22 @@ func paperGlobal(secret, overlay string) (string, error) {
 
 	// Reasserted last: whatever the overlay said about these three keys is
 	// overwritten rather than merged around.
+	//
+	// "secret", not "secret-key". Paper ignores a key its own
+	// GlobalConfiguration.Proxies.Velocity does not declare — it does not
+	// refuse the file, and it writes the stray key straight back out on the
+	// next save, so the document on disk keeps looking like the override took.
+	// Meanwhile secret stays at its default of '', and Paper's own postProcess
+	// turns enabled back off ("Velocity is enabled, but no secret key was
+	// specified. A secret key is required. Disabling velocity..."), leaving a
+	// backend that starts cleanly, passes every probe, and rejects every
+	// forwarded join. This spelling was wrong from the day it was written until
+	// milestone 3c's first end-to-end join found it; see
+	// TestPaperWritesTheKeysPaperItselfReads for the check that now measures
+	// these names against Paper's own defaults rather than against this file.
 	velocity["enabled"] = true
 	velocity["online-mode"] = true
-	velocity["secret-key"] = secret
+	velocity["secret"] = secret
 
 	out, err := yaml.Marshal(map[string]any{
 		"proxies": map[string]any{"velocity": velocity},

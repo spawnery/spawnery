@@ -40,6 +40,11 @@ type Values struct {
 	PlayerLimit *int32 `yaml:"playerLimit,omitempty" json:"playerLimit,omitempty"`
 	// Motd is what a player sees in the server list.
 	Motd *string `yaml:"motd,omitempty" json:"motd,omitempty"`
+	// OnlineMode is whether a proxy authenticates players with Mojang. It is
+	// the proxy's own setting and has no backend counterpart here: a Paper
+	// server rendered by this package is always online-mode=false, because the
+	// proxy in front of it is what authenticates. See RequireOnlineMode.
+	OnlineMode *bool `yaml:"onlineMode,omitempty" json:"onlineMode,omitempty"`
 }
 
 // RequireMaxPlayers refuses a backend that does not know its own capacity.
@@ -60,6 +65,26 @@ func (v Values) RequireMaxPlayers() error {
 // it ever sends: a metric that reads zero while players are connected.
 func (v Values) RequirePlayerLimit() error {
 	return requirePositive("playerLimit", v.PlayerLimit)
+}
+
+// RequireOnlineMode refuses a proxy that does not say whether it authenticates
+// players.
+//
+// Guessing is what this package will not do, and this is the field where
+// guessing is least acceptable in either direction. Defaulting to true would
+// override an operator who deliberately set false and produce a proxy nobody
+// can join with an offline client, with nothing on the object saying why.
+// Defaulting to false would silently open the whole network to anyone claiming
+// any name — the exact failure ProxyGroup.spec.config.onlineMode exists to keep
+// visible. The operator always writes the key (see
+// internal/controller.proxyConfigValues), and the CRD defaults it to true, so
+// the only way to arrive here nil is a config.yaml written by something other
+// than this operator; that is worth a refusal that names the key.
+func (v Values) RequireOnlineMode() error {
+	if v.OnlineMode == nil {
+		return fmt.Errorf("config.yaml: onlineMode is not set")
+	}
+	return nil
 }
 
 // requirePositive is the check RequireMaxPlayers and RequirePlayerLimit share.

@@ -1,11 +1,5 @@
 package cloud.spawnery.agent
 
-import cloud.spawnery.agent.pb.AgentServiceGrpc
-import cloud.spawnery.agent.pb.Hello
-import cloud.spawnery.agent.pb.OperatorToServer
-import cloud.spawnery.agent.pb.PlayerCount
-import cloud.spawnery.agent.pb.Ready
-import cloud.spawnery.agent.pb.ServerMessage
 import io.grpc.CallCredentials
 import io.grpc.ManagedChannel
 import io.grpc.stub.ClientCallStreamObserver
@@ -35,8 +29,8 @@ import java.util.concurrent.atomic.AtomicReference
  * instead of sleeping through it, and so the renewal and backoff timers share
  * the same clock as reporting.
  */
-private class Session(val channel: ManagedChannel, replaces: Session?) {
-    private val toOperator = AtomicReference<StreamObserver<ServerMessage>?>(null)
+private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?) {
+    private val toOperator = AtomicReference<StreamObserver<Req>?>(null)
     private var reporting: ScheduledFuture<*>? = null
     private var retired = false
 
@@ -76,7 +70,7 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
     private val answered = AtomicBoolean(false)
     private var answerDeadline: ScheduledFuture<*>? = null
 
-    fun attach(observer: StreamObserver<ServerMessage>) {
+    fun attach(observer: StreamObserver<Req>) {
         toOperator.set(observer)
     }
 
@@ -86,7 +80,7 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
      * reporting timer now reach it from three different threads.
      */
     @Synchronized
-    fun send(message: ServerMessage) {
+    fun send(message: Req) {
         toOperator.get()?.onNext(message)
     }
 
@@ -256,7 +250,7 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
             // short.
             runCatching {
                 @Suppress("UNCHECKED_CAST")
-                (observer as? ClientCallStreamObserver<ServerMessage>)
+                (observer as? ClientCallStreamObserver<Req>)
                     ?.cancel("the operator never answered this stream", null)
             }
             channel.shutdownNow()
@@ -316,10 +310,10 @@ private class Session(val channel: ManagedChannel, replaces: Session?) {
  * [SessionLoop.awaitAnswer] for the one way that really happens — would
  * otherwise hold the agent for the life of the TCP connection.
  */
-class SessionLoop(
+class SessionLoop<Req, Resp>(
     private val channels: () -> ManagedChannel,
     private val credentials: CallCredentials,
-    private val state: ServerState,
+    private val role: AgentRole<Req, Resp>,
     private val scheduler: ScheduledExecutorService,
     private val version: String,
     private val log: (String, Throwable?) -> Unit,
@@ -336,7 +330,7 @@ class SessionLoop(
      */
     private val fallbackAnswerBoundMillis: Long = FALLBACK_ANSWER_BOUND_MILLIS,
 ) : AutoCloseable {
-    private val current = AtomicReference<Session?>(null)
+    private val current = AtomicReference<Session<Req>?>(null)
     private val attempt = AtomicInteger(0)
     private val stopped = AtomicBoolean(false)
 
@@ -393,14 +387,14 @@ class SessionLoop(
     }
 
     /**
-     * Called when the server finished loading. Readiness is a state, not an
-     * event: every Hello carries it, and this only adds the immediate
-     * notification so the operator does not wait for the next connect.
+     * Sends one message on the current stream if there is one, and does nothing
+     * if there is not. The agent's own state is the caller's business: this is
+     * the immediate notification, not the state itself, and every Hello carries
+     * the state anyway.
      */
-    fun readyChanged() {
+    fun send(message: Req) {
         val session = current.get() ?: return
-        if (!state.ready) return
-        send(session, ServerMessage.newBuilder().setReady(Ready.getDefaultInstance()).build())
+        send(session, message)
     }
 
     fun stop() {
@@ -436,10 +430,9 @@ class SessionLoop(
         // the call below is still returning. From here on the replacement owes
         // the agent its next stream — see streamEnded.
         outgoing?.replacementOpened()
-        val stub = AgentServiceGrpc.newStub(channel).withCallCredentials(credentials)
 
-        val fromOperator = object : StreamObserver<OperatorToServer> {
-            override fun onNext(value: OperatorToServer) {
+        val fromOperator = object : StreamObserver<Resp> {
+            override fun onNext(value: Resp) {
                 // The operator answering is what proves the stream reached it;
                 // a Hello handed to the transport proves nothing. Three things
                 // here wait for that proof and nothing weaker.
@@ -457,18 +450,15 @@ class SessionLoop(
                 // before break is a claim about what the operator saw, so it
                 // can only be timed off something the operator sent.
                 session.takeOver()
-                when (value.messageCase) {
-                    OperatorToServer.MessageCase.REPORT_INTERVAL ->
-                        startReporting(session, value.reportInterval.seconds)
-                    OperatorToServer.MessageCase.SESSION_DEADLINE -> {
+                when (val directive = role.onMessage(value)) {
+                    is Directive.Report -> startReporting(session, directive.seconds)
+                    is Directive.Deadline -> {
                         hardDeadlineMillis.set(
-                            TimeUnit.SECONDS.toMillis(
-                                value.sessionDeadline.hardDeadlineSeconds.toLong(),
-                            ),
+                            TimeUnit.SECONDS.toMillis(directive.hardDeadlineSeconds.toLong()),
                         )
-                        scheduleRenewal(session, value.sessionDeadline.renewAfterSeconds)
+                        scheduleRenewal(session, directive.renewAfterSeconds)
                     }
-                    else -> Unit
+                    Directive.None -> Unit
                 }
             }
 
@@ -484,7 +474,7 @@ class SessionLoop(
         }
 
         val toOperator = try {
-            stub.serverSession(fromOperator)
+            role.open(channel, credentials, fromOperator)
         } catch (e: Exception) {
             // The channel was built here and was never handed to anything that
             // would shut it down, so this is the only place that can.
@@ -493,12 +483,7 @@ class SessionLoop(
         }
         session.attach(toOperator)
 
-        send(
-            session,
-            ServerMessage.newBuilder()
-                .setHello(Hello.newBuilder().setVersion(version).setReady(state.ready))
-                .build(),
-        )
+        send(session, role.hello(version))
 
         // The replacement died before it could take over — synchronously from
         // inside serverSession() on the in-process transport, and in production
@@ -562,7 +547,7 @@ class SessionLoop(
      * that is retired in turn has a live successor, and one the agent closed on
      * purpose was closed by a stop() that wants no reconnect at all.
      */
-    private fun streamEnded(session: Session) {
+    private fun streamEnded(session: Session<Req>) {
         if (!session.ended.compareAndSet(false, true)) return
         session.stopAwaitingAnswer()
         // Before the skip, not after it: a superseded stream's channel is as
@@ -612,7 +597,7 @@ class SessionLoop(
      * `stream.Context()`, so a handler stuck before its own `select` never
      * observes it however early the operator arms its deadline.
      */
-    private fun awaitAnswer(session: Session) {
+    private fun awaitAnswer(session: Session<Req>) {
         val bound = hardDeadlineMillis.get().takeIf { it > 0 } ?: fallbackAnswerBoundMillis
         if (bound <= 0) return
         session.awaitAnswer {
@@ -647,7 +632,7 @@ class SessionLoop(
      * its first message — and asking a graceful shutdown to wait for such a
      * call parks the transport.
      */
-    private fun answerOverdue(session: Session) {
+    private fun answerOverdue(session: Session<Req>) {
         if (!session.ended.compareAndSet(false, true)) return
         log("the operator accepted the stream and never answered it; opening another", null)
         session.close(cancel = true)
@@ -660,7 +645,7 @@ class SessionLoop(
      * old session is closed by connect(), strictly after the replacement has
      * greeted.
      */
-    private fun scheduleRenewal(session: Session, renewAfterSeconds: Int) {
+    private fun scheduleRenewal(session: Session<Req>, renewAfterSeconds: Int) {
         if (renewAfterSeconds <= 0) return
         val delay = jitter(TimeUnit.SECONDS.toMillis(renewAfterSeconds.toLong()))
         schedule(delay, "the renewal could not be scheduled") {
@@ -709,23 +694,12 @@ class SessionLoop(
         }
     }
 
-    private fun startReporting(session: Session, seconds: Int) {
+    private fun startReporting(session: Session<Req>, seconds: Int) {
         if (seconds <= 0) return
         try {
             session.report {
                 scheduler.scheduleAtFixedRate(
-                    {
-                        send(
-                            session,
-                            ServerMessage.newBuilder()
-                                .setPlayerCount(
-                                    PlayerCount.newBuilder()
-                                        .setPlayers(state.players)
-                                        .setSlots(state.slots),
-                                )
-                                .build(),
-                        )
-                    },
+                    { send(session, role.playerCount()) },
                     0,
                     seconds.toLong(),
                     TimeUnit.SECONDS,
@@ -738,7 +712,7 @@ class SessionLoop(
         }
     }
 
-    private fun send(session: Session, message: ServerMessage) {
+    private fun send(session: Session<Req>, message: Req) {
         try {
             session.send(message)
         } catch (e: Exception) {

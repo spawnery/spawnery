@@ -10,6 +10,7 @@
 , runCommand
 , velocity
 , spawnery-config
+, agents
 , imageVersion
 , oci-common
 }:
@@ -26,9 +27,8 @@ oci-common.layeredImage {
   tag = "${velocity.velocityVersion}-${imageVersion}";
 
   # Ordered by rate of change, the same rationale as the Paper image: the JRE
-  # and the pinned jar are large and almost static; spawnery-config and the
-  # entrypoint are small and change per commit. Milestone 3c adds the agent
-  # plugin as another small layer without touching either.
+  # and the pinned jar are large and almost static; the agent plugin,
+  # spawnery-config and the entrypoint are small and change per commit.
   contents = [
     (buildEnv {
       name = "velocity-tools";
@@ -40,6 +40,14 @@ oci-common.layeredImage {
     oci-common.passwd
     oci-common.group
     velocityHome
+    # The agent plugin, under the path image/velocity-entrypoint.sh already
+    # copies out of on every start. Its own layer rather than part of
+    # velocityHome: it changes on every commit that touches agent/, and the
+    # pinned proxy jar beside it changes about twice a year.
+    (runCommand "velocity-agent" { } ''
+      install -Dm644 ${agents}/share/spawnery/velocity/spawnery-agent.jar \
+        $out/opt/velocity/agent/spawnery-agent.jar
+    '')
     (oci-common.binIn { package = spawnery-config; name = "spawnery-config"; })
     (oci-common.entrypointFrom ../image/velocity-entrypoint.sh)
   ];

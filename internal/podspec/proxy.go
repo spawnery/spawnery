@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"path"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,6 +47,13 @@ const (
 	// limit. The agent reports it as slots, and the registry discards any
 	// report above it, so it is load-bearing rather than cosmetic.
 	EnvPlayerLimit = "SPAWNERY_PLAYER_LIMIT"
+	// EnvFallbackGroups carries ProxyGroup.spec.routing.fallbackGroups to the
+	// agent, comma separated and in order. It is the same list the operator puts
+	// in DrainPlayers.toGroups, so a join and a drain resolve against one source
+	// rather than two that can disagree. The CRD marks the field required with
+	// MinItems=1, so the agent treats an empty value as an operator bug and
+	// refuses to connect rather than coming up unable to route.
+	EnvFallbackGroups = "SPAWNERY_FALLBACK_GROUPS"
 	// EnvProxy names the container env var carrying the pod's own name.
 	EnvProxy = "SPAWNERY_PROXY"
 
@@ -182,6 +190,7 @@ func BuildProxyPod(
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: EnvProxy, Value: name},
 			{Name: EnvPlayerLimit, Value: strconv.FormatInt(int64(playerLimit), 10)},
+			{Name: EnvFallbackGroups, Value: strings.Join(group.Spec.Routing.FallbackGroups, ",")},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
 		},
 		VolumeMounts: mounts,

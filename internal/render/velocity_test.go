@@ -17,6 +17,7 @@ limitations under the License.
 package render
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -26,7 +27,8 @@ import (
 func velocityValues() Values {
 	n := int32(500)
 	m := "A Spawnery network"
-	return Values{PlayerLimit: &n, Motd: &m}
+	online := true
+	return Values{PlayerLimit: &n, Motd: &m, OnlineMode: &online}
 }
 
 const testSecretPath = "/etc/spawnery/forwarding.secret"
@@ -42,6 +44,132 @@ func containsTOMLString(rendered, key, value string) bool {
 		strings.Contains(rendered, key+` = '`+value+`'`)
 }
 
+// velocityDefault is Velocity's own default-velocity.toml, byte for byte as
+// the pinned jar ships it. Velocity writes this file out when /data has none,
+// and it is the same document its config loader validates a rendered one
+// against — so it is a measurement of the receiving program, which is the only
+// reason it exists. Every other test in this file asserts that the renderer
+// writes the string the renderer says it writes, and no such test can fail on
+// a key Velocity does not read.
+//
+// It costs an extraction rather than a server boot, because Velocity ships it
+// as a jar resource. Reproduce it with:
+//
+//	JAR=$(nix build .#velocity-jar --no-link --print-out-paths)
+//	cd internal/render/testdata && jar xf "$JAR" default-velocity.toml
+//	mv default-velocity.toml velocity.default.toml
+//
+// (default-velocity.toml sits at the jar root, not under META-INF; `unzip` is
+// not on PATH in the dev shell, so `jar xf` extracts it. This is the same
+// command nix/velocity.nix's config-version comment records, against the same
+// pin.)
+//
+// A Velocity bump therefore has to re-run this and update the file, exactly
+// the way a Paper bump has to re-run internal/render/testdata's
+// paper-global.default.yml.
+const velocityDefault = "testdata/velocity.default.toml"
+
+// The keys this renderer writes have to be keys Velocity declares.
+//
+// Velocity does not refuse a key it does not know; night-config parses the
+// file and the loader reads out the keys it asks for, so a misspelling is a
+// key nobody reads and a default silently kept. Two shapes of that are not
+// theoretical:
+//
+//   - forwarding-secret-file misspelled: Velocity finds no such key, falls
+//     back to its own relative "forwarding.secret", finds no such file,
+//     creates one in the writable /data, fills it with twelve random
+//     characters, logs "The forwarding-secret-file does not exist. A new file
+//     has been created at {}", starts cleanly, passes the port probe — and
+//     refuses every forwarded join, because the backends carry a different
+//     secret. Disassembled out of the pinned jar's
+//     VelocityConfiguration.read, 2026-08-11.
+//   - show-max-players misspelled: Velocity's own default is 500 and
+//     podspec.DefaultPlayerLimit is 500, so on the default path there is
+//     nothing to see at all.
+//
+// This is the Velocity half of the lesson milestone 3c learned on the Paper
+// side, where render.Paper wrote proxies.velocity.secret-key for a reader that
+// wanted secret — see TestPaperWritesTheKeysPaperItselfReads, which this
+// mirrors.
+func TestVelocityWritesTheKeysVelocityItselfReads(t *testing.T) {
+	defaults, err := os.ReadFile(velocityDefault)
+	if err != nil {
+		t.Fatalf("read Velocity's own defaults: %v", err)
+	}
+	declared := velocityTomlKeysOf(t, defaults, velocityDefault)
+
+	files, err := Velocity(velocityValues(), testSecretPath, nil)
+	if err != nil {
+		t.Fatalf("Velocity: %v", err)
+	}
+	rendered := files["velocity.toml"]
+
+	for _, key := range sortedKeys(velocityTomlKeysOf(t, rendered, "the rendered velocity.toml")) {
+		if !declared[key] {
+			t.Errorf("the renderer writes %s, which Velocity does not declare; Velocity reads %v and would silently keep its own default for whatever this key was meant to set:\n%s",
+				key, sortedKeys(declared), rendered)
+		}
+	}
+}
+
+// The config-version the renderer writes is the one the pinned jar ships, and
+// this is the only place the two are compared. velocityConfigVersion is a
+// constant measured by hand out of the jar; the fixture is that same file
+// checked in. A Velocity bump that regenerates the fixture without moving the
+// constant fails here instead of producing a config Velocity migrates out from
+// under the renderer on first start.
+func TestVelocityWritesThePinnedConfigVersion(t *testing.T) {
+	defaults, err := os.ReadFile(velocityDefault)
+	if err != nil {
+		t.Fatalf("read Velocity's own defaults: %v", err)
+	}
+	var parsed struct {
+		ConfigVersion string `toml:"config-version"`
+	}
+	if err := toml.Unmarshal(defaults, &parsed); err != nil {
+		t.Fatalf("%s does not parse as TOML: %v", velocityDefault, err)
+	}
+	if parsed.ConfigVersion != velocityConfigVersion {
+		t.Errorf("velocityConfigVersion is %q, the pinned jar's default-velocity.toml says %q",
+			velocityConfigVersion, parsed.ConfigVersion)
+	}
+}
+
+// velocityTomlKeysOf reads the key names out of a velocity.toml document: every
+// top-level key, plus servers.try. It fails rather than returning an empty set
+// when the document has no keys, so a truncated fixture cannot pass by having
+// nothing to compare.
+//
+// [servers] is the one table whose keys are not Velocity's to declare — each
+// is a server name somebody chose, and the fixture's are Velocity's three
+// example servers — so only try, the reserved key in there, is carried
+// through. [forced-hosts] is the same shape and contributes nothing but its
+// own name. Nothing else the renderer writes nests.
+func velocityTomlKeysOf(t *testing.T, doc []byte, what string) map[string]bool {
+	t.Helper()
+	var parsed map[string]any
+	if err := toml.Unmarshal(doc, &parsed); err != nil {
+		t.Fatalf("%s does not parse as TOML: %v", what, err)
+	}
+	if len(parsed) == 0 {
+		t.Fatalf("%s has no keys at all:\n%s", what, doc)
+	}
+	keys := make(map[string]bool, len(parsed))
+	for k, v := range parsed {
+		keys[k] = true
+		if k != "servers" {
+			continue
+		}
+		if table, ok := v.(map[string]any); ok {
+			if _, hasTry := table["try"]; hasTry {
+				keys["servers.try"] = true
+			}
+		}
+	}
+	return keys
+}
+
 // The proxy half of the inversion: true here, false on the backends.
 func TestVelocityKeepsOnlineModeOn(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, nil)
@@ -51,6 +179,77 @@ func TestVelocityKeepsOnlineModeOn(t *testing.T) {
 	toml := string(files["velocity.toml"])
 	if !strings.Contains(toml, "online-mode = true") {
 		t.Errorf("velocity.toml does not keep online-mode on:\n%s", toml)
+	}
+}
+
+// And the value actually travels, rather than the renderer reading
+// v.OnlineMode and writing true anyway. Without this the field would be a
+// setting that exists on the CRD, appears in config.yaml, and does nothing —
+// which is the failure mode the caller would only find by trying to join with
+// an unauthenticated client and being told to log in.
+func TestVelocityTurnsOnlineModeOffWhenTheValueSaysSo(t *testing.T) {
+	v := velocityValues()
+	off := false
+	v.OnlineMode = &off
+
+	files, err := Velocity(v, testSecretPath, nil)
+	if err != nil {
+		t.Fatalf("Velocity: %v", err)
+	}
+	toml := string(files["velocity.toml"])
+	if !strings.Contains(toml, "online-mode = false") {
+		t.Errorf("velocity.toml does not carry onlineMode: false through; the proxy still authenticates and no offline client can join:\n%s", toml)
+	}
+}
+
+// A config.yaml that says nothing about online-mode is refused rather than
+// guessed at, the way an absent playerLimit is. Both defaults would be wrong:
+// true silently overrides an operator who chose false, false silently opens
+// the network to anyone under any name.
+func TestVelocityRefusesAnUnsetOnlineMode(t *testing.T) {
+	v := velocityValues()
+	v.OnlineMode = nil
+
+	_, err := Velocity(v, testSecretPath, nil)
+	if err == nil {
+		t.Fatal("an unset onlineMode was accepted")
+	}
+	if !strings.Contains(err.Error(), "onlineMode") {
+		t.Errorf("error = %q, want it to name the key", err)
+	}
+}
+
+// The overlay still cannot reach online-mode, and the direction that matters
+// most is the one the four-key test above cannot cover: with the value set to
+// false, an overlay must not be able to turn authentication back on either.
+// online-mode moved from a literal to a value read out of Values, and a
+// renderer that set it in the base document instead of after the merge would
+// pass every other test in this file while handing a configOverlay control of
+// whether the network authenticates anyone.
+func TestVelocityOverlayCannotMoveOnlineModeInEitherDirection(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		value        bool
+		overlaySays  string
+		wantRendered string
+	}{
+		{"an overlay cannot turn it off", true, "online-mode = false\n", "online-mode = true"},
+		{"an overlay cannot turn it on", false, "online-mode = true\n", "online-mode = false"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			v := velocityValues()
+			value := tc.value
+			v.OnlineMode = &value
+
+			files, err := Velocity(v, testSecretPath, map[string]string{"velocity.toml": tc.overlaySays})
+			if err != nil {
+				t.Fatalf("Velocity: %v", err)
+			}
+			rendered := string(files["velocity.toml"])
+			if !strings.Contains(rendered, tc.wantRendered) {
+				t.Errorf("velocity.toml does not contain %q; the overlay moved online-mode:\n%s", tc.wantRendered, rendered)
+			}
+		})
 	}
 }
 
@@ -242,9 +441,10 @@ func TestVelocityRefusesAnOverlayForAFileItDoesNotWrite(t *testing.T) {
 // asserting anything about which quote character was used, this parses the
 // rendered file back with the same library and checks the motd survives.
 func TestVelocityEscapesAMotdThatCannotBeALiteralString(t *testing.T) {
-	n := int32(500)
+	v := velocityValues()
 	m := "A 'Spawnery' network\\with a backslash\nand a newline"
-	files, err := Velocity(Values{PlayerLimit: &n, Motd: &m}, testSecretPath, nil)
+	v.Motd = &m
+	files, err := Velocity(v, testSecretPath, nil)
 	if err != nil {
 		t.Fatalf("Velocity: %v", err)
 	}

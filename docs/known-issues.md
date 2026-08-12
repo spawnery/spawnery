@@ -1,15 +1,17 @@
 # Known issues and carry-overs for later milestones
 
-Status: end of milestone 3b, the Velocity image (2026-08-11).
+Status: end of milestone 3c, the Velocity agent (2026-08-11).
 
 This list collects what was deliberately left open during the implementation and
 the reviews of milestone 1, milestone 2a, milestone 2b, milestone 2c, milestone
-3a and milestone 3b. It does not replace a spec — the design decisions live in
+3a, milestone 3b and milestone 3c. It does not replace a spec — the design
+decisions live in
 `superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md`, in
 `superpowers/specs/2026-08-08-agent-channel-design.md`, in
 `superpowers/specs/2026-08-09-paper-agent-design.md`, in
-`superpowers/specs/2026-08-10-proxy-channel-design.md` and in
-`superpowers/specs/2026-08-10-velocity-image-design.md`.
+`superpowers/specs/2026-08-10-proxy-channel-design.md`, in
+`superpowers/specs/2026-08-10-velocity-image-design.md` and in
+`superpowers/specs/2026-08-11-velocity-agent-design.md`.
 
 ## Preconditions for milestone 2c (the Kotlin agent) — met
 
@@ -28,9 +30,12 @@ section 7.1). `internal/agentserver` only supplies the operator half of this
 (`Registry.Supersede` carries the readiness of a superseding stream over);
 without an agent that actually reconnects before the deadline it has no effect.
 
-*Met* by `SessionLoop` in `agent/paper/src/main/kotlin`, which opens the
-replacement stream and only retires the outgoing one once the operator has
-answered on the replacement. That last clause is not decoration: an earlier
+*Met* by `SessionLoop`, which opens the replacement stream and only retires
+the outgoing one once the operator has answered on the replacement. It lived
+in `agent/paper/src/main/kotlin` when this precondition was written; milestone
+3c's Gradle split moved it to `agent/common/src/main/kotlin` so the Velocity
+agent could run the identical loop rather than a copy of it, and every claim
+below about its behaviour still holds of the shared class. That last clause is not decoration: an earlier
 version retired on the local `Hello` call, which travels an established
 connection and therefore beats a greeting that still needs TCP and TLS, so the
 operator saw `leave()` then `enter()` — a `Disconnect` followed by a `Connect`
@@ -273,16 +278,20 @@ documents the relay container that works. Milestone 6 wires this flow into CI an
 will meet the same wall, and the durable answer there is to run the operator
 inside the cluster from its own image, where the Service is a Service.
 
-## Preconditions for milestone 3 (proxy integration)
+## Preconditions for milestone 3 (proxy integration) — fully discharged
 
-All five original preconditions below are now discharged: three by milestone
-3a (the operator's proxy side, 2026-08-10), and the remaining two — the
+All five original preconditions below are discharged: three by milestone 3a
+(the operator's proxy side, 2026-08-10), and the remaining two — the
 image-layer items — by milestone 3b (the Velocity image, 2026-08-11). They are
 kept rather than deleted for the same reason milestone 2c's closed
-preconditions are: the reasoning is what the next sub-project — 3c, the
-Velocity agent — inherits, and only the reasoning makes it legible. What 3a
-itself discovered while closing its three follows after them, and what 3b
-discovered while closing its own two follows after that.
+preconditions are: the reasoning is what the next sub-project inherits, and
+only the reasoning makes it legible. That next sub-project was 3c, the
+Velocity agent, and it has now also landed (2026-08-11) — its own discoveries
+are their own section, "From milestone 3c", below, in the same shape as "From
+milestone 2c" above rather than folded into this one, because unlike 3a and
+3b it is not itself a precondition of anything later. What 3a itself
+discovered while closing its three follows after them, and what 3b discovered
+while closing its own two follows after that.
 
 **Factor the shared image Nix while there is still exactly one consumer.**
 `nix/paper-image.nix` holds four things the Velocity image will need verbatim:
@@ -551,6 +560,212 @@ is why this is a gap and not a hole; it is the same class of duplication as
 `configOverlayDir`, whose divergence the test's own comment already
 documents as silent. Closing it is a one-line addition to the existing
 test.
+
+## From milestone 3c (the Velocity agent)
+
+Design `2026-08-11-velocity-agent-design.md` §11 named five of these before
+the milestone started; what follows carries them and adds what building it
+actually found. The one that matters most is first.
+
+**`internal/render/paper.go` wrote the Velocity forwarding secret under the
+key `secret-key`; Paper reads `secret`.** Paper does not reject the unknown
+key — it ignores it, preserves it verbatim on the next save so the file looks
+correct, keeps `secret: ''`, and disables forwarding in its own
+post-processing while logging *"Velocity is enabled, but no secret key was
+specified. A secret key is required. Disabling velocity..."*. That line was
+printed in every Paper container from the moment milestone 3b shipped, and
+nothing read it. Backend-side forwarding had never worked. It was found only
+by the first real end-to-end join, ten tasks into this milestone.
+
+The portable lesson is bigger than the fix: **no test in this repository
+measured the receiving program.** The render tests assert that the renderer
+writes the string the renderer says it writes, which cannot fail on a key the
+receiver ignores; and until this milestone no test had ever put a proxy in
+front of a Paper server. Both halves are now closed — a fixture of Paper's
+own default config checked against the renderer's key names
+(`TestPaperWritesTheKeysPaperItselfReads`, against
+`internal/render/testdata/paper-global.default.yml`), and an image test that
+reads the file back out of the running container
+(`hack/image-test.sh`) — but the class is what the next person needs to
+carry forward: a green render test proves what was written, never what was
+read.
+
+**And the same two for Velocity**, which the whole-branch review found had
+been missed: the lesson had been applied only to the flavour it was learned
+on. `TestVelocityWritesTheKeysVelocityItselfReads` checks the renderer's key
+names against `internal/render/testdata/velocity.default.toml`, extracted from
+the pinned jar's own `default-velocity.toml`, and `hack/velocity-image-test.sh`
+now asks the running proxy for a server list ping and reads `show-max-players`
+and the motd back out of the answer. That script's readback of
+`/data/velocity.toml` had been asserting over the renderer's own bytes:
+Velocity never rewrites that file (`.autosave()`, and no migration fires at
+`config-version = "2.8"`), which the script's own comment claimed the opposite
+of. Its `playerLimit` fixture moved off 500 in the same change, because 500 is
+both Velocity's default and `podspec.DefaultPlayerLimit`, so a misspelled
+`show-max-players` is invisible against it. The one key still not read back
+from Velocity is `forwarding-secret-file`, which nothing but a forwarded join
+exercises; it is checked instead by the absence of the `/data/forwarding.secret`
+Velocity generates when it cannot find the configured one.
+
+**`online-mode` moved to the CRD.** `ProxyGroup.spec.config.onlineMode`,
+defaulting `true`. It could not be set by a `configOverlay` because
+`render.Velocity` reasserts the keys it owns after the merge, and the ruling
+was that a security property switchable in a YAML file nobody reads is worse
+than one visible on the custom resource. Turning it off means the proxy
+stops authenticating players.
+
+**Paper 26.2 accepts the forwarding secret from the environment**
+(`PAPER_VELOCITY_SECRET`), so the plaintext need not be written into
+`/data/config/paper-global.yml` in the writable layer at all. Not done; a
+smaller attack surface for whoever next opens the Paper renderer.
+
+**A `configOverlay` can still inject unknown keys** into `proxies.velocity`.
+`TestPaperWritesTheKeysPaperItselfReads` renders with a nil overlay, so the
+"keys Paper reads" invariant is asserted for the base render only. The three
+critical keys (`enabled`, `online-mode`, `secret`) are reasserted over the
+overlay, so it is defensible — but it is the one path a `secret-key`-shaped
+key can still take, and nothing would catch a second one arriving the same
+way this one did.
+
+**The ready port is spelled in two languages** —
+`internal/podspec.ProxyReadyPort` and a Kotlin constant in
+`agent/velocity/src/main/kotlin/cloud/spawnery/agent/velocity/AgentPlugin.kt`
+— with no test that can compare them. Only the level-2 harness
+(`hack/agent-test.sh`, phase four) catches a divergence, and only when it
+runs.
+
+**A proxy that cannot bind its ready port is silent on the CR.** It stays
+`Pending` with the reason only in the container log
+(`ReadyGate.open`'s own `log(...)` call). This is the same shape as the
+`playerLimit` defect milestone 3b found and fixed, in a place where the
+operator has nothing to write to.
+
+**`SPAWNERY_FALLBACK_GROUPS` is a third spelling of the fallback list**,
+after the CRD field `ProxyGroup.spec.routing.fallbackGroups` and
+`DrainPlayers.toGroups`. `internal/podspec.BuildProxyPod` builds the
+environment variable from the same CRD field the operator's own
+`DrainPlayers` sender reads, so it cannot disagree today; nothing pins that
+it will not.
+
+**Per-proxy load balancing.** With several proxies, placement is even per
+proxy and not necessarily across the network — `Router` counts only the
+players Velocity itself can see, not what any other proxy in the same
+`ProxyGroup` is carrying.
+
+**Proxy drain still needs a lowerable readiness** in
+`internal/agent/registry.go`. That is a milestone 2a contract change and
+belongs to milestone 4, which owns proxy drain — see
+`docs/handover-milestone-4.md` for what the change has to do.
+
+**The NetworkPolicy is overdue, not deferred.** With `online-mode=false` on
+the backends and forwarding now actually working, a Paper server
+authenticates no one and trusts whatever completes the handshake with the
+right secret — and nothing restricts who may attempt it. Milestone 6 owns
+NetworkPolicies as a group. This entry is the one most likely to be read as a
+formality; it is not.
+
+**Smaller ones**, each worth a sentence: phase 5 of `hack/agent-test.sh`
+reuses phase 2's window constants declared 400 lines
+earlier, both derived from a hard-coded renewal interval; `streams_opened`
+counts what the operator saw, so a proxy leaking a gRPC channel per reconnect
+is still measured nowhere — the standing blind spot inherited from milestone
+2c; `ServerDirectory`'s stale-removal path (`unregisterTracked`) logs nothing
+at the point of removal, unlike every other mutation in the same class. Two
+entries that stood here are closed: phase 1's empty-token comparison now
+carries the same guard phase 4 does, and `Router.choose`'s fall-through when
+the exclusion empties the first group is covered both by a unit test and by
+the second fallback group `docs/runbook-milestone-3-evidence.md` §8a drains
+into. Separately: `cmd/spawnery-join` asks a
+server for its protocol version by announcing an unsupported one
+(`announceUnsupported = -1`) and trusts that the proxy's newest supported
+version and the backend's actual version agree — true of every pinned pair
+this repository ships and not guaranteed generally; `internal/mcjoin`'s own
+package comment names the failure mode (a loud "Outdated client!" naming the
+version to fix it to), so it fails loud rather than silent, but the runbook
+that depends on this tool inherits the same assumption. And
+`config/samples/network.yaml`'s own top comment still describes a `ProxyGroup`
+whose pod never turns `Ready` because "milestone 3c's Velocity agent" does not
+exist — false as of this milestone; nobody has updated the sample's comment
+to match.
+
+## From the milestone 3c evidence run (2026-08-12)
+
+`docs/runbook-milestone-3-evidence.md` was finally run against a real `kind`
+cluster. Criterion 7 (a player can join, automated) is now proven — see
+`docs/handover-milestone-4.md`. Criterion 9 (deleting a `Server` moves its
+player rather than disconnecting them) is not, and the reason why is the most
+important finding of this run.
+
+**Deleting a `Server` with a `spawnery-join --hold` player on it disconnected
+the player instead of moving them.** The diagnosis is measured end to end,
+and the defect sits in the evidence tool's fit for this criterion, not in the
+drain logic itself:
+
+- `--hold` stops the join one packet after `Login Acknowledged`, in the
+  configuration state — `internal/mcjoin`'s own package comment documents
+  this as deliberate, because that is as far as Velocity itself needs before
+  it dials a backend.
+- Paper's `getOnlinePlayers()` never contains such a client, because it never
+  finishes the configuration phase Paper is waiting for. So the Paper agent
+  reports zero players, and `Server.status.players` reads zero for a
+  connection the proxy is actively holding open.
+- The drain's own exit condition is `internal/phase/phase.go:224`, inside the
+  `Draining` case: `if !in.Occupied() { ... Reason: ReasonDrained, Message:
+  "no players left" ... }`. `Occupied()` (`internal/phase/phase.go:146`) is
+  `in.PlayersStale || in.PlayersOnline > 0` — and with a stale-held client
+  Paper never counted, `PlayersOnline` is exactly zero.
+- Measured directly, in one `kubectl get` against the running cluster:
+  `proxygroup/gateway-auto` showed `PLAYERS 1` in the same instant
+  `server/lobby-bsvg` showed `PLAYERS 0`. Same player, same second, two
+  different counts, and the drain reads the one that says nobody is there.
+- The Kubernetes events, all in the same second, show the operator acting on
+  the wrong count rather than hanging or erroring:
+
+  ```
+  DeletionRequested  server/lobby-5wv2  phase Ready -> Draining: deletion requested, moving players off
+  Killing            pod/lobby-5wv2     Stopping container minecraft
+  PodDeleted         server/lobby-5wv2  deleted pod lobby-5wv2: no players left
+  Drained            server/lobby-5wv2  phase Draining -> Terminating: no players left
+  ```
+
+- Velocity then reported `disconnected while connecting to lobby-5wv2: An
+  internal server connection error occurred.` — the player lost the
+  connection Velocity itself was still holding, because the pod it was about
+  to be moved off was already gone.
+
+So: the operator concluded the server was empty and deleted the pod out from
+under a player the proxy was still counting.
+
+**This is two separable findings, and they should stay separate:**
+
+1. **Criterion 9 is not provable with `spawnery-join` as it stands.** Closing
+   this needs the client to play the configuration phase through to the point
+   Paper starts counting it — the whole-branch review already on file
+   established that this is two packet-id constants and one `case` in
+   `holdOpen`, not a rewrite of the tool. Until that lands, criterion 9 can
+   only be proven manually, with a real client — see
+   `docs/runbook-milestone-3-evidence.md` §10 for that session — or not at
+   all.
+2. **A narrower product finding, and this half belongs to milestone 4, not
+   to the evidence tool.** A player who is connected at the proxy but not yet
+   counted by the backend sits outside the drain's protection: `Occupied()`
+   only sees what the backend has reported, and the proxy's own count is not
+   consulted at all. In production this window is real but small — a real
+   client completes the configuration phase within the same round trip, well
+   under the second `--hold` freezes it at deliberately to make the gap
+   visible. Small is not the same as absent, and milestone 4 owns drain, so
+   this is the milestone to decide whether `Occupied()` should ever
+   incorporate what the proxy side reports.
+
+**None of this branch's many reviews caught this**, and it is worth saying
+plainly why not, rather than filing it away as bad luck. The whole-branch
+review correctly predicted that a held connection would be *counted* — on
+the proxy side, in `status.connectedPlayers`, which is exactly right and is
+what §6 of the runbook now proves. Nobody in any of those reviews asked the
+complementary question: which side does the *drain's own* exit condition
+read? The two counts live in different structs, are populated by different
+agents, and were never checked against each other until an
+actual `kubectl delete` on an actual held connection forced the question.
 
 ## Preconditions for milestone 4 (scaling and drain)
 

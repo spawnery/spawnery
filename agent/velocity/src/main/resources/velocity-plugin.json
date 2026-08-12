@@ -1,0 +1,9 @@
+{
+  "id": "spawnery",
+  "name": "Spawnery Agent",
+  "version": "${version}",
+  "description": "Connects this proxy to the Spawnery operator",
+  "authors": ["The Spawnery Authors"],
+  "dependencies": [],
+  "main": "cloud.spawnery.agent.velocity.AgentPlugin"
+}

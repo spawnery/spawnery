@@ -157,7 +157,17 @@ proof is that every existing test still passes and the Paper image still works.
   installing `$out/share/spawnery/paper/spawnery-agent.jar`. Flake attribute
   `agents`.
 - Produces: Kotlin package `cloud.spawnery.agent` for the shared classes,
-  `cloud.spawnery.agent.paper` for `AgentPlugin` and `ServerState`.
+  `cloud.spawnery.agent.paper` for `AgentPlugin`.
+
+**`ServerState` stays in `:common` for this task.** The first draft of this
+plan moved it to `:paper` here, which cannot build: `SessionLoop` takes
+`state: ServerState` in its constructor and `SessionLoopTest` constructs one in
+seventeen places, so `:common` would depend on `:paper` while `:paper` already
+depends on `:common` — a project-graph cycle, not an import problem. Task 3 is
+what removes the reason for the dependency, by replacing that constructor
+parameter with a role, and Task 3 therefore performs the move in the same
+commit. Leaving it here would make Task 1 a rewrite, which is the one thing it
+must not be.
 
 - [ ] **Step 1: Read the two things that make this task non-mechanical**
 
@@ -209,7 +219,7 @@ dependencies {
     api("io.grpc:grpc-protobuf:1.83.1")
     api("io.grpc:grpc-stub:1.83.1")
     api("com.google.protobuf:protobuf-java:4.35.1")
-    api("javax.annotation:javax.annotation-api:1.3.2")
+    compileOnlyApi("javax.annotation:javax.annotation-api:1.3.2")
     implementation("io.grpc:grpc-okhttp:1.83.1")
 
     testImplementation(kotlin("test"))
@@ -474,9 +484,21 @@ is 1046 lines that pin them.
 - Create: `agent/paper/src/main/kotlin/cloud/spawnery/agent/paper/ServerRole.kt`
 - Create: `agent/common/src/test/kotlin/cloud/spawnery/agent/FakeRole.kt`
 - Create: `agent/common/src/test/kotlin/cloud/spawnery/agent/AgentRoleSeamTest.kt`
+- Create: `agent/paper/src/test/kotlin/cloud/spawnery/agent/paper/ServerRoleTest.kt`
+- Move: `ServerState.kt` and `ServerStateTest.kt` from `:common` to
+  `agent/paper/src/{main,test}/kotlin/cloud/spawnery/agent/paper/`, package
+  `cloud.spawnery.agent.paper`
 - Modify: `agent/common/src/main/kotlin/cloud/spawnery/agent/SessionLoop.kt`
 - Modify: `agent/common/src/test/kotlin/cloud/spawnery/agent/SessionLoopTest.kt`
 - Modify: `agent/paper/src/main/kotlin/cloud/spawnery/agent/paper/AgentPlugin.kt`
+
+**Why the `ServerState` move is in this task and not in Task 1.** Task 1 left
+it in `:common` because `SessionLoop`'s constructor takes one, and moving it
+while that was true would have made `:common` depend on `:paper` — a
+project-graph cycle. Step 2 removes that parameter. The move belongs in the
+same commit as its own justification, and `FakeRole` (Step 5) carries its own
+counters rather than reusing `ServerState`, so `:common`'s tests do not
+reintroduce the dependency by the back door.
 
 **Interfaces:**
 - Produces: `AgentRole<Req, Resp>` and `Directive` exactly as written in Step 1.
@@ -814,6 +836,16 @@ class ReadyGateTest {
     @Test fun `the gate accepts more than one connection`() {
         // The kubelet probes every 5 s forever; a gate that served one probe
         // and stopped would turn a pod ready and then not-ready again.
+        //
+        // The count has to exceed the listen backlog, and by enough that it
+        // is obvious why. Measured on this machine: with ServerSocket's
+        // default listen(50) and no accept() at all, 51 connections complete
+        // and the 52nd times out. So `repeat(8)` — the first draft of this
+        // plan — passes against a gate that binds and never starts its
+        // acceptor, which is the one thing this test exists to catch. Use 64,
+        // with an explicit 3000 ms connect timeout to match the pod spec's
+        // own timeoutSeconds; without the timeout a broken gate fails only
+        // after the kernel's two-minute SYN-retry schedule.
     }
 
     @Test fun `close releases the port`() {
@@ -956,10 +988,21 @@ everything else in this class is final as written. The gate is constructed but
 never opened here, so the image test in Step 9 sees a plugin that loads, logs
 and does nothing — which is exactly the claim that step makes.
 
-`logger` is `org.slf4j.Logger`, which Velocity bundles and injects. The
-`@Plugin` annotation is still required — Velocity reads the descriptor from
-JSON, but the class is instantiated through Guice and the annotation is what
-marks it.
+`logger` is `org.slf4j.Logger`, which Velocity bundles and injects.
+
+**The `@Plugin` annotation is inert at runtime, and the comment must say so.**
+The first draft of this plan claimed it is "what marks the class Guice
+instantiates". It is not: the proxy jar holds exactly three references to
+`com/velocitypowered/api/plugin/Plugin` — the annotation, the annotation
+processor and `SerializedPluginDescription` — and all three are compile-time
+machinery. The descriptor's `main` field is what names the class. Keep the
+annotation, because the processor requires it if anyone ever takes the kapt
+fallback, and use its `version` line to record why that fallback is a trap:
+a processor-generated descriptor is written to the same path from the
+annotation, carrying `0.0.0`, no `description` and no `authors`, and both
+descriptor guards in `hack/agent-jar-check.sh` would still pass — a `"version":`
+key is present and no `${` remains. Every proxy would then report version
+`0.0.0` with nothing failing anywhere.
 
 - [ ] **Step 7: Teach `nix/agents.nix` and the image about the second jar**
 
@@ -1262,6 +1305,19 @@ after every periodic `FullSync` — roughly every 30 seconds for as long as the
 server drains — and the sixth test is what proves the repetition is free rather
 than a move-storm.
 
+**None of the seven pins "once per player", and a test has to.** The first
+draft of this plan declared that invariant load-bearing and then listed seven
+tests, none of which can catch it: `FakePlayers.moveTo` only records the move,
+so no `FakeServer`'s player list changes during a `Drain.run`, so
+`Router.choose` is a pure function of state that cannot change mid-loop and
+returns the same answer however often it is called. A "compute the target once
+and reuse it for every player" implementation therefore produces identical
+moves and passes all seven. Add an eighth that measures the call *frequency*
+rather than the outcome — count `ProxyRegistry.server` lookups, which
+`ServerDirectory.inGroup` makes once per backend per call and never caches, so
+three draining players across a two-backend group is six lookups and the
+hoisted mutant is two.
+
 `FakePlayers` records each `moveTo` as `(username, targetName)` in order and
 lets a test set each player's `currentServer`.
 
@@ -1432,9 +1488,20 @@ On `ProxyInitializeEvent`, in this order:
    BearerCredentials.of(TokenSource(env.base.tokenPath)), role = role, …)` and
    `start()` it. The bundle is read per attempt, not once — the kubelet replaces
    both files in place.
-6. Register the plugin for `PlayerChooseInitialServerEvent` and
-   `ServerConnectedEvent`. Velocity discovers `@Subscribe` methods on the plugin
-   instance through `proxy.eventManager.register(this, this)`.
+6. Nothing. **Do not call `proxy.eventManager.register(this, this)`** — the
+   first draft of this plan said to, and it throws. Measured out of the pinned
+   3.5.1-615 jar: `VelocityEventManager.register` compares its two arguments by
+   identity and raises `IllegalArgumentException("The plugin main instance is
+   automatically registered.")`, because `VelocityServer` already calls
+   `registerInternally` for every plugin's own instance — which is how
+   `onInitialize` was being delivered in the first place. The `@Subscribe`
+   methods on the plugin class are live from plugin load and need no
+   registration.
+
+   That has a consequence step 1 assumed away: a dormant agent cannot register
+   *no* events, because the handlers exist before `ProxyEnvironment` is ever
+   consulted. Make them inert with null guards on the fields they touch, and
+   keep the observable behaviour — a dormant agent does nothing — the same.
 
 `PlayerChooseInitialServerEvent`: `router.choose(env.fallbackGroups)`; non-null →
 `event.setInitialServer(it)`; null → log at WARNING naming the groups searched,
@@ -1818,17 +1885,35 @@ Every command, in order, from an empty machine to the two proofs. It covers:
   a mistake;
 - the manifests: a `Network`, a forwarding-secret `Secret`, a `ServerGroup`
   named `lobby` with one replica, and a `ProxyGroup` with
-  `routing.fallbackGroups: ["lobby"]`, NodePort expose, and a `configOverlay`
-  ConfigMap setting `online-mode = false`;
-- the automated proof: `spawnery-join` against `nodeIP:nodePort`, then
-  `kubectl get proxygroup -o jsonpath` for `status.connectedPlayers`, then the
-  proxy and backend logs;
+  `routing.fallbackGroups: ["lobby"]`, NodePort expose, and
+  `spec.config.onlineMode: false`;
+- the automated proof: `spawnery-join --host <nodeIP> --port <nodePort>`
+  against that group, then `kubectl get proxygroup -o jsonpath` for
+  `status.connectedPlayers`, then the proxy and backend logs;
 - the manual proof: the same network without the `online-mode` overlay, joined
   from a real client with a Microsoft account;
 - the drain proof: `kubectl delete server` with a player connected, and the
   proxy log line showing the move.
 
 Each step states what to expect, so a deviation is recognisable as one.
+
+**Four things the runbook has to get right that this plan originally got
+wrong**, all established by tasks 10 and 10b:
+
+- `online-mode` is turned off through `spec.config.onlineMode: false` on the
+  `ProxyGroup`, not through a `configOverlay`. The renderer reasserts the four
+  keys it owns after merging an overlay, so an overlay never could have
+  reached it; the field exists because the automated proof needs it and
+  because a security switch belongs on the custom resource.
+- The probe's username is `spawnery_probe`. A hyphen is not a legal Minecraft
+  username: Velocity accepts it and Paper then kills the forwarded connection.
+- `spawnery-join` closes its connection when it returns, so the
+  `status.connectedPlayers` assertion needs `--hold`.
+- Whether a held connection is *counted* is unmeasured. It sits in the
+  configuration state, and the rig that measured the routing had no operator.
+  If the count reads zero, the fix is to play the configuration phase through
+  — two packet-id constants and one `case` in `holdOpen`, not a rewrite. Write
+  the runbook so that outcome is a recognisable branch rather than a puzzle.
 
 - [ ] **Step 2: Perform the runbook and record what happened**
 
