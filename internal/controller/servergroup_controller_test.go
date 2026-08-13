@@ -360,11 +360,25 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 
 	// setMinReplicas performs a real spec update, so the two servers already
 	// up go stale and the cold start orders one replacement. This fixture
-	// never reports for it, so it runs out its startup deadline and is kept:
-	// Failed servers are retained for failedRetentionSeconds (an hour by
-	// default), and the 65 passes above, at one resync each, do not run
-	// long enough to clear it. The corpse is asserted rather than filtered
-	// away, so a missing or a doubled one still fails this test.
+	// never reports for it, so it runs out its startup deadline and fails,
+	// and the corpse is kept: Failed servers are retained for
+	// failedRetentionSeconds (an hour by default), and the 65 passes above,
+	// at one resync each, do not run long enough to clear it.
+	//
+	// The group then builds one more replacement before the loop ends, and
+	// that second attempt is the backoff working rather than a leak. One
+	// failure buys ten seconds; the loop advances five seconds a pass, so
+	// the window closes two passes after the deadline expires and the cold
+	// start is permitted again. Nothing ever reports for that one either, so
+	// it is still starting when the loop stops — live, but not Ready.
+	//
+	// Until milestone 4d this settled on one live server, because 4b's
+	// cold-start suppression held every further attempt off for the whole
+	// retention hour after a single failure. Retiring that suppression is
+	// what makes the second attempt appear, and the wait that replaces it is
+	// ten seconds rather than an hour. Both live servers and the corpse are
+	// asserted rather than filtered away, so a missing or a doubled one
+	// still fails this test.
 	final := f.listServers(t)
 	var live, failed []spawneryv1alpha1.Server
 	for _, s := range final {
@@ -375,15 +389,35 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		live = append(live, s)
 	}
 
-	if len(live) != 1 || live[0].Name != busy {
+	var survivor, attempt *spawneryv1alpha1.Server
+	for i := range live {
+		if live[i].Name == busy {
+			survivor = &live[i]
+			continue
+		}
+		attempt = &live[i]
+	}
+	if len(live) != 2 || survivor == nil || attempt == nil {
 		names := make([]string, 0, len(live))
 		for _, s := range live {
 			names = append(names, s.Name)
 		}
-		t.Fatalf("live servers settled on %v, want only the occupied server %q", names, busy)
+		t.Fatalf("live servers settled on %v, want the occupied server %q and one further "+
+			"cold-start attempt: the backoff permits a second try ten seconds after the "+
+			"first replacement fails", names, busy)
 	}
-	if got := live[0].Status.Phase; got != string(phase.Ready) {
+	if got := survivor.Status.Phase; got != string(phase.Ready) {
 		t.Errorf("phase of the surviving server = %q, want Ready", got)
+	}
+	// The second live server is the attempt the closed window permitted, not
+	// a second survivor: the current generation's, and still starting.
+	if got := attempt.Spec.GroupGeneration; got != f.group.Generation {
+		t.Errorf("second live server's generation = %d, want %d: it is the current "+
+			"generation's next cold start, not a leftover", got, f.group.Generation)
+	}
+	if got := attempt.Status.Phase; got == string(phase.Ready) {
+		t.Errorf("second live server is %q; nothing reports for it in this fixture, so a "+
+			"Ready one means it is not the attempt this assertion is about", got)
 	}
 	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
 		t.Errorf("minAvailable = %d, want 1 — the surviving pod still carries players", got)
@@ -2670,5 +2704,85 @@ func TestBackingOffIsNotDecidedWithoutAUsableNetwork(t *testing.T) {
 	}
 	if degraded.Message != "backoff is not being decided: the group's network is not usable" {
 		t.Errorf("message = %q, want the not-decided message", degraded.Message)
+	}
+}
+
+// drainRecorder empties a FakeRecorder's buffer and throws the events away.
+// The channel is bounded and blocks its writer once full, and nothing in this
+// suite drains it, so a test that walks many servers through a whole lifecycle
+// wedges the reconciler mid-event rather than reaching its assertion. Only a
+// test that deliberately drives that much lifecycle needs this; scalingEvents
+// above drains as a side effect of counting, which is enough everywhere else.
+func drainRecorder(rec *record.FakeRecorder) {
+	for {
+		select {
+		case <-rec.Events:
+		default:
+			return
+		}
+	}
+}
+
+// TestGroupWithABrokenNewImageDoesNotRebuildEveryPass is the loop milestone
+// 4b's cold-start suppression was a stopgap for: a broken new image fails,
+// stops counting toward the group's size, and is recreated on the next
+// five-second pass, forever. It asserts the backoff bounds that loop, so the
+// stopgap can be removed without reopening it.
+//
+// Three deliberate departures from the obvious way to write this:
+//
+// Every server of the new generation is failed on each pass, rather than "the
+// one server that has not failed yet". The stale server the changeover is
+// replacing stays Ready throughout, so that description matches two servers
+// whenever a replacement exists and identifies neither — and a loop that
+// failed nothing would pass this test with the backoff, the stopgap and
+// everything else removed.
+//
+// The clock advances before each failure rather than after, so the first
+// failedAt is strictly newer than the stale server's readySince.
+// CountFailures restarts the streak on a success newer than the last counted
+// failure and a same-instant stamp is not after it, so without this the run
+// would count no failures at all.
+//
+// The bound is read off the backoff schedule rather than set at one more than
+// the cold start built. Ten passes move the clock fifty seconds; the windows
+// are ten, twenty and forty seconds, so two of them close inside the run and
+// the group legitimately builds two replacements on top of the cold start's
+// own server. A group rebuilding every pass would have built eleven.
+func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
+	const (
+		passes = 10
+		bound  = 3
+	)
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.markReady(t, f.oneServerName(t))
+
+	f.bumpGeneration(t) // the changeover begins; the cold start builds one
+	f.reconcileGroup(t, r)
+	generation := f.reloadGroup(t).Generation
+
+	// Every replacement fails immediately, and the clock moves only by the
+	// resync interval — far less than the backoff's first window.
+	for i := 0; i < passes; i++ {
+		// Both recorders, every pass: a group that rebuilt every pass — the
+		// failure this test exists to catch — produces ten servers' worth of
+		// lifecycle events, which is more than a FakeRecorder holds.
+		drainRecorder(f.reconc.Recorder.(*record.FakeRecorder))
+		drainRecorder(r.Recorder.(*record.FakeRecorder))
+		f.clock.Advance(resyncInterval)
+		for _, s := range f.serversOfGeneration(t, generation) {
+			if s.Status.Phase != string(phase.Failed) {
+				f.failServer(t, s.Name)
+			}
+		}
+		f.reconcileGroup(t, r)
+	}
+
+	if got := len(f.serversOfGeneration(t, generation)); got > bound {
+		t.Errorf("group built %d servers of the new generation across %d passes, want at most %d: "+
+			"the backoff must bound the loop", got, passes, bound)
 	}
 }

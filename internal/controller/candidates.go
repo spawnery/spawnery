@@ -267,16 +267,13 @@ const maxRetainedFailures = 1
 // says what broke; the previous generation's corpse says nothing about the new
 // image.
 //
-// It is load-bearing as well as truer. coldStart is suppressed only while a
-// Failed server of the *current* generation is retained (design §3.7), and that
-// suppression is the whole of 4b's guard against a broken new image being
-// re-created every five seconds. With maxRetainedFailures at 1, a purely
-// oldest-first rule keeps any inherited older failure and prunes the current
-// generation's — deleting the one thing doing the suppressing, on the same
-// reconcile that observes it, so the loop runs at time-to-fail instead of once
-// per retention window, and the corpse the operator is left with is the one that
-// says nothing. Preferring the newest generation is what gives coldStart a
-// suppression this function cannot take away.
+// It used to be load-bearing as well as truer: coldStart was suppressed while a
+// Failed server of the *current* generation was retained, and a purely
+// oldest-first rule would have pruned the very corpse doing the suppressing.
+// Milestone 4d retired that suppression — the per-group backoff bounds the loop
+// it stood in for, and the count it works from lives on the group's status
+// rather than on a corpse — so what is left here is the diagnosis argument
+// above, which was always the reason and is now the whole of it.
 //
 // Generations are compared numerically rather than against the group's current
 // one, which keeps this a pure two-argument selector: a Server is stamped with
