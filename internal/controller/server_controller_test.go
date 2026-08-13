@@ -1423,3 +1423,83 @@ func TestServerRetireFieldsRoundTripThroughTheAPIServer(t *testing.T) {
 		t.Error("status.retiringSince did not survive the API server; run make manifests")
 	}
 }
+
+// TestRetiringServerStampsItsClockAndDeregisters proves the server side of
+// Task 7's ask: a Server patched with spec.retire moves to phase Retiring,
+// stamps status.retiringSince so maxStaleSeconds has something to measure
+// from, and comes off the proxies so it stops taking joins — without moving
+// the players already on it.
+func TestRetiringServerStampsItsClockAndDeregisters(t *testing.T) {
+	f := newFixture(t)
+	bringUpReady(t, f, "a") // registered with the proxies
+
+	srv := f.server("a")
+	srv.Spec.Retire = true // what the group controller does
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcile("a")
+
+	got := f.server("a")
+	if got.Status.Phase != string(phase.Retiring) {
+		t.Errorf("phase = %q, want Retiring", got.Status.Phase)
+	}
+	if got.Status.RetiringSince == nil {
+		t.Error("retiringSince was not stamped, so maxStaleSeconds can never fire")
+	}
+	if got.Status.Registered {
+		t.Error("a retiring server is still registered, so it is still taking joins")
+	}
+}
+
+// retiringFor builds a Server that has been sitting in phase Retiring for d,
+// for the collectInputs unit tests below.
+func retiringFor(d time.Duration) *spawneryv1alpha1.Server {
+	since := metav1.NewTime(time.Now().Add(-d))
+	return &spawneryv1alpha1.Server{
+		Status: spawneryv1alpha1.ServerStatus{
+			Phase:         string(phase.Retiring),
+			RetiringSince: &since,
+		},
+	}
+}
+
+// groupWithMaxStale builds a ServerGroup configured with the given
+// maxStaleSeconds, for the collectInputs unit tests below.
+func groupWithMaxStale(seconds int32) *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			Update: &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: seconds},
+		},
+	}
+}
+
+// collectInputsReconciler is the minimal ServerReconciler collectInputs
+// needs: a Clock and an Agents registry, since collectInputs looks up the
+// agent snapshot unconditionally. It carries no client, so it only works
+// against Server/ServerGroup values built in memory, not ones read from
+// envtest.
+func collectInputsReconciler(clock func() time.Time) *ServerReconciler {
+	return &ServerReconciler{
+		Clock:  clock,
+		Agents: agent.New(clock, 5*time.Second, clock()),
+	}
+}
+
+func TestMaxStaleZeroNeverForcesADrain(t *testing.T) {
+	// The default. A retiring server with players waits indefinitely, which
+	// is the promise the whole feature makes.
+	in := collectInputsReconciler(time.Now).
+		collectInputs(retiringFor(time.Hour*24), groupWithMaxStale(0), nil, false)
+	if in.MaxStaleReached {
+		t.Error("MaxStaleReached with maxStaleSeconds = 0")
+	}
+}
+
+func TestMaxStaleFiresOnceTheWaitExceedsIt(t *testing.T) {
+	in := collectInputsReconciler(time.Now).
+		collectInputs(retiringFor(2*time.Minute), groupWithMaxStale(60), nil, false)
+	if !in.MaxStaleReached {
+		t.Error("MaxStaleReached is false after twice the configured wait")
+	}
+}
