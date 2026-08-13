@@ -1176,3 +1176,25 @@ intentional — the following points each concern only one of the two halves.
   the shared symlink, up to a half-written one mid-swap. `nix build
   --out-link` with two distinct names (e.g. `result-paper` and
   `result-velocity`) closes it; nothing does that today.
+- **`record.FakeRecorder`'s 100-event channel blocks its writer once full.**
+  Every fixture in `internal/controller` builds its recorder with
+  `record.NewFakeRecorder(100)`; the channel holds exactly that many events,
+  and a reconciler that emits a 101st blocks inside the `Send` call instead of
+  dropping it or erroring. A test that walks enough lifecycle to cross that
+  line does not fail — it hangs, and the only symptom is the package's
+  ten-minute `go test` timeout, with nothing in the output naming the
+  recorder or the channel; a mutant that should take a second to disprove can
+  look like a wedge instead. Milestone 4d hit this once, in
+  `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`
+  (`internal/controller/servergroup_controller_test.go`), which fails a
+  server on every one of ten passes and, unguarded, produces more than 100
+  events across the two recorders it shares. The fix there is local: a
+  `drainRecorder` helper next to the test empties both recorders once per
+  pass, a workaround for that one test, not of the fixture. Nothing stops the
+  next event-heavy test from hitting the same wall unwarned — milestone 4c's
+  proxy-drain and node-drain suites are the likeliest next hit, being the
+  same shape, many servers walked through many lifecycle events in one test.
+  The real fix belongs in the fixture itself, a recorder that grows or drops
+  past its buffer instead of blocking, the next time someone touches
+  `record.NewFakeRecorder`'s call sites in this package rather than adding a
+  second local drain.
