@@ -869,11 +869,15 @@ What `SessionsGone` does not resolve: `servergroup_controller.go`'s
 can still read true for a single resync for a server that has genuinely just
 started, if the informer's cache has not yet shown a pod the API server
 already created. A server caught in that window is credited zero for one
-pass instead of the full `maxPlayers` — under-, not over-provisioning, the
-safe direction, and the same shape of lag this flag already carried before
-this fix gave it a second reader: `isOccupied` has relied on it for the same
-reason since before 4b. It is worth naming here because 4b's cold start is
-the first place this risk feeds a scaling decision rather than only the
+pass instead of the full `maxPlayers`, so `provisionalCapacity`'s sum reads
+lower than the truth and `wanted` reads higher — over-creation for a resync
+or two, against the pre-fix entry's own under-creation above, and the safer
+direction of the two: a group with a server too many costs money, a group
+with a server too few costs joins. It is the same shape of lag this flag
+already carried before this fix gave it a second reader: `isOccupied` has
+relied on it for the same reason since before 4b. It is worth naming here
+because 4b's cold start is the first place this risk feeds a scaling
+decision rather than only the
 occupied-pod protection.
 
 **`derivePhase` still measures readiness against `DesiredReplicas()`, and that
