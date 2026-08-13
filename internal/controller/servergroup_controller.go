@@ -214,10 +214,21 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if decision.Limited {
 			limited.Status = metav1.ConditionTrue
 			limited.Reason = spawneryv1alpha1.ReasonMaxReplicasReached
-			limited.Message = fmt.Sprintf(
-				"%d more server(s) needed to cover spareSlots %d; maxReplicas %d allows %d now",
-				decision.Wanted, group.Spec.Scaling.SpareSlots,
-				group.Spec.Scaling.MaxReplicas, decision.Create)
+			if decision.ColdStartBlocked {
+				// The cold-start-refused case: Wanted and Create are both 0,
+				// so the ordinary-shortfall message below would tell the
+				// operator nothing is needed — the opposite of the truth.
+				// The group is at its ceiling and the changeover cannot
+				// begin; raising maxReplicas by one is the way out.
+				limited.Message = fmt.Sprintf(
+					"changeover cannot begin: the group is already at maxReplicas %d; raise it by at least 1 to start the new generation",
+					group.Spec.Scaling.MaxReplicas)
+			} else {
+				limited.Message = fmt.Sprintf(
+					"%d more server(s) needed to cover spareSlots %d; maxReplicas %d allows %d now",
+					decision.Wanted, group.Spec.Scaling.SpareSlots,
+					group.Spec.Scaling.MaxReplicas, decision.Create)
+			}
 		}
 		if !sized {
 			// Nothing was decided this pass, so the False above is the absence

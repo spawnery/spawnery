@@ -1568,8 +1568,13 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	if cond.Reason != spawneryv1alpha1.ReasonMaxReplicasReached {
 		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonMaxReplicasReached)
 	}
-	if !strings.Contains(cond.Message, "maxReplicas") {
-		t.Errorf("message = %q, want it to name the limit that is holding", cond.Message)
+	// Pinned down exactly, not just "contains maxReplicas": this is the
+	// ordinary-shortfall message, and it must stay distinct from the
+	// cold-start-refused message in TestGroupSaysColdStartIsBlockedByTheCeiling
+	// so the two can never silently converge again.
+	wantMsg := "1 more server(s) needed to cover spareSlots 40; maxReplicas 1 allows 0 now"
+	if cond.Message != wantMsg {
+		t.Errorf("message = %q, want %q", cond.Message, wantMsg)
 	}
 	if group.Status.Phase == "" {
 		t.Error("phase went empty")
@@ -1608,5 +1613,67 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	}
 	if got := scalingEvents(rec, spawneryv1alpha1.ReasonWithinLimits); got != 1 {
 		t.Errorf("%d WithinLimits events when the ceiling was raised, want exactly 1", got)
+	}
+}
+
+// TestGroupSaysColdStartIsBlockedByTheCeiling covers the other way Limited
+// gets set: a group pinned at maxReplicas with no shortfall of its own, whose
+// one running server has just gone stale. Wanted and Create are both 0 here
+// — exactly as they are when nothing is limited at all — so the message must
+// name the real cause (the changeover is stalled at the ceiling) rather than
+// the ordinary-shortfall wording, which would tell the operator that nothing
+// is needed. This is the case the Important review finding on Task 5 was
+// about: it must stay distinct from TestGroupSaysWhenItsCeilingHoldsCapacityBack's
+// message so the two can never silently converge again.
+func TestGroupSaysColdStartIsBlockedByTheCeiling(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+
+	f.group.Spec.Scaling.MaxReplicas = 1
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want 1", len(servers))
+	}
+	bringUpNamed(t, f, servers[0].Name)
+	f.reconcileGroup(t, r)
+
+	// A real spec update bumps the group's generation, so the server just
+	// brought up goes stale. It is empty (100 free of 100 slots, well past
+	// spareSlots 40), so nothing about capacity is short — the only reason
+	// to create anything now is the cold start, and the ceiling (maxReplicas
+	// still 1, one server already alive) has no room left to grant it.
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("ScalingLimited = %+v, want True with the ceiling refusing the cold start", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonMaxReplicasReached {
+		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonMaxReplicasReached)
+	}
+	wantMsg := "changeover cannot begin: the group is already at maxReplicas 1; raise it by at least 1 to start the new generation"
+	if cond.Message != wantMsg {
+		t.Errorf("message = %q, want %q", cond.Message, wantMsg)
+	}
+	if strings.Contains(cond.Message, "0 more server") {
+		t.Errorf("message = %q, must never claim nothing is needed while the changeover is refused", cond.Message)
 	}
 }

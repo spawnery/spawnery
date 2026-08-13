@@ -69,13 +69,23 @@ type SizeDecision struct {
 	// Delete names the servers to remove now.
 	Delete []string
 	// Wanted is how many servers the spare-slot rule asked for, before the
-	// ceiling. Wanted > Create is the definition of Limited.
+	// ceiling. Limited is true either because Wanted exceeds Create — the
+	// ordinary shortfall — or because the ceiling refused the one server a
+	// generation changeover needs to begin, in which case Wanted stays 0 and
+	// ColdStartBlocked, not Wanted, is what says why.
 	Wanted int32
 	// Surplus is how many servers the ceiling asked to have removed, whether
 	// or not that many could be nominated.
 	Surplus int32
 	// Limited is true while maxReplicas is holding capacity back.
 	Limited bool
+	// ColdStartBlocked is true when Limited is set because the ceiling
+	// refused a changeover's cold start rather than because of an ordinary
+	// capacity shortfall. Wanted is 0 in both that case and the unlimited
+	// "nothing is short" case, so it cannot distinguish them on its own —
+	// this field is the explicit signal the caller that builds the
+	// operator-facing ScalingLimited message needs to tell them apart.
+	ColdStartBlocked bool
 }
 
 // provisionalCapacity is one server's contribution to the figure the scale-up
@@ -248,12 +258,16 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	// A cold start the ceiling refuses is a changeover that cannot begin.
 	// Stalling is correct — a lowered maxReplicas is an instruction — but it
 	// must be visible, and ScalingLimited is the condition that says exactly
-	// "the ceiling is holding capacity back".
-	limited := wanted > granted || (cold && granted < 1)
+	// "the ceiling is holding capacity back". coldBlocked is carried apart
+	// from limited because Wanted is 0 in this case exactly as it is when
+	// nothing is short — it is the only field that lets the message the
+	// operator sees name which of the two is actually happening.
+	coldBlocked := cold && granted < 1
+	limited := wanted > granted || coldBlocked
 
 	if create > 0 {
 		if granted > 0 {
-			return SizeDecision{Create: granted, Wanted: wanted, Limited: limited}
+			return SizeDecision{Create: granted, Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
 		}
 		// No room to grow. Being short of capacity is not a reprieve from the
 		// ceiling: a lowered maxReplicas is an instruction, and a group that
@@ -264,13 +278,14 @@ func DecideSize(in ScalingInputs) SizeDecision {
 		// has just said it needs.
 		if surplus := alive - in.MaxReplicas; surplus > 0 {
 			return SizeDecision{
-				Wanted:  wanted,
-				Limited: limited,
-				Surplus: surplus,
-				Delete:  SelectDeletionCandidates(deletable(in), int(surplus)),
+				Wanted:           wanted,
+				Limited:          limited,
+				ColdStartBlocked: coldBlocked,
+				Surplus:          surplus,
+				Delete:           SelectDeletionCandidates(deletable(in), int(surplus)),
 			}
 		}
-		return SizeDecision{Wanted: wanted, Limited: limited}
+		return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
 	}
 
 	if surplus := alive - in.MaxReplicas; surplus > 0 {

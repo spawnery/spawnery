@@ -188,6 +188,9 @@ func TestDecideSizeReportsTheCeilingHoldingCapacityBack(t *testing.T) {
 	if !got.Limited {
 		t.Error("Limited = false, want true: the ceiling is holding capacity back")
 	}
+	if got.ColdStartBlocked {
+		t.Error("ColdStartBlocked = true, want false: this is the ordinary shortfall, not a refused cold start")
+	}
 	if len(got.Delete) != 0 {
 		t.Errorf("Delete = %v, want none: a group short of capacity does not also shrink", got.Delete)
 	}
@@ -538,6 +541,13 @@ func TestDecideSizeReportsAColdStartTheCeilingRefuses(t *testing.T) {
 	}
 	if !got.Limited {
 		t.Error("Limited = false, want true so the stalled changeover is visible")
+	}
+	if !got.ColdStartBlocked {
+		t.Error("ColdStartBlocked = false, want true: Wanted is 0 here same as the unlimited case, " +
+			"and ColdStartBlocked is the only field that tells them apart")
+	}
+	if got.Wanted != 0 {
+		t.Errorf("Wanted = %d, want 0 — this case is defined by Wanted staying 0 despite Limited", got.Wanted)
 	}
 }
 
