@@ -1147,6 +1147,49 @@ func TestDecideSizeStillReportsARefusedColdStartWithNothingToShed(t *testing.T) 
 	}
 }
 
+// TestDecideSizeDoesNotShedForARealShortfallEvenWhenTheColdStartIsRefused is
+// the other half of the guard the fall-through above depends on: `demanded <
+// 1`, captured before the cold start's own bump, is what tells "this pass
+// wanted nothing anyway" apart from "this pass is genuinely short and the
+// cold start ate the only slot the ceiling had". Dropping `&& demanded < 1`
+// from `coldOnly` passes the rest of the package, because the per-candidate
+// feasibility test in the demand rule usually catches a real shortfall on its
+// own — `provisional >= readyFree(pool)` for an ordinary view. It does not
+// here: x is Ready with SessionsGone, so provisionalCapacity credits it 0
+// while readyContribution, which has no SessionsGone test, credits it in
+// full. The spare-slot rule reads 10 free (from c alone) against 100 wanted
+// and asks for a server; the feasibility test reads x's phantom 100 and finds
+// room to shed c instead. Both x and c are stale (generation 3, one
+// generation behind), so the cold start is refused at the ceiling and the
+// fall-through is exactly what is being exercised.
+func TestDecideSizeDoesNotShedForARealShortfallEvenWhenTheColdStartIsRefused(t *testing.T) {
+	x := ready("x", 0, 100)
+	x.Generation = 3
+	x.SessionsGone = true
+	x.EmptyFor = 10 * time.Minute
+
+	c := ready("c", 0, 10)
+	c.Generation = 3
+	c.EmptyFor = 10 * time.Minute
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{x, c},
+		Generation: 4, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 2, SpareSlots: 100, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0 — the ceiling refuses the cold start", got.Create)
+	}
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: the group is short of capacity (demanded == "+
+			"1), and shedding c would take away capacity it just said it needs", got.Delete)
+	}
+	if !got.Limited {
+		t.Errorf("Limited = %v, want true — the shortfall is real and stays visible", got.Limited)
+	}
+}
+
 // TestPruningDoesNotTakeAwayTheColdStartSuppression is the interaction §3.7's
 // guard depends on and no task-scoped review was positioned to see. The
 // suppression reads a Failed server of the current generation; pruning decides
@@ -1195,6 +1238,13 @@ func TestPruningDoesNotTakeAwayTheColdStartSuppression(t *testing.T) {
 // spare-slot rule one server above the ceiling. At maxUnavailable 2 the group
 // holds maxReplicas + 2 Server objects, and design §3.3 and acceptance
 // criterion 5 are true only at the default of 1.
+//
+// The two retirements here are set up directly on the fixture (already
+// Retiring, Retire: true), so this test reaches its assertions through the
+// create path and never calls selectRetirement — MaxUnavailable is inert to
+// this particular outcome. That is fine: this test is about the overhang
+// bound, not the budget rule that lets a second retirement start.
+// TestDecideSizeGrantsASecondRetirementAtBudgetTwo covers that rule.
 func TestDecideSizeOverhangIsMaxUnavailableServersNotOne(t *testing.T) {
 	retiring := func(name string) ServerView {
 		v := staleReady(name, 50, 100, 3)
@@ -1219,6 +1269,44 @@ func TestDecideSizeOverhangIsMaxUnavailableServersNotOne(t *testing.T) {
 	if overhang := int32(len(views)) + got.Create - ceiling; overhang != 2 {
 		t.Errorf("overhang = %d Server objects above maxReplicas, want 2 — the bound "+
 			"is maxUnavailable, not one, and the design says one", overhang)
+	}
+}
+
+// TestDecideSizeGrantsASecondRetirementAtBudgetTwo is the budget-2 boundary
+// that TestDecideSizeRespectsTheUpdateBudget never exercises: that test (and
+// every other MaxUnavailable >= 2 fixture in this package, see
+// TestDecideSizeOverhangIsMaxUnavailableServersNotOne) only shows the create
+// path with the retirements already in flight. This is the same fixture as
+// TestDecideSizeRespectsTheUpdateBudget, one retirement already in flight and
+// one stale candidate waiting, but at MaxUnavailable: 2 rather than 1 — the
+// budget selectRetirement actually reads.
+func TestDecideSizeGrantsASecondRetirementAtBudgetTwo(t *testing.T) {
+	retiring := staleReady("first", 5, 100, 3)
+	retiring.Phase = phase.Retiring
+	retiring.Retire = true
+	views := []ServerView{retiring, staleReady("second", 5, 100, 3), ready("new", 0, 100)}
+
+	got := DecideSize(ScalingInputs{
+		Views:      views,
+		Generation: 0, MaxUnavailable: 2,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 1 || got.Retire[0] != "second" {
+		t.Fatalf("Retire = %v, want [second]: one retirement already in flight leaves "+
+			"one slot free of a budget of 2", got.Retire)
+	}
+
+	// The boundary the case above crosses: the identical fixture at the
+	// default budget of 1 declines, as TestDecideSizeRespectsTheUpdateBudget
+	// already pins.
+	got = DecideSize(ScalingInputs{
+		Views:      views,
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none at budget 1 — the same fixture that grants a "+
+			"nomination at budget 2 must decline it here", got.Retire)
 	}
 }
 
