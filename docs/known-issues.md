@@ -854,6 +854,28 @@ right signal is already on the view and unused here: `ServerView.SessionsGone`,
 one line at the top of the function. It belongs with 4b's own work on
 `scaling.go`.
 
+*Met* by `54a2ef2`: `provisionalCapacity` now tests `ServerView.SessionsGone`
+before the `Slots == 0` credit, exactly the one line this entry named, so a
+server whose pod has vanished is no longer credited a full `maxPlayers` it
+does not have. The obvious fix this entry warned against — testing `Stale`
+instead — stays wrong for the reason given above, and is now pinned rather
+than merely argued: `TestProvisionalCapacityStillCreditsAStartingServer` is
+the regression guard that fails if `Stale` is swapped in for `SessionsGone`,
+because a genuinely starting server is stale too and would then be credited
+zero, reintroducing the runaway this rule exists to prevent.
+
+What `SessionsGone` does not resolve: `servergroup_controller.go`'s
+`SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod))`
+can still read true for a single resync for a server that has genuinely just
+started, if the informer's cache has not yet shown a pod the API server
+already created. A server caught in that window is credited zero for one
+pass instead of the full `maxPlayers` — under-, not over-provisioning, the
+safe direction, and the same shape of lag this flag already carried before
+this fix gave it a second reader: `isOccupied` has relied on it for the same
+reason since before 4b. It is worth naming here because 4b's cold start is
+the first place this risk feeds a scaling decision rather than only the
+occupied-pod protection.
+
 **`derivePhase` still measures readiness against `DesiredReplicas()`, and that
 field's meaning changed under it this milestone.** Before 4a,
 `DesiredReplicas()` in `api/v1alpha1/servergroup_types.go` was the size the
