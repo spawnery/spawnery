@@ -253,9 +253,9 @@ func (g *ServerGroup) IsEphemeral() bool {
 	return g.Spec.Type == ServerGroupEphemeral
 }
 
-// DesiredReplicas is the number of servers the group must have at minimum.
-// Milestone 1 sizes ephemeral groups at their floor; slot-based scaling on top
-// of this arrives in milestone 4.
+// DesiredReplicas is the number of servers the group must have at minimum. For
+// an ephemeral group it is the floor only: the size it actually runs at is
+// DecideSize's, which reads this as one input among several.
 func (g *ServerGroup) DesiredReplicas() int32 {
 	if g.IsEphemeral() {
 		if g.Spec.Scaling == nil {

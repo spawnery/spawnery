@@ -53,11 +53,12 @@ func (f *fixture) groupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
 // groupReconciler wires a ServerGroup reconciler onto an existing fixture.
 func groupReconciler(f *fixture) *ServerGroupReconciler {
 	return &ServerGroupReconciler{
-		Client:   f.c,
-		Scheme:   f.reconc.Scheme,
-		Recorder: record.NewFakeRecorder(100),
-		Agents:   f.agents,
-		Clock:    f.clock.Now,
+		Client:       f.c,
+		Scheme:       f.reconc.Scheme,
+		Recorder:     record.NewFakeRecorder(100),
+		Agents:       f.agents,
+		Clock:        f.clock.Now,
+		Expectations: newExpectations(f.clock.Now),
 	}
 }
 
@@ -300,7 +301,13 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 
 	f.setMinReplicas(t, 1)
 
-	for i := 0; i < 60; i++ {
+	// 60 passes would only reach 295 seconds of emptiness at the last check —
+	// five short of the CRD's 300-second stabilization default — so the idle
+	// server would never clear DecideSize's stabilization gate and the loop
+	// would end with both servers still standing. The extra passes cover that
+	// window and the few more resyncs the drain itself needs once the removal
+	// is ordered: Draining, then Terminating, then the object actually gone.
+	for i := 0; i < 65; i++ {
 		// Live agents keep reporting, so no count goes stale by accident: the
 		// test must exercise the occupied rule, not the staleness rule.
 		for name, uid := range uids {
@@ -816,6 +823,31 @@ func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T)
 	f := newFixture(t)
 	r := groupReconciler(f)
 
+	// SpareSlots drops to zero so this test isolates the question it actually
+	// asks — which of the two candidates DecideSize picks — from the separate
+	// question TestDecideSizeKeepsEnoughFreeSlotsAfterTheRemoval already
+	// answers: whether a removal may proceed at all. The victim never becomes
+	// Ready again, so with the fixture's default spareSlots of 40 the peer is
+	// the group's only source of verified free capacity and removing it would
+	// always fall short, regardless of which server is the better candidate —
+	// the group would never converge, no matter how many passes ran.
+	//
+	// The stabilization window drops from the CRD's 300-second default too,
+	// and for a reason that has nothing to do with scaling: the fixture's
+	// StartupDeadline is also five minutes, and the victim never becomes Ready.
+	// A loop long enough to clear a 300-second stabilization window is also
+	// long enough for the victim to hit its own startup deadline and fail out
+	// on its own — which would drop it out of countsTowardSize and stop the
+	// demand rule before it ever nominates the peer, passing the test for an
+	// unrelated reason. A short window lets the peer's removal converge well
+	// inside that budget, so the invariant under test — the stale-but-occupied
+	// server is never the one picked — is what actually decides the outcome.
+	f.group.Spec.Scaling.SpareSlots = 0
+	f.group.Spec.Scaling.ScaleDownStabilizationSeconds = 20
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+
 	f.setMinReplicas(t, 2)
 	f.reconcileGroup(t, r)
 
@@ -858,6 +890,9 @@ func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T)
 
 	f.setMinReplicas(t, 1)
 
+	// The peer needs its 20-second stabilization window before DecideSize will
+	// nominate it, plus a few more resyncs for the drain that follows to
+	// actually finish.
 	for i := 0; i < 30; i++ {
 		_ = f.agents.ReportPlayers(uids[peer], 0, 100)
 		for _, s := range f.listServers(t) {
@@ -928,19 +963,34 @@ func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
 		f.clock.Advance(resyncInterval)
 	}
 
+	// spareSlots keeps its fixture default of 40 free player slots, and
+	// countsTowardSize excludes Phase == Failed from what counts toward it —
+	// so once pruning is down to the one failure it keeps for diagnosis,
+	// DecideSize still sees zero verified free capacity and orders one
+	// replacement to hold those slots. That replacement sits alongside the
+	// retained failure, not in place of it: two servers, not one, is the
+	// correct count once the group is actually sizing itself.
 	final := f.listServers(t)
-	if len(final) != 1 {
+	if len(final) != 2 {
 		remaining := make([]string, 0, len(final))
 		for _, s := range final {
-			remaining = append(remaining, s.Name)
+			remaining = append(remaining, fmt.Sprintf("%s(%s)", s.Name, s.Status.Phase))
 		}
-		t.Fatalf("group retained %v, want exactly one failure kept for diagnosis", remaining)
+		t.Fatalf("group retained %v, want exactly one failure kept for diagnosis "+
+			"plus the spare-slot replacement", remaining)
 	}
-	if !final[0].DeletionTimestamp.IsZero() {
-		t.Errorf("the retained failure %q is being removed; one must be kept", final[0].Name)
+
+	var retained *spawneryv1alpha1.Server
+	for i := range final {
+		if final[i].Status.Phase == string(phase.Failed) {
+			retained = &final[i]
+		}
 	}
-	if got := final[0].Status.Phase; got != string(phase.Failed) {
-		t.Errorf("phase of the retained server = %q, want Failed", got)
+	if retained == nil {
+		t.Fatalf("no server in %v is Failed, want exactly one kept for diagnosis", final)
+	}
+	if !retained.DeletionTimestamp.IsZero() {
+		t.Errorf("the retained failure %q is being removed; one must be kept", retained.Name)
 	}
 }
 
@@ -1280,11 +1330,12 @@ func TestServerGroupConfigMapWrittenBeforeTheServer(t *testing.T) {
 	f := newFixture(t)
 	recorder := &createOrderRecorder{Client: f.c}
 	r := &ServerGroupReconciler{
-		Client:   recorder,
-		Scheme:   f.reconc.Scheme,
-		Recorder: record.NewFakeRecorder(100),
-		Agents:   f.agents,
-		Clock:    f.clock.Now,
+		Client:       recorder,
+		Scheme:       f.reconc.Scheme,
+		Recorder:     record.NewFakeRecorder(100),
+		Agents:       f.agents,
+		Clock:        f.clock.Now,
+		Expectations: newExpectations(f.clock.Now),
 	}
 
 	f.reconcileGroup(t, r)
@@ -1301,5 +1352,113 @@ func TestServerGroupConfigMapWrittenBeforeTheServer(t *testing.T) {
 		t.Errorf("ConfigMap created at position %d, Server at %d — want the ConfigMap first: "+
 			"ServerReconciler can only build a pod for a Server that already exists, so a ConfigMap "+
 			"written before the Server is written before any pod that could reference it", cmIdx, srvIdx)
+	}
+}
+
+// TestGroupCreatesTheShortfallOnceWhileTheNewServersStart is the test that
+// carries this milestone.
+//
+// A group short of spare slots orders replacements. Those replacements are not
+// Ready for tens of seconds, and a scaler reading status.freeSlots would see the
+// same shortfall on every five-second pass and order the same replacement again,
+// until maxReplicas stopped it. An assertion on a single decision cannot see
+// that; only one that keeps reconciling can.
+func TestGroupCreatesTheShortfallOnceWhileTheNewServersStart(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// minReplicas 1, maxReplicas 5, spareSlots 40, maxPlayers 100.
+	f.group.Spec.Scaling.MaxReplicas = 5
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want the floor of 1", len(servers))
+	}
+	uid := bringUpNamed(t, f, servers[0].Name)
+	if err := f.agents.ReportPlayers(uid, 70, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+
+	// 30 free slots against 40 spare: exactly one server short.
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != 2 {
+		t.Fatalf("got %d servers after the shortfall, want 2", got)
+	}
+
+	// Ten more passes while the new server has no pod and no agent. Its
+	// capacity is ordered, so nothing more may be ordered on top of it.
+	//
+	// The first server keeps reporting throughout, as a real agent does every
+	// five seconds. Without that its count would go stale after two intervals
+	// and the test would pass for the wrong reason — a stale server contributes
+	// nothing either.
+	for i := 0; i < 10; i++ {
+		f.clock.Advance(resyncInterval)
+		if err := f.agents.ReportPlayers(uid, 70, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcileGroup(t, r)
+	}
+	if got := len(f.listServers(t)); got != 2 {
+		t.Fatalf("got %d servers after ten further passes, want 2 — the scaler "+
+			"ordered the same replacement again while it was still starting", got)
+	}
+}
+
+func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.setMinReplicas(t, 3)
+	f.reconcileGroup(t, r)
+	uids := map[string]string{}
+	for _, s := range f.listServers(t) {
+		uids[s.Name] = bringUpNamed(t, f, s.Name)
+	}
+	f.setMinReplicas(t, 1)
+
+	// All three are empty, but none has waited out the window yet.
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != 3 {
+		t.Fatalf("got %d servers before the window elapsed, want 3", got)
+	}
+
+	// The window is the CRD default, 300 seconds. The agents keep reporting
+	// across it, as real ones do: a count older than twice the report interval
+	// is stale, and stale counts as occupied. A repeated zero must not restart
+	// the emptiness window, which is what makes this assertion meaningful.
+	f.clock.Advance(301 * time.Second)
+	for _, uid := range uids {
+		if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+	}
+	f.reconcileGroup(t, r)
+
+	var leaving int
+	for _, s := range f.listServers(t) {
+		if !s.DeletionTimestamp.IsZero() {
+			leaving++
+		}
+	}
+	if leaving != 1 {
+		t.Fatalf("%d servers marked for deletion, want exactly one per pass", leaving)
+	}
+}
+
+func TestGroupRecordsWhatItIssued(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+
+	creates, _ := r.Expectations.pending(f.ns + "/lobby")
+	if creates != 1 {
+		t.Errorf("pending creates = %d right after the create, want 1: size() "+
+			"did not record what it issued", creates)
 	}
 }
