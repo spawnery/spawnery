@@ -1588,6 +1588,8 @@ git commit -m "feat(4b): a server carries out its retirement and bounds the wait
 
 This one is written last on purpose: it asserts the behaviour the milestone promises rather than any single rule, so it should pass the moment Tasks 1–8 are correct and fail if any of them regresses.
 
+> **Correction, made during execution.** The four assertions below are not enough, and the test as first written passed *with Task 3's `leaving()` change reverted* — the one line the whole surge mechanism rests on. With `spareSlots` at 40 and `maxPlayers` at 100 a single fresh replacement covers the reserve on its own, so whether a retiring server still counts toward the group's size never changes any of the four outcomes. The headline end-to-end test could not fail for the mechanism it exists to prove. Raise the fixture's `spareSlots` to 150 so one replacement no longer covers it, and add a fifth assertion: **the group creates a backfill replacement for the capacity a retiring server stops contributing.** Step 3's revert-and-confirm then produces a real failure, naming the missing backfill. Without both changes, step 3 will report success while proving nothing.
+
 ```go
 func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T) {
 	// The milestone's acceptance criterion, in one test: two occupied stale
