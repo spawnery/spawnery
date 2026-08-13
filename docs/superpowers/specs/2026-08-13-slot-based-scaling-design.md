@@ -78,6 +78,18 @@ field documents — ready servers of the current generation — because 4b's
 rolling update depends on exactly that meaning. **Two numbers, two purposes.**
 They must not be unified later.
 
+**4a is generation-blind, and that is not an oversight.** Every edit to a
+`ServerGroup` spec raises its `generation`. A scale-up rule that counted only
+servers of the current generation would find, the instant any field changed,
+that no running server contributes anything — and would order a full
+replacement set up to `maxReplicas` on the next five-second pass. That is a
+rolling update without `maxUnavailable`, without soft drain and without the
+"at least one ready server of the new generation" guarantee: 4b's work, done
+early and unbraked. So 4a's own two figures ignore the generation entirely,
+and the generation filter arrives in 4b together with the rules that make it
+safe. `AggregateGroup` keeps its filter unchanged, because `status.freeSlots`
+is an observation today and 4b's rolling update is what will read it.
+
 **The empty-since timestamp lives in memory, in the registry.** Design §6.4
 already puts the scaling inputs there: "the operator keeps them in memory —
 that is where the scaling logic makes its decisions." An operator restart
@@ -131,7 +143,6 @@ otherwise. Three edges, decided here so nobody has to guess:
 ```go
 type ScalingInputs struct {
 	Views          []ServerView
-	Generation     int64
 	MinReplicas    int32
 	MaxReplicas    int32
 	SpareSlots     int32
@@ -157,8 +168,9 @@ five-second resync the scaler would see the same shortfall six to twelve times
 and order the same replacement each time, until `maxReplicas` stopped it. That
 is not an edge case; it is what every scale-up would do.
 
-The scale-up rule therefore sums, over each server of the **current
-generation** that `countsTowardSize()` and is not pending deletion:
+The scale-up rule therefore sums, over each server that `countsTowardSize()`
+and is not pending deletion — whatever its generation, for the reason §3
+gives:
 
 | State | Contribution | Why |
 |---|---|---|
@@ -187,15 +199,17 @@ went quiet: the first has never reported, the second has.
 5. Otherwise, if `alive > MinReplicas`: delete **one** server, chosen by
    `SelectDeletionCandidates` from the candidates that additionally satisfy
    `Players == 0 && !Stale && EmptyFor >= Stabilization` and
-   `FreeSlots - contribution(v) >= SpareSlots`. `FreeSlots` here is
-   `AggregateGroup(views, generation).FreeSlots` — the real aggregate, not the
-   provisional figure, because scale-down must not count capacity that has not
-   arrived. `contribution(v)` is what that one server adds to that aggregate by
-   the same rule: `max(0, Slots - Players)` when it is `Ready`, of the current
-   generation and fresh, and zero otherwise — so removing a server that
-   contributes nothing is tested against an unchanged total. Each candidate is
-   tested independently, so an infeasible head does not hide a feasible tail.
-   One per pass: every deletion
+   `readyFree - contribution(v) >= SpareSlots`. `readyFree` is the sum of
+   `max(0, Slots - Players)` over the servers that are `Ready` with a fresh
+   count — the arrived capacity, not the provisional figure, because
+   scale-down must not count capacity that has not turned up yet.
+   `contribution(v)` is that same expression for the one candidate, and zero
+   for a server that is not `Ready` or not fresh, so removing a server that
+   contributes nothing is tested against an unchanged total. Both are computed
+   in `scaling.go` rather than taken from `AggregateGroup`, which filters by
+   generation and would freeze every scale-down after a spec edit. Each
+   candidate is tested independently, so an infeasible head does not hide a
+   feasible tail. One per pass: every deletion
    costs a drain cycle, and a five-second resync converges quickly enough.
 
 `MaxPlayers <= 0` cannot reach step 2 — the CRD requires it — but the division
@@ -304,9 +318,12 @@ false and the group is quiet again.
 
 ## 7. What 4a deliberately does not do
 
-- **Rolling updates.** Stale generations, soft drain, `maxUnavailable`,
-  `maxStaleSeconds` — 4b. `AggregateGroup` already excludes stale generations
-  from `FreeSlots`, which is the hook 4b needs and 4a does not use.
+- **Rolling updates, and with them any notice of the generation at all.**
+  Stale generations, soft drain, `maxUnavailable`, `maxStaleSeconds` — 4b.
+  `AggregateGroup` already excludes stale generations from `FreeSlots`, which
+  is the hook 4b needs; 4a's own rules do not read it, because a
+  generation-aware scale-up without the rest of the rolling-update rules
+  surges a full replacement set on every spec edit (§3).
 - **Per-group exponential backoff and a `Degraded` condition on repeated
   failures.** Listed in `docs/known-issues.md` as a milestone 4 precondition;
   it touches `pruneFailed` and the failure path, which 4b touches anyway.
@@ -397,9 +414,18 @@ returns.
 
 ## 11. What 4a leaves open
 
-- **`status.freeSlots` and provisional free slots are two numbers.** Anyone
-  reading the code for the first time will want to unify them. §3 and §4.2
-  say why they must not be; `docs/known-issues.md` gets the same entry.
+- **`status.freeSlots` and the scaler's two figures are not the same number,
+  and differ in two ways.** `AggregateGroup` filters by generation and counts
+  only `Ready` servers; `provisionalCapacity` credits ordered-but-unarrived
+  capacity and ignores the generation; `readyFree` sits between them. Anyone
+  reading the code for the first time will want to unify them. §3 and §4.2 say
+  why they must not be, and `docs/known-issues.md` gets the same entry so a
+  search finds it.
+- **4a's blindness to the generation means a group freezes nothing and rolls
+  nothing.** After a spec edit it goes on scaling exactly as before, on
+  servers of the old generation, until 4b teaches it the difference. That is
+  the intended state between the two sub-milestones, not a defect to be fixed
+  locally.
 - **Scale-down removes one server per pass.** With a large group emptying at
   once, returning to the floor takes one resync per server. Deliberate, and
   revisit only if it is ever measured to matter.
