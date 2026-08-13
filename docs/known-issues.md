@@ -918,25 +918,58 @@ produces a fourth server, of the new generation, before it produces a shrink,
 because the spec edit that lowered the floor is the same edit that staled the
 three servers already running.
 
-**A group at its ceiling cannot start a changeover.** The cold start (design
+**A group at its ceiling with nothing to shed cannot start a changeover, and
+one that is holding a stuck retiree does not say why.** The cold start (design
 §3.3) is a create like any other, so a group whose `maxReplicas` equals its
-current size stalls with its old generation serving. That is correct — a
-lowered ceiling is an instruction, not a suggestion — and it is not silent:
-`DecideSize` sets `Limited` and, in this specific case, `ColdStartBlocked`, so
-the `ScalingLimited` condition carries a message naming the cold start
-specifically rather than an ordinary capacity shortfall. Raising `maxReplicas`
-by one is the way out.
+current size cannot simply build the first server of the new generation. It
+first tries to make its own room: a refused cold start that was the only thing
+the pass wanted falls through to the demand rule, which sheds an idle stale
+server if there is one, and the next pass then starts the changeover. Only when
+there is genuinely nothing to shed does the group stall with its old generation
+serving. That stall is correct — a lowered ceiling is an instruction, not a
+suggestion — and it is not silent: `DecideSize` sets `Limited` and, in this
+specific case, `ColdStartBlocked`, so the `ScalingLimited` condition carries a
+message naming the cold start specifically rather than an ordinary capacity
+shortfall. Raising `maxReplicas` by one is the way out.
+
+There is a second way a changeover stops, and this one *is* silent. A server
+the group has just patched `spec.retire: true` onto, which loses readiness
+before the `Server` controller next reconciles, goes to `Starting` rather than
+`Retiring` (`phase.Decide` tests the readiness loss first, deliberately) while
+`spec.retire` stays true. If it recovers to `Ready` it retires normally. If it
+never does, `StartupDeadlineReached` fails it — and a `Failed` server carrying
+`spec.retire` holds the whole `maxUnavailable` budget for its retention window,
+an hour by default, with no condition, no event and nothing telling an operator
+why no further server is retiring. This matches design §3.8 as written ("a
+server counts against the budget while its `spec.retire` is true"); the spec
+did not consider a retiree that never retires, and the behaviour errs
+conservative — fewer retirements, never a disconnection — so it is carried
+rather than changed. `kubectl get servers -o custom-columns` showing
+`spec.retire` alongside the phase is what answers it today. Both of these
+present the same way from outside — the changeover stopped — and the difference
+is that the first one names itself on the group's conditions and the second
+does not.
 
 **The cold-start loop is only half-closed.** A broken new image fails, drops
 out of `countsTowardSize`, and would be re-created every five-second pass
 forever; 4b suppresses the cold start while a `Failed` server of the current
 generation is retained, so the interval becomes `failedRetentionSeconds` (an
-hour by default) instead of five seconds. That is a guard on 4b's own door,
-not backoff — it does nothing for the floor rule, which has the identical loop
-and keeps it. `maxRetainedFailures = 1` still caps only the footprint of the
-failure, not the rate at which the group tries again. Real per-group
-exponential backoff with the `Degraded` condition (master design §7) belongs
-to its own spec, which is next.
+hour by default) instead of five seconds. Two things have to agree for that to
+hold, and the second is easy to lose: the retention cap keeps one failure
+(`maxRetainedFailures = 1`), so it has to keep *that* one.
+`selectFailedForPruning` therefore prefers the newest generation, then the
+oldest failure within it — an oldest-first rule alone always kept an inherited
+older corpse and pruned the current generation's, which is the only one doing
+the suppressing, on the same reconcile that observed it, and the loop ran at
+time-to-fail. Anyone changing that ordering is changing this interval from an
+hour back to a minute.
+
+The suppression is a guard on 4b's own door, not backoff — it does nothing for
+the floor rule, which has the identical loop and keeps it.
+`maxRetainedFailures = 1` still caps only the footprint of the failure, not the
+rate at which the group tries again. Real per-group exponential backoff with
+the `Degraded` condition (master design §7) belongs to its own spec, which is
+next.
 
 ## Preconditions for milestone 5 (persistent groups)
 
@@ -1064,9 +1097,9 @@ intentional — the following points each concern only one of the two halves.
   token the agent reads its identity from. It still does not check for two user
   mounts sharing a name — the API server catches that, but with a generic
   message instead of a clear operator error.
-- "Keep the oldest failure" does not carry when the `creationTimestamp` is equal
-  (second resolution); the tiebreak falls to the random suffix instead of
-  `status.failedAt`.
+- "Keep the oldest failure of the newest generation" does not carry when two
+  failures of one generation share a `creationTimestamp` (second resolution);
+  the tiebreak falls to the random suffix instead of `status.failedAt`.
 - The status of a rejected `Network` freezes and keeps reporting old numbers.
 - After deleting the winning `Network`, recovery takes up to roughly 90 seconds,
   because the loser retries every minute and the group every 30 seconds. A watch
