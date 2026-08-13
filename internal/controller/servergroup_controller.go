@@ -298,6 +298,7 @@ func (r *ServerGroupReconciler) size(
 
 		PendingCreates: pendingCreates,
 		PendingDeletes: pendingDeletes,
+		Generation:     group.Generation,
 	})
 
 	for i := int32(0); i < decision.Create; i++ {

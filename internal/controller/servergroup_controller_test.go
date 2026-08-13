@@ -358,19 +358,46 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		f.clock.Advance(resyncInterval)
 	}
 
+	// setMinReplicas performs a real spec update, so the two servers already
+	// up go stale and the cold start orders one replacement. This fixture
+	// never reports for it, so it runs out its startup deadline and is kept:
+	// Failed servers are retained for failedRetentionSeconds (an hour by
+	// default), and the 65 passes above, at one resync each, do not run
+	// long enough to clear it. The corpse is asserted rather than filtered
+	// away, so a missing or a doubled one still fails this test.
 	final := f.listServers(t)
-	if len(final) != 1 || final[0].Name != busy {
-		names := make([]string, 0, len(final))
-		for _, s := range final {
+	var live, failed []spawneryv1alpha1.Server
+	for _, s := range final {
+		if s.Status.Phase == string(phase.Failed) {
+			failed = append(failed, s)
+			continue
+		}
+		live = append(live, s)
+	}
+
+	if len(live) != 1 || live[0].Name != busy {
+		names := make([]string, 0, len(live))
+		for _, s := range live {
 			names = append(names, s.Name)
 		}
-		t.Fatalf("group settled on %v, want only the occupied server %q", names, busy)
+		t.Fatalf("live servers settled on %v, want only the occupied server %q", names, busy)
 	}
-	if got := final[0].Status.Phase; got != string(phase.Ready) {
+	if got := live[0].Status.Phase; got != string(phase.Ready) {
 		t.Errorf("phase of the surviving server = %q, want Ready", got)
 	}
 	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
 		t.Errorf("minAvailable = %d, want 1 — the surviving pod still carries players", got)
+	}
+
+	if len(failed) != 1 {
+		names := make([]string, 0, len(failed))
+		for _, s := range failed {
+			names = append(names, s.Name)
+		}
+		t.Fatalf("failed servers = %v, want exactly one — the cold start's doomed replacement", names)
+	}
+	if got := failed[0].Spec.GroupGeneration; got != f.group.Generation {
+		t.Errorf("failed server's generation = %d, want %d: the current generation's cold start, not a leftover", got, f.group.Generation)
 	}
 }
 
@@ -1453,10 +1480,18 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	}
 	f.setMinReplicas(t, 1)
 
-	// All three are empty, but none has waited out the window yet.
+	// Four, not three: setMinReplicas performs a real spec update, so the
+	// group's generation moves and the three Ready servers created under the
+	// previous one are stale. With nothing of the current generation up, the
+	// cold start orders exactly one replacement — the changeover beginning,
+	// not the floor being missed. The shrink this test is about happens
+	// below, once the stabilization window elapses.
+	//
+	// All three original servers are empty, but none has waited out the
+	// window yet.
 	f.reconcileGroup(t, r)
-	if got := len(f.listServers(t)); got != 3 {
-		t.Fatalf("got %d servers before the window elapsed, want 3", got)
+	if got := len(f.listServers(t)); got != 4 {
+		t.Fatalf("got %d servers before the window elapsed, want 4", got)
 	}
 
 	// The window is the CRD default, 300 seconds. The agents keep reporting

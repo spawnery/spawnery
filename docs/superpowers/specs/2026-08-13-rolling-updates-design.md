@@ -128,6 +128,14 @@ is always current-generation by construction — so the cold start fires once
 and not once per pass while its server boots. And it does not fire at all
 under §3.7's condition.
 
+**A group at its ceiling cannot start a changeover, and says so.** The cold
+start is a create like any other and the ceiling clamps it, so a group whose
+`maxReplicas` equals its current size stalls with its old generation serving.
+That is the right outcome — a lowered ceiling is an instruction, not a
+suggestion — but it must not be silent, so `DecideSize` sets `Limited` in that
+case and the existing `ScalingLimited` condition carries it onto the group.
+Raising `maxReplicas` by one is the operator's way out.
+
 One is enough because the replacement is not one-for-one: a retiring server's
 players stay where they are, and the group only rebuilds capacity the
 spare-slot rule actually asks for. The update therefore costs at most one

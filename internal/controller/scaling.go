@@ -25,12 +25,14 @@ import (
 // ScalingInputs is everything the sizing decision needs. Like the other
 // decisions in this package it is a value type, so the rules are pure and
 // table-tested without a cluster.
-// Nothing here is the group's generation, and that is deliberate. Every edit to
-// a ServerGroup spec raises it, so a scale-up rule that only credited servers of
-// the current generation would order a full replacement set on the next
-// five-second pass after any edit — a rolling update without maxUnavailable,
-// without soft drain and without the guarantee of one ready server of the new
-// generation. Those rules, and with them the generation, arrive in milestone 4b.
+// The group's generation is here, and it is confined to one job. It selects
+// which stale server retires and whether the changeover has begun; it never
+// enters provisionalCapacity or readyFree. A scale-up rule that credited only
+// servers of the current generation would find, the instant any field of the
+// group's spec changed, that nothing running counts — and would order a full
+// replacement set up to maxReplicas on the next five-second pass. Keeping the
+// arithmetic generation-blind is what makes that impossible rather than merely
+// braked.
 type ScalingInputs struct {
 	// Views is what the cache shows of the group's servers.
 	Views []ServerView
@@ -51,6 +53,13 @@ type ScalingInputs struct {
 	// PendingDeletes are the servers whose removal it has already asked for
 	// and the cache still shows.
 	PendingDeletes map[string]bool
+	// Generation is the group's current metadata.generation. A view whose
+	// Generation differs is stale.
+	//
+	// It decides only *which* server retires, never how many get built: the
+	// capacity arithmetic below stays generation-blind, exactly as milestone
+	// 4a left it. See the type comment above.
+	Generation int64
 }
 
 // SizeDecision is what the group does about its size this pass.
@@ -149,6 +158,53 @@ func readyFree(views []ServerView) int32 {
 	return free
 }
 
+// coldStart reports whether the group must create the first server of its
+// current generation before anything can retire.
+//
+// Retirement needs a ready server of the current generation to exist. When
+// every server is stale none does, so nothing may retire, so nothing drops out
+// of the size count, so the spare-slot rule creates nothing — a deadlock that
+// only an unconditional create breaks. This is the one create in the system
+// that is not answering demand, and it is why the changeover costs at most one
+// extra server.
+//
+// It is suppressed while a Failed server of the *current* generation is being
+// retained. Without that, a broken new image fails, drops out of
+// countsTowardSize, and is re-created on the next five-second pass forever. The
+// retention window (an hour by default) becomes the interval: one attempt, the
+// old generation serving undisturbed, one corpse to diagnose from. A stale
+// failure does not suppress it — the old generation's corpse says nothing about
+// whether the new image works.
+//
+// This is deliberately not backoff. The floor rule has the same loop and keeps
+// it; giving it a real per-group backoff with a Degraded condition is its own
+// milestone.
+func coldStart(in ScalingInputs) bool {
+	if in.PendingCreates > 0 {
+		// A pending create is always of the current generation, by
+		// construction: createServer stamps group.Generation on it.
+		return false
+	}
+	var stale, current int
+	for _, v := range in.Views {
+		if in.PendingDeletes[v.Name] {
+			continue
+		}
+		if v.Generation == in.Generation {
+			// A retained failure counts here even though countsTowardSize
+			// excludes it, and that is the suppression.
+			if v.Phase == phase.Failed || v.countsTowardSize() {
+				current++
+			}
+			continue
+		}
+		if v.countsTowardSize() {
+			stale++
+		}
+	}
+	return stale > 0 && current == 0
+}
+
 // DecideSize is the group's sizing rule.
 //
 // The order matters and is the design's, not an accident: capacity first, then
@@ -177,6 +233,10 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	if floor := in.MinReplicas - alive; floor > create {
 		create = floor
 	}
+	cold := coldStart(in)
+	if cold && create < 1 {
+		create = 1
+	}
 	room := in.MaxReplicas - alive
 	if room < 0 {
 		room = 0
@@ -185,7 +245,11 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	if granted > room {
 		granted = room
 	}
-	limited := wanted > granted
+	// A cold start the ceiling refuses is a changeover that cannot begin.
+	// Stalling is correct — a lowered maxReplicas is an instruction — but it
+	// must be visible, and ScalingLimited is the condition that says exactly
+	// "the ceiling is holding capacity back".
+	limited := wanted > granted || (cold && granted < 1)
 
 	if create > 0 {
 		if granted > 0 {

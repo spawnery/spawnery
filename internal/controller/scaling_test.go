@@ -88,15 +88,31 @@ func TestDecideSizeCreditsCapacityThatIsOrderedButNotArrived(t *testing.T) {
 			want: 1,
 		},
 		{
-			// 4a does not roll updates, so it does not read the generation at
-			// all. A rule that did would order a full replacement set on every
-			// spec edit, because every edit raises the group's generation.
+			// 4a does not roll updates, so its capacity arithmetic does not
+			// read the generation at all, and 4b keeps it that way: a rule
+			// that credited only current-generation servers would order a
+			// full replacement set on every spec edit.
+			//
+			// The group is mid-changeover here - one stale server, one of the
+			// current generation - so coldStart does not fire and the only
+			// thing deciding the outcome is whether the stale server's twenty
+			// free slots are counted. They are: 20 + 20 meets the forty spare
+			// slots exactly. Drop the stale server's contribution and this
+			// wants one create instead of none, which is what makes the case
+			// load-bearing rather than decorative.
 			name: "a server of another generation still credits its capacity",
 			in: ScalingInputs{
-				Views: []ServerView{{
-					Name: "a", Phase: phase.Ready, Slots: 100,
-					WasRegistered: true, Generation: 7,
-				}},
+				Views: []ServerView{
+					{
+						Name: "stale", Phase: phase.Ready, Slots: 100, Players: 80,
+						WasRegistered: true, Generation: 3,
+					},
+					{
+						Name: "current", Phase: phase.Ready, Slots: 100, Players: 80,
+						WasRegistered: true, Generation: 4,
+					},
+				},
+				Generation:  4,
 				MinReplicas: 1, MaxReplicas: 10,
 				SpareSlots: 40, MaxPlayers: 100,
 			},
@@ -419,6 +435,109 @@ func TestDecideSizeDoesNotCountUntrustedCapacityAsFree(t *testing.T) {
 	in.Views[0].Stale = false
 	if got := DecideSize(in); len(got.Delete) != 1 {
 		t.Errorf("Delete = %v once the count is trustworthy, want exactly one", got.Delete)
+	}
+}
+
+// staleReady builds a Ready server of an older generation.
+func staleReady(name string, players, slots int32, gen int64) ServerView {
+	v := ready(name, players, slots)
+	v.Generation = gen
+	return v
+}
+
+func TestDecideSizeColdStartsAReplacementForAStaleGroup(t *testing.T) {
+	// Two stale servers with plenty of free capacity between them. The
+	// spare-slot rule is satisfied and would create nothing, so without the
+	// cold start no server of the new generation ever exists, nothing may
+	// retire, and the update never begins.
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			staleReady("a", 60, 100, 3),
+			staleReady("b", 60, 100, 3),
+		},
+		Generation:  4,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if got.Create != 1 {
+		t.Errorf("Create = %d, want exactly 1 to start the changeover", got.Create)
+	}
+}
+
+func TestDecideSizeColdStartsOnlyOnce(t *testing.T) {
+	// The replacement is on order but has not reached the cache. Firing
+	// again here would create one server per five-second pass for the whole
+	// boot.
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{staleReady("a", 60, 100, 3)},
+		Generation: 4, PendingCreates: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0 while the cold start is outstanding", got.Create)
+	}
+}
+
+func TestDecideSizeDoesNotColdStartWhenAReplacementIsAlreadyUp(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			staleReady("a", 60, 100, 3),
+			ready("b", 0, 100), // generation 0 == current
+		},
+		Generation:  0,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0 when the current generation is already up", got.Create)
+	}
+}
+
+func TestDecideSizeDoesNotColdStartAgainstARetainedFailure(t *testing.T) {
+	// A broken image is the most likely way an update goes wrong, and the
+	// cold start would otherwise re-create against it every five seconds
+	// forever. The retained failure is the window: one attempt per
+	// failedRetentionSeconds, the old generation serving throughout, one
+	// corpse left to diagnose from. This is not backoff and does nothing
+	// for the floor rule's own loop.
+	failed := ServerView{Name: "b", Phase: phase.Failed, Generation: 4}
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{staleReady("a", 60, 100, 3), failed},
+		Generation:  4,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0 while a failure of the current generation is retained", got.Create)
+	}
+}
+
+func TestDecideSizeStaleFailureDoesNotBlockTheColdStart(t *testing.T) {
+	// The corpse of the *old* generation says nothing about whether the new
+	// image works, so it must not hold the update back.
+	failed := ServerView{Name: "b", Phase: phase.Failed, Generation: 3}
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{staleReady("a", 60, 100, 3), failed},
+		Generation:  4,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if got.Create != 1 {
+		t.Errorf("Create = %d, want 1 — a stale failure is not evidence about the new generation", got.Create)
+	}
+}
+
+func TestDecideSizeReportsAColdStartTheCeilingRefuses(t *testing.T) {
+	// A group pinned at maxReplicas has no room for the one extra server the
+	// changeover needs, so the update cannot begin. Stalling is right — the
+	// ceiling is an instruction — but it must not stall silently, and
+	// ScalingLimited is the condition that already exists to say so.
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{staleReady("a", 0, 100, 3)},
+		Generation:  4,
+		MinReplicas: 1, MaxReplicas: 1, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0 at the ceiling", got.Create)
+	}
+	if !got.Limited {
+		t.Error("Limited = false, want true so the stalled changeover is visible")
 	}
 }
 
