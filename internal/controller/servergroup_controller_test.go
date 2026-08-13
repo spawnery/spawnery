@@ -1488,7 +1488,7 @@ func TestGroupRecordsWhatItIssued(t *testing.T) {
 
 	f.reconcileGroup(t, r)
 
-	creates, _ := r.Expectations.pending(f.ns + "/lobby")
+	creates, _, _ := r.Expectations.pending(f.ns + "/lobby")
 	if creates != 1 {
 		t.Errorf("pending creates = %d right after the create, want 1: size() "+
 			"did not record what it issued", creates)

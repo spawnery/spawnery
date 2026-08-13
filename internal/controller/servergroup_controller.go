@@ -286,7 +286,7 @@ func (r *ServerGroupReconciler) size(
 	key := group.Namespace + "/" + group.Name
 
 	r.Expectations.observe(key, views)
-	pendingCreates, pendingDeletes := r.Expectations.pending(key)
+	pendingCreates, pendingDeletes, _ := r.Expectations.pending(key)
 
 	decision := DecideSize(ScalingInputs{
 		Views:         views,

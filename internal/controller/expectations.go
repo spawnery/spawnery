@@ -32,6 +32,7 @@ type expectationKind int
 const (
 	expectationCreate expectationKind = iota
 	expectationDelete
+	expectationRetire
 )
 
 type expectation struct {
@@ -79,6 +80,11 @@ func (e *expectations) expectDeleted(group, name string) {
 	e.record(group, name, expectationDelete)
 }
 
+// expectRetired records a Server this reconciler has just asked to retire.
+func (e *expectations) expectRetired(group, name string) {
+	e.record(group, name, expectationRetire)
+}
+
 func (e *expectations) record(group, name string, kind expectationKind) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -124,6 +130,13 @@ func (e *expectations) observe(group string, views []ServerView) {
 			if !present || v.leaving() {
 				delete(m, name)
 			}
+		case expectationRetire:
+			// Satisfied when the cache shows the patch, and also when the
+			// server is gone: a retirement that completed between the patch
+			// and this list has nothing left to reserve.
+			if !present || v.Retire {
+				delete(m, name)
+			}
 		}
 	}
 	if len(m) == 0 {
@@ -131,23 +144,26 @@ func (e *expectations) observe(group string, views []ServerView) {
 	}
 }
 
-// pending is what the group has outstanding: how many creates, and which names
-// are already on their way out.
-func (e *expectations) pending(group string) (int32, map[string]bool) {
+// pending is what the group has outstanding: how many creates, which names are
+// already on their way out, and which have been asked to retire.
+func (e *expectations) pending(group string) (int32, map[string]bool, map[string]bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	var creates int32
 	deletes := make(map[string]bool)
+	retires := make(map[string]bool)
 	for name, exp := range e.byGroup[group] {
 		switch exp.kind {
 		case expectationCreate:
 			creates++
 		case expectationDelete:
 			deletes[name] = true
+		case expectationRetire:
+			retires[name] = true
 		}
 	}
-	return creates, deletes
+	return creates, deletes, retires
 }
 
 // forget drops a group entirely, so the map does not grow with every group
