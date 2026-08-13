@@ -53,6 +53,11 @@ type ServerView struct {
 	SessionsGone bool
 	// Generation is the group generation this server was created from.
 	Generation int64
+	// Retire is spec.retire: the group has asked this server to retire. It
+	// is the single signal for the update's maxUnavailable budget, and it
+	// survives the escalation to Draining that maxStaleSeconds can force —
+	// which is what tells that drain apart from one a scale-down started.
+	Retire bool
 	// CreatedAt is the creation timestamp of the Server object.
 	CreatedAt time.Time
 }
@@ -150,8 +155,13 @@ func (v ServerView) mayHavePlayers() bool {
 
 // leaving reports whether the server is already on its way out, so the group
 // must not count it as a candidate again.
+//
+// Retiring is in here for a second reason beyond nomination: dropping out of
+// the group's size is exactly what makes the spare-slot rule order a
+// replacement for a server a rolling update has retired. The generation never
+// enters the capacity arithmetic; this does the work instead.
 func (v ServerView) leaving() bool {
-	return v.Phase == phase.Draining || v.Phase == phase.Terminating
+	return v.Phase == phase.Draining || v.Phase == phase.Terminating || v.Phase == phase.Retiring
 }
 
 // countsTowardSize reports whether this server holds the group at its floor.

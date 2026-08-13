@@ -377,6 +377,46 @@ func TestSelectFailedForPruning(t *testing.T) {
 	}
 }
 
+func TestRetiringDoesNotCountTowardSize(t *testing.T) {
+	// This one line is the whole surge mechanism: a retiring server drops
+	// out of the group's size, so the existing spare-slot rule orders its
+	// replacement when — and only when — capacity actually needs one.
+	v := ServerView{Name: "a", Phase: phase.Retiring}
+	if v.countsTowardSize() {
+		t.Error("a retiring server still holds the group at its floor")
+	}
+	if !v.leaving() {
+		t.Error("leaving() does not recognise Retiring")
+	}
+}
+
+func TestRetiringServerIsNeverNominatedForDeletion(t *testing.T) {
+	// The invariant everything rests on. A retiring server has players on
+	// it by definition — that is what it is waiting for — and the group
+	// removes it by letting it empty, never by deleting it.
+	views := []ServerView{
+		{Name: "retiring", Phase: phase.Retiring, Players: 5, WasRegistered: true},
+	}
+	if got := SelectDeletionCandidates(views, 1); len(got) != 0 {
+		t.Errorf("SelectDeletionCandidates = %v, want none", got)
+	}
+}
+
+func TestRetiringServerStaysInsideTheDisruptionBudget(t *testing.T) {
+	// occupiedPods is deliberately not phase-based: the pod still carries
+	// the occupied label while anyone is on it, and minAvailable has to
+	// match that pod for pod or kubectl drain gets an eviction to spend on
+	// a pod with players. Nothing else in the tree would catch this
+	// changing.
+	views := []ServerView{
+		{Name: "a", Phase: phase.Retiring, Players: 2, WasRegistered: true},
+		{Name: "b", Phase: phase.Retiring, WasRegistered: true},
+	}
+	if got := occupiedPods(views); got != 1 {
+		t.Errorf("occupiedPods = %d, want 1 — the retiring server with players", got)
+	}
+}
+
 func TestClampReport(t *testing.T) {
 	for _, tc := range []struct {
 		name                    string
