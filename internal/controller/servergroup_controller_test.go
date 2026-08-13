@@ -817,36 +817,23 @@ func TestTheBudgetRefusesToEvictAPlayedOnPodAndReleasesADeadOne(t *testing.T) {
 // kicked, but the players get a visible move that the empty server should have
 // absorbed. status.wasRegistered exists to answer that question properly.
 //
+// Driven through the ceiling, not the spare-slot demand rule. The demand
+// branch filters a candidate out before SelectDeletionCandidates ever sees
+// it — a forgotten agent is both Stale and, since it was never given time to
+// wait, short of Stabilization — so mayHavePlayers, the rule this test is
+// actually about, would never get a chance to decide anything there. The
+// surplus branch has neither gate: it calls SelectDeletionCandidates
+// directly on the raw views, so lowering maxReplicas below the current count
+// puts mayHavePlayers back in sole charge of the choice, with the fixture's
+// default spareSlots and stabilization window left untouched — and with no
+// stabilization wait, there is no race against the victim's own
+// StartupDeadline either.
+//
 // Loop-driven: the nomination is made afresh on every pass, so the invariant
 // has to hold on every pass and the group still has to converge.
 func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-
-	// SpareSlots drops to zero so this test isolates the question it actually
-	// asks — which of the two candidates DecideSize picks — from the separate
-	// question TestDecideSizeKeepsEnoughFreeSlotsAfterTheRemoval already
-	// answers: whether a removal may proceed at all. The victim never becomes
-	// Ready again, so with the fixture's default spareSlots of 40 the peer is
-	// the group's only source of verified free capacity and removing it would
-	// always fall short, regardless of which server is the better candidate —
-	// the group would never converge, no matter how many passes ran.
-	//
-	// The stabilization window drops from the CRD's 300-second default too,
-	// and for a reason that has nothing to do with scaling: the fixture's
-	// StartupDeadline is also five minutes, and the victim never becomes Ready.
-	// A loop long enough to clear a 300-second stabilization window is also
-	// long enough for the victim to hit its own startup deadline and fail out
-	// on its own — which would drop it out of countsTowardSize and stop the
-	// demand rule before it ever nominates the peer, passing the test for an
-	// unrelated reason. A short window lets the peer's removal converge well
-	// inside that budget, so the invariant under test — the stale-but-occupied
-	// server is never the one picked — is what actually decides the outcome.
-	f.group.Spec.Scaling.SpareSlots = 0
-	f.group.Spec.Scaling.ScaleDownStabilizationSeconds = 20
-	if err := f.c.Update(f.ctx, f.group); err != nil {
-		t.Fatalf("update group: %v", err)
-	}
 
 	f.setMinReplicas(t, 2)
 	f.reconcileGroup(t, r)
@@ -888,12 +875,23 @@ func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T)
 	// registry no longer knows this pod, so its count reads zero and stale.
 	f.agents.Forget(uids[victim])
 
-	f.setMinReplicas(t, 1)
+	// Lowering the ceiling below the current count, rather than raising the
+	// floor, is what routes DecideSize through the surplus branch and
+	// SelectDeletionCandidates directly, instead of through the demand rule's
+	// own Stale/Stabilization filtering.
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Scaling.MinReplicas = 1
+	f.group.Spec.Scaling.MaxReplicas = 1
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
 
-	// The peer needs its 20-second stabilization window before DecideSize will
-	// nominate it, plus a few more resyncs for the drain that follows to
-	// actually finish.
-	for i := 0; i < 30; i++ {
+	// The surplus branch has no stabilization wait, so a handful of passes is
+	// enough to cover the drain that follows once the peer is nominated:
+	// Ready -> Draining -> Terminating -> the object actually gone.
+	for i := 0; i < 10; i++ {
 		_ = f.agents.ReportPlayers(uids[peer], 0, 100)
 		for _, s := range f.listServers(t) {
 			f.reconcile(s.Name)

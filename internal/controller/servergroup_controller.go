@@ -90,6 +90,15 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	group := &spawneryv1alpha1.ServerGroup{}
 	if err := r.Get(ctx, req.NamespacedName, group); err != nil {
+		if apierrors.IsNotFound(err) {
+			// No ServerGroup finalizer exists, so a deleted group is gone from
+			// the API server before any reconcile can observe its deletion
+			// timestamp. This is the only path most deletions take, and without
+			// it a group's reservations outlive it for the life of the process:
+			// expectationTTL is applied inside observe, and observe is only
+			// ever called for a group that still exists.
+			r.Expectations.forget(req.Namespace + "/" + req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !group.DeletionTimestamp.IsZero() {
