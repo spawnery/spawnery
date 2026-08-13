@@ -112,6 +112,45 @@ start plus retirement-driven replacement. `status.freeSlots` keeps its
 generation filter unchanged, because that field is an observation and its CRD
 documentation says what it means.
 
+#### The one removal decision the generation does enter
+
+Retirement is how a server leaves during a changeover and deletion is how it
+leaves for lack of demand. The two never happen in the same pass, but they do
+apply to the same group at the same time, and one rule settles what happens
+then: **while any stale server remains, the demand rule sheds stale servers
+only — a current-generation server is not a demand candidate.**
+
+The rule closes an oscillation. The retirement branch runs before demand, so
+while the `maxUnavailable` budget is free a pass that could retire returns
+there and demand never runs. When the budget is already spent — the long-lived
+case, since a soft drain on an occupied server is exactly what holds it — the
+retirement branch declines and the pass falls through to demand with stale
+servers still standing. The demand rule then deletes the cold start's own
+replacement, and *prefers* it: `SelectDeletionCandidates` sorts youngest-first
+among servers that took players, so the fresh server loses to the stale one
+beside it on age alone. With no current-generation server left, §3.3's cold
+start fires on the next pass and builds another, for as long as the budget
+stays spent — up to the whole of `maxStaleSeconds`. Skipping the current
+generation makes the last current-generation server uncandidatable, so the
+loop cannot start, and it corrects the backwards preference in the same
+stroke.
+
+**This does not weaken §3.2, and the reason is the direction the error can run
+in.** A generation filter in the capacity arithmetic —
+`provisionalCapacity`, `readyContribution`, `readyFree` — makes running
+servers stop counting the instant any field of the spec changes, so the group
+orders a full replacement set: runaway *creates*, up to `maxReplicas`, which
+is the failure that disconnects players. A generation filter in deletion
+candidacy can only make *fewer* servers deletable. It can hold a removal back;
+it cannot create anything. The numbers stay generation-blind; only candidacy
+reads the generation, alongside the retirement nomination that already did.
+
+"Remains" is the same set §3.3's cold start counts as stale: a different
+generation, no deletion already reserved, still counting toward the group's
+size. A stale server that is `Failed`, `Draining` or `Terminating` is not
+something the changeover is still racing to remove, and counting it would
+suspend ordinary scale-downs for the whole failed-retention window.
+
 ### 3.3 The overhang is fixed at one server
 
 Retirement needs a ready server of the current generation to exist first. When
@@ -301,6 +340,11 @@ servers that may be carrying players, and those are exactly the ones that
 retire. The nomination is its own, and it is narrower rather than wider —
 `Ready`, stale, not already retiring. Order: empty servers first, then the
 oldest, ties broken by name. One per pass.
+
+The demand rule gains the one generation test §3.2 permits: while any stale
+server remains it skips current-generation servers, so a pass that falls
+through a declined retirement sheds stale capacity rather than the
+replacement.
 
 `provisionalCapacity` also takes 4a's leftover one-liner: `SessionsGone` is
 tested before `Slots == 0`, so a server whose pod has vanished stops being

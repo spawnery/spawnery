@@ -299,6 +299,26 @@ func selectRetirement(in ScalingInputs) string {
 	return stale[0].Name
 }
 
+// staleRemains reports whether the changeover still has stale capacity to shed.
+//
+// It is the same set coldStart counts as stale: a different generation, no
+// deletion already reserved, and still counting toward the group's size. A
+// stale server that is Failed, Draining or Terminating is not something the
+// changeover is still racing to remove — it is gone or going — and counting it
+// would suspend ordinary scale-downs of current-generation servers for the
+// whole failed-retention window, an hour by default.
+func staleRemains(in ScalingInputs) bool {
+	for _, v := range in.Views {
+		if in.PendingDeletes[v.Name] {
+			continue
+		}
+		if v.Generation != in.Generation && v.countsTowardSize() {
+			return true
+		}
+	}
+	return false
+}
+
 // DecideSize is the group's sizing rule.
 //
 // The order matters and is the design's, not an accident: capacity first, then
@@ -394,9 +414,45 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	if in.PendingCreates == 0 && alive > in.MinReplicas {
 		pool := deletable(in)
 		free := readyFree(pool)
+		// While a changeover is in progress the group sheds stale capacity
+		// first: a current-generation server is not a demand candidate while
+		// any stale server remains.
+		//
+		// The retirement branch above closes this case only while the budget
+		// is free, because a pass that retires returns there. When
+		// maxUnavailable is already spent — the long-lived case, since a soft
+		// drain on an occupied server is exactly what holds the budget — that
+		// branch declines and the pass falls through to here with stale
+		// servers still standing. Without this filter the demand rule then
+		// deletes the cold start's own replacement, and it *prefers* it:
+		// SelectDeletionCandidates sorts youngest-first among servers that
+		// took players, so the fresh server loses to the stale one beside it
+		// on age alone. With no current-generation server left, coldStart
+		// fires on the next pass and builds another, for as long as the budget
+		// stays spent — up to the whole of maxStaleSeconds. Skipping the
+		// current generation closes that loop, because the last
+		// current-generation server is never a candidate, and it fixes the
+		// backwards preference in the same stroke.
+		//
+		// This is the one place the generation enters a decision other than
+		// "which server retires", and the reason it is allowed here while
+		// being forbidden in provisionalCapacity, readyContribution and
+		// readyFree is the direction the error can run in. A generation filter
+		// in the capacity arithmetic makes running servers stop counting the
+		// instant any field of the spec changes, so the group orders a full
+		// replacement set: runaway *creates*, up to maxReplicas, which is the
+		// failure that disconnects players. A generation filter in deletion
+		// candidacy can only make *fewer* servers deletable. It can hold a
+		// removal back; it cannot create anything. The numbers above stay
+		// generation-blind exactly as 4a left them.
+		changeover := staleRemains(in)
 
 		eligible := make([]ServerView, 0, len(pool))
 		for _, v := range pool {
+			// The changeover rule: stale capacity goes first. See above.
+			if changeover && v.Generation == in.Generation {
+				continue
+			}
 			// EmptyFor decides nothing on its own: a server that was never
 			// empty carries zero here too, and Stabilization may be zero.
 			if v.Players != 0 || v.Stale || v.EmptyFor < in.Stabilization {

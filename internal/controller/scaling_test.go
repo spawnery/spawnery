@@ -809,3 +809,102 @@ func TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart(t *testin
 			"the cold start and the group builds the same server again", got.Delete)
 	}
 }
+
+// TestDecideSizeDoesNotDeleteTheColdStartWhileTheRetirementBudgetIsSpent is the
+// other half of the test above, and the one the ordering does not cover.
+//
+// There, nothing had retired yet, so the pass nominated a retirement and
+// returned before the demand rule ran. Here one stale server is already
+// retiring and maxUnavailable is 1, so selectRetirement correctly declines and
+// the pass falls through to demand with a stale server still standing. The
+// fixture is the state that was probed against the implementation as task 6
+// first committed it, which answered Retire=[] Delete=[new]: the group deleted
+// the cold start's own replacement, leaving no current-generation server, so
+// coldStart fired again on the next pass.
+//
+// The victim was preferred rather than merely permitted — "old2" is a stale,
+// empty server sitting in the same candidate list, and it loses the
+// youngest-first sort to the fresh replacement purely on age. So the assertion
+// is in two parts: the replacement must survive, and the stale server is what
+// the group ought to shed instead.
+func TestDecideSizeDoesNotDeleteTheColdStartWhileTheRetirementBudgetIsSpent(t *testing.T) {
+	base := time.Now()
+	retiring := staleReady("old1", 40, 100, 3)
+	retiring.Phase = phase.Retiring
+	retiring.Retire = true
+	retiring.CreatedAt = base
+	idle := staleReady("old2", 0, 100, 3)
+	idle.EmptyFor = time.Hour
+	idle.CreatedAt = base.Add(time.Minute)
+	fresh := ready("new", 0, 100)
+	fresh.EmptyFor = time.Hour
+	fresh.CreatedAt = base.Add(time.Hour)
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{retiring, idle, fresh},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none while the budget is spent", got.Retire)
+	}
+	for _, name := range got.Delete {
+		if name == "new" {
+			t.Errorf("Delete = %v, want no current-generation server — deleting the "+
+				"replacement leaves none of its generation and re-triggers the cold start", got.Delete)
+		}
+	}
+	if len(got.Delete) != 1 || got.Delete[0] != "old2" {
+		t.Errorf("Delete = %v, want [old2] — while a changeover is in progress the "+
+			"group sheds stale capacity first", got.Delete)
+	}
+}
+
+// TestDecideSizeStillShedsAStaleServerForLackOfDemand is the guard on the rule
+// above: it holds current-generation servers out of the demand rule, and it
+// must hold nothing else out. A rule that also stopped stale servers being
+// shed would be worse than the bug it fixes — the group would keep paying for
+// capacity nobody is using for the whole of a changeover.
+//
+// The budget is spent, so retirement declines and demand runs. The
+// current-generation server has players and was never a candidate, so the only
+// thing this can measure is whether the empty stale server is still deletable.
+func TestDecideSizeStillShedsAStaleServerForLackOfDemand(t *testing.T) {
+	retiring := staleReady("old1", 40, 100, 3)
+	retiring.Phase = phase.Retiring
+	retiring.Retire = true
+	idle := staleReady("old2", 0, 100, 3)
+	idle.EmptyFor = time.Hour
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{retiring, idle, ready("new", 60, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if len(got.Delete) != 1 || got.Delete[0] != "old2" {
+		t.Errorf("Delete = %v, want [old2] — an empty stale server past its window "+
+			"is still shed for lack of demand during a changeover", got.Delete)
+	}
+}
+
+// TestDecideSizeDeletesForLackOfDemandWhenNoStaleServerRemains is the
+// regression check on the ordinary case, which is every pass outside a
+// changeover: with no stale server anywhere, the demand rule is exactly what
+// milestone 4a left, and the empty current-generation server is deleted.
+func TestDecideSizeDeletesForLackOfDemandWhenNoStaleServerRemains(t *testing.T) {
+	idle := ready("idle", 0, 100)
+	idle.EmptyFor = time.Hour
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{ready("busy", 60, 100), idle},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if len(got.Delete) != 1 || got.Delete[0] != "idle" {
+		t.Errorf("Delete = %v, want [idle] — with no changeover in progress the "+
+			"demand rule is untouched", got.Delete)
+	}
+}
