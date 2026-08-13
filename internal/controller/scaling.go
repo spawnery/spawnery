@@ -151,15 +151,29 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 // it here is also the plainly right answer on its own terms: a server this
 // group has just asked to retire is already on its way out, and deleting it
 // instead is the harder of the two removals.
+//
+// spec.retire is tested as well as the reservation, and the reservation alone
+// is not enough. observe() satisfies a retire expectation the moment the cache
+// shows spec.retire, but the phase is written by the Server controller in a
+// second write that necessarily lands later — so there is an ordinary pass, not
+// a race, in which the view reads Retire: true, Phase: Ready and holds no
+// reservation at all. Filtering only the reservation puts that server straight
+// back into the demand pool, where an empty stale server is the preferred
+// candidate; the soft drain the group just asked for becomes a hard delete, for
+// exactly the class of server the nomination prefers. Retirement is how a
+// server leaves during a changeover: once it has been asked, no other rule gets
+// to take it.
+//
+// There is no fast path for the reservation-free case any more, because
+// spec.retire lives on the views rather than in a map and has to be looked at
+// either way. The pool is one allocation per pass over a handful of servers.
 func deletable(in ScalingInputs) []ServerView {
-	if len(in.PendingDeletes) == 0 && len(in.PendingRetires) == 0 {
-		return in.Views
-	}
 	out := make([]ServerView, 0, len(in.Views))
 	for _, v := range in.Views {
-		if !in.PendingDeletes[v.Name] && !in.PendingRetires[v.Name] {
-			out = append(out, v)
+		if in.PendingDeletes[v.Name] || in.PendingRetires[v.Name] || v.Retire {
+			continue
 		}
+		out = append(out, v)
 	}
 	return out
 }
@@ -270,7 +284,17 @@ func selectRetirement(in ScalingInputs) string {
 			continue
 		}
 		if v.Generation == in.Generation {
-			if v.Phase == phase.Ready {
+			// A server already nominated for deletion is not a replacement.
+			// The ceiling branch runs before this one, applies no changeover
+			// filter, and sorts never-took-players first then youngest — which
+			// is the cold-start replacement exactly — so a lowered maxReplicas
+			// can take the new server while the cache still shows it Ready.
+			// Retiring a stale server on the strength of that is deregistering
+			// capacity against a replacement on its way out, and a retirement
+			// is not retractable by the next pass. coldStart and staleRemains
+			// both skip PendingDeletes before counting anything; this is the
+			// same rule.
+			if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] {
 				readyCurrent = true
 			}
 			continue
@@ -279,16 +303,44 @@ func selectRetirement(in ScalingInputs) string {
 			stale = append(stale, v)
 		}
 	}
+	// A zero budget can only mean "unset", so it is floored at one rather
+	// than read as "never retire".
+	//
+	// The CRD gives spec.update.maxUnavailable a default of 1 and a minimum
+	// of 1, so no group can legitimately present 0 — but spec.update itself
+	// is optional and no CEL rule requires it, and a nil parent means the
+	// child's default never applies. A group whose operator never wrote an
+	// update policy therefore arrives here with 0, and without this floor it
+	// would decline every retirement forever: no error, no condition, no
+	// event, just a changeover that never starts. Because the CRD forbids a
+	// real 0, defaulting inside a pure function is unambiguous here in a way
+	// it usually is not.
+	//
+	// The accessor at the call site applies the same default. Both being
+	// right is correct rather than redundant: this function is also reached
+	// by tests and by any future caller that builds ScalingInputs itself, and
+	// the silence of the failure is what makes one defence too few.
+	budget := in.MaxUnavailable
+	if budget < 1 {
+		budget = 1
+	}
 	// At least one ready server of the current generation, for every group
 	// and not only for fallback targets: a ServerGroup cannot tell whether a
 	// ProxyGroup names it, and learning to would cost a watch and a cache
 	// that can be wrong for a distinction that only permits emptying a
 	// non-fallback group faster.
-	if !readyCurrent || unavailable >= in.MaxUnavailable || len(stale) == 0 {
+	if !readyCurrent || unavailable >= budget || len(stale) == 0 {
 		return ""
 	}
 	sort.SliceStable(stale, func(i, j int) bool {
-		if ei, ej := stale[i].Players == 0, stale[j].Players == 0; ei != ej {
+		// Empty means empty and known to be: unknown counts as occupied
+		// everywhere in this repository, and a stale count on a server that
+		// last reported zero may be hiding players. Without !Stale this
+		// comparator *prefers* exactly those servers, doing the opposite of
+		// the rule it justifies itself by — retiring an empty server costs
+		// nobody anything, but retiring one that only looks empty costs the
+		// sessions the ordering exists to disturb last.
+		if ei, ej := stale[i].Players == 0 && !stale[i].Stale, stale[j].Players == 0 && !stale[j].Stale; ei != ej {
 			return ei
 		}
 		if !stale[i].CreatedAt.Equal(stale[j].CreatedAt) {

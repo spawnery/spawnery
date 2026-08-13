@@ -908,3 +908,172 @@ func TestDecideSizeDeletesForLackOfDemandWhenNoStaleServerRemains(t *testing.T) 
 			"demand rule is untouched", got.Delete)
 	}
 }
+
+// TestDecideSizeDoesNotDeleteAServerAlreadyShowingSpecRetire is the other half
+// of TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved, and the half
+// the reservation does not cover.
+//
+// observe() satisfies a retire expectation the moment the cache shows
+// spec.retire, while the phase is written by the Server controller in a second
+// write that lands later. So the ordinary sequence — not a race — puts the
+// group in exactly this state for a pass or more: the view reads Retire: true
+// and Phase: Ready, and PendingRetires is already empty. selectRetirement
+// counts the server against the budget and declines, the pass falls through to
+// demand, and if the pool were filtered on the reservation alone the server
+// would be right back in it — the preferred candidate, since the nomination
+// prefers empty servers and an empty server is what the demand rule wants too.
+// The soft drain would become a hard delete.
+func TestDecideSizeDoesNotDeleteAServerAlreadyShowingSpecRetire(t *testing.T) {
+	old := staleReady("old", 0, 100, 3)
+	old.EmptyFor = time.Hour
+	old.Retire = true // the patch landed; the phase write has not
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{old, ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none — this server is already retiring", got.Retire)
+	}
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: a server that has been asked to retire "+
+			"leaves by soft drain, not by deletion", got.Delete)
+	}
+}
+
+// TestDecideSizeDoesNotRetireOnAReplacementNominatedForDeletion pins the input
+// to the "one ready server of the current generation" guard.
+//
+// The guard is not about how many current-generation servers the cache lists,
+// it is about whether one of them will still be there. A replacement this
+// reconciler has already asked to delete will not be, and the ceiling branch
+// makes that the preferred outcome rather than a rare one: it runs before
+// retirement, applies no changeover filter, and sorts never-took-players first
+// then youngest — which is the cold-start replacement exactly. Retiring a stale
+// server on the strength of it deregisters capacity that has nothing to fall
+// back on, and a retirement is not retractable by the next pass.
+func TestDecideSizeDoesNotRetireOnAReplacementNominatedForDeletion(t *testing.T) {
+	booting := starting("booting") // current generation, not Ready yet
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{staleReady("old", 60, 100, 3), ready("new", 0, 100), booting},
+		Generation: 0, MaxUnavailable: 1,
+		PendingDeletes: map[string]bool{"new": true},
+		MinReplicas:    1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none — the only ready server of the current "+
+			"generation is already nominated for deletion", got.Retire)
+	}
+}
+
+// TestDecideSizeTreatsAnUnsetUpdateBudgetAsOne pins a decision that would
+// otherwise be invisible in both directions.
+//
+// spec.update is optional and no CEL rule requires it, so a nil parent is the
+// ordinary state of a group whose operator never wrote an update policy — and a
+// nil parent means maxUnavailable's CRD default of 1 never applies and 0
+// arrives here. Read literally that is "no budget", and the group would decline
+// every retirement forever with no error, no condition and no event. Because
+// the CRD's Minimum=1 means a real 0 cannot exist, a zero can only mean unset,
+// and the floor is safe.
+//
+// The second half is what stops the floor being read as "unset means
+// unlimited": one is one.
+func TestDecideSizeTreatsAnUnsetUpdateBudgetAsOne(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{staleReady("old", 60, 100, 3), ready("new", 0, 100)},
+		Generation:  0, // MaxUnavailable deliberately unset
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 1 || got.Retire[0] != "old" {
+		t.Fatalf("Retire = %v, want [old] — an unset maxUnavailable is one, not zero: "+
+			"a group with no spec.update block must still roll", got.Retire)
+	}
+
+	retiring := staleReady("first", 5, 100, 3)
+	retiring.Phase = phase.Retiring
+	retiring.Retire = true
+	got = DecideSize(ScalingInputs{
+		Views:       []ServerView{retiring, staleReady("second", 5, 100, 3), ready("new", 0, 100)},
+		Generation:  0, // MaxUnavailable deliberately unset
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none — the floor is one concurrent retirement, "+
+			"not an unbounded budget", got.Retire)
+	}
+}
+
+// TestDecideSizeDoesNotRetireAnUntrustedCountFirst is the empty-first rule
+// meeting the invariant the rest of the package obeys: unknown counts as
+// occupied.
+//
+// Ready && Stale is a real combination — losing the count is not losing the
+// probe — and a stale server whose last report was zero may be carrying
+// players. Preferring it for retirement inverts the rule's own justification:
+// retiring an empty server costs nobody anything, but this one is only empty as
+// far as anyone can see. The older server with a count that can be trusted is
+// what the ordering asks for instead.
+func TestDecideSizeDoesNotRetireAnUntrustedCountFirst(t *testing.T) {
+	base := time.Now()
+	busy := staleReady("busy", 5, 100, 3)
+	busy.CreatedAt = base
+	quiet := staleReady("quiet", 0, 100, 3)
+	quiet.Stale = true // last reported zero, and cannot be believed
+	quiet.CreatedAt = base.Add(time.Minute)
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{quiet, busy, ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 1 || got.Retire[0] != "busy" {
+		t.Errorf("Retire = %v, want [busy] — a stale count is not an empty server, "+
+			"so the oldest goes first and nothing jumps the queue on an unknown", got.Retire)
+	}
+}
+
+// TestDecideSizeDoesNotSuspendDemandForAStaleServerThatIsAlreadyGone pins
+// staleRemains' countsTowardSize condition.
+//
+// A stale server that is Failed, Draining or Terminating is not capacity the
+// changeover is still racing to remove — it is gone or going, and no rule is
+// going to shed it again. Counting it as "stale capacity remains" would hold
+// every current-generation server out of the demand rule for as long as it is
+// retained, which for a Failed server is the whole failed-retention window, an
+// hour by default. It is also the set coldStart counts, and the two have to
+// agree: the oscillation the changeover filter closes needs coldStart to
+// re-fire, so a filter live in states coldStart is not would suspend
+// scale-downs where the loop cannot happen.
+//
+// The discriminating fixture is the one the suite lacked: the corpse is the
+// *only* stale server, so staleRemains is false solely because of this
+// condition, and there is a demand-eligible current-generation server for it to
+// suspend.
+func TestDecideSizeDoesNotSuspendDemandForAStaleServerThatIsAlreadyGone(t *testing.T) {
+	for _, gone := range []phase.Phase{phase.Failed, phase.Draining, phase.Terminating} {
+		t.Run(string(gone), func(t *testing.T) {
+			corpse := staleReady("corpse", 0, 100, 3)
+			corpse.Phase = gone
+			idle := ready("idle", 0, 100)
+			idle.EmptyFor = time.Hour
+
+			got := DecideSize(ScalingInputs{
+				Views:      []ServerView{corpse, idle, ready("busy", 60, 100)},
+				Generation: 0, MaxUnavailable: 1,
+				MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+				Stabilization: 5 * time.Minute,
+			})
+			if len(got.Delete) != 1 || got.Delete[0] != "idle" {
+				t.Errorf("Delete = %v, want [idle] — a stale server that is already "+
+					"gone is not stale capacity the changeover still has to shed, and "+
+					"treating it as such suspends ordinary scale-downs for the whole "+
+					"of its retention", got.Delete)
+			}
+		})
+	}
+}
