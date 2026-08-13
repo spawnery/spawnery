@@ -690,13 +690,18 @@ func TestGroupStillShedsWhileItBacksOff(t *testing.T) {
 	// Two servers, one over the ceiling, plus a failure to open the window.
 	extra := f.createIdleServer(t)
 	f.failServer(t, f.oneOtherServerName(t, extra))
+
+	// One reconcile counts the failure and opens the window; the surplus must
+	// be shed on that same pass or the one after, while the window is still
+	// open. Advance by less than backoffBase so it certainly is.
+	f.reconcileGroup(t, f.r)
+	f.clock.Advance(time.Second)
 	f.reconcileGroup(t, f.r)
 
-	if _, alive := f.serverIfPresent(t, extra); !alive {
-		return // already gone: the surplus was shed, which is what this asserts
+	g := f.reloadGroup(t)
+	if !meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff) {
+		t.Fatal("the group is not backing off, so this proves nothing about shedding while it does")
 	}
-	f.clock.Advance(resyncInterval)
-	f.reconcileGroup(t, f.r)
 	if _, alive := f.serverIfPresent(t, extra); alive {
 		t.Error("the surplus server was not shed while the group was backing off")
 	}
