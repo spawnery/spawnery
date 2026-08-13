@@ -288,6 +288,83 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 			r.Recorder.Event(group, eventType, limited.Reason, limited.Message)
 		}
+		// Built false-by-default and flipped, like ScalingLimited above.
+		backingOff := metav1.Condition{
+			Type:    spawneryv1alpha1.ConditionBackingOff,
+			Status:  metav1.ConditionFalse,
+			Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
+			Message: "no server has failed to start recently",
+		}
+		degraded := metav1.Condition{
+			Type:    spawneryv1alpha1.ConditionDegraded,
+			Status:  metav1.ConditionFalse,
+			Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
+			Message: "servers are starting normally",
+		}
+		switch {
+		case !sized:
+			// Nothing was decided this pass, so the False above is the
+			// absence of a verdict rather than one — the same reasoning
+			// ScalingLimited's own !sized case gives above. The counting two
+			// blocks up runs whether or not the Network is usable, so
+			// without this case a group with a dead Network would advertise
+			// a wait (or a give-up) it is not serving, beside an Accepted:
+			// False that already explains the same standstill differently.
+			backingOff.Message = "backoff is not being decided: the group's network is not usable"
+			degraded.Message = "backoff is not being decided: the group's network is not usable"
+		case backoff.GaveUp:
+			// No pending retry, so BackingOff is false — but an all-clear
+			// reason here would be a lie, so it carries the real one.
+			backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+			backingOff.Message = fmt.Sprintf(
+				"not retrying: %d servers failed to start in a row; change the group's spec to try again",
+				group.Status.ConsecutiveFailures)
+			degraded.Status = metav1.ConditionTrue
+			degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+			degraded.Message = backingOff.Message
+		case backoff.RetryAfter > 0:
+			backingOff.Status = metav1.ConditionTrue
+			backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+			backingOff.Message = fmt.Sprintf(
+				"%d server(s) failed to start in a row; next attempt in %s",
+				group.Status.ConsecutiveFailures, backoff.RetryAfter.Round(time.Second))
+		default:
+			// Nothing has failed this streak. Only reachable with a non-nil
+			// LastFailureAt when a past failure's watermark is still stuck
+			// on the status (the residual edge Task 1 and Task 4 both
+			// accepted) — a genuinely clean history leaves it nil, which the
+			// !newestFailure.IsZero() guard above is what keeps true: drop
+			// that guard and this renders the zero time instead.
+			if group.Status.LastFailureAt != nil {
+				backingOff.Message = fmt.Sprintf(
+					"no server has failed to start recently (last failure at %s)",
+					group.Status.LastFailureAt.Time.Format(time.RFC3339))
+			}
+		}
+
+		// The event goes on the flank only, for the reason the
+		// ScalingLimited block gives: a five-second resync would otherwise
+		// announce the same wait over and over for its whole duration.
+		wasBackingOff := meta.IsStatusConditionTrue(group.Status.Conditions,
+			spawneryv1alpha1.ConditionBackingOff)
+		wasDegraded := meta.IsStatusConditionTrue(group.Status.Conditions,
+			spawneryv1alpha1.ConditionDegraded)
+		meta.SetStatusCondition(&group.Status.Conditions, backingOff)
+		meta.SetStatusCondition(&group.Status.Conditions, degraded)
+		if isTrue := backingOff.Status == metav1.ConditionTrue; isTrue != wasBackingOff {
+			eventType := corev1.EventTypeNormal
+			if isTrue {
+				eventType = corev1.EventTypeWarning
+			}
+			r.Recorder.Event(group, eventType, backingOff.Reason, backingOff.Message)
+		}
+		if isTrue := degraded.Status == metav1.ConditionTrue; isTrue != wasDegraded {
+			eventType := corev1.EventTypeNormal
+			if isTrue {
+				eventType = corev1.EventTypeWarning
+			}
+			r.Recorder.Event(group, eventType, degraded.Reason, degraded.Message)
+		}
 	}
 
 	if group.IsEphemeral() {

@@ -2140,6 +2140,27 @@ func (f *fixture) oneServerName(t *testing.T) string {
 	return servers[0].Name
 }
 
+// newestServerName returns the name of the group's one server not yet in
+// phase Failed — the replacement a closed backoff window just allowed — and
+// false once every server the group has ever created has failed and nothing
+// new was created this pass (a give-up, or a window still open).
+func (f *fixture) newestServerName(t *testing.T) (string, bool) {
+	t.Helper()
+	var name string
+	n := 0
+	for _, s := range f.listServers(t) {
+		if s.Status.Phase == string(phase.Failed) {
+			continue
+		}
+		name = s.Name
+		n++
+	}
+	if n != 1 {
+		return "", false
+	}
+	return name, true
+}
+
 // reloadGroup re-reads the group from the API server. The count lives on the
 // status precisely so that it survives a restart, so a test that asserts on it
 // has to read what was persisted rather than the fixture's own copy.
@@ -2258,9 +2279,10 @@ func TestGroupCreatesAgainOnceTheWindowCloses(t *testing.T) {
 //
 // The window is open by construction rather than by reading a condition:
 // consecutiveFailures is 1 below and the clock has not moved past the failedAt
-// the window runs from, which is DecideBackoff's "must wait" case exactly. The
-// BackingOff condition that says the same thing in the group's status is Task
-// 5's, and this assertion is worth strengthening to it then.
+// the window runs from, which is DecideBackoff's "must wait" case exactly.
+// Task 4 could only assert consecutiveFailures as a stand-in because the
+// BackingOff condition did not exist yet; now that Task 5 has added it, the
+// assertion below is strengthened to read the condition itself.
 func TestGroupStillShedsWhileItBacksOff(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2288,8 +2310,9 @@ func TestGroupStillShedsWhileItBacksOff(t *testing.T) {
 
 	f.reconcileGroup(t, r)
 
-	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got != 1 {
-		t.Fatalf("consecutiveFailures = %d, want 1: with no window open this proves nothing about shedding while one is", got)
+	c := meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("BackingOff = %+v, want True: with no window open this proves nothing about shedding while one is", c)
 	}
 	if got := f.shedCount(t, broken); got != 1 {
 		t.Errorf("%d of the two idle servers were shed while the group was backing off, want 1", got)
@@ -2384,5 +2407,229 @@ func TestGenerationChangeClearsTheBackoff(t *testing.T) {
 	// than serving out the wait the old spec earned.
 	if len(f.serversOfGeneration(t, g.Generation)) == 0 {
 		t.Error("the group created nothing on the pass that cleared the streak; after a spec change the next attempt is immediate")
+	}
+}
+
+// TestBackingOffConditionNamesTheCountAndTheWait pins the waiting half of the
+// two conditions Task 5 adds: after a single failure the group must say it is
+// waiting, name the count, and say roughly how long — and it must not claim a
+// fault. derivePhase turns a true Degraded into the group's phase, so
+// conflating the two would make a ten-second wait look identical to a broken
+// image.
+func TestBackingOffConditionNamesTheCountAndTheWait(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("BackingOff = %+v, want True", c)
+	}
+	if c.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("reason = %q, want %q", c.Reason, spawneryv1alpha1.ReasonCrashLoopBackoff)
+	}
+	if !strings.Contains(c.Message, "1 server") || !strings.Contains(c.Message, "next attempt in") {
+		t.Errorf("message = %q, want the count and the remaining wait", c.Message)
+	}
+	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Error("Degraded is true after a single failure")
+	}
+}
+
+// TestGroupGivesUpAndSaysSo drives the streak all the way to
+// backoffGiveUpAt and checks the other half: once the group has given up,
+// Degraded goes true (so the phase reflects the real fault) and BackingOff
+// goes false — but with a reason and a message that say why, because
+// NoRecentFailures there would be a lie. It then proves the give-up sticks:
+// an hour later, with nothing about the spec changed, the group has still
+// created nothing.
+func TestGroupGivesUpAndSaysSo(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	// Drive the streak to the threshold: fail, wait out the window, repeat.
+	for i := int32(0); i < backoffGiveUpAt; i++ {
+		f.reconcileGroup(t, r)
+		if name, ok := f.newestServerName(t); ok {
+			f.failServer(t, name)
+		}
+		f.reconcileGroup(t, r)
+		f.clock.Advance(backoffCap)
+	}
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	if !meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Fatalf("Degraded is not true after %d failures", backoffGiveUpAt)
+	}
+	if got := meta.FindStatusCondition(g.Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded).Reason; got != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("Degraded reason = %q, want CrashLoopBackoff", got)
+	}
+	if g.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded: derivePhase already maps the condition", g.Status.Phase)
+	}
+	c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("BackingOff = %+v, want False once the group gave up", c)
+	}
+	if c.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("reason = %q, want CrashLoopBackoff rather than an all-clear", c.Reason)
+	}
+
+	before := len(f.listServers(t))
+	f.clock.Advance(time.Hour)
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != before {
+		t.Errorf("a group that gave up created a server after an hour: %d -> %d", before, got)
+	}
+}
+
+// TestBackingOffEventFiresOnTheFlankOnly pins the same non-spam rule
+// ScalingLimited already carries: SetStatusCondition moves lastTransitionTime
+// only on a real change of status, so comparing across the call is what tells
+// a transition apart from a five-second resync, and an event belongs only on
+// the former.
+func TestBackingOffEventFiresOnTheFlankOnly(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+
+	// scalingEvents drains the recorder, so this first call also empties it of
+	// whatever fired on the two passes above.
+	if first := scalingEvents(rec, spawneryv1alpha1.ReasonCrashLoopBackoff); first != 1 {
+		t.Fatalf("events = %d after the first failure, want 1", first)
+	}
+	f.clock.Advance(time.Second)
+	f.reconcileGroup(t, r)
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonCrashLoopBackoff); got != 0 {
+		t.Errorf("events = %d after a resync inside the same window, want 0: the event goes on the flank", got)
+	}
+}
+
+// TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened pins the
+// !newestFailure.IsZero() guard in Reconcile around the write to
+// group.Status.LastFailureAt. No test that reloads the group can ever tell a
+// guarded write apart from an unguarded one: a zero metav1.Time marshals to
+// null and round-trips back to nil either way, so the field itself carries no
+// evidence. What the guard actually protects is the in-memory value on this
+// same pass, and the default BackingOff message is what reads it back — so a
+// group that has never failed must render the plain, dateless message, not a
+// zero time smuggled in by an unconditional write.
+func TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+
+	c := meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if c == nil {
+		t.Fatal("BackingOff condition was not published")
+	}
+	if c.Message != "no server has failed to start recently" {
+		t.Errorf("message = %q, want the plain no-history message with no timestamp", c.Message)
+	}
+}
+
+// TestGenerationChangeClearsAGaveUpGroupsConditions closes out the carried
+// finding that the generation-change RemoveStatusCondition calls were
+// completely untested: until this task nothing ever set either condition, so
+// the removal had nothing to prove. Driving a real give-up first, then a real
+// spec change, is what makes this a test of the clear rather than of two
+// conditions that were already absent.
+func TestGenerationChangeClearsAGaveUpGroupsConditions(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	for i := int32(0); i < backoffGiveUpAt; i++ {
+		f.reconcileGroup(t, r)
+		if name, ok := f.newestServerName(t); ok {
+			f.failServer(t, name)
+		}
+		f.reconcileGroup(t, r)
+		f.clock.Advance(backoffCap)
+	}
+	f.reconcileGroup(t, r)
+
+	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Fatalf("Degraded is not true after %d failures; the generation change below would prove nothing", backoffGiveUpAt)
+	}
+
+	// The operator's answer to whatever failed.
+	f.bumpGeneration(t)
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Error("Degraded still true after the spec change that answers it")
+	}
+	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff) {
+		t.Error("BackingOff still true after the spec change")
+	}
+	if got := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff).Reason; got != spawneryv1alpha1.ReasonNoRecentFailures {
+		t.Errorf("BackingOff reason = %q after the spec change, want %q: the give-up reason must not survive it", got, spawneryv1alpha1.ReasonNoRecentFailures)
+	}
+	if got := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded).Reason; got != spawneryv1alpha1.ReasonNoRecentFailures {
+		t.Errorf("Degraded reason = %q after the spec change, want %q: the give-up reason must not survive it", got, spawneryv1alpha1.ReasonNoRecentFailures)
+	}
+}
+
+// TestBackingOffIsNotDecidedWithoutAUsableNetwork closes out the carried
+// finding that the counting block sits ahead of the networkUsable &&
+// IsEphemeral guard: a group whose Network does not exist still counts and
+// still computes a real backoff decision it cannot act on. Publishing that
+// decision as BackingOff/Degraded would sit a second, differently-worded
+// explanation for the same standstill next to Accepted: False. It has to say
+// nothing was decided instead, mirroring ScalingLimited's own !sized case
+// exactly.
+func TestBackingOffIsNotDecidedWithoutAUsableNetwork(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	orphan := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "nowhere", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: spawneryv1alpha1.ObjectRef{Name: "missing"},
+			Type:       spawneryv1alpha1.ServerGroupEphemeral,
+			Image:      "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers: 100,
+			Scaling:    &spawneryv1alpha1.ScalingSpec{MinReplicas: 1, MaxReplicas: 2, SpareSlots: 10},
+		},
+	}
+	if err := f.c.Create(f.ctx, orphan); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "nowhere", Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "nowhere", Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	backingOff := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if backingOff == nil || backingOff.Status != metav1.ConditionFalse {
+		t.Fatalf("BackingOff = %+v on a group without its Network, want False", backingOff)
+	}
+	if backingOff.Message != "backoff is not being decided: the group's network is not usable" {
+		t.Errorf("message = %q, want the not-decided message", backingOff.Message)
+	}
+	degraded := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionFalse {
+		t.Fatalf("Degraded = %+v on a group without its Network, want False", degraded)
+	}
+	if degraded.Message != "backoff is not being decided: the group's network is not usable" {
+		t.Errorf("message = %q, want the not-decided message", degraded.Message)
 	}
 }
