@@ -60,6 +60,15 @@ type ServerView struct {
 	Retire bool
 	// CreatedAt is the creation timestamp of the Server object.
 	CreatedAt time.Time
+	// FailedAt is status.failedAt: when this server entered phase Failed.
+	// Zero for a server that has not. The backoff counts a failure from this
+	// rather than from the moment it observed one, so a window cannot be
+	// extended by being looked at.
+	FailedAt time.Time
+	// ReadySince is status.readySince: when this server last entered phase
+	// Ready. Zero for one that never did — and the Server controller clears
+	// it on every exit from Ready, so a Failed server carries no ReadySince.
+	ReadySince time.Time
 }
 
 // isOccupied is the single occupancy rule of the system. Both sides of the
