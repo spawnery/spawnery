@@ -5,6 +5,11 @@ Status: end of milestone 3c, the Velocity agent (2026-08-11). Updated
 cluster, and again on 2026-08-13 with the manual session that closed the two
 criteria that run left open; nothing before that section changed.
 
+**If you are starting milestone 4b, read
+[`handover-milestone-4b.md`](handover-milestone-4b.md) instead.** This
+document remains the one to start 4c from, and the record of milestone 3's
+evidence.
+
 This document is not a spec. It says where 3c stopped and what milestone 4 —
 scaling and drain — already finds in place. The design decisions live in
 `docs/superpowers/specs/2026-08-11-velocity-agent-design.md`; the open points

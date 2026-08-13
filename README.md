@@ -165,11 +165,16 @@ Milestone 4 continues with 4b, rolling updates of ephemeral groups, and 4c,
 proxy and node drain, which owns the readiness
 `internal/agent/registry.go` still cannot lower.
 
-Anyone starting milestone 4b or 4c begins at
-[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md): it says where
-3c stopped, the one milestone 2a contract change proxy drain needs in
-`internal/agent/registry.go`, and what 3c leaves in place for milestone 4 to
-build on. [`docs/handover-milestone-3.md`](docs/handover-milestone-3.md),
+Anyone starting milestone 4b begins at
+[`docs/handover-milestone-4b.md`](docs/handover-milestone-4b.md): it says what
+4b is, what 4a leaves in place for it, the one state the `Server` machine
+cannot express that soft drain needs, and the three numbers in `scaling.go`
+that must not be collapsed into one. It is written to be read by someone with
+no memory of how any of this was built.
+[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md) is where 4c
+begins instead: it says where 3c stopped, carries milestone 3's evidence, and
+names the one milestone 2a contract change proxy drain needs in
+`internal/agent/registry.go`. [`docs/handover-milestone-3.md`](docs/handover-milestone-3.md),
 [`docs/handover-milestone-2c.md`](docs/handover-milestone-2c.md) and
 [`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md) are its
 predecessors, kept as the record of what those milestones started from.
