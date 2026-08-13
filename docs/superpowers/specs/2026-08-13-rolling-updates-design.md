@@ -254,6 +254,14 @@ durability is what errs safely.
 
 ### 3.7 The cold start is suppressed while a failure of the current generation is retained
 
+> **Superseded by milestone 4d.** The suppression described below was removed
+> once per-group backoff landed. It was always a stopgap — this section says
+> so itself — and the backoff bounds the same loop with a window that starts
+> at ten seconds and grows, instead of a flat retention hour after any single
+> failure. The reasoning below is kept because it is the record of why the
+> loop needed closing at all; the mechanism it describes is gone. See
+> `2026-08-13-per-group-backoff-design.md`.
+
 A broken image is the most likely thing to go wrong in an update, and it is
 the case 4b makes most reachable. Without a guard: the cold-start server
 fails, `countsTowardSize` excludes `Failed`, so the cold start fires again on

@@ -796,6 +796,20 @@ drain, which needs the same real cluster to prove.
 has only an upper bound of one retained failure per group. Belongs to 4b,
 alongside its per-group backoff on rolling-update failures.
 
+*Met* by milestone 4d's `CountFailures` and `DecideBackoff`
+(`internal/controller/backoff.go`): a counter on `ServerGroupStatus`
+(`consecutiveFailures`, `lastFailureAt`) tracks the streak, `ConditionBackingOff`
+reports the wait with the count and the remaining time in its message, and at
+six consecutive failures the group sets `Degraded` with reason
+`CrashLoopBackoff` and creates nothing further until `metadata.generation`
+moves. It shipped as its own sub-milestone rather than folded into 4b — cut out
+during 4b's own brainstorm on the measurement that it shares no code with the
+rolling update — but it is the same backoff this entry pointed at. The bound
+this entry named, "an upper bound of one retained failure per group," is
+`maxRetainedFailures = 1` and it stays: it still caps the footprint of a
+failure, not the rate of retrying after one, which is now bounded separately.
+See `docs/superpowers/specs/2026-08-13-per-group-backoff-design.md`.
+
 **`ProxyGroupReconciler.pods()` has no expectations tracking — half of this is
 now closed.** The `ServerGroup` side is: `internal/controller/expectations.go`
 gives `ServerGroupReconciler` create and delete reservations keyed by name, so
@@ -970,6 +984,48 @@ the floor rule, which has the identical loop and keeps it.
 rate at which the group tries again. Real per-group exponential backoff with
 the `Degraded` condition (master design §7) belongs to its own spec, which is
 next.
+
+*Met* by milestone 4d's per-group backoff, which subsumes this suppression
+rather than fixing its ordering further. `CountFailures` and `DecideBackoff`
+(`internal/controller/backoff.go`) count consecutive failures on
+`ServerGroupStatus` and gate the create call site in
+`ServerGroupReconciler.size()` with a window that starts at ten seconds and
+doubles, rather than this suppression's flat `failedRetentionSeconds` hour
+after any single failure. The `coldStart` branch this entry describes — the
+one counting a retained current-generation `Failed` server — is removed,
+along with the tests that pinned it, and the loop it closed is now closed by
+the backoff instead: `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`
+holds a group with a permanently broken new generation to at most 3 servers
+across 10 five-second passes, and fails without the backoff gate (20
+servers built against that bound) — the mutation was run, not assumed.
+Restoring the removed suppression itself was also tried, and fails only the
+rewritten tail of `TestOccupiedServerSurvivesAContinuousScaleDown`, so that
+test is what now pins the removal.
+`maxRetainedFailures = 1` stays, and still bounds only the footprint — one
+corpse retained for diagnosis — not the rate; the rate is what the backoff
+now bounds. `selectFailedForPruning`'s newest-generation-first ordering,
+which this entry's own fix made load-bearing for the suppression, stays too,
+for the reason it always had independent of the suppression: the first
+failure after a generation bump is the one that says what broke, and the
+previous generation's corpse says nothing about the new image. See
+`docs/superpowers/specs/2026-08-13-per-group-backoff-design.md`.
+
+## From milestone 4d
+
+**Which message an operator sees first when a group has both given up and a
+dead `Network` is unpinned.** The `BackingOff`/`Degraded` switch in
+`ServerGroupReconciler.Reconcile` tests `!sized` before `backoff.GaveUp`, so a
+group whose `Network` died while it was also six failures deep gets "backoff
+is not being decided: the group's network is not usable" rather than "not
+retrying: change the group's spec to try again" — even though the failure
+count that produced `GaveUp` is computed from the views before `sized` is
+known, and does not depend on the `Network` at all. Moving the `!sized` case
+after `GaveUp` in the switch leaves the whole suite green: both messages are
+true of a group in that state, which is likely why nothing distinguishes
+them, but which one an operator should see first is a real question and
+nothing checked in answers it. Worth a deliberate ruling, and a test that
+pins whichever order is chosen, rather than leaving the switch's current
+order as an accident of how it was written.
 
 ## Preconditions for milestone 5 (persistent groups)
 

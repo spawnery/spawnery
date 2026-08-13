@@ -30,12 +30,14 @@ session after it proved the other half and the drain.
 
 ## 4a has landed
 
-Milestone 4 was cut into three: 4a (slot-based scaling, done), 4b (rolling
+Milestone 4 was cut into four: 4a (slot-based scaling, done), 4b (rolling
 updates of ephemeral groups — stale generations, soft drain, `maxUnavailable`,
-`maxStaleSeconds`, per-group exponential backoff) and 4c (proxy drain and node
-drain — the lowerable readiness `internal/agent/registry.go` still cannot
-express, `ProxyGroup` scaling down without kicking anyone, `unschedulable`
-nodes). What follows is what 4a built and what 4b and 4c now find in place.
+`maxStaleSeconds`), 4d (per-group exponential backoff and the `Degraded`
+condition, cut out of 4b's own brainstorm once the two turned out to share no
+code) and 4c (proxy drain and node drain — the lowerable readiness
+`internal/agent/registry.go` still cannot express, `ProxyGroup` scaling down
+without kicking anyone, `unschedulable` nodes). What follows is what 4a built
+and what 4b, 4d and 4c now find in place.
 
 - **`DecideSize` in `internal/controller/scaling.go` is the sizing rule.** It
   is a pure function, table-tested without a cluster, and it already carries a
@@ -125,6 +127,71 @@ leaves. What follows is what 4b built and what 4c now finds in place.
   cannot express — "connected, but no longer ready" — is what proxy drain and
   node drain still need, and "The one contract change milestone 4 has to
   make," below, is exactly as 3c left it.
+
+## 4d has landed
+
+4d (per-group backoff and the `Degraded` condition, 2026-08-13) closes the
+loop 4b's own §3.7 had only half-closed: a `ServerGroup` whose servers cannot
+start no longer creates a replacement every five-second pass. It counts
+consecutive failures on its own status, waits 10s, 20s, 40s, 80s and 160s
+between attempts, and after six in a row sets `Degraded`/`CrashLoopBackoff`
+and creates nothing further until the spec changes. It was cut out of 4b
+during that milestone's own brainstorm, on the measurement that it shares no
+code with the rolling update; nothing in it depends on 4c and nothing in 4c
+depends on it. What follows is what 4d built and what 4c now finds in place.
+
+- **Two pure rules, `CountFailures` and `DecideBackoff`
+  (`internal/controller/backoff.go`), the same shape as `DecideSize` and
+  `phase.Decide`.** `CountFailures` folds a pass's `Failed` views into the
+  running count, identified idempotently by each server's own `status.failedAt`
+  being newer than the newest one already counted, and resets the streak on a
+  `readySince` *after* the last counted failure rather than on any server
+  being ready — the weaker rule would hold a mixed group's counter at zero
+  forever against the one server that keeps crash-looping. `DecideBackoff`
+  turns the count into a decision — `MayCreate`, `GaveUp`, `RetryAfter` —
+  against four named constants (base 10s, factor 2, cap 5 minutes, give up at
+  six), none of them a CRD field, for the same reason `spec.update` carries no
+  knob nobody has asked for.
+- **The counter lives on `ServerGroupStatus`, not in memory, and that is the
+  opposite of 4a's choice for `EmptyFor`, for the same reason 4b chose
+  durability for `spec.retire`.** 4a's empty-since clock resets on an
+  operator restart in the safe direction — it only delays a scale-down. Here
+  a reset would restart the very loop this feature exists to bound,
+  immediately, in the unsafe direction. `consecutiveFailures` and
+  `lastFailureAt` are therefore fields on the CR, the same durability call 4b
+  made when it put `spec.retire` on the `Server` rather than tracking a
+  retirement in the reconciler's own memory.
+- **The gate sits on execution, not on the decision.** `DecideSize` is
+  untouched; `ServerGroupReconciler.size()` simply does not carry out
+  `decision.Create` while `backoff.MayCreate` is false. Deletions,
+  retirements and drains are never gated — the backoff holds back building,
+  not tidying up, and those paths touch players and cannot wait on an
+  unrelated failure. `ScalingLimited` keeps reporting the shortfall
+  independently of whether the group may act on it, so an operator sees "the
+  group needs a server" and "it is waiting" as two separate facts rather than
+  one muddled one.
+- **Two conditions, and `ConditionBackingOff` is kept separate from
+  `Degraded` for the same reason `ScalingLimited` is its own condition rather
+  than folded in — the pattern 4c will want for the proxy side.**
+  `derivePhase` turns a true `Degraded` into the group's phase; a group
+  waiting ten seconds after one hiccup would otherwise present as
+  indistinguishable from a group with a real fault. `BackingOff` is true
+  while a window is open, with the count and the remaining time in its
+  message; once the group gives up it goes false, but with reason
+  `CrashLoopBackoff` and a message saying a spec change is the way back,
+  rather than an all-clear nobody checked.
+- **Counting is scoped to the current generation.** `CountFailures` is only
+  ever given the views `ofGeneration` filters to the group's current spec —
+  a filter at the call site in `Reconcile`, not inside the function itself.
+  Without it, the generation-change clear (`consecutiveFailures` and
+  `lastFailureAt` reset to zero/nil the moment `metadata.generation` moves
+  past `status.observedGeneration`) would undo itself on the very pass that
+  performs it: the retained corpse of the generation just replaced is newer
+  than the zero watermark it left behind and would be counted straight back
+  in.
+- **`ProxyGroup` has no equivalent, and that is deliberate — it belongs to
+  4c.** The controller has no failure path of this shape yet; 4d's own
+  design says so in as many words.
 
 ## The evidence run
 
