@@ -112,3 +112,22 @@ func TestForgetDropsAGroupEntirely(t *testing.T) {
 		t.Errorf("pending = (%d, %v) after forget, want (0, empty)", creates, deletes)
 	}
 }
+
+// TestPendingSeparatesCreatesFromDeletes exercises the type's primary read API
+// with both kinds in one group at once. It is the arithmetic task 6 sizes the
+// group from: a delete counted as a create inflates alive by two and hides a
+// shortfall the group actually has.
+func TestPendingSeparatesCreatesFromDeletes(t *testing.T) {
+	e, _ := newTestExpectations()
+	e.expectCreated("ns/lobby", "lobby-aaaa")
+	e.expectCreated("ns/lobby", "lobby-bbbb")
+	e.expectDeleted("ns/lobby", "lobby-cccc")
+
+	creates, deletes := e.pending("ns/lobby")
+	if creates != 2 {
+		t.Errorf("creates = %d, want 2", creates)
+	}
+	if len(deletes) != 1 || !deletes["lobby-cccc"] {
+		t.Errorf("deletes = %v, want exactly lobby-cccc", deletes)
+	}
+}
