@@ -1736,7 +1736,10 @@ git commit -m "fix(4b): stop crediting capacity to a server whose pod is gone"
 - [ ] `nix develop -c make test` — green, coverage at or above 88% for `internal/controller` and 100% for `internal/phase`.
 - [ ] `nix develop -c make manifests` — no diff beyond Task 2's two fields.
 - [ ] `git diff --name-only master...HEAD` — nothing under `agent/`, `image/`, `proto/`, `nix/`.
-- [ ] `docs/known-issues.md` gains a "From milestone 4b" section: the group at its ceiling that cannot start a changeover (Task 5), and the cold-start loop that remains the backoff spec's to close properly.
+- [ ] `docs/known-issues.md` gains a "From milestone 4b" section with three entries:
+  1. **Any spec change begins a changeover.** `metadata.generation` moves on every edit, so tuning `minReplicas`, `spareSlots` or `maxReplicas` marks every running server stale and replaces a whole group of functionally identical servers. Master design §4.4 specifies exactly this ("when the group spec changes, its generation goes up"), and 4b implements it as written; the behaviour was latent before — `AggregateGroup` already filtered by generation — and only became actionable here. It is safe (nobody is kicked) but it costs churn, and the likeliest moment to change a scaling knob is a player spike. Narrowing staleness to the fields that actually shape a pod is a real design change with its own pitfalls and was deliberately not made mid-milestone. `TestGroupShrinksOnceTheStabilizationWindowElapses` documents the behaviour rather than hiding it.
+  2. **A group at its ceiling cannot start a changeover** (Task 5). It stalls with the old generation serving and sets `ScalingLimited`; raising `maxReplicas` by one is the way out.
+  3. **The cold-start loop** remains the backoff spec's to close properly; 4b only guards its own door with the retained-failure suppression.
 - [ ] `docs/handover-milestone-4.md`'s "4a has landed" section gains 4b, and the sub-project table in `docs/handover-milestone-4b.md` marks 4b done.
 - [ ] One whole-branch review before merge. On 4a it found a fixed point no per-task review could see; the equivalent risk here is the interaction between the cold start, the ceiling and the budget, which no single task's tests exercise together.
 
