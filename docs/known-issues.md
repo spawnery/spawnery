@@ -773,55 +773,78 @@ actual `kubectl delete` on an actual held connection forced the question.
 protection of occupied pods, but not the detection of nodes that have become
 `unschedulable` along with a proactive drain, as foreseen in spec 5.1 and 7.
 Until then the operator can block a node drain without being able to release it
-again. Both belong in one milestone.
+again. Both belong in one milestone: 4c, which owns node drain.
 
 **Terminating pods count as "process gone".** `isOccupied` treats a pod with a
 set `deletionTimestamp` as free of sessions, even though the process is still
 running during the grace period and players may still be connected. As a result
 `minAvailable` drops by one for the duration of the grace period while the pod's
 label still matches the selector. Not reproducible in envtest, because there is
-no kubelet there — this needs a real cluster.
+no kubelet there — this needs a real cluster. Belongs to 4c, alongside node
+drain, which needs the same real cluster to prove.
 
 **Exponential backoff per group.** Spec 7 requires it along with the condition
 `Degraded`/`CrashLoopBackoff` and stopping further attempts. Milestone 1 instead
-has only an upper bound of one retained failure per group.
+has only an upper bound of one retained failure per group. Belongs to 4b,
+alongside its per-group backoff on rolling-update failures.
 
-**Nothing bounds the reported `slots` against the group's `maxPlayers`.**
-`internal/agent/registry.go` rejects a player count above the reported `slots`,
-but checks `slots` itself against nothing — even though the operator knows the
-upper bound and handed it to the pod itself as `SPAWNERY_MAX_PLAYERS`. Today
-`slots` only ends up in `status.slots` and is therefore cosmetic. From milestone
-4 it feeds `FreeSlots` and with it the scaling decision: a compromised pod
-reporting `slots: 1000000` at zero players makes the group look permanently
-spacious and suppresses every scale-up for all of its servers — exactly the
-effect across pod boundaries that milestone 2a otherwise rules out. The bound
-belongs in the same change as `FreeSlots`: the registry entry does not yet know
-the pod's group, so clamping to `maxPlayers` has to sit where both come
-together.
-
-**`ProxyGroupReconciler.pods()` has no expectations tracking, and the blast
-radius of that is new.** It lists pods through the manager's plain cached
-`List`, with no reservation for a create it just issued. A reconcile the
-group's own pod-create event triggers can therefore read a cache that has not
-caught up yet, see the count still short, create a second pod, and have the
-next reconcile — once the cache catches up — delete the surplus.
-`ServerGroupReconciler.pods()` has the identical shape (`servergroup_controller.go`),
-so this is a repository-wide pattern, not something 3a introduced. What 3a
-changes is the cost of hitting it: milestone 3a ships no proxy drain, so
-deleting a surplus proxy pod disconnects every player on it outright, where
-deleting a surplus `Server` at least goes through the drain state machine
-first. The fix — expectations tracking, à la the original `ReplicaSet`
-controller, or deterministic pod names derived from an ordinal instead of a
-random suffix — belongs with milestone 4's rolling updates, which touch this
-same code for an unrelated reason. This entry is the precondition: the record
-that the problem exists and why, so milestone 4 does not have to rediscover
-it.
+**`ProxyGroupReconciler.pods()` has no expectations tracking — half of this is
+now closed.** The `ServerGroup` side is: `internal/controller/expectations.go`
+gives `ServerGroupReconciler` create and delete reservations keyed by name, so
+a reconcile its own create event triggers no longer reads a stale cache, sees
+the group still short, and creates a second server. `ProxyGroupReconciler.pods()`
+is untouched — it still lists pods through the manager's plain cached `List`,
+with no reservation for a create it just issued, so a reconcile the group's own
+pod-create event triggers can still create a second pod and have the next
+reconcile delete the surplus once the cache catches up. This now belongs to
+4c, the milestone that makes proxy replica counts move: the mechanism to copy
+already exists in `expectations.go`, so 4c does not have to design it again.
 
 **Orphaned `Server`s without a pod.** The sweep covers "pod without CR" and
 "server without group", but not "CR without pod": that is handled by the state
 machine through `PodLost`, which only applies once `status.podName` has been
 written. A server that never got a pod would stay in `Pending` and occupy its
-slot.
+slot. Belongs to 4c.
+
+## Closed by milestone 4a
+
+**Nothing bounded the reported `slots` against the group's `maxPlayers`.**
+`internal/agent/registry.go` rejected a player count above the reported
+`slots`, but checked `slots` itself against nothing, even though the operator
+knows the upper bound and handed it to the pod itself as `SPAWNERY_MAX_PLAYERS`.
+Once `slots` started feeding a scaling decision this milestone, a compromised
+pod reporting `slots: 1000000` at zero players could have made its whole group
+look permanently spacious and suppressed every scale-up for all of its
+servers — exactly the effect across pod boundaries that milestone 2a otherwise
+rules out. Closed by `clampReport` in `internal/controller/candidates.go`: the
+reported `slots` is clamped to the group's `maxPlayers`, and the reported
+`players` is clamped to the (possibly lower) result, before either reaches
+`DecideSize`.
+
+## From milestone 4a
+
+**`status.freeSlots` and the scaler's own figure are two numbers.**
+`AggregateGroup` computes free slots over `Ready` servers of the current
+generation; `provisionalCapacity` in `internal/controller/scaling.go` computes
+a second figure that also credits servers whose capacity is ordered and has
+not arrived. Anyone reading the code for the first time will want to unify
+them. They must not be: the first is what `status.freeSlots` documents and
+what 4b's rolling update needs; the second is what stops the scaler ordering
+the same replacement on every five-second pass. Both files say so; this entry
+is the third place, so a search finds it.
+
+**`provisionalCapacity` cannot tell "has never reported" from "the pod
+vanished"** — both present as `Slots == 0`, because `Registry.Lookup` on an
+unknown pod returns a zero snapshot. A server whose pod is gone is therefore
+credited a full `maxPlayers` of capacity it does not have, for the seconds
+until the Server controller fails it. The blast radius is under-creation for a
+resync or two, and no invariant is touched. The obvious fix — testing `Stale`
+before `Slots == 0` — would be a regression: a server that is genuinely
+starting up is also stale and has never reported, and crediting it zero
+reintroduces exactly the runaway `provisionalCapacity` exists to prevent. The
+right signal is already on the view and unused here: `ServerView.SessionsGone`,
+one line at the top of the function. It belongs with 4b's own work on
+`scaling.go`.
 
 ## Preconditions for milestone 5 (persistent groups)
 

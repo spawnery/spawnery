@@ -21,6 +21,47 @@ draining. Both halves of milestone 3's success criterion — a player can join,
 automated and by hand — are implemented; whether they hold against a real
 cluster is what the evidence run below measures.
 
+## 4a has landed
+
+Milestone 4 was cut into three: 4a (slot-based scaling, done), 4b (rolling
+updates of ephemeral groups — stale generations, soft drain, `maxUnavailable`,
+`maxStaleSeconds`, per-group exponential backoff) and 4c (proxy drain and node
+drain — the lowerable readiness `internal/agent/registry.go` still cannot
+express, `ProxyGroup` scaling down without kicking anyone, `unschedulable`
+nodes). What follows is what 4a built and what 4b and 4c now find in place.
+
+- **`DecideSize` in `internal/controller/scaling.go` is the sizing rule.** It
+  is a pure function, table-tested without a cluster, and it already carries a
+  comment on why it does not filter by generation: doing so would make every
+  scale-down impossible from the moment anyone edits the group's spec. 4b's
+  rolling update adds the stale-generation rules — `maxUnavailable`,
+  `maxStaleSeconds`, soft drain — to this same function rather than standing
+  up a second scaler beside it.
+- **`expectations` exists**, in `internal/controller/expectations.go`, and is
+  the mechanism `ProxyGroupReconciler` needs for the create/delete reservation
+  it has never had (see "Closed by milestone 4a" and the rewritten
+  `ProxyGroupReconciler.pods()` entry in `docs/known-issues.md`). It is
+  the `ReplicaSet` controller's own mechanism, keyed by name; 4c can wire the
+  same type in rather than design a new one.
+- **`agent.Snapshot.EmptyFor` exists**, in `internal/agent/registry.go`, and
+  `ServerView.EmptyFor` in `internal/controller/candidates.go` carries it
+  through to the scaling decision. Both fields decide nothing on their own —
+  every rule that reads either also asks `Players == 0 && !Stale` — which is
+  the same caution 4b's soft drain and 4c's proxy drain will want for their
+  own idle timers.
+- **The `ScalingLimited` condition is the pattern 4c can reuse** for the
+  proxy's own gaps. It is set on every reconcile of an ephemeral group (true
+  exactly while `maxReplicas` is holding capacity back, false otherwise), and
+  fires an event only on the flank — comparing `meta.IsStatusConditionTrue`
+  before and after `SetStatusCondition`, since that call only moves
+  `lastTransitionTime` on an actual change of status. The same shape works for
+  whatever caps a `ProxyGroup`'s own scale-down.
+- **Everything under "The one contract change milestone 4 has to make" is
+  untouched and still 4c's.** 4a scaled ephemeral `ServerGroup`s by their free
+  slots; it did not touch `internal/agent/registry.go`'s readiness, and a
+  `ProxyGroup` still cannot lower a proxy's readiness without dropping its
+  connection. That section below is exactly as 3c left it.
+
 ## The evidence run
 
 `docs/runbook-milestone-3-evidence.md` was run against a real `kind` cluster
