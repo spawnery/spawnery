@@ -2745,10 +2745,16 @@ func drainRecorder(rec *record.FakeRecorder) {
 // would count no failures at all.
 //
 // The bound is read off the backoff schedule rather than set at one more than
-// the cold start built. Ten passes move the clock fifty seconds; the windows
-// are ten, twenty and forty seconds, so two of them close inside the run and
-// the group legitimately builds two replacements on top of the cold start's
-// own server. A group rebuilding every pass would have built eleven.
+// the cold start built. Ten passes move the clock fifty seconds:
+// passes * resyncInterval = 10 * 5s = 50s. backoffDelay(n) = backoffBase *
+// backoffFactor^(n-1) gives windows of 10s, 20s, 40s for n = 1, 2, 3
+// (backoffBase = 10s, backoffFactor = 2, both in backoff.go). Two windows'
+// worth fit inside 50s (10s, then 20s more — 30s elapsed) and the third does
+// not (40s more would need 70s), so two replacements are legitimately built
+// on top of the cold start's own server: bound = 1 + 2 = 3. A group
+// rebuilding every pass would have built eleven. Changing passes,
+// backoffBase, backoffFactor or resyncInterval moves this arithmetic and
+// will turn this red — that is a fixture change, not a backoff regression.
 func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	const (
 		passes = 10

@@ -362,11 +362,14 @@ func TestSelectFailedForPruning(t *testing.T) {
 			want: []string{"b"},
 		},
 		{
-			// The current generation's corpse is the one the cold-start
-			// suppression reads, and it is always the *younger* of the two, so
-			// a purely oldest-first rule prunes exactly it — on the same
-			// reconcile that observes it. The inherited corpse says nothing
-			// about the new image; this one does.
+			// This is the sole surviving cover for selectFailedForPruning's
+			// generation clause (candidates.go: `failed[i].Generation !=
+			// failed[j].Generation`) — drop that clause and this case is one of
+			// exactly two that fail, both halves of the newest-generation-first
+			// ordering. The reason is the diagnosis argument in
+			// selectFailedForPruning's doc: a generation bump is a change, and
+			// the first failure after it is the one that says what broke. The
+			// inherited corpse says nothing about the new image; this one does.
 			name: "keeps the newest generation's failure over an inherited older one",
 			views: []ServerView{
 				view("f-old", phase.Failed, 0, 100, false, 3, 0),

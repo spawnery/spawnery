@@ -230,6 +230,10 @@ func readyFree(views []ServerView) int32 {
 // seconds — and the per-group backoff replaced it: the same loop is now bounded
 // by a window that starts at seconds and grows only if the failures keep
 // coming, rather than by a flat retention hour after any single failure.
+// DecideSize still returns Create >= 1 whenever coldStart applies — neither
+// this function nor DecideSize does the bounding. It happens on execution, at
+// the gate in servergroup_controller.go (`if backoff.MayCreate`), which skips
+// the create loop entirely while a window is open.
 func coldStart(in ScalingInputs) bool {
 	if in.PendingCreates > 0 {
 		// A pending create is of the current generation in every pass but one:

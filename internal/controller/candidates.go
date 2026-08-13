@@ -248,9 +248,11 @@ func SelectDeletionCandidates(views []ServerView, count int) []string {
 // per floor replica before the first one expires.
 //
 // One retained failure is enough to diagnose from, and it is the retention
-// window that then bounds the footprint rather than the failure rate. Proper
-// backoff, a Degraded condition and giving up on repeated failures belong to
-// milestone 4; this is only the bound that keeps the cluster usable until then.
+// window that then bounds the footprint rather than the failure rate — the
+// rate is bounded separately, by the per-group backoff (DecideBackoff in
+// backoff.go, gated at the create call site in servergroup_controller.go).
+// This cap and that backoff answer different questions: this is how many
+// corpses stick around, that is how often a new one gets made.
 const maxRetainedFailures = 1
 
 // selectFailedForPruning names the Failed servers beyond the retention cap.
