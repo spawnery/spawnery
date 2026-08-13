@@ -227,3 +227,40 @@ func TestDecideSizeNeverNominatesAServerAlreadyBeingRemoved(t *testing.T) {
 		t.Errorf("Delete = %v, want none once the pending removal is counted", got.Delete)
 	}
 }
+
+// TestDecideSizeShortOfCapacityNeverAlsoShrinks pins the early return: three
+// servers against a ceiling of one is a surplus, and the group is also 700
+// slots short. Only one of those two answers may come out of a single pass,
+// and it is the one that does not disturb anybody.
+func TestDecideSizeShortOfCapacityNeverAlsoShrinks(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			ready("a", 0, 100), ready("b", 0, 100), ready("c", 0, 100),
+		},
+		MinReplicas: 1, MaxReplicas: 1,
+		SpareSlots: 1000, MaxPlayers: 100,
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v while the group is short of capacity, want none", got.Delete)
+	}
+	if got.Create != 0 || got.Wanted != 7 || !got.Limited {
+		t.Errorf("Create = %d, Wanted = %d, Limited = %v; want 0, 7 and true",
+			got.Create, got.Wanted, got.Limited)
+	}
+}
+
+// TestDecideSizeDoesNotLetALeavingServerHoldTheFloor gives the group exactly
+// as much room as its floor needs, so counting the draining server toward the
+// size — instead of only toward nothing, as countsTowardSize says — is the
+// difference between ordering the replacement and running one short for the
+// whole drain.
+func TestDecideSizeDoesNotLetALeavingServerHoldTheFloor(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{{Name: "a", Phase: phase.Draining, Slots: 100}},
+		MinReplicas: 1, MaxReplicas: 1,
+		SpareSlots: 0, MaxPlayers: 100,
+	})
+	if got.Create != 1 {
+		t.Errorf("Create = %d, want 1: a server on its way out does not hold the floor", got.Create)
+	}
+}
