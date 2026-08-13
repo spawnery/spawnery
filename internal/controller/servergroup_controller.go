@@ -189,8 +189,11 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if group.Generation != group.Status.ObservedGeneration {
 		group.Status.ConsecutiveFailures = 0
 		group.Status.LastFailureAt = nil
-		meta.RemoveStatusCondition(&group.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
-		meta.RemoveStatusCondition(&group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+		// The two conditions need no explicit removal: the BackingOff/Degraded
+		// switch below (the one with the "!sized" case) republishes both with
+		// meta.SetStatusCondition unconditionally on every pass, including the
+		// case where nothing was decided, so a Remove here would be
+		// overwritten before it could ever be observed.
 	}
 
 	var lastFailure time.Time
@@ -351,14 +354,14 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			spawneryv1alpha1.ConditionDegraded)
 		meta.SetStatusCondition(&group.Status.Conditions, backingOff)
 		meta.SetStatusCondition(&group.Status.Conditions, degraded)
-		if isTrue := backingOff.Status == metav1.ConditionTrue; isTrue != wasBackingOff {
+		if isTrue := backingOff.Status == metav1.ConditionTrue; sized && isTrue != wasBackingOff {
 			eventType := corev1.EventTypeNormal
 			if isTrue {
 				eventType = corev1.EventTypeWarning
 			}
 			r.Recorder.Event(group, eventType, backingOff.Reason, backingOff.Message)
 		}
-		if isTrue := degraded.Status == metav1.ConditionTrue; isTrue != wasDegraded {
+		if isTrue := degraded.Status == metav1.ConditionTrue; sized && isTrue != wasDegraded {
 			eventType := corev1.EventTypeNormal
 			if isTrue {
 				eventType = corev1.EventTypeWarning

@@ -2516,6 +2516,45 @@ func TestBackingOffEventFiresOnTheFlankOnly(t *testing.T) {
 	}
 }
 
+// TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff pins the review's
+// finding 1 on Task 5: the BackingOff/Degraded event guards must check sized
+// the same way ScalingLimited's guard does (`if sized && decision.Limited !=
+// was`). Without that check, a group whose Network dies while it is actively
+// backing off flips BackingOff from True to the !sized case's False on the
+// very next pass — a real transition by IsStatusConditionTrue's bookkeeping,
+// even though nothing was decided — and fires an event carrying the
+// condition's default NoRecentFailures reason next to a message that says
+// the opposite: that backoff is not being decided, not that servers are
+// healthy. A reassuring Reason paired with an unresolved-problem Message is
+// exactly what the sized guard exists to prevent.
+func TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+
+	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionBackingOff) {
+		t.Fatalf("BackingOff is not true after a failure; the network-dies-mid-backoff pass below would prove nothing")
+	}
+	// Drains the recorder of everything that fired getting here (this test is
+	// about the next pass only); scalingEvents empties the whole channel
+	// regardless of which reason it is asked to count.
+	scalingEvents(rec, spawneryv1alpha1.ReasonCrashLoopBackoff)
+
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete network: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonNoRecentFailures); got != 0 {
+		t.Errorf("events = %d when the network died mid-backoff, want 0: nothing was decided this pass, so no event should fire", got)
+	}
+}
+
 // TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened pins the
 // !newestFailure.IsZero() guard in Reconcile around the write to
 // group.Status.LastFailureAt. No test that reloads the group can ever tell a
