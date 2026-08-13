@@ -2296,6 +2296,65 @@ func TestGroupStillShedsWhileItBacksOff(t *testing.T) {
 	}
 }
 
+// TestGroupStillRetiresWhileItBacksOff pins the other half of the same
+// promise as TestGroupStillSheds: the retire loop in size() must not wait on
+// backoff.MayCreate either. The delete loop is covered above; this is the
+// path a rolling update actually depends on, because a retirement is what
+// starts a soft drain — the only thing in this diff that moves a player's
+// session. A retirement stalled behind the window would be a changeover that
+// stops mid-flight over a failure that has nothing to do with it.
+//
+// The fixture is a group mid-changeover: a stale (previous-generation) Ready
+// server, which is the retirement candidate, and a Ready server of the
+// current generation, which selectRetirement refuses to nominate anything
+// without (design §3.4's "at least one ready server of the current
+// generation"). Both are brought up with the fixture's default scaling
+// (spareSlots 40, maxReplicas 10) so that each Ready server's 100 free slots
+// already clears spare-slot demand and DecideSize reaches the retirement
+// branch rather than a create or a ceiling-driven delete.
+//
+// As in TestGroupStillSheds, the window is proved open by construction:
+// consecutiveFailures reads 1 with the clock still short of failedAt +
+// backoffBase, DecideBackoff's must-wait case exactly.
+func TestGroupStillRetiresWhileItBacksOff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// The retirement candidate, created and readied under the group's
+	// starting generation, before the bump below makes it stale.
+	stale := "lobby-stale"
+	bringUpReady(t, f, stale)
+
+	// The operator's fix in flight: a real generation bump, so the group is
+	// genuinely mid-changeover rather than merely holding one old server.
+	f.bumpGeneration(t)
+
+	// The current-generation Ready server selectRetirement requires before it
+	// will nominate anything. Its readySince is the watermark the failure
+	// below has to clear.
+	current := "lobby-current"
+	bringUpReady(t, f, current)
+
+	// The failure has to be newer than lobby-current's readySince or it is
+	// not a failure since the last success and the streak never starts — see
+	// CountFailures and the identical comment on TestGroupStillSheds above.
+	// ofGeneration excludes the stale server from the count entirely, so only
+	// this watermark matters here.
+	f.clock.Advance(time.Second)
+	broken := "lobby-broken"
+	f.createServer(broken)
+	f.failServer(t, broken)
+
+	f.reconcileGroup(t, r)
+
+	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got != 1 {
+		t.Fatalf("consecutiveFailures = %d, want 1: with no window open this proves nothing about retiring while one is", got)
+	}
+	if !f.server(stale).Spec.Retire {
+		t.Errorf("the stale server was not asked to retire while the group was backing off")
+	}
+}
+
 // TestGenerationChangeClearsTheBackoff pins the way out. A spec change is the
 // operator's answer to whatever broke, so the streak it caused is over and the
 // next attempt is immediate.
