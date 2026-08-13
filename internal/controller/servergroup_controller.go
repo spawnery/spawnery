@@ -295,12 +295,19 @@ func (r *ServerGroupReconciler) collectViews(
 		// status: the control loop must decide on fresh data.
 		pod, podFound := r.podFor(ctx, srv)
 		snap := r.Agents.Lookup(podUID(pod, podFound))
+		players, slots := clampReport(snap.Players, snap.Slots, group.Spec.MaxPlayers)
+		if players != snap.Players || slots != snap.Slots {
+			log.FromContext(ctx).V(1).Info("agent report clamped to the group's capacity",
+				"server", srv.Name, "reportedPlayers", snap.Players, "reportedSlots", snap.Slots,
+				"maxPlayers", group.Spec.MaxPlayers)
+		}
 		v := ServerView{
-			Name:    srv.Name,
-			Phase:   phase.Phase(srv.Status.Phase),
-			Players: snap.Players,
-			Slots:   snap.Slots,
-			Stale:   snap.PlayersStale,
+			Name:     srv.Name,
+			Phase:    phase.Phase(srv.Status.Phase),
+			Players:  players,
+			Slots:    slots,
+			EmptyFor: snap.EmptyFor,
+			Stale:    snap.PlayersStale,
 			// Read from the status, never guessed from the phase: a server that
 			// lost its probe is in Starting with its players still connected.
 			WasRegistered: srv.Status.WasRegistered,

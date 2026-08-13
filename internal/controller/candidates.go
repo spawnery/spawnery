@@ -34,6 +34,11 @@ type ServerView struct {
 	Players int32
 	// Slots is the reported capacity.
 	Slots int32
+	// EmptyFor is how long this server has been reporting zero players. Like
+	// agent.Snapshot.EmptyFor it decides nothing on its own: a server that was
+	// never empty carries zero here too, so every rule that reads it also asks
+	// Players == 0 && !Stale.
+	EmptyFor time.Duration
 	// Stale is true if the count cannot be trusted. Stale counts as occupied.
 	Stale bool
 	// WasRegistered is true if this server was registered with the proxies at
@@ -90,6 +95,33 @@ func isOccupied(players int32, stale, wasRegistered, sessionsGone bool) bool {
 // players. The group's PodDisruptionBudget is sized from it.
 func (v ServerView) Occupied() bool {
 	return isOccupied(v.Players, v.Stale, v.WasRegistered, v.SessionsGone)
+}
+
+// clampReport bounds what an agent reports about itself by the capacity the
+// operator handed its group.
+//
+// Registry.ReportPlayers rejects a player count above the reported slots, but
+// checks the slots against nothing, because it does not know which group a pod
+// belongs to. Here the two meet. From milestone 4a the reported slots feed the
+// group's scaling decision, so one pod reporting slots: 1000000 at zero players
+// would make its whole group look permanently spacious and suppress every
+// scale-up for every server in it — an effect reaching across pod boundaries,
+// which is exactly what the agent channel's design rules out everywhere else.
+//
+// The players are cut to the clamped capacity rather than to maxPlayers, so a
+// group whose servers legitimately report a smaller capacity than the group's
+// bound stays consistent with itself.
+func clampReport(players, slots, maxPlayers int32) (int32, int32) {
+	if maxPlayers < 0 {
+		maxPlayers = 0
+	}
+	if slots > maxPlayers {
+		slots = maxPlayers
+	}
+	if players > slots {
+		players = slots
+	}
+	return players, slots
 }
 
 // mayHavePlayers is the question the deletion candidate selection asks: could

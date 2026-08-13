@@ -376,3 +376,26 @@ func TestSelectFailedForPruning(t *testing.T) {
 		})
 	}
 }
+
+func TestClampReport(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		players, slots, maxPlay int32
+		wantPlayers, wantSlots  int32
+	}{
+		{"an honest report passes through", 7, 100, 100, 7, 100},
+		{"a smaller capacity than the group's is the agent's business", 7, 40, 100, 7, 40},
+		{"slots above the group's capacity are cut to it", 0, 1000000, 100, 0, 100},
+		{"players follow the cut capacity down", 900, 1000, 100, 100, 100},
+		{"a zero capacity leaves nothing", 5, 50, 0, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPlayers, gotSlots := clampReport(tc.players, tc.slots, tc.maxPlay)
+			if gotPlayers != tc.wantPlayers || gotSlots != tc.wantSlots {
+				t.Errorf("clampReport(%d, %d, %d) = (%d, %d), want (%d, %d)",
+					tc.players, tc.slots, tc.maxPlay,
+					gotPlayers, gotSlots, tc.wantPlayers, tc.wantSlots)
+			}
+		})
+	}
+}
