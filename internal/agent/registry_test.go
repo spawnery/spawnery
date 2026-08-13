@@ -219,3 +219,89 @@ func TestKeysListsEveryKnownPod(t *testing.T) {
 		t.Fatalf("Keys() = %v, want both a and b — a disconnected agent is still known", keys)
 	}
 }
+
+func TestEmptyForStartsWhenTheCountReachesZero(t *testing.T) {
+	r, clock := newTestRegistry()
+	r.Connect("pod-uid-1", RoleServer)
+	if err := r.ReportPlayers("pod-uid-1", 3, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	if got := r.Lookup("pod-uid-1").EmptyFor; got != 0 {
+		t.Errorf("EmptyFor = %v on an occupied server, want 0", got)
+	}
+
+	if err := r.ReportPlayers("pod-uid-1", 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	clock.Advance(90 * time.Second)
+	if got := r.Lookup("pod-uid-1").EmptyFor; got != 90*time.Second {
+		t.Errorf("EmptyFor = %v, want 90s since the count reached zero", got)
+	}
+
+	// A second zero report does not restart the clock: the server has been
+	// empty since the first one, and the stabilization window measures that.
+	if err := r.ReportPlayers("pod-uid-1", 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	if got := r.Lookup("pod-uid-1").EmptyFor; got != 90*time.Second {
+		t.Errorf("EmptyFor = %v after a repeated zero report, want 90s", got)
+	}
+}
+
+func TestEmptyForClearsWhenPlayersReturn(t *testing.T) {
+	r, clock := newTestRegistry()
+	r.Connect("pod-uid-1", RoleServer)
+	if err := r.ReportPlayers("pod-uid-1", 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	clock.Advance(time.Minute)
+	if err := r.ReportPlayers("pod-uid-1", 1, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	if got := r.Lookup("pod-uid-1").EmptyFor; got != 0 {
+		t.Errorf("EmptyFor = %v after a player joined, want 0", got)
+	}
+}
+
+func TestEmptyForIsZeroBeforeTheFirstReport(t *testing.T) {
+	r, clock := newTestRegistry()
+	r.Connect("pod-uid-1", RoleServer)
+	clock.Advance(time.Minute)
+
+	if got := r.Lookup("pod-uid-1").EmptyFor; got != 0 {
+		t.Errorf("EmptyFor = %v before the first report, want 0: a server that "+
+			"has never reported is not known to be empty", got)
+	}
+}
+
+// TestEmptyForAcrossStreamChanges pins the three edges the design fixes on
+// purpose. Connect may have a restarted process behind it and must forget what
+// the previous one reported; Supersede cannot, because the displaced stream was
+// still live; Disconnect keeps it, which is inert because the count goes stale
+// and stale counts as occupied.
+func TestEmptyForAcrossStreamChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		event func(r *Registry)
+		want  time.Duration
+	}{
+		{"connect clears it", func(r *Registry) { r.Connect("pod-uid-1", RoleServer) }, 0},
+		{"supersede keeps it", func(r *Registry) { r.Supersede("pod-uid-1", RoleServer) }, time.Minute},
+		{"disconnect keeps it", func(r *Registry) { r.Disconnect("pod-uid-1") }, time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, clock := newTestRegistry()
+			r.Connect("pod-uid-1", RoleServer)
+			if err := r.ReportPlayers("pod-uid-1", 0, 100); err != nil {
+				t.Fatalf("ReportPlayers: %v", err)
+			}
+			clock.Advance(time.Minute)
+
+			tc.event(r)
+
+			if got := r.Lookup("pod-uid-1").EmptyFor; got != tc.want {
+				t.Errorf("EmptyFor = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
