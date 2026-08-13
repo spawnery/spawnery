@@ -16,7 +16,11 @@ limitations under the License.
 
 package controller
 
-import "time"
+import (
+	"time"
+
+	"github.com/spawnery/spawnery/internal/phase"
+)
 
 // ScalingInputs is everything the sizing decision needs. Like the other
 // decisions in this package it is a value type, so the rules are pure and
@@ -116,6 +120,35 @@ func deletable(in ScalingInputs) []ServerView {
 	return out
 }
 
+// readyContribution is the free capacity one server actually has right now:
+// arrived, unlike provisionalCapacity, because a removal must be judged against
+// capacity that exists rather than capacity that is on order.
+//
+// It is AggregateGroup's formula without the generation filter, and not a call
+// to AggregateGroup, for the reason ScalingInputs gives: filtering by generation
+// would make every scale-down impossible from the moment anyone edits the
+// group's spec, because the whole group would read as stale and contribute
+// nothing.
+func readyContribution(v ServerView) int32 {
+	if v.Phase != phase.Ready || v.Stale {
+		return 0
+	}
+	if free := v.Slots - v.Players; free > 0 {
+		return free
+	}
+	return 0
+}
+
+// readyFree is the group's arrived free capacity, the total the feasibility
+// test subtracts one candidate's share from.
+func readyFree(views []ServerView) int32 {
+	var free int32
+	for _, v := range views {
+		free += readyContribution(v)
+	}
+	return free
+}
+
 // DecideSize is the group's sizing rule.
 //
 // The order matters and is the design's, not an accident: capacity first, then
@@ -160,6 +193,35 @@ func DecideSize(in ScalingInputs) SizeDecision {
 		return SizeDecision{
 			Surplus: surplus,
 			Delete:  SelectDeletionCandidates(deletable(in), int(surplus)),
+		}
+	}
+
+	// Demand. Never in the same pass as a create — reaching here means the
+	// group is not short of capacity, but an outstanding create says capacity
+	// is on its way, and removing a server against that is a decision made on
+	// two different readings of the same moment.
+	if in.PendingCreates == 0 && alive > in.MinReplicas {
+		pool := deletable(in)
+		free := readyFree(pool)
+
+		eligible := make([]ServerView, 0, len(pool))
+		for _, v := range pool {
+			// EmptyFor decides nothing on its own: a server that was never
+			// empty carries zero here too, and Stabilization may be zero.
+			if v.Players != 0 || v.Stale || v.EmptyFor < in.Stabilization {
+				continue
+			}
+			// Each candidate on its own, so an infeasible head of the list does
+			// not hide a feasible tail.
+			if free-readyContribution(v) < in.SpareSlots {
+				continue
+			}
+			eligible = append(eligible, v)
+		}
+		// One per pass: every removal costs a drain cycle, and the five-second
+		// resync converges quickly enough.
+		if names := SelectDeletionCandidates(eligible, 1); len(names) > 0 {
+			return SizeDecision{Delete: names}
 		}
 	}
 

@@ -264,3 +264,110 @@ func TestDecideSizeDoesNotLetALeavingServerHoldTheFloor(t *testing.T) {
 		t.Errorf("Create = %d, want 1: a server on its way out does not hold the floor", got.Create)
 	}
 }
+
+// empty builds a Ready, empty server that has been empty for d.
+func empty(name string, slots int32, d time.Duration) ServerView {
+	v := ready(name, 0, slots)
+	v.EmptyFor = d
+	return v
+}
+
+func TestDecideSizeWaitsForTheStabilizationWindow(t *testing.T) {
+	in := ScalingInputs{
+		Views: []ServerView{
+			empty("a", 100, 4*time.Minute),
+			empty("b", 100, 4*time.Minute),
+		},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+	}
+	if got := DecideSize(in); len(got.Delete) != 0 {
+		t.Errorf("Delete = %v before the window elapsed, want none", got.Delete)
+	}
+
+	in.Views[0].EmptyFor = 5 * time.Minute
+	in.Views[1].EmptyFor = 5 * time.Minute
+	got := DecideSize(in)
+	if len(got.Delete) != 1 {
+		t.Fatalf("Delete = %v, want exactly one — one per pass", got.Delete)
+	}
+}
+
+func TestDecideSizeHoldsTheFloor(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{empty("a", 100, time.Hour)},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v at the floor, want none", got.Delete)
+	}
+}
+
+func TestDecideSizeKeepsEnoughFreeSlotsAfterTheRemoval(t *testing.T) {
+	// Two empty servers, spare 150: removing either leaves 100 free, which is
+	// short. Nothing may go, even though both have waited out the window.
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			empty("a", 100, time.Hour),
+			empty("b", 100, time.Hour),
+		},
+		MinReplicas: 0, MaxReplicas: 10,
+		SpareSlots: 150, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: the removal would fall below spareSlots", got.Delete)
+	}
+}
+
+// TestDecideSizeTestsEachCandidateOnItsOwn pins that an infeasible head of the
+// candidate list does not hide a feasible tail.
+//
+// Both servers are empty and past the window, so both are candidates.
+// SelectDeletionCandidates puts servers that never took players first, so
+// "fresh" is the head. Free slots are 100 + 30 = 130: removing "fresh" leaves
+// 30, short of the 40 spare, while removing "small" leaves 100. A rule that
+// tested only the head would delete nothing.
+func TestDecideSizeTestsEachCandidateOnItsOwn(t *testing.T) {
+	fresh := empty("fresh", 100, time.Hour)
+	fresh.WasRegistered = false
+	small := empty("small", 30, time.Hour)
+
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{fresh, small},
+		MinReplicas: 0, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+	})
+	if len(got.Delete) != 1 || got.Delete[0] != "small" {
+		t.Errorf("Delete = %v, want [small]: removing fresh would leave 30 free slots, short of 40", got.Delete)
+	}
+}
+
+func TestDecideSizeNeverRemovesAServerWithAnUnreliableCount(t *testing.T) {
+	stale := empty("a", 100, time.Hour)
+	stale.Stale = true
+
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{stale, empty("b", 100, time.Hour)},
+		MinReplicas: 0, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+	})
+	if len(got.Delete) != 1 || got.Delete[0] != "b" {
+		t.Fatalf("Delete = %v, want [b]: a server whose player count cannot be "+
+			"trusted is never removed, and the one beside it still can be", got.Delete)
+	}
+}
+
+func TestDecideSizeDoesNotShrinkWhileACreateIsOutstanding(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			empty("a", 100, time.Hour), empty("b", 100, time.Hour),
+		},
+		MinReplicas: 0, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+		PendingCreates: 1,
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v while a create is outstanding, want none", got.Delete)
+	}
+}
