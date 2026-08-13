@@ -302,6 +302,20 @@ func TestDecideSizeHoldsTheFloor(t *testing.T) {
 	if len(got.Delete) != 0 {
 		t.Errorf("Delete = %v at the floor, want none", got.Delete)
 	}
+
+	// The case above cannot tell the floor from the spare: removing the only
+	// server would leave no free slots at all, so feasibility blocks it too.
+	// With a spare of zero, nothing but the floor can stop the removal.
+	got = DecideSize(ScalingInputs{
+		Views: []ServerView{
+			empty("a", 100, time.Hour), empty("b", 100, time.Hour),
+		},
+		MinReplicas: 2, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v with the group already at a floor of 2, want none", got.Delete)
+	}
 }
 
 func TestDecideSizeKeepsEnoughFreeSlotsAfterTheRemoval(t *testing.T) {
@@ -355,6 +369,32 @@ func TestDecideSizeNeverRemovesAServerWithAnUnreliableCount(t *testing.T) {
 	if len(got.Delete) != 1 || got.Delete[0] != "b" {
 		t.Fatalf("Delete = %v, want [b]: a server whose player count cannot be "+
 			"trusted is never removed, and the one beside it still can be", got.Delete)
+	}
+}
+
+// TestDecideSizeDoesNotCountUntrustedCapacityAsFree pins the other half of the
+// staleness rule. A stale server is never removed — that is tested elsewhere —
+// but its capacity must also not be counted as free, or a removal somewhere
+// else in the group passes a spare check on slots nobody can vouch for.
+func TestDecideSizeDoesNotCountUntrustedCapacityAsFree(t *testing.T) {
+	untrusted := empty("untrusted", 100, time.Hour)
+	untrusted.Stale = true
+
+	in := ScalingInputs{
+		Views:       []ServerView{untrusted, empty("b", 100, time.Hour)},
+		MinReplicas: 0, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+	}
+	if got := DecideSize(in); len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: only b's 100 slots are trustworthy, and "+
+			"removing b would leave nothing at all against a spare of 40", got.Delete)
+	}
+
+	// The same group with the count trusted again: 200 free slots, and removing
+	// one still leaves 100 against a spare of 40.
+	in.Views[0].Stale = false
+	if got := DecideSize(in); len(got.Delete) != 1 {
+		t.Errorf("Delete = %v once the count is trustworthy, want exactly one", got.Delete)
 	}
 }
 
