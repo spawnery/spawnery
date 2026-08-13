@@ -513,7 +513,7 @@ git commit -m "feat(4b): a retiring server leaves the size count and keeps its p
 
 **Files:**
 - Modify: `internal/controller/expectations.go`
-- Modify: `internal/controller/servergroup_controller.go` (the one `pending` caller)
+- Modify: every caller of `pending`, whose signature widens from two return values to three. Find them with `grep -rn '\.pending(' --include=*.go internal/` rather than trusting this list: at the time of writing they are `servergroup_controller.go`, `servergroup_controller_test.go` (`TestGroupRecordsWhatItIssued`) and `expectations_test.go` throughout. A caller left behind does not fail a test, it fails the build.
 - Test: `internal/controller/expectations_test.go`
 
 **Interfaces:**
