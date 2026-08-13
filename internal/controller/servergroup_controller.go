@@ -74,6 +74,9 @@ type ServerGroupReconciler struct {
 	Agents *agent.Registry
 	// Clock is injectable so the time rules are testable.
 	Clock func() time.Time
+	// Expectations reserves the creates and deletes this reconciler has issued
+	// and the cache has not shown yet. One instance is shared across groups.
+	Expectations *expectations
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
@@ -87,11 +90,21 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	group := &spawneryv1alpha1.ServerGroup{}
 	if err := r.Get(ctx, req.NamespacedName, group); err != nil {
+		if apierrors.IsNotFound(err) {
+			// No ServerGroup finalizer exists, so a deleted group is gone from
+			// the API server before any reconcile can observe its deletion
+			// timestamp. This is the only path most deletions take, and without
+			// it a group's reservations outlive it for the life of the process:
+			// expectationTTL is applied inside observe, and observe is only
+			// ever called for a group that still exists.
+			r.Expectations.forget(req.Namespace + "/" + req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !group.DeletionTimestamp.IsZero() {
 		// The Server objects are owned by the group; Kubernetes garbage
 		// collection cascades, and each Server drains through its finalizer.
+		r.Expectations.forget(group.Namespace + "/" + group.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -181,9 +194,49 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Freezing them would leave exactly the pods that still carry players
 	// unprotected, and a rejected group holding players is still holding
 	// players.
+	var decision SizeDecision
+	sized := false
 	if networkUsable && group.IsEphemeral() {
-		if err := r.size(ctx, group, views, servers); err != nil {
+		var err error
+		if decision, err = r.size(ctx, group, views, servers); err != nil {
 			return ctrl.Result{}, err
+		}
+		sized = true
+	}
+
+	if group.IsEphemeral() {
+		limited := metav1.Condition{
+			Type:    spawneryv1alpha1.ConditionScalingLimited,
+			Status:  metav1.ConditionFalse,
+			Reason:  spawneryv1alpha1.ReasonWithinLimits,
+			Message: "free slots cover spec.scaling.spareSlots",
+		}
+		if decision.Limited {
+			limited.Status = metav1.ConditionTrue
+			limited.Reason = spawneryv1alpha1.ReasonMaxReplicasReached
+			limited.Message = fmt.Sprintf(
+				"%d more server(s) needed to cover spareSlots %d; maxReplicas %d allows %d now",
+				decision.Wanted, group.Spec.Scaling.SpareSlots,
+				group.Spec.Scaling.MaxReplicas, decision.Create)
+		}
+		if !sized {
+			// Nothing was decided this pass, so the False above is the absence
+			// of a verdict rather than one. Saying "free slots cover the spare"
+			// here would assert something no code checked, and an all-clear
+			// event would announce it.
+			limited.Message = "scaling is not being decided: the group's network is not usable"
+		}
+		// The event goes on the flank only. SetStatusCondition moves
+		// lastTransitionTime just on a change of status, so comparing across
+		// the call is what tells a transition from a resync.
+		was := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
+		meta.SetStatusCondition(&group.Status.Conditions, limited)
+		if sized && decision.Limited != was {
+			eventType := corev1.EventTypeNormal
+			if decision.Limited {
+				eventType = corev1.EventTypeWarning
+			}
+			r.Recorder.Event(group, eventType, limited.Reason, limited.Message)
 		}
 	}
 
@@ -218,46 +271,54 @@ func networkNotAcceptedMessage(network *spawneryv1alpha1.Network) string {
 	return fmt.Sprintf("network %q has not been accepted yet", network.Name)
 }
 
-// size brings the number of servers that hold the group at its floor up or
-// down to the desired count.
+// size brings the group to the size DecideSize asks for and reports that
+// decision, so Reconcile can publish the part of it that belongs on the status.
 func (r *ServerGroupReconciler) size(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	views []ServerView,
 	servers map[string]*spawneryv1alpha1.Server,
-) error {
+) (SizeDecision, error) {
 	logger := log.FromContext(ctx)
-
-	desired := group.DesiredReplicas()
-	alive := int32(0)
-	for _, v := range views {
-		if v.countsTowardSize() {
-			alive++
-		}
+	if group.Spec.Scaling == nil {
+		return SizeDecision{}, nil
 	}
+	key := group.Namespace + "/" + group.Name
 
-	switch {
-	case alive < desired:
-		for i := alive; i < desired; i++ {
-			if err := r.createServer(ctx, group); err != nil {
-				return err
-			}
+	r.Expectations.observe(key, views)
+	pendingCreates, pendingDeletes := r.Expectations.pending(key)
+
+	decision := DecideSize(ScalingInputs{
+		Views:         views,
+		MinReplicas:   group.Spec.Scaling.MinReplicas,
+		MaxReplicas:   group.Spec.Scaling.MaxReplicas,
+		SpareSlots:    group.Spec.Scaling.SpareSlots,
+		MaxPlayers:    group.Spec.MaxPlayers,
+		Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
+
+		PendingCreates: pendingCreates,
+		PendingDeletes: pendingDeletes,
+	})
+
+	for i := int32(0); i < decision.Create; i++ {
+		name, err := r.createServer(ctx, group)
+		if err != nil {
+			return decision, err
 		}
-	case alive > desired:
-		surplus := int(alive - desired)
-		names := SelectDeletionCandidates(views, surplus)
-		if len(names) < surplus {
-			logger.Info("fewer free servers than the surplus, trying again later",
-				"group", group.Name, "surplus", surplus, "free", len(names))
-		}
-		for _, name := range names {
-			if err := r.deleteServer(ctx, group, servers, name,
-				"ServerRemoved", "removing server %s"); err != nil {
-				return err
-			}
-		}
+		r.Expectations.expectCreated(key, name)
 	}
-	return nil
+	if int32(len(decision.Delete)) < decision.Surplus {
+		logger.Info("fewer free servers than the surplus, trying again later",
+			"group", group.Name, "surplus", decision.Surplus, "free", len(decision.Delete))
+	}
+	for _, name := range decision.Delete {
+		if err := r.deleteServer(ctx, group, servers, name,
+			"ServerRemoved", "removing server %s"); err != nil {
+			return decision, err
+		}
+		r.Expectations.expectDeleted(key, name)
+	}
+	return decision, nil
 }
 
 // derivePhase maps the totals and conditions onto the group phase.
@@ -295,12 +356,19 @@ func (r *ServerGroupReconciler) collectViews(
 		// status: the control loop must decide on fresh data.
 		pod, podFound := r.podFor(ctx, srv)
 		snap := r.Agents.Lookup(podUID(pod, podFound))
+		players, slots := clampReport(snap.Players, snap.Slots, group.Spec.MaxPlayers)
+		if players != snap.Players || slots != snap.Slots {
+			log.FromContext(ctx).V(1).Info("agent report clamped to the group's capacity",
+				"server", srv.Name, "reportedPlayers", snap.Players, "reportedSlots", snap.Slots,
+				"maxPlayers", group.Spec.MaxPlayers)
+		}
 		v := ServerView{
-			Name:    srv.Name,
-			Phase:   phase.Phase(srv.Status.Phase),
-			Players: snap.Players,
-			Slots:   snap.Slots,
-			Stale:   snap.PlayersStale,
+			Name:     srv.Name,
+			Phase:    phase.Phase(srv.Status.Phase),
+			Players:  players,
+			Slots:    slots,
+			EmptyFor: snap.EmptyFor,
+			Stale:    snap.PlayersStale,
 			// Read from the status, never guessed from the phase: a server that
 			// lost its probe is in Starting with its players still connected.
 			WasRegistered: srv.Status.WasRegistered,
@@ -337,7 +405,7 @@ func (r *ServerGroupReconciler) podFor(ctx context.Context, srv *spawneryv1alpha
 	return pod, true
 }
 
-func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) error {
+func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) (string, error) {
 	srv := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      NewServerName(group.Name),
@@ -354,13 +422,13 @@ func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawner
 		},
 	}
 	if err := controllerutil.SetControllerReference(group, srv, r.Scheme); err != nil {
-		return err
+		return "", err
 	}
 	if err := r.Create(ctx, srv); err != nil {
-		return err
+		return "", err
 	}
 	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerCreated", "created server %s", srv.Name)
-	return nil
+	return srv.Name, nil
 }
 
 func (r *ServerGroupReconciler) deleteServer(
@@ -489,6 +557,12 @@ func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *s
 
 // SetupWithManager registers the controller.
 func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// A construction site that forgets this would otherwise panic inside a
+	// reconcile, in a goroutine, minutes after start — the same failure mode
+	// SetupAll refuses a nil Bootstrapper for.
+	if r.Expectations == nil {
+		r.Expectations = newExpectations(r.Clock)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.ServerGroup{}).
 		Owns(&spawneryv1alpha1.Server{}).

@@ -137,7 +137,35 @@ milestones leave open — are in
 The design lives under [`docs/superpowers/specs/`](docs/superpowers/specs/), the
 plans under [`docs/superpowers/plans/`](docs/superpowers/plans/).
 
-Anyone starting milestone 4 begins at
+Milestone 4a is done: slot-based scaling. An ephemeral `ServerGroup` no longer
+sits at its floor. It creates servers as soon as its free player slots fall
+below `spec.scaling.spareSlots`, bounded by `maxReplicas`, and removes them
+again — one per pass, and only while the group's free slots would still cover
+the spare — once a server has been empty for `scaleDownStabilizationSeconds`.
+That is the rule for a group short of demand; a lowered `maxReplicas` is a
+different rule, and a stronger one — it removes the whole surplus in a single
+pass and waits for neither the stabilization window nor the spare-slot check,
+because a ceiling is an instruction, not a suggestion. The rule is
+`DecideSize` in `internal/controller/scaling.go`, a pure function beside
+`phase.Decide` and `SelectDeletionCandidates`, and the invariant those already
+carried holds unchanged: a server that may be carrying players is never
+nominated.
+
+The one thing worth naming is what the scale-up rule reads. A server created
+now is not `Ready` for tens of seconds and adds nothing to `status.freeSlots`,
+so a scaler reading that figure would see the same shortfall on every
+five-second pass and order the same replacement again, until `maxReplicas`
+stopped it. It reads a second figure instead, one that credits capacity that
+has been ordered and has not arrived. The two are deliberately not the same
+number, and the envtest that carries this milestone is the one that keeps
+reconciling for ten more passes and asserts the count has not moved — a single
+decision cannot show that failure.
+
+Milestone 4 continues with 4b, rolling updates of ephemeral groups, and 4c,
+proxy and node drain, which owns the readiness
+`internal/agent/registry.go` still cannot lower.
+
+Anyone starting milestone 4b or 4c begins at
 [`docs/handover-milestone-4.md`](docs/handover-milestone-4.md): it says where
 3c stopped, the one milestone 2a contract change proxy drain needs in
 `internal/agent/registry.go`, and what 3c leaves in place for milestone 4 to

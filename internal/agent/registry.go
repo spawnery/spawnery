@@ -59,6 +59,14 @@ type Snapshot struct {
 	// an unknown pod it is the time since the operator started, so agents get
 	// a grace period to reconnect after an operator restart.
 	StreamDownFor time.Duration
+	// EmptyFor is how long the agent has been reporting zero players. It is
+	// zero while players are on, and zero before the first report — a server
+	// that has never reported is not known to be empty.
+	//
+	// It never decides anything on its own. Every rule that reads it also asks
+	// players == 0 && !PlayersStale, because a server that was never empty
+	// reports zero here too, and scaleDownStabilizationSeconds may be 0.
+	EmptyFor time.Duration
 }
 
 type entry struct {
@@ -67,6 +75,7 @@ type entry struct {
 	ready          bool
 	players        int32
 	slots          int32
+	emptySince     time.Time
 	lastReportAt   time.Time
 	disconnectedAt time.Time
 }
@@ -132,6 +141,11 @@ func (r *Registry) connect(key string, role Role, keepReady bool) {
 	e.connected = true
 	if !keepReady {
 		e.ready = false
+		// A fresh stream may have a restarted process behind it, and that
+		// process has reported nothing yet — the same reasoning that clears
+		// readiness here. A superseding stream cannot: the displaced one was
+		// still live, so the emptiness it observed still holds.
+		e.emptySince = time.Time{}
 	}
 	e.disconnectedAt = time.Time{}
 }
@@ -164,6 +178,16 @@ func (r *Registry) ReportPlayers(key string, players, slots int32) error {
 	}
 	e.players = players
 	e.slots = slots
+	// The stabilization window measures from the moment the server became
+	// empty, not from the last report that found it empty, so a repeated zero
+	// must not restart it.
+	if players == 0 {
+		if e.emptySince.IsZero() {
+			e.emptySince = r.now()
+		}
+	} else {
+		e.emptySince = time.Time{}
+	}
 	e.lastReportAt = r.now()
 	return nil
 }
@@ -227,5 +251,8 @@ func (r *Registry) Lookup(key string) Snapshot {
 	}
 	snap.PlayersStale = e.lastReportAt.IsZero() ||
 		now.Sub(e.lastReportAt) >= 2*r.reportInterval
+	if !e.emptySince.IsZero() {
+		snap.EmptyFor = now.Sub(e.emptySince)
+	}
 	return snap
 }

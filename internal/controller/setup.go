@@ -74,11 +74,12 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	}
 
 	if err := (&ServerGroupReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("servergroup"),
-		Agents:   opts.Agents,
-		Clock:    opts.Clock,
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorderFor("servergroup"),
+		Agents:       opts.Agents,
+		Clock:        opts.Clock,
+		Expectations: newExpectations(opts.Clock),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server group controller: %w", err)
 	}
