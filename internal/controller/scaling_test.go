@@ -228,24 +228,48 @@ func TestDecideSizeNeverNominatesAServerAlreadyBeingRemoved(t *testing.T) {
 	}
 }
 
-// TestDecideSizeShortOfCapacityNeverAlsoShrinks pins the early return: three
-// servers against a ceiling of one is a surplus, and the group is also 700
-// slots short. Only one of those two answers may come out of a single pass,
-// and it is the one that does not disturb anybody.
-func TestDecideSizeShortOfCapacityNeverAlsoShrinks(t *testing.T) {
+// TestDecideSizeShortOfCapacityStillObeysALoweredCeiling pins the fixed point
+// the whole-branch review found: three servers against a ceiling of one is an
+// instruction, and the group is also 700 slots short. Before the fix the
+// shortfall returned first and the surplus branch was unreachable, so the
+// group stood above its ceiling for ever while publishing that it wanted more.
+func TestDecideSizeShortOfCapacityStillObeysALoweredCeiling(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
 			ready("a", 0, 100), ready("b", 0, 100), ready("c", 0, 100),
 		},
 		MinReplicas: 1, MaxReplicas: 1,
-		SpareSlots: 1000, MaxPlayers: 100,
+		SpareSlots: 1000, MaxPlayers: 100, Stabilization: 5 * time.Minute,
 	})
-	if len(got.Delete) != 0 {
-		t.Errorf("Delete = %v while the group is short of capacity, want none", got.Delete)
+	if got.Create != 0 {
+		t.Errorf("Create = %d at the ceiling, want 0", got.Create)
 	}
-	if got.Create != 0 || got.Wanted != 7 || !got.Limited {
-		t.Errorf("Create = %d, Wanted = %d, Limited = %v; want 0, 7 and true",
-			got.Create, got.Wanted, got.Limited)
+	if got.Wanted != 7 || !got.Limited {
+		t.Errorf("Wanted = %d, Limited = %v; want 7 and true — the group is still short "+
+			"while it shrinks, and has to say so", got.Wanted, got.Limited)
+	}
+	if got.Surplus != 2 || len(got.Delete) != 2 {
+		t.Errorf("Surplus = %d, Delete = %v; want 2 and two names", got.Surplus, got.Delete)
+	}
+}
+
+// TestDecideSizeShortOfCapacityDoesNotShrinkForLackOfDemand is the other half:
+// an idle server past its window sits beside a full one and the group is short.
+// The demand rule would remove the idle one; the shortfall says the opposite,
+// and the shortfall wins.
+func TestDecideSizeShortOfCapacityDoesNotShrinkForLackOfDemand(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			ready("full", 100, 100), empty("idle", 100, time.Hour),
+		},
+		MinReplicas: 0, MaxReplicas: 10,
+		SpareSlots: 200, MaxPlayers: 100, Stabilization: 5 * time.Minute,
+	})
+	if got.Create != 1 {
+		t.Errorf("Create = %d, want 1", got.Create)
+	}
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v while the group is short, want none", got.Delete)
 	}
 }
 

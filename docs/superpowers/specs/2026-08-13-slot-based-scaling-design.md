@@ -190,8 +190,11 @@ went quiet: the first has never reported, the second has.
    short, else 0.
 3. `create = max(MinReplicas - alive, wanted)`. If `create > 0`, grant
    `min(create, max(0, MaxReplicas - alive))`, set `Limited = wanted > granted`,
-   and **return** — a group that is short of capacity does not also delete.
-   `Limited` is therefore reported even when the grant is zero.
+   and **return**. When the ceiling grants nothing at all, fall through to
+   rule 4 instead: being short is no reprieve from a lowered ceiling. What a
+   shortfall does forbid is rule 5, which removes for lack of demand — that
+   would take away capacity the group has just said it needs. `Limited` is
+   reported either way.
 4. Otherwise, if `alive > MaxReplicas`: delete the surplus through
    `SelectDeletionCandidates`, **without** the stabilization window. A lowered
    ceiling is an instruction, not a suggestion, and the selection already

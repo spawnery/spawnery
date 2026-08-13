@@ -177,16 +177,36 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	if floor := in.MinReplicas - alive; floor > create {
 		create = floor
 	}
+	room := in.MaxReplicas - alive
+	if room < 0 {
+		room = 0
+	}
+	granted := create
+	if granted > room {
+		granted = room
+	}
+	limited := wanted > granted
+
 	if create > 0 {
-		room := in.MaxReplicas - alive
-		if room < 0 {
-			room = 0
+		if granted > 0 {
+			return SizeDecision{Create: granted, Wanted: wanted, Limited: limited}
 		}
-		granted := create
-		if granted > room {
-			granted = room
+		// No room to grow. Being short of capacity is not a reprieve from the
+		// ceiling: a lowered maxReplicas is an instruction, and a group that
+		// cannot answer its shortfall must still carry it out — while saying
+		// that it is short, which is why Wanted and Limited travel with the
+		// removal. What the shortfall does forbid is the removal below, which
+		// runs for lack of demand: that one would take away capacity the group
+		// has just said it needs.
+		if surplus := alive - in.MaxReplicas; surplus > 0 {
+			return SizeDecision{
+				Wanted:  wanted,
+				Limited: limited,
+				Surplus: surplus,
+				Delete:  SelectDeletionCandidates(deletable(in), int(surplus)),
+			}
 		}
-		return SizeDecision{Create: granted, Wanted: wanted, Limited: wanted > granted}
+		return SizeDecision{Wanted: wanted, Limited: limited}
 	}
 
 	if surplus := alive - in.MaxReplicas; surplus > 0 {
