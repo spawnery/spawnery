@@ -63,6 +63,23 @@ func groupReconciler(f *fixture) *ServerGroupReconciler {
 	}
 }
 
+// scalingEvents drains the recorder and counts the events carrying a given
+// reason. FakeRecorder renders an event as "<type> <reason> <message>", so a
+// substring match on the reason is enough to tell them apart.
+func scalingEvents(rec *record.FakeRecorder, reason string) int {
+	n := 0
+	for {
+		select {
+		case e := <-rec.Events:
+			if strings.Contains(e, reason) {
+				n++
+			}
+		default:
+			return n
+		}
+	}
+}
+
 func (f *fixture) reconcileGroup(t *testing.T, r *ServerGroupReconciler) {
 	t.Helper()
 	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
@@ -601,6 +618,17 @@ func TestGroupWithoutItsNetworkIsNotAccepted(t *testing.T) {
 	}
 	if len(f.listServers(t)) != 0 {
 		t.Error("a group without a network must not create servers")
+	}
+
+	// An ephemeral group whose Network is missing is not limited by
+	// maxReplicas — its Accepted condition already says what is wrong with it —
+	// so ScalingLimited is published as False rather than left absent. The
+	// condition is guarded on IsEphemeral alone, not on the Network being
+	// usable, and this is what says so.
+	if cond := meta.FindStatusCondition(got.Status.Conditions,
+		spawneryv1alpha1.ConditionScalingLimited); cond == nil ||
+		cond.Status != metav1.ConditionFalse {
+		t.Errorf("ScalingLimited = %+v on a group without its Network, want False", cond)
 	}
 }
 
@@ -1470,6 +1498,8 @@ func TestGroupRecordsWhatItIssued(t *testing.T) {
 func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
 
 	f.group.Spec.Scaling.MaxReplicas = 1
 	if err := f.c.Update(f.ctx, f.group); err != nil {
@@ -1508,6 +1538,18 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 		t.Error("a group working exactly as configured must not be Degraded")
 	}
 
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonMaxReplicasReached); got != 1 {
+		t.Errorf("%d MaxReplicasReached events on the flank, want exactly 1", got)
+	}
+
+	// Nothing changed. The group is still at its ceiling and still short, so
+	// the condition stays True — and an event on every resync would be one
+	// every five seconds for as long as the group is popular.
+	f.reconcileGroup(t, r)
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonMaxReplicasReached); got != 0 {
+		t.Errorf("%d further MaxReplicasReached events on an unchanged resync, want none", got)
+	}
+
 	// Room again: the condition has to come back down.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
@@ -1523,5 +1565,8 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	}
 	if meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited) {
 		t.Error("ScalingLimited still True after maxReplicas was raised")
+	}
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonWithinLimits); got != 1 {
+		t.Errorf("%d WithinLimits events when the ceiling was raised, want exactly 1", got)
 	}
 }
