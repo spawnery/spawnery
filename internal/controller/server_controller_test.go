@@ -1503,3 +1503,170 @@ func TestMaxStaleFiresOnceTheWaitExceedsIt(t *testing.T) {
 		t.Error("MaxStaleReached is false after twice the configured wait")
 	}
 }
+
+// TestRetiringSinceSurvivesRepeatedReconciles is the wiring counterpart to
+// TestRetiringServerStampsItsClockAndDeregisters, which only reconciles once.
+// status.retiringSince is stamped with the same guarded-once pattern as
+// DrainStartedAt and FailedAt (see TestFailedServerDrainsBeforeItsPodIsDeleted),
+// and that guard is exactly what maxStaleSeconds depends on: if it were
+// re-stamped on every pass, the deadline measured from it would never arrive.
+// This drives a real server through several reconciles with the clock moving
+// between them and pins the timestamp as identical throughout, not merely
+// non-nil.
+func TestRetiringSinceSurvivesRepeatedReconciles(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	srv.Spec.Retire = true
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	got := f.server("lobby-x7k2")
+	if got.Status.Phase != string(phase.Retiring) {
+		t.Fatalf("phase = %q after retire, want Retiring", got.Status.Phase)
+	}
+	if got.Status.RetiringSince == nil {
+		t.Fatal("retiringSince not stamped on entry to Retiring")
+	}
+	retiringSince := got.Status.RetiringSince.DeepCopy()
+
+	// The group's default Update is unset (MaxStaleSeconds 0, "never"), so
+	// nothing here should push the server out of Retiring — the point is
+	// purely whether the timestamp itself holds still.
+	for i := 0; i < 3; i++ {
+		f.clock.Advance(10 * time.Second)
+		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+	}
+
+	got = f.server("lobby-x7k2")
+	if got.Status.Phase != string(phase.Retiring) {
+		t.Errorf("phase = %q after further reconciles, want still Retiring", got.Status.Phase)
+	}
+	if rs := got.Status.RetiringSince; !rs.Equal(retiringSince) {
+		t.Errorf("retiringSince rewritten: %v, want the original %v", rs, retiringSince)
+	}
+}
+
+// TestMaxStaleSecondsEscalatesARetiringServerToDraining drives a Server
+// through the real machine — collectInputs, phase.Decide and applyDecision
+// together, not collectInputs called directly as
+// TestMaxStaleFiresOnceTheWaitExceedsIt does — to confirm a configured
+// maxStaleSeconds actually forces a stale Retiring server into Draining, with
+// the players still on it: the escalation must go through the drain path
+// (phase.Retiring's MaxStaleReached branch sets StartDrain), never straight to
+// Terminating.
+func TestMaxStaleSecondsEscalatesARetiringServerToDraining(t *testing.T) {
+	f := newFixture(t)
+	f.group.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: 30}
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update ServerGroup: %v", err)
+	}
+
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	srv.Spec.Retire = true
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Retiring) {
+		t.Fatalf("phase = %q after retire, want Retiring", got)
+	}
+
+	// Advance past the 30s window in several passes, the same shape as
+	// TestDrainTimeoutTerminatesLoudly's thirteen reconciles past a deadline.
+	for i := 0; i < 4; i++ {
+		f.clock.Advance(10 * time.Second)
+		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+	}
+
+	got := f.server("lobby-x7k2")
+	if got.Status.Phase != string(phase.Draining) {
+		t.Errorf("phase = %q after the stale window elapsed, want Draining", got.Status.Phase)
+	}
+	if got.Status.DrainStartedAt == nil {
+		t.Error("drainStartedAt not set; the maxStaleSeconds escalation must go through the drain path")
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want exactly one drain broadcast", f.registrar.drained)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while 6 players were still online — core invariant broken")
+	}
+}
+
+// TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely is the complement of
+// TestMaxStaleSecondsEscalatesARetiringServerToDraining: the same clock
+// advance, but with maxStaleSeconds at 0 ("never"), must never push the
+// server out of Retiring. This is the case that actually protects players —
+// a group that never configured a stale window must not have one inferred
+// for it — so it gets its own fixture and its own server rather than reusing
+// the one that proved the positive case, which would leave the zero path
+// resting on inference instead of its own assertion.
+func TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely(t *testing.T) {
+	f := newFixture(t)
+	// f.group's default Update is unset, i.e. MaxStaleSeconds 0 — made
+	// explicit here so the zero case doesn't quietly depend on the fixture's
+	// default staying zero.
+	f.group.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: 0}
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update ServerGroup: %v", err)
+	}
+
+	uid := bringUpReady(t, f, "lobby-zero")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-zero")
+
+	srv := f.server("lobby-zero")
+	srv.Spec.Retire = true
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcile("lobby-zero")
+	if got := f.server("lobby-zero").Status.Phase; got != string(phase.Retiring) {
+		t.Fatalf("phase = %q after retire, want Retiring", got)
+	}
+
+	// Same clock advance as the escalating case above.
+	for i := 0; i < 4; i++ {
+		f.clock.Advance(10 * time.Second)
+		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-zero")
+	}
+
+	got := f.server("lobby-zero")
+	if got.Status.Phase != string(phase.Retiring) {
+		t.Errorf("phase = %q after the same clock advance with maxStaleSeconds = 0, want still Retiring", got.Status.Phase)
+	}
+	if got.Status.DrainStartedAt != nil {
+		t.Error("drainStartedAt set with maxStaleSeconds = 0; a server with no configured stale window must wait forever")
+	}
+	if len(f.registrar.drained) != 0 {
+		t.Errorf("drained = %v, want no drain broadcast with maxStaleSeconds = 0", f.registrar.drained)
+	}
+	if _, ok := f.pod("lobby-zero"); !ok {
+		t.Fatal("pod deleted while players were still online — core invariant broken")
+	}
+}
