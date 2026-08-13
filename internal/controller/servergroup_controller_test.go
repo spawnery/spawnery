@@ -1845,6 +1845,16 @@ func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32)
 // leaving()'s own promise ("dropping out of the group's size is exactly what
 // makes the spare-slot rule order a replacement for a server a rolling
 // update has retired") into something this test actually exercises.
+//
+// 150 also has to stay inside the window that keeps assertion 1 below
+// reading "exactly one": roughly (80, 180]. At or below 80 the pre-bump gap
+// (spareSlots minus the two occupied stale servers' 80 free) goes to zero or
+// negative and the cold start alone would already have to explain the
+// create; above 180 the post-bump gap exceeds what a single fresh server's
+// 100 slots can cover and wanted climbs to 2 at pass 1. 150 sits comfortably
+// mid-window, ~70 clear on either side, so this is not fragile today — but a
+// future spareSlots change made for an unrelated reason could silently push
+// assertion 1 (or 5) outside it.
 func (f *fixture) bumpGeneration(t *testing.T) {
 	t.Helper()
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
@@ -1927,8 +1937,17 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 
 	f.bumpGeneration(t)
 
-	// 1. The cold start: exactly one server of the new generation — not
-	// zero, and not one per five-second pass while it boots.
+	// 1. Exactly one replacement is created — not zero, and not one per
+	// five-second pass while it boots. At this fixture's spareSlots (150,
+	// see bumpGeneration), this create is explained by ordinary spare-slot
+	// demand alone: pass 1 sees provisional=80 (two occupied stale servers,
+	// 40 free each) against spareSlots=150, gap=70, wanted=1 — already 1
+	// before coldStart's own "if cold && create<1" branch is even consulted.
+	// So this assertion does not, on its own, exercise coldStart's
+	// deadlock-breaker (Task 5); TestARollingUpdateColdStartCreatesExactlyOneServer
+	// below pins that mechanism specifically, with a fixture tuned so the
+	// spare-slot rule wants nothing and the create can only be explained by
+	// coldStart.
 	reconcilePass(t, f, r)
 	fresh := f.serversOfGeneration(t, f.group.Generation)
 	if len(fresh) != 1 {
@@ -1979,5 +1998,69 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 	if got := len(f.serversOfGeneration(t, f.group.Generation)); got != 2 {
 		t.Fatalf("%d current-generation servers after the retirement, want 2: "+
 			"the cold-start replacement plus the backfill for the capacity the retiring server took with it", got)
+	}
+}
+
+// TestARollingUpdateColdStartCreatesExactlyOneServer pins coldStart's (Task
+// 5) deadlock-breaker in isolation, apart from ordinary spare-slot demand.
+// TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone's assertion 1
+// no longer can: at that test's spareSlots of 150, ordinary demand alone
+// already wants a create at pass 1, so hard-coding coldStart to always
+// return false there still yields one create and that assertion would not
+// notice. This test's fixture is tuned the other way, so nothing but
+// coldStart can explain the create.
+//
+// Arithmetic: two stale (old-generation) occupied servers, 60 players each
+// out of maxPlayers 100, for 40 free slots apiece — sum(stale free) = 80.
+// spareSlots is left at the fixture's default of 40 (bumpGeneration is not
+// used here precisely because it raises spareSlots to 150; this test needs
+// it left alone). At pass 1: provisional = 80 >= spareSlots = 40, so gap <=
+// 0 and wanted = 0. MinReplicas (1) does not raise create either — alive is
+// already 2. So create is 0 before coldStart is consulted at all; coldStart
+// sees stale=2, current=0, PendingCreates=0, reports true, and DecideSize's
+// "if cold && create<1 { create = 1 }" is the only line that can produce the
+// server this test asserts on. The margin is comfortable — sum(stale free)
+// 80 is double spareSlots 40 — so a modest future change to either number
+// will not flip this by accident, but a change that closes the gap (raises
+// spareSlots toward 80, or lowers the two servers' free capacity) would.
+func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	a, b := "lobby-a", "lobby-b"
+	f.createServer(a)
+	f.markReadyWithPlayers(t, a, 60)
+	f.createServer(b)
+	f.markReadyWithPlayers(t, b, 60)
+
+	// A real spec update, bumping the generation exactly as bumpGeneration
+	// does, but deliberately not touching spareSlots — it must stay at the
+	// fixture's default of 40 for the arithmetic above to hold.
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+
+	reconcilePass(t, f, r)
+	fresh := f.serversOfGeneration(t, f.group.Generation)
+	if len(fresh) != 1 {
+		t.Fatalf("cold start created %d servers, want exactly 1", len(fresh))
+	}
+
+	// The replacement is still booting (Pending/Starting, never marked
+	// Ready). Once it exists it counts toward coldStart's "current" tally
+	// and its own provisional capacity (a not-yet-reporting server counts as
+	// its full maxPlayers, per provisionalCapacity), so nothing should order
+	// a second one on the next two five-second passes either — the cold
+	// start must produce one server, not one per pass.
+	for i := 0; i < 2; i++ {
+		reconcilePass(t, f, r)
+		if got := len(f.serversOfGeneration(t, f.group.Generation)); got != 1 {
+			t.Fatalf("%d servers of the new generation after pass %d, want exactly 1: "+
+				"cold start must create one server, not one per five-second pass while it boots", got, i+2)
+		}
 	}
 }
