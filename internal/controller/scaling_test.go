@@ -564,3 +564,248 @@ func TestDecideSizeDoesNotShrinkWhileACreateIsOutstanding(t *testing.T) {
 		t.Errorf("Delete = %v while a create is outstanding, want none", got.Delete)
 	}
 }
+
+func TestDecideSizeRetiresAStaleServerOnceAReplacementIsReady(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			staleReady("old", 60, 100, 3),
+			ready("new", 0, 100),
+		},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 1 || got.Retire[0] != "old" {
+		t.Errorf("Retire = %v, want [old]", got.Retire)
+	}
+}
+
+func TestDecideSizeRetiresAServerThatStillHasPlayers(t *testing.T) {
+	// The point of soft drain, and the reason retirement cannot reuse
+	// SelectDeletionCandidates: that function excludes exactly these
+	// servers, and these are the ones that have to go.
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			staleReady("old", 99, 100, 3),
+			ready("new", 0, 100),
+		},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 1 {
+		t.Fatalf("Retire = %v, want the occupied stale server", got.Retire)
+	}
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none — retirement is not deletion", got.Delete)
+	}
+}
+
+func TestDecideSizeDoesNotRetireWithoutAReadyReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		new  ServerView
+	}{
+		{"the replacement is still starting", starting("new")},
+		{"the replacement failed", ServerView{Name: "new", Phase: phase.Failed}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecideSize(ScalingInputs{
+				Views:      []ServerView{staleReady("old", 60, 100, 3), tc.new},
+				Generation: 0, MaxUnavailable: 1,
+				MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+			})
+			if len(got.Retire) != 0 {
+				t.Errorf("Retire = %v, want none until a replacement is Ready", got.Retire)
+			}
+		})
+	}
+}
+
+func TestDecideSizeRespectsTheUpdateBudget(t *testing.T) {
+	// One is already retiring. maxUnavailable is 1, so the second stale
+	// server waits.
+	retiring := staleReady("first", 5, 100, 3)
+	retiring.Phase = phase.Retiring
+	retiring.Retire = true
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{retiring, staleReady("second", 5, 100, 3), ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none while the budget is spent", got.Retire)
+	}
+}
+
+func TestDecideSizeCountsAForcedDrainAgainstTheBudget(t *testing.T) {
+	// maxStaleSeconds escalated a retirement into a real drain. spec.retire
+	// stays true across that, so it keeps occupying the budget it started
+	// in — the server is still unavailable because of this update.
+	forced := staleReady("first", 5, 100, 3)
+	forced.Phase = phase.Draining
+	forced.Retire = true
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{forced, staleReady("second", 5, 100, 3), ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none — the forced drain still holds the budget", got.Retire)
+	}
+}
+
+func TestDecideSizeDoesNotCountAScaleDownDrainAgainstTheUpdateBudget(t *testing.T) {
+	// The complement, and the reason spec.retire exists rather than the
+	// phase being read: a server draining because demand fell was not made
+	// unavailable by this update and must not spend its budget.
+	unrelated := staleReady("shrinking", 0, 100, 3)
+	unrelated.Phase = phase.Draining // Retire stays false
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{unrelated, staleReady("old", 5, 100, 3), ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 1 || got.Retire[0] != "old" {
+		t.Errorf("Retire = %v, want [old]", got.Retire)
+	}
+}
+
+func TestDecideSizeCountsAReservedRetirementAgainstTheBudget(t *testing.T) {
+	// The patch is out, the cache has not shown it. Counting only what the
+	// cache shows would spend the budget twice.
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			staleReady("first", 5, 100, 3),
+			staleReady("second", 5, 100, 3),
+			ready("new", 0, 100),
+		},
+		Generation: 0, MaxUnavailable: 1,
+		PendingRetires: map[string]bool{"first": true},
+		MinReplicas:    1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none while a reservation stands", got.Retire)
+	}
+}
+
+func TestDecideSizeRetiresEmptyServersFirstThenTheOldest(t *testing.T) {
+	base := time.Now()
+	older := staleReady("older", 5, 100, 3)
+	older.CreatedAt = base
+	newer := staleReady("newer", 5, 100, 3)
+	newer.CreatedAt = base.Add(time.Minute)
+	empty := staleReady("empty", 0, 100, 3)
+	empty.CreatedAt = base.Add(2 * time.Minute)
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{newer, older, empty, ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 1 || got.Retire[0] != "empty" {
+		t.Fatalf("Retire = %v, want [empty] — an empty server costs nobody anything", got.Retire)
+	}
+
+	got = DecideSize(ScalingInputs{
+		Views:      []ServerView{newer, older, ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 1 || got.Retire[0] != "older" {
+		t.Errorf("Retire = %v, want [older] when none is empty", got.Retire)
+	}
+}
+
+func TestDecideSizeDoesNotRetireAndShrinkInOnePass(t *testing.T) {
+	// 4a's precedent: two removals decided in one pass are two decisions
+	// taken on two readings of the same moment. Retirement comes first and
+	// the pass ends there.
+	idle := staleReady("idle", 0, 100, 3)
+	idle.EmptyFor = time.Hour
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{idle, staleReady("busy", 5, 100, 3), ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: time.Minute,
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none in a pass that retires", got.Delete)
+	}
+	if len(got.Retire) != 1 {
+		t.Errorf("Retire = %v, want one", got.Retire)
+	}
+}
+
+// TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved pins the answer
+// to the question task 4 carried forward: expectations is keyed by name, so a
+// delete reservation recorded for a server that already has a retire
+// reservation overwrites it, the retirement stops counting against
+// maxUnavailable while its patch is still in flight, and the pass after that
+// spends the budget a second time.
+//
+// The sequence is reachable, and this is the pass that reaches it. A pass that
+// nominates a retirement returns there, so the two decisions never meet within
+// one pass — but on the pass after, the standing reservation is exactly what
+// makes selectRetirement decline, while the cache still shows the server Ready
+// and long empty, which is everything the demand rule asks for. "old" is the
+// only stabilized candidate here, so the demand rule has no other way to
+// spend the pass.
+func TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved(t *testing.T) {
+	old := staleReady("old", 0, 100, 3)
+	old.EmptyFor = time.Hour
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{old, ready("new", 0, 100)},
+		Generation: 0, MaxUnavailable: 1,
+		PendingRetires: map[string]bool{"old": true},
+		MinReplicas:    1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none — the reservation already spends the budget", got.Retire)
+	}
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: deleting a server whose retirement is "+
+			"reserved overwrites that reservation and hands the budget back", got.Delete)
+	}
+}
+
+// TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart pins the
+// answer to the question task 5 carried forward: the cold-start server becomes
+// Ready, and while nothing has retired yet it is empty, it is surplus, and
+// deleting it re-triggers the cold start on the next pass, which creates
+// another.
+//
+// The retirement rule is what closes that loop, and it closes it by ordering
+// rather than by any test of its own: the pass finds a stale server to retire
+// and returns there, so the demand rule never runs. On the next pass the stale
+// server is Retiring, leaving() drops it out of the size, and the fresh server
+// is no longer surplus.
+//
+// The fixture is arranged so the demand rule would otherwise take exactly the
+// wrong server. Both have been empty past the window, so both are candidates;
+// SelectDeletionCandidates sorts the youngest first among servers that took
+// players, and the cold-start server is the younger — so without the branch
+// above it, the group deletes the replacement and keeps the server the update
+// is trying to get rid of.
+func TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart(t *testing.T) {
+	base := time.Now()
+	old := staleReady("old", 0, 100, 3)
+	old.EmptyFor = time.Hour
+	old.CreatedAt = base
+	fresh := ready("new", 0, 100)
+	fresh.EmptyFor = time.Hour
+	fresh.CreatedAt = base.Add(time.Hour)
+
+	got := DecideSize(ScalingInputs{
+		Views:      []ServerView{old, fresh},
+		Generation: 0, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if len(got.Retire) != 1 || got.Retire[0] != "old" {
+		t.Errorf("Retire = %v, want [old]", got.Retire)
+	}
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none — deleting the cold-start server re-triggers "+
+			"the cold start and the group builds the same server again", got.Delete)
+	}
+}

@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"sort"
 	"time"
 
 	"github.com/spawnery/spawnery/internal/phase"
@@ -60,6 +61,12 @@ type ScalingInputs struct {
 	// capacity arithmetic below stays generation-blind, exactly as milestone
 	// 4a left it. See the type comment above.
 	Generation int64
+	// MaxUnavailable is spec.update.maxUnavailable: how many servers this
+	// update may have unavailable at once.
+	MaxUnavailable int32
+	// PendingRetires are the servers this reconciler has asked to retire and
+	// the cache has not shown yet.
+	PendingRetires map[string]bool
 }
 
 // SizeDecision is what the group does about its size this pass.
@@ -68,6 +75,11 @@ type SizeDecision struct {
 	Create int32
 	// Delete names the servers to remove now.
 	Delete []string
+	// Retire names the stale servers to put into soft drain now. Never the
+	// same server as Delete, and never in the same pass: retirement is how a
+	// server leaves during a changeover, deletion is how it leaves for lack
+	// of demand.
+	Retire []string
 	// Wanted is how many servers the spare-slot rule asked for, before the
 	// ceiling. Limited is true either because Wanted exceeds Create — the
 	// ordinary shortfall — or because the ceiling refused the one server a
@@ -126,13 +138,26 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 // whose removal this reconciler has already asked for. Leaving them in would
 // let one pass nominate the same server the previous pass already deleted, and
 // count it twice against the surplus.
+//
+// Reserved retirements are held out for a second, sharper reason: expectations
+// is keyed by name, so a delete reservation recorded for a server that already
+// has a retire reservation overwrites it, and the retirement stops counting
+// against maxUnavailable while the patch is still in flight — which lets the
+// next pass spend the budget a second time. That is reachable rather than
+// theoretical. A pass that reserves a retirement returns there, so the two
+// never meet within one pass; but on the pass after, the reservation makes
+// selectRetirement decline while the server still shows Ready and empty in the
+// cache, and the demand rule below is happy to nominate exactly it. Excluding
+// it here is also the plainly right answer on its own terms: a server this
+// group has just asked to retire is already on its way out, and deleting it
+// instead is the harder of the two removals.
 func deletable(in ScalingInputs) []ServerView {
-	if len(in.PendingDeletes) == 0 {
+	if len(in.PendingDeletes) == 0 && len(in.PendingRetires) == 0 {
 		return in.Views
 	}
 	out := make([]ServerView, 0, len(in.Views))
 	for _, v := range in.Views {
-		if !in.PendingDeletes[v.Name] {
+		if !in.PendingDeletes[v.Name] && !in.PendingRetires[v.Name] {
 			out = append(out, v)
 		}
 	}
@@ -215,6 +240,65 @@ func coldStart(in ScalingInputs) bool {
 	return stale > 0 && current == 0
 }
 
+// selectRetirement nominates one stale server for soft drain, or nothing.
+//
+// It cannot reuse SelectDeletionCandidates: that function refuses any server
+// that may be carrying players, and those are precisely the ones a changeover
+// has to retire. This is not a loosening of that rule — a retiring server is
+// still never nominated for deletion — it is a different question asked of a
+// narrower set: Ready, stale, not already retiring.
+//
+// Empty servers first, because retiring one costs nobody anything, then the
+// oldest, so the longest-lived sessions are disturbed last. Ties by name, so
+// two passes over the same state agree.
+//
+// One per pass. Every retirement is a replacement's worth of work, and the
+// five-second resync converges quickly enough.
+func selectRetirement(in ScalingInputs) string {
+	var (
+		readyCurrent bool
+		unavailable  int32
+		stale        []ServerView
+	)
+	for _, v := range in.Views {
+		// spec.retire is the single budget signal. It survives the
+		// escalation to Draining that maxStaleSeconds can force, so a
+		// forced drain keeps holding the slot it started in — while a drain
+		// that a scale-down or a deletion began never had it.
+		if v.Retire || in.PendingRetires[v.Name] {
+			unavailable++
+			continue
+		}
+		if v.Generation == in.Generation {
+			if v.Phase == phase.Ready {
+				readyCurrent = true
+			}
+			continue
+		}
+		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] {
+			stale = append(stale, v)
+		}
+	}
+	// At least one ready server of the current generation, for every group
+	// and not only for fallback targets: a ServerGroup cannot tell whether a
+	// ProxyGroup names it, and learning to would cost a watch and a cache
+	// that can be wrong for a distinction that only permits emptying a
+	// non-fallback group faster.
+	if !readyCurrent || unavailable >= in.MaxUnavailable || len(stale) == 0 {
+		return ""
+	}
+	sort.SliceStable(stale, func(i, j int) bool {
+		if ei, ej := stale[i].Players == 0, stale[j].Players == 0; ei != ej {
+			return ei
+		}
+		if !stale[i].CreatedAt.Equal(stale[j].CreatedAt) {
+			return stale[i].CreatedAt.Before(stale[j].CreatedAt)
+		}
+		return stale[i].Name < stale[j].Name
+	})
+	return stale[0].Name
+}
+
 // DecideSize is the group's sizing rule.
 //
 // The order matters and is the design's, not an accident: capacity first, then
@@ -293,6 +377,14 @@ func DecideSize(in ScalingInputs) SizeDecision {
 			Surplus: surplus,
 			Delete:  SelectDeletionCandidates(deletable(in), int(surplus)),
 		}
+	}
+
+	// Retirement, after the ceiling and before demand. The ceiling is an
+	// instruction and outranks a changeover; demand does not, because a pass
+	// that retires has already decided how this group loses a server and a
+	// second removal would be a second decision on the same reading.
+	if name := selectRetirement(in); name != "" {
+		return SizeDecision{Retire: []string{name}}
 	}
 
 	// Demand. Never in the same pass as a create — reaching here means the
