@@ -213,6 +213,21 @@ type ServerGroupStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
+	// ConsecutiveFailures counts servers that failed to start with no success
+	// since. It lives on the CR rather than in the operator's memory because a
+	// restart must not reset it: that would restart the create loop it exists
+	// to bound. This is the opposite of the choice made for the empty-since
+	// clock in milestone 4a, where a reset delays a scale-down and so errs
+	// safely.
+	// +optional
+	ConsecutiveFailures int32 `json:"consecutiveFailures,omitempty"`
+
+	// LastFailureAt is the newest status.failedAt this group has counted. It
+	// is what makes the count idempotent across resyncs, and the instant the
+	// backoff window runs from.
+	// +optional
+	LastFailureAt *metav1.Time `json:"lastFailureAt,omitempty"`
+
 	// Conditions follow the standard Kubernetes condition contract.
 	// +optional
 	// +listType=map

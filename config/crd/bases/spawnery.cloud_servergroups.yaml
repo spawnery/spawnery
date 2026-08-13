@@ -1497,12 +1497,29 @@ spec:
                 x-kubernetes-list-map-keys:
                 - type
                 x-kubernetes-list-type: map
+              consecutiveFailures:
+                description: |-
+                  ConsecutiveFailures counts servers that failed to start with no success
+                  since. It lives on the CR rather than in the operator's memory because a
+                  restart must not reset it: that would restart the create loop it exists
+                  to bound. This is the opposite of the choice made for the empty-since
+                  clock in milestone 4a, where a reset delays a scale-down and so errs
+                  safely.
+                format: int32
+                type: integer
               freeSlots:
                 description: |-
                   FreeSlots is the sum of free slots across ready servers of the current
                   generation. Stale servers do not count.
                 format: int32
                 type: integer
+              lastFailureAt:
+                description: |-
+                  LastFailureAt is the newest status.failedAt this group has counted. It
+                  is what makes the count idempotent across resyncs, and the instant the
+                  backoff window runs from.
+                format: date-time
+                type: string
               observedGeneration:
                 description: ObservedGeneration is the spec generation this status
                   was computed from.

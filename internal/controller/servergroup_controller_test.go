@@ -2064,3 +2064,26 @@ func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupBackoffFieldsRoundTripThroughTheAPIServer(t *testing.T) {
+	f := newFixture(t)
+	g := f.group
+
+	now := metav1.Now()
+	g.Status.ConsecutiveFailures = 3
+	g.Status.LastFailureAt = &now
+	if err := f.c.Status().Update(f.ctx, g); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(g), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status.ConsecutiveFailures != 3 {
+		t.Error("status.consecutiveFailures did not survive the API server; run make manifests")
+	}
+	if got.Status.LastFailureAt == nil {
+		t.Error("status.lastFailureAt did not survive the API server; run make manifests")
+	}
+}
