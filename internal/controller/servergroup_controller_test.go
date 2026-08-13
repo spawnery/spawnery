@@ -625,10 +625,14 @@ func TestGroupWithoutItsNetworkIsNotAccepted(t *testing.T) {
 	// so ScalingLimited is published as False rather than left absent. The
 	// condition is guarded on IsEphemeral alone, not on the Network being
 	// usable, and this is what says so.
-	if cond := meta.FindStatusCondition(got.Status.Conditions,
-		spawneryv1alpha1.ConditionScalingLimited); cond == nil ||
-		cond.Status != metav1.ConditionFalse {
+	cond := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Errorf("ScalingLimited = %+v on a group without its Network, want False", cond)
+	}
+	// size() never ran, so the message must say nothing was decided rather
+	// than assert the all-clear a sized pass would have checked.
+	if cond != nil && cond.Message != "scaling is not being decided: the group's network is not usable" {
+		t.Errorf("message = %q, want the not-decided message, not the all-clear", cond.Message)
 	}
 }
 
@@ -1007,15 +1011,16 @@ func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
 			"plus the spare-slot replacement", remaining)
 	}
 
-	var retained *spawneryv1alpha1.Server
+	var failed []*spawneryv1alpha1.Server
 	for i := range final {
 		if final[i].Status.Phase == string(phase.Failed) {
-			retained = &final[i]
+			failed = append(failed, &final[i])
 		}
 	}
-	if retained == nil {
-		t.Fatalf("no server in %v is Failed, want exactly one kept for diagnosis", final)
+	if len(failed) != 1 {
+		t.Fatalf("%d servers in %v are Failed, want exactly one kept for diagnosis", len(failed), final)
 	}
+	retained := failed[0]
 	if !retained.DeletionTimestamp.IsZero() {
 		t.Errorf("the retained failure %q is being removed; one must be kept", retained.Name)
 	}

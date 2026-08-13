@@ -388,7 +388,7 @@ func TestClampReport(t *testing.T) {
 		{"slots above the group's capacity are cut to it", 0, 1000000, 100, 0, 100},
 		{"players follow the cut capacity down", 900, 1000, 100, 100, 100},
 		{"players follow a smaller reported capacity, not the group's bound", 60, 40, 100, 40, 40},
-		{"a zero capacity leaves nothing", 5, 50, 0, 0, 0},
+		{"a capacity of zero still cannot hide a player", 5, 50, 0, 1, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			gotPlayers, gotSlots := clampReport(tc.players, tc.slots, tc.maxPlay)

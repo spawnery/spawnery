@@ -846,6 +846,20 @@ right signal is already on the view and unused here: `ServerView.SessionsGone`,
 one line at the top of the function. It belongs with 4b's own work on
 `scaling.go`.
 
+**`derivePhase` still measures readiness against `DesiredReplicas()`, and that
+field's meaning changed under it this milestone.** Before 4a,
+`DesiredReplicas()` in `api/v1alpha1/servergroup_types.go` was the size the
+group ran at, so "ready replicas have reached it" meant the group was fully
+up. Now it is only the group's floor: `DecideSize` can and does run the group
+above it to cover `spareSlots`. `derivePhase` in
+`internal/controller/servergroup_controller.go` never changed its comparison,
+so a group scaled to five for spare slots with one server up and four still
+starting publishes `status.phase: Ready` off that one. Defensible — the group
+is serving — but it is no longer what the field used to mean, and the change
+happened silently. 4b's rolling update, which needs to say "the new generation
+is up" as something other than "one server somewhere is," will want the
+distinction this milestone left unmade.
+
 ## Preconditions for milestone 5 (persistent groups)
 
 If a server's `ServerGroup` is missing, the server controller carries on with

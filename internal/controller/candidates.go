@@ -112,8 +112,15 @@ func (v ServerView) Occupied() bool {
 // group whose servers legitimately report a smaller capacity than the group's
 // bound stays consistent with itself.
 func clampReport(players, slots, maxPlayers int32) (int32, int32) {
-	if maxPlayers < 0 {
-		maxPlayers = 0
+	// Floored at one rather than zero, and not because a group is ever
+	// configured with a capacity of zero: the CRD forbids it. This is the
+	// invariant the function must carry on its own — a clamp that could turn a
+	// positive player count into zero would take an occupied server out of
+	// Occupied(), and with it out of the budget's minAvailable, while the pod
+	// label computed from the unclamped snapshot still says it is occupied.
+	// candidates.go's isOccupied comment says what that costs.
+	if maxPlayers < 1 {
+		maxPlayers = 1
 	}
 	if slots > maxPlayers {
 		slots = maxPlayers

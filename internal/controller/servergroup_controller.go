@@ -195,11 +195,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// unprotected, and a rejected group holding players is still holding
 	// players.
 	var decision SizeDecision
+	sized := false
 	if networkUsable && group.IsEphemeral() {
 		var err error
 		if decision, err = r.size(ctx, group, views, servers); err != nil {
 			return ctrl.Result{}, err
 		}
+		sized = true
 	}
 
 	if group.IsEphemeral() {
@@ -213,15 +215,23 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			limited.Status = metav1.ConditionTrue
 			limited.Reason = spawneryv1alpha1.ReasonMaxReplicasReached
 			limited.Message = fmt.Sprintf(
-				"%d more server(s) needed to cover spareSlots %d, but maxReplicas %d is reached",
-				decision.Wanted, group.Spec.Scaling.SpareSlots, group.Spec.Scaling.MaxReplicas)
+				"%d more server(s) needed to cover spareSlots %d; maxReplicas %d allows %d now",
+				decision.Wanted, group.Spec.Scaling.SpareSlots,
+				group.Spec.Scaling.MaxReplicas, decision.Create)
+		}
+		if !sized {
+			// Nothing was decided this pass, so the False above is the absence
+			// of a verdict rather than one. Saying "free slots cover the spare"
+			// here would assert something no code checked, and an all-clear
+			// event would announce it.
+			limited.Message = "scaling is not being decided: the group's network is not usable"
 		}
 		// The event goes on the flank only. SetStatusCondition moves
 		// lastTransitionTime just on a change of status, so comparing across
 		// the call is what tells a transition from a resync.
 		was := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
 		meta.SetStatusCondition(&group.Status.Conditions, limited)
-		if decision.Limited != was {
+		if sized && decision.Limited != was {
 			eventType := corev1.EventTypeNormal
 			if decision.Limited {
 				eventType = corev1.EventTypeWarning
@@ -547,6 +557,12 @@ func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *s
 
 // SetupWithManager registers the controller.
 func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// A construction site that forgets this would otherwise panic inside a
+	// reconcile, in a goroutine, minutes after start — the same failure mode
+	// SetupAll refuses a nil Bootstrapper for.
+	if r.Expectations == nil {
+		r.Expectations = newExpectations(r.Clock)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.ServerGroup{}).
 		Owns(&spawneryv1alpha1.Server{}).
