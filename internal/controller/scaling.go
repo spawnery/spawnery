@@ -316,10 +316,12 @@ func selectRetirement(in ScalingInputs) string {
 	// real 0, defaulting inside a pure function is unambiguous here in a way
 	// it usually is not.
 	//
-	// The accessor at the call site applies the same default. Both being
-	// right is correct rather than redundant: this function is also reached
-	// by tests and by any future caller that builds ScalingInputs itself, and
-	// the silence of the failure is what makes one defence too few.
+	// ServerGroup.UpdateMaxUnavailable (api/v1alpha1/servergroup_types.go),
+	// the accessor that fills ScalingInputs.MaxUnavailable at the call site,
+	// applies the same default. Both being right is correct rather than
+	// redundant: this function is also reached by tests and by any future
+	// caller that builds ScalingInputs itself, and the silence of the
+	// failure is what makes one defence too few.
 	budget := in.MaxUnavailable
 	if budget < 1 {
 		budget = 1

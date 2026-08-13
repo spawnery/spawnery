@@ -1736,3 +1736,56 @@ func TestGroupPatchesRetireOntoTheNominatedServer(t *testing.T) {
 		t.Error("the stale server was not asked to retire")
 	}
 }
+
+// TestGroupRetireServerGuardsAgainstARepeatCall exercises retireServer's
+// idempotence guard directly. selectRetirement never nominates a server
+// already showing Retire: true, so the only call site today never reaches
+// the guard; this calls retireServer twice against the same servers map to
+// stand in for a future call site that does not pre-filter, and confirms the
+// second call is a true no-op: no second event, no second patch.
+func TestGroupRetireServerGuardsAgainstARepeatCall(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+
+	f.reconcileGroup(t, r)
+	list := f.listServers(t)
+	if len(list) != 1 {
+		t.Fatalf("got %d servers, want minReplicas = 1", len(list))
+	}
+	srv := &list[0]
+	servers := map[string]*spawneryv1alpha1.Server{srv.Name: srv}
+
+	if err := r.retireServer(f.ctx, f.group, servers, srv.Name); err != nil {
+		t.Fatalf("first retireServer: %v", err)
+	}
+	first := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: srv.Name, Namespace: f.ns}, first); err != nil {
+		t.Fatalf("get %s after first call: %v", srv.Name, err)
+	}
+	if !first.Spec.Retire {
+		t.Fatalf("first retireServer did not patch spec.retire")
+	}
+
+	// The in-memory server the map points at already reflects the patch —
+	// retireServer sets srv.Spec.Retire = true on it before issuing the
+	// patch — so this second call sees exactly what a future call site that
+	// forgets to pre-filter would see.
+	if err := r.retireServer(f.ctx, f.group, servers, srv.Name); err != nil {
+		t.Fatalf("second retireServer: %v", err)
+	}
+
+	second := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: srv.Name, Namespace: f.ns}, second); err != nil {
+		t.Fatalf("get %s after second call: %v", srv.Name, err)
+	}
+	if second.ResourceVersion != first.ResourceVersion {
+		t.Errorf("second retireServer issued a patch: resourceVersion moved from %s to %s",
+			first.ResourceVersion, second.ResourceVersion)
+	}
+
+	if got := scalingEvents(rec, "ServerRetiring"); got != 1 {
+		t.Errorf("got %d ServerRetiring events, want 1", got)
+	}
+}
