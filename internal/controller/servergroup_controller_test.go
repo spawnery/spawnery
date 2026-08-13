@@ -25,6 +25,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -1458,5 +1459,69 @@ func TestGroupRecordsWhatItIssued(t *testing.T) {
 	if creates != 1 {
 		t.Errorf("pending creates = %d right after the create, want 1: size() "+
 			"did not record what it issued", creates)
+	}
+}
+
+// TestGroupSaysWhenItsCeilingHoldsCapacityBack closes a gap this repository
+// already has once: a proxy that cannot bind its ready port says so only in a
+// container log. A group that cannot serve its spareSlots because maxReplicas
+// stops it is the same kind of silence, and this is the milestone that would
+// otherwise add a second one next to the first.
+func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.group.Spec.Scaling.MaxReplicas = 1
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want 1", len(servers))
+	}
+	uid := bringUpNamed(t, f, servers[0].Name)
+	if err := f.agents.ReportPlayers(uid, 100, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("ScalingLimited = %+v, want True with the group full at its ceiling", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonMaxReplicasReached {
+		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonMaxReplicasReached)
+	}
+	if !strings.Contains(cond.Message, "maxReplicas") {
+		t.Errorf("message = %q, want it to name the limit that is holding", cond.Message)
+	}
+	if group.Status.Phase == "" {
+		t.Error("phase went empty")
+	}
+	if meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Error("a group working exactly as configured must not be Degraded")
+	}
+
+	// Room again: the condition has to come back down.
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Scaling.MaxReplicas = 5
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	if meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited) {
+		t.Error("ScalingLimited still True after maxReplicas was raised")
 	}
 }

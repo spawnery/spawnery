@@ -194,9 +194,39 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Freezing them would leave exactly the pods that still carry players
 	// unprotected, and a rejected group holding players is still holding
 	// players.
+	var decision SizeDecision
 	if networkUsable && group.IsEphemeral() {
-		if _, err := r.size(ctx, group, views, servers); err != nil {
+		var err error
+		if decision, err = r.size(ctx, group, views, servers); err != nil {
 			return ctrl.Result{}, err
+		}
+	}
+
+	if group.IsEphemeral() {
+		limited := metav1.Condition{
+			Type:    spawneryv1alpha1.ConditionScalingLimited,
+			Status:  metav1.ConditionFalse,
+			Reason:  spawneryv1alpha1.ReasonWithinLimits,
+			Message: "free slots cover spec.scaling.spareSlots",
+		}
+		if decision.Limited {
+			limited.Status = metav1.ConditionTrue
+			limited.Reason = spawneryv1alpha1.ReasonMaxReplicasReached
+			limited.Message = fmt.Sprintf(
+				"%d more server(s) needed to cover spareSlots %d, but maxReplicas %d is reached",
+				decision.Wanted, group.Spec.Scaling.SpareSlots, group.Spec.Scaling.MaxReplicas)
+		}
+		// The event goes on the flank only. SetStatusCondition moves
+		// lastTransitionTime just on a change of status, so comparing across
+		// the call is what tells a transition from a resync.
+		was := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
+		meta.SetStatusCondition(&group.Status.Conditions, limited)
+		if decision.Limited != was {
+			eventType := corev1.EventTypeNormal
+			if decision.Limited {
+				eventType = corev1.EventTypeWarning
+			}
+			r.Recorder.Event(group, eventType, limited.Reason, limited.Message)
 		}
 	}
 

@@ -26,6 +26,12 @@ const (
 	ConditionReady = "Ready"
 	// ConditionDegraded reports a persistent problem that needs attention.
 	ConditionDegraded = "Degraded"
+	// ConditionScalingLimited reports that a group would create more servers
+	// to cover its spareSlots and maxReplicas is stopping it. Deliberately not
+	// Degraded: a popular group sitting on its ceiling works exactly as
+	// configured, and folding the two together would move the group's phase and
+	// make a real fault during peak load indistinguishable from peak load.
+	ConditionScalingLimited = "ScalingLimited"
 )
 
 // Condition reasons.
@@ -40,6 +46,8 @@ const (
 	ReasonNotImplemented       = "NotImplementedInThisVersion"
 	ReasonReconciling          = "Reconciling"
 	ReasonExposeNotImplemented = "ExposeStrategyNotImplemented"
+	ReasonMaxReplicasReached   = "MaxReplicasReached"
+	ReasonWithinLimits         = "WithinLimits"
 )
 
 // ObjectRef names another object in the same namespace.
