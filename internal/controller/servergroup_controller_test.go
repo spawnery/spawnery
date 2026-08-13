@@ -1677,3 +1677,62 @@ func TestGroupSaysColdStartIsBlockedByTheCeiling(t *testing.T) {
 		t.Errorf("message = %q, must never claim nothing is needed while the changeover is refused", cond.Message)
 	}
 }
+
+// TestGroupPatchesRetireOntoTheNominatedServer proves the group actually
+// carries out the changeover it decides on: spec.retire is the whole channel
+// between the group's decision and the Server controller that executes it.
+// If this patch does not land, the changeover is a rule nobody carries out.
+//
+// The file has no helper that builds two servers of different generations
+// directly, so this drives the real path instead: bring the floor's one
+// server up, bump the group's generation the way an operator would, and let
+// the cold start create the replacement — exactly what
+// TestOccupiedServerSurvivesAContinuousScaleDown and the ScalingLimited tests
+// above already rely on to get a stale server and a current one onto the
+// board.
+func TestGroupPatchesRetireOntoTheNominatedServer(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want minReplicas = 1", len(servers))
+	}
+	old := servers[0].Name
+	bringUpNamed(t, f, old)
+
+	// A real spec update bumps the group's generation, so the server already
+	// up goes stale and the cold start orders its replacement.
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	var newSrv string
+	for _, s := range f.listServers(t) {
+		if s.Name != old {
+			newSrv = s.Name
+		}
+	}
+	if newSrv == "" {
+		t.Fatalf("the cold start did not create the changeover's replacement")
+	}
+	bringUpNamed(t, f, newSrv)
+
+	// Both servers are Ready now: old at the previous generation, new at the
+	// current one. This is the one pass that must nominate old to retire.
+	f.reconcileGroup(t, r)
+
+	got := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: old, Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get %s: %v", old, err)
+	}
+	if !got.Spec.Retire {
+		t.Error("the stale server was not asked to retire")
+	}
+}

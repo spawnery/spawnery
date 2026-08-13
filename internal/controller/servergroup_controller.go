@@ -297,7 +297,7 @@ func (r *ServerGroupReconciler) size(
 	key := group.Namespace + "/" + group.Name
 
 	r.Expectations.observe(key, views)
-	pendingCreates, pendingDeletes, _ := r.Expectations.pending(key)
+	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
 
 	decision := DecideSize(ScalingInputs{
 		Views:         views,
@@ -307,9 +307,12 @@ func (r *ServerGroupReconciler) size(
 		MaxPlayers:    group.Spec.MaxPlayers,
 		Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
 
+		Generation:     group.Generation,
+		MaxUnavailable: group.UpdateMaxUnavailable(),
+
 		PendingCreates: pendingCreates,
 		PendingDeletes: pendingDeletes,
-		Generation:     group.Generation,
+		PendingRetires: pendingRetires,
 	})
 
 	for i := int32(0); i < decision.Create; i++ {
@@ -329,6 +332,12 @@ func (r *ServerGroupReconciler) size(
 			return decision, err
 		}
 		r.Expectations.expectDeleted(key, name)
+	}
+	for _, name := range decision.Retire {
+		if err := r.retireServer(ctx, group, servers, name); err != nil {
+			return decision, err
+		}
+		r.Expectations.expectRetired(key, name)
 	}
 	return decision, nil
 }
@@ -388,6 +397,7 @@ func (r *ServerGroupReconciler) collectViews(
 			// exactly like one that reached a terminal state.
 			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),
 			Generation:   srv.Spec.GroupGeneration,
+			Retire:       srv.Spec.Retire,
 			CreatedAt:    srv.CreationTimestamp.Time,
 		}
 		if v.Phase == "" {
@@ -465,6 +475,37 @@ func (r *ServerGroupReconciler) deleteServer(
 		return err
 	}
 	r.Recorder.Eventf(group, corev1.EventTypeNormal, reason, message, name)
+	return nil
+}
+
+// retireServer asks one server to enter soft drain.
+//
+// A patch rather than an update: the group holds a cached copy and the Server
+// controller writes status on the same object, so a full update here would
+// race it for no reason.
+func (r *ServerGroupReconciler) retireServer(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	servers map[string]*spawneryv1alpha1.Server,
+	name string,
+) error {
+	srv, ok := servers[name]
+	if !ok {
+		return nil
+	}
+	// Already asked. The nomination reads the cache, which lags the patch by
+	// a reconcile or two, so without this the same server collects the same
+	// event every resync for the whole of its retirement.
+	if srv.Spec.Retire {
+		return nil
+	}
+	patch := client.MergeFrom(srv.DeepCopy())
+	srv.Spec.Retire = true
+	if err := r.Patch(ctx, srv, patch); err != nil {
+		return err
+	}
+	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerRetiring",
+		"retiring server %s for a rolling update", name)
 	return nil
 }
 

@@ -282,6 +282,25 @@ func (g *ServerGroup) FailedRetention() time.Duration {
 	return time.Duration(g.Spec.FailedRetentionSeconds) * time.Second
 }
 
+// UpdateMaxUnavailable is how many servers a rolling update may have
+// unavailable at once. A group with no spec.update gets the CRD's own default,
+// so the rule is the same whether the field was written out or left off.
+func (g *ServerGroup) UpdateMaxUnavailable() int32 {
+	if g.Spec.Update == nil || g.Spec.Update.MaxUnavailable < 1 {
+		return 1
+	}
+	return g.Spec.Update.MaxUnavailable
+}
+
+// UpdateMaxStale is how long a server may wait in soft drain before its
+// players are moved off. Zero means never.
+func (g *ServerGroup) UpdateMaxStale() time.Duration {
+	if g.Spec.Update == nil {
+		return 0
+	}
+	return time.Duration(g.Spec.Update.MaxStaleSeconds) * time.Second
+}
+
 func init() {
 	SchemeBuilder.Register(&ServerGroup{}, &ServerGroupList{})
 }
