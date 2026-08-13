@@ -5,7 +5,12 @@ machine with rootless Podman, the same shape `README.md`'s local-cluster
 section documents. Corrected 2026-08-12 after the first real run against a
 `kind` cluster: six defects in the procedure below stopped that run at
 various points and are fixed in place rather than noted as a fork, and §10 is
-new, added for the manual proof this run could not attempt.
+new, added for the manual proof this run could not attempt. Run a second time
+on 2026-08-13, on a different machine, §0 through §7 plus §10: every section
+ran as written and needed no correction, and both proofs §10 was written for —
+criterion 8 and the manual criterion-9 retry — landed. What that run measured
+is in `docs/handover-milestone-4.md` under "The manual session"; the runbook
+below is unchanged by it.
 
 Design §10 states milestone 3's acceptance in two sentences: a player can
 join, automated, and a player can join, manually, with a real Microsoft
