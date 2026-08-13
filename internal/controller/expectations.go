@@ -21,10 +21,14 @@ import (
 	"time"
 )
 
-// expectationTTL bounds how long an unobserved create or delete is believed.
-// Without it, a lost watch event would leave a reservation standing forever and
-// the group could never size itself again; with it, the group decides on what
-// the cache shows, which by then is correct.
+// expectationTTL bounds how long an unobserved create, delete or retire is
+// believed. Without it, a lost watch event would leave a reservation standing
+// forever and the group could never size itself again; with it, the group
+// decides on what the cache shows, which by then is correct.
+//
+// The retire kind is the one to hold in mind here, because it is the only one
+// whose reservation bounds a budget rather than a count: an unobserved
+// retirement holds a slot of spec.update.maxUnavailable until this TTL expires.
 const expectationTTL = 30 * time.Second
 
 type expectationKind int
@@ -40,8 +44,14 @@ type expectation struct {
 	expires time.Time
 }
 
-// expectations reserves the creates and deletes a reconcile has issued and the
-// cache has not caught up with yet.
+// expectations reserves the creates, deletes and retirements a reconcile has
+// issued and the cache has not caught up with yet.
+//
+// The three are the same mechanism, but the retire kind is the one worth
+// signposting: it is what enforces spec.update.maxUnavailable across the window
+// in which the group has patched spec.retire onto a server and the cache still
+// shows it untouched. Without it a second server is nominated while the first
+// has not appeared, and the budget is exceeded by one.
 //
 // collectViews lists Servers through the manager's cached client. A reconcile
 // triggered by its own create event can therefore read a cache that has not

@@ -233,13 +233,26 @@ func readyFree(views []ServerView) int32 {
 // failure does not suppress it — the old generation's corpse says nothing about
 // whether the new image works.
 //
+// That suppression is only as durable as the corpse it reads, and the corpse is
+// pruned by selectFailedForPruning rather than by anything here. Keeping the
+// *newest generation's* failure is what makes the two agree; that function's
+// comment carries the argument, and breaking it turns this window back into the
+// five-second one.
+//
 // This is deliberately not backoff. The floor rule has the same loop and keeps
 // it; giving it a real per-group backoff with a Degraded condition is its own
 // milestone.
 func coldStart(in ScalingInputs) bool {
 	if in.PendingCreates > 0 {
-		// A pending create is always of the current generation, by
-		// construction: createServer stamps group.Generation on it.
+		// A pending create is of the current generation in every pass but one:
+		// createServer stamps group.Generation on it. The exception is a create
+		// issued under generation N that is still outstanding when the pass
+		// reads N+1 — then this declines a cold start on the strength of a
+		// server that will arrive stale. It costs one pass and no more: either
+		// the cache shows the server, which makes it a stale view like any
+		// other, or the reservation reaches its TTL. Nothing is created or
+		// deleted on the strength of it, which is why the code does not try to
+		// tell the two apart.
 		return false
 	}
 	var stale, current int
@@ -409,6 +422,11 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	if floor := in.MinReplicas - alive; floor > create {
 		create = floor
 	}
+	// demanded is what this group would build with no changeover running: the
+	// spare-slot rule and the floor, before the cold start is added on top. The
+	// difference is load-bearing below — a cold start the ceiling refuses has
+	// decided nothing, while an ordinary shortfall it refuses has.
+	demanded := create
 	cold := coldStart(in)
 	if cold && create < 1 {
 		create = 1
@@ -430,6 +448,10 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	// operator sees name which of the two is actually happening.
 	coldBlocked := cold && granted < 1
 	limited := wanted > granted || coldBlocked
+	// A refused cold start that is the only thing this pass wanted to build.
+	// See the fall-through in the create block below: this pass has decided
+	// nothing, so it must not return as though it had.
+	coldOnly := coldBlocked && demanded < 1
 
 	if create > 0 {
 		if granted > 0 {
@@ -451,7 +473,39 @@ func DecideSize(in ScalingInputs) SizeDecision {
 				Delete:           SelectDeletionCandidates(deletable(in), int(surplus)),
 			}
 		}
-		return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
+		if !coldOnly {
+			return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
+		}
+		// The refused cold start, and nothing else asking for a server: no
+		// create was granted and there is no surplus to shed, so this pass has
+		// decided nothing at all. Returning here is what made the stall
+		// permanent. A group at its ceiling with an idle stale server beside it
+		// would refuse to delete the very server the changeover exists to
+		// remove — the demand rule below sheds it happily when no changeover is
+		// running — and would then tell the operator that the way out is a
+		// higher maxReplicas. Every later pass read the same state and decided
+		// the same thing. Falling through lets the demand rule free the room the
+		// cold start was refused for, and the next pass starts the changeover.
+		//
+		// Falling through is safe on both counts. It cannot delete a server that
+		// may be carrying players: it reaches the one removal the chain below
+		// can make through the same two independent guards as every other, the
+		// eligibility loop's Players != 0 || Stale and SelectDeletionCandidates'
+		// mayHavePlayers. And it cannot delete something this pass should have
+		// kept: demanded < 1 says neither the spare-slot rule nor the floor
+		// asked for a server, so the group is not short; the eligibility loop
+		// still tests feasibility against spareSlots one candidate at a time;
+		// alive > MinReplicas still guards the floor; and only a *stale* server
+		// can be taken, because a cold start means no current-generation server
+		// counts toward the size, which is exactly when staleRemains is true and
+		// the changeover filter holds the current generation out. The retirement
+		// branch cannot fire here at all, for the same reason: it needs a Ready
+		// server of the current generation, and a cold start is the statement
+		// that there is none.
+		//
+		// The stall stays visible. With nothing to shed, the chain below decides
+		// nothing either and the final return carries Limited and
+		// ColdStartBlocked exactly as this branch used to.
 	}
 
 	if surplus := alive - in.MaxReplicas; surplus > 0 {
@@ -534,5 +588,10 @@ func DecideSize(in ScalingInputs) SizeDecision {
 		}
 	}
 
-	return SizeDecision{}
+	// Nothing was decided. Every path that reaches here with create == 0 has
+	// wanted == 0 and neither flag set, so this is the empty decision it always
+	// was. The one path that does not is the refused cold start that fell
+	// through and found nothing to shed — and that is the stall the operator has
+	// to be told about, so the flags travel out with it.
+	return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
 }

@@ -529,7 +529,7 @@ func (r *ServerGroupReconciler) pruneFailed(
 		// The Server controller still drains it first if it turns out to have
 		// players on it; this only asks for the removal.
 		if err := r.deleteServer(ctx, group, servers, name, "FailedServerPruned",
-			"removing failed server %s, only the oldest failure is kept for diagnosis"); err != nil {
+			"removing failed server %s, only the newest generation's oldest failure is kept for diagnosis"); err != nil {
 			return err
 		}
 	}

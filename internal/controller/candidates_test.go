@@ -312,8 +312,9 @@ func TestOccupiedPodsReleasesPodsThatCarryNobody(t *testing.T) {
 }
 
 // TestSelectFailedForPruning pins the retention cap and, above all, which
-// failure survives it: the oldest, because the first failure after a change is
-// the one that says what broke.
+// failure survives it: the newest generation's, and the oldest within it,
+// because the first failure after a change is the one that says what broke and
+// a generation bump is the largest change a group can undergo.
 func TestSelectFailedForPruning(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -359,6 +360,32 @@ func TestSelectFailedForPruning(t *testing.T) {
 			},
 			keep: 1,
 			want: []string{"b"},
+		},
+		{
+			// The current generation's corpse is the one the cold-start
+			// suppression reads, and it is always the *younger* of the two, so
+			// a purely oldest-first rule prunes exactly it — on the same
+			// reconcile that observes it. The inherited corpse says nothing
+			// about the new image; this one does.
+			name: "keeps the newest generation's failure over an inherited older one",
+			views: []ServerView{
+				view("f-old", phase.Failed, 0, 100, false, 3, 0),
+				view("c-new", phase.Failed, 0, 100, false, 4, 7200),
+			},
+			keep: 1,
+			want: []string{"f-old"},
+		},
+		{
+			// The generation ordering must not cost the original rule. Within
+			// one generation the first failure is still the survivor.
+			name: "still keeps the oldest within the newest generation",
+			views: []ServerView{
+				view("new-second", phase.Failed, 0, 100, false, 4, 7260),
+				view("old", phase.Failed, 0, 100, false, 3, 0),
+				view("new-first", phase.Failed, 0, 100, false, 4, 7200),
+			},
+			keep: 1,
+			want: []string{"new-second", "old"},
 		},
 	}
 

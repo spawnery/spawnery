@@ -1078,6 +1078,150 @@ func TestDecideSizeDoesNotSuspendDemandForAStaleServerThatIsAlreadyGone(t *testi
 	}
 }
 
+// TestDecideSizeShedsAnIdleStaleServerToMakeRoomForARefusedColdStart is the
+// fixed point that used to be permanent. A group at its ceiling with an idle
+// stale server beside it refused to delete the very server the changeover
+// exists to remove, and told the operator to raise maxReplicas instead. The
+// control case below is what makes that a defect rather than a design
+// consequence: the same views and knobs with no changeover shed the same server
+// happily.
+func TestDecideSizeShedsAnIdleStaleServerToMakeRoomForARefusedColdStart(t *testing.T) {
+	views := []ServerView{
+		staleReady("a", 60, 100, 3),
+		func() ServerView {
+			v := staleReady("b", 0, 100, 3)
+			v.EmptyFor = 10 * time.Minute
+			return v
+		}(),
+	}
+	in := ScalingInputs{
+		Views:      views,
+		Generation: 4, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 2, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	}
+
+	got := DecideSize(in)
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0 — the ceiling refuses the cold start", got.Create)
+	}
+	if len(got.Delete) != 1 || got.Delete[0] != "b" {
+		t.Fatalf("Delete = %v, want [b]: the pass granted nothing, so it has decided "+
+			"nothing, and shedding the idle stale server is what frees the room the "+
+			"cold start was refused for", got.Delete)
+	}
+
+	// The control. Without the changeover the group already sheds b, which is
+	// why refusing to shed it *because* of a changeover is the wrong way round.
+	in.Generation = 3
+	if control := DecideSize(in); len(control.Delete) != 1 || control.Delete[0] != "b" {
+		t.Fatalf("control Delete = %v, want [b] — the fixture no longer measures the "+
+			"difference the changeover makes", control.Delete)
+	}
+}
+
+// TestDecideSizeStillReportsARefusedColdStartWithNothingToShed is the other half
+// of the finding above: falling through must not cost the stall its visibility.
+// When the pass genuinely has nothing to shed there is no way out but a higher
+// ceiling, and ScalingLimited has to say so.
+func TestDecideSizeStillReportsARefusedColdStartWithNothingToShed(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			staleReady("a", 60, 100, 3),
+			staleReady("b", 60, 100, 3),
+		},
+		Generation: 4, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 2, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none — both servers have players on them", got.Delete)
+	}
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0 at the ceiling", got.Create)
+	}
+	if !got.Limited || !got.ColdStartBlocked {
+		t.Errorf("Limited = %v, ColdStartBlocked = %v, want both true: with nothing to "+
+			"shed the changeover really is stalled on maxReplicas and the operator "+
+			"has to be told", got.Limited, got.ColdStartBlocked)
+	}
+}
+
+// TestPruningDoesNotTakeAwayTheColdStartSuppression is the interaction §3.7's
+// guard depends on and no task-scoped review was positioned to see. The
+// suppression reads a Failed server of the current generation; pruning decides
+// which failure survives. If pruning takes that one, the guard lasts exactly as
+// long as the reconcile that observed it.
+func TestPruningDoesNotTakeAwayTheColdStartSuppression(t *testing.T) {
+	base := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	fOld := ServerView{Name: "f-old", Phase: phase.Failed, Generation: 3, CreatedAt: base.Add(-2 * time.Hour)}
+	cNew := ServerView{Name: "c-new", Phase: phase.Failed, Generation: 4, CreatedAt: base}
+	views := []ServerView{fOld, staleReady("a", 60, 100, 3), cNew}
+
+	in := ScalingInputs{
+		Views:      views,
+		Generation: 4, MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	}
+	if got := DecideSize(in).Create; got != 0 {
+		t.Fatalf("Create = %d, want 0 while a failure of the current generation is retained", got)
+	}
+
+	pruned := selectFailedForPruning(views, maxRetainedFailures)
+	if len(pruned) != 1 || pruned[0] != "f-old" {
+		t.Fatalf("selectFailedForPruning = %v, want [f-old]: pruning c-new deletes the "+
+			"only thing suppressing the cold start", pruned)
+	}
+
+	// What the next reconcile sees, once the prune has landed.
+	survivors := make([]ServerView, 0, len(views))
+	for _, v := range views {
+		if v.Name == pruned[0] {
+			continue
+		}
+		survivors = append(survivors, v)
+	}
+	in.Views = survivors
+	if got := DecideSize(in).Create; got != 0 {
+		t.Errorf("Create = %d after the prune, want 0 — the suppression has to survive "+
+			"pruning, or the create/fail loop runs at time-to-fail instead of once "+
+			"per failedRetentionSeconds", got)
+	}
+}
+
+// TestDecideSizeOverhangIsMaxUnavailableServersNotOne pins what the design's
+// "at most one extra server" claim is actually worth. maxReplicas bounds alive,
+// leaving() holds Retiring out of alive, so every concurrent retirement buys the
+// spare-slot rule one server above the ceiling. At maxUnavailable 2 the group
+// holds maxReplicas + 2 Server objects, and design §3.3 and acceptance
+// criterion 5 are true only at the default of 1.
+func TestDecideSizeOverhangIsMaxUnavailableServersNotOne(t *testing.T) {
+	retiring := func(name string) ServerView {
+		v := staleReady(name, 50, 100, 3)
+		v.Phase = phase.Retiring
+		v.Retire = true
+		return v
+	}
+	const ceiling = 3
+	views := []ServerView{
+		retiring("r1"), retiring("r2"),
+		ready("a", 100, 100), ready("b", 100, 100),
+	}
+	got := DecideSize(ScalingInputs{
+		Views:      views,
+		Generation: 0, MaxUnavailable: 2,
+		MinReplicas: 1, MaxReplicas: ceiling, SpareSlots: 100, MaxPlayers: 100,
+	})
+	if got.Create != 1 {
+		t.Fatalf("Create = %d, want 1: two retiring servers are out of alive, so the "+
+			"ceiling of %d still has room for one more", got.Create, ceiling)
+	}
+	if overhang := int32(len(views)) + got.Create - ceiling; overhang != 2 {
+		t.Errorf("overhang = %d Server objects above maxReplicas, want 2 — the bound "+
+			"is maxUnavailable, not one, and the design says one", overhang)
+	}
+}
+
 func TestProvisionalCapacityDoesNotCreditAServerWhosePodIsGone(t *testing.T) {
 	// Slots == 0 means two different things: a server that has never
 	// reported (capacity on its way, credit it) and one whose pod vanished
