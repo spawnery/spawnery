@@ -1077,3 +1077,22 @@ func TestDecideSizeDoesNotSuspendDemandForAStaleServerThatIsAlreadyGone(t *testi
 		})
 	}
 }
+
+func TestProvisionalCapacityDoesNotCreditAServerWhosePodIsGone(t *testing.T) {
+	// Slots == 0 means two different things: a server that has never
+	// reported (capacity on its way, credit it) and one whose pod vanished
+	// (nothing there, credit nothing). SessionsGone is what separates them.
+	gone := ServerView{Name: "a", Phase: phase.Starting, Stale: true, SessionsGone: true}
+	if got := provisionalCapacity(gone, 100); got != 0 {
+		t.Errorf("provisionalCapacity = %d, want 0 for a server whose pod is gone", got)
+	}
+}
+
+func TestProvisionalCapacityStillCreditsAStartingServer(t *testing.T) {
+	// The guard against the obvious wrong fix: a starting server is stale
+	// and has never reported too, and crediting it zero brings back the
+	// runaway scale-up 4a built this rule to stop.
+	if got := provisionalCapacity(starting("a"), 100); got != 100 {
+		t.Errorf("provisionalCapacity = %d, want the full 100 for a starting server", got)
+	}
+}

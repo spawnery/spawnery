@@ -122,6 +122,14 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 	if !v.countsTowardSize() {
 		return 0
 	}
+	// Before the Slots == 0 credit below, and not merged into it: a server
+	// whose pod is gone reads exactly like one that has never reported, and
+	// only this flag tells them apart. Testing Stale here instead would be a
+	// regression — a genuinely starting server is stale too, and crediting it
+	// zero is the runaway this function exists to prevent.
+	if v.SessionsGone {
+		return 0
+	}
 	if v.Slots == 0 {
 		return maxPlayers
 	}
