@@ -490,10 +490,14 @@ stale in its turn and the same rules run from the top, cold start included.
   `FreeSlots`, `provisionalCapacity`'s sum and `readyFree` stay three numbers
   with three purposes, and 4b changes none of their *generation* filters — the
   handover anticipated that it would change the first one's; §3.2 is why it
-  does not, and no capacity function reads the generation at all. The one
-  filter that does move is `provisionalCapacity`'s `SessionsGone` test, which
-  §4.4 specifies: 4a's leftover one-liner, unrelated to the generation, and it
-  changes what that figure credits for a server whose pod has vanished.
+  does not, and none of the three *sizing* functions the arithmetic actually
+  runs on — `provisionalCapacity`, `readyContribution` and `readyFree` — reads
+  the generation at all. `AggregateGroup` does: `FreeSlots` filters on
+  `v.Generation == generation` deliberately, because `status.freeSlots` is
+  documented as counting only ready servers of the current generation (§3.2).
+  The one filter that does move is `provisionalCapacity`'s `SessionsGone` test,
+  which §4.4 specifies: 4a's leftover one-liner, unrelated to the generation,
+  and it changes what that figure credits for a server whose pod has vanished.
 - **It does not weaken `SelectDeletionCandidates`.** Retirement is a separate
   nomination with a narrower filter, not a loosening of the existing one.
 - **It does not answer "is this group finished changing over?"** `derivePhase`
