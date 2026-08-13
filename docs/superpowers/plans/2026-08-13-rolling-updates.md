@@ -630,13 +630,13 @@ func (e *expectations) pending(group string) (int32, map[string]bool, map[string
 }
 ```
 
-In `internal/controller/servergroup_controller.go`, update the single caller in `size()`:
+In `internal/controller/servergroup_controller.go`, update the single caller in `size()`. Discard the third value for now — `ScalingInputs.PendingRetires` does not exist until Task 6, and a named-but-unused variable would be dead code for two tasks:
 
 ```go
-	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
+	pendingCreates, pendingDeletes, _ := r.Expectations.pending(key)
 ```
 
-and add `_ = pendingRetires` immediately below it with the comment `// wired in task 6`, so this task compiles on its own and the next one deletes the line. Do not thread it into `ScalingInputs` yet — that field does not exist until Task 6.
+Task 7 gives it a name when it has somewhere to go.
 
 - [ ] **Step 5: Run to verify it passes**
 
