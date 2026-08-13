@@ -663,6 +663,7 @@ git commit -m "feat(4b): reserve a retirement the cache has not shown yet"
 
 **Files:**
 - Modify: `internal/controller/scaling.go`
+- Modify: `internal/controller/servergroup_controller.go` — one line, `Generation: group.Generation,` in the `ScalingInputs` literal in `size()`. **This cannot wait for Task 7.** Real `ServerView`s carry `Generation >= 1` from `srv.Spec.GroupGeneration`; a call site that leaves `ScalingInputs.Generation` at its zero value makes every running server read as stale, so `coldStart` fires on every pass forever and the group creates without bound. That is the exact runaway this milestone is built to avoid, arriving through a gap between two tasks rather than through a logic error.
 - Modify: `docs/superpowers/specs/2026-08-13-rolling-updates-design.md`
 - Test: `internal/controller/scaling_test.go`
 
@@ -1321,7 +1322,7 @@ In `size()`, replace the `_ = pendingRetires` line from Task 4 and extend the `D
 		MaxPlayers:    group.Spec.MaxPlayers,
 		Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
 
-		Generation:     group.Generation,
+		Generation:     group.Generation, // already wired by Task 5; leave it
 		MaxUnavailable: group.UpdateMaxUnavailable(),
 
 		PendingCreates: pendingCreates,
