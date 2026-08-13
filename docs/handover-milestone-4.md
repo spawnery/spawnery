@@ -69,6 +69,63 @@ nodes). What follows is what 4a built and what 4b and 4c now find in place.
   `ProxyGroup` still cannot lower a proxy's readiness without dropping its
   connection. That section below is exactly as 3c left it.
 
+## 4b has landed
+
+4b (rolling updates of ephemeral groups, 2026-08-13) makes a `ServerGroup`
+whose spec changes replace its own servers: a replacement of the new
+generation comes up, an old server stops taking joins, its players finish
+their session undisturbed, and the server disappears once the last one
+leaves. What follows is what 4b built and what 4c now finds in place.
+
+- **A new `Server` phase, `Retiring`, is soft drain** (`internal/phase/phase.go`):
+  deregistered, no active drain, no drain deadline, entered only from `Ready`.
+  `internal/proxyreg` needed no change to support it — `fleet.go` turns phase
+  `Draining` into a `DrainPlayers` message on every snapshot it sends a proxy
+  and keys player-moving off that phase alone, so a server sitting in
+  `Retiring` simply does not match and nothing is sent. Soft drain falls out
+  of code that already existed rather than needing a second axis on the
+  phase, which is why 4c inherits no change here at all.
+- **`spec.retire` is the group's instruction channel to a server, and the
+  single signal `spec.update.maxUnavailable` counts against.** The
+  `ServerGroup` controller decides who retires — only it knows the
+  generation, the budget and whether a ready replacement exists — and says so
+  by patching `spec.retire = true`; the `Server` controller only carries the
+  transition out. The field stays true across the escalation to `Draining`
+  that `maxStaleSeconds` can force, so a forced drain keeps occupying the
+  budget slot it started in, while a drain a scale-down or a user's own
+  deletion started never had it and never counts.
+- **`status.retiringSince` is the fifth phase-entry timestamp**, alongside
+  `StartedAt`, `ReadySince`, `DrainStartedAt` and `FailedAt`, and drives
+  `spec.update.maxStaleSeconds` on the same precedent `DrainStartedAt` set for
+  the drain deadline — the group controller itself never reads it.
+- **The generation is confined to two jobs and never reaches the capacity
+  arithmetic.** It decides which stale server `selectRetirement` nominates,
+  and it is the one exception the demand rule's changeover filter makes to
+  4a's otherwise generation-blind numbers: while any stale server remains,
+  demand sheds stale capacity before a current-generation server becomes a
+  candidate, which closes an oscillation where the demand rule would
+  otherwise delete the cold start's own replacement and prefer it, on age
+  alone, over the stale server beside it. `provisionalCapacity`,
+  `readyContribution` and `readyFree` are exactly as 4a left them —
+  generation-blind — because reading the generation there would make every
+  running server stop counting the instant any field of the group's spec
+  changed, and order a full replacement set up to `maxReplicas`: the runaway
+  4a was built to avoid, arriving through the capacity arithmetic instead of
+  the demand rule.
+- **`expectations` gained a third reservation kind, the retire
+  reservation**, in the same shape as the create and delete reservations 4a
+  introduced: a retirement this reconciler has patched and the cache has not
+  shown yet still counts against `maxUnavailable`, so a second server cannot
+  be nominated into the same budget slot while the first patch is still in
+  flight.
+- **4c's contract change is untouched and still 4c's.** 4b never touches
+  `internal/agent/registry.go` — a `Server`'s soft drain is expressed
+  entirely through `spec.retire` and the `Retiring` phase, neither of which
+  needed a lowerable readiness. The lowerable readiness that `registry.go`
+  cannot express — "connected, but no longer ready" — is what proxy drain and
+  node drain still need, and "The one contract change milestone 4 has to
+  make," below, is exactly as 3c left it.
+
 ## The evidence run
 
 `docs/runbook-milestone-3-evidence.md` was run against a real `kind` cluster

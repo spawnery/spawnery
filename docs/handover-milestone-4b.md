@@ -41,7 +41,7 @@ Milestone 4 was cut into three sub-projects:
 | | Contents | State |
 |---|---|---|
 | **4a** | Slot-based scaling of ephemeral `ServerGroup`s | done |
-| **4b** | Rolling updates of ephemeral groups — **this document** | next |
+| **4b** | Rolling updates of ephemeral groups — **this document** | done |
 | **4c** | Proxy drain and node drain | after 4b |
 
 4a made an ephemeral `ServerGroup` size itself from its free player slots
@@ -305,3 +305,26 @@ each, then one whole-branch review before merge. The whole-branch review
 earned its keep on 4a — it found a fixed point no per-task review could see,
 where a lowered `maxReplicas` was never enforced on a group that was also
 short of spare slots.
+
+## 4b has landed
+
+4b closed against this document's own decisions: `Retiring` as a phase of its
+own (§4), the generation kept out of the capacity arithmetic and readmitted
+only for retirement candidacy and the demand rule's changeover filter (§5,
+§6), and every open question in §5 resolved and recorded either here or in
+`docs/known-issues.md`, "From milestone 4b". The design it produced is
+`docs/superpowers/specs/2026-08-13-rolling-updates-design.md`; that document's
+§11, "What 4b leaves open," is where the changeover's own gaps live —
+`derivePhase` still not answering "has this group finished changing over?",
+and the drain's proxy-side blind spot from milestone 3, both carried forward
+rather than closed here.
+
+**Per-group exponential backoff is next.** §1 of the 4b design measured, and
+found false, the handover's own assumption that backoff belongs with 4b
+because it "touches the failure path which the rolling update touches
+anyway" — 4b shares no code with `pruneFailed`. `maxRetainedFailures = 1`
+still stands in for it, capping the footprint of a retained failure but not
+the rate at which the group tries again; 4b's own cold start inherits and
+extends that gap rather than closing it (`docs/known-issues.md`, "From
+milestone 4b"). Master design §7's `Degraded` condition is that spec's to
+write.

@@ -868,6 +868,50 @@ happened silently. 4b's rolling update, which needs to say "the new generation
 is up" as something other than "one server somewhere is," will want the
 distinction this milestone left unmade.
 
+## From milestone 4b
+
+**Any spec change begins a changeover.** `metadata.generation` moves on every
+edit, so tuning `minReplicas`, `spareSlots` or `maxReplicas` marks every
+running server stale and replaces a whole group of functionally identical
+servers. The master design's §4.4 specifies exactly this — "when the group
+spec changes, its generation goes up" — and 4b implements it as written. The
+behaviour was latent before: `AggregateGroup` already filtered
+`status.freeSlots` by generation, but nothing acted on it, so a generation
+bump changed a published number and nothing else. It is safe — nobody is
+kicked, and `maxUnavailable` and the cold start govern the changeover exactly
+as they would for a real image bump — but it costs churn, and the likeliest
+moment anyone changes a scaling knob is a player spike, which is the worst
+time to be replacing servers one at a time. Narrowing staleness to the fields
+that actually shape a pod is a real design change with its own pitfalls —
+which fields count, and what happens to a server whose pod-affecting fields
+never moved but whose scaling knobs did — and was deliberately not made
+mid-milestone. `TestGroupShrinksOnceTheStabilizationWindowElapses`
+(`internal/controller/servergroup_controller_test.go`) documents the
+behaviour rather than hiding it: dropping `minReplicas` from 3 to 1 still
+produces a fourth server, of the new generation, before it produces a shrink,
+because the spec edit that lowered the floor is the same edit that staled the
+three servers already running.
+
+**A group at its ceiling cannot start a changeover.** The cold start (design
+§3.3) is a create like any other, so a group whose `maxReplicas` equals its
+current size stalls with its old generation serving. That is correct — a
+lowered ceiling is an instruction, not a suggestion — and it is not silent:
+`DecideSize` sets `Limited` and, in this specific case, `ColdStartBlocked`, so
+the `ScalingLimited` condition carries a message naming the cold start
+specifically rather than an ordinary capacity shortfall. Raising `maxReplicas`
+by one is the way out.
+
+**The cold-start loop is only half-closed.** A broken new image fails, drops
+out of `countsTowardSize`, and would be re-created every five-second pass
+forever; 4b suppresses the cold start while a `Failed` server of the current
+generation is retained, so the interval becomes `failedRetentionSeconds` (an
+hour by default) instead of five seconds. That is a guard on 4b's own door,
+not backoff — it does nothing for the floor rule, which has the identical loop
+and keeps it. `maxRetainedFailures = 1` still caps only the footprint of the
+failure, not the rate at which the group tries again. Real per-group
+exponential backoff with the `Degraded` condition (master design §7) belongs
+to its own spec, which is next.
+
 ## Preconditions for milestone 5 (persistent groups)
 
 If a server's `ServerGroup` is missing, the server controller carries on with
