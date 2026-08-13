@@ -32,6 +32,14 @@ const (
 	Starting Phase = "Starting"
 	// Ready means the server is registered with the proxies and takes players.
 	Ready Phase = "Ready"
+	// Retiring is soft drain: the server is deregistered and takes no new
+	// joins, but its players are left alone until they leave of their own
+	// accord. It is what a rolling update puts a stale server into, and it
+	// is deliberately not Draining: no players are moved, and
+	// spec.drain.timeoutSeconds does not hang over it, because a lobby can
+	// legitimately sit here for hours. spec.update.maxStaleSeconds is the
+	// only thing that bounds it, and only when configured non-zero.
+	Retiring Phase = "Retiring"
 	// Draining means the server is deregistered and players are being moved.
 	// There is no way back to Ready.
 	Draining Phase = "Draining"
@@ -67,6 +75,8 @@ const (
 	ReasonDrainTimeout      = "DrainTimeout"
 	ReasonPodLost           = "PodLost"
 	ReasonPodTerminal       = "PodTerminal"
+	ReasonRetiring          = "Retiring"
+	ReasonMaxStaleElapsed   = "MaxStaleElapsed"
 	// ReasonDrainingBeforeCleanup marks a Failed server whose players are being
 	// moved off before its pod is removed.
 	ReasonDrainingBeforeCleanup = "DrainingBeforeCleanup"
@@ -139,6 +149,16 @@ type Inputs struct {
 	DrainDeadlineReached bool
 	// FailedRetentionElapsed is true once failedRetentionSeconds elapsed.
 	FailedRetentionElapsed bool
+
+	// RetirementRequested is the group's instruction to enter soft drain,
+	// read from Server.spec.retire. The group decides, because only it knows
+	// the generation, the update budget and whether a replacement is ready;
+	// this package only carries out the transition.
+	RetirementRequested bool
+	// MaxStaleReached is true once a retiring server has waited longer than
+	// spec.update.maxStaleSeconds. It is measured from status.retiringSince
+	// — the wait in soft drain — and not from the group's generation change.
+	MaxStaleReached bool
 }
 
 // Occupied reports whether the server must be treated as carrying players.
@@ -236,6 +256,50 @@ func Decide(current Phase, in Inputs) Decision {
 		return Decision{
 			Next:   Draining,
 			Reason: ReasonDeletionRequested, Message: "waiting for players to leave",
+		}
+
+	case Retiring:
+		if in.PodLost {
+			return Decision{
+				Next: Terminating, DeletePod: true,
+				Reason: ReasonPodLost, Message: "pod disappeared while retiring",
+			}
+		}
+		if in.PodTerminal {
+			return Decision{
+				Next: Terminating, DeletePod: true,
+				Reason:  ReasonPodTerminal,
+				Message: "pod reached a terminal phase while retiring, its players are already gone",
+			}
+		}
+		// Empty first, and before the two escalations below: a retiring
+		// server that has already run empty needs neither a drain nor a
+		// deadline, and sending it through Draining would cost a reconcile
+		// and emit a move for nobody.
+		if !in.Occupied() {
+			return Decision{
+				Next: Terminating, DeletePod: true,
+				Reason: ReasonDrained, Message: "no players left",
+			}
+		}
+		if in.DeletionRequested {
+			return Decision{
+				Next: Draining, StartDrain: true,
+				Reason: ReasonDeletionRequested, Message: "deletion requested, moving players off",
+			}
+		}
+		if in.MaxStaleReached {
+			return Decision{
+				Next: Draining, StartDrain: true,
+				Reason:  ReasonMaxStaleElapsed,
+				Message: "stale deadline reached, moving players off",
+			}
+		}
+		// No Deregister here: entering Retiring did that once. Repeating it
+		// every pass would re-emit the proxy call for the whole wait.
+		return Decision{
+			Next:   Retiring,
+			Reason: ReasonRetiring, Message: "waiting for players to leave",
 		}
 
 	case Pending, Starting, Ready:
@@ -345,6 +409,16 @@ func Decide(current Phase, in Inputs) Decision {
 			return Decision{
 				Next: Starting, Deregister: true, CountReadinessLoss: true,
 				Reason: ReasonReadinessLost, Message: "server lost a ready signal",
+			}
+		}
+		// After the readiness check on purpose: a server that has just lost a
+		// ready signal is already being deregistered by that path, and letting
+		// retirement overtake it would swallow the readiness loss the flap
+		// counter needs.
+		if in.RetirementRequested {
+			return Decision{
+				Next: Retiring, Deregister: true,
+				Reason: ReasonRetiring, Message: "retiring for a rolling update",
 			}
 		}
 		return Decision{

@@ -349,6 +349,74 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonPodTerminal},
 		},
 		{
+			name:    "ready retires when the group asks",
+			current: Ready,
+			in: Inputs{
+				PodExists: true, PodRunning: true, PodReady: true, AgentReady: true,
+				RetirementRequested: true, WasRegistered: true,
+			},
+			want: Decision{Next: Retiring, Deregister: true, Reason: ReasonRetiring},
+		},
+		{
+			// Soft drain is deregistration without a move. The proxies learn the
+			// server is gone from status.registered; nothing tells them to take
+			// anyone off it, and internal/proxyreg only sends DrainPlayers for
+			// phase Draining.
+			name:    "retiring never asks for a drain while it waits",
+			current: Retiring,
+			in:      Inputs{PodExists: true, PodRunning: true, PlayersOnline: 3},
+			want:    Decision{Next: Retiring, Reason: ReasonRetiring},
+		},
+		{
+			name:    "retiring terminates once the last player leaves",
+			current: Retiring,
+			in:      Inputs{PodExists: true, PodRunning: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDrained},
+		},
+		{
+			// The whole difference from Draining: an occupied retiring server has
+			// no deadline over it at all until maxStaleSeconds says so.
+			name:    "an occupied retiring server is never terminated on a drain deadline",
+			current: Retiring,
+			in: Inputs{
+				PodExists: true, PodRunning: true, PlayersOnline: 1,
+				DrainDeadlineReached: true,
+			},
+			want: Decision{Next: Retiring, Reason: ReasonRetiring},
+		},
+		{
+			name:    "the stale deadline escalates to a real drain",
+			current: Retiring,
+			in: Inputs{
+				PodExists: true, PodRunning: true, PlayersOnline: 1,
+				MaxStaleReached: true,
+			},
+			want: Decision{Next: Draining, StartDrain: true, Reason: ReasonMaxStaleElapsed},
+		},
+		{
+			// Whoever deletes a retiring server gets the proper move, not a drop:
+			// it still has players on it.
+			name:    "deleting a retiring server moves its players off",
+			current: Retiring,
+			in: Inputs{
+				PodExists: true, PodRunning: true, PlayersOnline: 1,
+				DeletionRequested: true,
+			},
+			want: Decision{Next: Draining, StartDrain: true, Reason: ReasonDeletionRequested},
+		},
+		{
+			name:    "a lost pod ends a retirement without a drain",
+			current: Retiring,
+			in:      Inputs{PodLost: true, PlayersOnline: 1, PlayersStale: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonPodLost},
+		},
+		{
+			name:    "a terminal pod ends a retirement without a drain",
+			current: Retiring,
+			in:      Inputs{PodExists: true, PodTerminal: true, PlayersOnline: 1},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonPodTerminal},
+		},
+		{
 			name:    "a lost pod terminates a ready server and deregisters it",
 			current: Ready,
 			in: func() Inputs {
@@ -444,6 +512,20 @@ func TestNoPathBackFromDraining(t *testing.T) {
 	got := Decide(Draining, healthyReady())
 	if got.Next == Ready || got.Register {
 		t.Fatalf("draining went back to Ready: %+v", got)
+	}
+}
+
+func TestNoPathBackFromRetiring(t *testing.T) {
+	// Retiring is one-way, like Draining. A server that is being replaced
+	// must not re-register itself because its probe happens to be green:
+	// the proxies would start sending joins to a server the group has
+	// already decided to remove.
+	in := Inputs{
+		PodExists: true, PodRunning: true, PodReady: true, AgentReady: true,
+		PlayersOnline: 1,
+	}
+	if got := Decide(Retiring, in); got.Next == Ready || got.Register {
+		t.Errorf("Decide(Retiring, healthy) = %+v, want no way back to Ready", got)
 	}
 }
 
