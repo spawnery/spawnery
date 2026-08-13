@@ -693,8 +693,16 @@ to match.
 `docs/runbook-milestone-3-evidence.md` was finally run against a real `kind`
 cluster. Criterion 7 (a player can join, automated) is now proven — see
 `docs/handover-milestone-4.md`. Criterion 9 (deleting a `Server` moves its
-player rather than disconnecting them) is not, and the reason why is the most
+player rather than disconnecting them) was not, and the reason why is the most
 important finding of this run.
+
+**Read the rest of this entry as a finding about `spawnery-join`, not as an
+open criterion.** Criterion 9 was proven manually the next day, 2026-08-13,
+with a real client on a live account — recorded in
+`docs/handover-milestone-4.md` under "The manual session". Of the two
+findings below, the first is closed for the milestone's purposes and stays
+here because it still describes the tool's limits; the second is open and
+belongs to milestone 4.
 
 **Deleting a `Server` with a `spawnery-join --hold` player on it disconnected
 the player instead of moving them.** The diagnosis is measured end to end,

@@ -2,7 +2,8 @@
 
 Status: end of milestone 3c, the Velocity agent (2026-08-11). Updated
 2026-08-12 with what the evidence run below actually measured against a real
-cluster; nothing before that section changed.
+cluster, and again on 2026-08-13 with the manual session that closed the two
+criteria that run left open; nothing before that section changed.
 
 This document is not a spec. It says where 3c stopped and what milestone 4 —
 scaling and drain — already finds in place. The design decisions live in
@@ -18,8 +19,9 @@ server list into Velocity's own registry, binds its readiness port on the
 first `FullSync` and not before, routes a joining player by the group's
 `fallbackGroups` try-list, and moves players off a backend the operator is
 draining. Both halves of milestone 3's success criterion — a player can join,
-automated and by hand — are implemented; whether they hold against a real
-cluster is what the evidence run below measures.
+automated and by hand — are implemented, and both now hold against a real
+cluster: the evidence run below proved the automated half, and the manual
+session after it proved the other half and the drain.
 
 ## The evidence run
 
@@ -90,14 +92,15 @@ rendered TOML is the second artifact worth naming: it is the CRD field added
 in `14331b2`, doing exactly what it was added to do.
 
 **Criterion 8 — a player can join manually, with a real Microsoft account —
-is NOT proven.** It needs a licensed Minecraft client and a person to drive
-it, neither available in this session. `docs/runbook-milestone-3-evidence.md`
-§10, "The manual proof, for a later session", is written for whoever runs it
-next, from a different machine, starting from an empty cluster.
+was not attempted in this run.** It needs a licensed Minecraft client and a
+person to drive it, neither available in this session.
+`docs/runbook-milestone-3-evidence.md` §10, "The manual proof, for a later
+session", was written for whoever ran it next. That session happened the
+following day and is recorded under "The manual session" below.
 
 **Criterion 9 — deleting a `Server` moves a connected player rather than
-disconnecting them — is NOT proven, and the reason is the most important
-finding of this run.** Deleting a `Server` with a `spawnery-join --hold`
+disconnecting them — could not be proven by this run, and the reason is its
+most important finding.** Deleting a `Server` with a `spawnery-join --hold`
 player on it disconnected the player instead of moving them. The defect is
 in the evidence tool's fit for this criterion, not in the drain logic: a
 held join never reaches the point where Paper counts it as an online player,
@@ -113,10 +116,112 @@ product finding — a player connected at the proxy but not yet counted by the
 backend sits outside the drain's protection today — that belongs to
 milestone 4's own design work on drain, not to this evidence tool.
 
-The manual session that still owes criterion 8 and a manual re-run of
-criterion 9 (`docs/runbook-milestone-3-evidence.md` §10) should record its
-own two log lines per side, the player's real UUID, and the drain's move
-line under this same heading when it runs.
+## The manual session
+
+`docs/runbook-milestone-3-evidence.md` §10 was run on 2026-08-13, on a
+different machine from the day before (NixOS, 93 GiB RAM, rootless Podman
+5.8.4, kind v0.32.0, Kubernetes v1.36.1), against a fresh `spawnery-evidence`
+cluster built from §0 upward exactly as §10 instructs. The runbook needed no
+correction this time: every section ran as written, and all four pods reached
+`Ready` 21 seconds after `kubectl apply`. Log timestamps below are the
+containers' own clock (UTC); the host ran CEST, two hours ahead.
+
+**Criterion 7 re-confirmed first, before spending the account's login** — §10
+asks for this so that an environment problem cannot be mistaken for a product
+one:
+
+```
+$ spawnery-join --host 127.0.0.1 --port 30565 --hold 60s --timeout 90s
+{"protocol":776,"username":"spawnery_probe","uuid":"bcc1dc19-a5eb-33a1-aa1b-4e3907d5e22f","compressed":true}
+exit=0
+```
+
+`gateway-auto.status.connectedPlayers` read `1` six seconds into the hold —
+faster than the runbook's own "not in the first ten seconds" caution
+suggests, so that caution is a floor and not a measurement. Both log lines
+appeared as on 2026-08-12, this time naming `lobby-6yw2`.
+
+**That `online-mode` was really on for the manual proof was measured, not
+assumed.** `gateway-manual`'s `/data/velocity.toml`, read out of the running
+pod, carried `online-mode = true` and `player-info-forwarding-mode =
+'modern'`; and `spawnery-join` pointed at 30566 was refused exactly where it
+should be:
+
+```
+spawnery-join: the server is in online mode and asked for encryption, which this client cannot answer
+```
+
+That refusal does double duty — it proves the NodePort is reachable from the
+host and that a real Mojang session is genuinely being demanded there. It is
+worth running before the manual join for that reason.
+
+**Criterion 8 — a player can join manually, with a real Microsoft account.
+PROVEN.** A licensed Minecraft Java 26.2 client on the cluster host joined
+`127.0.0.1:30566`. Velocity's log (`gateway-manual`) and Paper's (`lobby-6yw2`):
+
+```
+[15:04:49 INFO]: [connected player] paul_wtf (/10.244.0.1:50113) has connected
+[15:04:49 INFO]: [server connection] paul_wtf -> lobby-6yw2 has connected
+[15:04:49 INFO]: UUID of player paul_wtf is 836fe395-9e8b-4985-b8c9-cc93afe43995
+[15:04:50 INFO]: paul_wtf joined the game
+[15:04:50 INFO]: paul_wtf[/10.244.0.1:35400] logged in with entity id 16 at ([minecraft:overworld]-21.5, 71.0, 40.5)
+```
+
+**The UUID is the artifact, and it reads as one against the probe's.**
+`836fe395-9e8b-4985-b8c9-cc93afe43995` is version 4 — the `4` leading the
+third group — a UUID Mojang minted and handed back only after the client
+proved its session. `spawnery_probe`'s `bcc1dc19-a5eb-33a1-aa1b-4e3907d5e22f`
+is version 3, the name-derived offline form, which proves nothing about who
+connected. The two sit side by side in the same cluster's logs, an hour
+apart, and the difference between them is the whole of what
+`online-mode: true` buys. `paul_wtf joined the game` is the second half of
+it: unlike the held probe, this client completed the configuration phase, so
+Paper counted it and `server/lobby-6yw2` showed `PLAYERS 1`.
+
+**Criterion 9 — deleting a `Server` moves a connected player rather than
+disconnecting them. PROVEN, manually, on that same live player**, which is
+the only way it could be proven at all (see the finding above). `kubectl
+delete server lobby-6yw2` while the account was in the game:
+
+```
+15:05:25  DeletionRequested  server/lobby-6yw2  phase Ready -> Draining: deletion requested, moving players off
+15:05:25  [gateway-manual]   [server connection] paul_wtf -> hub-tmdd has connected
+15:05:25  [gateway-manual]   [server connection] paul_wtf -> lobby-6yw2 has disconnected
+15:05:26  [hub-tmdd]         UUID of player paul_wtf is 836fe395-9e8b-4985-b8c9-cc93afe43995
+15:05:26  [hub-tmdd]         paul_wtf joined the game
+15:05:26  [hub-tmdd]         paul_wtf[/10.244.0.1:49170] logged in with entity id 29 at ([minecraft:overworld]-92.5, 73.0, -180.5)
+15:05:30  PodDeleted         server/lobby-6yw2  deleted pod lobby-6yw2: no players left
+15:05:30  Drained            server/lobby-6yw2  phase Draining -> Terminating: no players left
+```
+
+**Three things in that sequence carry the proof, and each is worth naming.**
+
+1. **The new connection precedes the old one's close**, in Velocity's own
+   log and in that order. That is a move, not a reconnect after a drop.
+2. **`no players left` arrives *after* the move, not during it.** The
+   2026-08-12 failure logged the identical message while the player was still
+   attached — same words, opposite meaning. Here the drain waited, because
+   `Server.status.players` actually held the player this time, which is
+   precisely the count the held probe could never produce.
+3. **The player saw no disconnect screen**, reported by the person driving
+   the client. The logs prove what the proxy did; only they could attest to
+   what the game showed, and it showed an uninterrupted session that woke up
+   in a different world.
+
+The move landed in `hub`, not in another `lobby` server — the fall-through
+§8a describes: `lobby` held exactly one server, `Router.choose`'s exclusion
+emptied that group, and the try list went on to the second one rather than
+giving up. `agent/velocity/.../Drain.kt` logged no `spawnery:` line at all,
+which is its documented silence on success. The `ServerGroup` then brought
+`lobby` back to `minReplicas` on its own as `lobby-svq7`.
+
+**Milestone 3's acceptance is therefore closed in full**: criteria 7, 8 and 9
+are all proven against a real cluster. What is *not* closed by this session is
+finding 2 above — a player connected at the proxy but not yet counted by the
+backend still sits outside `Occupied()`'s protection. A real client crosses
+that window in a single round trip, which is why this session succeeded where
+the held probe failed; the window is narrow, not absent, and deciding what to
+do about it remains milestone 4's.
 
 ## The one contract change milestone 4 has to make
 
