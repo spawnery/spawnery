@@ -400,6 +400,12 @@ func (r *ServerGroupReconciler) collectViews(
 			Retire:       srv.Spec.Retire,
 			CreatedAt:    srv.CreationTimestamp.Time,
 		}
+		if srv.Status.FailedAt != nil {
+			v.FailedAt = srv.Status.FailedAt.Time
+		}
+		if srv.Status.ReadySince != nil {
+			v.ReadySince = srv.Status.ReadySince.Time
+		}
 		if v.Phase == "" {
 			v.Phase = phase.Pending
 		}

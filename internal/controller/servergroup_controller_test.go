@@ -2087,3 +2087,37 @@ func TestGroupBackoffFieldsRoundTripThroughTheAPIServer(t *testing.T) {
 		t.Error("status.lastFailureAt did not survive the API server; run make manifests")
 	}
 }
+
+func TestCollectViewsCarriesTheFailureAndReadyTimestamps(t *testing.T) {
+	// Both fields exist on the Server status and were simply never lifted into
+	// the view. The backoff reads them, and a view that leaves them zero makes
+	// every failure look like it happened at the epoch — which counts once and
+	// then never again.
+	f := newFixture(t)
+	f.createServer("lobby-tsx1")
+	r := groupReconciler(f)
+
+	failed := metav1.NewTime(f.clock.Now().Add(-time.Minute))
+	ready := metav1.NewTime(f.clock.Now().Add(-time.Hour))
+	srv := f.server("lobby-tsx1")
+	srv.Status.Phase = string(phase.Failed)
+	srv.Status.FailedAt = &failed
+	srv.Status.ReadySince = &ready
+	if err := f.c.Status().Update(f.ctx, srv); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+
+	views, _, err := r.collectViews(f.ctx, f.group)
+	if err != nil {
+		t.Fatalf("collectViews: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("got %d views, want 1", len(views))
+	}
+	if !views[0].FailedAt.Equal(failed.Time) {
+		t.Errorf("FailedAt = %v, want %v", views[0].FailedAt, failed.Time)
+	}
+	if !views[0].ReadySince.Equal(ready.Time) {
+		t.Errorf("ReadySince = %v, want %v", views[0].ReadySince, ready.Time)
+	}
+}
