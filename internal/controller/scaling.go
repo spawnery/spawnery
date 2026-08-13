@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"sort"
 	"time"
 
 	"github.com/spawnery/spawnery/internal/phase"
@@ -25,12 +26,14 @@ import (
 // ScalingInputs is everything the sizing decision needs. Like the other
 // decisions in this package it is a value type, so the rules are pure and
 // table-tested without a cluster.
-// Nothing here is the group's generation, and that is deliberate. Every edit to
-// a ServerGroup spec raises it, so a scale-up rule that only credited servers of
-// the current generation would order a full replacement set on the next
-// five-second pass after any edit — a rolling update without maxUnavailable,
-// without soft drain and without the guarantee of one ready server of the new
-// generation. Those rules, and with them the generation, arrive in milestone 4b.
+// The group's generation is here, and it is confined to one job. It selects
+// which stale server retires and whether the changeover has begun; it never
+// enters provisionalCapacity or readyFree. A scale-up rule that credited only
+// servers of the current generation would find, the instant any field of the
+// group's spec changed, that nothing running counts — and would order a full
+// replacement set up to maxReplicas on the next five-second pass. Keeping the
+// arithmetic generation-blind is what makes that impossible rather than merely
+// braked.
 type ScalingInputs struct {
 	// Views is what the cache shows of the group's servers.
 	Views []ServerView
@@ -51,6 +54,19 @@ type ScalingInputs struct {
 	// PendingDeletes are the servers whose removal it has already asked for
 	// and the cache still shows.
 	PendingDeletes map[string]bool
+	// Generation is the group's current metadata.generation. A view whose
+	// Generation differs is stale.
+	//
+	// It decides only *which* server retires, never how many get built: the
+	// capacity arithmetic below stays generation-blind, exactly as milestone
+	// 4a left it. See the type comment above.
+	Generation int64
+	// MaxUnavailable is spec.update.maxUnavailable: how many servers this
+	// update may have unavailable at once.
+	MaxUnavailable int32
+	// PendingRetires are the servers this reconciler has asked to retire and
+	// the cache has not shown yet.
+	PendingRetires map[string]bool
 }
 
 // SizeDecision is what the group does about its size this pass.
@@ -59,14 +75,29 @@ type SizeDecision struct {
 	Create int32
 	// Delete names the servers to remove now.
 	Delete []string
+	// Retire names the stale servers to put into soft drain now. Never the
+	// same server as Delete, and never in the same pass: retirement is how a
+	// server leaves during a changeover, deletion is how it leaves for lack
+	// of demand.
+	Retire []string
 	// Wanted is how many servers the spare-slot rule asked for, before the
-	// ceiling. Wanted > Create is the definition of Limited.
+	// ceiling. Limited is true either because Wanted exceeds Create — the
+	// ordinary shortfall — or because the ceiling refused the one server a
+	// generation changeover needs to begin, in which case Wanted stays 0 and
+	// ColdStartBlocked, not Wanted, is what says why.
 	Wanted int32
 	// Surplus is how many servers the ceiling asked to have removed, whether
 	// or not that many could be nominated.
 	Surplus int32
 	// Limited is true while maxReplicas is holding capacity back.
 	Limited bool
+	// ColdStartBlocked is true when Limited is set because the ceiling
+	// refused a changeover's cold start rather than because of an ordinary
+	// capacity shortfall. Wanted is 0 in both that case and the unlimited
+	// "nothing is short" case, so it cannot distinguish them on its own —
+	// this field is the explicit signal the caller that builds the
+	// operator-facing ScalingLimited message needs to tell them apart.
+	ColdStartBlocked bool
 }
 
 // provisionalCapacity is one server's contribution to the figure the scale-up
@@ -91,6 +122,14 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 	if !v.countsTowardSize() {
 		return 0
 	}
+	// Before the Slots == 0 credit below, and not merged into it: a server
+	// whose pod is gone reads exactly like one that has never reported, and
+	// only this flag tells them apart. Testing Stale here instead would be a
+	// regression — a genuinely starting server is stale too, and crediting it
+	// zero is the runaway this function exists to prevent.
+	if v.SessionsGone {
+		return 0
+	}
 	if v.Slots == 0 {
 		return maxPlayers
 	}
@@ -107,15 +146,42 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 // whose removal this reconciler has already asked for. Leaving them in would
 // let one pass nominate the same server the previous pass already deleted, and
 // count it twice against the surplus.
+//
+// Reserved retirements are held out for a second, sharper reason: expectations
+// is keyed by name, so a delete reservation recorded for a server that already
+// has a retire reservation overwrites it, and the retirement stops counting
+// against maxUnavailable while the patch is still in flight — which lets the
+// next pass spend the budget a second time. That is reachable rather than
+// theoretical. A pass that reserves a retirement returns there, so the two
+// never meet within one pass; but on the pass after, the reservation makes
+// selectRetirement decline while the server still shows Ready and empty in the
+// cache, and the demand rule below is happy to nominate exactly it. Excluding
+// it here is also the plainly right answer on its own terms: a server this
+// group has just asked to retire is already on its way out, and deleting it
+// instead is the harder of the two removals.
+//
+// spec.retire is tested as well as the reservation, and the reservation alone
+// is not enough. observe() satisfies a retire expectation the moment the cache
+// shows spec.retire, but the phase is written by the Server controller in a
+// second write that necessarily lands later — so there is an ordinary pass, not
+// a race, in which the view reads Retire: true, Phase: Ready and holds no
+// reservation at all. Filtering only the reservation puts that server straight
+// back into the demand pool, where an empty stale server is the preferred
+// candidate; the soft drain the group just asked for becomes a hard delete, for
+// exactly the class of server the nomination prefers. Retirement is how a
+// server leaves during a changeover: once it has been asked, no other rule gets
+// to take it.
+//
+// There is no fast path for the reservation-free case any more, because
+// spec.retire lives on the views rather than in a map and has to be looked at
+// either way. The pool is one allocation per pass over a handful of servers.
 func deletable(in ScalingInputs) []ServerView {
-	if len(in.PendingDeletes) == 0 {
-		return in.Views
-	}
 	out := make([]ServerView, 0, len(in.Views))
 	for _, v := range in.Views {
-		if !in.PendingDeletes[v.Name] {
-			out = append(out, v)
+		if in.PendingDeletes[v.Name] || in.PendingRetires[v.Name] || v.Retire {
+			continue
 		}
+		out = append(out, v)
 	}
 	return out
 }
@@ -149,6 +215,185 @@ func readyFree(views []ServerView) int32 {
 	return free
 }
 
+// coldStart reports whether the group must create the first server of its
+// current generation before anything can retire.
+//
+// Retirement needs a ready server of the current generation to exist. When
+// every server is stale none does, so nothing may retire, so nothing drops out
+// of the size count, so the spare-slot rule creates nothing — a deadlock that
+// only an unconditional create breaks. This is the one create in the system
+// that is not answering demand, and it is why the changeover costs at most one
+// extra server.
+//
+// It is suppressed while a Failed server of the *current* generation is being
+// retained. Without that, a broken new image fails, drops out of
+// countsTowardSize, and is re-created on the next five-second pass forever. The
+// retention window (an hour by default) becomes the interval: one attempt, the
+// old generation serving undisturbed, one corpse to diagnose from. A stale
+// failure does not suppress it — the old generation's corpse says nothing about
+// whether the new image works.
+//
+// That suppression is only as durable as the corpse it reads, and the corpse is
+// pruned by selectFailedForPruning rather than by anything here. Keeping the
+// *newest generation's* failure is what makes the two agree; that function's
+// comment carries the argument, and breaking it turns this window back into the
+// five-second one.
+//
+// This is deliberately not backoff. The floor rule has the same loop and keeps
+// it; giving it a real per-group backoff with a Degraded condition is its own
+// milestone.
+func coldStart(in ScalingInputs) bool {
+	if in.PendingCreates > 0 {
+		// A pending create is of the current generation in every pass but one:
+		// createServer stamps group.Generation on it. The exception is a create
+		// issued under generation N that is still outstanding when the pass
+		// reads N+1 — then this declines a cold start on the strength of a
+		// server that will arrive stale. It costs one pass and no more: either
+		// the cache shows the server, which makes it a stale view like any
+		// other, or the reservation reaches its TTL. Nothing is created or
+		// deleted on the strength of it, which is why the code does not try to
+		// tell the two apart.
+		return false
+	}
+	var stale, current int
+	for _, v := range in.Views {
+		if in.PendingDeletes[v.Name] {
+			continue
+		}
+		if v.Generation == in.Generation {
+			// A retained failure counts here even though countsTowardSize
+			// excludes it, and that is the suppression.
+			if v.Phase == phase.Failed || v.countsTowardSize() {
+				current++
+			}
+			continue
+		}
+		if v.countsTowardSize() {
+			stale++
+		}
+	}
+	return stale > 0 && current == 0
+}
+
+// selectRetirement nominates one stale server for soft drain, or nothing.
+//
+// It cannot reuse SelectDeletionCandidates: that function refuses any server
+// that may be carrying players, and those are precisely the ones a changeover
+// has to retire. This is not a loosening of that rule — a retiring server is
+// still never nominated for deletion — it is a different question asked of a
+// narrower set: Ready, stale, not already retiring.
+//
+// Empty servers first, because retiring one costs nobody anything, then the
+// oldest, so the longest-lived sessions are disturbed last. Ties by name, so
+// two passes over the same state agree.
+//
+// One per pass. Every retirement is a replacement's worth of work, and the
+// five-second resync converges quickly enough.
+func selectRetirement(in ScalingInputs) string {
+	var (
+		readyCurrent bool
+		unavailable  int32
+		stale        []ServerView
+	)
+	for _, v := range in.Views {
+		// spec.retire is the single budget signal. It survives the
+		// escalation to Draining that maxStaleSeconds can force, so a
+		// forced drain keeps holding the slot it started in — while a drain
+		// that a scale-down or a deletion began never had it.
+		if v.Retire || in.PendingRetires[v.Name] {
+			unavailable++
+			continue
+		}
+		if v.Generation == in.Generation {
+			// A server already nominated for deletion is not a replacement.
+			// The ceiling branch runs before this one, applies no changeover
+			// filter, and sorts never-took-players first then youngest — which
+			// is the cold-start replacement exactly — so a lowered maxReplicas
+			// can take the new server while the cache still shows it Ready.
+			// Retiring a stale server on the strength of that is deregistering
+			// capacity against a replacement on its way out, and a retirement
+			// is not retractable by the next pass. coldStart and staleRemains
+			// both skip PendingDeletes before counting anything; this is the
+			// same rule.
+			if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] {
+				readyCurrent = true
+			}
+			continue
+		}
+		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] {
+			stale = append(stale, v)
+		}
+	}
+	// A zero budget can only mean "unset", so it is floored at one rather
+	// than read as "never retire".
+	//
+	// The CRD gives spec.update.maxUnavailable a default of 1 and a minimum
+	// of 1, so no group can legitimately present 0 — but spec.update itself
+	// is optional and no CEL rule requires it, and a nil parent means the
+	// child's default never applies. A group whose operator never wrote an
+	// update policy therefore arrives here with 0, and without this floor it
+	// would decline every retirement forever: no error, no condition, no
+	// event, just a changeover that never starts. Because the CRD forbids a
+	// real 0, defaulting inside a pure function is unambiguous here in a way
+	// it usually is not.
+	//
+	// ServerGroup.UpdateMaxUnavailable (api/v1alpha1/servergroup_types.go),
+	// the accessor that fills ScalingInputs.MaxUnavailable at the call site,
+	// applies the same default. Both being right is correct rather than
+	// redundant: this function is also reached by tests and by any future
+	// caller that builds ScalingInputs itself, and the silence of the
+	// failure is what makes one defence too few.
+	budget := in.MaxUnavailable
+	if budget < 1 {
+		budget = 1
+	}
+	// At least one ready server of the current generation, for every group
+	// and not only for fallback targets: a ServerGroup cannot tell whether a
+	// ProxyGroup names it, and learning to would cost a watch and a cache
+	// that can be wrong for a distinction that only permits emptying a
+	// non-fallback group faster.
+	if !readyCurrent || unavailable >= budget || len(stale) == 0 {
+		return ""
+	}
+	sort.SliceStable(stale, func(i, j int) bool {
+		// Empty means empty and known to be: unknown counts as occupied
+		// everywhere in this repository, and a stale count on a server that
+		// last reported zero may be hiding players. Without !Stale this
+		// comparator *prefers* exactly those servers, doing the opposite of
+		// the rule it justifies itself by — retiring an empty server costs
+		// nobody anything, but retiring one that only looks empty costs the
+		// sessions the ordering exists to disturb last.
+		if ei, ej := stale[i].Players == 0 && !stale[i].Stale, stale[j].Players == 0 && !stale[j].Stale; ei != ej {
+			return ei
+		}
+		if !stale[i].CreatedAt.Equal(stale[j].CreatedAt) {
+			return stale[i].CreatedAt.Before(stale[j].CreatedAt)
+		}
+		return stale[i].Name < stale[j].Name
+	})
+	return stale[0].Name
+}
+
+// staleRemains reports whether the changeover still has stale capacity to shed.
+//
+// It is the same set coldStart counts as stale: a different generation, no
+// deletion already reserved, and still counting toward the group's size. A
+// stale server that is Failed, Draining or Terminating is not something the
+// changeover is still racing to remove — it is gone or going — and counting it
+// would suspend ordinary scale-downs of current-generation servers for the
+// whole failed-retention window, an hour by default.
+func staleRemains(in ScalingInputs) bool {
+	for _, v := range in.Views {
+		if in.PendingDeletes[v.Name] {
+			continue
+		}
+		if v.Generation != in.Generation && v.countsTowardSize() {
+			return true
+		}
+	}
+	return false
+}
+
 // DecideSize is the group's sizing rule.
 //
 // The order matters and is the design's, not an accident: capacity first, then
@@ -177,6 +422,15 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	if floor := in.MinReplicas - alive; floor > create {
 		create = floor
 	}
+	// demanded is what this group would build with no changeover running: the
+	// spare-slot rule and the floor, before the cold start is added on top. The
+	// difference is load-bearing below — a cold start the ceiling refuses has
+	// decided nothing, while an ordinary shortfall it refuses has.
+	demanded := create
+	cold := coldStart(in)
+	if cold && create < 1 {
+		create = 1
+	}
 	room := in.MaxReplicas - alive
 	if room < 0 {
 		room = 0
@@ -185,11 +439,23 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	if granted > room {
 		granted = room
 	}
-	limited := wanted > granted
+	// A cold start the ceiling refuses is a changeover that cannot begin.
+	// Stalling is correct — a lowered maxReplicas is an instruction — but it
+	// must be visible, and ScalingLimited is the condition that says exactly
+	// "the ceiling is holding capacity back". coldBlocked is carried apart
+	// from limited because Wanted is 0 in this case exactly as it is when
+	// nothing is short — it is the only field that lets the message the
+	// operator sees name which of the two is actually happening.
+	coldBlocked := cold && granted < 1
+	limited := wanted > granted || coldBlocked
+	// A refused cold start that is the only thing this pass wanted to build.
+	// See the fall-through in the create block below: this pass has decided
+	// nothing, so it must not return as though it had.
+	coldOnly := coldBlocked && demanded < 1
 
 	if create > 0 {
 		if granted > 0 {
-			return SizeDecision{Create: granted, Wanted: wanted, Limited: limited}
+			return SizeDecision{Create: granted, Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
 		}
 		// No room to grow. Being short of capacity is not a reprieve from the
 		// ceiling: a lowered maxReplicas is an instruction, and a group that
@@ -200,13 +466,46 @@ func DecideSize(in ScalingInputs) SizeDecision {
 		// has just said it needs.
 		if surplus := alive - in.MaxReplicas; surplus > 0 {
 			return SizeDecision{
-				Wanted:  wanted,
-				Limited: limited,
-				Surplus: surplus,
-				Delete:  SelectDeletionCandidates(deletable(in), int(surplus)),
+				Wanted:           wanted,
+				Limited:          limited,
+				ColdStartBlocked: coldBlocked,
+				Surplus:          surplus,
+				Delete:           SelectDeletionCandidates(deletable(in), int(surplus)),
 			}
 		}
-		return SizeDecision{Wanted: wanted, Limited: limited}
+		if !coldOnly {
+			return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
+		}
+		// The refused cold start, and nothing else asking for a server: no
+		// create was granted and there is no surplus to shed, so this pass has
+		// decided nothing at all. Returning here is what made the stall
+		// permanent. A group at its ceiling with an idle stale server beside it
+		// would refuse to delete the very server the changeover exists to
+		// remove — the demand rule below sheds it happily when no changeover is
+		// running — and would then tell the operator that the way out is a
+		// higher maxReplicas. Every later pass read the same state and decided
+		// the same thing. Falling through lets the demand rule free the room the
+		// cold start was refused for, and the next pass starts the changeover.
+		//
+		// Falling through is safe on both counts. It cannot delete a server that
+		// may be carrying players: it reaches the one removal the chain below
+		// can make through the same two independent guards as every other, the
+		// eligibility loop's Players != 0 || Stale and SelectDeletionCandidates'
+		// mayHavePlayers. And it cannot delete something this pass should have
+		// kept: demanded < 1 says neither the spare-slot rule nor the floor
+		// asked for a server, so the group is not short; the eligibility loop
+		// still tests feasibility against spareSlots one candidate at a time;
+		// alive > MinReplicas still guards the floor; and only a *stale* server
+		// can be taken, because a cold start means no current-generation server
+		// counts toward the size, which is exactly when staleRemains is true and
+		// the changeover filter holds the current generation out. The retirement
+		// branch cannot fire here at all, for the same reason: it needs a Ready
+		// server of the current generation, and a cold start is the statement
+		// that there is none.
+		//
+		// The stall stays visible. With nothing to shed, the chain below decides
+		// nothing either and the final return carries Limited and
+		// ColdStartBlocked exactly as this branch used to.
 	}
 
 	if surplus := alive - in.MaxReplicas; surplus > 0 {
@@ -216,6 +515,14 @@ func DecideSize(in ScalingInputs) SizeDecision {
 		}
 	}
 
+	// Retirement, after the ceiling and before demand. The ceiling is an
+	// instruction and outranks a changeover; demand does not, because a pass
+	// that retires has already decided how this group loses a server and a
+	// second removal would be a second decision on the same reading.
+	if name := selectRetirement(in); name != "" {
+		return SizeDecision{Retire: []string{name}}
+	}
+
 	// Demand. Never in the same pass as a create — reaching here means the
 	// group is not short of capacity, but an outstanding create says capacity
 	// is on its way, and removing a server against that is a decision made on
@@ -223,9 +530,45 @@ func DecideSize(in ScalingInputs) SizeDecision {
 	if in.PendingCreates == 0 && alive > in.MinReplicas {
 		pool := deletable(in)
 		free := readyFree(pool)
+		// While a changeover is in progress the group sheds stale capacity
+		// first: a current-generation server is not a demand candidate while
+		// any stale server remains.
+		//
+		// The retirement branch above closes this case only while the budget
+		// is free, because a pass that retires returns there. When
+		// maxUnavailable is already spent — the long-lived case, since a soft
+		// drain on an occupied server is exactly what holds the budget — that
+		// branch declines and the pass falls through to here with stale
+		// servers still standing. Without this filter the demand rule then
+		// deletes the cold start's own replacement, and it *prefers* it:
+		// SelectDeletionCandidates sorts youngest-first among servers that
+		// took players, so the fresh server loses to the stale one beside it
+		// on age alone. With no current-generation server left, coldStart
+		// fires on the next pass and builds another, for as long as the budget
+		// stays spent — up to the whole of maxStaleSeconds. Skipping the
+		// current generation closes that loop, because the last
+		// current-generation server is never a candidate, and it fixes the
+		// backwards preference in the same stroke.
+		//
+		// This is the one place the generation enters a decision other than
+		// "which server retires", and the reason it is allowed here while
+		// being forbidden in provisionalCapacity, readyContribution and
+		// readyFree is the direction the error can run in. A generation filter
+		// in the capacity arithmetic makes running servers stop counting the
+		// instant any field of the spec changes, so the group orders a full
+		// replacement set: runaway *creates*, up to maxReplicas, which is the
+		// failure that disconnects players. A generation filter in deletion
+		// candidacy can only make *fewer* servers deletable. It can hold a
+		// removal back; it cannot create anything. The numbers above stay
+		// generation-blind exactly as 4a left them.
+		changeover := staleRemains(in)
 
 		eligible := make([]ServerView, 0, len(pool))
 		for _, v := range pool {
+			// The changeover rule: stale capacity goes first. See above.
+			if changeover && v.Generation == in.Generation {
+				continue
+			}
 			// EmptyFor decides nothing on its own: a server that was never
 			// empty carries zero here too, and Stabilization may be zero.
 			if v.Players != 0 || v.Stale || v.EmptyFor < in.Stabilization {
@@ -245,5 +588,10 @@ func DecideSize(in ScalingInputs) SizeDecision {
 		}
 	}
 
-	return SizeDecision{}
+	// Nothing was decided. Every path that reaches here with create == 0 has
+	// wanted == 0 and neither flag set, so this is the empty decision it always
+	// was. The one path that does not is the refused cold start that fell
+	// through and found nothing to shed — and that is the stall the operator has
+	// to be told about, so the flags travel out with it.
+	return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
 }

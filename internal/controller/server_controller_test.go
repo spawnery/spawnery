@@ -1384,3 +1384,289 @@ func TestAFailedRegisterFailsTheReconcile(t *testing.T) {
 		t.Error("status.wasRegistered is false, but it must be written before Register is even called")
 	}
 }
+
+// TestServerRetireFieldsRoundTripThroughTheAPIServer exists to catch the
+// specific mistake of editing the Go type and forgetting make manifests: the
+// API server silently drops unknown fields, so a Go-only change round-trips
+// as zero. Only a round trip through a real API server catches that, which is
+// why this is here and not a struct test.
+func TestServerRetireFieldsRoundTripThroughTheAPIServer(t *testing.T) {
+	f := newFixture(t)
+	ctx := f.ctx
+
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "retire-roundtrip", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: f.group.Name},
+			Retire:   true,
+		},
+	}
+	if err := f.c.Create(ctx, srv); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = f.c.Delete(ctx, srv) })
+
+	now := metav1.Now()
+	srv.Status.RetiringSince = &now
+	if err := f.c.Status().Update(ctx, srv); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+
+	got := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(ctx, client.ObjectKeyFromObject(srv), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.Spec.Retire {
+		t.Error("spec.retire did not survive the API server; run make manifests")
+	}
+	if got.Status.RetiringSince == nil {
+		t.Error("status.retiringSince did not survive the API server; run make manifests")
+	}
+}
+
+// TestRetiringServerStampsItsClockAndDeregisters proves the server side of
+// Task 7's ask: a Server patched with spec.retire moves to phase Retiring,
+// stamps status.retiringSince so maxStaleSeconds has something to measure
+// from, and comes off the proxies so it stops taking joins — without moving
+// the players already on it.
+func TestRetiringServerStampsItsClockAndDeregisters(t *testing.T) {
+	f := newFixture(t)
+	bringUpReady(t, f, "a") // registered with the proxies
+
+	srv := f.server("a")
+	srv.Spec.Retire = true // what the group controller does
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcile("a")
+
+	got := f.server("a")
+	if got.Status.Phase != string(phase.Retiring) {
+		t.Errorf("phase = %q, want Retiring", got.Status.Phase)
+	}
+	if got.Status.RetiringSince == nil {
+		t.Error("retiringSince was not stamped, so maxStaleSeconds can never fire")
+	}
+	if got.Status.Registered {
+		t.Error("a retiring server is still registered, so it is still taking joins")
+	}
+}
+
+// retiringFor builds a Server that has been sitting in phase Retiring for d,
+// for the collectInputs unit tests below.
+func retiringFor(d time.Duration) *spawneryv1alpha1.Server {
+	since := metav1.NewTime(time.Now().Add(-d))
+	return &spawneryv1alpha1.Server{
+		Status: spawneryv1alpha1.ServerStatus{
+			Phase:         string(phase.Retiring),
+			RetiringSince: &since,
+		},
+	}
+}
+
+// groupWithMaxStale builds a ServerGroup configured with the given
+// maxStaleSeconds, for the collectInputs unit tests below.
+func groupWithMaxStale(seconds int32) *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			Update: &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: seconds},
+		},
+	}
+}
+
+// collectInputsReconciler is the minimal ServerReconciler collectInputs
+// needs: a Clock and an Agents registry, since collectInputs looks up the
+// agent snapshot unconditionally. It carries no client, so it only works
+// against Server/ServerGroup values built in memory, not ones read from
+// envtest.
+func collectInputsReconciler(clock func() time.Time) *ServerReconciler {
+	return &ServerReconciler{
+		Clock:  clock,
+		Agents: agent.New(clock, 5*time.Second, clock()),
+	}
+}
+
+func TestMaxStaleZeroNeverForcesADrain(t *testing.T) {
+	// The default. A retiring server with players waits indefinitely, which
+	// is the promise the whole feature makes.
+	in := collectInputsReconciler(time.Now).
+		collectInputs(retiringFor(time.Hour*24), groupWithMaxStale(0), nil, false)
+	if in.MaxStaleReached {
+		t.Error("MaxStaleReached with maxStaleSeconds = 0")
+	}
+}
+
+func TestMaxStaleFiresOnceTheWaitExceedsIt(t *testing.T) {
+	in := collectInputsReconciler(time.Now).
+		collectInputs(retiringFor(2*time.Minute), groupWithMaxStale(60), nil, false)
+	if !in.MaxStaleReached {
+		t.Error("MaxStaleReached is false after twice the configured wait")
+	}
+}
+
+// TestRetiringSinceSurvivesRepeatedReconciles is the wiring counterpart to
+// TestRetiringServerStampsItsClockAndDeregisters, which only reconciles once.
+// status.retiringSince is stamped with the same guarded-once pattern as
+// DrainStartedAt and FailedAt (see TestFailedServerDrainsBeforeItsPodIsDeleted),
+// and that guard is exactly what maxStaleSeconds depends on: if it were
+// re-stamped on every pass, the deadline measured from it would never arrive.
+// This drives a real server through several reconciles with the clock moving
+// between them and pins the timestamp as identical throughout, not merely
+// non-nil.
+func TestRetiringSinceSurvivesRepeatedReconciles(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	srv.Spec.Retire = true
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	got := f.server("lobby-x7k2")
+	if got.Status.Phase != string(phase.Retiring) {
+		t.Fatalf("phase = %q after retire, want Retiring", got.Status.Phase)
+	}
+	if got.Status.RetiringSince == nil {
+		t.Fatal("retiringSince not stamped on entry to Retiring")
+	}
+	retiringSince := got.Status.RetiringSince.DeepCopy()
+
+	// The group's default Update is unset (MaxStaleSeconds 0, "never"), so
+	// nothing here should push the server out of Retiring — the point is
+	// purely whether the timestamp itself holds still.
+	for i := 0; i < 3; i++ {
+		f.clock.Advance(10 * time.Second)
+		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+	}
+
+	got = f.server("lobby-x7k2")
+	if got.Status.Phase != string(phase.Retiring) {
+		t.Errorf("phase = %q after further reconciles, want still Retiring", got.Status.Phase)
+	}
+	if rs := got.Status.RetiringSince; !rs.Equal(retiringSince) {
+		t.Errorf("retiringSince rewritten: %v, want the original %v", rs, retiringSince)
+	}
+}
+
+// TestMaxStaleSecondsEscalatesARetiringServerToDraining drives a Server
+// through the real machine — collectInputs, phase.Decide and applyDecision
+// together, not collectInputs called directly as
+// TestMaxStaleFiresOnceTheWaitExceedsIt does — to confirm a configured
+// maxStaleSeconds actually forces a stale Retiring server into Draining, with
+// the players still on it: the escalation must go through the drain path
+// (phase.Retiring's MaxStaleReached branch sets StartDrain), never straight to
+// Terminating.
+func TestMaxStaleSecondsEscalatesARetiringServerToDraining(t *testing.T) {
+	f := newFixture(t)
+	f.group.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: 30}
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update ServerGroup: %v", err)
+	}
+
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	srv.Spec.Retire = true
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Retiring) {
+		t.Fatalf("phase = %q after retire, want Retiring", got)
+	}
+
+	// Advance past the 30s window in several passes, the same shape as
+	// TestDrainTimeoutTerminatesLoudly's thirteen reconciles past a deadline.
+	for i := 0; i < 4; i++ {
+		f.clock.Advance(10 * time.Second)
+		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-x7k2")
+	}
+
+	got := f.server("lobby-x7k2")
+	if got.Status.Phase != string(phase.Draining) {
+		t.Errorf("phase = %q after the stale window elapsed, want Draining", got.Status.Phase)
+	}
+	if got.Status.DrainStartedAt == nil {
+		t.Error("drainStartedAt not set; the maxStaleSeconds escalation must go through the drain path")
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want exactly one drain broadcast", f.registrar.drained)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("pod deleted while 6 players were still online — core invariant broken")
+	}
+}
+
+// TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely is the complement of
+// TestMaxStaleSecondsEscalatesARetiringServerToDraining: the same clock
+// advance, but with maxStaleSeconds at 0 ("never"), must never push the
+// server out of Retiring. This is the case that actually protects players —
+// a group that never configured a stale window must not have one inferred
+// for it — so it gets its own fixture and its own server rather than reusing
+// the one that proved the positive case, which would leave the zero path
+// resting on inference instead of its own assertion.
+func TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely(t *testing.T) {
+	f := newFixture(t)
+	// f.group's default Update is unset, i.e. MaxStaleSeconds 0 — made
+	// explicit here so the zero case doesn't quietly depend on the fixture's
+	// default staying zero.
+	f.group.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: 0}
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update ServerGroup: %v", err)
+	}
+
+	uid := bringUpReady(t, f, "lobby-zero")
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-zero")
+
+	srv := f.server("lobby-zero")
+	srv.Spec.Retire = true
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcile("lobby-zero")
+	if got := f.server("lobby-zero").Status.Phase; got != string(phase.Retiring) {
+		t.Fatalf("phase = %q after retire, want Retiring", got)
+	}
+
+	// Same clock advance as the escalating case above.
+	for i := 0; i < 4; i++ {
+		f.clock.Advance(10 * time.Second)
+		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.reconcile("lobby-zero")
+	}
+
+	got := f.server("lobby-zero")
+	if got.Status.Phase != string(phase.Retiring) {
+		t.Errorf("phase = %q after the same clock advance with maxStaleSeconds = 0, want still Retiring", got.Status.Phase)
+	}
+	if got.Status.DrainStartedAt != nil {
+		t.Error("drainStartedAt set with maxStaleSeconds = 0; a server with no configured stale window must wait forever")
+	}
+	if len(f.registrar.drained) != 0 {
+		t.Errorf("drained = %v, want no drain broadcast with maxStaleSeconds = 0", f.registrar.drained)
+	}
+	if _, ok := f.pod("lobby-zero"); !ok {
+		t.Fatal("pod deleted while players were still online — core invariant broken")
+	}
+}

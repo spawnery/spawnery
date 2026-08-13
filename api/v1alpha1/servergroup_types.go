@@ -282,6 +282,43 @@ func (g *ServerGroup) FailedRetention() time.Duration {
 	return time.Duration(g.Spec.FailedRetentionSeconds) * time.Second
 }
 
+// UpdateMaxUnavailable is how many servers a rolling update may have
+// unavailable at once. A group with no spec.update gets the CRD's own default,
+// so the rule is the same whether the field was written out or left off.
+//
+// spec.update is +optional with no CEL rule requiring it, so Spec.Update is
+// nil for any Ephemeral group whose operator never wrote an update policy —
+// and a nil parent means the field's own +kubebuilder:default=1 never
+// applies. The CRD forbids 0 whenever spec.update is present (minimum 1), so
+// a 0 reaching this method can only be that unset case, never a real operator
+// choice. Floor it at 1 here: selectRetirement (internal/controller/scaling.go)
+// treats unavailable >= budget as "no room to retire", and an unfloored 0
+// would make that comparison true forever, so the group would silently never
+// roll — no error, no condition, no event, just stale servers standing
+// forever.
+//
+// selectRetirement floors the same value a second time, on its own copy in
+// ScalingInputs.MaxUnavailable. That is deliberate, not redundant, and
+// neither floor should be removed: this accessor is where a reader learns
+// what an unset policy means, and selectRetirement's floor is what protects
+// the pure rule from a future call site that builds ScalingInputs without
+// going through this accessor.
+func (g *ServerGroup) UpdateMaxUnavailable() int32 {
+	if g.Spec.Update == nil || g.Spec.Update.MaxUnavailable < 1 {
+		return 1
+	}
+	return g.Spec.Update.MaxUnavailable
+}
+
+// UpdateMaxStale is how long a server may wait in soft drain before its
+// players are moved off. Zero means never.
+func (g *ServerGroup) UpdateMaxStale() time.Duration {
+	if g.Spec.Update == nil {
+		return 0
+	}
+	return time.Duration(g.Spec.Update.MaxStaleSeconds) * time.Second
+}
+
 func init() {
 	SchemeBuilder.Register(&ServerGroup{}, &ServerGroupList{})
 }

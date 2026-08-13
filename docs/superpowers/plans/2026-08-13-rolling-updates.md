@@ -513,7 +513,7 @@ git commit -m "feat(4b): a retiring server leaves the size count and keeps its p
 
 **Files:**
 - Modify: `internal/controller/expectations.go`
-- Modify: `internal/controller/servergroup_controller.go` (the one `pending` caller)
+- Modify: every caller of `pending`, whose signature widens from two return values to three. Find them with `grep -rn '\.pending(' --include=*.go internal/` rather than trusting this list: at the time of writing they are `servergroup_controller.go`, `servergroup_controller_test.go` (`TestGroupRecordsWhatItIssued`) and `expectations_test.go` throughout. A caller left behind does not fail a test, it fails the build.
 - Test: `internal/controller/expectations_test.go`
 
 **Interfaces:**
@@ -630,13 +630,13 @@ func (e *expectations) pending(group string) (int32, map[string]bool, map[string
 }
 ```
 
-In `internal/controller/servergroup_controller.go`, update the single caller in `size()`:
+In `internal/controller/servergroup_controller.go`, update the single caller in `size()`. Discard the third value for now — `ScalingInputs.PendingRetires` does not exist until Task 6, and a named-but-unused variable would be dead code for two tasks:
 
 ```go
-	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
+	pendingCreates, pendingDeletes, _ := r.Expectations.pending(key)
 ```
 
-and add `_ = pendingRetires` immediately below it with the comment `// wired in task 6`, so this task compiles on its own and the next one deletes the line. Do not thread it into `ScalingInputs` yet — that field does not exist until Task 6.
+Task 7 gives it a name when it has somewhere to go.
 
 - [ ] **Step 5: Run to verify it passes**
 
@@ -663,6 +663,7 @@ git commit -m "feat(4b): reserve a retirement the cache has not shown yet"
 
 **Files:**
 - Modify: `internal/controller/scaling.go`
+- Modify: `internal/controller/servergroup_controller.go` — one line, `Generation: group.Generation,` in the `ScalingInputs` literal in `size()`. **This cannot wait for Task 7.** Real `ServerView`s carry `Generation >= 1` from `srv.Spec.GroupGeneration`; a call site that leaves `ScalingInputs.Generation` at its zero value makes every running server read as stale, so `coldStart` fires on every pass forever and the group creates without bound. That is the exact runaway this milestone is built to avoid, arriving through a gap between two tasks rather than through a logic error.
 - Modify: `docs/superpowers/specs/2026-08-13-rolling-updates-design.md`
 - Test: `internal/controller/scaling_test.go`
 
@@ -1321,7 +1322,7 @@ In `size()`, replace the `_ = pendingRetires` line from Task 4 and extend the `D
 		MaxPlayers:    group.Spec.MaxPlayers,
 		Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
 
-		Generation:     group.Generation,
+		Generation:     group.Generation, // already wired by Task 5; leave it
 		MaxUnavailable: group.UpdateMaxUnavailable(),
 
 		PendingCreates: pendingCreates,
@@ -1587,6 +1588,8 @@ git commit -m "feat(4b): a server carries out its retirement and bounds the wait
 
 This one is written last on purpose: it asserts the behaviour the milestone promises rather than any single rule, so it should pass the moment Tasks 1–8 are correct and fail if any of them regresses.
 
+> **Correction, made during execution.** The four assertions below are not enough, and the test as first written passed *with Task 3's `leaving()` change reverted* — the one line the whole surge mechanism rests on. With `spareSlots` at 40 and `maxPlayers` at 100 a single fresh replacement covers the reserve on its own, so whether a retiring server still counts toward the group's size never changes any of the four outcomes. The headline end-to-end test could not fail for the mechanism it exists to prove. Raise the fixture's `spareSlots` to 150 so one replacement no longer covers it, and add a fifth assertion: **the group creates a backfill replacement for the capacity a retiring server stops contributing.** Step 3's revert-and-confirm then produces a real failure, naming the missing backfill. Without both changes, step 3 will report success while proving nothing.
+
 ```go
 func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T) {
 	// The milestone's acceptance criterion, in one test: two occupied stale
@@ -1735,7 +1738,10 @@ git commit -m "fix(4b): stop crediting capacity to a server whose pod is gone"
 - [ ] `nix develop -c make test` — green, coverage at or above 88% for `internal/controller` and 100% for `internal/phase`.
 - [ ] `nix develop -c make manifests` — no diff beyond Task 2's two fields.
 - [ ] `git diff --name-only master...HEAD` — nothing under `agent/`, `image/`, `proto/`, `nix/`.
-- [ ] `docs/known-issues.md` gains a "From milestone 4b" section: the group at its ceiling that cannot start a changeover (Task 5), and the cold-start loop that remains the backoff spec's to close properly.
+- [ ] `docs/known-issues.md` gains a "From milestone 4b" section with three entries:
+  1. **Any spec change begins a changeover.** `metadata.generation` moves on every edit, so tuning `minReplicas`, `spareSlots` or `maxReplicas` marks every running server stale and replaces a whole group of functionally identical servers. Master design §4.4 specifies exactly this ("when the group spec changes, its generation goes up"), and 4b implements it as written; the behaviour was latent before — `AggregateGroup` already filtered by generation — and only became actionable here. It is safe (nobody is kicked) but it costs churn, and the likeliest moment to change a scaling knob is a player spike. Narrowing staleness to the fields that actually shape a pod is a real design change with its own pitfalls and was deliberately not made mid-milestone. `TestGroupShrinksOnceTheStabilizationWindowElapses` documents the behaviour rather than hiding it.
+  2. **A group at its ceiling cannot start a changeover** (Task 5). It stalls with the old generation serving and sets `ScalingLimited`; raising `maxReplicas` by one is the way out.
+  3. **The cold-start loop** remains the backoff spec's to close properly; 4b only guards its own door with the retained-failure suppression.
 - [ ] `docs/handover-milestone-4.md`'s "4a has landed" section gains 4b, and the sub-project table in `docs/handover-milestone-4b.md` marks 4b done.
 - [ ] One whole-branch review before merge. On 4a it found a fixed point no per-task review could see; the equivalent risk here is the interaction between the cold start, the ceiling and the budget, which no single task's tests exercise together.
 

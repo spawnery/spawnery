@@ -112,7 +112,46 @@ start plus retirement-driven replacement. `status.freeSlots` keeps its
 generation filter unchanged, because that field is an observation and its CRD
 documentation says what it means.
 
-### 3.3 The overhang is fixed at one server
+#### The one removal decision the generation does enter
+
+Retirement is how a server leaves during a changeover and deletion is how it
+leaves for lack of demand. The two never happen in the same pass, but they do
+apply to the same group at the same time, and one rule settles what happens
+then: **while any stale server remains, the demand rule sheds stale servers
+only — a current-generation server is not a demand candidate.**
+
+The rule closes an oscillation. The retirement branch runs before demand, so
+while the `maxUnavailable` budget is free a pass that could retire returns
+there and demand never runs. When the budget is already spent — the long-lived
+case, since a soft drain on an occupied server is exactly what holds it — the
+retirement branch declines and the pass falls through to demand with stale
+servers still standing. The demand rule then deletes the cold start's own
+replacement, and *prefers* it: `SelectDeletionCandidates` sorts youngest-first
+among servers that took players, so the fresh server loses to the stale one
+beside it on age alone. With no current-generation server left, §3.3's cold
+start fires on the next pass and builds another, for as long as the budget
+stays spent — up to the whole of `maxStaleSeconds`. Skipping the current
+generation makes the last current-generation server uncandidatable, so the
+loop cannot start, and it corrects the backwards preference in the same
+stroke.
+
+**This does not weaken §3.2, and the reason is the direction the error can run
+in.** A generation filter in the capacity arithmetic —
+`provisionalCapacity`, `readyContribution`, `readyFree` — makes running
+servers stop counting the instant any field of the spec changes, so the group
+orders a full replacement set: runaway *creates*, up to `maxReplicas`, which
+is the failure that disconnects players. A generation filter in deletion
+candidacy can only make *fewer* servers deletable. It can hold a removal back;
+it cannot create anything. The numbers stay generation-blind; only candidacy
+reads the generation, alongside the retirement nomination that already did.
+
+"Remains" is the same set §3.3's cold start counts as stale: a different
+generation, no deletion already reserved, still counting toward the group's
+size. A stale server that is `Failed`, `Draining` or `Terminating` is not
+something the changeover is still racing to remove, and counting it would
+suspend ordinary scale-downs for the whole failed-retention window.
+
+### 3.3 The overhang is one server per concurrent retirement
 
 Retirement needs a ready server of the current generation to exist first. When
 every server is stale, none does, so nothing may retire, so no replacement is
@@ -128,11 +167,40 @@ is always current-generation by construction — so the cold start fires once
 and not once per pass while its server boots. And it does not fire at all
 under §3.7's condition.
 
-One is enough because the replacement is not one-for-one: a retiring server's
-players stay where they are, and the group only rebuilds capacity the
-spare-slot rule actually asks for. The update therefore costs at most one
-extra server at any moment, which is why `maxUnavailable` needs no companion
-`maxSurge` and no second meaning.
+**A group at its ceiling sheds first, and stalls only with nothing to shed.**
+The cold start is a create like any other and the ceiling clamps it. But a
+clamped cold start is the *only* thing that pass wanted to build — the
+spare-slot rule and the floor asked for nothing — so the pass has decided
+nothing, and it must not return as though it had. It falls through to the
+ceiling/retirement/demand chain instead. Where the group has an idle stale
+server standing, the demand rule sheds it, and that is the room the cold start
+was refused for; the next pass starts the changeover. Returning instead was a
+permanent fixed point: the group refused to delete the very stale server the
+changeover exists to remove, which the same group with no changeover running
+sheds happily, and then named `maxReplicas` as the way out.
+
+Retirement cannot fire on that fall-through — it needs a `Ready` server of the
+current generation, and a cold start is the statement that there is none — and
+only a stale server can be deleted on it, because `staleRemains` is true
+whenever the cold start is. Where there is genuinely nothing to shed, the chain
+decides nothing either and the pass ends carrying `Limited` and
+`ColdStartBlocked`, so `ScalingLimited` still says the changeover is stalled at
+the ceiling. That stall is the right outcome — a lowered ceiling is an
+instruction, not a suggestion — and raising `maxReplicas` by one is then the
+operator's way out.
+
+One extra server *per concurrent retirement* is the bound, because the
+replacement is not one-for-one: a retiring server's players stay where they
+are, and the group only rebuilds capacity the spare-slot rule actually asks
+for. **At the default `maxUnavailable: 1` the update therefore costs at most
+one extra server at any moment, which is why `maxUnavailable` needs no
+companion `maxSurge` and no second meaning.** The bound is `maxUnavailable`
+rather than one, and stated that way it still needs no `maxSurge`: a retiring
+server is out of `alive`, `maxReplicas` bounds `alive`, so a group at
+`maxUnavailable: n` holds up to `maxReplicas + n` `Server` objects while *n*
+retirements are in flight. Anyone raising `maxUnavailable` is raising the peak
+footprint by the same number, and that is the sentence to read before doing it.
+`TestDecideSizeOverhangIsMaxUnavailableServersNotOne` pins the case at 2.
 
 ### 3.4 The "one ready server of the new generation" rule applies to every group
 
@@ -204,6 +272,27 @@ the old generation serving undisturbed throughout, and one corpse left
 standing to diagnose from. This is deliberately not backoff — it does nothing
 for the floor rule's loop, and says so.
 
+**The retention cap has to agree with it, and did not.** The suppression is
+only as durable as the corpse it reads, and which corpse survives is
+`selectFailedForPruning`'s decision, not this one. `maxRetainedFailures` is 1
+and that function kept the *oldest* failure — and a failure inherited from the
+previous generation is always older than the cold start's, so the corpse doing
+the suppressing was the one pruned, on the same reconcile that observed it. The
+loop then ran at time-to-fail (a minute or two for a crash-looping image), not
+once per window, and the corpse the operator was left with was the old
+generation's, which says nothing about the new image.
+
+`selectFailedForPruning` therefore orders by **newest generation first, then
+oldest within that generation.** That is the same rule it always had, applied
+to the largest change a group can undergo: the first failure after a change is
+the one that says what broke, and a generation bump is a change. The footprint
+cap is unchanged at one retained failure. Generations are compared numerically
+rather than against the group's current one, which keeps the function a pure
+two-argument selector — a `Server` is stamped with its group's generation at
+creation and a group's generation only increases, so the highest generation
+among the failures is the current one whenever a current-generation failure
+exists.
+
 ### 3.8 `maxUnavailable` counts what this update made unavailable
 
 **`spec.retire` is the single signal, and it is the whole rule.** A server
@@ -255,7 +344,12 @@ RetiringSince *metav1.Time `json:"retiringSince,omitempty"`
   the entry narrow keeps the phase's meaning single.
 - **`case Retiring:`** mirrors `Draining` with two differences: no
   `StartDrain`, and the deadline is `MaxStaleReached` rather than
-  `DrainDeadlineReached`.
+  `DrainDeadlineReached`. **The exits below are a list of the exits, not a
+  precedence list** — the code's order is its own and its comments give the
+  reasons. The one pair that is order-sensitive is `!Occupied()` against
+  `DeletionRequested`, for a retiring server that is both empty and being
+  deleted: the code tests `!Occupied()` first and terminates it, which is safe
+  because it is empty, and cheaper than starting a drain with nobody to move.
   - `PodLost` or `PodTerminal` → `Terminating`; the sessions are gone.
   - `DeletionRequested` → `Draining` **with** `StartDrain`. A retiring server
     has players, and whoever deletes it gets the proper move.
@@ -277,6 +371,10 @@ RetiringSince *metav1.Time `json:"retiringSince,omitempty"`
   phase-based, so a retiring server with players stays inside the
   `PodDisruptionBudget`. That is correct and is asserted by its own test,
   because nothing else in the tree would catch it changing.
+- `selectFailedForPruning()` orders by newest generation first, then oldest
+  within that generation. §3.7 is why: the corpse it keeps is the one the
+  cold-start suppression reads, and oldest-first alone always pruned exactly
+  that one.
 
 ### 4.4 `internal/controller/scaling.go`
 
@@ -288,11 +386,21 @@ demand**, and a pass that nominates a retirement returns there. Two removals
 decided in one pass would be two decisions taken on two readings of the same
 moment, which 4a already ruled out for creates and deletes.
 
+The one create that does not return where the others do is a cold start the
+ceiling refuses when nothing else asked for a server: it granted nothing, so it
+falls through the rest of the chain rather than ending the pass. §3.3 has the
+reasoning and the safety argument.
+
 Retirement cannot reuse `SelectDeletionCandidates`: that function excludes
 servers that may be carrying players, and those are exactly the ones that
 retire. The nomination is its own, and it is narrower rather than wider —
 `Ready`, stale, not already retiring. Order: empty servers first, then the
 oldest, ties broken by name. One per pass.
+
+The demand rule gains the one generation test §3.2 permits: while any stale
+server remains it skips current-generation servers, so a pass that falls
+through a declined retirement sheds stale capacity rather than the
+replacement.
 
 `provisionalCapacity` also takes 4a's leftover one-liner: `SessionsGone` is
 tested before `Slots == 0`, so a server whose pod has vanished stops being
@@ -380,8 +488,16 @@ stale in its turn and the same rules run from the top, cold start included.
 
 - **It does not unify the three capacity figures.** `AggregateGroup`'s
   `FreeSlots`, `provisionalCapacity`'s sum and `readyFree` stay three numbers
-  with three purposes. 4b changes none of their filters — the handover
-  anticipated that it would change the first one's; §3.2 is why it does not.
+  with three purposes, and 4b changes none of their *generation* filters — the
+  handover anticipated that it would change the first one's; §3.2 is why it
+  does not, and none of the three *sizing* functions the arithmetic actually
+  runs on — `provisionalCapacity`, `readyContribution` and `readyFree` — reads
+  the generation at all. `AggregateGroup` does: `FreeSlots` filters on
+  `v.Generation == generation` deliberately, because `status.freeSlots` is
+  documented as counting only ready servers of the current generation (§3.2).
+  The one filter that does move is `provisionalCapacity`'s `SessionsGone` test,
+  which §4.4 specifies: 4a's leftover one-liner, unrelated to the generation,
+  and it changes what that figure credits for a server whose pod has vanished.
 - **It does not weaken `SelectDeletionCandidates`.** Retirement is a separate
   nomination with a narrower filter, not a loosening of the existing one.
 - **It does not answer "is this group finished changing over?"** `derivePhase`
@@ -447,7 +563,9 @@ failing" and "the test stopped testing" look identical from outside.
 3. The group converges on servers of the current generation only.
 4. At most `maxUnavailable` servers are unavailable because of the update at
    any moment.
-5. The group never exceeds its demand-driven size by more than one server.
+5. The group never exceeds its demand-driven size by more than one server per
+   concurrent retirement — one at the default `maxUnavailable: 1`, and
+   `maxUnavailable` in general. See §3.3.
 6. `make manifests` produces a diff limited to the two new fields, and
    `git diff --name-only` touches no agent, image or proto file.
 7. Coverage stays at or above 88% for `internal/controller` and 100% for

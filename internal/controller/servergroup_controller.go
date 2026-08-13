@@ -214,10 +214,21 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if decision.Limited {
 			limited.Status = metav1.ConditionTrue
 			limited.Reason = spawneryv1alpha1.ReasonMaxReplicasReached
-			limited.Message = fmt.Sprintf(
-				"%d more server(s) needed to cover spareSlots %d; maxReplicas %d allows %d now",
-				decision.Wanted, group.Spec.Scaling.SpareSlots,
-				group.Spec.Scaling.MaxReplicas, decision.Create)
+			if decision.ColdStartBlocked {
+				// The cold-start-refused case: Wanted and Create are both 0,
+				// so the ordinary-shortfall message below would tell the
+				// operator nothing is needed — the opposite of the truth.
+				// The group is at its ceiling and the changeover cannot
+				// begin; raising maxReplicas by one is the way out.
+				limited.Message = fmt.Sprintf(
+					"changeover cannot begin: the group is already at maxReplicas %d; raise it by at least 1 to start the new generation",
+					group.Spec.Scaling.MaxReplicas)
+			} else {
+				limited.Message = fmt.Sprintf(
+					"%d more server(s) needed to cover spareSlots %d; maxReplicas %d allows %d now",
+					decision.Wanted, group.Spec.Scaling.SpareSlots,
+					group.Spec.Scaling.MaxReplicas, decision.Create)
+			}
 		}
 		if !sized {
 			// Nothing was decided this pass, so the False above is the absence
@@ -286,7 +297,7 @@ func (r *ServerGroupReconciler) size(
 	key := group.Namespace + "/" + group.Name
 
 	r.Expectations.observe(key, views)
-	pendingCreates, pendingDeletes := r.Expectations.pending(key)
+	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
 
 	decision := DecideSize(ScalingInputs{
 		Views:         views,
@@ -296,8 +307,12 @@ func (r *ServerGroupReconciler) size(
 		MaxPlayers:    group.Spec.MaxPlayers,
 		Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
 
+		Generation:     group.Generation,
+		MaxUnavailable: group.UpdateMaxUnavailable(),
+
 		PendingCreates: pendingCreates,
 		PendingDeletes: pendingDeletes,
+		PendingRetires: pendingRetires,
 	})
 
 	for i := int32(0); i < decision.Create; i++ {
@@ -317,6 +332,12 @@ func (r *ServerGroupReconciler) size(
 			return decision, err
 		}
 		r.Expectations.expectDeleted(key, name)
+	}
+	for _, name := range decision.Retire {
+		if err := r.retireServer(ctx, group, servers, name); err != nil {
+			return decision, err
+		}
+		r.Expectations.expectRetired(key, name)
 	}
 	return decision, nil
 }
@@ -376,6 +397,7 @@ func (r *ServerGroupReconciler) collectViews(
 			// exactly like one that reached a terminal state.
 			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),
 			Generation:   srv.Spec.GroupGeneration,
+			Retire:       srv.Spec.Retire,
 			CreatedAt:    srv.CreationTimestamp.Time,
 		}
 		if v.Phase == "" {
@@ -456,6 +478,37 @@ func (r *ServerGroupReconciler) deleteServer(
 	return nil
 }
 
+// retireServer asks one server to enter soft drain.
+//
+// A patch rather than an update: the group holds a cached copy and the Server
+// controller writes status on the same object, so a full update here would
+// race it for no reason.
+func (r *ServerGroupReconciler) retireServer(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	servers map[string]*spawneryv1alpha1.Server,
+	name string,
+) error {
+	srv, ok := servers[name]
+	if !ok {
+		return nil
+	}
+	// Already asked. The nomination reads the cache, which lags the patch by
+	// a reconcile or two, so without this the same server collects the same
+	// event every resync for the whole of its retirement.
+	if srv.Spec.Retire {
+		return nil
+	}
+	patch := client.MergeFrom(srv.DeepCopy())
+	srv.Spec.Retire = true
+	if err := r.Patch(ctx, srv, patch); err != nil {
+		return err
+	}
+	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerRetiring",
+		"retiring server %s for a rolling update", name)
+	return nil
+}
+
 // pruneFailed keeps the number of retained failures per group at
 // maxRetainedFailures. It does not depend on the Network, so it runs even when
 // that cannot be resolved: a group whose Network was deleted is exactly the one
@@ -476,7 +529,7 @@ func (r *ServerGroupReconciler) pruneFailed(
 		// The Server controller still drains it first if it turns out to have
 		// players on it; this only asks for the removal.
 		if err := r.deleteServer(ctx, group, servers, name, "FailedServerPruned",
-			"removing failed server %s, only the oldest failure is kept for diagnosis"); err != nil {
+			"removing failed server %s, only the newest generation's oldest failure is kept for diagnosis"); err != nil {
 			return err
 		}
 	}

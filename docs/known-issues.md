@@ -854,6 +854,32 @@ right signal is already on the view and unused here: `ServerView.SessionsGone`,
 one line at the top of the function. It belongs with 4b's own work on
 `scaling.go`.
 
+*Met* by `54a2ef2`: `provisionalCapacity` now tests `ServerView.SessionsGone`
+before the `Slots == 0` credit, exactly the one line this entry named, so a
+server whose pod has vanished is no longer credited a full `maxPlayers` it
+does not have. The obvious fix this entry warned against — testing `Stale`
+instead — stays wrong for the reason given above, and is now pinned rather
+than merely argued: `TestProvisionalCapacityStillCreditsAStartingServer` is
+the regression guard that fails if `Stale` is swapped in for `SessionsGone`,
+because a genuinely starting server is stale too and would then be credited
+zero, reintroducing the runaway this rule exists to prevent.
+
+What `SessionsGone` does not resolve: `servergroup_controller.go`'s
+`SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod))`
+can still read true for a single resync for a server that has genuinely just
+started, if the informer's cache has not yet shown a pod the API server
+already created. A server caught in that window is credited zero for one
+pass instead of the full `maxPlayers`, so `provisionalCapacity`'s sum reads
+lower than the truth and `wanted` reads higher — over-creation for a resync
+or two, against the pre-fix entry's own under-creation above, and the safer
+direction of the two: a group with a server too many costs money, a group
+with a server too few costs joins. It is the same shape of lag this flag
+already carried before this fix gave it a second reader: `isOccupied` has
+relied on it for the same reason since before 4b. It is worth naming here
+because 4b's cold start is the first place this risk feeds a scaling
+decision rather than only the
+occupied-pod protection.
+
 **`derivePhase` still measures readiness against `DesiredReplicas()`, and that
 field's meaning changed under it this milestone.** Before 4a,
 `DesiredReplicas()` in `api/v1alpha1/servergroup_types.go` was the size the
@@ -867,6 +893,83 @@ is serving — but it is no longer what the field used to mean, and the change
 happened silently. 4b's rolling update, which needs to say "the new generation
 is up" as something other than "one server somewhere is," will want the
 distinction this milestone left unmade.
+
+## From milestone 4b
+
+**Any spec change begins a changeover.** `metadata.generation` moves on every
+edit, so tuning `minReplicas`, `spareSlots` or `maxReplicas` marks every
+running server stale and replaces a whole group of functionally identical
+servers. The master design's §4.4 specifies exactly this — "when the group
+spec changes, its generation goes up" — and 4b implements it as written. The
+behaviour was latent before: `AggregateGroup` already filtered
+`status.freeSlots` by generation, but nothing acted on it, so a generation
+bump changed a published number and nothing else. It is safe — nobody is
+kicked, and `maxUnavailable` and the cold start govern the changeover exactly
+as they would for a real image bump — but it costs churn, and the likeliest
+moment anyone changes a scaling knob is a player spike, which is the worst
+time to be replacing servers one at a time. Narrowing staleness to the fields
+that actually shape a pod is a real design change with its own pitfalls —
+which fields count, and what happens to a server whose pod-affecting fields
+never moved but whose scaling knobs did — and was deliberately not made
+mid-milestone. `TestGroupShrinksOnceTheStabilizationWindowElapses`
+(`internal/controller/servergroup_controller_test.go`) documents the
+behaviour rather than hiding it: dropping `minReplicas` from 3 to 1 still
+produces a fourth server, of the new generation, before it produces a shrink,
+because the spec edit that lowered the floor is the same edit that staled the
+three servers already running.
+
+**A group at its ceiling with nothing to shed cannot start a changeover, and
+one that is holding a stuck retiree does not say why.** The cold start (design
+§3.3) is a create like any other, so a group whose `maxReplicas` equals its
+current size cannot simply build the first server of the new generation. It
+first tries to make its own room: a refused cold start that was the only thing
+the pass wanted falls through to the demand rule, which sheds an idle stale
+server if there is one, and the next pass then starts the changeover. Only when
+there is genuinely nothing to shed does the group stall with its old generation
+serving. That stall is correct — a lowered ceiling is an instruction, not a
+suggestion — and it is not silent: `DecideSize` sets `Limited` and, in this
+specific case, `ColdStartBlocked`, so the `ScalingLimited` condition carries a
+message naming the cold start specifically rather than an ordinary capacity
+shortfall. Raising `maxReplicas` by one is the way out.
+
+There is a second way a changeover stops, and this one *is* silent. A server
+the group has just patched `spec.retire: true` onto, which loses readiness
+before the `Server` controller next reconciles, goes to `Starting` rather than
+`Retiring` (`phase.Decide` tests the readiness loss first, deliberately) while
+`spec.retire` stays true. If it recovers to `Ready` it retires normally. If it
+never does, `StartupDeadlineReached` fails it — and a `Failed` server carrying
+`spec.retire` holds the whole `maxUnavailable` budget for its retention window,
+an hour by default, with no condition, no event and nothing telling an operator
+why no further server is retiring. This matches design §3.8 as written ("a
+server counts against the budget while its `spec.retire` is true"); the spec
+did not consider a retiree that never retires, and the behaviour errs
+conservative — fewer retirements, never a disconnection — so it is carried
+rather than changed. `kubectl get servers -o custom-columns` showing
+`spec.retire` alongside the phase is what answers it today. Both of these
+present the same way from outside — the changeover stopped — and the difference
+is that the first one names itself on the group's conditions and the second
+does not.
+
+**The cold-start loop is only half-closed.** A broken new image fails, drops
+out of `countsTowardSize`, and would be re-created every five-second pass
+forever; 4b suppresses the cold start while a `Failed` server of the current
+generation is retained, so the interval becomes `failedRetentionSeconds` (an
+hour by default) instead of five seconds. Two things have to agree for that to
+hold, and the second is easy to lose: the retention cap keeps one failure
+(`maxRetainedFailures = 1`), so it has to keep *that* one.
+`selectFailedForPruning` therefore prefers the newest generation, then the
+oldest failure within it — an oldest-first rule alone always kept an inherited
+older corpse and pruned the current generation's, which is the only one doing
+the suppressing, on the same reconcile that observed it, and the loop ran at
+time-to-fail. Anyone changing that ordering is changing this interval from an
+hour back to a minute.
+
+The suppression is a guard on 4b's own door, not backoff — it does nothing for
+the floor rule, which has the identical loop and keeps it.
+`maxRetainedFailures = 1` still caps only the footprint of the failure, not the
+rate at which the group tries again. Real per-group exponential backoff with
+the `Degraded` condition (master design §7) belongs to its own spec, which is
+next.
 
 ## Preconditions for milestone 5 (persistent groups)
 
@@ -994,9 +1097,9 @@ intentional — the following points each concern only one of the two halves.
   token the agent reads its identity from. It still does not check for two user
   mounts sharing a name — the API server catches that, but with a generic
   message instead of a clear operator error.
-- "Keep the oldest failure" does not carry when the `creationTimestamp` is equal
-  (second resolution); the tiebreak falls to the random suffix instead of
-  `status.failedAt`.
+- "Keep the oldest failure of the newest generation" does not carry when two
+  failures of one generation share a `creationTimestamp` (second resolution);
+  the tiebreak falls to the random suffix instead of `status.failedAt`.
 - The status of a rejected `Network` freezes and keeps reporting old numbers.
 - After deleting the winning `Network`, recovery takes up to roughly 90 seconds,
   because the loser retries every minute and the group every 30 seconds. A watch

@@ -312,8 +312,9 @@ func TestOccupiedPodsReleasesPodsThatCarryNobody(t *testing.T) {
 }
 
 // TestSelectFailedForPruning pins the retention cap and, above all, which
-// failure survives it: the oldest, because the first failure after a change is
-// the one that says what broke.
+// failure survives it: the newest generation's, and the oldest within it,
+// because the first failure after a change is the one that says what broke and
+// a generation bump is the largest change a group can undergo.
 func TestSelectFailedForPruning(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -360,6 +361,32 @@ func TestSelectFailedForPruning(t *testing.T) {
 			keep: 1,
 			want: []string{"b"},
 		},
+		{
+			// The current generation's corpse is the one the cold-start
+			// suppression reads, and it is always the *younger* of the two, so
+			// a purely oldest-first rule prunes exactly it — on the same
+			// reconcile that observes it. The inherited corpse says nothing
+			// about the new image; this one does.
+			name: "keeps the newest generation's failure over an inherited older one",
+			views: []ServerView{
+				view("f-old", phase.Failed, 0, 100, false, 3, 0),
+				view("c-new", phase.Failed, 0, 100, false, 4, 7200),
+			},
+			keep: 1,
+			want: []string{"f-old"},
+		},
+		{
+			// The generation ordering must not cost the original rule. Within
+			// one generation the first failure is still the survivor.
+			name: "still keeps the oldest within the newest generation",
+			views: []ServerView{
+				view("new-second", phase.Failed, 0, 100, false, 4, 7260),
+				view("old", phase.Failed, 0, 100, false, 3, 0),
+				view("new-first", phase.Failed, 0, 100, false, 4, 7200),
+			},
+			keep: 1,
+			want: []string{"new-second", "old"},
+		},
 	}
 
 	for _, tc := range cases {
@@ -374,6 +401,46 @@ func TestSelectFailedForPruning(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRetiringDoesNotCountTowardSize(t *testing.T) {
+	// This one line is the whole surge mechanism: a retiring server drops
+	// out of the group's size, so the existing spare-slot rule orders its
+	// replacement when — and only when — capacity actually needs one.
+	v := ServerView{Name: "a", Phase: phase.Retiring}
+	if v.countsTowardSize() {
+		t.Error("a retiring server still holds the group at its floor")
+	}
+	if !v.leaving() {
+		t.Error("leaving() does not recognise Retiring")
+	}
+}
+
+func TestRetiringServerIsNeverNominatedForDeletion(t *testing.T) {
+	// The invariant everything rests on. A retiring server has players on
+	// it by definition — that is what it is waiting for — and the group
+	// removes it by letting it empty, never by deleting it.
+	views := []ServerView{
+		{Name: "retiring", Phase: phase.Retiring, Players: 5, WasRegistered: true},
+	}
+	if got := SelectDeletionCandidates(views, 1); len(got) != 0 {
+		t.Errorf("SelectDeletionCandidates = %v, want none", got)
+	}
+}
+
+func TestRetiringServerStaysInsideTheDisruptionBudget(t *testing.T) {
+	// occupiedPods is deliberately not phase-based: the pod still carries
+	// the occupied label while anyone is on it, and minAvailable has to
+	// match that pod for pod or kubectl drain gets an eviction to spend on
+	// a pod with players. Nothing else in the tree would catch this
+	// changing.
+	views := []ServerView{
+		{Name: "a", Phase: phase.Retiring, Players: 2, WasRegistered: true},
+		{Name: "b", Phase: phase.Retiring, WasRegistered: true},
+	}
+	if got := occupiedPods(views); got != 1 {
+		t.Errorf("occupiedPods = %d, want 1 — the retiring server with players", got)
 	}
 }
 

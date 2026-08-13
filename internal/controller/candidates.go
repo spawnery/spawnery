@@ -53,6 +53,11 @@ type ServerView struct {
 	SessionsGone bool
 	// Generation is the group generation this server was created from.
 	Generation int64
+	// Retire is spec.retire: the group has asked this server to retire. It
+	// is the single signal for the update's maxUnavailable budget, and it
+	// survives the escalation to Draining that maxStaleSeconds can force —
+	// which is what tells that drain apart from one a scale-down started.
+	Retire bool
 	// CreatedAt is the creation timestamp of the Server object.
 	CreatedAt time.Time
 }
@@ -150,8 +155,13 @@ func (v ServerView) mayHavePlayers() bool {
 
 // leaving reports whether the server is already on its way out, so the group
 // must not count it as a candidate again.
+//
+// Retiring is in here for a second reason beyond nomination: dropping out of
+// the group's size is exactly what makes the spare-slot rule order a
+// replacement for a server a rolling update has retired. The generation never
+// enters the capacity arithmetic; this does the work instead.
 func (v ServerView) leaving() bool {
-	return v.Phase == phase.Draining || v.Phase == phase.Terminating
+	return v.Phase == phase.Draining || v.Phase == phase.Terminating || v.Phase == phase.Retiring
 }
 
 // countsTowardSize reports whether this server holds the group at its floor.
@@ -236,11 +246,38 @@ const maxRetainedFailures = 1
 
 // selectFailedForPruning names the Failed servers beyond the retention cap.
 //
-// The oldest failure is the one kept. The first failure after a change is the
-// one that says what broke; every later one is the same story again, told by a
-// server that started against an already-broken world. Servers already on
-// their way out are left alone — they are being removed anyway, and counting
-// them would let a second failure through while the first drains.
+// The newest generation's failures come first, and within one generation the
+// oldest failure is the one kept.
+//
+// Oldest-within-a-generation is the original rule and its reason is unchanged:
+// the first failure after a change is the one that says what broke, and every
+// later one is the same story again, told by a server that started against an
+// already-broken world. The generation ordering is that same reason applied to
+// the largest change a group can undergo. A generation bump is a change, so the
+// first failure after it — the current generation's earliest — is the one that
+// says what broke; the previous generation's corpse says nothing about the new
+// image.
+//
+// It is load-bearing as well as truer. coldStart is suppressed only while a
+// Failed server of the *current* generation is retained (design §3.7), and that
+// suppression is the whole of 4b's guard against a broken new image being
+// re-created every five seconds. With maxRetainedFailures at 1, a purely
+// oldest-first rule keeps any inherited older failure and prunes the current
+// generation's — deleting the one thing doing the suppressing, on the same
+// reconcile that observes it, so the loop runs at time-to-fail instead of once
+// per retention window, and the corpse the operator is left with is the one that
+// says nothing. Preferring the newest generation is what gives coldStart a
+// suppression this function cannot take away.
+//
+// Generations are compared numerically rather than against the group's current
+// one, which keeps this a pure two-argument selector: a Server is stamped with
+// its group's generation when it is created and a group's generation only ever
+// increases, so the highest generation among the failures is the current one
+// whenever a current-generation failure exists.
+//
+// Servers already on their way out are left alone — they are being removed
+// anyway, and counting them would let a second failure through while the first
+// drains.
 func selectFailedForPruning(views []ServerView, keep int) []string {
 	failed := make([]ServerView, 0, len(views))
 	for _, v := range views {
@@ -253,6 +290,9 @@ func selectFailedForPruning(views []ServerView, keep int) []string {
 	}
 
 	sort.SliceStable(failed, func(i, j int) bool {
+		if failed[i].Generation != failed[j].Generation {
+			return failed[i].Generation > failed[j].Generation
+		}
 		if !failed[i].CreatedAt.Equal(failed[j].CreatedAt) {
 			return failed[i].CreatedAt.Before(failed[j].CreatedAt)
 		}

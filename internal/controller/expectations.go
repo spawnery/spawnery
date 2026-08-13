@@ -21,10 +21,14 @@ import (
 	"time"
 )
 
-// expectationTTL bounds how long an unobserved create or delete is believed.
-// Without it, a lost watch event would leave a reservation standing forever and
-// the group could never size itself again; with it, the group decides on what
-// the cache shows, which by then is correct.
+// expectationTTL bounds how long an unobserved create, delete or retire is
+// believed. Without it, a lost watch event would leave a reservation standing
+// forever and the group could never size itself again; with it, the group
+// decides on what the cache shows, which by then is correct.
+//
+// The retire kind is the one to hold in mind here, because it is the only one
+// whose reservation bounds a budget rather than a count: an unobserved
+// retirement holds a slot of spec.update.maxUnavailable until this TTL expires.
 const expectationTTL = 30 * time.Second
 
 type expectationKind int
@@ -32,6 +36,7 @@ type expectationKind int
 const (
 	expectationCreate expectationKind = iota
 	expectationDelete
+	expectationRetire
 )
 
 type expectation struct {
@@ -39,8 +44,14 @@ type expectation struct {
 	expires time.Time
 }
 
-// expectations reserves the creates and deletes a reconcile has issued and the
-// cache has not caught up with yet.
+// expectations reserves the creates, deletes and retirements a reconcile has
+// issued and the cache has not caught up with yet.
+//
+// The three are the same mechanism, but the retire kind is the one worth
+// signposting: it is what enforces spec.update.maxUnavailable across the window
+// in which the group has patched spec.retire onto a server and the cache still
+// shows it untouched. Without it a second server is nominated while the first
+// has not appeared, and the budget is exceeded by one.
 //
 // collectViews lists Servers through the manager's cached client. A reconcile
 // triggered by its own create event can therefore read a cache that has not
@@ -77,6 +88,11 @@ func (e *expectations) expectCreated(group, name string) {
 // for.
 func (e *expectations) expectDeleted(group, name string) {
 	e.record(group, name, expectationDelete)
+}
+
+// expectRetired records a Server this reconciler has just asked to retire.
+func (e *expectations) expectRetired(group, name string) {
+	e.record(group, name, expectationRetire)
 }
 
 func (e *expectations) record(group, name string, kind expectationKind) {
@@ -124,6 +140,13 @@ func (e *expectations) observe(group string, views []ServerView) {
 			if !present || v.leaving() {
 				delete(m, name)
 			}
+		case expectationRetire:
+			// Satisfied when the cache shows the patch, and also when the
+			// server is gone: a retirement that completed between the patch
+			// and this list has nothing left to reserve.
+			if !present || v.Retire {
+				delete(m, name)
+			}
 		}
 	}
 	if len(m) == 0 {
@@ -131,23 +154,26 @@ func (e *expectations) observe(group string, views []ServerView) {
 	}
 }
 
-// pending is what the group has outstanding: how many creates, and which names
-// are already on their way out.
-func (e *expectations) pending(group string) (int32, map[string]bool) {
+// pending is what the group has outstanding: how many creates, which names are
+// already on their way out, and which have been asked to retire.
+func (e *expectations) pending(group string) (int32, map[string]bool, map[string]bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	var creates int32
 	deletes := make(map[string]bool)
+	retires := make(map[string]bool)
 	for name, exp := range e.byGroup[group] {
 		switch exp.kind {
 		case expectationCreate:
 			creates++
 		case expectationDelete:
 			deletes[name] = true
+		case expectationRetire:
+			retires[name] = true
 		}
 	}
-	return creates, deletes
+	return creates, deletes, retires
 }
 
 // forget drops a group entirely, so the map does not grow with every group

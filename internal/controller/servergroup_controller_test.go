@@ -358,19 +358,46 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		f.clock.Advance(resyncInterval)
 	}
 
+	// setMinReplicas performs a real spec update, so the two servers already
+	// up go stale and the cold start orders one replacement. This fixture
+	// never reports for it, so it runs out its startup deadline and is kept:
+	// Failed servers are retained for failedRetentionSeconds (an hour by
+	// default), and the 65 passes above, at one resync each, do not run
+	// long enough to clear it. The corpse is asserted rather than filtered
+	// away, so a missing or a doubled one still fails this test.
 	final := f.listServers(t)
-	if len(final) != 1 || final[0].Name != busy {
-		names := make([]string, 0, len(final))
-		for _, s := range final {
+	var live, failed []spawneryv1alpha1.Server
+	for _, s := range final {
+		if s.Status.Phase == string(phase.Failed) {
+			failed = append(failed, s)
+			continue
+		}
+		live = append(live, s)
+	}
+
+	if len(live) != 1 || live[0].Name != busy {
+		names := make([]string, 0, len(live))
+		for _, s := range live {
 			names = append(names, s.Name)
 		}
-		t.Fatalf("group settled on %v, want only the occupied server %q", names, busy)
+		t.Fatalf("live servers settled on %v, want only the occupied server %q", names, busy)
 	}
-	if got := final[0].Status.Phase; got != string(phase.Ready) {
+	if got := live[0].Status.Phase; got != string(phase.Ready) {
 		t.Errorf("phase of the surviving server = %q, want Ready", got)
 	}
 	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
 		t.Errorf("minAvailable = %d, want 1 — the surviving pod still carries players", got)
+	}
+
+	if len(failed) != 1 {
+		names := make([]string, 0, len(failed))
+		for _, s := range failed {
+			names = append(names, s.Name)
+		}
+		t.Fatalf("failed servers = %v, want exactly one — the cold start's doomed replacement", names)
+	}
+	if got := failed[0].Spec.GroupGeneration; got != f.group.Generation {
+		t.Errorf("failed server's generation = %d, want %d: the current generation's cold start, not a leftover", got, f.group.Generation)
 	}
 }
 
@@ -1453,10 +1480,18 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	}
 	f.setMinReplicas(t, 1)
 
-	// All three are empty, but none has waited out the window yet.
+	// Four, not three: setMinReplicas performs a real spec update, so the
+	// group's generation moves and the three Ready servers created under the
+	// previous one are stale. With nothing of the current generation up, the
+	// cold start orders exactly one replacement — the changeover beginning,
+	// not the floor being missed. The shrink this test is about happens
+	// below, once the stabilization window elapses.
+	//
+	// All three original servers are empty, but none has waited out the
+	// window yet.
 	f.reconcileGroup(t, r)
-	if got := len(f.listServers(t)); got != 3 {
-		t.Fatalf("got %d servers before the window elapsed, want 3", got)
+	if got := len(f.listServers(t)); got != 4 {
+		t.Fatalf("got %d servers before the window elapsed, want 4", got)
 	}
 
 	// The window is the CRD default, 300 seconds. The agents keep reporting
@@ -1488,7 +1523,7 @@ func TestGroupRecordsWhatItIssued(t *testing.T) {
 
 	f.reconcileGroup(t, r)
 
-	creates, _ := r.Expectations.pending(f.ns + "/lobby")
+	creates, _, _ := r.Expectations.pending(f.ns + "/lobby")
 	if creates != 1 {
 		t.Errorf("pending creates = %d right after the create, want 1: size() "+
 			"did not record what it issued", creates)
@@ -1533,8 +1568,13 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	if cond.Reason != spawneryv1alpha1.ReasonMaxReplicasReached {
 		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonMaxReplicasReached)
 	}
-	if !strings.Contains(cond.Message, "maxReplicas") {
-		t.Errorf("message = %q, want it to name the limit that is holding", cond.Message)
+	// Pinned down exactly, not just "contains maxReplicas": this is the
+	// ordinary-shortfall message, and it must stay distinct from the
+	// cold-start-refused message in TestGroupSaysColdStartIsBlockedByTheCeiling
+	// so the two can never silently converge again.
+	wantMsg := "1 more server(s) needed to cover spareSlots 40; maxReplicas 1 allows 0 now"
+	if cond.Message != wantMsg {
+		t.Errorf("message = %q, want %q", cond.Message, wantMsg)
 	}
 	if group.Status.Phase == "" {
 		t.Error("phase went empty")
@@ -1573,5 +1613,454 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	}
 	if got := scalingEvents(rec, spawneryv1alpha1.ReasonWithinLimits); got != 1 {
 		t.Errorf("%d WithinLimits events when the ceiling was raised, want exactly 1", got)
+	}
+}
+
+// TestGroupSaysColdStartIsBlockedByTheCeiling covers the other way Limited
+// gets set: a group pinned at maxReplicas with no shortfall of its own, whose
+// one running server has just gone stale. Wanted and Create are both 0 here
+// — exactly as they are when nothing is limited at all — so the message must
+// name the real cause (the changeover is stalled at the ceiling) rather than
+// the ordinary-shortfall wording, which would tell the operator that nothing
+// is needed. This is the case the Important review finding on Task 5 was
+// about: it must stay distinct from TestGroupSaysWhenItsCeilingHoldsCapacityBack's
+// message so the two can never silently converge again.
+func TestGroupSaysColdStartIsBlockedByTheCeiling(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+
+	f.group.Spec.Scaling.MaxReplicas = 1
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want 1", len(servers))
+	}
+	bringUpNamed(t, f, servers[0].Name)
+	f.reconcileGroup(t, r)
+
+	// A real spec update bumps the group's generation, so the server just
+	// brought up goes stale. It is empty (100 free of 100 slots, well past
+	// spareSlots 40), so nothing about capacity is short — the only reason
+	// to create anything now is the cold start, and the ceiling (maxReplicas
+	// still 1, one server already alive) has no room left to grant it.
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("ScalingLimited = %+v, want True with the ceiling refusing the cold start", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonMaxReplicasReached {
+		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonMaxReplicasReached)
+	}
+	wantMsg := "changeover cannot begin: the group is already at maxReplicas 1; raise it by at least 1 to start the new generation"
+	if cond.Message != wantMsg {
+		t.Errorf("message = %q, want %q", cond.Message, wantMsg)
+	}
+	if strings.Contains(cond.Message, "0 more server") {
+		t.Errorf("message = %q, must never claim nothing is needed while the changeover is refused", cond.Message)
+	}
+}
+
+// TestGroupPatchesRetireOntoTheNominatedServer proves the group actually
+// carries out the changeover it decides on: spec.retire is the whole channel
+// between the group's decision and the Server controller that executes it.
+// If this patch does not land, the changeover is a rule nobody carries out.
+//
+// The file has no helper that builds two servers of different generations
+// directly, so this drives the real path instead: bring the floor's one
+// server up, bump the group's generation the way an operator would, and let
+// the cold start create the replacement — exactly what
+// TestOccupiedServerSurvivesAContinuousScaleDown and the ScalingLimited tests
+// above already rely on to get a stale server and a current one onto the
+// board.
+func TestGroupPatchesRetireOntoTheNominatedServer(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want minReplicas = 1", len(servers))
+	}
+	old := servers[0].Name
+	bringUpNamed(t, f, old)
+
+	// A real spec update bumps the group's generation, so the server already
+	// up goes stale and the cold start orders its replacement.
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	var newSrv string
+	for _, s := range f.listServers(t) {
+		if s.Name != old {
+			newSrv = s.Name
+		}
+	}
+	if newSrv == "" {
+		t.Fatalf("the cold start did not create the changeover's replacement")
+	}
+	bringUpNamed(t, f, newSrv)
+
+	// Both servers are Ready now: old at the previous generation, new at the
+	// current one. This is the one pass that must nominate old to retire.
+	f.reconcileGroup(t, r)
+
+	got := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: old, Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get %s: %v", old, err)
+	}
+	if !got.Spec.Retire {
+		t.Error("the stale server was not asked to retire")
+	}
+}
+
+// TestGroupRetireServerGuardsAgainstARepeatCall exercises retireServer's
+// idempotence guard directly. selectRetirement never nominates a server
+// already showing Retire: true, so the only call site today never reaches
+// the guard; this calls retireServer twice against the same servers map to
+// stand in for a future call site that does not pre-filter, and confirms the
+// second call is a true no-op: no second event, no second patch.
+func TestGroupRetireServerGuardsAgainstARepeatCall(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+
+	f.reconcileGroup(t, r)
+	list := f.listServers(t)
+	if len(list) != 1 {
+		t.Fatalf("got %d servers, want minReplicas = 1", len(list))
+	}
+	srv := &list[0]
+	servers := map[string]*spawneryv1alpha1.Server{srv.Name: srv}
+
+	if err := r.retireServer(f.ctx, f.group, servers, srv.Name); err != nil {
+		t.Fatalf("first retireServer: %v", err)
+	}
+	first := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: srv.Name, Namespace: f.ns}, first); err != nil {
+		t.Fatalf("get %s after first call: %v", srv.Name, err)
+	}
+	if !first.Spec.Retire {
+		t.Fatalf("first retireServer did not patch spec.retire")
+	}
+
+	// The in-memory server the map points at already reflects the patch —
+	// retireServer sets srv.Spec.Retire = true on it before issuing the
+	// patch — so this second call sees exactly what a future call site that
+	// forgets to pre-filter would see.
+	if err := r.retireServer(f.ctx, f.group, servers, srv.Name); err != nil {
+		t.Fatalf("second retireServer: %v", err)
+	}
+
+	second := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: srv.Name, Namespace: f.ns}, second); err != nil {
+		t.Fatalf("get %s after second call: %v", srv.Name, err)
+	}
+	if second.ResourceVersion != first.ResourceVersion {
+		t.Errorf("second retireServer issued a patch: resourceVersion moved from %s to %s",
+			first.ResourceVersion, second.ResourceVersion)
+	}
+
+	if got := scalingEvents(rec, "ServerRetiring"); got != 1 {
+		t.Errorf("got %d ServerRetiring events, want 1", got)
+	}
+}
+
+// reconcilePass drives one resync the way the real system does: every Server
+// first, so a phase transition the group ordered on a previous pass (spec.retire,
+// most of all) actually lands before the group looks at the result, and then the
+// group itself. Every loop-driven test above this one already repeats this exact
+// shape inline (TestOccupiedServerSurvivesAContinuousScaleDown is the clearest
+// example); this names it once for a test that needs it standalone.
+func reconcilePass(t *testing.T, f *fixture, r *ServerGroupReconciler) {
+	t.Helper()
+	for _, s := range f.listServers(t) {
+		f.reconcile(s.Name)
+	}
+	f.reconcileGroup(t, r)
+}
+
+// markReady brings an already-created server all the way to phase Ready with
+// no players — the state a changeover's replacement is in the moment it
+// becomes eligible to receive a retirement. A thin name for bringUpNamed, so
+// the test below reads at the same level as the milestone's promise rather
+// than the machinery underneath it.
+func (f *fixture) markReady(t *testing.T, name string) {
+	t.Helper()
+	bringUpNamed(t, f, name)
+}
+
+// markReadyWithPlayers is markReady plus a live player count, for a server
+// that must already be occupied by the time the changeover looks at it.
+func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32) {
+	t.Helper()
+	uid := bringUpNamed(t, f, name)
+	if err := f.agents.ReportPlayers(uid, players, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+}
+
+// bumpGeneration performs a real spec update, the way an operator rolling a
+// new image would: it moves group.Generation forward, so every server created
+// under the previous value reads as stale to the scaling rules.
+//
+// It also pins spec.update explicitly rather than leaving it unset.
+// spec.update is optional, and an unset one arrives at MaxUnavailable: 0 —
+// which ServerGroup.UpdateMaxUnavailable and selectRetirement both floor to 1
+// already (see that accessor's doc comment) — but a prior finding on this
+// branch showed relying on that floor silently is exactly how a group can
+// appear to work while never actually rolling. Writing the policy out here
+// removes that question from this test.
+//
+// It also raises spareSlots to 150, above what a single fresh replacement
+// (100 free slots once it is Ready and empty) can cover on its own. The
+// fixture's default of 40 never needs a retiring server's capacity backfilled
+// — one fresh replacement already clears it before anything has even
+// retired — so a test that left it there could pass even if a retiring
+// server never dropped out of the group's size at all. 150 is what makes
+// leaving()'s own promise ("dropping out of the group's size is exactly what
+// makes the spare-slot rule order a replacement for a server a rolling
+// update has retired") into something this test actually exercises.
+//
+// 150 also has to stay inside the window that keeps assertion 1 below
+// reading "exactly one": roughly (80, 180]. At or below 80 the pre-bump gap
+// (spareSlots minus the two occupied stale servers' 80 free) goes to zero or
+// negative and the cold start alone would already have to explain the
+// create; above 180 the post-bump gap exceeds what a single fresh server's
+// 100 slots can cover and wanted climbs to 2 at pass 1. 150 sits comfortably
+// mid-window, ~70 clear on either side, so this is not fragile today — but a
+// future spareSlots change made for an unrelated reason could silently push
+// assertion 1 (or 5) outside it.
+func (f *fixture) bumpGeneration(t *testing.T) {
+	t.Helper()
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	f.group.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxUnavailable: 1, MaxStaleSeconds: 0}
+	f.group.Spec.Scaling.SpareSlots = 150
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+}
+
+// serversOfGeneration filters the group's servers down to one generation.
+func (f *fixture) serversOfGeneration(t *testing.T, generation int64) []spawneryv1alpha1.Server {
+	t.Helper()
+	var out []spawneryv1alpha1.Server
+	for _, s := range f.listServers(t) {
+		if s.Spec.GroupGeneration == generation {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// retiringCount counts the servers currently in phase Retiring.
+func (f *fixture) retiringCount(t *testing.T) int {
+	t.Helper()
+	n := 0
+	for _, s := range f.listServers(t) {
+		if s.Status.Phase == string(phase.Retiring) {
+			n++
+		}
+	}
+	return n
+}
+
+// firstRetiring returns the (assumed unique) server in phase Retiring.
+func (f *fixture) firstRetiring(t *testing.T) *spawneryv1alpha1.Server {
+	t.Helper()
+	for _, s := range f.listServers(t) {
+		if s.Status.Phase == string(phase.Retiring) {
+			srv := s
+			return &srv
+		}
+	}
+	t.Fatal("no server in phase Retiring")
+	return nil
+}
+
+// TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone is the
+// milestone's acceptance criterion, end to end, in one test: two occupied
+// stale servers, a spec change, and a group that ends up entirely on the new
+// generation with nobody having been moved. Tasks 1 through 8 all have to be
+// correct for this to pass — a regression in any one of them fails a specific
+// numbered assertion below, not the test as an undifferentiated whole.
+//
+// Driven with the suite's own direct-Reconcile idiom (reconcilePass), not the
+// brief's bare reconcileGroup calls: this repository runs the Server and
+// ServerGroup reconcilers as two separate direct calls rather than through a
+// running manager, and a phase the group orders (spec.retire, above all) only
+// lands once the Server reconciler for that object runs. Every loop-driven
+// test in this file already reconciles every server before the group on each
+// pass; this test does the same, just for a fixed, small number of passes
+// instead of a loop, because each step here asserts a distinct thing that can
+// break rather than an invariant that must hold across many passes.
+func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// Two occupied servers of the group's starting generation, created
+	// directly rather than through the reconciler's floor: minReplicas stays
+	// at the fixture's default of 1, so scaling itself would only ever create
+	// one of them.
+	a, b := "lobby-a", "lobby-b"
+	f.createServer(a)
+	f.markReadyWithPlayers(t, a, 60)
+	f.createServer(b)
+	f.markReadyWithPlayers(t, b, 60)
+
+	f.bumpGeneration(t)
+
+	// 1. Exactly one replacement is created — not zero, and not one per
+	// five-second pass while it boots. At this fixture's spareSlots (150,
+	// see bumpGeneration), this create is explained by ordinary spare-slot
+	// demand alone: pass 1 sees provisional=80 (two occupied stale servers,
+	// 40 free each) against spareSlots=150, gap=70, wanted=1 — already 1
+	// before coldStart's own "if cold && create<1" branch is even consulted.
+	// So this assertion does not, on its own, exercise coldStart's
+	// deadlock-breaker (Task 5); TestARollingUpdateColdStartCreatesExactlyOneServer
+	// below pins that mechanism specifically, with a fixture tuned so the
+	// spare-slot rule wants nothing and the create can only be explained by
+	// coldStart.
+	reconcilePass(t, f, r)
+	fresh := f.serversOfGeneration(t, f.group.Generation)
+	if len(fresh) != 1 {
+		t.Fatalf("cold start created %d servers, want exactly 1", len(fresh))
+	}
+
+	// 2. Nothing retires before the replacement is Ready. This is the
+	// guarantee that stops a group emptying itself: were it not enforced, the
+	// two occupied servers below would already be candidates the instant they
+	// went stale.
+	reconcilePass(t, f, r)
+	if n := f.retiringCount(t); n != 0 {
+		t.Fatalf("%d servers retiring before a replacement was Ready", n)
+	}
+
+	// 3. Once the replacement is Ready, exactly one stale server retires —
+	// one, because maxUnavailable defaults to (and here is pinned at) 1. The
+	// first pass below is what nominates it (patches spec.retire); the second
+	// is what lands the phase transition that patch orders, exactly as a real
+	// resync would need two five-second passes to do the same.
+	f.markReady(t, fresh[0].Name)
+	reconcilePass(t, f, r)
+	reconcilePass(t, f, r)
+	if n := f.retiringCount(t); n != 1 {
+		t.Fatalf("%d servers retiring, want exactly 1 (maxUnavailable)", n)
+	}
+
+	// 4. The retiring server keeps its players — it is not deleted — and it
+	// is deregistered so it takes no new joins.
+	retiring := f.firstRetiring(t)
+	if !retiring.DeletionTimestamp.IsZero() {
+		t.Error("a retiring server with players was deleted")
+	}
+	if retiring.Status.Registered {
+		t.Error("a retiring server is still registered")
+	}
+
+	// 5. The retirement above is what leaving() (Task 3) exists to make
+	// possible: the retiring server dropping out of the group's size is what
+	// lets DecideSize notice the capacity it was carrying is gone and order a
+	// replacement for it, in the very same pass — bumpGeneration's spareSlots
+	// of 150 is chosen so fresh alone cannot cover that gap on its own. If
+	// leaving() stopped including phase.Retiring, the retiring server would
+	// keep holding the group's size, the shortfall would never become
+	// visible, and this is the assertion that would catch it: exactly two
+	// servers of the current generation, the cold start's replacement plus
+	// the backfill for what the retirement just gave up.
+	if got := len(f.serversOfGeneration(t, f.group.Generation)); got != 2 {
+		t.Fatalf("%d current-generation servers after the retirement, want 2: "+
+			"the cold-start replacement plus the backfill for the capacity the retiring server took with it", got)
+	}
+}
+
+// TestARollingUpdateColdStartCreatesExactlyOneServer pins coldStart's (Task
+// 5) deadlock-breaker in isolation, apart from ordinary spare-slot demand.
+// TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone's assertion 1
+// no longer can: at that test's spareSlots of 150, ordinary demand alone
+// already wants a create at pass 1, so hard-coding coldStart to always
+// return false there still yields one create and that assertion would not
+// notice. This test's fixture is tuned the other way, so nothing but
+// coldStart can explain the create.
+//
+// Arithmetic: two stale (old-generation) occupied servers, 60 players each
+// out of maxPlayers 100, for 40 free slots apiece — sum(stale free) = 80.
+// spareSlots is left at the fixture's default of 40 (bumpGeneration is not
+// used here precisely because it raises spareSlots to 150; this test needs
+// it left alone). At pass 1: provisional = 80 >= spareSlots = 40, so gap <=
+// 0 and wanted = 0. MinReplicas (1) does not raise create either — alive is
+// already 2. So create is 0 before coldStart is consulted at all; coldStart
+// sees stale=2, current=0, PendingCreates=0, reports true, and DecideSize's
+// "if cold && create<1 { create = 1 }" is the only line that can produce the
+// server this test asserts on. The margin is comfortable — sum(stale free)
+// 80 is double spareSlots 40 — so a modest future change to either number
+// will not flip this by accident, but a change that closes the gap (raises
+// spareSlots toward 80, or lowers the two servers' free capacity) would.
+func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	a, b := "lobby-a", "lobby-b"
+	f.createServer(a)
+	f.markReadyWithPlayers(t, a, 60)
+	f.createServer(b)
+	f.markReadyWithPlayers(t, b, 60)
+
+	// A real spec update, bumping the generation exactly as bumpGeneration
+	// does, but deliberately not touching spareSlots — it must stay at the
+	// fixture's default of 40 for the arithmetic above to hold.
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+
+	reconcilePass(t, f, r)
+	fresh := f.serversOfGeneration(t, f.group.Generation)
+	if len(fresh) != 1 {
+		t.Fatalf("cold start created %d servers, want exactly 1", len(fresh))
+	}
+
+	// The replacement is still booting (Pending/Starting, never marked
+	// Ready). Once it exists it counts toward coldStart's "current" tally
+	// and its own provisional capacity (a not-yet-reporting server counts as
+	// its full maxPlayers, per provisionalCapacity), so nothing should order
+	// a second one on the next two five-second passes either — the cold
+	// start must produce one server, not one per pass.
+	for i := 0; i < 2; i++ {
+		reconcilePass(t, f, r)
+		if got := len(f.serversOfGeneration(t, f.group.Generation)); got != 1 {
+			t.Fatalf("%d servers of the new generation after pass %d, want exactly 1: "+
+				"cold start must create one server, not one per five-second pass while it boots", got, i+2)
+		}
 	}
 }

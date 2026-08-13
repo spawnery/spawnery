@@ -363,7 +363,8 @@ func (r *ServerReconciler) collectInputs(
 		// fallback deregisters to stop new joins, it does not move anyone off),
 		// and only status.wasRegistered still knows that. The controller writes
 		// it wherever it registers and resets it when it creates a fresh pod.
-		WasRegistered: srv.Status.WasRegistered,
+		WasRegistered:       srv.Status.WasRegistered,
+		RetirementRequested: srv.Spec.Retire,
 	}
 
 	if podFound {
@@ -393,6 +394,16 @@ func (r *ServerReconciler) collectInputs(
 	if srv.Status.DrainStartedAt != nil {
 		in.DrainDeadlineReached = now.Sub(srv.Status.DrainStartedAt.Time) >= group.DrainTimeout()
 	}
+	// Measured from the wait in soft drain, not from the group's generation
+	// change: a server still queued behind maxUnavailable is not failing to
+	// empty, it has not been asked yet. Zero means never, which is the CRD
+	// default and the promise that nobody is moved unless somebody asked for
+	// it.
+	if srv.Status.RetiringSince != nil {
+		if window := group.UpdateMaxStale(); window > 0 {
+			in.MaxStaleReached = now.Sub(srv.Status.RetiringSince.Time) >= window
+		}
+	}
 	if srv.Status.FailedAt != nil {
 		in.FailedRetentionElapsed = now.Sub(srv.Status.FailedAt.Time) >= group.FailedRetention()
 	}
@@ -413,6 +424,7 @@ func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
 			Type:                   spawneryv1alpha1.ServerGroupEphemeral,
 			Drain:                  &spawneryv1alpha1.DrainSpec{TimeoutSeconds: defaultDrainTimeoutSeconds},
 			FailedRetentionSeconds: defaultFailedRetentionSeconds,
+			Update:                 &spawneryv1alpha1.UpdateSpec{MaxUnavailable: 1, MaxStaleSeconds: 0},
 		},
 	}
 }
@@ -557,6 +569,11 @@ func (r *ServerReconciler) applyDecision(
 	case phase.Draining:
 		if srv.Status.DrainStartedAt == nil {
 			srv.Status.DrainStartedAt = &now
+		}
+		srv.Status.ReadySince = nil
+	case phase.Retiring:
+		if srv.Status.RetiringSince == nil {
+			srv.Status.RetiringSince = &now
 		}
 		srv.Status.ReadySince = nil
 	case phase.Failed:

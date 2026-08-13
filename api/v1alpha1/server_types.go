@@ -34,6 +34,15 @@ type ServerSpec struct {
 	// time. A server whose value is behind the group's is stale.
 	// +optional
 	GroupGeneration int64 `json:"groupGeneration,omitempty"`
+
+	// Retire asks this server to stop taking joins and empty out, without its
+	// players being moved. The ServerGroup controller sets it during a
+	// rolling update; a user never does. It is also the single signal for
+	// spec.update.maxUnavailable: a server counts against that budget while
+	// this is true, which is what tells a retirement apart from a drain a
+	// scale-down or a deletion started.
+	// +optional
+	Retire bool `json:"retire,omitempty"`
 }
 
 // ServerStatus is the observed state of a Server.
@@ -95,6 +104,12 @@ type ServerStatus struct {
 	// drain deadline.
 	// +optional
 	DrainStartedAt *metav1.Time `json:"drainStartedAt,omitempty"`
+
+	// RetiringSince is when the server entered phase Retiring. It drives
+	// spec.update.maxStaleSeconds and nothing else — what marks a server as
+	// one this update made unavailable is spec.retire.
+	// +optional
+	RetiringSince *metav1.Time `json:"retiringSince,omitempty"`
 
 	// FailedAt is when the server entered phase Failed. Drives the retention.
 	// +optional
