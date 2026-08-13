@@ -191,6 +191,37 @@ goes false — but with reason `CrashLoopBackoff` and a message saying it is not
 retrying and a spec change is the way back. A false with `NoRecentFailures`
 there would be a lie.
 
+### 3.8 Counting is scoped to the current generation
+
+`CountFailures` is given the views of the servers the group's *current*
+generation produced, and no others. It is a filter at the call site in
+`Reconcile`; the function itself takes whatever views it is handed.
+
+**The counter answers "how many attempts under this spec have failed", and
+only a current-generation server can answer it.** The previous generation's
+corpse says nothing about the current spec — which is the reasoning
+`selectFailedForPruning` already carries when it keeps the newest
+generation's failure — and by the same token a previous generation's server
+going `Ready` says nothing about it either.
+
+**Without the filter, §3.5's clear undoes itself on the very pass that
+performs it.** The clear sets `lastFailureAt` to nil, so the comparison point
+becomes the zero time, and the retained corpse of the spec just replaced is
+newer than that and is counted straight back in. The group comes out of the
+operator's fix with one failure already against it and a window it did not
+earn. This was measured, not reasoned about: with the filter removed the
+group creates *nothing* on the pass that observes the generation bump.
+
+**This does not weaken the standing constraint, because it runs in the
+opposite direction.** The rule that the *capacity arithmetic* stays
+generation-blind — `provisionalCapacity`, `readyContribution`, `readyFree`,
+carried in `ScalingInputs`' type comment — exists because a generation filter
+there makes every running server stop counting the instant the spec changes,
+so the group orders a full replacement set up to `maxReplicas`: runaway
+creates, the failure that disconnects players. A filter on *counting
+failures* can only hold a create back. It cannot order one, and it never
+reaches `DecideSize`.
+
 ## 4. Components
 
 ### 4.1 `api/v1alpha1`
@@ -281,7 +312,7 @@ A group at `minReplicas 1`. Someone points `spec.image` at a broken tag.
 
 | Time | What happens | State |
 |---|---|---|
-| 0 | generation 3 → 4, both fields cleared | the cold start creates `C` immediately — a zero counter means no window |
+| 0 | generation 3 → 4, both fields cleared | the cold start creates `C` immediately — a zero counter means no window, and generation 3's retained corpse is not counted against generation 4 (§3.8) |
 | ~90 s | `C` exhausts its restarts and fails | `failedAt` stamped |
 | +5 s | the next reconcile counts it | `consecutiveFailures 1`, `BackingOff` true with the count and the remaining time, one event |
 | +10 s | the window closes | `D` is created |

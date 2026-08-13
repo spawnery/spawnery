@@ -463,6 +463,12 @@ func TestGroupReplacesAFailedServer(t *testing.T) {
 	bringUpNamed(t, f, failed)
 	driveToFailed(t, f, failed)
 
+	// Milestone 4d: the first failure buys a ten-second window, so the
+	// replacement this test is about arrives after it rather than on the very
+	// next pass. What is asserted below is unchanged — a Failed server does not
+	// hold the group at its floor, and a replacement is created while it is
+	// kept for diagnosis — only when the group is allowed to act on it.
+	f.clock.Advance(backoffBase + time.Second)
 	f.reconcileGroup(t, r)
 
 	var replacement string
@@ -2119,5 +2125,205 @@ func TestCollectViewsCarriesTheFailureAndReadyTimestamps(t *testing.T) {
 	}
 	if !views[0].ReadySince.Equal(ready.Time) {
 		t.Errorf("ReadySince = %v, want %v", views[0].ReadySince, ready.Time)
+	}
+}
+
+// oneServerName is the name of the group's only server. It fails the test on
+// any other number, because every backoff test below reasons about one
+// specific corpse and a second server would change what the count means.
+func (f *fixture) oneServerName(t *testing.T) string {
+	t.Helper()
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want exactly 1", len(servers))
+	}
+	return servers[0].Name
+}
+
+// reloadGroup re-reads the group from the API server. The count lives on the
+// status precisely so that it survives a restart, so a test that asserts on it
+// has to read what was persisted rather than the fixture's own copy.
+func (f *fixture) reloadGroup(t *testing.T) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
+	g := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, g); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	return g
+}
+
+// setMaxReplicas moves the group's ceiling, the mirror of setMinReplicas.
+func (f *fixture) setMaxReplicas(t *testing.T, n int32) {
+	t.Helper()
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Scaling.MaxReplicas = n
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+}
+
+// failServer walks an existing server up to Ready and then past its readiness
+// losses into Failed — bringUpNamed and driveToFailed, named once for the
+// tests below. driveToFailed is what makes the Server controller stamp
+// status.failedAt, and that timestamp, not the moment the group observes it,
+// is what the count and the window are measured from.
+func (f *fixture) failServer(t *testing.T, name string) {
+	t.Helper()
+	bringUpNamed(t, f, name)
+	driveToFailed(t, f, name)
+	if f.server(name).Status.FailedAt == nil {
+		t.Fatalf("server %s reached Failed with no status.failedAt; that is the field the count reads", name)
+	}
+}
+
+// shedCount counts the servers the group has asked to remove, ignoring the
+// named ones. envtest runs no kubelet and the Server controller holds a
+// finalizer through the drain, so a deleted Server lingers carrying a deletion
+// timestamp rather than disappearing.
+func (f *fixture) shedCount(t *testing.T, ignore ...string) int {
+	t.Helper()
+	n := 0
+	for _, s := range f.listServers(t) {
+		if containsString(ignore, s.Name) || s.DeletionTimestamp.IsZero() {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// TestGroupStopsCreatingWhileItBacksOff is the point of the milestone: a group
+// whose server failed does not build another one on the next five-second pass.
+func TestGroupStopsCreatingWhileItBacksOff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+
+	name := f.oneServerName(t)
+	f.failServer(t, name)
+
+	// The pass that counts the failure is already inside the window it opens:
+	// the clock has not moved since failedAt was stamped. So the replacement
+	// the floor asks for must not be created on this pass either, and
+	// asserting that here rather than only on the next pass is deliberate.
+	// With the gate removed the replacement appears on exactly this pass, and
+	// a test that took its baseline afterwards would take that replacement for
+	// the baseline and then see nothing wrong on the next pass — where the
+	// floor is satisfied and nothing more is created anyway.
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != 1 {
+		t.Fatalf("%d servers on the pass that counted the failure, want 1: "+
+			"the group built a replacement inside the backoff window it had just opened", got)
+	}
+
+	f.clock.Advance(resyncInterval)
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != 1 {
+		t.Errorf("%d servers five seconds into a ten-second window, want 1", got)
+	}
+
+	g := f.reloadGroup(t)
+	if g.Status.ConsecutiveFailures != 1 {
+		t.Errorf("consecutiveFailures = %d, want 1", g.Status.ConsecutiveFailures)
+	}
+	if g.Status.LastFailureAt == nil {
+		t.Error("lastFailureAt was not stamped, so the count could not survive an operator restart")
+	}
+}
+
+// TestGroupCreatesAgainOnceTheWindowCloses is the other half: the backoff is a
+// wait, not a stop. One failure buys ten seconds and no more.
+func TestGroupCreatesAgainOnceTheWindowCloses(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+
+	before := len(f.listServers(t))
+	f.clock.Advance(backoffBase + time.Second)
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != before+1 {
+		t.Errorf("servers = %d, want %d: the window closed and the group should build again", got, before+1)
+	}
+}
+
+// TestGroupStillShedsWhileItBacksOff pins that the backoff holds back
+// building, not tidying up. A deletion path that waited on an unrelated
+// failure would leave surplus servers standing for the whole window.
+//
+// The window is open by construction rather than by reading a condition:
+// consecutiveFailures is 1 below and the clock has not moved past the failedAt
+// the window runs from, which is DecideBackoff's "must wait" case exactly. The
+// BackingOff condition that says the same thing in the group's status is Task
+// 5's, and this assertion is worth strengthening to it then.
+func TestGroupStillShedsWhileItBacksOff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	// No floor and a ceiling of one, so a removal is the only thing this pass
+	// can decide: nothing is short, and the surplus is unambiguous.
+	f.setMinReplicas(t, 0)
+	f.setMaxReplicas(t, 1)
+
+	// Two idle servers against that ceiling, plus a third that fails and opens
+	// the window. The failure does not count toward the group's size, so the
+	// surplus is exactly one of the two idle servers.
+	idle := []string{"lobby-idle-a", "lobby-idle-b"}
+	for _, name := range idle {
+		bringUpReady(t, f, name)
+	}
+	// The failure has to be newer than those two readySince stamps or it is
+	// not a failure since the last success and the streak never starts. The
+	// fixture's clock only moves when a test moves it, so without this the
+	// whole scenario happens in one instant and CountFailures is right to
+	// count nothing.
+	f.clock.Advance(time.Second)
+	broken := "lobby-broken"
+	f.createServer(broken)
+	f.failServer(t, broken)
+
+	f.reconcileGroup(t, r)
+
+	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got != 1 {
+		t.Fatalf("consecutiveFailures = %d, want 1: with no window open this proves nothing about shedding while one is", got)
+	}
+	if got := f.shedCount(t, broken); got != 1 {
+		t.Errorf("%d of the two idle servers were shed while the group was backing off, want 1", got)
+	}
+}
+
+// TestGenerationChangeClearsTheBackoff pins the way out. A spec change is the
+// operator's answer to whatever broke, so the streak it caused is over and the
+// next attempt is immediate.
+func TestGenerationChangeClearsTheBackoff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got != 1 {
+		t.Fatalf("consecutiveFailures = %d before the spec change, want 1: there is no streak here to clear", got)
+	}
+
+	// The operator's answer to whatever failed.
+	f.bumpGeneration(t)
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	if g.Status.ConsecutiveFailures != 0 {
+		t.Errorf("consecutiveFailures = %d after a spec change, want 0", g.Status.ConsecutiveFailures)
+	}
+	if g.Status.LastFailureAt != nil {
+		t.Error("lastFailureAt survived a spec change")
+	}
+	// A cleared counter means no window, so the group builds at once rather
+	// than serving out the wait the old spec earned.
+	if len(f.serversOfGeneration(t, g.Generation)) == 0 {
+		t.Error("the group created nothing on the pass that cleared the streak; after a spec change the next attempt is immediate")
 	}
 }

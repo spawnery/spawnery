@@ -183,6 +183,45 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	// The counter and the two conditions belong to the spec that produced the
+	// failures. A generation change is the operator's answer to whatever broke,
+	// so the streak it caused is over and the next attempt is immediate.
+	if group.Generation != group.Status.ObservedGeneration {
+		group.Status.ConsecutiveFailures = 0
+		group.Status.LastFailureAt = nil
+		meta.RemoveStatusCondition(&group.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+		meta.RemoveStatusCondition(&group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	}
+
+	var lastFailure time.Time
+	if group.Status.LastFailureAt != nil {
+		lastFailure = group.Status.LastFailureAt.Time
+	}
+	failures, newestFailure := CountFailures(ofGeneration(views, group.Generation),
+		group.Status.ConsecutiveFailures, lastFailure)
+	group.Status.ConsecutiveFailures = failures
+	// Only written when this pass actually counted something. CountFailures
+	// returns the timestamp it counted from unchanged when it counted nothing,
+	// including when a success reset the streak to zero — so what stays on the
+	// status is the watermark of the newest failure already counted, which is
+	// what keeps the count idempotent across a five-second resync. Clearing it
+	// on a reset would be the opposite of durable: the next pass would count
+	// from the zero time and every retained corpse again with it. Moving it
+	// forward to the success instead would be durable, but it would write a
+	// time at which nothing failed into a status field an operator reads as
+	// lastFailureAt. The residual edge — a corpse older than a success that has
+	// since left the views being counted once more — is bounded by what
+	// pruneFailed retains, which is one.
+	if !newestFailure.IsZero() {
+		stamped := metav1.NewTime(newestFailure)
+		group.Status.LastFailureAt = &stamped
+	}
+	backoff := DecideBackoff(BackoffInputs{
+		ConsecutiveFailures: failures,
+		LastFailureAt:       newestFailure,
+		Now:                 r.Clock(),
+	})
+
 	// Sizing is the only step that needs a usable Network: a Server created
 	// without one could never get a pod, would run into its startup deadline and
 	// would be replaced over and over. That holds whether the Network is
@@ -198,7 +237,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	sized := false
 	if networkUsable && group.IsEphemeral() {
 		var err error
-		if decision, err = r.size(ctx, group, views, servers); err != nil {
+		if decision, err = r.size(ctx, group, views, servers, backoff); err != nil {
 			return ctrl.Result{}, err
 		}
 		sized = true
@@ -282,6 +321,43 @@ func networkNotAcceptedMessage(network *spawneryv1alpha1.Network) string {
 	return fmt.Sprintf("network %q has not been accepted yet", network.Name)
 }
 
+// ofGeneration narrows the views to the servers the group's current spec
+// produced, which is the set the failure count is taken over.
+//
+// A streak belongs to the spec that caused it. The previous generation's corpse
+// says nothing about the new image — selectFailedForPruning already keeps the
+// newest generation's failure for exactly that reason — and a previous
+// generation's server going Ready says nothing about it either.
+//
+// It is also what makes the clear above mean anything. Without it the reset
+// would be undone on the very pass that performs it: the counter goes to zero
+// and lastFailureAt to nil, and the retained corpse of the spec just replaced,
+// now newer than a zero watermark, is counted straight back into it. A group
+// that had given up would come back with one failure already against it and a
+// window it did not earn, and the "the next attempt is immediate" this whole
+// branch exists for would be false.
+//
+// A later reader will arrive believing the generation is forbidden anywhere
+// near this code, so: the standing constraint is that the *capacity
+// arithmetic* stays generation-blind. ScalingInputs carries the reason — a
+// generation filter in provisionalCapacity or readyFree makes every running
+// server stop counting the instant any field of the spec changes, so the group
+// orders a full replacement set up to maxReplicas: runaway creates, which is
+// the failure that disconnects players.
+//
+// This is a filter on *counting failures*, and it runs in the other direction.
+// The strictest thing it can do is hold a create back. It cannot order one, and
+// it never reaches DecideSize at all. Different direction, different rule.
+func ofGeneration(views []ServerView, generation int64) []ServerView {
+	out := make([]ServerView, 0, len(views))
+	for _, v := range views {
+		if v.Generation == generation {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // size brings the group to the size DecideSize asks for and reports that
 // decision, so Reconcile can publish the part of it that belongs on the status.
 func (r *ServerGroupReconciler) size(
@@ -289,6 +365,7 @@ func (r *ServerGroupReconciler) size(
 	group *spawneryv1alpha1.ServerGroup,
 	views []ServerView,
 	servers map[string]*spawneryv1alpha1.Server,
+	backoff BackoffDecision,
 ) (SizeDecision, error) {
 	logger := log.FromContext(ctx)
 	if group.Spec.Scaling == nil {
@@ -315,12 +392,22 @@ func (r *ServerGroupReconciler) size(
 		PendingRetires: pendingRetires,
 	})
 
-	for i := int32(0); i < decision.Create; i++ {
-		name, err := r.createServer(ctx, group)
-		if err != nil {
-			return decision, err
+	// The gate is on execution, not on the decision. DecideSize keeps computing
+	// what the group needs, so Limited and ColdStartBlocked go on telling the
+	// truth about the shortfall while the backoff separately says the group is
+	// waiting — two facts an operator needs to see apart. It also means
+	// expectations never reserves a create that did not happen.
+	//
+	// Only creation is gated. The deletes and retirements below run either way:
+	// they touch players, and must not wait on an unrelated failure.
+	if backoff.MayCreate {
+		for i := int32(0); i < decision.Create; i++ {
+			name, err := r.createServer(ctx, group)
+			if err != nil {
+				return decision, err
+			}
+			r.Expectations.expectCreated(key, name)
 		}
-		r.Expectations.expectCreated(key, name)
 	}
 	if int32(len(decision.Delete)) < decision.Surplus {
 		logger.Info("fewer free servers than the surplus, trying again later",
