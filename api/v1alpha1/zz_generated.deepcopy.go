@@ -751,6 +751,10 @@ func (in *ServerStatus) DeepCopyInto(out *ServerStatus) {
 		in, out := &in.DrainStartedAt, &out.DrainStartedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.RetiringSince != nil {
+		in, out := &in.RetiringSince, &out.RetiringSince
+		*out = (*in).DeepCopy()
+	}
 	if in.FailedAt != nil {
 		in, out := &in.FailedAt, &out.FailedAt
 		*out = (*in).DeepCopy()

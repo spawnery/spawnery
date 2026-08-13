@@ -85,6 +85,15 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              retire:
+                description: |-
+                  Retire asks this server to stop taking joins and empty out, without its
+                  players being moved. The ServerGroup controller sets it during a
+                  rolling update; a user never does. It is also the single signal for
+                  spec.update.maxUnavailable: a server counts against that budget while
+                  this is true, which is what tells a retirement apart from a drain a
+                  scale-down or a deletion started.
+                type: boolean
             required:
             - groupRef
             type: object
@@ -202,6 +211,13 @@ spec:
                 description: Registered reports whether the proxies currently know
                   this server.
                 type: boolean
+              retiringSince:
+                description: |-
+                  RetiringSince is when the server entered phase Retiring. It drives
+                  spec.update.maxStaleSeconds and nothing else — what marks a server as
+                  one this update made unavailable is spec.retire.
+                format: date-time
+                type: string
               slots:
                 description: Slots is the player capacity reported by the agent.
                 format: int32

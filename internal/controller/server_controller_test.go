@@ -1384,3 +1384,42 @@ func TestAFailedRegisterFailsTheReconcile(t *testing.T) {
 		t.Error("status.wasRegistered is false, but it must be written before Register is even called")
 	}
 }
+
+// TestServerRetireFieldsRoundTripThroughTheAPIServer exists to catch the
+// specific mistake of editing the Go type and forgetting make manifests: the
+// API server silently drops unknown fields, so a Go-only change round-trips
+// as zero. Only a round trip through a real API server catches that, which is
+// why this is here and not a struct test.
+func TestServerRetireFieldsRoundTripThroughTheAPIServer(t *testing.T) {
+	f := newFixture(t)
+	ctx := f.ctx
+
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "retire-roundtrip", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: f.group.Name},
+			Retire:   true,
+		},
+	}
+	if err := f.c.Create(ctx, srv); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = f.c.Delete(ctx, srv) })
+
+	now := metav1.Now()
+	srv.Status.RetiringSince = &now
+	if err := f.c.Status().Update(ctx, srv); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+
+	got := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(ctx, client.ObjectKeyFromObject(srv), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if !got.Spec.Retire {
+		t.Error("spec.retire did not survive the API server; run make manifests")
+	}
+	if got.Status.RetiringSince == nil {
+		t.Error("status.retiringSince did not survive the API server; run make manifests")
+	}
+}
