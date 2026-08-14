@@ -287,9 +287,20 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// isOccupied's own rule also requires wasRegistered, because nobody is
 	// ever routed to a server the proxies were not told about. A proxy has no
 	// such qualifier: it sits behind the Service and players reach it
-	// directly, so there is no state in which a stale count is safe to read as
-	// empty. Staleness alone is enough, and the cost is bounded — a proxy
-	// whose agent never appears is removed by the deadline rather than never.
+	// directly, so for a pod that is still running there is no state in which
+	// a stale count is safe to read as empty. Staleness alone is enough, and
+	// the cost is bounded — a proxy whose agent never appears is removed by
+	// the deadline rather than never.
+	//
+	// isOccupied has a third term this deliberately does not model:
+	// sessionsGone, which overrides even a non-zero count, because a pod that
+	// reached a terminal state took its sessions down with it. A crashed
+	// surplus proxy therefore waits out its full deadline here rather than
+	// going immediately, and is then announced as losing players who were
+	// disconnected by the crash. That is wasteful and the event overstates,
+	// but both err towards keeping a pod that might still have someone on it,
+	// and the wait is bounded. Reading pod state to decide it is a wider
+	// change than this task, which only ever asks the registry.
 	for i := len(pods) - 1; i >= int(group.Spec.Replicas); i-- {
 		pod := &pods[i]
 		snap := r.Agents.Lookup(string(pod.UID))

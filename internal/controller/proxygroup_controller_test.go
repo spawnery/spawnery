@@ -348,6 +348,14 @@ func TestProxyGroupScalesDown(t *testing.T) {
 	sortPodsOldestFirst(before)
 	oldest, unreported, newest := before[0].Name, before[1].Name, before[2].Name
 	f.reportProxyPlayers(t, before[2], 0)
+	// The oldest pod gets a fresh zero too, which is what keeps this test's
+	// grip on the loop's lower bound. Under correct code it is outside the
+	// deletion window entirely and nothing here touches it, so every assertion
+	// below is unchanged by this line. But widen the bound to `i >= 0` and the
+	// oldest becomes the one pod in range that is known empty — without this
+	// report it would read stale, be kept, and the mutation would produce the
+	// same two survivors the test expects and pass clean.
+	f.reportProxyPlayers(t, before[0], 0)
 
 	group = f.proxyGroup("gateway")
 	group.Spec.Replicas = 1
@@ -732,16 +740,20 @@ func TestSurplusProxyIsMarkedWithWhenTheDrainStarted(t *testing.T) {
 // would push the deadline forever and the drain would never end.
 //
 // This calls markDraining directly rather than driving two full Reconcile
-// passes over a scaled-down group. Two passes would now keep the pod alive —
-// Task 5's wait does that, given a player on it — but they would still prove
-// nothing about this guard: the annotation the second pass reads is the one
-// the first pass left on the object, so a markDraining that re-stamped freely
-// and one that refused would be told apart only by a clock that moved in
-// between and a pod re-read from the API server. Calling markDraining
-// directly — the exact call reconcileReplicas makes once per live pod per
-// pass — is what actually exercises a second call to the guard, with the pod
-// re-read between the two so the guard reacts to what was persisted rather
-// than to what this test still holds in memory.
+// passes over a scaled-down group, and the reason is narrowness, not
+// impossibility: two passes would work now that Task 5's wait exists, given a
+// reported player to hold the pod open across them. That is the point — the
+// rationale that used to stand here said two passes would prove nothing
+// because the surplus pod was deleted in the same reconcile that marked it,
+// which was true when it was written and which this task falsified.
+//
+// What is left is a straightforward trade. The direct call is the exact call
+// reconcileReplicas makes once per live pod per pass, it exercises the guard
+// without a scale-down, a player report and two full reconciles standing
+// between the test and the thing it is testing, and it does not silently
+// depend on the deletion rule staying as it is today. The pod is re-read from
+// the API server between the two calls, so the guard still reacts to what was
+// persisted rather than to what this test holds in memory.
 func TestMarkDrainingDoesNotMoveAnExistingMark(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -839,11 +851,21 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 // server-side.
 //
 // It overrides nothing else. It used to swallow Delete as well, so that the
-// pods reconcileReplicas walked would survive to be inspected; the pod this
-// test inspects now survives on its own, because a player is reported on it
-// and Task 5's wait leaves it alone. Delete therefore reaches the real client,
-// and the racing pod — which has nobody on it — is really removed, which is
-// what would happen in a cluster.
+// pods reconcileReplicas walked would survive to be inspected. Delete now
+// reaches the real client, and neither surplus pod is removed on this pass —
+// each for its own reason, and both of them the operator's real behaviour
+// rather than a fake's:
+//
+//   - the inspected pod has a player reported on it, so the wait holds it;
+//   - the racing pod has no player count at all, because nothing reports one
+//     for it, and an unknown count is treated as occupied. Its deadline has
+//     not started either: markDraining's patch is the call this fake fails, so
+//     no draining-since was ever persisted and nothing can expire.
+//
+// The second bullet is the whole point of the rule this milestone added, so it
+// is asserted at the end of the test rather than left as a claim here. A
+// comment is not a test, and this one described the deletion rule backwards
+// until the reviewer traced it.
 type racingPodClient struct {
 	client.Client
 	racingPod string
@@ -908,6 +930,15 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	if got := f.proxies.lastReady(string(otherPod.UID)); got == nil || *got {
 		t.Errorf("the pod after the racing one was told ready=%v, want false", got)
 	}
+	// The racing pod survives too, and for the reason racingPodClient's comment
+	// gives: nothing ever reported a count for it, and an unknown count is
+	// treated as occupied. Asserted rather than described, so that a future
+	// change to the deletion rule cannot make that comment false in silence —
+	// which is exactly what it did before.
+	if _, ok := f.pod(racing.Name); !ok {
+		t.Error("the racing pod was deleted; its player count is unknown, not zero, " +
+			"and an unknown count must be treated as occupied")
+	}
 }
 
 // reportProxyPlayers puts a player count on a proxy pod the way that pod's own
@@ -927,8 +958,15 @@ func (f *fixture) reportProxyPlayers(t *testing.T, pod corev1.Pod, players int32
 	if err := f.agents.ReportPlayers(uid, players, 100); err != nil {
 		t.Fatalf("report %d players for proxy %s: %v", players, pod.Name, err)
 	}
-	if got := f.agents.Lookup(uid).Players; got != players {
-		t.Fatalf("registry holds %d players for proxy %s, want %d", got, pod.Name, players)
+	switch snap := f.agents.Lookup(uid); {
+	case snap.Players != players:
+		t.Fatalf("registry holds %d players for proxy %s, want %d", snap.Players, pod.Name, players)
+	case snap.PlayersStale:
+		// The count check above cannot catch a failed report when players is
+		// zero — an unknown key reports zero too, which is the whole reason
+		// this read-back exists. Freshness is what tells the two apart, and a
+		// fresh zero is precisely what TestProxyGroupScalesDown turns on.
+		t.Fatalf("registry holds a stale count for proxy %s; the report did not land", pod.Name)
 	}
 }
 
@@ -963,9 +1001,24 @@ func containsEvent(events []string, reason string) bool {
 	return false
 }
 
+// containsEventType reports whether any event carries the given type, matched
+// as FakeRecorder's first field for the reason containsEvent matches the
+// second: "Warning" is an ordinary English word that a message body could
+// easily contain, and a substring match over the whole line would accept one
+// that did while the event itself was Normal.
+func containsEventType(events []string, eventType string) bool {
+	for _, e := range events {
+		if fields := strings.SplitN(e, " ", 2); len(fields) >= 1 && fields[0] == eventType {
+			return true
+		}
+	}
+	return false
+}
+
 // containsSubstring reports whether any event's rendered text contains want.
-// Unlike containsEvent this looks at the message body, which is where the cost
-// of a timed-out drain is named.
+// Unlike containsEvent and containsEventType this looks at the message body,
+// which is where the cost of a timed-out drain is named and where there is no
+// field to match on.
 func containsSubstring(events []string, want string) bool {
 	for _, e := range events {
 		if strings.Contains(e, want) {
@@ -1089,7 +1142,7 @@ func TestTheDeadlineDeletesLoudly(t *testing.T) {
 	if !containsSubstring(ev, "3 player") {
 		t.Errorf("events = %v, want the number of players lost named", ev)
 	}
-	if !containsSubstring(ev, "Warning") {
+	if !containsEventType(ev, "Warning") {
 		t.Errorf("events = %v, want the deadline recorded as a Warning — it cost somebody their session", ev)
 	}
 }
