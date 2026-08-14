@@ -29,11 +29,13 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/render"
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -122,6 +124,12 @@ func proxyGroupReconciler(f *fixture) *ProxyGroupReconciler {
 		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
 		Proxies:       f.proxies,
 		Clock:         f.clock.Now,
+		// Every reconciler helper in this package wires a recorder whether or
+		// not the test under it looks at one, so that a path which only fires
+		// under an unusual condition — here, a drain that ran out of time —
+		// cannot nil-dereference in a test that stumbled into it. A test that
+		// wants to read the events replaces this with its own handle.
+		Recorder: record.NewFakeRecorder(100),
 	}
 }
 
@@ -615,37 +623,31 @@ func TestSurplusProxyIsToldToStopTakingConnections(t *testing.T) {
 	}
 }
 
-// deleteSuppressingClient lets everything through except Delete. A pod these
-// tests create never leaves Pending — envtest runs no kubelet to move it any
-// further — and envtest's apiserver does not hold a Pending pod back for its
-// grace period the way it would a Running one: r.Delete removes the object
-// outright, in the same Reconcile call that just patched its draining
-// annotation onto it, before a test could ever read the annotation back.
-// Suppressing the delete is what lets these tests observe what the
-// assertion loop actually wrote, and it is also an honest stand-in for
-// Task 5's behaviour, which will stop deleting a draining pod immediately —
-// exactly what this fake pretends is already true.
-type deleteSuppressingClient struct {
-	client.Client
-}
-
-// Delete implements client.Client by doing nothing.
-func (deleteSuppressingClient) Delete(context.Context, client.Object, ...client.DeleteOption) error {
-	return nil
-}
-
 // TestSurplusProxyIsMarkedWithWhenTheDrainStarted proves the deadline is
 // written down: without it, nothing bounds how long the drain may run.
+//
+// The surplus proxy is given a player first, and that is load-bearing rather
+// than colour. Until Task 5 these tests wrapped the client in a fake that
+// swallowed Delete, because reconcileReplicas removed the surplus pod outright
+// in the very Reconcile that stamped it — a pod here never leaves Pending,
+// envtest runs no kubelet to move it further, and envtest's apiserver does not
+// hold an unscheduled pod back for a grace period the way it would a running
+// one, so there was no object left to read the annotation off. Now the wait is
+// real, and the thing that makes a draining pod linger is the thing that makes
+// it linger in a cluster: somebody is still on it. Reporting a player is what
+// retires the fake, and it is strictly the stronger test — with Delete
+// suppressed, this test could not have told a working wait from no wait at
+// all.
 func TestSurplusProxyIsMarkedWithWhenTheDrainStarted(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	r.Client = deleteSuppressingClient{Client: r.Client}
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
 
 	before := f.proxyPods("gateway")
 	sortPodsOldestFirst(before)
 	surplusName := before[1].Name
+	f.reportProxyPlayers(t, before[1], 1)
 
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
@@ -668,18 +670,16 @@ func TestSurplusProxyIsMarkedWithWhenTheDrainStarted(t *testing.T) {
 // would push the deadline forever and the drain would never end.
 //
 // This calls markDraining directly rather than driving two full Reconcile
-// passes over a scaled-down group: reconcileReplicas' own delete loop is
-// unchanged by this task, and a surplus pod here never leaves Pending —
-// envtest runs no kubelet — so, exactly as deleteSuppressingClient's comment
-// above explains, r.Delete removes it outright in the same reconcile that
-// marked it. There is no deletion timestamp and no pod left for a second
-// Reconcile to revisit, so driving two passes would prove nothing either
-// way: the second pass would never call markDraining on that pod at all,
-// guard or no guard, and this test would pass even after the mutation in
-// Step 6. Calling markDraining directly — the exact call reconcileReplicas
-// itself makes once per live pod per pass — is what actually exercises a
-// second call to the guard, and the pod is re-read from the API server
-// between the two calls so the guard reacts to what was actually persisted.
+// passes over a scaled-down group. Two passes would now keep the pod alive —
+// Task 5's wait does that, given a player on it — but they would still prove
+// nothing about this guard: the annotation the second pass reads is the one
+// the first pass left on the object, so a markDraining that re-stamped freely
+// and one that refused would be told apart only by a clock that moved in
+// between and a pod re-read from the API server. Calling markDraining
+// directly — the exact call reconcileReplicas makes once per live pod per
+// pass — is what actually exercises a second call to the guard, with the pod
+// re-read between the two so the guard reacts to what was persisted rather
+// than to what this test still holds in memory.
 func TestMarkDrainingDoesNotMoveAnExistingMark(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -724,24 +724,23 @@ func TestMarkDrainingDoesNotMoveAnExistingMark(t *testing.T) {
 // surplus pod is actually gone corrects itself with nothing left to clean
 // up.
 //
-// It uses deleteSuppressingClient for the same reason
-// TestSurplusProxyIsMarkedWithWhenTheDrainStarted does: reconcileReplicas'
-// delete loop is unchanged by this task and would otherwise remove the
-// surplus pod outright in the very reconcile that marks it, leaving no
-// object for the "scale back up" pass to correct. Suppressing the delete
-// keeps the same pod in play, which is what actually exercises "derived,
-// not remembered" rather than a coincidence of a fresh pod happening to
-// start out ready.
+// The player on the surplus proxy is what keeps the same pod in play across
+// both passes, which is what makes this test about "derived, not remembered"
+// rather than about a fresh replacement pod happening to start out ready. It
+// replaces the Delete-swallowing fake this test used before Task 5, for the
+// reason TestSurplusProxyIsMarkedWithWhenTheDrainStarted spells out: the pod
+// now survives because the operator waits for it, not because a double hid
+// the deletion.
 func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	r.Client = deleteSuppressingClient{Client: r.Client}
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
 
 	before := f.proxyPods("gateway")
 	sortPodsOldestFirst(before)
 	surplus := before[1]
+	f.reportProxyPlayers(t, surplus, 1)
 
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
@@ -774,13 +773,15 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 
 // racingPodClient simulates a pod that was evicted or deleted between the
 // informer's list and markDraining's patch: Patch on the named pod returns
-// NotFound, exactly as the real client would if the object were already
-// gone server-side. Delete is also suppressed, the same way
-// deleteSuppressingClient's is, so every pod in reconcileReplicas' assertion
-// loop survives to be inspected afterward — including the pod after the
-// racing one in iteration order, which is what
-// TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile actually
-// checks.
+// NotFound, exactly as the real client would if the object were already gone
+// server-side.
+//
+// It overrides nothing else. It used to swallow Delete as well, so that the
+// pods reconcileReplicas walked would survive to be inspected; the pod this
+// test inspects now survives on its own, because a player is reported on it
+// and Task 5's wait leaves it alone. Delete therefore reaches the real client,
+// and the racing pod — which has nobody on it — is really removed, which is
+// what would happen in a cluster.
 type racingPodClient struct {
 	client.Client
 	racingPod string
@@ -792,12 +793,6 @@ func (c racingPodClient) Patch(ctx context.Context, obj client.Object, patch cli
 		return apierrors.NewNotFound(corev1.Resource("pods"), obj.GetName())
 	}
 	return c.Client.Patch(ctx, obj, patch, opts...)
-}
-
-// Delete implements client.Client by doing nothing, for the same reason
-// deleteSuppressingClient's does.
-func (racingPodClient) Delete(context.Context, client.Object, ...client.DeleteOption) error {
-	return nil
 }
 
 // TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile proves
@@ -831,6 +826,10 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	}
 	sortPodsOldestFirst(before)
 	racing, other := before[1], before[2]
+	// The pod this test inspects has to still be there to inspect. A player on
+	// it is what does that now, in place of the Delete-swallowing override
+	// racingPodClient used to carry.
+	f.reportProxyPlayers(t, other, 1)
 
 	r.Client = racingPodClient{Client: r.Client, racingPod: racing.Name}
 	f.setProxyReplicas("gateway", 1)
@@ -846,5 +845,189 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	}
 	if got := f.proxies.lastReady(string(otherPod.UID)); got == nil || *got {
 		t.Errorf("the pod after the racing one was told ready=%v, want false", got)
+	}
+}
+
+// reportProxyPlayers puts a player count on a proxy pod the way that pod's own
+// agent would, and proves the registry took it.
+//
+// Connect comes first because Registry.ReportPlayers refuses a count for a key
+// with no live stream. The read-back afterwards is not ceremony: Lookup on a
+// key it does not know returns a zero Players, which is indistinguishable from
+// a genuinely empty proxy and is exactly the case the deletion loop acts on. A
+// test whose setup silently failed here would go on believing it had put three
+// players on a proxy while asserting against an empty one, and would pass for
+// the wrong reason.
+func (f *fixture) reportProxyPlayers(t *testing.T, pod corev1.Pod, players int32) {
+	t.Helper()
+	uid := string(pod.UID)
+	f.agents.Connect(uid, agent.RoleProxy)
+	if err := f.agents.ReportPlayers(uid, players, 100); err != nil {
+		t.Fatalf("report %d players for proxy %s: %v", players, pod.Name, err)
+	}
+	if got := f.agents.Lookup(uid).Players; got != players {
+		t.Fatalf("registry holds %d players for proxy %s, want %d", got, pod.Name, players)
+	}
+}
+
+// drainEvents empties a FakeRecorder and returns what it held, so a test can
+// make several assertions about the same batch. Reading the channel twice
+// would not work: each event is delivered once.
+func drainEvents(rec *record.FakeRecorder) []string {
+	var out []string
+	for {
+		select {
+		case e := <-rec.Events:
+			out = append(out, e)
+		default:
+			return out
+		}
+	}
+}
+
+// containsEvent reports whether any event carries the given reason.
+//
+// FakeRecorder renders an event as "<type> <reason> <message>", so the reason
+// is the second space-separated field, and it is compared exactly rather than
+// as a substring of the whole line: the reason also appears in prose in this
+// file, and a message that merely mentioned it must not be able to stand in
+// for an event that was actually recorded.
+func containsEvent(events []string, reason string) bool {
+	for _, e := range events {
+		if fields := strings.SplitN(e, " ", 3); len(fields) >= 2 && fields[1] == reason {
+			return true
+		}
+	}
+	return false
+}
+
+// containsSubstring reports whether any event's rendered text contains want.
+// Unlike containsEvent this looks at the message body, which is where the cost
+// of a timed-out drain is named.
+func containsSubstring(events []string, want string) bool {
+	for _, e := range events {
+		if strings.Contains(e, want) {
+			return true
+		}
+	}
+	return false
+}
+
+// TestADrainingProxyWithPlayersIsNotDeleted is the promise of the milestone.
+// Readiness stops the inflow — the Service drops the endpoint, so no new
+// connection arrives — and says nothing whatever about the three people
+// already connected, whose TCP sessions Kubernetes does not close. The wait is
+// therefore for empty, not for NotReady.
+//
+// The second pass, a resync interval later, is the part that matters: one pass
+// could be explained by a deletion that simply had not landed yet.
+func TestADrainingProxyWithPlayersIsNotDeleted(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	surplus := before[1]
+	f.reportProxyPlayers(t, surplus, 3)
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want the draining proxy still there with its three players", len(pods))
+	}
+	if _, ok := f.pod(surplus.Name); !ok {
+		t.Error("the draining proxy was deleted with three players on it")
+	}
+	// It must be draining, not merely surviving: a reconciler that had stopped
+	// asserting readiness altogether would also leave two pods standing.
+	if got := f.proxies.lastReady(string(surplus.UID)); got == nil || *got {
+		t.Errorf("the draining proxy was told ready=%v, want false", got)
+	}
+}
+
+// TestADrainingProxyIsDeletedOnceEmpty is the other half: the wait ends by
+// itself when the last player leaves, with no deadline involved and nothing
+// for an operator to do.
+func TestADrainingProxyIsDeletedOnceEmpty(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	surplus := before[1]
+	f.reportProxyPlayers(t, surplus, 3)
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+	if got := len(f.proxyPods("gateway")); got != 2 {
+		t.Fatalf("proxy pods = %d before the proxy emptied, want 2 — the wait never started", got)
+	}
+
+	f.reportProxyPlayers(t, surplus, 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := len(f.proxyPods("gateway")); got != 1 {
+		t.Errorf("got %d pods after the proxy emptied, want 1", got)
+	}
+}
+
+// TestTheDeadlineDeletesLoudly covers the one path in this milestone that
+// disconnects anybody.
+//
+// Nobody is moved, and that is not an omission: a draining server can hand its
+// players to another backend because the connection terminates at the proxy,
+// which stays, while a draining proxy has no such option because the
+// connection terminates at the proxy being removed. So the deadline is a real
+// cost, it is configured rather than accidental, and the event has to name how
+// many were lost — a Warning that only said "timed out" would leave nobody
+// able to tell a drain of three players from a drain of three hundred.
+func TestTheDeadlineDeletesLoudly(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	surplus := before[1]
+	f.reportProxyPlayers(t, surplus, 3)
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+
+	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := len(f.proxyPods("gateway")); got != 1 {
+		t.Fatalf("got %d pods after the deadline, want 1", got)
+	}
+	ev := drainEvents(rec)
+	if !containsEvent(ev, "ProxyDrainTimeout") {
+		t.Fatalf("events = %v, want a ProxyDrainTimeout", ev)
+	}
+	if !containsSubstring(ev, "3 player") {
+		t.Errorf("events = %v, want the number of players lost named", ev)
+	}
+	if !containsSubstring(ev, "Warning") {
+		t.Errorf("events = %v, want the deadline recorded as a Warning — it cost somebody their session", ev)
 	}
 }

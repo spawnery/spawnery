@@ -29,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -71,17 +72,17 @@ func NewProxyName(group string) string { return NewServerName(group) }
 //
 // Unlike ServerGroupReconciler it manages pods directly. Proxies are
 // fungible: there is no per-proxy object and no state machine. Draining one
-// is only the readiness contract — telling a surplus pod's own agent to stop
-// taking connections and dating when that started — not a wait: the pod is
-// still deleted immediately in reconcileReplicas, exactly as before this
-// existed. Making deletion wait for the drain to actually finish belongs to
-// a later task.
+// is the readiness contract — telling a surplus pod's own agent to stop
+// taking connections and dating when that started — plus the wait that
+// contract exists for: reconcileReplicas removes a surplus pod once it is
+// empty, or once its deadline has passed, and not before.
 //
-// It emits no Kubernetes events: this milestone's only visible signal is the
-// Accepted condition, and events for pod creation or deletion are additional
-// behaviour nothing here asks for. If a later milestone wants them, adding an
-// EventRecorder field back alongside its call sites is a smaller change than
-// carrying a field nothing writes to in the meantime.
+// It emits exactly one Kubernetes event, and only from that deadline. Pod
+// creation and ordinary deletion stay silent: they are recorded on the
+// objects themselves and an event would say nothing the group's status does
+// not. A drain that ran out of time is different in kind — it is the only
+// thing in this milestone that disconnects a player, and nothing else on the
+// object would ever say it happened.
 type ProxyGroupReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -100,6 +101,10 @@ type ProxyGroupReconciler struct {
 	Proxies ProxyReadinessSetter
 	// Clock is injectable so the drain deadline is testable.
 	Clock func() time.Time
+	// Recorder announces the one thing here a user cannot see any other way:
+	// a drain that hit its deadline with players still on the proxy. See the
+	// type comment for why nothing else is announced.
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
@@ -256,12 +261,61 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		}
 	}
 
+	// Removal waits for the pod to be empty. Readiness stopped the inflow —
+	// the Service dropped the endpoint, so no new connection arrives — but it
+	// said nothing about the players already on it, whose TCP sessions
+	// Kubernetes does not close. Deleting at NotReady would disconnect exactly
+	// the people the readiness contract exists to protect.
+	//
+	// Nobody is moved, and that is not an omission. A draining server can hand
+	// its players to another backend because the client's connection
+	// terminates at the proxy, which stays; a draining proxy has no such
+	// option, because the connection terminates at the proxy being removed.
+	// So the deadline below is the only path here that disconnects anyone.
 	for i := len(pods) - 1; i >= int(group.Spec.Replicas); i-- {
-		if err := r.Delete(ctx, &pods[i]); err != nil && !apierrors.IsNotFound(err) {
+		pod := &pods[i]
+		players := r.Agents.Lookup(string(pod.UID)).Players
+		since, err := drainingSince(pod)
+		if err != nil {
+			return err
+		}
+		expired := !since.IsZero() && r.Clock().Sub(since) >= group.DrainTimeout()
+
+		switch {
+		case players == 0:
+			// Empty: nobody is on it, so removing it costs nothing.
+		case expired:
+			// The one path in this milestone that disconnects anybody. It is
+			// configured rather than accidental, so it says so loudly and
+			// names the cost.
+			r.Recorder.Eventf(group, corev1.EventTypeWarning, "ProxyDrainTimeout",
+				"deleting proxy %s after %s with %d player(s) still connected",
+				pod.Name, group.DrainTimeout(), players)
+		default:
+			// Still draining. Nothing to do; the next pass looks again.
+			continue
+		}
+		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+// drainingSince reads the annotation markDraining writes. A pod without one
+// has not been asked to drain yet, which reads as the zero time and therefore
+// as no deadline.
+func drainingSince(pod *corev1.Pod) (time.Time, error) {
+	raw, ok := pod.Annotations[ProxyDrainingSinceAnnotation]
+	if !ok {
+		return time.Time{}, nil
+	}
+	at, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("proxy %s has an unparsable %s: %w",
+			pod.Name, ProxyDrainingSinceAnnotation, err)
+	}
+	return at, nil
 }
 
 // markDraining writes or removes the annotation that dates a proxy's drain.
