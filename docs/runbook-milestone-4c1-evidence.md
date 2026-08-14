@@ -853,13 +853,43 @@ actually showed them, which is the part nobody can reconstruct later.
 ## 11. Clean up
 
 ```bash
-pkill -f 'go run ./cmd/spawnery-operator'   # kills it from whichever shell you run this in
+pkill -f '[g]o run ./cmd/spawnery-operator'
 podman rm -f spawnery-4c1-relay
 systemd-run --scope --user --property=Delegate=yes \
   env KIND_EXPERIMENTAL_PROVIDER=podman \
   nix develop -c kind delete cluster --name spawnery-4c1
 rm -f /tmp/spawnery-4c1-kind.yaml /tmp/spawnery-join
 ```
+
+The brackets around the `g` are not decoration. `pkill -f` matches against
+every process's full command line, including the shell running this very
+line, and an unbracketed pattern that appears verbatim in that shell's own
+invocation kills the shell instead of — or as well as — the operator.
+Typed at an interactive prompt this cannot happen, because the shell's own
+command line is just the shell's name; it matters here because this runbook
+may be driven non-interactively for its cluster half, one script fed to a
+shell as `sh -c "<script text>"`, and a shell whose own invocation contains
+`go run ./cmd/spawnery-operator` — because an earlier step in that same
+script started it — is exactly such a match. `[g]o run` cannot appear
+literally in any command's own text, so it cannot match that command's own
+invocation, only a live process's argument list.
+
+**Confirm it, rather than trust it.** `go run` compiles to a temporary
+binary and runs it as a child process; killing the `go run` wrapper does not
+reliably kill that child — measured in this repository's devshell, sending
+`SIGTERM` to the wrapper left the compiled binary running, reparented and
+orphaned. So:
+
+```bash
+pgrep -af '[s]pawnery-operator'   # expect no output
+```
+
+If anything is still listed, `kill` it by the PID `pgrep` printed. A
+surviving operator does not stop working just because you have moved on: it
+keeps reconciling, silently, for as long as the API server it is talking to
+still answers — which, until `kind delete cluster` above actually finishes,
+is the live cluster you have just measured. Confirm it is gone before
+trusting that the run is over.
 
 `gateway-pin` and the `evidence.local/pin` label go with the cluster; neither
 exists anywhere in this repository's manifests, and neither should be
