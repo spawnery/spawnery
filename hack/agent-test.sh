@@ -612,11 +612,13 @@ chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding
 FULL_SYNC_AFTER=45
 
 # And how long it then holds the SetReady back, counted from that FullSync.
-# Everything between the sync and the withdrawal has to fit inside it: the poll
-# that notices the sync, the open-gate probe, and this phase's player count
-# assertion. Generous for the same reason FULL_SYNC_AFTER is - and it is a lower
-# bound on nothing, so overrunning it only costs a failed run with the guard
-# below naming this variable.
+#
+# What has to fit inside it is the poll that notices the sync and the open-gate
+# probe, and nothing after them: a withdrawal that lands before the gate has
+# been seen open is a run that measured this script's flags rather than the
+# agent, and the two arms of the guard below say so by name. The player count
+# assertion that follows may overrun it freely - the only difference is that
+# closed_after reads 0. Generous for the same reason FULL_SYNC_AFTER is.
 SET_READY_AFTER=20s
 
 # renew-after is 180 rather than the 5 the phases above use, so exactly one
@@ -757,6 +759,21 @@ GATE_WITHIN=30
 start=$SECONDS
 until port_open "$NAME4" 8081; do
 	if [ $((SECONDS - start)) -gt "$GATE_WITHIN" ]; then
+		# Which failure this is depends on whether the withdrawal has already
+		# gone out, and the two have nothing to do with each other. A gate that
+		# never opened because SET_READY_AFTER was too small for this phase to
+		# get here in time is a harness that measured its own flags; the message
+		# below would blame the agent for it, and blame is what a person reads
+		# first. Assigned rather than tested inline, for the reason count_events
+		# gives about itself: a failed read has to reach `set -e` as an exit
+		# rather than as a comparison that reads false.
+		withdrawn4="$(count_events set_ready_sent "$EVENTS4")"
+		if [ "$withdrawn4" -ne 0 ]; then
+			echo "the SetReady went out before the gate ever opened; raise SET_READY_AFTER" >&2
+			echo "this proxy was told to stop being ready before it had started, so the gate below is shut for the harness's reasons rather than the agent's" >&2
+			jq -rs '.' <"$EVENTS4" >&2
+			exit 1
+		fi
 		echo "8081 was still closed ${GATE_WITHIN}s after the operator sent a server list" >&2
 		echo "this pod would never turn ready, and the proxy would never receive a player" >&2
 		jq -rs '.' <"$EVENTS4" >&2
@@ -768,14 +785,19 @@ done
 echo "the ready gate opened $((SECONDS - start))s after the first FullSync"
 
 # And it opened on the sync, not in spite of a withdrawal that had already gone
-# out. This is the same guard the two either side of the closed-gate probe are,
-# pointed at the other flag: if the SetReady beat this probe the gate would
-# never have opened here at all, and the loop above would have failed 30s later
-# accusing the agent of never turning ready. Naming the real cause is the whole
-# difference between that run and a debuggable one.
+# out. This is the second arm of the same guard, and it covers the case the one
+# inside the timeout cannot reach: the port answered, so that loop never
+# returned to its deadline, but the withdrawal had already been sent by the time
+# it did. What that produces is worse than a failure - it is a pass. The gate
+# would have opened and closed inside this phase's own probe window, the
+# closed-gate assertion below would then succeed against a gate that was already
+# shut, and the phase would report "open, then closed on the operator's word"
+# having established neither. Both arms name SET_READY_AFTER because raising it
+# is the answer to either.
 withdrawn4="$(count_events set_ready_sent "$EVENTS4")"
 if [ "$withdrawn4" -ne 0 ]; then
 	echo "the SetReady went out before the gate could be probed open; raise SET_READY_AFTER" >&2
+	echo "the close below would then be asserted against a gate that had already shut, and this phase would pass having measured nothing" >&2
 	jq -rs '.' <"$EVENTS4" >&2
 	exit 1
 fi
@@ -952,13 +974,16 @@ echo "the proxy opened $opened5 streams in ${WINDOW}s across $superseded5 supers
 
 # The gate is still open, after $superseded5 retirements and $opened5 handovers.
 #
-# Nothing at any level checks this today, and it is true by construction:
-# ReadyGate.close() is reachable only from onShutdown, and ProxyRole opens the
-# gate once and never asks again. "True by construction" is not "measured", and
-# the failure it rules out is the one this whole design exists to prevent - a
-# proxy that dropped out of Ready on every renewal would flap its pod's
-# readiness on the operator's own schedule, taking itself out of the Service
-# endpoints while nothing was wrong with it.
+# Phase four proves the gate closes when the operator says so; what no level can
+# see is whether anything *else* closes it. ReadyGate.close() is reachable from
+# a SetReady and from onShutdown, and this phase's stub sends no SetReady and is
+# killed rather than asked to shut the proxy down - so across every retirement
+# and handover above there is nothing the gate may legitimately react to, and
+# any movement in it is the renewal machinery touching a port it does not own.
+# That is the failure this whole design exists to prevent: a proxy that dropped
+# out of Ready on every renewal would flap its pod's readiness on the operator's
+# own schedule, taking itself out of the Service endpoints while nothing was
+# wrong with it.
 if ! port_open "$NAME5" 8081; then
 	echo "the ready gate is closed after ${WINDOW}s of supersessions; a renewal took this pod out of Ready" >&2
 	jq -rs '[.[] | select(.kind == "stream_opened" or .kind == "stream_closed" or .kind == "full_sync_sent")]' <"$EVENTS5" >&2
