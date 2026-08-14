@@ -121,6 +121,53 @@ func (f *fixture) pods() []corev1.Pod {
 	return list.Items
 }
 
+// TestServerFailedStraightFromReadyClearsReadySince pins the cross-file
+// invariant CountFailures states and depends on: "A Failed server carries no
+// ReadySince (the Server controller clears it on the way out of Ready), so a
+// corpse can never look like the success that ends its own streak"
+// (backoff.go). Break the clearing and a group's failure streak resets on its
+// own corpse, so the count never climbs past 1 for a server that was Ready and
+// then died — and the whole per-group backoff stops bounding anything.
+//
+// It has to go through the terminal-pod transition rather than the flapping
+// one. Every other fixture in this package reaches Failed via Starting, and
+// entering Starting clears readySince on its own, so a test built that way
+// passes with `case phase.Failed: srv.Status.ReadySince = nil` deleted — which
+// is exactly what the whole-branch review measured. phase.Decide's PodTerminal
+// branch goes Ready -> Failed in one step and touches no other clearing, so
+// only the Failed arm of the status switch can be what empties the field here.
+//
+// Its counting-side companion is
+// TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe in
+// backoff_test.go, which shows what a corpse that kept its readySince does to
+// a streak.
+func TestServerFailedStraightFromReadyClearsReadySince(t *testing.T) {
+	f := newFixture(t)
+	bringUpReady(t, f, "lobby-x7k2")
+	if f.server("lobby-x7k2").Status.ReadySince == nil {
+		t.Fatal("status.readySince was not stamped at Ready; the clearing below would prove nothing")
+	}
+
+	// The kubelet's other verdict: the process is down for good.
+	f.setPodFailed("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if got := srv.Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q after the pod reached a terminal phase, want Failed", got)
+	}
+	if srv.Status.ReadinessLosses != 0 {
+		t.Fatalf("readinessLosses = %d, want 0: this server must reach Failed without going "+
+			"through Starting, or the clearing under test is not the one being observed",
+			srv.Status.ReadinessLosses)
+	}
+	if srv.Status.ReadySince != nil {
+		t.Errorf("status.readySince = %v on a Failed server, want nil: a corpse that keeps its "+
+			"readySince looks to CountFailures like the success that ends its own streak",
+			srv.Status.ReadySince.Time.UTC())
+	}
+}
+
 // TestLongLivedReadyServerSurvivesAReadinessBlip is the regression test for the
 // stale startup deadline. status.startedAt is written once at pod creation and
 // never refreshed, so StartupDeadlineReached is true for every server older than

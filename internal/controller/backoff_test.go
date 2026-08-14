@@ -98,6 +98,55 @@ func TestCountFailuresStartsAFreshStreakAfterASuccess(t *testing.T) {
 	}
 }
 
+// TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe writes down the
+// half of CountFailures' stated safety property that lives in another file.
+//
+// backoff.go says: "A Failed server carries no ReadySince (the Server
+// controller clears it on the way out of Ready), so a corpse can never look
+// like the success that ends its own streak." That is load-bearing — without
+// it a corpse whose own readySince post-dates the watermark would reset the
+// streak it belongs to, and the count could never climb past 1 for the
+// Ready -> Failed class — and until now nothing checked it: the whole-branch
+// review mutated `case phase.Failed: srv.Status.ReadySince = nil` out of
+// server_controller.go and the entire suite stayed green, because every
+// fixture reaches Failed through Starting, which clears it anyway.
+//
+// This test pins the *dependency*, and does so honestly: CountFailures' search
+// for the newest success reads ReadySince off every view regardless of phase,
+// so handed a Failed view carrying one it resets the streak. That is the
+// behaviour, and asserting it is what makes the invariant's location explicit
+// — the guarantee is not in this function, it is upstream, in the Server
+// controller's clearing of readySince on entry to Failed. Its direct pin is
+// TestServerFailedStraightFromReadyClearsReadySince in
+// server_controller_test.go, over the one transition that reaches Failed
+// without passing through Starting; a reader who breaks that one should land
+// here to see what it costs.
+func TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe(t *testing.T) {
+	base := time.Now()
+	// The state the Server controller must never produce: Failed, and carrying
+	// a readySince newer than the watermark the streak is counted from.
+	corpse := ServerView{
+		Name:       "broken",
+		Phase:      phase.Failed,
+		FailedAt:   base.Add(2 * time.Second),
+		ReadySince: base.Add(time.Second),
+	}
+
+	got, _ := CountFailures([]ServerView{corpse}, 3, base)
+	if got != 1 {
+		t.Errorf("count = %d, want 1: CountFailures reads readySince off every view whatever its "+
+			"phase, so a corpse carrying one ends its own streak and the new failure starts a fresh one", got)
+	}
+
+	// The same corpse as the Server controller actually stamps it — readySince
+	// cleared on the way into Failed — continues the streak, which is what the
+	// group's six-failure budget depends on.
+	corpse.ReadySince = time.Time{}
+	if got, _ := CountFailures([]ServerView{corpse}, 3, base); got != 4 {
+		t.Errorf("count = %d, want 4: with readySince cleared the corpse is a failure and nothing else", got)
+	}
+}
+
 func TestDecideBackoffLetsTheFirstAttemptThrough(t *testing.T) {
 	got := DecideBackoff(BackoffInputs{ConsecutiveFailures: 0, Now: time.Now()})
 	if !got.MayCreate {
