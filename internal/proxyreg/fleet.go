@@ -70,6 +70,16 @@ type session struct {
 	// closed guards against a double close. A session is closed either because
 	// its stream left or because it fell behind, and both can happen.
 	closed bool
+	// lastReady is the readiness this session was last told to have, and
+	// whether it has been told at all. The operator asserts the desired state
+	// on every reconcile; without this the same message would go out every
+	// five seconds for the whole of a drain.
+	//
+	// It belongs to the session and not to the Fleet on purpose: a new stream
+	// starts without one, so the state is re-asserted on reconnect without the
+	// operator having to know a reconnect happened.
+	lastReady    bool
+	lastReadySet bool
 }
 
 // Fleet is every live proxy session. Safe for concurrent use.
@@ -331,6 +341,34 @@ func (f *Fleet) Deregister(ctx context.Context, srv *spawneryv1alpha1.Server) er
 func (f *Fleet) Drain(ctx context.Context, srv *spawneryv1alpha1.Server) error {
 	f.broadcast(srv.Namespace, func(s *session) *agentpb.OperatorToProxy {
 		return drainMessage(srv, f.fallbacks(ctx, s.namespace, s.group))
+	})
+	return nil
+}
+
+// SetReady tells one proxy whether it should be taking new connections.
+//
+// The proxy's readiness is what the kubelet probes and therefore what decides
+// whether the Service keeps its endpoint, so this is how the operator takes a
+// proxy out of rotation without touching the sessions already on it.
+//
+// A pod with no live stream is not an error: it is not taking connections
+// either, and the next reconcile asserts the state again if it comes back.
+func (f *Fleet) SetReady(ctx context.Context, podUID string, ready bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	s, ok := f.sessions[podUID]
+	if !ok {
+		return nil
+	}
+	if s.lastReadySet && s.lastReady == ready {
+		return nil
+	}
+	s.lastReady, s.lastReadySet = ready, true
+	f.send(s, &agentpb.OperatorToProxy{
+		Message: &agentpb.OperatorToProxy_SetReady{
+			SetReady: &agentpb.SetReady{Ready: ready},
+		},
 	})
 	return nil
 }

@@ -113,6 +113,25 @@ func recv(t *testing.T, outbox <-chan *agentpb.OperatorToProxy) *agentpb.Operato
 	}
 }
 
+// drain returns every message currently queued on outbox without blocking for
+// more. It is for tests that assert on how many messages went out rather than
+// on the shape of just one.
+func drain(t *testing.T, outbox <-chan *agentpb.OperatorToProxy) []*agentpb.OperatorToProxy {
+	t.Helper()
+	var got []*agentpb.OperatorToProxy
+	for {
+		select {
+		case msg, ok := <-outbox:
+			if !ok {
+				return got
+			}
+			got = append(got, msg)
+		default:
+			return got
+		}
+	}
+}
+
 func TestFullSyncIsTheFirstMessage(t *testing.T) {
 	f := newFleet(t, proxyGroup("lobby"), registered("lobby-aaaa", "10.0.0.1:25565"))
 
@@ -502,5 +521,111 @@ func TestAFullOutboxCutsTheSession(t *testing.T) {
 
 	if _, ok := <-outbox; ok {
 		t.Error("the outbox was not closed after a message overflowed it")
+	}
+}
+
+// SetReady is unlike Register/Deregister/Drain: it targets one pod rather than
+// broadcasting to a namespace, and it must not repeat an assertion the session
+// already carries — the operator calls it on every five-second reconcile
+// whether or not the desired state changed.
+
+func TestSetReadyReachesOneSessionOnly(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+
+	a, leaveA, err := f.Join(context.Background(), ns, group, "pod-a")
+	if err != nil {
+		t.Fatalf("Join a: %v", err)
+	}
+	defer leaveA()
+	recv(t, a) // the FullSync
+
+	b, leaveB, err := f.Join(context.Background(), ns, group, "pod-b")
+	if err != nil {
+		t.Fatalf("Join b: %v", err)
+	}
+	defer leaveB()
+	recv(t, b) // the FullSync
+
+	if err := f.SetReady(context.Background(), "pod-a", false); err != nil {
+		t.Fatalf("SetReady: %v", err)
+	}
+
+	msg := recv(t, a)
+	setReady := msg.GetSetReady()
+	if setReady == nil {
+		t.Fatalf("pod-a got %T, want a SetReady", msg.GetMessage())
+	}
+	if setReady.GetReady() {
+		t.Error("pod-a was told ready=true, want false")
+	}
+	select {
+	case msg := <-b:
+		t.Fatalf("pod-b is a different proxy and must not be told anything, got %+v", msg)
+	default:
+	}
+}
+
+func TestSetReadyIsNotRepeatedForTheSameState(t *testing.T) {
+	// The operator asserts the desired state on every reconcile, five seconds
+	// apart. Without the memo a draining proxy would be told the same thing
+	// for the whole of its drain.
+	f := newFleet(t, proxyGroup("lobby"))
+
+	s, leave, err := f.Join(context.Background(), ns, group, "pod-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	recv(t, s) // the FullSync
+
+	for i := 0; i < 3; i++ {
+		if err := f.SetReady(context.Background(), "pod-a", false); err != nil {
+			t.Fatalf("SetReady %d: %v", i, err)
+		}
+	}
+
+	if got := drain(t, s); len(got) != 1 {
+		t.Errorf("sent %d messages for three identical assertions, want 1", len(got))
+	}
+}
+
+func TestSetReadyIsReassertedOnANewStream(t *testing.T) {
+	// The memo lives on the session, so a reconnect starts without one. That
+	// is what makes the state survive a stream that broke mid-drain: the
+	// operator's next assertion lands even though the value has not changed.
+	f := newFleet(t, proxyGroup("lobby"))
+
+	s, leave, err := f.Join(context.Background(), ns, group, "pod-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	recv(t, s) // the FullSync
+	if err := f.SetReady(context.Background(), "pod-a", false); err != nil {
+		t.Fatalf("SetReady: %v", err)
+	}
+	drain(t, s)
+	leave()
+
+	s2, leave2, err := f.Join(context.Background(), ns, group, "pod-a")
+	if err != nil {
+		t.Fatalf("Join after reconnect: %v", err)
+	}
+	defer leave2()
+	recv(t, s2) // the FullSync
+	if err := f.SetReady(context.Background(), "pod-a", false); err != nil {
+		t.Fatalf("SetReady after reconnect: %v", err)
+	}
+	if got := drain(t, s2); len(got) != 1 {
+		t.Errorf("the new stream got %d messages, want the state re-asserted once", len(got))
+	}
+}
+
+func TestSetReadyToAnUnknownPodIsNotAnError(t *testing.T) {
+	// A proxy whose stream has gone is a proxy that is not taking connections
+	// either. The reconcile that asked must not fail because of it — it will
+	// assert again on the next pass if the pod comes back.
+	f := newFleet(t, proxyGroup("lobby"))
+	if err := f.SetReady(context.Background(), "pod-gone", false); err != nil {
+		t.Errorf("SetReady to an unknown pod = %v, want nil", err)
 	}
 }
