@@ -70,6 +70,22 @@ type session struct {
 	// closed guards against a double close. A session is closed either because
 	// its stream left or because it fell behind, and both can happen.
 	closed bool
+	// lastReady is the readiness this session was last told to have, and
+	// whether it has been told at all. The operator asserts the desired state
+	// on every reconcile; without this the same message would go out every
+	// five seconds for the whole of a drain.
+	//
+	// Suppressing the reconcile's repeats is all it does. It is not a claim
+	// that the agent was told once and that settles it: Resync re-sends this
+	// value on every tick, which is what bounds a disagreement between the
+	// agent's gate and this memo to one interval. Read the two together —
+	// this decides the rate, Resync makes it periodic.
+	//
+	// It belongs to the session and not to the Fleet on purpose: a new stream
+	// starts without one, so the state is re-asserted on reconnect without the
+	// operator having to know a reconnect happened.
+	lastReady    bool
+	lastReadySet bool
 }
 
 // Fleet is every live proxy session. Safe for concurrent use.
@@ -335,7 +351,50 @@ func (f *Fleet) Drain(ctx context.Context, srv *spawneryv1alpha1.Server) error {
 	return nil
 }
 
-// Resync re-sends every live session the same construction Join builds.
+// SetReady tells one proxy whether it should be taking new connections.
+//
+// The proxy's readiness is what the kubelet probes and therefore what decides
+// whether the Service keeps its endpoint, so this is how the operator takes a
+// proxy out of rotation without touching the sessions already on it.
+//
+// A pod with no live stream is not an error: it is not taking connections
+// either, and the next reconcile asserts the state again if it comes back.
+//
+// The memo below suppresses a repeat of a value this session already carries,
+// which is what keeps a five-second reconcile from re-sending the same message
+// for the whole of a drain. It is not the only thing that ever asserts: Resync
+// re-sends the memo's value on every tick, so the assertion is periodic at the
+// resync interval rather than once per change. That is deliberate — see
+// Resync — and the proto's SetReady comment describes the pair of them.
+func (f *Fleet) SetReady(ctx context.Context, podUID string, ready bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	s, ok := f.sessions[podUID]
+	if !ok {
+		return nil
+	}
+	if s.lastReadySet && s.lastReady == ready {
+		return nil
+	}
+	s.lastReady, s.lastReadySet = ready, true
+	f.send(s, readyMessage(ready))
+	return nil
+}
+
+// readyMessage is one readiness assertion on the wire. SetReady and Resync
+// share it so the two paths that assert readiness cannot come to mean
+// different things.
+func readyMessage(ready bool) *agentpb.OperatorToProxy {
+	return &agentpb.OperatorToProxy{
+		Message: &agentpb.OperatorToProxy_SetReady{
+			SetReady: &agentpb.SetReady{Ready: ready},
+		},
+	}
+}
+
+// Resync re-sends every live session the same construction Join builds,
+// followed by the readiness this session was last told to have.
 //
 // This is not in section 5.2 of the main design, and it is not redundant with
 // the ordering invariant in Join. That invariant closes the window between a
@@ -350,6 +409,31 @@ func (f *Fleet) Drain(ctx context.Context, srv *spawneryv1alpha1.Server) error {
 // Nothing else would ever correct that. The window is short and this closes it
 // within one interval. Do not remove it because "the list is derived from the
 // CRs anyway" — that is exactly the reasoning that leaves it broken.
+//
+// The readiness assertion rides along for the same kind of reason, and it is
+// the half of it that is not about the cache. SetReady sends only on a change,
+// so if the agent's gate and this session's memo ever disagree — a lost race
+// inside the agent, a message applied and then undone, a bug neither end has
+// found yet — nothing else re-states the desired value, and the disagreement
+// lasts as long as the session does. A pod stuck Ready while its drain
+// deadline runs is the expensive direction of that: it keeps taking players
+// who are then disconnected when it is deleted. Re-asserting here bounds any
+// such divergence to one interval (DefaultResyncInterval, 30s) whatever caused
+// it, which is a property no fix to a particular cause can give.
+//
+// After the snapshot, not before it: a SetReady(true) that arrives before a
+// server list asks a proxy to advertise readiness with nothing to route to,
+// and every player sent there is disconnected with "no available server". This
+// repository's Velocity agent now refuses that on its own side — it records a
+// ready asserted before its first FullSync and opens the gate on that sync
+// instead — but that is the agent's guard and not this one's: an older build,
+// or another language's implementation of this proto, has no such rule, and
+// the order the operator sends in is the half of the contract the operator
+// owns.
+//
+// A session never told anything is sent nothing, rather than a default: the
+// operator has no readiness for a pod it has not decided about, and inventing
+// ready=true here would assert one.
 //
 // It is exported rather than only ticked, so tests drive it instead of
 // sleeping.
@@ -369,6 +453,9 @@ func (f *Fleet) Resync(ctx context.Context) {
 		}
 		for _, msg := range messages {
 			f.send(s, msg)
+		}
+		if s.lastReadySet {
+			f.send(s, readyMessage(s.lastReady))
 		}
 	}
 }

@@ -934,8 +934,15 @@ git commit -m "docs(4c-1): record the upgrade ordering and what 4c-2 finds"
 ## Before the branch is merged
 
 - [ ] `nix develop -c make test` — green.
-- [ ] `nix develop -c make agent-test CONTAINER=podman` — five phases green.
-- [ ] `nix develop -c make image-test CONTAINER=podman` and `make image-repro` — green.
+- [ ] `nix develop -c make agent-test` — five phases green.
+- [ ] `nix develop -c make image-test` and `make image-repro` — green.
+
+  Add `CONTAINER=podman` to the two container targets only where the Makefile's
+  `docker` default is not already Podman, and a disk-backed `TMPDIR` only where
+  `/tmp` is a tmpfs. On the machine that ran this milestone neither applies —
+  `docker` is a symlink into `podman-docker-compat` and `/tmp` is part of the
+  root filesystem — and all four targets pass with plain defaults (measured
+  2026-08-14). `docs/runbook-milestone-3-evidence.md` §0 states both conditions.
 - [ ] `nix develop -c make manifests` — **no diff**; this milestone adds no CRD field.
 - [ ] `git diff --name-only master...HEAD` — the proto, its generated stubs, `internal/proxyreg`, `internal/controller`, `api/v1alpha1`, `agent/velocity`, `cmd/spawnery-stubop`, `hack/` and `docs/`. Nothing else.
 - [ ] One whole-branch review before merge. On the last three milestones this review found what no task-scoped review could: a ceiling never enforced on a group that was also short, a fixed point where a refused create suppressed the branch that would have freed its room, and a give-up test that could not fail. The equivalent risk here is the interaction between the assertion loop, the annotation and the deletion loop — no single task exercises all three against a pod whose stream is flapping.

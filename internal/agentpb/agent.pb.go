@@ -919,6 +919,72 @@ func (x *DrainPlayers) GetToGroups() []string {
 	return nil
 }
 
+// SetReady is the operator asserting whether this proxy should be taking new
+// connections. It is a state and not an event, the same way Hello.ready is:
+// the operator re-sends the value it last asserted on every resync — one every
+// 30 seconds, on the same tick as FullSync and after it — so a reconnect
+// cannot leave a proxy stuck in the wrong one, a cancelled drain simply
+// reverts, and an agent whose gate has come to disagree with what the operator
+// asserted is corrected within one interval rather than never. Between those
+// ticks it is sent only when the value changes, so an agent sees repeats at
+// the resync rate and not at the reconcile rate; applying a value the agent
+// already holds has to be harmless.
+//
+// The agent maps it onto its readiness gate, which the kubelet probes. So the
+// effect an operator is really asking for is "leave the Service's endpoints" —
+// established connections are not touched, because Kubernetes does not close
+// them when an endpoint is removed.
+//
+// An agent must not open that gate before a FullSync has applied. Readiness
+// means routable, and a proxy with no server list disconnects every player it
+// is sent with "no available server", so a ready=true asserted that early is
+// recorded and takes effect with the first FullSync that applies rather than
+// on arrival. ready=false is applied whenever it arrives: an agent that cannot
+// build its server list has no business in the endpoints either.
+type SetReady struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Ready         bool                   `protobuf:"varint,1,opt,name=ready,proto3" json:"ready,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetReady) Reset() {
+	*x = SetReady{}
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetReady) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetReady) ProtoMessage() {}
+
+func (x *SetReady) ProtoReflect() protoreflect.Message {
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetReady.ProtoReflect.Descriptor instead.
+func (*SetReady) Descriptor() ([]byte, []int) {
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *SetReady) GetReady() bool {
+	if x != nil {
+		return x.Ready
+	}
+	return false
+}
+
 type OperatorToProxy struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Message:
@@ -929,6 +995,7 @@ type OperatorToProxy struct {
 	//	*OperatorToProxy_DrainPlayers
 	//	*OperatorToProxy_ReportInterval
 	//	*OperatorToProxy_SessionDeadline
+	//	*OperatorToProxy_SetReady
 	Message       isOperatorToProxy_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -936,7 +1003,7 @@ type OperatorToProxy struct {
 
 func (x *OperatorToProxy) Reset() {
 	*x = OperatorToProxy{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -948,7 +1015,7 @@ func (x *OperatorToProxy) String() string {
 func (*OperatorToProxy) ProtoMessage() {}
 
 func (x *OperatorToProxy) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -961,7 +1028,7 @@ func (x *OperatorToProxy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperatorToProxy.ProtoReflect.Descriptor instead.
 func (*OperatorToProxy) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{15}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *OperatorToProxy) GetMessage() isOperatorToProxy_Message {
@@ -1025,6 +1092,15 @@ func (x *OperatorToProxy) GetSessionDeadline() *SessionDeadline {
 	return nil
 }
 
+func (x *OperatorToProxy) GetSetReady() *SetReady {
+	if x != nil {
+		if x, ok := x.Message.(*OperatorToProxy_SetReady); ok {
+			return x.SetReady
+		}
+	}
+	return nil
+}
+
 type isOperatorToProxy_Message interface {
 	isOperatorToProxy_Message()
 }
@@ -1053,6 +1129,10 @@ type OperatorToProxy_SessionDeadline struct {
 	SessionDeadline *SessionDeadline `protobuf:"bytes,6,opt,name=session_deadline,json=sessionDeadline,proto3,oneof"`
 }
 
+type OperatorToProxy_SetReady struct {
+	SetReady *SetReady `protobuf:"bytes,7,opt,name=set_ready,json=setReady,proto3,oneof"`
+}
+
 func (*OperatorToProxy_FullSync) isOperatorToProxy_Message() {}
 
 func (*OperatorToProxy_RegisterServer) isOperatorToProxy_Message() {}
@@ -1064,6 +1144,8 @@ func (*OperatorToProxy_DrainPlayers) isOperatorToProxy_Message() {}
 func (*OperatorToProxy_ReportInterval) isOperatorToProxy_Message() {}
 
 func (*OperatorToProxy_SessionDeadline) isOperatorToProxy_Message() {}
+
+func (*OperatorToProxy_SetReady) isOperatorToProxy_Message() {}
 
 var File_spawnery_agent_v1alpha1_agent_proto protoreflect.FileDescriptor
 
@@ -1114,14 +1196,17 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\fDrainPlayers\x12\x1f\n" +
 	"\vfrom_server\x18\x01 \x01(\tR\n" +
 	"fromServer\x12\x1b\n" +
-	"\tto_groups\x18\x02 \x03(\tR\btoGroups\"\x85\x04\n" +
+	"\tto_groups\x18\x02 \x03(\tR\btoGroups\" \n" +
+	"\bSetReady\x12\x14\n" +
+	"\x05ready\x18\x01 \x01(\bR\x05ready\"\xc7\x04\n" +
 	"\x0fOperatorToProxy\x12@\n" +
 	"\tfull_sync\x18\x01 \x01(\v2!.spawnery.agent.v1alpha1.FullSyncH\x00R\bfullSync\x12R\n" +
 	"\x0fregister_server\x18\x02 \x01(\v2'.spawnery.agent.v1alpha1.RegisterServerH\x00R\x0eregisterServer\x12X\n" +
 	"\x11unregister_server\x18\x03 \x01(\v2).spawnery.agent.v1alpha1.UnregisterServerH\x00R\x10unregisterServer\x12L\n" +
 	"\rdrain_players\x18\x04 \x01(\v2%.spawnery.agent.v1alpha1.DrainPlayersH\x00R\fdrainPlayers\x12R\n" +
 	"\x0freport_interval\x18\x05 \x01(\v2'.spawnery.agent.v1alpha1.ReportIntervalH\x00R\x0ereportInterval\x12U\n" +
-	"\x10session_deadline\x18\x06 \x01(\v2(.spawnery.agent.v1alpha1.SessionDeadlineH\x00R\x0fsessionDeadlineB\t\n" +
+	"\x10session_deadline\x18\x06 \x01(\v2(.spawnery.agent.v1alpha1.SessionDeadlineH\x00R\x0fsessionDeadline\x12@\n" +
+	"\tset_ready\x18\a \x01(\v2!.spawnery.agent.v1alpha1.SetReadyH\x00R\bsetReadyB\t\n" +
 	"\amessage2\xdb\x01\n" +
 	"\fAgentService\x12c\n" +
 	"\fProxySession\x12%.spawnery.agent.v1alpha1.ProxyMessage\x1a(.spawnery.agent.v1alpha1.OperatorToProxy(\x010\x01\x12f\n" +
@@ -1141,7 +1226,7 @@ func file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP() []byte {
 	return file_spawnery_agent_v1alpha1_agent_proto_rawDescData
 }
 
-var file_spawnery_agent_v1alpha1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_spawnery_agent_v1alpha1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_spawnery_agent_v1alpha1_agent_proto_goTypes = []any{
 	(*ReportInterval)(nil),     // 0: spawnery.agent.v1alpha1.ReportInterval
 	(*SessionDeadline)(nil),    // 1: spawnery.agent.v1alpha1.SessionDeadline
@@ -1158,7 +1243,8 @@ var file_spawnery_agent_v1alpha1_agent_proto_goTypes = []any{
 	(*RegisterServer)(nil),     // 12: spawnery.agent.v1alpha1.RegisterServer
 	(*UnregisterServer)(nil),   // 13: spawnery.agent.v1alpha1.UnregisterServer
 	(*DrainPlayers)(nil),       // 14: spawnery.agent.v1alpha1.DrainPlayers
-	(*OperatorToProxy)(nil),    // 15: spawnery.agent.v1alpha1.OperatorToProxy
+	(*SetReady)(nil),           // 15: spawnery.agent.v1alpha1.SetReady
+	(*OperatorToProxy)(nil),    // 16: spawnery.agent.v1alpha1.OperatorToProxy
 }
 var file_spawnery_agent_v1alpha1_agent_proto_depIdxs = []int32{
 	2,  // 0: spawnery.agent.v1alpha1.ServerMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
@@ -1178,15 +1264,16 @@ var file_spawnery_agent_v1alpha1_agent_proto_depIdxs = []int32{
 	14, // 14: spawnery.agent.v1alpha1.OperatorToProxy.drain_players:type_name -> spawnery.agent.v1alpha1.DrainPlayers
 	0,  // 15: spawnery.agent.v1alpha1.OperatorToProxy.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
 	1,  // 16: spawnery.agent.v1alpha1.OperatorToProxy.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
-	9,  // 17: spawnery.agent.v1alpha1.AgentService.ProxySession:input_type -> spawnery.agent.v1alpha1.ProxyMessage
-	5,  // 18: spawnery.agent.v1alpha1.AgentService.ServerSession:input_type -> spawnery.agent.v1alpha1.ServerMessage
-	15, // 19: spawnery.agent.v1alpha1.AgentService.ProxySession:output_type -> spawnery.agent.v1alpha1.OperatorToProxy
-	6,  // 20: spawnery.agent.v1alpha1.AgentService.ServerSession:output_type -> spawnery.agent.v1alpha1.OperatorToServer
-	19, // [19:21] is the sub-list for method output_type
-	17, // [17:19] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	15, // 17: spawnery.agent.v1alpha1.OperatorToProxy.set_ready:type_name -> spawnery.agent.v1alpha1.SetReady
+	9,  // 18: spawnery.agent.v1alpha1.AgentService.ProxySession:input_type -> spawnery.agent.v1alpha1.ProxyMessage
+	5,  // 19: spawnery.agent.v1alpha1.AgentService.ServerSession:input_type -> spawnery.agent.v1alpha1.ServerMessage
+	16, // 20: spawnery.agent.v1alpha1.AgentService.ProxySession:output_type -> spawnery.agent.v1alpha1.OperatorToProxy
+	6,  // 21: spawnery.agent.v1alpha1.AgentService.ServerSession:output_type -> spawnery.agent.v1alpha1.OperatorToServer
+	20, // [20:22] is the sub-list for method output_type
+	18, // [18:20] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_spawnery_agent_v1alpha1_agent_proto_init() }
@@ -1209,13 +1296,14 @@ func file_spawnery_agent_v1alpha1_agent_proto_init() {
 		(*ProxyMessage_PlayerJoinedServer)(nil),
 		(*ProxyMessage_Heartbeat)(nil),
 	}
-	file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15].OneofWrappers = []any{
+	file_spawnery_agent_v1alpha1_agent_proto_msgTypes[16].OneofWrappers = []any{
 		(*OperatorToProxy_FullSync)(nil),
 		(*OperatorToProxy_RegisterServer)(nil),
 		(*OperatorToProxy_UnregisterServer)(nil),
 		(*OperatorToProxy_DrainPlayers)(nil),
 		(*OperatorToProxy_ReportInterval)(nil),
 		(*OperatorToProxy_SessionDeadline)(nil),
+		(*OperatorToProxy_SetReady)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -1223,7 +1311,7 @@ func file_spawnery_agent_v1alpha1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_spawnery_agent_v1alpha1_agent_proto_rawDesc), len(file_spawnery_agent_v1alpha1_agent_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

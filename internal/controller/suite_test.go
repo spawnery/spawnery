@@ -184,6 +184,7 @@ type fixture struct {
 	clock     *testClock
 	agents    *agent.Registry
 	registrar *recordingRegistrar
+	proxies   *recordingFleet
 	reconc    *ServerReconciler
 	network   *spawneryv1alpha1.Network
 	group     *spawneryv1alpha1.ServerGroup
@@ -198,10 +199,11 @@ func newFixture(t *testing.T) *fixture {
 	clock := &testClock{now: start}
 	agents := agent.New(clock.Now, 5*time.Second, start)
 	registrar := &recordingRegistrar{}
+	proxies := &recordingFleet{}
 
 	f := &fixture{
 		t: t, ctx: ctx, c: c, ns: ns,
-		clock: clock, agents: agents, registrar: registrar,
+		clock: clock, agents: agents, registrar: registrar, proxies: proxies,
 		reconc: &ServerReconciler{
 			Client:               c,
 			Scheme:               testenv.Scheme(t),

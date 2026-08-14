@@ -60,6 +60,7 @@ private static final long serialVersionUID = 0L;
     DRAIN_PLAYERS(4),
     REPORT_INTERVAL(5),
     SESSION_DEADLINE(6),
+    SET_READY(7),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -83,6 +84,7 @@ private static final long serialVersionUID = 0L;
         case 4: return DRAIN_PLAYERS;
         case 5: return REPORT_INTERVAL;
         case 6: return SESSION_DEADLINE;
+        case 7: return SET_READY;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -284,6 +286,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.SessionDeadline.getDefaultInstance();
   }
 
+  public static final int SET_READY_FIELD_NUMBER = 7;
+  /**
+   * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+   * @return Whether the setReady field is set.
+   */
+  @java.lang.Override
+  public boolean hasSetReady() {
+    return messageCase_ == 7;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+   * @return The setReady.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.SetReady getSetReady() {
+    if (messageCase_ == 7) {
+       return (cloud.spawnery.agent.pb.SetReady) message_;
+    }
+    return cloud.spawnery.agent.pb.SetReady.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.SetReadyOrBuilder getSetReadyOrBuilder() {
+    if (messageCase_ == 7) {
+       return (cloud.spawnery.agent.pb.SetReady) message_;
+    }
+    return cloud.spawnery.agent.pb.SetReady.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -316,6 +349,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 6) {
       output.writeMessage(6, (cloud.spawnery.agent.pb.SessionDeadline) message_);
     }
+    if (messageCase_ == 7) {
+      output.writeMessage(7, (cloud.spawnery.agent.pb.SetReady) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -343,6 +379,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 6) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(6, (cloud.spawnery.agent.pb.SessionDeadline) message_);
+    }
+    if (messageCase_ == 7) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(7, (cloud.spawnery.agent.pb.SetReady) message_);
     }
     return size;
   }
@@ -394,6 +434,10 @@ private static final long serialVersionUID = 0L;
         if (!getSessionDeadline()
             .equals(other.getSessionDeadline())) return false;
         break;
+      case 7:
+        if (!getSetReady()
+            .equals(other.getSetReady())) return false;
+        break;
       case 0:
       default:
     }
@@ -432,6 +476,10 @@ private static final long serialVersionUID = 0L;
       case 6:
         hash = (37 * hash) + SESSION_DEADLINE_FIELD_NUMBER;
         hash = (53 * hash) + getSessionDeadline().hashCode();
+        break;
+      case 7:
+        hash = (37 * hash) + SET_READY_FIELD_NUMBER;
+        hash = (53 * hash) + getSetReady().hashCode();
         break;
       case 0:
       default:
@@ -585,6 +633,9 @@ private static final long serialVersionUID = 0L;
       if (sessionDeadlineBuilder_ != null) {
         sessionDeadlineBuilder_.clear();
       }
+      if (setReadyBuilder_ != null) {
+        setReadyBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -650,6 +701,10 @@ private static final long serialVersionUID = 0L;
           sessionDeadlineBuilder_ != null) {
         result.message_ = sessionDeadlineBuilder_.build();
       }
+      if (messageCase_ == 7 &&
+          setReadyBuilder_ != null) {
+        result.message_ = setReadyBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -687,6 +742,10 @@ private static final long serialVersionUID = 0L;
         }
         case SESSION_DEADLINE: {
           mergeSessionDeadline(other.getSessionDeadline());
+          break;
+        }
+        case SET_READY: {
+          mergeSetReady(other.getSetReady());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -761,6 +820,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 6;
               break;
             } // case 50
+            case 58: {
+              input.readMessage(
+                  internalGetSetReadyFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 7;
+              break;
+            } // case 58
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1643,6 +1709,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 6;
       onChanged();
       return sessionDeadlineBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.SetReady, cloud.spawnery.agent.pb.SetReady.Builder, cloud.spawnery.agent.pb.SetReadyOrBuilder> setReadyBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     * @return Whether the setReady field is set.
+     */
+    @java.lang.Override
+    public boolean hasSetReady() {
+      return messageCase_ == 7;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     * @return The setReady.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.SetReady getSetReady() {
+      if (setReadyBuilder_ == null) {
+        if (messageCase_ == 7) {
+          return (cloud.spawnery.agent.pb.SetReady) message_;
+        }
+        return cloud.spawnery.agent.pb.SetReady.getDefaultInstance();
+      } else {
+        if (messageCase_ == 7) {
+          return setReadyBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.SetReady.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     */
+    public Builder setSetReady(cloud.spawnery.agent.pb.SetReady value) {
+      if (setReadyBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        setReadyBuilder_.setMessage(value);
+      }
+      messageCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     */
+    public Builder setSetReady(
+        cloud.spawnery.agent.pb.SetReady.Builder builderForValue) {
+      if (setReadyBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        setReadyBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     */
+    public Builder mergeSetReady(cloud.spawnery.agent.pb.SetReady value) {
+      if (setReadyBuilder_ == null) {
+        if (messageCase_ == 7 &&
+            message_ != cloud.spawnery.agent.pb.SetReady.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.SetReady.newBuilder((cloud.spawnery.agent.pb.SetReady) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 7) {
+          setReadyBuilder_.mergeFrom(value);
+        } else {
+          setReadyBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     */
+    public Builder clearSetReady() {
+      if (setReadyBuilder_ == null) {
+        if (messageCase_ == 7) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 7) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        setReadyBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     */
+    public cloud.spawnery.agent.pb.SetReady.Builder getSetReadyBuilder() {
+      return internalGetSetReadyFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.SetReadyOrBuilder getSetReadyOrBuilder() {
+      if ((messageCase_ == 7) && (setReadyBuilder_ != null)) {
+        return setReadyBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 7) {
+          return (cloud.spawnery.agent.pb.SetReady) message_;
+        }
+        return cloud.spawnery.agent.pb.SetReady.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.SetReady, cloud.spawnery.agent.pb.SetReady.Builder, cloud.spawnery.agent.pb.SetReadyOrBuilder> 
+        internalGetSetReadyFieldBuilder() {
+      if (setReadyBuilder_ == null) {
+        if (!(messageCase_ == 7)) {
+          message_ = cloud.spawnery.agent.pb.SetReady.getDefaultInstance();
+        }
+        setReadyBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.SetReady, cloud.spawnery.agent.pb.SetReady.Builder, cloud.spawnery.agent.pb.SetReadyOrBuilder>(
+                (cloud.spawnery.agent.pb.SetReady) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 7;
+      onChanged();
+      return setReadyBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.OperatorToProxy)

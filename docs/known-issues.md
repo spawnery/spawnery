@@ -1059,6 +1059,151 @@ nothing checked in answers it. Worth a deliberate ruling, and a test that
 pins whichever order is chosen, rather than leaving the switch's current
 order as an accident of how it was written.
 
+## From milestone 4c-1 (the proxy readiness contract)
+
+**A new operator against proxy images that predate `SetReady` empties nobody
+and disconnects everybody five minutes later.** What an operator sees first is
+that nothing happens: `spec.replicas` goes from 2 to 1 and the surplus pod
+stays `Ready`, stays in the `Service`'s endpoint slice, and goes on receiving
+*new* players for the whole of the drain window. Then, at the deadline, the pod
+is deleted with all of them on it, and one event is the only thing that says
+so:
+
+```
+Warning  ProxyDrainTimeout  proxygroup/gateway  deleting proxy gateway-xxxx after 5m0s with 3 player(s) still connected
+```
+
+That is worse than the immediate deletion 4c-1 replaced, which disconnected the
+same people without first routing more of them onto a pod it was about to
+remove.
+
+The tell that separates this from a proxy that is genuinely still occupied is
+on the pod. The operator writes `spawnery.cloud/draining-since` whether or not
+the agent ever hears the message, so an un-upgraded proxy carries the
+annotation while its `Ready` condition is still `True` and
+`kubectl get endpointslice -l kubernetes.io/service-name=<group>` still shows
+its address as ready. A correctly drained proxy carries the annotation and is
+`NotReady`. Annotation plus `Ready` is the signature.
+
+The cause is one line of protobuf: `SetReady` is field 7 of
+`OperatorToProxy`'s oneof (`proto/spawnery/agent/v1alpha1/agent.proto`), added
+by this milestone. An older agent does what protobuf requires of an unknown
+field and ignores it, so `ReadyGate.close()` is never reached, the kubelet's
+probe keeps succeeding, and the endpoint never goes away. The deadline bounds
+the damage and the event names it; nothing prevents it.
+
+**So: upgrade the proxy images before the operator, until something
+version-gates the message.** Nothing in the session says which agent build is
+on the other end — `Hello` carries no version — so the operator cannot detect
+this case, and there is no condition and no event that tells "old agent" apart
+from "busy proxy". The other order is the safe one, and so is rolling the
+operator back on its own: an agent that supports `SetReady` and never receives
+one behaves exactly as 3c's did, because `ProxyRole`'s latch starts at
+`asserted = null` and its first `FullSync` opens the gate unless a `false` was
+asserted — `ProxyRole.kt`'s `Latch(synced = false, asserted = null)` and, in
+its `FULL_SYNC` branch, `if (!previous.synced && previous.asserted != false)
+onFirstSync()`. Quoted rather than cited by line: this file's citations into
+that one have gone stale twice already.
+
+**`status.connectedPlayers` briefly meant something other than what it says,
+because this milestone changed the field's meaning without editing the line
+that computes it — found and fixed inside the same milestone.** `setStatus`
+skipped any pod that was not `Ready` before adding its player count, so after
+a scale-down the group printed `READY 1 PLAYERS 0` with a person visibly in
+the game. The evidence run of 2026-08-14 saw exactly that.
+
+The line did not need editing to become wrong. Before 4c-1, `NotReady` meant
+starting up or broken, and skipping those pods was a fair reading of "players
+in this group". 4c-1 makes `NotReady` also a deliberate, healthy, populated
+state — a proxy serving people precisely because it is being emptied — so the
+same code answered a different question than it used to, while the CRD's own
+description still promised "the sum of players across all proxies".
+
+The whole-branch review ruled it a defect rather than a naming question, and
+the sum now runs above the readiness guard while `ready++` stays inside it.
+Four things decided it: the CRD description was false in a state the operator
+deliberately creates, and it is a printed column; it was wrong during the one
+operation where it is the only observable, since nothing logs a readiness
+withdrawal; the milestone had shipped a runbook paragraph apologising for it,
+which is evidence the output was wrong rather than the reader; and no test
+anywhere asserted the field, so the fix broke nothing — which also means
+nothing would have caught it.
+
+**Kept because the trap is general, not because the bug survives.** A guard
+can go on compiling, passing its tests and reading sensibly while the meaning
+of the state it filters on moves underneath it. The 4a entry above records the
+same shape on `derivePhase` and `DesiredReplicas()`, and that one is still
+open. Both were found by reading a comment or description against what the
+code had come to do — not by any test.
+
+**`nix build` filters the source tree through the git index, so an untracked
+file does not exist for a sandboxed build.** This is not a 4c-1 discovery —
+it cost time in milestone 2c as well and was simply never written down. It
+presents as a compile failure naming a symbol that is plainly there in the file
+in front of you: this milestone's was 35 copies of
+`package cloud.spawnery.agent.pb.SetReady does not exist` from `make agent`,
+immediately after `make proto` had generated the Java stubs, which looks
+exactly like the `protoc`/runtime version drift the milestone 2c entry above
+warns about and is not. The agents derivation builds from `src = ../agent`
+(`nix/agents.nix:33`), the four Go binaries from `src = ./.` in `flake.nix`;
+either way the source is the git tree. `git add` before the build, not just
+before the commit — staging is enough, nothing has to be committed.
+
+**Smaller ones**, each carried out of this milestone's task reviews rather than
+fixed in them:
+
+- The drain-deadline event reports the *last known* player count, which is a
+  floor and not a measurement. `Registry.Lookup` hands back a stale snapshot's
+  numbers, so a proxy whose agent died with seven players on it is announced
+  with whatever it last reported, and one whose agent never connected at all is
+  announced as `0 player(s)` inside a `Warning` about disconnecting people.
+  Nothing reads that number today, which is what keeps it cosmetic; the first
+  reader — a metric, a condition, a decision — turns it into a wrong input.
+  "up to N", or no number at all, are the two rewrites on offer.
+- `drainingSince`'s parse error aborts the whole `Reconcile`, on every pass,
+  over one pod's corrupt annotation, while every neighbour in the same loop
+  tolerates a single pod's bad state: `Create` tolerates `AlreadyExists`,
+  `Delete` and `markDraining`'s patch tolerate `NotFound`, and `Fleet.SetReady`
+  returns nil for a pod it has no session for. Nobody writes that annotation
+  but the operator, so reaching it takes a hand edit; the objection is the
+  blast radius, not the likelihood.
+- The deadline event is emitted before the `Delete`, so a failed delete
+  re-announces it on the next pass, and a `NotFound` announces lost sessions
+  for a pod that was already gone.
+- Two assertions in `hack/agent-test.sh` are argued rather than demonstrated:
+  the control probe on 25565 that follows the closed-gate assertion, which
+  needs the container to die mid-phase to be shown failing, and the post-loop
+  arm of phase 4's withdrawal guard, which needs `port_open` to answer while
+  `set_ready_sent` is already non-zero — a sub-second window on a correct
+  agent.
+
+**Two facts about the machine this milestone was built on, measured
+2026-08-14.** `docker` here is a symlink into `podman-docker-compat`, so the
+`Makefile`'s `CONTAINER ?= docker` default already runs Podman and
+`CONTAINER=podman` changes nothing; and `/tmp` is not a tmpfs (part of root,
+649 G free), so the `TMPDIR` prerequisite a small tmpfs would make necessary
+does not apply here. Both are stated conditionally where they matter —
+`docs/runbook-milestone-3-evidence.md` §0 always did, and
+`docs/handover-milestone-4b.md` was corrected during this milestone — because a
+machine where either is false still needs the override. Neither is a property
+of the repository, which is the reason to date them.
+
+**An unchecked question about milestone 3's runbook, which must not be repeated
+as a finding.** Measured 2026-08-14 against Go 1.26.5 in this repository's
+devshell: `go run` does not forward `SIGTERM` to the binary it compiled, so
+`pkill -f` on the wrapper leaves the compiled child running and reparented, and
+the operator goes on reconciling.
+`docs/runbook-milestone-4c1-evidence.md` says so and kills the child.
+`docs/runbook-milestone-3-evidence.md` cleans up the same `go run` with
+`kill %1`, and whether that has the same problem is **not known**: `kill %n`
+addresses the *job*, which in some shells means the job's whole process group,
+and signalling the group would take the compiled child down along with the
+wrapper. Two possibilities, one of them benign, and nobody has run it in the
+shell milestone 3 was actually run in. The 4c-1 measurement is about `pkill -f`,
+which signals only the process it matched, and it does not settle the other
+case — evidence consistent with a conclusion is not evidence that establishes
+it, which is a lesson this milestone learned three separate times.
+
 ## Preconditions for milestone 5 (persistent groups)
 
 If a server's `ServerGroup` is missing, the server controller carries on with

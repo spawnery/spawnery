@@ -8,11 +8,15 @@ import cloud.spawnery.agent.pb.ProxyMessage
 import cloud.spawnery.agent.pb.RegisterServer
 import cloud.spawnery.agent.pb.ReportInterval
 import cloud.spawnery.agent.pb.SessionDeadline
+import cloud.spawnery.agent.pb.SetReady
 import cloud.spawnery.agent.pb.UnregisterServer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import cloud.spawnery.agent.pb.RegisteredServer as PbServer
 
 /**
@@ -48,6 +52,7 @@ class ProxyRoleTest {
         directory = directory,
         drain = drain,
         onFirstSync = { syncs++ },
+        onSetReady = { },
         log = { message, error -> logs += message to error },
     )
 
@@ -267,12 +272,199 @@ class ProxyRoleTest {
         assertEquals(1, syncs, "a failed first sync consumed the gate's one opening")
     }
 
+    @Test
+    fun `set ready closes and reopens the gate`() {
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onSetReady = { states += it })
+
+        // The sync first, because the reopen is conditional on it: a proxy
+        // with no server list is not made ready by anything. The two tests
+        // below own that rule; this one owns the mapping once it is satisfied.
+        role.onMessage(fullSync())
+        role.onMessage(setReady(false))
+        role.onMessage(setReady(true))
+
+        assertEquals(listOf(false, true), states)
+    }
+
+    @Test
+    fun `a ready before the first sync is recorded and not passed on`() {
+        // Readiness means routable. A proxy that opened its gate here would be
+        // in the Service's endpoints with an empty routing table, and every
+        // player sent to it is disconnected with "no available server".
+        //
+        // Reaching this needs a FullSync that threw -- Fleet queues a
+        // session's FullSync ahead of anything else -- which is why the same
+        // sequence ends with a sync that works: what is asserted is not lost
+        // while the fault lasts, it takes effect when the fault clears.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(setReady(true))
+        assertEquals(emptyList<Boolean>(), states, "an unsynced proxy was made ready with no server list")
+
+        role.onMessage(fullSync())
+        assertEquals(listOf(true), states, "the standing ready did not survive to the sync that could honour it")
+    }
+
+    @Test
+    fun `a not-ready before the first sync still reaches the gate`() {
+        // The mirror is not gated, and must not be. A proxy that cannot apply
+        // its directory has no business in the endpoints either, and refusing
+        // a close is the one direction that leaves a draining pod ready --
+        // which is the failure ReadyGate's own comment names.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(setReady(false))
+
+        assertEquals(listOf(false), states, "a not-ready was withheld from the gate for want of a sync")
+    }
+
+    @Test
+    fun `a standing not-ready survives the first sync`() {
+        // The pod became surplus while it was still starting: the operator's
+        // instruction arrives before the first FullSync. Opening the gate on that
+        // sync would put a draining proxy back into the Service's endpoints and
+        // send it new players.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(setReady(false))
+        role.onMessage(fullSync())
+
+        assertEquals(listOf(false), states, "the first sync must not open a gate the operator closed")
+    }
+
+    @Test
+    fun `the first sync still opens the gate when nothing was asserted`() {
+        // The ordinary case, and the guard above must not break it.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(fullSync())
+
+        assertEquals(listOf(true), states)
+    }
+
+    @Test
+    fun `a not-ready after the first sync still closes the gate`() {
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(fullSync())
+        role.onMessage(setReady(false))
+
+        assertEquals(listOf(true, false), states)
+    }
+
+    @Test
+    fun `a cancelled drain leaves the gate open`() {
+        // The brief's hazard scenario, chained in one sequence rather than
+        // left as two separate tests that each pin half of it: the operator
+        // marks the pod not-ready, the drain does not finish before the
+        // operator changes its mind, and a fresh FullSync arrives before the
+        // reversal does. A proxy that got this wrong would come out of the
+        // sequence either still closed (the corpse the brief warns about) or
+        // would have opened the gate on the sync it should not have.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(setReady(false))
+        role.onMessage(fullSync())
+        role.onMessage(setReady(true))
+
+        // The sequence in between, not only the final state: the FullSync
+        // must not have opened the gate (a standing not-ready still wins),
+        // and the cancellation must reopen it directly through onSetReady
+        // rather than through the FullSync's spent latch.
+        assertEquals(listOf(false, true), states, "the cancelled drain did not leave a working proxy behind")
+    }
+
+    @Test
+    fun `a not-ready racing the first sync leaves the gate closed`() {
+        // The only case in this class that is not single-threaded, and the one
+        // ProxyRole's readiness monitor exists for: SessionLoop's
+        // make-before-break renewal puts two gRPC callback threads inside
+        // onMessage at once, one per live stream. The operator's SET_READY
+        // arrives on one of them while the other is applying the FullSync that
+        // would open the gate.
+        //
+        // `asserted` ends false however the two land -- SET_READY(false) is the
+        // only message here that writes it -- so "the gate agrees with
+        // asserted" is exactly "the gate ends closed". The failure this pins is
+        // a FullSync thread that read the pair before the SET_READY wrote it
+        // and then opened the gate after the SET_READY had closed it: a pod
+        // left Ready, in the Service's endpoints and taking new players, with
+        // the operator's drain deadline already running against it.
+        //
+        // TRIALS is chosen against a measurement rather than a guess. With the
+        // gate call outside the atomic read (the shape this replaced) the bad
+        // interleaving landed 35 times in 20 000 trials on 2026-08-14 -- about
+        // one in 570 -- so 20 000 makes a run that sees none of them
+        // vanishingly unlikely rather than merely lucky, and costs about a
+        // second. A machine slower or less parallel than that one may hit it
+        // less often; that changes how loudly this fails on a regression, not
+        // whether it can pass one.
+        val trials = 20_000
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            repeat(trials) { trial ->
+                // The last gate operation either callback made. Both run inside
+                // the role's readiness monitor, so the last write is the state
+                // the pod is left in and not one of two racing writes.
+                val gate = AtomicBoolean(false)
+                val role = newRole(onFirstSync = { gate.set(true) }, onSetReady = { gate.set(it) })
+
+                val start = CyclicBarrier(2)
+                val sync = pool.submit { start.await(); role.onMessage(fullSync()) }
+                val notReady = pool.submit { start.await(); role.onMessage(setReady(false)) }
+                sync.get()
+                notReady.get()
+
+                assertFalse(gate.get(), "trial $trial left the gate open on a proxy the operator had closed")
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+
+        // onMessage swallows and logs whatever its branches throw, so an empty
+        // log is what says the trials raced inside those branches rather than
+        // failing before they got there. It is also what makes `logs` -- a
+        // plain ArrayList the role holds and two threads could have reached --
+        // safe here: nothing wrote to it.
+        assertEquals(emptyList<Pair<String, Throwable?>>(), logs, "a trial failed inside apply instead of racing")
+    }
+
+    /**
+     * A second [ProxyRole] over the same collaborators as [role], for the tests
+     * above that need their own `onFirstSync`/`onSetReady` rather than the
+     * counting ones [role] was built with.
+     */
+    private fun newRole(
+        onFirstSync: () -> Unit = { syncs++ },
+        onSetReady: (Boolean) -> Unit = { },
+    ): ProxyRole =
+        ProxyRole(
+            state = state,
+            directory = directory,
+            drain = drain,
+            onFirstSync = onFirstSync,
+            onSetReady = onSetReady,
+            log = { message, error -> logs += message to error },
+        )
+
     private fun backend(name: String, address: String, group: String): PbServer =
         PbServer.newBuilder().setName(name).setAddress(address).setGroup(group).build()
 
     private fun fullSync(vararg servers: PbServer): OperatorToProxy =
         OperatorToProxy.newBuilder()
             .setFullSync(FullSync.newBuilder().addAllServers(servers.toList()))
+            .build()
+
+    private fun setReady(ready: Boolean): OperatorToProxy =
+        OperatorToProxy.newBuilder()
+            .setSetReady(SetReady.newBuilder().setReady(ready))
             .build()
 
     private fun info(name: String, host: String, port: Int) =

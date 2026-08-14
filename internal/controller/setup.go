@@ -46,6 +46,11 @@ type Options struct {
 	// AgentEndpoint is the address the in-game agent dials to reach the
 	// operator's gRPC endpoint.
 	AgentEndpoint string
+	// Proxies is how the ProxyGroup controller tells a surplus proxy to stop
+	// taking connections. Required: the production binary always supplies the
+	// real *proxyreg.Fleet, and SetupAll refuses a nil value for the same
+	// reason it refuses a nil Bootstrapper.
+	Proxies ProxyReadinessSetter
 }
 
 // Leader election locks on a Lease in the operator's own namespace. It is not
@@ -62,6 +67,12 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	// a goroutine, instead of as a startup error.
 	if opts.Bootstrapper == nil {
 		return fmt.Errorf("no bootstrapper: the server controller cannot create pods without one")
+	}
+	// Refused for the same reason as a nil Bootstrapper: a nil Proxies would
+	// surface as a panic inside a reconcile, minutes after start and in a
+	// goroutine, instead of as a startup error.
+	if opts.Proxies == nil {
+		return fmt.Errorf("no proxies: the proxy group controller cannot set readiness without one")
 	}
 
 	if err := (&NetworkReconciler{
@@ -102,9 +113,12 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	if err := (&ProxyGroupReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("proxygroup"),
 		Agents:        opts.Agents,
 		Bootstrap:     opts.Bootstrapper,
 		AgentEndpoint: opts.AgentEndpoint,
+		Proxies:       opts.Proxies,
+		Clock:         opts.Clock,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup proxy group controller: %w", err)
 	}
