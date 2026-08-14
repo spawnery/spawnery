@@ -1239,6 +1239,62 @@ func TestADrainingProxyIsDeletedOnceEmpty(t *testing.T) {
 	}
 }
 
+// TestAZeroFromADeadStreamDoesNotDeleteTheProxy closes the gap between the
+// two halves of "known empty": the count was fresh, and the stream that
+// produced it was already gone.
+//
+// Registry.Disconnect keeps the last count and leaves lastReportAt untouched
+// on purpose, so a zero stays inside the staleness window for twice the report
+// interval after the stream died — ten seconds at the operator's configured
+// five. The pod is still Ready for that whole window, because readiness is the
+// agent's own gate and nothing closed it, so the Service still routes to it
+// and a player can join with no live stream left to report them. Believing the
+// zero there deletes a populated proxy, which is the exact failure the wait
+// exists to prevent.
+//
+// The freshness check before the scale-down is what makes this test about the
+// stream rather than about staleness: without it, the same two survivors would
+// be produced by a clock that had simply moved on, and the test would pass
+// against code that never looked at the stream at all.
+func TestAZeroFromADeadStreamDoesNotDeleteTheProxy(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	surplus := before[1]
+	f.reportProxyPlayers(t, surplus, 0)
+	f.agents.Disconnect(string(surplus.UID))
+
+	switch snap := f.agents.Lookup(string(surplus.UID)); {
+	case snap.PlayersStale:
+		t.Fatalf("the count went stale before the scale-down: this test would then pass for the wrong reason (%+v)", snap)
+	case snap.Connected:
+		t.Fatalf("the stream is still up after Disconnect; there is no dead stream to test (%+v)", snap)
+	}
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if _, ok := f.pod(surplus.Name); !ok {
+		t.Error("the surplus proxy was deleted on a zero from a stream that had already died; " +
+			"Velocity goes on serving, and anyone who joined after the last report is invisible to the registry")
+	}
+
+	// Bounded, like every other reason this loop keeps a pod: the deadline
+	// still ends it.
+	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
+	f.reconcileProxyGroup(r, "gateway")
+	if got := len(f.proxyPods("gateway")); got != 1 {
+		t.Errorf("proxy pods = %d after the deadline, want 1 — a dead stream must not hold a pod forever", got)
+	}
+}
+
 // TestTheDeadlineDeletesLoudly covers the one path in this milestone that
 // disconnects anybody.
 //

@@ -274,16 +274,27 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// option, because the connection terminates at the proxy being removed.
 	// So the deadline below is the only path here that disconnects anyone.
 	//
-	// Empty means the count is fresh and zero. A count we cannot trust is
-	// treated as occupied — the single occupancy rule of this repository, the
-	// one candidates.go's isOccupied states and the Server controller obeys.
-	// It matters more here than the phrasing suggests: an agent's gRPC stream
-	// breaking does not disconnect anybody, because Velocity goes on serving
-	// the sessions it already holds, and the registry then reports a pod it
-	// has never heard of and a pod whose agent died three minutes ago
-	// identically — both as zero players. Deleting on a bare zero would
-	// disconnect everyone on a proxy whose only fault was a dropped stream,
-	// which is precisely the failure this wait exists to prevent.
+	// Empty means the count is fresh, zero, and reported by a stream that is
+	// still up. A count we cannot trust is treated as occupied — the single
+	// occupancy rule of this repository, the one candidates.go's isOccupied
+	// states and the Server controller obeys. It matters more here than the
+	// phrasing suggests: an agent's gRPC stream breaking does not disconnect
+	// anybody, because Velocity goes on serving the sessions it already holds,
+	// and the registry then reports a pod it has never heard of and a pod
+	// whose agent died three minutes ago identically — both as zero players.
+	// Deleting on a bare zero would disconnect everyone on a proxy whose only
+	// fault was a dropped stream, which is precisely the failure this wait
+	// exists to prevent.
+	//
+	// Connected is what makes "three minutes ago" and "three seconds ago" the
+	// same answer. Registry.Disconnect deliberately keeps the last count and
+	// leaves lastReportAt alone, so freshness alone still believes a zero for
+	// 2 × the report interval — 10 s at the operator's configured 5 s — after
+	// the stream that produced it died. A player can join through the Service
+	// inside that window, because the pod is Ready until its own agent closes
+	// the gate, and Velocity accepts them with nothing left to report it. So
+	// the count is only believed while the stream that would have updated it
+	// is still there.
 	//
 	// isOccupied's own rule also requires wasRegistered, because nobody is
 	// ever routed to a server the proxies were not told about. A proxy has no
@@ -314,7 +325,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		expired := dated && r.Clock().Sub(since) >= group.DrainTimeout()
 
 		switch {
-		case players == 0 && !snap.PlayersStale:
+		case players == 0 && !snap.PlayersStale && snap.Connected:
 			// Known empty: nobody is on it, so removing it costs nothing.
 		case expired:
 			// The one path in this milestone that disconnects anybody. It is
