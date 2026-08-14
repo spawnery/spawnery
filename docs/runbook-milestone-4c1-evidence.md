@@ -501,22 +501,31 @@ pod accepted a given player, and only the accepting pod logs the line at all:
 ```bash
 nix develop -c kubectl logs -n minecraft \
   -l spawnery.cloud/role=proxy,spawnery.cloud/group=gateway \
-  --prefix=true --tail=-1 --timestamps | grep 'has connected'
+  --prefix=true --tail=-1 --timestamps | grep 'connected player.*has connected'
 ```
 
 `--tail` defaults to 10 lines per pod, not to "all", the moment a selector
 (`-l`) is in play — `kubectl logs --help` says so in as many words — and by
 the time this command is repeated in §8 and §10, minutes and several log
 lines later, the line this command is looking for is very likely past that
-window. `--tail=-1` turns that default back off. The narrower pattern, `has
-connected` rather than the bare `connected player` marker, is there because
-Velocity logs a disconnect on that same marker too, spelled `has
-disconnected` — a different word after `has `, so the narrower grep does not
-also match a quit. (This repository's own record of the marker,
-`docs/handover-milestone-4.md:333`, shows only the connect spelling; it does
-not record what a disconnect on this marker looks like, so treat the
-narrower pattern as the safe choice rather than as tested against a real
-disconnect line.)
+window. `--tail=-1` turns that default back off. The pattern keeps both the
+marker and the verb, `connected player.*has connected`, and each is doing a
+different job. The verb excludes a disconnect on its own terms, without
+needing to know how Velocity actually spells one: `has connected` cannot
+occur inside `has disconnected`, because the word after `has ` differs —
+true whatever the disconnect line looks like. The marker is needed for a
+different reason: on the very join this command is looking for, the
+accepting pod's own log carries a *second* line that also contains `has
+connected` — `[server connection] <player> -> <backend> has connected`,
+logged immediately after the `[connected player]` line
+(`docs/handover-milestone-4.md:333-334`, also `:217` and `:358`). A
+verb-only grep matches both lines from the one join and turns one accepted
+player into two matching lines; keeping the `connected player` marker
+excludes the second. (This repository's own record of the marker,
+`docs/handover-milestone-4.md:333`, shows only the connect spelling under
+`[connected player]`; it does not record what a disconnect on that marker
+looks like, so the verb's exclusion above rests on the words themselves, not
+on a disconnect line anyone has observed here.)
 
 Expect one line, prefixed with the pod it came from and timestamped by
 `kubectl` itself ahead of Velocity's own embedded time:
@@ -870,15 +879,20 @@ command line is just the shell's name; it matters here because this runbook
 may be driven non-interactively for its cluster half, one script fed to a
 shell as `sh -c "<script text>"`, and a shell whose own invocation contains
 `go run ./cmd/spawnery-operator` — because an earlier step in that same
-script started it — is exactly such a match. `[g]o run` cannot appear
-literally in any command's own text, so it cannot match that command's own
-invocation, only a live process's argument list.
+script started it — is exactly such a match, and that shell's own command
+line then literally contains the bracketed cleanup text too, character for
+character. What saves it is what `pkill -f` actually matches against: `man
+pgrep` states it plainly — `pkill -f`'s pattern is an Extended Regular
+Expression, not a literal string. The pattern `[g]o run …` matches the
+*text* `go run …`; the `pkill` line itself contains only the bracketed
+spelling, so it can never match its own invocation, only a live process
+whose argument list spells the word unbracketed.
 
 **Confirm it, rather than trust it.** `go run` compiles to a temporary
 binary and runs it as a child process; killing the `go run` wrapper does not
-reliably kill that child — measured in this repository's devshell, sending
-`SIGTERM` to the wrapper left the compiled binary running, reparented and
-orphaned. So:
+reliably kill that child — measured 2026-08-14 in this repository's
+devshell, Go 1.26.5: sending `SIGTERM` to the wrapper left the compiled
+binary running, reparented and orphaned. So:
 
 ```bash
 pgrep -af '[s]pawnery-operator'   # expect no output
