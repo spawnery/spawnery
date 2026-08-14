@@ -193,6 +193,116 @@ depends on it. What follows is what 4d built and what 4c now finds in place.
   4c.** The controller has no failure path of this shape yet; 4d's own
   design says so in as many words.
 
+## 4c-1 has landed
+
+4c-1 (the proxy readiness contract, 2026-08-14) gives a proxy a way to stop
+being ready without dropping its connection, and spends it on the first drain
+that needed it: a surplus proxy is told to stop taking connections, its agent
+closes the port the kubelet probes, the pod goes `NotReady`, the `Service`
+drops its endpoint so no new player is routed there, and the players already on
+it keep playing until they leave of their own accord. Only then is the pod
+deleted. Until this landed, lowering `spec.replicas` deleted the pod in the
+same instant and disconnected everyone on it. 4c was cut into three at the
+start of this milestone — 4c-1 the contract, 4c-2 proxy rolling updates, 4c-3
+node drain — and what follows is what 4c-1 built and what the other two now
+find in place.
+
+- **`SetReady { bool ready = 1; }` is field 7 of `OperatorToProxy`'s oneof,
+  and it carries a state rather than an event.** The operator asserts what
+  each proxy's readiness *should* be on every pass, for every pod, surplus or
+  not; the agent maps it onto `ReadyGate.open()` and `close()`, which already
+  existed and did not change. State is this repository's own rule — `Hello`'s
+  readiness and `FullSync` are both stated that way — and here it buys two
+  things a one-shot `Drain` message would have lost. A proxy that reconnected
+  mid-drain would have come back ready, and an operator that crashed between
+  asking and deleting would have left a pod stuck `NotReady` holding a replica
+  slot forever, because `reconcileReplicas` counts pods and not ready pods. It
+  also makes the drain reversible: a cancelled scale-down reopens the gate and
+  removes the annotation, deliberately unlike the server side, where
+  `Retiring` has no path back to `Ready` — a `Server` on its way out is
+  replaced, a proxy on its way out may simply be kept.
+- **Upgrade proxy images before the operator.** The message is additive, so an
+  agent that predates it ignores the field, its gate never closes, and the
+  drain runs to its deadline and disconnects whoever is on it — having gone on
+  taking new players for the whole window. `docs/known-issues.md`, "From
+  milestone 4c-1", says what that looks like from outside and how to tell it
+  apart from a proxy that is genuinely occupied. Nothing version-gates the
+  message today.
+- **`internal/agent/registry.go` was deliberately not touched, and "The one
+  contract change milestone 4 has to make" below is wrong about it.** That
+  section, written by 3c and carried unchanged through 4a, 4b and 4d, says the
+  fix needs the registry to carry "ready" separately from "connected".
+  Measured against the tree it does not: `Snapshot.Ready` has exactly one
+  reader, the server state machine in `internal/controller/server_controller.go`,
+  and `ProxyGroupReconciler` reads the registry only for player counts and
+  takes a proxy's readiness from the pod condition — which is the one the
+  `Service` actually obeys. "Connected, but no longer ready" was already
+  expressible; the operator simply had no way to *ask* for it. A registry bit
+  beside the pod condition would have been a second copy of one truth, the
+  shape `candidates.go` already records the cost of. What was actually needed
+  was one message and one `when` branch. See design §3.1.
+- **The one thing stored is the drain's start time, and it lives on the pod.**
+  `spawnery.cloud/draining-since` (`ProxyDrainingSinceAnnotation`,
+  `internal/controller/proxygroup_controller.go`), an RFC 3339 timestamp,
+  written when the operator first asks that pod to go not-ready and never
+  moved afterwards — re-stamping it on each five-second pass would push the
+  deadline forever and the drain would never end. A `Server` keeps the same
+  clock in `status.drainStartedAt`, but a proxy has no CR of its own and a
+  `ProxyGroup`'s status is per group, so an annotation is the only per-pod
+  place that survives an operator restart. Everything else is re-derived every
+  pass, which is why a restart mid-drain continues where it was and a
+  cancelled scale-down needs nothing cleaned up.
+- **`Fleet.SetReady` is per session, so a reconnect re-asserts for free.** The
+  send-suppressing memo (`lastReady`/`lastReadySet`) lives on the session
+  rather than beside the pod UID, so a new stream starts without one and the
+  next pass re-sends. The agent holds the mirror of this: `ProxyRole` records
+  the assertion in the same latch as its first-sync flag, so a pod told to
+  drain before its first `FullSync` does not open its gate on that sync. 4c-2
+  inherits both behaviours without doing anything.
+- **The wait is for *empty*, and a count that cannot be trusted counts as
+  occupied.** A surplus pod is deleted when its reported player count is fresh
+  and zero, or when `spec.drain.timeoutSeconds` has elapsed since the
+  annotation — 300 seconds by default, five minutes rather than the server
+  side's sixty seconds because nobody is moved anywhere and the operator is
+  waiting for people to leave on their own. The deadline is the only path in
+  this milestone that disconnects anybody and it is the only thing here that
+  emits an event: one `Warning`, reason `ProxyDrainTimeout`. A *stale* count
+  waits for the deadline instead of deleting, which is the repository's own
+  occupancy rule (`isOccupied`, `scaling.go`) and matters more than it sounds:
+  an agent's gRPC stream breaking disconnects nobody, because Velocity goes on
+  serving the sessions it holds, so deleting on a bare zero would disconnect
+  exactly the people the wait exists to protect.
+- **4c-2 still owns which proxy goes, and how fast.** The selection is
+  unchanged — from the end of the pod list — and several surplus proxies drain
+  at once, which is what lowering `spec.replicas` asked for. Surge,
+  one-at-a-time replacement (master design §6.6's "one at a time" is about
+  *replacement* during a rolling update, not about scale-down), preferring the
+  emptiest proxy, and `ProxyGroupReconciler.pods()`'s missing expectations are
+  all 4c-2's. The expectations concern the *create* path racing the informer
+  cache, which 4c-1 neither causes nor worsens, and
+  `internal/controller/expectations.go` is still the mechanism to copy rather
+  than design again.
+- **4c-3 owns node drain and depends on none of this.** It drains *servers*,
+  which has worked since 4b, and nothing in the operator reads `Node` objects
+  yet.
+- **Criterion 3 is proven at both ends and nowhere in between.** That the
+  desired readiness is re-asserted after a reconnect is proved at the `Fleet`
+  level by `internal/proxyreg`'s tests and at the agent level by the Velocity
+  agent's, and `make agent-test` phase 1 already proves a reconnect itself
+  works — but nothing exercises a real reconnect against a real readiness
+  assertion end to end. Extending phase 1 to assert readiness across a proxy
+  reconnect is the stronger test; it was not in this plan, and the plan's own
+  self-review says so rather than leaving it implied. It is cheap work for
+  whoever is next in this area.
+- **Criteria 1 and 2 need a real cluster, and had not been run when this was
+  written (2026-08-14).** envtest has no kubelet, no probes and no kube-proxy,
+  so "the endpoint disappears before the pod does" and "the established
+  connection survives" are claims it cannot make.
+  `docs/runbook-milestone-4c1-evidence.md` exists for exactly those two and
+  says of itself that it has not been run. Whoever runs it first should
+  correct it in place, the way `docs/runbook-milestone-3-evidence.md` was
+  corrected after its own first run.
+
 ## The evidence run
 
 `docs/runbook-milestone-3-evidence.md` was run against a real `kind` cluster
@@ -394,6 +504,15 @@ the held probe failed; the window is narrow, not absent, and deciding what to
 do about it remains milestone 4's.
 
 ## The one contract change milestone 4 has to make
+
+**Read this against "4c-1 has landed" above before acting on it.** 4c-1
+answered this section and did not make the change it predicts: the registry was
+left alone deliberately, because a proxy's readiness already lives in the pod
+condition the `Service` obeys. The diagnosis below is still worth reading — it
+is what led to the message that did land — but its conclusion, that this is a
+milestone 2a change spanning the registry, is wrong. The section is kept as 3c
+wrote it rather than rewritten, so that what was predicted and what was
+measured can be compared.
 
 `internal/agent/registry.go` cannot express "connected, but no longer
 ready." `Registry.MarkReady` is only ever called on `Hello{ready:true}` or
