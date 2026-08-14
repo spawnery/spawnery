@@ -86,12 +86,26 @@ func NewProxyName(group string) string { return NewServerName(group) }
 // contract exists for: reconcileReplicas removes a surplus pod once it is
 // empty, or once its deadline has passed, and not before.
 //
-// It emits exactly one Kubernetes event, and only from that deadline. Pod
-// creation and ordinary deletion stay silent: they are recorded on the
+// It emits Kubernetes events on two occasions, and the bar both clear is the
+// same one: something happened that no other signal on the object reports.
+//
+//   - A drain that ran out of time (ProxyDrainTimeout, Warning, from the
+//     deletion loop in reconcileReplicas). It is the one thing in this
+//     milestone that disconnects a player, it is configured rather than
+//     accidental, and nothing else on the object would ever say it happened.
+//   - A readiness divergence crossing its grace period, on the flank in
+//     either direction (ReadinessDiverged as a Warning, ReadinessAgrees as a
+//     Normal, from reportReadinessDivergence). Here the condition of the same
+//     name carries the state, so what the event adds is the transition and
+//     its timing: a condition read later says a proxy is ignoring its
+//     withdrawal, not when it started or that it happened at all if it has
+//     since cleared. An agent that heard a withdrawal and went on taking
+//     connections looks healthy from every angle the kubelet reports, so
+//     nothing outside this pair reports it.
+//
+// Pod creation and ordinary deletion stay silent: they are recorded on the
 // objects themselves and an event would say nothing the group's status does
-// not. A drain that ran out of time is different in kind — it is the only
-// thing in this milestone that disconnects a player, and nothing else on the
-// object would ever say it happened.
+// not.
 type ProxyGroupReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -110,9 +124,10 @@ type ProxyGroupReconciler struct {
 	Proxies ProxyReadinessSetter
 	// Clock is injectable so the drain deadline is testable.
 	Clock func() time.Time
-	// Recorder announces the one thing here a user cannot see any other way:
-	// a drain that hit its deadline with players still on the proxy. See the
-	// type comment for why nothing else is announced.
+	// Recorder announces two things: a drain that hit its deadline with
+	// players still on the proxy, and the flank of a readiness divergence.
+	// See the type comment for the bar both clear and why nothing else here
+	// is announced.
 	Recorder record.EventRecorder
 	// Expectations reserves the pod creates and deletes this reconciler has
 	// issued and the cache has not shown yet. One instance is shared across
