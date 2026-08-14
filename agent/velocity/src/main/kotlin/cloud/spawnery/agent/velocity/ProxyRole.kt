@@ -10,7 +10,7 @@ import cloud.spawnery.agent.pb.ProxyMessage
 import io.grpc.CallCredentials
 import io.grpc.ManagedChannel
 import io.grpc.stub.StreamObserver
-import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import cloud.spawnery.agent.pb.RegisteredServer as PbServer
 
 /**
@@ -60,21 +60,34 @@ class ProxyRole(
     private val log: (String, Throwable?) -> Unit,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
-     * Whether a `FullSync` has ever been applied. Atomic rather than a plain
-     * `Boolean`, because during a make-before-break renewal two gRPC callback
-     * threads can be applying a `FullSync` at the same time -- one per live
-     * stream -- and a lost transition would open the gate twice or, worse,
-     * never.
+     * Whether a `FullSync` has ever been applied, paired with the last
+     * readiness the operator asserted (or null if it never has) -- read and
+     * written together as one [AtomicReference], not as two independent
+     * fields.
+     *
+     * They used to be independent: a `synced` `AtomicBoolean` beside a
+     * separately `@Volatile` `asserted`. Each is safe alone, but the
+     * FULL_SYNC branch below has to read them *as a pair* -- a standing
+     * not-ready must survive the first sync -- and during a make-before-break
+     * renewal two gRPC callback threads really can be inside [apply] at once,
+     * one per live stream (see [SessionLoop]'s class comment for why that is
+     * a real window and not a hypothetical one). Two independent reads there
+     * can straddle a concurrent `SetReady` write, observing a stale
+     * `asserted` next to whichever `synced` transition wins the race.
+     *
+     * Folding both into one [Latch] behind one [AtomicReference] makes that
+     * read-and-latch a single atomic step instead of two, so there is no
+     * interleaving left to reason about -- without adding a lock. A lock
+     * was deliberately not the fix: [onFirstSync] and [onSetReady] both end
+     * in [ReadyGate], whose `open()`/`close()` are already `@Synchronized`,
+     * and taking a monitor on `this` before calling into them would invent a
+     * lock ordering (`ProxyRole` then `ReadyGate`) this code does not have
+     * today, on a gRPC callback thread -- a deadlock there would be strictly
+     * worse than the transient, self-correcting staleness this replaces.
      */
-    private val synced = AtomicBoolean(false)
+    private data class Latch(val synced: Boolean, val asserted: Boolean?)
 
-    /**
-     * The last readiness the operator asserted, or null if it never has.
-     * Read by the FullSync branch so a standing instruction wins over the
-     * gate-opening that a first sync would otherwise do.
-     */
-    @Volatile
-    private var asserted: Boolean? = null
+    private val latch = AtomicReference(Latch(synced = false, asserted = null))
 
     override fun open(
         channel: ManagedChannel,
@@ -145,7 +158,15 @@ class ProxyRole(
                 // operator repeats FullSync roughly every 30 seconds. Claiming
                 // the latch first would spend the pod's one chance to become
                 // ready on the attempt that failed.
-                if (synced.compareAndSet(false, true) && asserted != false) onFirstSync()
+                //
+                // getAndUpdate claims the latch and reads the asserted value
+                // it is paired with in one atomic step: `previous` is the
+                // state as it stood immediately before this attempt (and only
+                // this attempt, if two threads race here) won the transition
+                // to synced. See the Latch doc comment above for why that
+                // pairing has to be atomic rather than two separate reads.
+                val previous = latch.getAndUpdate { it.copy(synced = true) }
+                if (!previous.synced && previous.asserted != false) onFirstSync()
                 Directive.None
             }
 
@@ -173,7 +194,13 @@ class ProxyRole(
                 // surplus while it is still starting gets the instruction
                 // before its first sync, and opening on that sync would put a
                 // draining proxy back into the Service's endpoints.
-                asserted = message.setReady.ready
+                //
+                // Recorded before onSetReady is called, not after: reversing
+                // the order would widen, not narrow, the window in which a
+                // concurrent FullSync thread could read a stale `asserted`
+                // after the gate had already been mutated by this newer
+                // SetReady.
+                latch.updateAndGet { it.copy(asserted = message.setReady.ready) }
                 onSetReady(message.setReady.ready)
                 Directive.None
             }

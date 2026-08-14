@@ -317,6 +317,29 @@ class ProxyRoleTest {
         assertEquals(listOf(true, false), states)
     }
 
+    @Test
+    fun `a cancelled drain leaves the gate open`() {
+        // The brief's hazard scenario, chained in one sequence rather than
+        // left as two separate tests that each pin half of it: the operator
+        // marks the pod not-ready, the drain does not finish before the
+        // operator changes its mind, and a fresh FullSync arrives before the
+        // reversal does. A proxy that got this wrong would come out of the
+        // sequence either still closed (the corpse the brief warns about) or
+        // would have opened the gate on the sync it should not have.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(setReady(false))
+        role.onMessage(fullSync())
+        role.onMessage(setReady(true))
+
+        // The sequence in between, not only the final state: the FullSync
+        // must not have opened the gate (a standing not-ready still wins),
+        // and the cancellation must reopen it directly through onSetReady
+        // rather than through the FullSync's spent latch.
+        assertEquals(listOf(false, true), states, "the cancelled drain did not leave a working proxy behind")
+    }
+
     /**
      * A second [ProxyRole] over the same collaborators as [role], for the tests
      * above that need their own `onFirstSync`/`onSetReady` rather than the
