@@ -1012,6 +1012,38 @@ previous generation's corpse says nothing about the new image. See
 
 ## From milestone 4d
 
+**A group whose `minReplicas` is 6 or more gives up after a single round of
+failures, with no retry at all.** The backoff's threshold
+(`backoffGiveUpAt = 6`, `internal/controller/backoff.go`) counts failed
+*servers*, not failed rounds. `size()` creates the whole shortfall in one pass
+— for a group starting from nothing the floor term `minReplicas - alive` is
+the entire floor at once — and `CountFailures` then counts every `Failed` view
+in a single pass. So the budget of six is spent in `⌈6 / minReplicas⌉` rounds:
+three attempts at `minReplicas 2`, two at 3, and exactly one at 6 or above.
+Verified rather than reasoned about:
+`DecideSize({MinReplicas: 6, MaxReplicas: 10, SpareSlots: 10, MaxPlayers: 100})`
+returns `Create: 6`, `CountFailures` over those six same-instant `Failed` views
+returns 6, and `DecideBackoff` turns that straight into
+`GaveUp: true, MayCreate: false`.
+
+The operational consequence is what matters here, because giving up is
+terminal: a transient scheduler, registry or quota problem that fails a whole
+floor's worth of servers at once takes a large group straight to
+`Degraded`/`CrashLoopBackoff`, and design §3.5 makes the way back a spec edit
+by a human — the group will not recover on its own however long the problem
+lasted or how quickly it cleared. Nothing is lost and no player is
+disconnected by this on its own; the group simply stays at zero new servers
+until somebody touches it. If a group with a floor above one is found
+`Degraded` shortly after a cluster-wide hiccup, this is very likely why, and
+any spec change clears it (a `metadata.generation` bump is all the reconciler
+looks at).
+
+Design §3.6 and §5 are both narrated at `minReplicas 1`, where the schedule is
+the intended one free attempt plus five growing waits. §3.6 now says so
+explicitly and §11 carries the open design question — whether the schedule
+should count rounds, or the threshold should scale with the floor. Neither was
+decided in 4d, and changing it is a behaviour change, not a fix.
+
 **Which message an operator sees first when a group has both given up and a
 dead `Network` is unpinned.** The `BackingOff`/`Degraded` switch in
 `ServerGroupReconciler.Reconcile` tests `!sized` before `backoff.GaveUp`, so a
@@ -1176,11 +1208,14 @@ intentional — the following points each concern only one of the two halves.
   the shared symlink, up to a half-written one mid-swap. `nix build
   --out-link` with two distinct names (e.g. `result-paper` and
   `result-velocity`) closes it; nothing does that today.
-- **`record.FakeRecorder`'s 100-event channel blocks its writer once full.**
-  Every fixture in `internal/controller` builds its recorder with
-  `record.NewFakeRecorder(100)`; the channel holds exactly that many events,
-  and a reconciler that emits a 101st blocks inside the `Send` call instead of
-  dropping it or erroring. A test that walks enough lifecycle to cross that
+- **`record.FakeRecorder`'s buffered channel blocks its writer once full.**
+  Almost every fixture in `internal/controller` builds its recorder with
+  `record.NewFakeRecorder(100)`, but the buffer is per call site and not a
+  package-wide constant: `server_controller_test.go` builds one with 20. The
+  channel holds exactly as many events as its own call site asked for,
+  and a reconciler that emits one more blocks inside the `Send` call instead of
+  dropping it or erroring. Budget against the buffer the test in front of you
+  actually built, not against 100. A test that walks enough lifecycle to cross that
   line does not fail — it hangs, and the only symptom is the package's
   ten-minute `go test` timeout, with nothing in the output naming the
   recorder or the channel; a mutant that should take a second to disprove can
