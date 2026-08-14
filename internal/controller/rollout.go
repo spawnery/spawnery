@@ -47,11 +47,25 @@ type RolloutDecision struct {
 // mark as going.
 //
 // The target size is replicas plus a surge of 1 while any pod is stale --
-// including one that is already draining. Dropping the surge the moment a pod
-// is marked would leave the group one over its target, and the surplus rule
-// below would mark a second pod on the same pass: a rolling update that
-// drains the whole group at once, which is exactly what one-at-a-time
-// forbids.
+// including one that is already draining. What surge outliving the mark buys
+// is the create branch, and it is worth deriving rather than repeating,
+// because the design's §3.2 gives a different reason and that reason does not
+// hold against the rules in the order they ship.
+//
+// §3.2 argues that dropping the surge the moment a pod is marked leaves the
+// group at replicas + 1 against a target of replicas, so the surplus rule
+// marks a second pod and the group drains at once. It does not: the
+// one-at-a-time guard sits ahead of the surplus rule here, the marked pod is
+// draining, and the guard returns before that rule is reached. That path is
+// closed with surge or without it.
+//
+// The create branch is what is not closed, because it is checked before the
+// guard. With the surge dropped, a group whose surge pod dies while the old
+// one is still draining stands at replicas pods against a target of replicas,
+// builds no replacement, and drops to replicas - 1 ready the moment the
+// draining pod goes. Surge outliving the mark rebuilds it in place instead.
+// TestDecideRollout's "the surge pod dying mid-drain is replaced, because
+// surge outlives the mark" is that case exactly.
 func DecideRollout(pods []ProxyView, replicas int32) RolloutDecision {
 	var stale, draining int32
 	for _, p := range pods {
