@@ -118,11 +118,22 @@ class AgentPlugin @Inject constructor(
      * its branches; nothing here is conditional.
      */
     private fun start(env: ProxyEnvironment.Configured) {
-        // Constructed, not opened. The gate is what makes this pod ready, and
-        // a proxy is not ready until it has a server list -- ProxyRole opens
-        // it on the first FullSync and never again. A dormant agent never gets
-        // here at all, which is the claim hack/velocity-image-test.sh makes by
-        // probing 8081 and requiring a refusal.
+        // Constructed, not opened: a proxy is not ready until it has a server
+        // list, and the gate is what makes this pod ready.
+        //
+        // Two of the callbacks below open it, not one. ProxyRole opens it on
+        // the first FullSync it applies without throwing, and a SetReady(true)
+        // opens it directly -- which is how a cancelled drain puts a proxy
+        // back into the Service's endpoints without waiting for the next sync.
+        // The second is deliberately not conditional on having synced, and the
+        // reason it is survivable is on the wire rather than here: Fleet
+        // queues a session's FullSync ahead of everything else, so a
+        // SetReady(true) can only arrive first on an agent whose FullSync
+        // threw. Anyone changing either callback owns that argument.
+        //
+        // A dormant agent never gets here at all, which is the claim
+        // hack/velocity-image-test.sh makes by probing 8081 and requiring a
+        // refusal.
         val gate = ReadyGate(READY_PORT, ::warn)
         this.gate = gate
 
