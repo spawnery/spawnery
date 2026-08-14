@@ -87,6 +87,15 @@ func TestDecideRollout(t *testing.T) {
 			want:     RolloutDecision{},
 		},
 		{
+			name: "the surge pod dying mid-drain is replaced, because surge outlives the mark",
+			pods: []ProxyView{
+				{Name: "draining", Stale: true, Draining: true, Players: 1, CreatedAt: at(0)},
+				{Name: "waiting", Stale: true, Ready: true, CreatedAt: at(1)},
+			},
+			replicas: 2,
+			want:     RolloutDecision{Create: 1},
+		},
+		{
 			name: "scale-down takes the emptiest",
 			pods: []ProxyView{
 				{Name: "a", Ready: true, Players: 4, CreatedAt: at(0)},
@@ -121,6 +130,16 @@ func TestDecideRollout(t *testing.T) {
 			pods: []ProxyView{
 				{Name: "stale-full", Stale: true, Ready: true, Players: 9, CreatedAt: at(0)},
 				{Name: "current-empty", Ready: true, Players: 0, CreatedAt: at(1)},
+			},
+			replicas: 1,
+			want:     RolloutDecision{Drain: []string{"stale-full"}},
+		},
+		{
+			name: "a surplus of mixed generations takes the stale pod before an emptier current one",
+			pods: []ProxyView{
+				{Name: "stale-full", Stale: true, Ready: true, Players: 9, CreatedAt: at(0)},
+				{Name: "current-empty", Ready: true, Players: 0, CreatedAt: at(1)},
+				{Name: "current-quiet", Ready: true, Players: 1, CreatedAt: at(2)},
 			},
 			replicas: 1,
 			want:     RolloutDecision{Drain: []string{"stale-full"}},

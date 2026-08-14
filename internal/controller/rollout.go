@@ -94,9 +94,9 @@ func DecideRollout(pods []ProxyView, replicas int32) RolloutDecision {
 	return RolloutDecision{}
 }
 
-// readyCurrentBeyond reports whether the surge pod has arrived: the group
-// already holds more pods than replicas, and at least one current-generation
-// pod among them is Ready and not draining.
+// readyCurrentBeyond reports whether a stale pod may safely go: a
+// current-generation pod is already serving beyond what replicas requires,
+// so retiring one stale pod cannot drop ready capacity below replicas.
 func readyCurrentBeyond(pods []ProxyView, replicas int32) bool {
 	var total, readyCurrent int32
 	for _, p := range pods {
