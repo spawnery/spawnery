@@ -193,18 +193,24 @@ func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
 }
 
 // markProxyPodReady does to a proxy pod what a kubelet would once its probe
-// passed: Running, on a node, and Ready. It is the block
-// TestProxyGroupAddressComesFromAReadyPodsHostIP used to spell out inline,
-// lifted out because the rollout tests need it for every pod in a group rather
-// than for one.
+// passed: Running, on a node, and Ready. f.markReady is not this — it is for
+// Servers, and goes through bringUpNamed.
 //
-// f.markReady is not this: it is for Servers, and goes through bringUpNamed.
-// The hostIP is set because a ready proxy that publishes no address would make
-// status.address empty for a group these tests do read it on.
+// The hostIP is here because one caller needs it:
+// TestProxyGroupAddressComesFromAReadyPodsHostIP, which is where this block was
+// written inline before the rollout tests needed the same thing for every pod
+// in a group. Its address assertion reads that value back out of
+// status.address, so the constant is load-bearing there and inert everywhere
+// else — the rollout tests never look at the address.
+// proxyPodHostIP is the node address markProxyPodReady puts on a ready proxy
+// pod, named so the one test that reads it back out of status.address does not
+// have to repeat the literal.
+const proxyPodHostIP = "192.168.1.10"
+
 func (f *fixture) markProxyPodReady(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
 	pod.Status.Phase = corev1.PodRunning
-	pod.Status.HostIP = "192.168.1.10"
+	pod.Status.HostIP = proxyPodHostIP
 	pod.Status.Conditions = []corev1.PodCondition{{
 		Type: corev1.PodReady, Status: corev1.ConditionTrue,
 		LastTransitionTime: metav1.NewTime(f.clock.Now()),
@@ -287,16 +293,7 @@ func TestProxyGroupAddressComesFromAReadyPodsHostIP(t *testing.T) {
 	if len(pods) == 0 {
 		t.Fatal("no proxy pods to mark ready")
 	}
-	pod := &pods[0]
-	pod.Status.Phase = corev1.PodRunning
-	pod.Status.HostIP = "192.168.1.10"
-	pod.Status.Conditions = []corev1.PodCondition{{
-		Type: corev1.PodReady, Status: corev1.ConditionTrue,
-		LastTransitionTime: metav1.NewTime(f.clock.Now()),
-	}}
-	if err := f.c.Status().Update(f.ctx, pod); err != nil {
-		t.Fatalf("update pod status: %v", err)
-	}
+	f.markProxyPodReady(t, &pods[0])
 
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -310,8 +307,12 @@ func TestProxyGroupAddressComesFromAReadyPodsHostIP(t *testing.T) {
 	}
 
 	group := f.proxyGroup("gateway")
-	if group.Status.Address != "192.168.1.10:30001" {
-		t.Errorf("status.address = %q, want 192.168.1.10:30001", group.Status.Address)
+	// The host half is the hostIP markProxyPodReady puts on the pod; the port
+	// half is the group's nodePort. Both sides of the address are read back
+	// from where they were written, not hardcoded twice.
+	want := fmt.Sprintf("%s:%d", proxyPodHostIP, f.proxyGroup("gateway").Spec.Expose.NodePort.Port)
+	if group.Status.Address != want {
+		t.Errorf("status.address = %q, want %s", group.Status.Address, want)
 	}
 	if group.Status.ReadyReplicas != 1 {
 		t.Errorf("status.readyReplicas = %d, want 1", group.Status.ReadyReplicas)
@@ -990,14 +991,22 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 // is asserted at the end of the test rather than left as a claim here. A
 // comment is not a test, and this one described the deletion rule backwards
 // until the reviewer traced it.
+// fired records whether the fake ever got to do its job. Without it this test
+// cannot tell the tolerance working from the racing pod never being patched at
+// all, and it has already been both: the pod it names went from marked to
+// unmarked when the drain stopped being chosen by position, and every assertion
+// went on passing. A fake that is never reached is a test asserting nothing, so
+// this one says so out loud.
 type racingPodClient struct {
 	client.Client
 	racingPod string
+	fired     *bool
 }
 
 // Patch implements client.Client.
 func (c racingPodClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 	if obj.GetName() == c.racingPod {
+		*c.fired = true
 		return apierrors.NewNotFound(corev1.Resource("pods"), obj.GetName())
 	}
 	return c.Client.Patch(ctx, obj, patch, opts...)
@@ -1024,15 +1033,19 @@ func (c racingPodClient) Patch(ctx context.Context, obj client.Object, patch cli
 // Which pod is the racing one moved with this milestone, and the test went
 // quietly vacuous until a mutation run said so: with the drain chosen by
 // occupancy rather than by position, the two pods marked here are the one with
-// a player reported on it and the *first* of the two whose counts are unknown —
-// the two unknown pods tie on every clause of the ordering, including age,
-// because envtest creates all three inside the same second, and the stable sort
-// then keeps them in list order. The racing pod has to be one of the two that
-// are actually marked: markDraining runs for every pod on every pass, but for
-// one that is not going and carries no stamp it takes neither branch of its
-// switch and never reaches the Patch, so the tolerance this test is named for
-// goes unexercised. Deleting IgnoreNotFound left the suite green before this
-// was corrected.
+// a player reported on it and one of the two whose counts are unknown.
+// markDraining runs for every pod on every pass, but for one that is not going
+// and carries no stamp it takes neither branch of its switch and never reaches
+// the Patch, so a racing pod that is not marked leaves the tolerance this test
+// is named for unexercised — deleting IgnoreNotFound left the suite green.
+//
+// Naming the pod the rule currently picks would repair that only until the rule
+// moves again, and the ordering between the two unknown-count pods is not even
+// stable in the meantime: they tie on every clause including age, but only
+// while they share a creation timestamp, and three sequential creations that
+// straddle a second do not. So the fake reports whether it fired, and that is
+// asserted first. The test now fails loudly when it stops testing anything,
+// which is the property it was missing both times.
 func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1052,9 +1065,15 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	// racingPodClient used to carry.
 	f.reportProxyPlayers(t, other, 1)
 
-	r.Client = racingPodClient{Client: r.Client, racingPod: racing.Name}
+	fired := false
+	r.Client = racingPodClient{Client: r.Client, racingPod: racing.Name, fired: &fired}
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
+
+	if !fired {
+		t.Fatalf("markDraining never patched the racing pod %s, so nothing here exercises the NotFound it returns; "+
+			"the drain no longer includes that pod and this test has stopped testing its own subject", racing.Name)
+	}
 
 	otherPod, ok := f.pod(other.Name)
 	if !ok {
@@ -1394,9 +1413,19 @@ func TestTheDeadlineDeletesLoudly(t *testing.T) {
 	}
 }
 
-// TestAStaleProxyIsReplacedOneAtATime is the milestone's subject: a spec
-// change replaces the group's proxies without the ready count ever dipping.
-func TestAStaleProxyIsReplacedOneAtATime(t *testing.T) {
+// TestASpecChangeSurgesBeforeItMarksAnything is the first move of the
+// milestone's subject: the replacement proxy is created before any proxy is
+// asked to stop taking connections. That ordering is what leaves room for the
+// ready count to hold at replicas; whether it actually holds is the readiness
+// gate's business, and that is the next test's.
+//
+// It measures the surge and nothing else. The rollout as a whole — one proxy at
+// a time, every one of them, ending on the new shape — is
+// TestTheRolloutFinishesWithEveryProxyOnTheNewShape, and the readiness gate in
+// front of the first mark is TestTheSurgePodMustBeReadyBeforeAnyPodIsMarked.
+// This test was called TestAStaleProxyIsReplacedOneAtATime, which named all
+// three and asserted the first.
+func TestASpecChangeSurgesBeforeItMarksAnything(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
 	f.createProxyGroup("gateway")
@@ -1729,4 +1758,86 @@ func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
 	if n := len(f.proxyPods("gateway")); n != 3 {
 		t.Errorf("proxy pods = %d, want 3 — a replacement surge pod must come up under the one that is going", n)
 	}
+}
+
+// TestAPartlyCancelledScaleDownReleasesOnlyTheMarksItHasTo is the case that
+// tells "is this pod surplus?" from "how many of these pods are surplus?".
+//
+// Four replicas taken to two marks two proxies, which is right. Raising the
+// count to three afterwards makes exactly one of those two wanted again — and
+// asking a group-level question once per marked pod cannot express that, because
+// it returns the same answer for both and keeps both marks. The cost is not
+// cosmetic: DecideRollout creates nothing while anything is draining, so the
+// group serves two proxies against a requested three until one of the drains
+// finishes on its own, which the players on it can hold open to the full drain
+// timeout.
+//
+// Every proxy carries a player so the marked ones stay to be looked at, and the
+// counts are equal so that which two are marked is decided by the same rule on
+// both passes rather than by the players moving underneath the test.
+func TestAPartlyCancelledScaleDownReleasesOnlyTheMarksItHasTo(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 4
+	})
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 4 {
+		t.Fatalf("proxy pods = %d, want 4", len(before))
+	}
+	for i := range before {
+		f.markProxyPodReady(t, &before[i])
+		f.reportProxyPlayers(t, before[i], 1)
+	}
+
+	f.setProxyReplicas("gateway", 2)
+	f.reconcileProxyGroup(r, "gateway")
+	if got := markedProxies(f.proxyPods("gateway")); len(got) != 2 {
+		t.Fatalf("marked = %v, want 2 after four replicas were taken to two", got)
+	}
+
+	f.setProxyReplicas("gateway", 3)
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 4 {
+		t.Fatalf("proxy pods = %d, want the four still there — each has a player on it", len(pods))
+	}
+	marked := markedProxies(pods)
+	if len(marked) != 1 {
+		t.Errorf("marked = %v, want 1 — three replicas out of four pods leaves one surplus, not two", marked)
+	}
+	// The released proxy has to be back in the Service, not merely un-annotated:
+	// the annotation dates the deadline, and readiness is what carries players.
+	for i := range pods {
+		going := false
+		for _, name := range marked {
+			if pods[i].Name == name {
+				going = true
+			}
+		}
+		if going {
+			continue
+		}
+		if got := f.proxies.lastReady(string(pods[i].UID)); got == nil || !*got {
+			t.Errorf("proxy %s carries no mark but was told ready=%v, want true", pods[i].Name, got)
+		}
+	}
+}
+
+// markedProxies names the pods carrying a readable draining-since, so a test can
+// say how many are going and which, rather than counting annotations by hand in
+// three places.
+func markedProxies(pods []corev1.Pod) []string {
+	var out []string
+	for i := range pods {
+		if _, dated := drainingSince(&pods[i]); dated {
+			out = append(out, pods[i].Name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }

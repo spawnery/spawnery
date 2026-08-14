@@ -291,32 +291,56 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	for _, name := range decision.Drain {
 		leaving[name] = true
 	}
-	// A pod already carrying the mark keeps it while the reason it was marked
-	// still holds — the group is over its replica count, or the pod's shape is
-	// out of date — because DecideRollout deliberately names nobody while
-	// another pod is draining, which is what makes the update one proxy at a
-	// time. Without this the drain started last pass would be cancelled on the
-	// next one and made again on the one after, and each cancellation deletes
-	// the annotation, so the deadline would start from zero every time.
+	// A pod already carrying the mark keeps it while the group still wants it
+	// gone, because DecideRollout deliberately names nobody while another pod
+	// is draining — that is what makes the update one proxy at a time. Without
+	// this the drain started last pass would be cancelled on the next one and
+	// made again on the one after, and each cancellation deletes the
+	// annotation, so the deadline would start from zero every time.
 	//
-	// The condition is what keeps a drain cancellable. Persisting every mark
-	// unconditionally would make a marked pod's readiness remembered rather
-	// than derived, and a scale-down reversed before its pod was gone would
-	// not be reversed on the pod: it would sit NotReady until it emptied, and
-	// then be replaced by one of the same shape.
+	// Wanting it gone is two different questions, and they have to be asked
+	// differently. A stale pod has to go whatever else is true of the group, so
+	// that mark is kept per pod. Being surplus is not a property of any pod at
+	// all: it is a shortfall of one number against another, and the group needs
+	// exactly len(views)-replicas of its non-stale marks, no matter which pods
+	// carry them. Asking "is the group over its count?" once per marked pod
+	// gives the same answer for every one of them, so a group that lowered
+	// replicas twice and then raised them partway keeps every mark it made
+	// rather than the number it still needs, and sits under capacity until a
+	// drain finishes on its own — DecideRollout will not create a replacement
+	// while anything is draining.
+	//
+	// The count is what keeps a drain cancellable. Persisting every mark would
+	// make a marked pod's readiness remembered rather than derived, and a
+	// scale-down reversed before its pod was gone would not be reversed on the
+	// pod: it would sit NotReady until it emptied, and then be replaced by one
+	// of the same shape.
+	surplusMarks := make([]ProxyView, 0, len(views))
 	for _, v := range views {
-		if !v.Draining {
-			continue
-		}
-		if v.Stale || int32(len(views)) > group.Spec.Replicas {
+		switch {
+		case !v.Draining:
+		case v.Stale:
 			leaving[v.Name] = true
+		default:
+			surplusMarks = append(surplusMarks, v)
+		}
+	}
+	// pick, so that the marks released are the ones a fresh decision would not
+	// have made — the fullest and the least trusted go back into service first,
+	// and the pods that keep their marks are the ones the same rule would
+	// choose again.
+	if want := int32(len(views)) - group.Spec.Replicas; want > 0 {
+		for _, name := range pick(surplusMarks, want) {
+			leaving[name] = true
 		}
 	}
 
 	// The desired readiness is derived, not remembered: this loop already
 	// knows which pods are surplus, so it asserts the answer for every pod on
 	// every pass. An operator restart recomputes the same thing, and a
-	// cancelled scale-down corrects itself without anything to clean up.
+	// cancelled scale-down corrects itself without anything to clean up —
+	// including one cancelled part of the way, which returns as many proxies to
+	// service as the new count asks for and leaves the rest draining.
 	for i := range pods {
 		going := leaving[pods[i].Name]
 		if err := r.Proxies.SetReady(ctx, string(pods[i].UID), !going); err != nil {
