@@ -792,6 +792,91 @@ func TestMarkDrainingDoesNotMoveAnExistingMark(t *testing.T) {
 	}
 }
 
+// setDrainingSince writes the draining-since annotation straight onto a pod,
+// bypassing markDraining, the way anything else with pod write access could.
+func (f *fixture) setDrainingSince(name, value string) {
+	f.t.Helper()
+	pod, ok := f.pod(name)
+	if !ok {
+		f.t.Fatalf("pod %s not found", name)
+	}
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[ProxyDrainingSinceAnnotation] = value
+	if err := f.c.Update(f.ctx, pod); err != nil {
+		f.t.Fatalf("set %s on %s: %v", ProxyDrainingSinceAnnotation, name, err)
+	}
+}
+
+// TestAnUnparsableDrainingSinceDoesNotWedgeTheGroup covers the annotation's
+// one user-writable failure: it lives on a pod, so anybody who can write a pod
+// annotation can put something in it that is not RFC 3339.
+//
+// Returning an error for that aborted the entire Reconcile — no Service, no
+// status, no other pod's readiness assertion, and the corrupt pod never
+// deleted — on every pass, permanently, because nothing downstream of the
+// error ever rewrote the value and controller-runtime simply retried forever.
+// One pod's bad annotation stopped a whole group converging.
+//
+// The recovery is a re-stamp rather than tolerance: the value must end up
+// readable, or the deadline still has nothing to run from. The pod pays a
+// restarted clock for it, which is asserted below as the deletion happening
+// after a full drain timeout measured from the repair.
+func TestAnUnparsableDrainingSinceDoesNotWedgeTheGroup(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	survivor, surplus := before[0], before[1]
+	// A player on the surplus pod so the wait holds it long enough to be
+	// looked at, and so the corrupt annotation is on a pod the deletion loop
+	// actually reaches rather than one it skips.
+	f.reportProxyPlayers(t, surplus, 1)
+	f.setDrainingSince(surplus.Name, "yesterday afternoon")
+
+	f.setProxyReplicas("gateway", 1)
+	// f.reconcileProxyGroup fails the test on a returned error, which is the
+	// wedge itself: before the fix this line never got past the pod carrying
+	// the bad stamp.
+	f.reconcileProxyGroup(r, "gateway")
+
+	// The rest of the group converged rather than being taken down with the
+	// one bad pod.
+	if got := f.proxies.lastReady(string(survivor.UID)); got == nil || !*got {
+		t.Errorf("the surviving proxy was told ready=%v, want true — one pod's bad annotation stopped the whole group",
+			got)
+	}
+	if got := f.proxyGroup("gateway").Status.ObservedGeneration; got != f.proxyGroup("gateway").Generation {
+		t.Errorf("status.observedGeneration = %d, want the current generation — the status write is downstream of the wedge", got)
+	}
+
+	drained, ok := f.pod(surplus.Name)
+	if !ok {
+		t.Fatal("the draining proxy was deleted with a player on it")
+	}
+	at, ok := drained.Annotations[ProxyDrainingSinceAnnotation]
+	if !ok {
+		t.Fatal("the unparsable draining-since was removed rather than replaced; the deadline has nothing to run from")
+	}
+	if _, err := time.Parse(time.RFC3339, at); err != nil {
+		t.Fatalf("draining-since = %q, want a readable stamp: a value nothing rewrites is a value that stays wrong forever", at)
+	}
+
+	// And the replacement is a working deadline, not just a readable string.
+	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
+	f.reconcileProxyGroup(r, "gateway")
+	if _, ok := f.pod(surplus.Name); ok {
+		t.Error("the repaired pod outlived its drain timeout; the re-stamped deadline never fired")
+	}
+}
+
 // TestACancelledScaleDownPutsTheProxyBack proves readiness is derived, not
 // remembered: an operator restart, or simply a later pass, recomputes which
 // pods are surplus from scratch, so a scale-down that is reversed before the

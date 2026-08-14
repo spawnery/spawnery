@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -305,11 +306,12 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		pod := &pods[i]
 		snap := r.Agents.Lookup(string(pod.UID))
 		players := snap.Players
-		since, err := drainingSince(pod)
-		if err != nil {
-			return err
-		}
-		expired := !since.IsZero() && r.Clock().Sub(since) >= group.DrainTimeout()
+		// A pod with no readable stamp has no deadline. It is not a dead end:
+		// the assertion loop above has already re-stamped every surplus pod
+		// that lacked one, this pod included, so the deadline starts on this
+		// pass rather than never.
+		since, dated := drainingSince(pod)
+		expired := dated && r.Clock().Sub(since) >= group.DrainTimeout()
 
 		switch {
 		case players == 0 && !snap.PlayersStale:
@@ -332,27 +334,58 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	return nil
 }
 
-// drainingSince reads the annotation markDraining writes. A pod without one
-// has not been asked to drain yet, which reads as the zero time and therefore
-// as no deadline.
-func drainingSince(pod *corev1.Pod) (time.Time, error) {
+// drainingSince reads the annotation markDraining writes. ok is false when
+// there is no usable start for the deadline to run from, which is two cases
+// that behave identically from here: no annotation at all — the pod has not
+// been asked to drain yet — and an annotation that does not parse.
+//
+// An unparsable stamp is deliberately not an error. The annotation is on a
+// pod, so anybody who can write a pod annotation can produce one, and
+// returning an error would abort the whole Reconcile — Service, status, and
+// every other pod's readiness assertion with it — on every pass, forever,
+// because nothing downstream of the error would ever rewrite the value. Every
+// other API call reconcileReplicas makes tolerates one pod's bad state
+// (Create tolerates AlreadyExists, Delete tolerates NotFound, markDraining's
+// patch tolerates NotFound, Fleet.SetReady is a no-op for an unknown pod);
+// this is the one whose input a user can write.
+//
+// Treating it as no stamp is what makes it recoverable: markDraining's guard
+// keys on this function, so a surplus pod whose stamp does not parse is
+// re-stamped with the current time on the same pass. See markDraining for
+// what that costs.
+func drainingSince(pod *corev1.Pod) (time.Time, bool) {
 	raw, ok := pod.Annotations[ProxyDrainingSinceAnnotation]
 	if !ok {
-		return time.Time{}, nil
+		return time.Time{}, false
 	}
 	at, err := time.Parse(time.RFC3339, raw)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("proxy %s has an unparsable %s: %w",
-			pod.Name, ProxyDrainingSinceAnnotation, err)
+		return time.Time{}, false
 	}
-	return at, nil
+	return at, true
 }
 
 // markDraining writes or removes the annotation that dates a proxy's drain.
 //
-// Written once and never moved: the deadline runs from the first assertion,
-// and re-stamping it on every five-second pass would push it forever and the
-// drain would never end.
+// Written once and never moved while it stays readable: the deadline runs
+// from the first assertion, and re-stamping it on every five-second pass would
+// push it forever and the drain would never end. So the write branch is keyed
+// on drainingSince — on a stamp the deadline can actually run from — and not
+// on the annotation merely being present.
+//
+// The one case where a stamp is rewritten is a stamp that does not parse,
+// which is the only way out of it: drainingSince cannot read it and no other
+// code path touches the annotation, so a guard keyed on presence would leave
+// a corrupt value there for the pod's whole life. Rewriting costs that pod a
+// restarted clock — its deadline runs from now rather than from whenever the
+// drain really began, so it can wait up to one full spec.drain.timeoutSeconds
+// longer than it should. That is the same direction every other rule here
+// errs in: waiting too long keeps players connected, and the wait stays
+// bounded. Nothing is lost that was ever readable.
+//
+// The removal branch keys on presence instead, so that cancelling a
+// scale-down clears an unparsable stamp as well as a good one rather than
+// leaving litter on a pod that is no longer draining.
 //
 // The patch tolerates NotFound like every other API call reconcileReplicas
 // makes for a racing pod (Create tolerates AlreadyExists, Delete tolerates
@@ -360,9 +393,15 @@ func drainingSince(pod *corev1.Pod) (time.Time, error) {
 // pod evicted or deleted between the informer list and this patch should
 // not fail the whole reconcile over a stamp that no longer matters.
 func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod, draining bool) error {
-	_, marked := pod.Annotations[ProxyDrainingSinceAnnotation]
+	raw, marked := pod.Annotations[ProxyDrainingSinceAnnotation]
+	_, dated := drainingSince(pod)
 	switch {
-	case draining && !marked:
+	case draining && !dated:
+		if marked {
+			log.FromContext(ctx).Info("replacing an unparsable draining-since; this proxy's drain deadline restarts from now",
+				"pod", pod.Name, "namespace", pod.Namespace,
+				"annotation", ProxyDrainingSinceAnnotation, "value", raw)
+		}
 		patch := client.MergeFrom(pod.DeepCopy())
 		if pod.Annotations == nil {
 			pod.Annotations = map[string]string{}
