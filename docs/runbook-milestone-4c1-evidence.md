@@ -63,13 +63,24 @@ correctly.
    evidence is the pod's `Ready` condition and the `EndpointSlice`, and there
    is no log line to go looking for.
 
-3. **`status.connectedPlayers` will read `0` while your player is still
-   playing, and that is correct.** `setStatus` skips any pod that is not
-   `Ready` before adding its player count, so the moment the draining proxy's
-   probe fails, the player on it stops being counted. After the scale-down in
-   §9 expect `kubectl get proxygroup` to show `READY 1`, `PLAYERS 0`, `PHASE
-   Ready` — with a real person visibly in the game on the pod that is still
-   there. Do not report this as a lost player.
+3. **`status.connectedPlayers` counts the player on the draining proxy, and
+   it is the number to watch during the drain.** `setStatus` adds every live
+   pod's last reported count outside the readiness guard, deliberately: a
+   draining proxy is `NotReady` on purpose and still has on it the people this
+   milestone exists to protect. So after the scale-down in §9 expect `kubectl
+   get proxygroup` to show `READY 1`, `PLAYERS 1`, `PHASE Ready` — one ready
+   proxy, and the player on the one that is leaving still counted. With
+   nothing logging a readiness withdrawal (fact 2), this is the number that
+   follows the player through the drain. It falls to `0` when the last player
+   leaves or when the pod is deleted, whichever comes first: `pods()` drops a
+   pod the moment it carries a deletion timestamp, so the count goes with it.
+   Until 2026-08-14 this field skipped non-`Ready` pods and read `0` for the
+   whole drain, which a real run showed with a person visibly in the game. So
+   `PLAYERS 0` with somebody on a draining proxy now means something is off,
+   and there are two likely somethings: an operator built before that fix, or
+   an agent that has never reported. The sum is built from each agent's last
+   word (fact 4), and a proxy whose agent never connected serves its players
+   while contributing `0` to it.
 
 4. **The count in §10's `Warning` event is the last known count, not a
    measurement.** It comes from `r.Agents.Lookup(pod.UID).Players` — whatever
@@ -702,10 +713,14 @@ Only the person driving can attest to this. Record what they say, in their
 words — milestone 3's manual session did the same and it is the half of the
 record the logs cannot supply.
 
-**Expectation 5 — the group's own status stops counting your player.** Expect
-`kubectl get proxygroup gateway -n minecraft` to read `READY 1`, `PLAYERS 0`,
-`PHASE Ready`, with a player very much in the game. Fact 3 is why. This is not
-a lost player and not a defect.
+**Expectation 5 — the group's own status goes on counting your player.**
+Expect `kubectl get proxygroup gateway -n minecraft` to read `READY 1`,
+`PLAYERS 1`, `PHASE Ready`: one ready proxy, and the person on the draining
+one still in the sum. Fact 3 is why. `PLAYERS 0` with somebody in the game is
+worth stopping for — it is what this field did before 2026-08-14, so the first
+thing to check is that the operator you are running is built from this branch
+(§4). The count dropping is not an anomaly to excuse here; it is the drain
+finishing, and expectation 7 is where it should happen.
 
 **Expectation 6 — the pod is not deleted.** Confirm it, more than once, over
 whatever length of session you want to give it. `kubectl get pods -n minecraft
@@ -720,7 +735,20 @@ pass (fact 6), so raising it mid-drain works.
 the client quit the game normally. Expect `$DOOMED` to disappear within
 roughly 10 to 15 seconds: the agent reports the new count on its 5-second
 report interval, the next reconcile reads `players == 0 && !PlayersStale`, and
-deletes. Then:
+deletes.
+
+**Start following the doomed proxy's log before the client quits, and keep
+what it prints.** The proxy's own log is where the player's departure is
+recorded, and it goes with the pod: 10 to 15 seconds after the quit there is
+no pod left to read it from, and nothing is also what a proxy that logged
+nothing looks like. So `kubectl logs -f -n minecraft "$DOOMED"` in its own
+shell, started while the pod is still there. This is the one thing the run on
+2026-08-14 got wrong: the departure was polled for after the deletion, found
+absent, and reported as the proxy having said nothing — an absence of
+observation written down as an absence of the thing. If you want to evidence
+"deleted only after the player left", this is the capture that evidences it.
+
+Then:
 
 ```bash
 nix develop -c kubectl get pods -n minecraft -l spawnery.cloud/role=proxy
@@ -801,12 +829,21 @@ nix develop -c kubectl patch proxygroup gateway -n minecraft --type=merge \
 
 **Expect §9's expectations 1 through 5 exactly as before** — annotation,
 readiness drop, `ready=false` on a still-listed address, an uninterrupted
-session, `PLAYERS 0`. Nothing about the deadline changes any of them. Then,
-about 60 seconds after the annotation's timestamp:
+session, `PLAYERS 1` for as long as that session lasts. Nothing about the
+deadline changes any of them. Then, about 60 seconds after the annotation's
+timestamp:
 
-**Expectation A — the player is disconnected.** Expect a disconnect on the
-client, at the moment the pod is deleted. Confirm it with the person driving
-rather than inferring it from the pod list. This is the outcome; a session
+**Expectation A — the player is disconnected, and the client tells them
+something.** Expect a disconnect at the moment the pod is deleted. On
+2026-08-14, driven with a real client against this repository's own machine,
+the message on screen was **"proxy shutting down"**, a little over a minute
+after the scale-down. That text is Velocity's, from its graceful shutdown on
+the `SIGTERM` the pod deletion sends; the operator writes nothing to the
+player and has no channel to. Milestone 3's manual session saw no disconnect
+screen at all, so a message here is what this path added rather than a fault —
+and a disconnect with no message, or with a network error instead, is the
+thing worth reporting. Confirm it with the person driving rather than
+inferring it from the pod list, and write down the words they saw. A session
 that survives past the deadline means the deadline did not fire, which is the
 defect, not the disconnect.
 
@@ -853,7 +890,10 @@ a pod that might still have someone on it, and both are bounded by the
 deadline.
 
 **Expectation C — the pod is gone.** One proxy pod left, and the group back to
-`READY 1 PHASE Ready`.
+`READY 1 PLAYERS 0 PHASE Ready`. The count drops as soon as the pod carries a
+deletion timestamp rather than when the client's screen changes (fact 3), so
+`PLAYERS 0` here can be true a moment before the person tells you they were
+dropped.
 
 Record the event verbatim, the annotation timestamp it should be 60 seconds
 after, and the player's account of the disconnect — including what the client
