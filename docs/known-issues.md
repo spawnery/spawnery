@@ -1322,7 +1322,7 @@ in advance:
   *contents* of a user's own `configOverlay` ConfigMap and of the forwarding
   secret: the pod names them, so editing what is inside them rolls nothing.
 - **`spec.drain.timeoutSeconds` does roll the group**, because it reaches the
-  pod as `TerminationGracePeriodSeconds`. Tuning a drain timeout is something
+  pod as `terminationGracePeriodSeconds`. Tuning a drain timeout is something
   an operator does in the middle of an incident, and under this rule it also
   replaces every proxy in the group. Raising it while a drain is already in
   flight still behaves — the marked pod keeps its mark, since it is now stale
