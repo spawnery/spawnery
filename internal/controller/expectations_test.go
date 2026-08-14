@@ -20,6 +20,9 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
@@ -154,6 +157,38 @@ func TestExpectedRetireCountsUntilTheCacheShowsIt(t *testing.T) {
 	e.observe("ns/g", []ServerView{{Name: "a", Retire: true}})
 	if _, _, retires = e.pending("ns/g"); retires["a"] {
 		t.Error("the reservation outlived the observation")
+	}
+}
+
+// TestObservePodsClearsACreateReservation pins observePods -- observe's pod-
+// shaped counterpart for the ProxyGroup controller, which lists pods rather
+// than the Server CRs observe reads.
+func TestObservePodsClearsACreateReservation(t *testing.T) {
+	e := newExpectations(func() time.Time { return time.Unix(0, 0) })
+	e.expectCreated("gateway", "gateway-aaaa")
+
+	pending, _, _ := e.pending("gateway")
+	if pending != 1 {
+		t.Fatalf("pending = %d, want 1 before the pod appears", pending)
+	}
+
+	e.observePods("gateway", []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "gateway-aaaa"}}})
+
+	pending, _, _ = e.pending("gateway")
+	if pending != 0 {
+		t.Errorf("pending = %d, want 0 once the cache shows the pod", pending)
+	}
+}
+
+func TestObservePodsClearsADeleteReservationWhenThePodIsGone(t *testing.T) {
+	e := newExpectations(func() time.Time { return time.Unix(0, 0) })
+	e.expectDeleted("gateway", "gateway-aaaa")
+
+	e.observePods("gateway", nil)
+
+	pending, leaving, _ := e.pending("gateway")
+	if pending != 0 || len(leaving) != 0 {
+		t.Errorf("pending = %d, leaving = %v, want both empty once the pod is gone", pending, leaving)
 	}
 }
 

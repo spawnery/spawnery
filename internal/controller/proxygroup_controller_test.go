@@ -125,6 +125,7 @@ func proxyGroupReconciler(f *fixture) *ProxyGroupReconciler {
 		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
 		Proxies:       f.proxies,
 		Clock:         f.clock.Now,
+		Expectations:  newExpectations(f.clock.Now),
 		// Every reconciler helper in this package wires a recorder whether or
 		// not the test under it looks at one, so that a path which only fires
 		// under an unusual condition — here, a drain that ran out of time —
@@ -317,6 +318,37 @@ func TestProxyGroupAddressComesFromAReadyPodsHostIP(t *testing.T) {
 	}
 	if group.Status.ReadyReplicas != 1 {
 		t.Errorf("status.readyReplicas = %d, want 1", group.Status.ReadyReplicas)
+	}
+}
+
+// TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown pins the
+// correction reconcileReplicas applies on top of DecideRollout's answer: a
+// create already reserved and not yet visible in the list must not be created
+// again.
+//
+// A real cache lag cannot be staged here: the fixture's client talks straight
+// to envtest's API server (testenv.Client), so every List call this
+// reconciler makes already reflects true state and DecideRollout would never
+// see a short count on its own. Seeding the reservation directly is the same
+// state a lagging informer cache would produce -- Expectations believes a pod
+// exists under a name pods() cannot find, because nothing by that name was
+// ever actually created -- without depending on real cache timing that this
+// package's envtest suite cannot control.
+func TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway") // replicas: 2
+
+	r.Expectations.expectCreated(f.ns+"/gateway", "gateway-phantom")
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	// DecideRollout sees 0 live pods against a target of 2 and answers
+	// Create: 2. Without the cap this pass creates both, landing on 2; the
+	// phantom reservation cuts it to one real pod.
+	if n := len(f.proxyPods("gateway")); n != 1 {
+		t.Errorf("proxy pods = %d, want 1: the phantom reservation should have "+
+			"cut DecideRollout's Create: 2 down by the one already pending", n)
 	}
 }
 
@@ -678,6 +710,7 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
 		Proxies:       f.proxies,
 		Clock:         f.clock.Now,
+		Expectations:  newExpectations(f.clock.Now),
 	}
 	f.createProxyGroup("gateway")
 

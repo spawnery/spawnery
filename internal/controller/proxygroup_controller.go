@@ -106,6 +106,14 @@ type ProxyGroupReconciler struct {
 	// a drain that hit its deadline with players still on the proxy. See the
 	// type comment for why nothing else is announced.
 	Recorder record.EventRecorder
+	// Expectations reserves the pod creates and deletes this reconciler has
+	// issued and the cache has not shown yet. One instance is shared across
+	// groups. Task 4 made a rollout create a pod per replacement rather than
+	// only at scale-up, which makes the create path race the informer cache as
+	// a matter of course rather than rarely; see expectations.go. Only create
+	// and delete apply here -- a proxy has no per-pod CR and so no retirement,
+	// which is the one thing ServerGroupReconciler reserves that this does not.
+	Expectations *expectations
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
@@ -117,6 +125,16 @@ type ProxyGroupReconciler struct {
 func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	group := &spawneryv1alpha1.ProxyGroup{}
 	if err := r.Get(ctx, req.NamespacedName, group); err != nil {
+		if apierrors.IsNotFound(err) {
+			// No ProxyGroup finalizer exists, so a deleted group is gone from
+			// the API server before any reconcile can observe its deletion
+			// timestamp. This is the only path most deletions take, and without
+			// it a group's reservations would sit under a key nothing will ever
+			// observe again, for the life of the process -- see
+			// ServerGroupReconciler.Reconcile, which forgets for the same
+			// reason at the same two sites.
+			r.Expectations.forget(req.Namespace + "/" + req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !group.DeletionTimestamp.IsZero() {
@@ -124,6 +142,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// removes them. There is nothing to drain here: moving players is the
 		// proxy's own job, and making deletion wait for it belongs to a later
 		// task.
+		r.Expectations.forget(group.Namespace + "/" + group.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -226,6 +245,11 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 		}
 		return live[i].CreationTimestamp.Before(&live[j].CreationTimestamp)
 	})
+	// Namespace-qualified, matching every other key this reconciler's
+	// Expectations uses (see reconcileReplicas and Reconcile's forget calls)
+	// and the composite key ServerGroupReconciler keys its own Expectations
+	// by -- a bare group.Name would collide across namespaces.
+	r.Expectations.observePods(group.Namespace+"/"+group.Name, live)
 	return live, nil
 }
 
@@ -272,7 +296,31 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 
 	decision := DecideRollout(views, group.Spec.Replicas)
 
-	for i := int32(0); i < decision.Create; i++ {
+	// DecideRollout sizes target - total from views, which pods() has already
+	// read through the manager's cached client: a reconcile triggered by its
+	// own create can run again before that create is visible, see the group
+	// still short by the same count, and decide to create it a second time.
+	// Unlike a Server's name, NewProxyName draws a fresh random suffix on every
+	// call (see NewServerName), so the race described above is not a retry of
+	// the name already in flight -- apierrors.IsAlreadyExists below has
+	// nothing to catch, because the second create asks for a different,
+	// genuinely distinct pod for the slot the first one already fills. key is
+	// namespace-qualified: see the comment on pods() for why.
+	//
+	// The correction is arithmetic, not a bare gate: capping at zero the
+	// moment anything is pending would also block a create the group still
+	// legitimately needs beyond the one already reserved. Subtracting exactly
+	// what is reserved is what ServerGroupReconciler.size does through
+	// DecideSize's alive := in.PendingCreates (scaling.go); this states the
+	// same correction as a post-processing step on DecideRollout's answer
+	// instead, so rollout.go's sizing keeps knowing nothing about reservations.
+	key := group.Namespace + "/" + group.Name
+	pendingCreates, _, _ := r.Expectations.pending(key)
+	create := decision.Create - pendingCreates
+	if create < 0 {
+		create = 0
+	}
+	for i := int32(0); i < create; i++ {
 		pod, err := podspec.BuildProxyPod(network, group, NewProxyName(group.Name), r.AgentEndpoint)
 		if err != nil {
 			return err
@@ -280,6 +328,16 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
 			return err
 		}
+		// Reserved on the same terms the loop above already tolerates: an
+		// AlreadyExists means a pod under this name exists in the API server
+		// either way, so it is as reserved as one this call just created.
+		// Reserved only here, matching ServerGroupReconciler.size, which calls
+		// expectCreated after createServer returns successfully and not
+		// before: a failed Create returns from this function immediately,
+		// and no reservation is made for a create that never happened. There
+		// is nothing to expire on the TTL in that case, because nothing was
+		// recorded.
+		r.Expectations.expectCreated(key, pod.Name)
 	}
 
 	// Which pods are going, decided once and used by both loops below.
@@ -483,6 +541,12 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
+		// Reserved after the Delete succeeds (or the pod was already gone),
+		// matching ServerGroupReconciler.size's expectDeleted -- and, like the
+		// create loop above, matching what it does on failure too: an error
+		// other than NotFound returns above before this line runs, so nothing
+		// is reserved for a delete that did not go through.
+		r.Expectations.expectDeleted(key, pod.Name)
 	}
 	return nil
 }
