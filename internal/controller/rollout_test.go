@@ -116,14 +116,30 @@ func TestDecideRollout(t *testing.T) {
 			want:     RolloutDecision{Drain: []string{"b"}},
 		},
 		{
-			name: "equal counts break by age, oldest first",
+			name: "equal counts break by age, newest first",
 			pods: []ProxyView{
 				{Name: "young", Ready: true, Players: 1, CreatedAt: at(9)},
 				{Name: "old", Ready: true, Players: 1, CreatedAt: at(1)},
 				{Name: "mid", Ready: true, Players: 1, CreatedAt: at(5)},
 			},
 			replicas: 2,
-			want:     RolloutDecision{Drain: []string{"old"}},
+			want:     RolloutDecision{Drain: []string{"young"}},
+		},
+		{
+			// The case age is actually for. Every count here is untrusted, so
+			// the three clauses above it all tie and age is the only thing
+			// deciding -- and the guess it stands in for, that an older proxy
+			// has had longer to collect players, is the only information the
+			// operator has left. Taking "old" here would mark the pod most
+			// likely to have somebody on it.
+			name: "untrusted counts all round still take the newest",
+			pods: []ProxyView{
+				{Name: "young", Ready: true, PlayersStale: true, CreatedAt: at(9)},
+				{Name: "old", Ready: true, PlayersStale: true, CreatedAt: at(1)},
+				{Name: "mid", Ready: true, PlayersStale: true, CreatedAt: at(5)},
+			},
+			replicas: 2,
+			want:     RolloutDecision{Drain: []string{"young"}},
 		},
 		{
 			name: "a scale-down during a rollout takes the stale pod first",

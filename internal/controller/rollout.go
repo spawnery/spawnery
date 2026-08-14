@@ -123,8 +123,22 @@ func staleOnly(pods []ProxyView) []ProxyView {
 // emptiest finishes soonest and disconnects fewest people at the deadline. An
 // untrusted count sorts last on the repository's own rule -- unknown counts
 // as occupied, since a pod whose agent stream is down may hold players nobody
-// can see. Age breaks ties so the order is deterministic and a test can name
-// the pod it expects rather than counting survivors.
+// can see.
+//
+// Age breaks what is left, newest first, and the direction is not symmetry: it
+// is the same guess the rule this function replaced was making, that an older
+// proxy has had longer to collect players. That guess is worth nothing between
+// two known counts -- equally empty is equally empty, whoever got there first
+// -- and it is the only thing there is when every count is untrusted, which is
+// an operator that has just restarted or a fleet whose agent streams are all
+// down. Marking the oldest there picks the pod most likely to be occupied,
+// which then reads as occupied, which holds the drain open to the full
+// deadline before disconnecting whoever was on it. So age points the way it
+// always did, and a later reader should not flip it back for looking
+// arbitrary: it is a stand-in for the occupancy the operator cannot see.
+//
+// It also keeps the order deterministic, so a test can name the pod it expects
+// rather than counting survivors.
 func pick(pods []ProxyView, n int32) []string {
 	candidates := append([]ProxyView(nil), pods...)
 	sort.SliceStable(candidates, func(i, j int) bool {
@@ -138,7 +152,7 @@ func pick(pods []ProxyView, n int32) []string {
 		if a.Players != b.Players {
 			return a.Players < b.Players
 		}
-		return a.CreatedAt.Before(b.CreatedAt)
+		return a.CreatedAt.After(b.CreatedAt)
 	})
 	out := make([]string, 0, n)
 	for i := int32(0); i < n && int(i) < len(candidates); i++ {

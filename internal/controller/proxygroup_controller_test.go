@@ -1012,14 +1012,27 @@ func (c racingPodClient) Patch(ctx context.Context, obj client.Object, patch cli
 // the other pods' assertions along with it — over a stamp that no longer
 // matters.
 //
-// Three replicas scaled down to one puts two pods in the assertion loop's
-// surplus tail. racingPodClient fails the patch for the first of them
-// (iteration order, not list order) and this test's real assertion is that
-// the second surplus pod — later in the same loop — still gets marked and
-// told ready=false. Without client.IgnoreNotFound around markDraining's
-// Patch, the racing pod's NotFound error propagates out of reconcileReplicas
-// and f.reconcileProxyGroup's own t.Fatalf fires before either check below
-// ever runs.
+// Three replicas scaled down to one puts two pods in the drain. racingPodClient
+// fails the patch for the first of them in the assertion loop's iteration
+// order, which is the order the pods were listed in, and this test's real
+// assertion is that the second — later in the same loop — still gets marked and
+// told ready=false. Without client.IgnoreNotFound around markDraining's Patch,
+// the racing pod's NotFound error propagates out of reconcileReplicas and
+// f.reconcileProxyGroup's own t.Fatalf fires before either check below ever
+// runs.
+//
+// Which pod is the racing one moved with this milestone, and the test went
+// quietly vacuous until a mutation run said so: with the drain chosen by
+// occupancy rather than by position, the two pods marked here are the one with
+// a player reported on it and the *first* of the two whose counts are unknown —
+// the two unknown pods tie on every clause of the ordering, including age,
+// because envtest creates all three inside the same second, and the stable sort
+// then keeps them in list order. The racing pod has to be one of the two that
+// are actually marked: markDraining runs for every pod on every pass, but for
+// one that is not going and carries no stamp it takes neither branch of its
+// switch and never reaches the Patch, so the tolerance this test is named for
+// goes unexercised. Deleting IgnoreNotFound left the suite green before this
+// was corrected.
 func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1033,7 +1046,7 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 		t.Fatalf("proxy pods = %d, want 3", len(before))
 	}
 	sortPodsOldestFirst(before)
-	racing, other := before[1], before[2]
+	racing, other := before[0], before[2]
 	// The pod this test inspects has to still be there to inspect. A player on
 	// it is what does that now, in place of the Delete-swallowing override
 	// racingPodClient used to carry.

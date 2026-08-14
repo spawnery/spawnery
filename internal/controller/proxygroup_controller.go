@@ -233,14 +233,14 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 // and replaces pods whose rendered shape no longer matches the group.
 //
 // Which pods go is DecideRollout's answer, not this function's: stale before
-// current, then the fewest players, then age. That replaces a rule which took
-// the newest first because an older proxy has had longer to collect players.
-// The old rule was a guess at the player count; the operator now has that
-// count reported by the proxies' own agents, so it uses the number rather than
-// the proxy for it — and falls back to age only when two pods are otherwise
-// indistinguishable. Staleness comes first because a stale pod has to go
-// regardless, and taking a current one ahead of it would drain two pods for
-// one replacement.
+// current, then the fewest players, then the newest. That replaces a rule
+// which took the newest first, full stop, because an older proxy has had
+// longer to collect players. The old rule was a guess at the player count; the
+// operator now has that count reported by the proxies' own agents, so it uses
+// the number where it has one and falls back to the guess — unchanged, and
+// still newest first — where it does not. Staleness comes first because a
+// stale pod has to go regardless, and taking a current one ahead of it would
+// drain two pods for one replacement.
 func (r *ProxyGroupReconciler) reconcileReplicas(
 	ctx context.Context,
 	network *spawneryv1alpha1.Network,
