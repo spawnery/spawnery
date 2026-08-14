@@ -301,26 +301,49 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// Wanting it gone is two different questions, and they have to be asked
 	// differently. A stale pod has to go whatever else is true of the group, so
 	// that mark is kept per pod. Being surplus is not a property of any pod at
-	// all: it is a shortfall of one number against another, and the group needs
-	// exactly len(views)-replicas of its non-stale marks, no matter which pods
-	// carry them. Asking "is the group over its count?" once per marked pod
+	// all: it is a shortfall of one number against another, and no pod can be
+	// asked about it. Asking "is the group over its count?" once per marked pod
 	// gives the same answer for every one of them, so a group that lowered
 	// replicas twice and then raised them partway keeps every mark it made
 	// rather than the number it still needs, and sits under capacity until a
-	// drain finishes on its own — DecideRollout will not create a replacement
-	// while anything is draining.
+	// drain finishes on its own. Nothing rescues it in the meantime: the group
+	// is not short of pods, only of ready ones, so DecideRollout's create
+	// branch does not fire, and its one-at-a-time gate returns before it could
+	// decide anything else.
+	//
+	// The number it needs comes out of what must be left standing:
+	//
+	//	len(views) - staleMarks - keptSurplusMarks >= replicas
+	//
+	// so at most len(views)-staleMarks-replicas surplus marks are kept. A pod
+	// already leaving for being stale must not also spend the surplus budget,
+	// or the group holds a mark for a pod it needs back and counts the same
+	// departure twice.
+	//
+	// The term subtracts stale *marks* rather than stale pods because what the
+	// invariant is about is pods that are leaving, and a stale pod with no mark
+	// is still serving — it will be marked on a later pass, one at a time. The
+	// two counts do not differ in any state this operator can reach on its own,
+	// and a mutation swapping them kills nothing: a surplus mark only ever exists if some pass found the
+	// group over its target with no pod draining, and pick exhausts the stale
+	// pods before it reaches a current one, so every stale pod was marked on
+	// that same pass. Staleness arrives group-wide, from a spec change, which
+	// can only ever make the already-marked pods stale too. Marks is still what
+	// this means, so marks is what it counts.
 	//
 	// The count is what keeps a drain cancellable. Persisting every mark would
 	// make a marked pod's readiness remembered rather than derived, and a
 	// scale-down reversed before its pod was gone would not be reversed on the
 	// pod: it would sit NotReady until it emptied, and then be replaced by one
 	// of the same shape.
+	var staleMarks int32
 	surplusMarks := make([]ProxyView, 0, len(views))
 	for _, v := range views {
 		switch {
 		case !v.Draining:
 		case v.Stale:
 			leaving[v.Name] = true
+			staleMarks++
 		default:
 			surplusMarks = append(surplusMarks, v)
 		}
@@ -329,7 +352,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// have made — the fullest and the least trusted go back into service first,
 	// and the pods that keep their marks are the ones the same rule would
 	// choose again.
-	if want := int32(len(views)) - group.Spec.Replicas; want > 0 {
+	if want := int32(len(views)) - staleMarks - group.Spec.Replicas; want > 0 {
 		for _, name := range pick(surplusMarks, want) {
 			leaving[name] = true
 		}

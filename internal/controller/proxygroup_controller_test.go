@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1767,10 +1768,10 @@ func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
 // count to three afterwards makes exactly one of those two wanted again — and
 // asking a group-level question once per marked pod cannot express that, because
 // it returns the same answer for both and keeps both marks. The cost is not
-// cosmetic: DecideRollout creates nothing while anything is draining, so the
-// group serves two proxies against a requested three until one of the drains
-// finishes on its own, which the players on it can hold open to the full drain
-// timeout.
+// cosmetic: the group is not short of pods, only of ready ones, so nothing
+// creates a replacement — it serves two proxies against a requested three until
+// one of the drains finishes on its own, which the players on it can hold open
+// to the full drain timeout.
 //
 // Every proxy carries a player so the marked ones stay to be looked at, and the
 // counts are equal so that which two are marked is decided by the same rule on
@@ -1840,4 +1841,96 @@ func markedProxies(pods []corev1.Pod) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestAStaleMarkDoesNotSpendTheSurplusBudget is the case where the two reasons
+// a proxy carries a mark meet on the same group.
+//
+// A pod marked for being stale is already leaving. Counting it as one of the
+// surplus the group is allowed to keep counts the same departure twice: the
+// group then holds a mark for a proxy it needs back, and gets no replacement
+// for it either: it has pods enough, and only DecideRollout's create branch
+// makes more. So the budget is len(views) minus the stale marks minus
+// replicas, and here that
+// is zero — one stale mark and one surplus mark against four pods and three
+// replicas, where the stale pod's own departure is the whole of the surplus.
+//
+// The fixture is the shortest route to one stale pod among three current ones
+// with nothing draining: a single proxy, then an image change and a scale-up in
+// one update, so the three pods that come up are of the new shape and the
+// original is not. Every pod carries a player, so a marked one stays to be
+// looked at instead of going the moment it is marked.
+func TestAStaleMarkDoesNotSpendTheSurplusBudget(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 1
+	})
+	f.reconcileProxyGroup(r, "gateway")
+
+	first := f.proxyPods("gateway")
+	if len(first) != 1 {
+		t.Fatalf("proxy pods = %d, want 1", len(first))
+	}
+	f.markProxyPodReady(t, &first[0])
+	f.reportProxyPlayers(t, first[0], 1)
+	stale := first[0].Name
+
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	g.Spec.Replicas = 3
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 4 {
+		t.Fatalf("proxy pods = %d, want 4 — three replicas of the new shape plus the one of the old", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+		f.reportProxyPlayers(t, pods[i], 1)
+	}
+
+	// Down to one: two pods must go, and the stale one goes first because it
+	// has to go regardless. The second is a current pod, marked for surplus
+	// alone — which is the pairing this test exists for.
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+	marked := markedProxies(f.proxyPods("gateway"))
+	if len(marked) != 2 {
+		t.Fatalf("marked = %v, want 2 — four pods down to one replica, with a surge of 1 for the stale pod", marked)
+	}
+	if !slices.Contains(marked, stale) {
+		t.Fatalf("marked = %v, want the stale proxy %s among them", marked, stale)
+	}
+
+	// And back up to three. The stale proxy is still going, and its departure
+	// is the only one the group has room for.
+	f.setProxyReplicas("gateway", 3)
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+
+	after := f.proxyPods("gateway")
+	if len(after) != 4 {
+		t.Fatalf("proxy pods = %d, want the four still there — each has a player on it", len(after))
+	}
+	if got := markedProxies(after); len(got) != 1 || got[0] != stale {
+		t.Errorf("marked = %v, want just the stale proxy %s — a pod already leaving for its shape cannot also "+
+			"be the surplus the group is short of", got, stale)
+	}
+	serving := 0
+	for i := range after {
+		if _, dated := drainingSince(&after[i]); dated {
+			continue
+		}
+		serving++
+		if got := f.proxies.lastReady(string(after[i].UID)); got == nil || !*got {
+			t.Errorf("proxy %s carries no mark but was told ready=%v, want true", after[i].Name, got)
+		}
+	}
+	if serving != 3 {
+		t.Errorf("proxies still taking connections = %d, want the 3 replicas asked for", serving)
+	}
 }
