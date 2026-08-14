@@ -85,27 +85,26 @@ func DecideRollout(pods []ProxyView, replicas int32) RolloutDecision {
 		return RolloutDecision{Drain: pick(pods, total-target)}
 	}
 
-	// At target with stale pods left: mark one, but only once a
-	// current-generation pod beyond replicas is serving, so ready capacity
-	// never falls below replicas.
-	if stale > 0 && readyCurrentBeyond(pods, replicas) {
+	// At target with stale pods left: mark one, but only while the group has
+	// a ready pod to spare -- stale or current alike, because what protects
+	// players is ready capacity and not which generation supplies it.
+	if stale > 0 && readyBeyond(pods, replicas) {
 		return RolloutDecision{Drain: pick(staleOnly(pods), 1)}
 	}
 	return RolloutDecision{}
 }
 
-// readyCurrentBeyond reports whether a stale pod may safely go: a
-// current-generation pod is already serving beyond what replicas requires,
-// so retiring one stale pod cannot drop ready capacity below replicas.
-func readyCurrentBeyond(pods []ProxyView, replicas int32) bool {
-	var total, readyCurrent int32
+// readyBeyond reports whether a stale pod may safely go: the group already
+// has a ready pod to spare, stale and current counted the same, so retiring
+// one stale pod cannot drop ready capacity below replicas.
+func readyBeyond(pods []ProxyView, replicas int32) bool {
+	var readyTotal int32
 	for _, p := range pods {
-		total++
-		if !p.Stale && p.Ready && !p.Draining {
-			readyCurrent++
+		if p.Ready && !p.Draining {
+			readyTotal++
 		}
 	}
-	return total > replicas && readyCurrent >= 1
+	return readyTotal > replicas
 }
 
 func staleOnly(pods []ProxyView) []ProxyView {

@@ -145,6 +145,23 @@ func TestDecideRollout(t *testing.T) {
 			want:     RolloutDecision{Drain: []string{"stale-full"}},
 		},
 		{
+			name: "a group whose replicas dropped mid-rollout still rolls forward",
+			pods: []ProxyView{
+				{Name: "old-a", Stale: true, Ready: true, Players: 2, CreatedAt: at(0)},
+				{Name: "old-b", Stale: true, Ready: true, Players: 1, CreatedAt: at(1)},
+			},
+			replicas: 1,
+			want:     RolloutDecision{Drain: []string{"old-b"}},
+		},
+		{
+			name: "a stale pod does not block the group from reaching zero",
+			pods: []ProxyView{
+				{Name: "last", Stale: true, Ready: true, CreatedAt: at(0)},
+			},
+			replicas: 0,
+			want:     RolloutDecision{Drain: []string{"last"}},
+		},
+		{
 			name: "a cancelled rollout creates nothing and marks nothing",
 			pods: []ProxyView{
 				{Name: "a", Ready: true, CreatedAt: at(0)},
