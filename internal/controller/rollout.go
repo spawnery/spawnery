@@ -85,13 +85,53 @@ func DecideRollout(pods []ProxyView, replicas int32) RolloutDecision {
 		return RolloutDecision{Drain: pick(pods, total-target)}
 	}
 
-	// At target with stale pods left: mark one, but only while the group has
-	// a ready pod to spare -- stale or current alike, because what protects
-	// players is ready capacity and not which generation supplies it.
-	if stale > 0 && readyBeyond(pods, replicas) {
+	// At target with stale pods left: mark one while the group has a ready pod
+	// to spare -- stale or current alike, because what protects players is
+	// ready capacity and not which generation supplies it -- or while a stale
+	// pod is not serving at all, because retiring what serves nobody costs
+	// nobody anything.
+	//
+	// The second clause is not a relaxation of the first, it is the same rule
+	// applied to the pod that would actually go. A pod the kubelet does not
+	// call Ready is behind no Service endpoint, so readyBeyond counts it as
+	// zero and marking it lowers ready capacity by zero -- and pick sorts
+	// not-Ready ahead of Ready among stale candidates, so the pod returned
+	// under this clause is that pod and not a ready one standing next to it.
+	//
+	// Without the clause a stale pod that stays unready holds the gate shut
+	// against its own replacement: it counts towards stale, so it holds the
+	// surge open and keeps total at target, and it contributes nothing to
+	// readyTotal, so it cannot supply the spare capacity the first clause asks
+	// for. Every branch then declines, and nothing this function does changes
+	// the state they decline on -- the rollout stops on the pass that reaches
+	// it and only something outside here (the pod recovering, or an operator
+	// deleting it by hand) starts it again. The ordinary way in is the one
+	// that makes it worth a paragraph: an operator bumps spec.image because a
+	// proxy is crashlooping, and the crashlooping proxy deadlocks the roll
+	// issued to replace it.
+	if stale > 0 && (readyBeyond(pods, replicas) || anyStaleNotReady(pods)) {
 		return RolloutDecision{Drain: pick(staleOnly(pods), 1)}
 	}
 	return RolloutDecision{}
+}
+
+// anyStaleNotReady reports whether some stale pod is not serving: not Ready,
+// and not already going.
+//
+// Draining is excluded so that this counts the same population readyBeyond
+// does -- both ask about pods still in service, and a predicate that answered
+// about a pod already on its way out would not be about capacity at all. Note
+// staleOnly does not filter Draining, so a draining pod can be handed to pick;
+// what keeps the two in step is that the draining > 0 guard returns before
+// this branch is reached, so neither this predicate nor that pick ever sees a
+// draining pod on a live path.
+func anyStaleNotReady(pods []ProxyView) bool {
+	for _, p := range pods {
+		if p.Stale && !p.Ready && !p.Draining {
+			return true
+		}
+	}
+	return false
 }
 
 // readyBeyond reports whether a stale pod may safely go: the group already
@@ -119,11 +159,23 @@ func staleOnly(pods []ProxyView) []ProxyView {
 
 // pick returns the n pods that should go, in order. Stale before current,
 // because a stale pod has to go regardless and taking a current one first
-// would drain two pods for one replacement. Then fewest players, because the
-// emptiest finishes soonest and disconnects fewest people at the deadline. An
-// untrusted count sorts last on the repository's own rule -- unknown counts
-// as occupied, since a pod whose agent stream is down may hold players nobody
-// can see.
+// would drain two pods for one replacement. Then not-Ready before Ready,
+// because a pod the kubelet does not call Ready is behind no Service
+// endpoint: nobody can reach it, nobody new will, and retiring it lowers the
+// group's ready capacity by exactly zero. That makes it the cheapest thing
+// here to retire, in the surplus branch as much as the at-target one, and it
+// is what lets the at-target gate allow a mark on the strength of an unready
+// stale pod: the gate decides whether, this decides which, and the gate's
+// second disjunct is exact because this clause guarantees the pod it gets
+// back is the unready one it reasoned about. It is above the player clauses
+// deliberately: a fallen pod's last reported count is what it held
+// before it fell over, not what it holds now, so sorting it by that figure
+// would rank it on a number that has stopped meaning anything.
+//
+// Then fewest players, because the emptiest finishes soonest and disconnects
+// fewest people at the deadline. An untrusted count sorts last on the
+// repository's own rule -- unknown counts as occupied, since a pod whose
+// agent stream is down may hold players nobody can see.
 //
 // Age breaks what is left, newest first, and the direction is not symmetry: it
 // is the same guess the rule this function replaced was making, that an older
@@ -145,6 +197,9 @@ func pick(pods []ProxyView, n int32) []string {
 		a, b := candidates[i], candidates[j]
 		if a.Stale != b.Stale {
 			return a.Stale
+		}
+		if a.Ready != b.Ready {
+			return !a.Ready
 		}
 		if a.PlayersStale != b.PlayersStale {
 			return !a.PlayersStale

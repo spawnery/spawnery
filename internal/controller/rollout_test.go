@@ -178,6 +178,51 @@ func TestDecideRollout(t *testing.T) {
 			want:     RolloutDecision{Drain: []string{"last"}},
 		},
 		{
+			// The same case with the pod not Ready. readyBeyond counts ready,
+			// non-draining pods, so this one contributes nothing and the gate
+			// that reads it alone would hold shut against a group asked to
+			// reach zero -- which is what the case above's name denies in
+			// general, not only for a pod the kubelet happens to like.
+			name: "a stale pod that is not ready does not block the group from reaching zero either",
+			pods: []ProxyView{
+				{Name: "last", Stale: true, Ready: false, CreatedAt: at(0)},
+			},
+			replicas: 0,
+			want:     RolloutDecision{Drain: []string{"last"}},
+		},
+		{
+			// The permanent stall, before the readiness clause existed:
+			// stale=2 so target=3, total=3, so no create and no surplus;
+			// nothing is draining; and readyBeyond counts a and s, which is 2
+			// and not more than replicas. Every branch declines, and no
+			// branch changed the state they declined on -- so the next pass
+			// declines identically, and the pod holding the gate shut is the
+			// crashlooping one the image bump was issued to replace.
+			name: "a stale pod that is not ready is marked, because retiring it costs no ready capacity",
+			pods: []ProxyView{
+				{Name: "a", Stale: true, Ready: true, CreatedAt: at(0)},
+				{Name: "b", Stale: true, Ready: false, CreatedAt: at(1)},
+				{Name: "s", Ready: true, CreatedAt: at(2)},
+			},
+			replicas: 2,
+			want:     RolloutDecision{Drain: []string{"b"}},
+		},
+		{
+			// Same shape, but the unready stale pod is the fullest and the
+			// least trusted -- the two things pick otherwise sorts last. It
+			// still goes first, because a pod the kubelet does not call Ready
+			// is behind no Service endpoint and the count is what it held
+			// before it fell over, not what it holds now.
+			name: "an unready stale pod goes ahead of an emptier ready one",
+			pods: []ProxyView{
+				{Name: "quiet", Stale: true, Ready: true, Players: 0, CreatedAt: at(0)},
+				{Name: "fallen", Stale: true, Ready: false, Players: 9, PlayersStale: true, CreatedAt: at(1)},
+				{Name: "s", Ready: true, CreatedAt: at(2)},
+			},
+			replicas: 2,
+			want:     RolloutDecision{Drain: []string{"fallen"}},
+		},
+		{
 			name: "a cancelled rollout creates nothing and marks nothing",
 			pods: []ProxyView{
 				{Name: "a", Ready: true, CreatedAt: at(0)},
