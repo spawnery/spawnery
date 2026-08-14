@@ -20,6 +20,8 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -52,6 +54,13 @@ import (
 // pods are surplus, and therefore what readiness each should have — so this is
 // the only thing that has to be written down.
 const ProxyDrainingSinceAnnotation = "spawnery.cloud/draining-since"
+
+// readinessDivergenceGrace is how long a pod's actual readiness may disagree
+// with the asserted one before the group says so. It must clear both known
+// delays: the kubelet's probe takes 10 to 15 seconds to flip a condition
+// (period 5s times failure threshold 3), and Fleet.Resync re-asserts every 30
+// seconds. 60 clears both with margin.
+const readinessDivergenceGrace = 60 * time.Second
 
 // ProxyReadinessSetter is how the ProxyGroup controller tells one proxy pod
 // whether it should be taking connections. *proxyreg.Fleet satisfies it; the
@@ -114,6 +123,12 @@ type ProxyGroupReconciler struct {
 	// and delete apply here -- a proxy has no per-pod CR and so no retirement,
 	// which is the one thing ServerGroupReconciler reserves that this does not.
 	Expectations *expectations
+	// Divergence tracks how long each pod's actual readiness has disagreed
+	// with the readiness this reconciler last asserted for it, so
+	// ConditionReadinessDiverged can be raised once that has run past
+	// readinessDivergenceGrace. One instance is shared across groups, like
+	// Expectations.
+	Divergence *readinessDivergence
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
@@ -132,8 +147,11 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			// it a group's reservations would sit under a key nothing will ever
 			// observe again, for the life of the process -- see
 			// ServerGroupReconciler.Reconcile, which forgets for the same
-			// reason at the same two sites.
+			// reason at the same two sites. Divergence forgets here too, for
+			// the same reason: its pods are gone with the group, and no later
+			// observe call for this key is ever coming to prune their entries.
 			r.Expectations.forget(req.Namespace + "/" + req.Name)
+			r.Divergence.forget(req.Namespace + "/" + req.Name)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
@@ -143,6 +161,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// proxy's own job, and making deletion wait for it belongs to a later
 		// task.
 		r.Expectations.forget(group.Namespace + "/" + group.Name)
+		r.Divergence.forget(group.Namespace + "/" + group.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -465,6 +484,13 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// cancelled scale-down corrects itself without anything to clean up —
 	// including one cancelled part of the way, which returns as many proxies to
 	// service as the new count asks for and leaves the rest draining.
+	// diverging and names feed reportReadinessDivergence below: it needs to
+	// know, for every live pod, both what was just asserted for it and what
+	// the kubelet actually reports, and this loop is the only place both are
+	// in hand at once -- going is local to this function, and isPodReady
+	// reads the same pod this loop already has open.
+	diverging := make(map[types.UID]bool, len(pods))
+	names := make(map[types.UID]string, len(pods))
 	for i := range pods {
 		going := leaving[pods[i].Name]
 		if err := r.Proxies.SetReady(ctx, string(pods[i].UID), !going); err != nil {
@@ -473,7 +499,10 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		if err := r.markDraining(ctx, &pods[i], going); err != nil {
 			return err
 		}
+		diverging[pods[i].UID] = (!going) != isPodReady(&pods[i])
+		names[pods[i].UID] = pods[i].Name
 	}
+	r.reportReadinessDivergence(group, key, diverging, names)
 
 	// Removal waits for the pod to be empty. Readiness stopped the inflow —
 	// the Service dropped the endpoint, so no new connection arrives — but it
@@ -565,6 +594,153 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		r.Expectations.expectDeleted(key, pod.Name)
 	}
 	return nil
+}
+
+// reportReadinessDivergence tells the group's ReadinessDiverged condition
+// what r.Divergence has observed for this pass's pods, and fires the one
+// event this readiness contract needs beyond Resync's own repeated
+// assertion: a pod whose actual readiness has disagreed with what the
+// operator asserted for at least readinessDivergenceGrace. A divergence
+// caused by a lost SetReady or a lost pod-status update heals on the next
+// resync; what survives that is an agent that received the instruction and
+// did not act on it, and reporting -- not repairing -- is what this
+// function does about it.
+//
+// Built false-by-default and flipped, like ScalingLimited and BackingOff in
+// ServerGroupReconciler.Reconcile. The event goes on the flank only, for the
+// same reason theirs does: SetStatusCondition moves lastTransitionTime just
+// on a change of status, so comparing IsStatusConditionTrue across the call
+// is what tells a transition from a resync repeating the same verdict.
+func (r *ProxyGroupReconciler) reportReadinessDivergence(
+	group *spawneryv1alpha1.ProxyGroup,
+	key string,
+	diverging map[types.UID]bool,
+	names map[types.UID]string,
+) {
+	stale := r.Divergence.observe(key, diverging, readinessDivergenceGrace)
+
+	diverged := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionReadinessDiverged,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonReadinessAgrees,
+		Message: "every proxy pod's actual readiness matches what the operator last asserted for it",
+	}
+	if len(stale) > 0 {
+		staleNames := make([]string, 0, len(stale))
+		for _, uid := range stale {
+			staleNames = append(staleNames, names[uid])
+		}
+		sort.Strings(staleNames)
+		diverged.Status = metav1.ConditionTrue
+		diverged.Reason = spawneryv1alpha1.ReasonReadinessDiverged
+		diverged.Message = fmt.Sprintf(
+			"%s still disagree(s) with the readiness the operator asserted, %s after the mismatch was first seen; "+
+				"the operator does not retry this, only reports it",
+			strings.Join(staleNames, ", "), readinessDivergenceGrace)
+	}
+
+	was := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionReadinessDiverged)
+	meta.SetStatusCondition(&group.Status.Conditions, diverged)
+	if isTrue := diverged.Status == metav1.ConditionTrue; isTrue != was {
+		eventType := corev1.EventTypeNormal
+		if isTrue {
+			eventType = corev1.EventTypeWarning
+		}
+		r.Recorder.Event(group, eventType, diverged.Reason, diverged.Message)
+	}
+}
+
+// readinessDivergence tracks, per ProxyGroup, how long each of its pods'
+// actual readiness has disagreed with the readiness the operator most
+// recently asserted for it.
+//
+// Scoped per group by the same byGroup shape as expectations, and for the
+// same reason: one instance is shared across every ProxyGroup this
+// reconciler serves, so a bare map keyed on pod UID alone would have no way
+// to tell "this pod is gone" from "this pod belongs to some other group I
+// have not looked at this pass." observe is always given the complete live
+// pod list of the one group it is reconciling, so an entry that pass does
+// not renew -- because the pod agreed again, or because the pod is no
+// longer in the list at all -- is exactly the entry that must not survive
+// it. Unlike expectations this needs no TTL: every reconcile calls observe
+// with the group's full current pod list, so a departed pod is pruned on
+// the very next pass rather than waiting out a timer.
+//
+// Safe for concurrent use: one instance is shared by every reconcile of
+// every group, the same guarantee expectations makes.
+type readinessDivergence struct {
+	mu      sync.Mutex
+	now     func() time.Time
+	byGroup map[string]map[types.UID]time.Time
+}
+
+func newReadinessDivergence(now func() time.Time) *readinessDivergence {
+	return &readinessDivergence{now: now, byGroup: make(map[string]map[types.UID]time.Time)}
+}
+
+// observe records the current agreement for every pod in diverging -- true
+// for a pod whose actual readiness disagrees with what was just asserted for
+// it, false for one that agrees -- and returns the UIDs of every pod that
+// has disagreed for at least grace, continuously: a pod past the threshold
+// is returned on every call from the one that first crosses it onward, not
+// only the call that crosses it, because the caller's flank detection is
+// what turns that into a one-time event.
+//
+// A pod absent from diverging is dropped the same as one reported false.
+// diverging is built from the group's complete live pod list on every call,
+// so absence here means the pod is no longer there to have a readiness at
+// all, not merely that this pass forgot to check it.
+func (d *readinessDivergence) observe(group string, diverging map[types.UID]bool, grace time.Duration) []types.UID {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	m := d.byGroup[group]
+	now := d.now()
+	var expired []types.UID
+	for uid, mismatched := range diverging {
+		if !mismatched {
+			if m != nil {
+				delete(m, uid)
+			}
+			continue
+		}
+		if m == nil {
+			m = make(map[types.UID]time.Time)
+			d.byGroup[group] = m
+		}
+		since, tracked := m[uid]
+		if !tracked {
+			m[uid] = now
+			continue
+		}
+		if now.Sub(since) >= grace {
+			expired = append(expired, uid)
+		}
+	}
+	// Anything this group was tracking that diverging did not even mention
+	// is a pod that left the live list entirely between one call and the
+	// next; nothing is left to report a readiness for, so its entry goes
+	// too rather than sitting in the map for the rest of the process's life.
+	for uid := range m {
+		if _, present := diverging[uid]; !present {
+			delete(m, uid)
+		}
+	}
+	if len(m) == 0 {
+		delete(d.byGroup, group)
+	}
+	return expired
+}
+
+// forget drops a group entirely, matching expectations.forget: a group
+// deleted while one of its pods was mid-divergence has no later observe call
+// coming to prune that entry on its own, since observe only ever prunes a
+// group's map when it is given that same group's current pod list, and a
+// deleted group never produces one again.
+func (d *readinessDivergence) forget(group string) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	delete(d.byGroup, group)
 }
 
 // drainingSince reads the annotation markDraining writes. ok is false when
