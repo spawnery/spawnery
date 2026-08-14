@@ -40,18 +40,37 @@ import (
 // An entry measures how long a pod has been diverging *while something was
 // watching*. Observation is what starts and sustains that clock, and
 // Reconcile does not call observe on every pass for a group that still
-// exists: NetworkNotFound, NetworkNotAccepted and ExposeNotImplemented all
-// return before reconcileReplicas runs. The group is not gone in any of
-// those three cases, so it is not caught by the earlier forget calls in
-// Reconcile that fire only when the ProxyGroup itself is gone or being
-// deleted -- each of the three calls forget explicitly on its own instead.
-// Unlike expectations this needs no TTL to cover a gap like this one: a TTL
-// would let a stale first-seen timestamp survive the gap and then fire the
-// moment observation resumes, reporting a span of divergence nobody
-// actually watched. Forgetting is the honest response -- the measurement is
-// void, so it restarts -- and the cost is bounded in the safe direction: a
-// Network briefly unaccepted delays a genuine report by at most one grace
-// period.
+// exists. Three of its steady-state early returns handle that themselves --
+// NetworkNotFound, NetworkNotAccepted and ExposeNotImplemented all return
+// before reconcileReplicas runs, the group is not gone in any of them so the
+// earlier forget calls (which fire only when the ProxyGroup itself is gone or
+// being deleted) do not catch them, and each calls forget explicitly instead.
+//
+// Read that as three cases handled, not as the whole of the gap. Every error
+// return above reconcileReplicas has the identical shape and does not forget
+// -- a failed read, the status write, Bootstrap.Ensure, the ConfigMap, the
+// Service, the first pods() call -- and the next early return added here will
+// not forget either unless somebody remembers this rule. known-issues.md
+// files the count and declines to maintain it, which is the right way round.
+//
+// What that costs is worth stating exactly, because it is not only an entry
+// that outlives its usefulness. Nothing advances since: it is written once,
+// when the pod is first seen diverging, and read on every later call. So a
+// pod still diverging across a five-minute Bootstrap.Ensure outage is
+// measured from before the outage, now.Sub(since) is 300s on the first pass
+// that resumes, the grace is cleared on that pass, and a Warning fires for a
+// divergence nobody watched. That is a false positive, and it is precisely
+// the outcome rejecting a TTL was meant to prevent -- a TTL would let a stale
+// first-seen timestamp survive a gap and fire the instant observation
+// resumes -- arriving through the door the un-forgotten returns leave open.
+//
+// Forgetting is the honest response where it is done: the measurement is
+// void, so it restarts, and the cost runs the safe way -- a Network briefly
+// unaccepted delays a genuine report by at most one grace period. The fix
+// that would close the rest is structural rather than more forget calls, and
+// known-issues.md carries it: have the entry record when it was last
+// observed, and treat one unobserved on the previous pass as void. The type
+// would then enforce the property instead of each exit remembering to.
 //
 // Safe for concurrent use: one instance is shared by every reconcile of
 // every group, the same guarantee expectations makes.
