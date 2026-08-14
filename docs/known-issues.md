@@ -1105,25 +1105,36 @@ its `FULL_SYNC` branch, `if (!previous.synced && previous.asserted != false)
 onFirstSync()`. Quoted rather than cited by line: this file's citations into
 that one have gone stale twice already.
 
-**`status.connectedPlayers` reads 0 while people are playing on a draining
-proxy, and this milestone changed what the field means without editing it.**
-`setStatus` skips a pod that is not `Ready` before adding its player count —
-`if !isPodReady(&pods[i]) { continue }`,
-`internal/controller/proxygroup_controller.go:498-503` — so after a scale-down
-the group prints `READY 1 PLAYERS 0` with a person visibly in the game.
-`docs/runbook-milestone-4c1-evidence.md` states that as expected output so its
-first reader does not report a false defect; an operator watching a real
-cluster has no such warning and could reasonably conclude the proxy is empty
-and act on it. The line did not need editing to become wrong: before 4c-1,
-`NotReady` meant starting up or broken, and skipping those pods was a fair
-reading of "players in this group". 4c-1 makes `NotReady` also a deliberate,
-healthy, populated state — a proxy serving people precisely because it is being
-emptied — so the same line now answers a different question than it used to,
-while `setStatus`'s own doc comment still says it "writes what is observably
-true of the group's pods". Counting draining pods and renaming the field are
-both defensible and both are the owner's call, which is why this is recorded
-rather than fixed. 4c-2, which makes proxy replica counts move in earnest, is
-where it starts to cost.
+**`status.connectedPlayers` briefly meant something other than what it says,
+because this milestone changed the field's meaning without editing the line
+that computes it — found and fixed inside the same milestone.** `setStatus`
+skipped any pod that was not `Ready` before adding its player count, so after
+a scale-down the group printed `READY 1 PLAYERS 0` with a person visibly in
+the game. The evidence run of 2026-08-14 saw exactly that.
+
+The line did not need editing to become wrong. Before 4c-1, `NotReady` meant
+starting up or broken, and skipping those pods was a fair reading of "players
+in this group". 4c-1 makes `NotReady` also a deliberate, healthy, populated
+state — a proxy serving people precisely because it is being emptied — so the
+same code answered a different question than it used to, while the CRD's own
+description still promised "the sum of players across all proxies".
+
+The whole-branch review ruled it a defect rather than a naming question, and
+the sum now runs above the readiness guard while `ready++` stays inside it.
+Four things decided it: the CRD description was false in a state the operator
+deliberately creates, and it is a printed column; it was wrong during the one
+operation where it is the only observable, since nothing logs a readiness
+withdrawal; the milestone had shipped a runbook paragraph apologising for it,
+which is evidence the output was wrong rather than the reader; and no test
+anywhere asserted the field, so the fix broke nothing — which also means
+nothing would have caught it.
+
+**Kept because the trap is general, not because the bug survives.** A guard
+can go on compiling, passing its tests and reading sensibly while the meaning
+of the state it filters on moves underneath it. The 4a entry above records the
+same shape on `derivePhase` and `DesiredReplicas()`, and that one is still
+open. Both were found by reading a comment or description against what the
+code had come to do — not by any test.
 
 **`nix build` filters the source tree through the git index, so an untracked
 file does not exist for a sandboxed build.** This is not a 4c-1 discovery —
