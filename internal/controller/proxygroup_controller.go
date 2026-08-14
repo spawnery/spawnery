@@ -489,6 +489,23 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// the kubelet actually reports, and this loop is the only place both are
 	// in hand at once -- going is local to this function, and isPodReady
 	// reads the same pod this loop already has open.
+	//
+	// Only the withdrawal direction counts: going && isPodReady is true
+	// exactly when a pod was just told to stop taking connections and the
+	// kubelet still calls it Ready -- an agent that heard the instruction
+	// and did not act on it, which is what this condition exists to catch.
+	// The reverse -- asserted ready but not yet actually Ready -- is
+	// deliberately not checked. SetReady(true) is asserted for a
+	// non-draining pod from the moment it exists, before any kubelet has
+	// had a chance to probe it even once, and a cold image pull can easily
+	// outrun readinessDivergenceGrace without the pod having disobeyed
+	// anything: it is starting up, not diverging, and reporting that
+	// direction would misname it as an agent that heard an instruction and
+	// ignored it. A proxy that is supposed to be ready and never gets there
+	// is already visible without this: the group sits below its ready
+	// count, and known-issues.md's "a proxy that cannot bind its ready port
+	// is silent on the CR" entry (filed under 3c, the milestone that added
+	// the bind) is the diagnosis that direction actually needs.
 	diverging := make(map[types.UID]bool, len(pods))
 	names := make(map[types.UID]string, len(pods))
 	for i := range pods {
@@ -499,7 +516,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		if err := r.markDraining(ctx, &pods[i], going); err != nil {
 			return err
 		}
-		diverging[pods[i].UID] = (!going) != isPodReady(&pods[i])
+		diverging[pods[i].UID] = going && isPodReady(&pods[i])
 		names[pods[i].UID] = pods[i].Name
 	}
 	r.reportReadinessDivergence(group, key, diverging, names)
@@ -599,12 +616,13 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 // reportReadinessDivergence tells the group's ReadinessDiverged condition
 // what r.Divergence has observed for this pass's pods, and fires the one
 // event this readiness contract needs beyond Resync's own repeated
-// assertion: a pod whose actual readiness has disagreed with what the
-// operator asserted for at least readinessDivergenceGrace. A divergence
+// assertion: a pod that was told to stop taking connections and the kubelet
+// still calls Ready, for at least readinessDivergenceGrace. A divergence
 // caused by a lost SetReady or a lost pod-status update heals on the next
-// resync; what survives that is an agent that received the instruction and
+// resync; what survives that is an agent that received the withdrawal and
 // did not act on it, and reporting -- not repairing -- is what this
-// function does about it.
+// function does about it. See the comment on diverging in
+// reconcileReplicas for why only this direction is checked.
 //
 // Built false-by-default and flipped, like ScalingLimited and BackingOff in
 // ServerGroupReconciler.Reconcile. The event goes on the flank only, for the
@@ -623,7 +641,7 @@ func (r *ProxyGroupReconciler) reportReadinessDivergence(
 		Type:    spawneryv1alpha1.ConditionReadinessDiverged,
 		Status:  metav1.ConditionFalse,
 		Reason:  spawneryv1alpha1.ReasonReadinessAgrees,
-		Message: "every proxy pod's actual readiness matches what the operator last asserted for it",
+		Message: "no proxy pod has stayed Ready past its withdrawal for longer than the grace period",
 	}
 	if len(stale) > 0 {
 		staleNames := make([]string, 0, len(stale))
@@ -634,7 +652,7 @@ func (r *ProxyGroupReconciler) reportReadinessDivergence(
 		diverged.Status = metav1.ConditionTrue
 		diverged.Reason = spawneryv1alpha1.ReasonReadinessDiverged
 		diverged.Message = fmt.Sprintf(
-			"%s still disagree(s) with the readiness the operator asserted, %s after the mismatch was first seen; "+
+			"%s still Ready %s after the operator withdrew its readiness; "+
 				"the operator does not retry this, only reports it",
 			strings.Join(staleNames, ", "), readinessDivergenceGrace)
 	}

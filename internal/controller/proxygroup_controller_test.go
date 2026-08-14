@@ -1651,6 +1651,51 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 	}
 }
 
+// TestASlowStartingProxyIsNotReportedAsDiverged pins the scope decision
+// ReadinessDiverged narrowed to: only a withdrawal the operator asserted and
+// the pod ignored is reported, never a pod that simply has not gotten
+// around to its first successful probe yet.
+//
+// Every pod is asserted ready from the moment it exists — SetReady(true) for
+// a non-draining pod runs before any kubelet has had a chance to probe it at
+// all — so a bidirectional comparison would start this pod's grace clock at
+// creation, and a proxy pulling a large image on a cold node can easily run
+// past readinessDivergenceGrace without ever having disobeyed anything. This
+// test's pods are never marked ready at all — envtest runs no kubelet — so
+// they stand in for exactly that: a proxy still starting up, not one that
+// heard an instruction and ignored it. Reporting it would misname the two as
+// identical, which is the false diagnosis this test exists to rule out.
+func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := record.NewFakeRecorder(10)
+	r.Recorder = rec
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+	// The pods this pass creates are not in the list reconcileReplicas reads
+	// its readiness assertions from -- that list is fetched once at the top
+	// of Reconcile, before this pass's own creates land -- so a second pass
+	// is what first puts them through the divergence check at all. Without
+	// it, the clock advance below would land before the pods' first sight
+	// rather than after, and the test would pass whether or not the scope
+	// decision held.
+	f.reconcileProxyGroup(r, "gateway")
+
+	// Neither pod is ever marked ready, and neither is asked to drain: both
+	// replicas are still wanted, so this is purely "still starting up," with
+	// no withdrawal anywhere in the picture.
+	f.clock.Advance(readinessDivergenceGrace + time.Second)
+	f.reconcileProxyGroup(r, "gateway")
+
+	g := f.proxyGroup("gateway")
+	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionReadinessDiverged) {
+		t.Error("a pod that has simply never passed its first probe was reported as ReadinessDiverged")
+	}
+	if ev := drainEvents(rec); len(ev) != 0 {
+		t.Errorf("events = %v, want none: a slow-starting pod is not a withdrawal that was ignored", ev)
+	}
+}
+
 // TestASpecChangeSurgesBeforeItMarksAnything is the first move of the
 // milestone's subject: the replacement proxy is created before any proxy is
 // asked to stop taking connections. That ordering is what leaves room for the
