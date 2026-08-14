@@ -294,14 +294,115 @@ find in place.
   reconnect is the stronger test; it was not in this plan, and the plan's own
   self-review says so rather than leaving it implied. It is cheap work for
   whoever is next in this area.
-- **Criteria 1 and 2 need a real cluster, and had not been run when this was
-  written (2026-08-14).** envtest has no kubelet, no probes and no kube-proxy,
-  so "the endpoint disappears before the pod does" and "the established
-  connection survives" are claims it cannot make.
-  `docs/runbook-milestone-4c1-evidence.md` exists for exactly those two and
-  says of itself that it has not been run. Whoever runs it first should
-  correct it in place, the way `docs/runbook-milestone-3-evidence.md` was
-  corrected after its own first run.
+- **Criteria 1 and 2 need a real cluster, and were run the same day.** envtest
+  has no kubelet, no probes and no kube-proxy, so "the endpoint disappears
+  before the pod does" and "the established connection survives" are claims it
+  cannot make. `docs/runbook-milestone-4c1-evidence.md` was written for exactly
+  those two and driven twice on 2026-08-14 — see "The 4c-1 evidence runs"
+  below. The runbook was corrected in place after each, the way milestone 3's
+  was.
+
+## The 4c-1 evidence runs
+
+Twice on 2026-08-14, against `kind` v0.32.0 / Kubernetes v1.36.1 under
+rootless Podman, one control-plane node, both images built from the tree under
+test, a licensed client at 26.2 driven by the repository's owner. The second
+run exists because the first found a defect that changed the operator.
+
+**Criterion 1 — the endpoint goes before the pod.** Lowering `replicas` from 2
+to 1 flipped the doomed pod's endpoint to `ready=false serving=false` between
+8 and 12 seconds later, in both runs. That is the window the probe's own
+numbers predict (period 5s × failure threshold 3). The address stayed listed
+in the `EndpointSlice` until the pod was actually deleted — which is why the
+runbook reads `endpointslices` rather than `endpoints`: the older API prints
+only ready addresses, so "stopped being ready" and "was deleted" reach it as
+the same absence, and criterion 1 is precisely the claim that one happens
+before the other.
+
+**Criterion 2 — the established session survives it.** Attested both times by
+the person at the keyboard, in the game, playing through the transition:
+nothing was noticed. The pod stayed `0/1 Running` for as long as it was
+occupied — 93 seconds in the first run — and was deleted within seconds of the
+player leaving, not by any deadline. A rejoin four seconds later landed on the
+surviving proxy, which incidentally demonstrates the other half: a not-ready
+endpoint takes no new connections.
+
+**The deadline, run on purpose.** With `drain.timeoutSeconds` lowered to 60,
+the operator disconnected the player and said so:
+`Warning ProxyDrainTimeout — deleting proxy gateway-tseg after 1m0s with 1
+player(s) still connected`. The count was right, because the agent was
+connected and reporting; it understates only when the count is stale, which
+`known-issues.md` records. The client showed **"proxy shutting down"** — that
+is Velocity's own graceful shutdown on the `SIGTERM` the deletion sends, not
+anything the operator says. Milestone 3's manual session saw no disconnect
+screen at all, so this path differs and §10 now states the expected message.
+
+**What the first run found.** `status.connectedPlayers` read `0` with a person
+visibly in the game: `setStatus` skipped pods that were not `Ready` before
+summing, and 4c-1 had quietly made `NotReady` a populated state. The
+whole-branch review ruled it a defect rather than a naming question and it was
+fixed; the second run confirmed `READY 1 PLAYERS 1` at the same moment in the
+same exercise. It is the one measurement here that a unit test would not have
+produced, because the field is written and never read in Go.
+
+**What the second run needed.** The owner's join landed on the *surviving*
+proxy — the case that measures nothing while looking like a pass, since the
+client keeps playing exactly as it should. §8's pin was used for the first
+time and worked first try. One honest limit, since it changes what was
+measured: the pin `Service` runs `externalTrafficPolicy: Cluster` where the
+group's own runs `Local`, so the second run's criterion 1 went through a
+hand-built `Service`. The first run used no pin, so between them both paths
+are covered.
+
+**A rule the runbook gained, and immediately needed.** By the second run the
+log held three `has connected` lines for one player, and the correct one was
+not last in the output — `kubectl logs -l` prints one pod's matches and then
+the next's rather than interleaving by time. Take the most recent by
+timestamp. Without that rule this run would have read the wrong pod name at
+the one step where reading it wrong is invisible.
+
+**One thing a runbook cannot record after the fact.** A pod's logs die with
+it, so the player's departure has to be captured *before* the deletion. The
+first run lost it and had to reason from the pod's disappearance instead.
+
+## What the whole-branch review found, and why 4c-2 should care
+
+Every task here passed its own review. The whole-branch pass then found a
+defect none of them could see, because it lives in the composition of three
+of them — the fourth milestone running where that has been true.
+
+**The gate could be left open on a proxy the operator had already withdrawn,
+and nothing would ever repair it.** The agent's fold of `(synced, asserted)`
+made the *read* atomic; the *gate call* sat outside it. A `FULL_SYNC` that had
+read `(false, null)` could reopen the gate after a concurrent `SET_READY(false)`
+closed it, ending at `asserted = false` with the gate open — pod `Ready`, in
+the `Service`, taking players, while the drain clock ran against it.
+
+The composition is the point. `Fleet.SetReady` suppresses repeats once it has
+sent a value, and `Fleet.Resync` carried `FullSync` and `DrainPlayers` and
+nothing else, so nothing re-asserted, ever. Each piece was correct alone: the
+memo is what turned a millisecond into forever. It reproduced at roughly 1 in
+570 on unfixed code, and the new two-thread test failed six runs of six.
+
+The fix is in two halves, and 4c-2 should keep both in mind. The agent now
+holds one monitor across latch-update-and-gate-call — the `AtomicReference` was
+removed rather than kept beside it, because two mechanisms for one invariant,
+where one no longer carries the argument, is the shape that produced this.
+And `Resync` now re-asserts the last readiness it sent, which bounds *any*
+future divergence to one resync interval whatever its cause.
+
+**Still open, and 4c-2's to take if it wants it.** The operator already holds
+both the asserted value and `isPodReady()` in the same loop and never compares
+them. Closing that loop would make this whole class self-correcting rather than
+merely bounded. The resync is what this milestone owed; the observation is a
+larger and better claim.
+
+**A general trap, twice recorded now.** `status.connectedPlayers` and
+`derivePhase`'s use of `DesiredReplicas()` (see `known-issues.md`) are the same
+shape: a guard that goes on compiling, passing its tests and reading sensibly
+while the meaning of the state it filters on moves underneath it. Both were
+found by reading a description against what the code had come to do. Neither
+was found by a test.
 
 ## The evidence run
 
