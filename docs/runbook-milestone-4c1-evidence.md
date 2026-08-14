@@ -10,9 +10,12 @@ also its first corrector; do what
 defects in place rather than noting them as a fork.
 
 Design `docs/superpowers/specs/2026-08-14-proxy-readiness-contract-design.md`
-§10 lists eight acceptance criteria. Six of them are met by `go test`,
-`make agent-test`, `make image-test`, `make image-repro` and `make manifests`.
-Two are not, and this document exists for exactly those two:
+§10 lists eight acceptance criteria. Five of them — criteria 3, 4, 5, 6 and 7
+— are met by `go test`, `make agent-test`, `make image-test`,
+`make image-repro` and `make manifests`. A sixth, criterion 8, is met by
+running this document itself, as the paragraph below states. The remaining
+two are not met by anything else, and this document exists for exactly
+those two:
 
 - **Criterion 2** — the removed proxy leaves the `Service`'s endpoints
   *before* it is deleted.
@@ -498,14 +501,38 @@ pod accepted a given player, and only the accepting pod logs the line at all:
 ```bash
 nix develop -c kubectl logs -n minecraft \
   -l spawnery.cloud/role=proxy,spawnery.cloud/group=gateway \
-  --prefix=true | grep 'connected player'
+  --prefix=true --tail=-1 --timestamps | grep 'has connected'
 ```
 
-Expect exactly one line, prefixed with the pod it came from:
+`--tail` defaults to 10 lines per pod, not to "all", the moment a selector
+(`-l`) is in play — `kubectl logs --help` says so in as many words — and by
+the time this command is repeated in §8 and §10, minutes and several log
+lines later, the line this command is looking for is very likely past that
+window. `--tail=-1` turns that default back off. The narrower pattern, `has
+connected` rather than the bare `connected player` marker, is there because
+Velocity logs a disconnect on that same marker too, spelled `has
+disconnected` — a different word after `has `, so the narrower grep does not
+also match a quit. (This repository's own record of the marker,
+`docs/handover-milestone-4.md:333`, shows only the connect spelling; it does
+not record what a disconnect on this marker looks like, so treat the
+narrower pattern as the safe choice rather than as tested against a real
+disconnect line.)
+
+Expect one line, prefixed with the pod it came from and timestamped by
+`kubectl` itself ahead of Velocity's own embedded time:
 
 ```
-[pod/gateway-xxxx/velocity] [15:04:49 INFO]: [connected player] <player> (/10.244.0.1:50113) has connected
+[pod/gateway-xxxx/velocity] 2026-08-14T15:04:49.123456789Z [15:04:49 INFO]: [connected player] <player> (/10.244.0.1:50113) has connected
 ```
+
+**Once a second join has happened — the coin-flip fallback below, or §8 and
+§10's rejoin — take the most recent line by the `kubectl`-added timestamp,
+not by its position in the output.** The surviving pod keeps its own earlier
+`has connected` line in its history, so the selector-wide grep then returns
+one line per pod that has ever accepted a player, not one line total; and
+`kubectl logs -l` does not interleave pods in time order, it prints one
+pod's matches and then the next's, so where a line sits in the output says
+nothing about when it happened.
 
 Compare that pod name with the second line from §6's pod command — the one a
 scale-down will delete.
@@ -566,16 +593,23 @@ single-node cluster it makes no difference, and `Local` would only add a
 second way for this to answer nothing.
 
 Now quit the client and rejoin against **`127.0.0.1:30568`**. Repeat §7's log
-command; expect the one `connected player` line to name `$DOOMED` this time,
-every time.
+command; it now returns one line per pod that has ever accepted a player, so
+take the most recent by timestamp, per §7's rule. Expect that line to name
+`$DOOMED`, every time.
 
 **Two honest limits on this pin.** It is a second route to the same pod, not a
-different kind of connection: kube-proxy handles it exactly as it handles
-30567, so §9's survival measurement is made on the real path. And when the
-draining proxy's readiness drops, `gateway-pin`'s endpoint goes not-ready too
-— readiness is a property of the pod, not of the `Service` — so no new
-connection will arrive through it either. That is fine; §9 needs the session
-you already have, not a new one.
+different kind of connection — but not an identical one either.
+`gateway-pin` is left at the default `externalTrafficPolicy: Cluster`, so
+kube-proxy SNATs through it, where the group's own `Service` runs `Local` and
+does not. That is the one respect in which the two paths differ: criterion 1
+ends up measured through this hand-built `Service`, not the operator's own.
+The mechanism under test — conntrack keeping an established NodePort DNAT
+session alive across an endpoint going not-ready — is identical either way,
+so the method is sound and §9's survival measurement is made on the real
+path. And when the draining proxy's readiness drops, `gateway-pin`'s endpoint
+goes not-ready too — readiness is a property of the pod, not of the
+`Service` — so no new connection will arrive through it either. That is
+fine; §9 needs the session you already have, not a new one.
 
 Leave `gateway-pin` in place for §10, which repeats the exercise.
 
@@ -748,7 +782,8 @@ nix develop -c kubectl label pod -n minecraft "$DOOMED" evidence.local/pin=doome
 ```
 
 Rejoin with the real client on `127.0.0.1:30568`, confirm from §7's log
-command that it landed on `$DOOMED`, and scale down:
+command — taking the most recent line by timestamp, its rule for a repeat
+join — that it landed on `$DOOMED`, and scale down:
 
 ```bash
 nix develop -c kubectl patch proxygroup gateway -n minecraft --type=merge \
@@ -818,7 +853,7 @@ actually showed them, which is the part nobody can reconstruct later.
 ## 11. Clean up
 
 ```bash
-kill %1   # the operator's go run
+pkill -f 'go run ./cmd/spawnery-operator'   # kills it from whichever shell you run this in
 podman rm -f spawnery-4c1-relay
 systemd-run --scope --user --property=Delegate=yes \
   env KIND_EXPERIMENTAL_PROVIDER=podman \
@@ -840,11 +875,16 @@ session, unless milestone 4c-1 gets a handover document of its own, in which
 case there. This file is the procedure; that one is the record of what running
 it produced.
 
-Two things are worth stating explicitly in whatever you write:
+Three things are worth stating explicitly in whatever you write:
 
 - **which pod the client was on**, and how you established it. A run that
   cannot answer that has not proven criterion 1, however well the session
   went.
+- **which `Service` the surviving session ran through** — the group's own on
+  30567, or §8's `gateway-pin` on 30568. They differ in
+  `externalTrafficPolicy` (`Local` versus `Cluster`), and a later reader of
+  the evidence cannot reconstruct which path was actually measured without
+  being told.
 - **what the player saw**, in both §9 and §10. The logs prove what the proxy
   did. Only the person at the keyboard can say what the game showed, and in
   §10 the whole finding is that it showed a disconnect.

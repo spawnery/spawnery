@@ -287,8 +287,11 @@ builds there needed `CONTAINER=podman` and a disk-backed `TMPDIR`, and Gradle
 daemons exhaust a small machine. **Both overrides are conditional on the
 machine, not unconditional requirements** — `CONTAINER=podman` is needed where
 there is no `docker` binary at all, and `TMPDIR` where `/tmp` is a tmpfs too
-small for Podman's OCI-archive extraction, which is how
-`docs/runbook-milestone-3-evidence.md` §0 states both. Measured 2026-08-14 on
+small for Podman's OCI-archive extraction, which is the reason
+`docs/runbook-milestone-3-evidence.md` §0 gives for `TMPDIR`. (§0 states
+`CONTAINER=podman` itself as conditional; its `TMPDIR` bullet is an
+unconditional instruction, and only the rationale attached to it is
+qualified the same way.) Measured 2026-08-14 on
 this repository's own machine, where `docker` is a symlink into
 `podman-docker-compat` and `/tmp` is disk-backed: neither override is needed,
 and `make agent-test`, `make image-test` and `make image-repro` all pass on
