@@ -54,6 +54,14 @@ limitations under the License.
 // observable at all; a unit test can see that bind() was called and nothing
 // more.
 //
+// --set-ready-after is the other end of that gate, and the only end the
+// operator drives on its own: some time after the FullSync, the stub tells the
+// proxy to stop being ready. The opening is a decision the agent reaches from a
+// server list; the closing is a decision the operator makes and the agent obeys,
+// and nothing outside a unit test had ever put that message in front of the real
+// jar. What hack/agent-test.sh asserts under it is again the port -- closed
+// while the agent is connected, synced, and still answering on 25565.
+//
 // --proxy gates the FullSync and nothing else. Both rpcs are served
 // unconditionally, because refusing one would make an agent that opened the
 // wrong rpc look like a connection failure rather than naming itself.
@@ -177,6 +185,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fullSyncAfter := fs.Int("full-sync-after", 0,
 		"seconds to hold the FullSync back after the opening messages, so a test can "+
 			"probe the readiness gate while the proxy has no server list yet")
+	setReadyAfter := fs.Duration("set-ready-after", 0,
+		"after a proxy's FullSync, wait this long and then tell it to stop being ready; "+
+			"0 disables. Used by hack/agent-test.sh phase 4 to prove the gate closes on the "+
+			"operator's word rather than only at shutdown")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -217,6 +229,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		muteAfter:      *muteAfter,
 		proxy:          *proxy,
 		fullSyncAfter:  time.Duration(*fullSyncAfter) * time.Second,
+		setReadyAfter:  *setReadyAfter,
 		token:          material.Token,
 	}
 
@@ -420,8 +433,11 @@ type stub struct {
 
 	// proxy is the --proxy half: whether a proxy stream is sent a FullSync at
 	// all, and fullSyncAfter is how long it is held back once it is.
+	// setReadyAfter is the --set-ready-after half: how long after that FullSync
+	// the proxy is told to stop being ready, or zero for never.
 	proxy         bool
 	fullSyncAfter time.Duration
+	setReadyAfter time.Duration
 
 	// token is what --require-token demands in the header. Set always, read only
 	// by requireBearer, which is only installed under the flag.
@@ -543,9 +559,9 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 // difference is the FullSync, which has no equivalent on the server side —
 // see the package comment.
 func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) error {
-	var later *delayed[agentpb.OperatorToProxy]
+	var later []delayed[agentpb.OperatorToProxy]
 	if s.proxy {
-		later = &delayed[agentpb.OperatorToProxy]{
+		later = append(later, delayed[agentpb.OperatorToProxy]{
 			message: &agentpb.OperatorToProxy{
 				Message: &agentpb.OperatorToProxy_FullSync{
 					FullSync: &agentpb.FullSync{
@@ -558,6 +574,23 @@ func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) erro
 			after:   s.fullSyncAfter,
 			kind:    "full_sync_sent",
 			failure: "full_sync_failed",
+		})
+		// Behind the FullSync rather than beside it, because the message the
+		// agent is meant to obey here only means anything to a proxy that has
+		// already opened its gate: a SetReady{false} against an unsynced proxy
+		// closes a port nothing ever bound, and the phase asserting on it would
+		// pass without the agent doing a thing.
+		if s.setReadyAfter > 0 {
+			later = append(later, delayed[agentpb.OperatorToProxy]{
+				message: &agentpb.OperatorToProxy{
+					Message: &agentpb.OperatorToProxy_SetReady{
+						SetReady: &agentpb.SetReady{Ready: false},
+					},
+				},
+				after:   s.setReadyAfter,
+				kind:    "set_ready_sent",
+				failure: "set_ready_failed",
+			})
 		}
 	}
 	return serveSession(s, stream, []*agentpb.OperatorToProxy{
@@ -577,8 +610,13 @@ func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) erro
 // answer to anything: what to send, how long to wait first, and the event kinds
 // recorded once the send has returned or failed.
 //
+// They come as a sequence, and `after` is counted from the previous send rather
+// than from the stream opening: --set-ready-after is documented as a wait after
+// the FullSync, and a second offset measured from the same origin as the first
+// would silently become an absolute schedule the moment either flag moved.
+//
 // kind is recorded *after* Send returns, never before, because the whole point
-// of the flag is that a test can order its own observations against it.
+// of the flags is that a test can order its own observations against them.
 type delayed[Out any] struct {
 	message *Out
 	after   time.Duration
@@ -599,7 +637,7 @@ func serveSession[In, Out any](
 	s *stub,
 	stream grpc.BidiStreamingServer[In, Out],
 	opening []*Out,
-	later *delayed[Out],
+	later []delayed[Out],
 	observe func(func(map[string]any) map[string]any, *In),
 ) error {
 	index := s.streams.Add(1) - 1
@@ -629,8 +667,9 @@ func serveSession[In, Out any](
 	// A muted stream skips every Send and nothing else: it is registered, it
 	// displaced whatever came before it, and it stays open. That is the point —
 	// the agent holds a stream the operator accepted and will never answer. The
-	// FullSync is skipped with them, because a muted operator that still handed
-	// out a server list would not be silent.
+	// scheduled messages are skipped with them, because a muted operator that
+	// still handed out a server list, or still asserted a readiness, would not
+	// be silent.
 	if !muted {
 		for _, message := range opening {
 			if err := stream.Send(message); err != nil {
@@ -639,16 +678,17 @@ func serveSession[In, Out any](
 			}
 		}
 
-		if later != nil {
-			// Its own goroutine, because the hold has to overlap the receive
-			// loop below rather than precede it. The agent's Hello arrives
-			// while the timer runs, and a stub that slept before its first Recv
-			// would record the greeting only once the FullSync had already gone
-			// out — collapsing the two events the test needs to probe between
-			// into one moment.
+		if len(later) > 0 {
+			// One goroutine, because the hold has to overlap the receive loop
+			// below rather than precede it. The agent's Hello arrives while the
+			// timer runs, and a stub that slept before its first Recv would
+			// record the greeting only once the FullSync had already gone out —
+			// collapsing the two events the test needs to probe between into
+			// one moment.
 			//
-			// It is the only sender left once the messages above are on the
-			// wire, so nothing here ever calls Send concurrently. The deferred
+			// One for the whole sequence rather than one each, and that is what
+			// keeps it the only sender left once the messages above are on the
+			// wire: nothing here ever calls Send concurrently. The deferred
 			// stop-and-wait is what keeps that true through the handler's
 			// return: grpc-go finishes the stream when the handler returns, and
 			// a goroutine still holding it would be sending on a stream that no
@@ -657,16 +697,18 @@ func serveSession[In, Out any](
 			sent := make(chan struct{})
 			go func() {
 				defer close(sent)
-				select {
-				case <-time.After(later.after):
-				case <-sendCtx.Done():
-					return
+				for _, next := range later {
+					select {
+					case <-time.After(next.after):
+					case <-sendCtx.Done():
+						return
+					}
+					if err := stream.Send(next.message); err != nil {
+						s.events.record(next.failure, of(map[string]any{"error": err.Error()}))
+						return
+					}
+					s.events.record(next.kind, of(map[string]any{}))
 				}
-				if err := stream.Send(later.message); err != nil {
-					s.events.record(later.failure, of(map[string]any{"error": err.Error()}))
-					return
-				}
-				s.events.record(later.kind, of(map[string]any{}))
 			}()
 			defer func() {
 				stopSending()

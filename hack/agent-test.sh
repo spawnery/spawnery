@@ -29,9 +29,10 @@
 #
 # Phases four and five run against the Velocity image, and add the one
 # obligation only a proxy has: the pod's readiness gate opens on the first
-# FullSync and not before. That pair of probes - 8081 closed while the agent is
-# connected and has deliberately not been given a server list, open once one has
-# arrived - is the whole reason this script grew a proxy half. A unit test can
+# FullSync and not before, and closes again when the operator says so. Those
+# three probes - 8081 closed while the agent is connected and has deliberately
+# not been given a server list, open once one has arrived, closed again on a
+# SetReady - are the whole reason this script grew a proxy half. A unit test can
 # see that bind() was called; only a container can see a port.
 set -euo pipefail
 
@@ -556,7 +557,7 @@ fi
 echo "the agent opened $opened3 streams in ${WINDOW3}s while the operator said nothing: an unanswered session is bounded by the operator's hard deadline"
 
 # ---------------------------------------------------------------------------
-# Phase four: the proxy, and the gate that must not open early.
+# Phase four: the proxy, and the gate that must not open early - or stay open.
 #
 # internal/podspec gives the proxy container a tcpSocket readiness probe on 8081
 # and nothing else, so "this pod is ready" means exactly "the agent bound that
@@ -570,6 +571,15 @@ echo "the agent opened $opened3 streams in ${WINDOW3}s while the operator said n
 # anything, so the stub holds its FullSync back rather than sending it with the
 # opening messages, and the guards below fail the phase if it went out before
 # the probe ran anyway.
+#
+# Then the third probe, and the one milestone 4c-1 exists for. Opening is a
+# decision the agent reaches on its own from a server list; closing is one the
+# operator makes and the agent obeys, over the wire, as a SetReady{ready:false}.
+# Every test written for that so far has faked one side of that wire: the Go
+# tests send the message to a recorder, the JUnit tests hand a hand-built
+# message to a ProxyRole holding a lambda. Nothing had ever put the real message
+# in front of the real jar, and the port it is supposed to release is not a
+# thing either level can see. So the stub sends it, and this phase reads 8081.
 echo
 echo "starting the proxy against an operator that holds its server list back..."
 "$CONTAINER" rm -f "$NAME3" >/dev/null 2>&1 || true
@@ -601,11 +611,22 @@ chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding
 # is a failed run and the cost of a long hold is 45 seconds.
 FULL_SYNC_AFTER=45
 
-# renew-after is 60 rather than the 5 the phases above use, so exactly one
-# stream exists while the gate is being probed. Under a 5s renewal each new
-# stream would start a hold of its own and the trace would carry a
-# full_sync_sent per stream; nothing about the gate would change, but the two
-# events this phase orders its probes against would stop being one pair.
+# And how long it then holds the SetReady back, counted from that FullSync.
+# Everything between the sync and the withdrawal has to fit inside it: the poll
+# that notices the sync, the open-gate probe, and this phase's player count
+# assertion. Generous for the same reason FULL_SYNC_AFTER is - and it is a lower
+# bound on nothing, so overrunning it only costs a failed run with the guard
+# below naming this variable.
+SET_READY_AFTER=20s
+
+# renew-after is 180 rather than the 5 the phases above use, so exactly one
+# stream exists for the whole of this phase. Under a 5s renewal each new stream
+# would start a schedule of its own and the trace would carry a full_sync_sent
+# and a set_ready_sent per stream; nothing about the gate would change, but the
+# three events this phase orders its probes against would stop being one
+# sequence. It has to outlast the SetReady as well as the sync now: a renewal
+# landing between them would retire the stream the withdrawal was scheduled on,
+# and the stub would record set_ready_failed on a stream that no longer exists.
 mkdir -p "$WORK/agent-proxy"
 chmod 0755 "$WORK/agent-proxy"
 "$STUBOP" \
@@ -613,11 +634,12 @@ chmod 0755 "$WORK/agent-proxy"
 	--san stubop \
 	--listen ":19446" \
 	--report-interval 1 \
-	--renew-after 60 \
+	--renew-after 180 \
 	--hard-deadline 240 \
 	--proxy \
 	--require-token \
 	--full-sync-after "$FULL_SYNC_AFTER" \
+	--set-ready-after "$SET_READY_AFTER" \
 	>"$EVENTS4" 2>"$WORK/stub4.log" &
 STUB4_PID=$!
 
@@ -745,6 +767,19 @@ until port_open "$NAME4" 8081; do
 done
 echo "the ready gate opened $((SECONDS - start))s after the first FullSync"
 
+# And it opened on the sync, not in spite of a withdrawal that had already gone
+# out. This is the same guard the two either side of the closed-gate probe are,
+# pointed at the other flag: if the SetReady beat this probe the gate would
+# never have opened here at all, and the loop above would have failed 30s later
+# accusing the agent of never turning ready. Naming the real cause is the whole
+# difference between that run and a debuggable one.
+withdrawn4="$(count_events set_ready_sent "$EVENTS4")"
+if [ "$withdrawn4" -ne 0 ]; then
+	echo "the SetReady went out before the gate could be probed open; raise SET_READY_AFTER" >&2
+	jq -rs '.' <"$EVENTS4" >&2
+	exit 1
+fi
+
 # The proxy's own capacity, on the wire. internal/agent/registry.go discards any
 # report where players exceed slots, so a proxy that reported zero slots would
 # have every count with a player online silently thrown away - and this is the
@@ -768,6 +803,50 @@ if [ "$proxy_slots" != "$PROXY_LIMIT" ]; then
 	exit 1
 fi
 echo "the proxy reports its configured player limit as slots"
+
+# The gate closes on the operator's word, which is the contract milestone 4c-1
+# hangs the whole drain on: the operator tells a surplus proxy to stop being
+# ready, the kubelet's probe fails, the Service drops the endpoint, and no new
+# player is sent to a proxy that is on its way out.
+echo "waiting for the operator to withdraw the proxy's readiness..."
+await_event set_ready_sent "$EVENTS4" "$NAME4"
+
+# Retried rather than probed once, for the same reason the open probe is: the
+# stub records set_ready_sent the moment its own Send returned, which is before
+# the bytes have crossed the loopback, reached a gRPC callback thread and closed
+# a socket.
+CLOSED_WITHIN=30
+start=$SECONDS
+while port_open "$NAME4" 8081; do
+	if [ $((SECONDS - start)) -gt "$CLOSED_WITHIN" ]; then
+		echo "8081 was still open ${CLOSED_WITHIN}s after the operator withdrew this proxy's readiness" >&2
+		echo "this pod would stay in the Service's endpoints, and a proxy the operator is trying to drain would go on being handed new players" >&2
+		jq -rs '.' <"$EVENTS4" >&2
+		"$CONTAINER" logs "$NAME4" 2>&1 | grep -i spawnery >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+closed_after=$((SECONDS - start))
+
+# The control probe again, and it carries more here than the one before the
+# open probe did. `port_open` answers false for every way an exec can fail, so
+# without this the loop above would have reported success for a proxy that had
+# died - the assertion this half of the phase exists for, passing for the
+# failure it exists to catch.
+#
+# And 25565 is not merely the control this time, it is half the claim. The
+# contract is that a withdrawn proxy stops being *ready*, not that it stops
+# serving: the whole point of closing 8081 rather than shutting down is that
+# established sessions survive while the endpoint drains. A proxy whose own
+# listener went with the gate would have dropped every player still on it.
+if ! port_open "$NAME4" 25565; then
+	echo "the proxy's own listener on 25565 went down with the ready gate" >&2
+	echo "withdrawing readiness must take this pod out of the Service's endpoints, not out of service: the players already on it have to keep playing" >&2
+	"$CONTAINER" logs "$NAME4" 2>&1 | tail -40 >&2
+	exit 1
+fi
+echo "the ready gate closed ${closed_after}s after the operator withdrew readiness, and 25565 still answers"
 
 # ---------------------------------------------------------------------------
 # Phase five: the operator's retirement order, against the proxy.
