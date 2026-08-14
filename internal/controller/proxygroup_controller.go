@@ -499,6 +499,24 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// held in the stale branch moves into this one when the spec comes back.
 	// Both add a candidate rather than restoring a released one, so neither can
 	// start the cycle this paragraph rules out.
+	// One direction here is open and is left open knowingly, so that the next
+	// reader has the question rather than having to find it. views is built
+	// from the pods this pass could see, so a create the informer cache has
+	// not caught up with makes len(views) one low, which makes want one low,
+	// which releases one more mark than a correct count would. Releasing a
+	// mark deletes the annotation, so that pod's deadline restarts from zero
+	// when the group decides it should go after all -- a drain that had nearly
+	// run its course begins again, and the players on it wait another full
+	// timeout.
+	//
+	// Whether that is reachable was not settled. Four candidate states were
+	// traced -- scale-down then up with a create pending, a rollback with the
+	// surge pod lost, replicas raised mid-rollout, and a mixed-generation
+	// surplus -- and in each either surplusMarks was empty or want did not
+	// cross 1 to 0, so none of them reaches it. That is not a proof it is
+	// unreachable. Note the direction is the opposite of the create cap's
+	// above, where the same undercount is conservative; here it is not, which
+	// is the reason to write it down.
 	if want := int32(len(views)) - staleMarks - group.Spec.Replicas; want > 0 {
 		for _, name := range pick(surplusMarks, want) {
 			leaving[name] = true
