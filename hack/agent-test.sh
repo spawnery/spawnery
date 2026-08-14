@@ -611,24 +611,52 @@ chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding
 # is a failed run and the cost of a long hold is 45 seconds.
 FULL_SYNC_AFTER=45
 
-# And how long it then holds the SetReady back, counted from that FullSync.
+# And how long it then holds the SetReady back, counted from that FullSync -
+# cmd/spawnery-stubop/main.go's `delayed` chain counts each `after` from the
+# previous send, and records the event once that Send has returned.
 #
-# What has to fit inside it is the poll that notices the sync and the open-gate
-# probe, and nothing after them: a withdrawal that lands before the gate has
-# been seen open is a run that measured this script's flags rather than the
-# agent, and the two arms of the guard below say so by name. The player count
-# assertion that follows may overrun it freely - the only difference is that
-# closed_after reads 0. Generous for the same reason FULL_SYNC_AFTER is.
-SET_READY_AFTER=20s
+# What has to fit inside it is the poll that notices the sync and the whole of
+# the open-gate probe below, its deadline included: a withdrawal that lands
+# before that probe has given up is a run that measured this script's flags
+# rather than the agent, and the two arms of the guard below say so by name.
+# That is an arithmetic claim, so here is the arithmetic, in the constants as
+# they stand:
+#
+#   start   <= T_fullsync + 2       await_event polls on `sleep 2` (:169) and
+#                                   `start` is taken the line after it returns
+#   timeout <= start + GATE_WITHIN + 1 + one port_open exec
+#            = T_fullsync + 2 + 30 + 1 + exec
+#   SetReady at T_fullsync + 60
+#
+# So the probe's deadline is reached about 33s after the FullSync and the
+# withdrawal is still some 27 seconds away, which is the margin a single
+# `container exec` would have to overrun for the two arms to swap. At the 20s
+# this held until 2026-08-14 the same arithmetic ran the other way - 33 > 20 -
+# and the withdrawal was always already out by the time the deadline was
+# reached, so an agent that never opened its gate was announced as a
+# misconfigured harness: the guard's own message, inverted. Measured that day
+# by driving the loop below against a trace whose port never opens: at 20s it
+# takes the first arm, at 60s the second, and at 5s the first again.
+#
+# The player count assertion that follows may overrun it freely - the only
+# difference is that closed_after reads 0. Generous for the same reason
+# FULL_SYNC_AFTER is: what raising it costs is 40 further seconds of run time,
+# and what it has to stay under is the renewal and the session deadline the
+# stub is started with below, 180s and 240s from the stream opening against a
+# withdrawal now due at 45 + 60 = 105.
+SET_READY_AFTER=60s
 
 # renew-after is 180 rather than the 5 the phases above use, so exactly one
 # stream exists for the whole of this phase. Under a 5s renewal each new stream
 # would start a schedule of its own and the trace would carry a full_sync_sent
 # and a set_ready_sent per stream; nothing about the gate would change, but the
 # three events this phase orders its probes against would stop being one
-# sequence. It has to outlast the SetReady as well as the sync now: a renewal
+# sequence. It has to outlast the SetReady as well as the sync: a renewal
 # landing between them would retire the stream the withdrawal was scheduled on,
 # and the stub would record set_ready_failed on a stream that no longer exists.
+# Counted from the stream opening that is FULL_SYNC_AFTER + SET_READY_AFTER =
+# 45 + 60 = 105 seconds against a renewal at 180, so the margin is 75s; raising
+# either hold past 180 between them is what would break this.
 mkdir -p "$WORK/agent-proxy"
 chmod 0755 "$WORK/agent-proxy"
 "$STUBOP" \
@@ -764,7 +792,19 @@ until port_open "$NAME4" 8081; do
 		# never opened because SET_READY_AFTER was too small for this phase to
 		# get here in time is a harness that measured its own flags; the message
 		# below would blame the agent for it, and blame is what a person reads
-		# first. Assigned rather than tested inline, for the reason count_events
+		# first.
+		#
+		# Which of the two arms a failing run takes is decided by the constants
+		# rather than by the agent, so they are evaluated where SET_READY_AFTER
+		# is set: at GATE_WITHIN=30 this branch is reached about 33s after the
+		# FullSync, against a withdrawal due 60s after it. So an agent that
+		# never opens its gate reaches the arm below this one, and this arm is
+		# what a SET_READY_AFTER of about 33s or less produces - the
+		# misconfiguration it names. Both are reachable; at the 20s
+		# SET_READY_AFTER held until 2026-08-14, only this one was, and every
+		# agent that failed to open its gate was reported as a harness fault.
+		#
+		# Assigned rather than tested inline, for the reason count_events
 		# gives about itself: a failed read has to reach `set -e` as an exit
 		# rather than as a comparison that reads false.
 		withdrawn4="$(count_events set_ready_sent "$EVENTS4")"
