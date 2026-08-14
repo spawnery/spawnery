@@ -412,13 +412,16 @@ fields and conditions clear, and the cold start builds at once.
   `maxStaleSeconds` escalates that retirement to `Draining`, which moves
   players off.
 
-  **This is bounded, and the bound is the floor.** Retirements are not gated —
-  §3.4's rule is right and stays; a retirement stalled behind an unrelated
-  failure is a changeover that stops mid-flight. But `DecideSize` checks
-  capacity before it reaches the retirement branch, so once retirements have
-  pushed `alive` below `minReplicas` the floor term makes `create > 0` and the
-  retirement branch is unreachable. The group settles at its floor rather than
-  emptying. What it does not do is guarantee that nobody is moved: a stalled
+  **This is bounded, and the bound is one below the floor.** Retirements are
+  not gated — §3.4's rule is right and stays; a retirement stalled behind an
+  unrelated failure is a changeover that stops mid-flight. But `DecideSize`
+  checks capacity before it reaches the retirement branch, and the floor term
+  (`in.MinReplicas - alive`) only makes `create > 0` once `alive` is *strictly
+  below* `minReplicas` — one retirement later than "at the floor". So the last
+  retirement still fires with `alive == minReplicas`, and only the pass after
+  that, with `alive` one short, takes the `create > 0` return instead. The
+  group settles at `minReplicas - 1` rather than emptying. What it does not do
+  is guarantee that nobody is moved: a stalled
   changeover under this shape drains part of its old generation with no
   replacement ever created, and an operator should read `Degraded` here as
   "sessions are being moved and not replaced", not as "everything is frozen

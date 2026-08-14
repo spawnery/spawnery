@@ -2275,8 +2275,16 @@ func (f *fixture) failServerNeverReady(t *testing.T, name string) {
 	if got := srv.Status.Phase; got != string(phase.Failed) {
 		t.Fatalf("phase of %s = %q after its startup deadline elapsed, want Failed", name, got)
 	}
+	// This would fail regardless of whether the server was ever Ready: entering
+	// Starting or Failed clears status.readySince unconditionally (the phase
+	// switch in server_controller.go), so a failServer corpse — which did reach
+	// Ready — passes this identically. What actually shows this server was
+	// never Ready is the Starting assertion above and the fact that
+	// phase.Decide's Ready case, the only place that sets readySince, is never
+	// reached: the deadline advance runs out before the ready gate is ever
+	// satisfied.
 	if srv.Status.ReadySince != nil {
-		t.Fatalf("server %s carries status.readySince; it was never Ready and this helper's whole point is that it never was", name)
+		t.Fatalf("server %s carries status.readySince", name)
 	}
 	if srv.Status.FailedAt == nil {
 		t.Fatalf("server %s reached Failed with no status.failedAt; that is the field the count reads", name)
@@ -2664,8 +2672,14 @@ func TestGroupGivesUpOnServersThatNeverBecomeReady(t *testing.T) {
 			continue
 		}
 		corpses++
+		// This would fail regardless of whether the server was ever Ready:
+		// entering Starting or Failed clears status.readySince unconditionally,
+		// so a failServer corpse — which did reach Ready — passes this
+		// identically. What actually establishes that these six were never
+		// Ready is failServerNeverReady's own Starting assertion and the ready
+		// gate its deadline advance never satisfies.
 		if s.Status.ReadySince != nil {
-			t.Errorf("corpse %s carries status.readySince; this test is about servers that were never Ready", s.Name)
+			t.Errorf("corpse %s carries status.readySince", s.Name)
 		}
 	}
 	if live != 0 {
