@@ -492,15 +492,35 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 }
 
 // setStatus writes what is observably true of the group's pods.
+//
+// The two counts deliberately answer different questions about the same pods.
+// readyReplicas is about the ready gate, so it counts only pods the kubelet
+// calls Ready. connectedPlayers is about people, so it counts every pod in the
+// group, ready or not — the CRD calls it "the sum of players across all
+// proxies" and it is a printed column.
 func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod) {
 	var ready int32
 	var players int32
 	for i := range pods {
+		// Outside the readiness guard below, and that placement is the whole
+		// point: a draining proxy is NotReady on purpose and still has the
+		// people this milestone exists to protect on it. Counting only ready
+		// pods reported 0 during exactly the one operation where this field is
+		// the only observable — nothing logs a readiness withdrawal anywhere —
+		// so a real drain printed PLAYERS 0 with somebody in the game.
+		//
+		// The guard never bought anything here in the first place: a pod that
+		// is starting up, or broken, contributes 0 either way, because Lookup
+		// on a pod the registry has not heard from returns a zero count.
+		//
+		// For a pod whose count is stale this reports the last known figure
+		// rather than nothing. That is a better answer than zero, and the
+		// field already had that property for ready pods.
+		players += r.Agents.Lookup(string(pods[i].UID)).Players
 		if !isPodReady(&pods[i]) {
 			continue
 		}
 		ready++
-		players += r.Agents.Lookup(string(pods[i].UID)).Players
 	}
 
 	group.Status.ReadyReplicas = ready

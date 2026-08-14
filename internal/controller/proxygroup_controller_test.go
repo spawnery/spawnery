@@ -1069,6 +1069,60 @@ func TestADrainingProxyWithPlayersIsNotDeleted(t *testing.T) {
 	}
 }
 
+// TestStatusCountsPlayersOnADrainingProxy pins the field this milestone
+// changed the meaning of without editing: status.connectedPlayers, the CRD's
+// "sum of players across all proxies" and the PLAYERS column.
+//
+// A draining proxy is NotReady on purpose — that is the readiness contract —
+// and it still has people on it. Summing only ready pods therefore printed
+// PLAYERS 0 with a person visibly in the game, during the one operation where
+// this number is the only thing an operator can watch: nothing logs a
+// readiness withdrawal anywhere.
+//
+// The survivor carries a player too, so the sum is 1 + 3 rather than 0 + 3 and
+// a fix that swapped the guard for "only count draining pods" fails here as
+// well. readyReplicas is asserted in the same breath because it is the count
+// that must keep the guard: the two numbers answer different questions about
+// the same pods, and moving ready++ out with the sum would make this group
+// claim two ready replicas while one of its pods is out of the Service.
+func TestStatusCountsPlayersOnADrainingProxy(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	survivor, surplus := before[0], before[1]
+	f.reportProxyPlayers(t, survivor, 1)
+	f.reportProxyPlayers(t, surplus, 3)
+
+	// What a kubelet would do on either side of the drain: the survivor's
+	// probe passes, and the draining proxy's agent has closed the port the
+	// probe reads, so its pod is NotReady while its three players play on.
+	f.setPodRunning(survivor.Name, true)
+	f.setPodRunning(surplus.Name, false)
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if _, ok := f.pod(surplus.Name); !ok {
+		t.Fatal("the draining proxy was deleted with three players on it; there is nothing left to count")
+	}
+	group := f.proxyGroup("gateway")
+	if group.Status.ConnectedPlayers != 4 {
+		t.Errorf("status.connectedPlayers = %d, want 4 — the three players on the draining proxy are still playing, "+
+			"and this field is the only place a drain is visible", group.Status.ConnectedPlayers)
+	}
+	if group.Status.ReadyReplicas != 1 {
+		t.Errorf("status.readyReplicas = %d, want 1 — the draining proxy is out of the Service and must not be counted ready",
+			group.Status.ReadyReplicas)
+	}
+}
+
 // TestADrainingProxyIsDeletedOnceEmpty is the other half: the wait ends by
 // itself when the last player leaves, with no deadline involved and nothing
 // for an operator to do.
