@@ -17,10 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +37,39 @@ import (
 	"github.com/spawnery/spawnery/internal/render"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
+
+// recordingFleet is the Fleet double these tests need: it remembers the last
+// readiness asserted for each pod UID, which is exactly what
+// ProxyReadinessSetter's one method commits to. No pre-existing double did
+// this — Task 2's Fleet tests exercise the real proxyreg.Fleet against a live
+// stream, which these envtest-only pod-state tests have no need for.
+type recordingFleet struct {
+	mu   sync.Mutex
+	last map[string]bool
+}
+
+// SetReady implements ProxyReadinessSetter.
+func (f *recordingFleet) SetReady(_ context.Context, podUID string, ready bool) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.last == nil {
+		f.last = map[string]bool{}
+	}
+	f.last[podUID] = ready
+	return nil
+}
+
+// lastReady returns the last readiness asserted for podUID, or nil if none
+// was ever asserted.
+func (f *recordingFleet) lastReady(podUID string) *bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	v, ok := f.last[podUID]
+	if !ok {
+		return nil
+	}
+	return &v
+}
 
 // proxyGroupConfigMap re-reads the ConfigMap a ProxyGroupReconciler renders
 // for the named group.
@@ -83,6 +119,8 @@ func proxyGroupReconciler(f *fixture) *ProxyGroupReconciler {
 			CA: func() []byte { return []byte("test-ca") },
 		},
 		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
+		Proxies:       f.proxies,
+		Clock:         f.clock.Now,
 	}
 }
 
@@ -111,6 +149,29 @@ func (f *fixture) proxyPods(group string) []corev1.Pod {
 		}
 	}
 	return live
+}
+
+// sortPodsOldestFirst orders pods the same way ProxyGroupReconciler.pods
+// orders its own live list — oldest first, ties broken by name — so "the
+// surplus pod" in a test is determined the way the reconciler determines it,
+// not guessed.
+func sortPodsOldestFirst(pods []corev1.Pod) {
+	sort.Slice(pods, func(i, j int) bool {
+		if pods[i].CreationTimestamp.Equal(&pods[j].CreationTimestamp) {
+			return pods[i].Name < pods[j].Name
+		}
+		return pods[i].CreationTimestamp.Before(&pods[j].CreationTimestamp)
+	})
+}
+
+// setProxyReplicas updates spec.replicas on an already-created ProxyGroup.
+func (f *fixture) setProxyReplicas(name string, n int32) {
+	f.t.Helper()
+	group := f.proxyGroup(name)
+	group.Spec.Replicas = n
+	if err := f.c.Update(f.ctx, group); err != nil {
+		f.t.Fatalf("set replicas of %s to %d: %v", name, n, err)
+	}
 }
 
 func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
@@ -504,6 +565,8 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 			CA: func() []byte { return []byte("test-ca") },
 		},
 		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
+		Proxies:       f.proxies,
+		Clock:         f.clock.Now,
 	}
 	f.createProxyGroup("gateway")
 
@@ -520,5 +583,177 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 	if cmIdx >= podIdx {
 		t.Errorf("ConfigMap created at position %d, pod at %d — want the ConfigMap first: "+
 			"a pod's projected volume names it, and does not start if it is missing", cmIdx, podIdx)
+	}
+}
+
+// TestSurplusProxyIsToldToStopTakingConnections proves the operator asserts
+// readiness for every proxy pod, not just the ones being removed: a surplus
+// pod is told ready=false and every survivor is told ready=true, both on the
+// same pass that discovers the surplus.
+func TestSurplusProxyIsToldToStopTakingConnections(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	survivor, surplus := before[0], before[1]
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := f.proxies.lastReady(string(surplus.UID)); got == nil || *got {
+		t.Errorf("the surplus proxy was told ready=%v, want false", got)
+	}
+	if got := f.proxies.lastReady(string(survivor.UID)); got == nil || !*got {
+		t.Errorf("the surviving proxy was told ready=%v, want true", got)
+	}
+}
+
+// deleteSuppressingClient lets everything through except Delete. A pod these
+// tests create never leaves Pending — envtest runs no kubelet to move it any
+// further — and envtest's apiserver does not hold a Pending pod back for its
+// grace period the way it would a Running one: r.Delete removes the object
+// outright, in the same Reconcile call that just patched its draining
+// annotation onto it, before a test could ever read the annotation back.
+// Suppressing the delete is what lets these tests observe what the
+// assertion loop actually wrote, and it is also an honest stand-in for
+// Task 5's behaviour, which will stop deleting a draining pod immediately —
+// exactly what this fake pretends is already true.
+type deleteSuppressingClient struct {
+	client.Client
+}
+
+// Delete implements client.Client by doing nothing.
+func (deleteSuppressingClient) Delete(context.Context, client.Object, ...client.DeleteOption) error {
+	return nil
+}
+
+// TestSurplusProxyIsMarkedWithWhenTheDrainStarted proves the deadline is
+// written down: without it, nothing bounds how long the drain may run.
+func TestSurplusProxyIsMarkedWithWhenTheDrainStarted(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	r.Client = deleteSuppressingClient{Client: r.Client}
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	sortPodsOldestFirst(before)
+	surplusName := before[1].Name
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+
+	surplus, ok := f.pod(surplusName)
+	if !ok {
+		t.Fatalf("surplus pod %s not found", surplusName)
+	}
+	at, ok := surplus.Annotations[ProxyDrainingSinceAnnotation]
+	if !ok {
+		t.Fatal("the surplus proxy carries no draining-since annotation; the deadline has nothing to run from")
+	}
+	if _, err := time.Parse(time.RFC3339, at); err != nil {
+		t.Errorf("draining-since = %q, want RFC 3339: %v", at, err)
+	}
+}
+
+// TestTheMarkIsNotMovedOnLaterPasses proves markDraining's own guard: the
+// deadline runs from the first assertion, and re-stamping it on a later pass
+// would push the deadline forever and the drain would never end.
+//
+// This calls markDraining directly rather than driving two full Reconcile
+// passes over a scaled-down group: reconcileReplicas' own delete loop is
+// unchanged by this task, so the surplus pod envtest leaves behind carries a
+// deletion timestamp, and ProxyGroupReconciler.pods excludes anything
+// terminating from every pass after the one that deleted it — a second
+// Reconcile would never revisit it regardless of whether the guard existed,
+// which would make that version of this test pass even after the mutation in
+// Step 6. Calling markDraining directly — the exact call reconcileReplicas
+// itself makes once per live pod per pass — is what actually exercises "on a
+// later pass" here, and the pod is re-read from the API server between the
+// two calls so the guard reacts to what was actually persisted.
+func TestTheMarkIsNotMovedOnLaterPasses(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) == 0 {
+		t.Fatal("no proxy pods to drain")
+	}
+	name := pods[0].Name
+
+	pod, ok := f.pod(name)
+	if !ok {
+		t.Fatalf("pod %s not found", name)
+	}
+	if err := r.markDraining(f.ctx, pod, true); err != nil {
+		t.Fatalf("markDraining: %v", err)
+	}
+	first := pod.Annotations[ProxyDrainingSinceAnnotation]
+	if first == "" {
+		t.Fatal("markDraining did not stamp the annotation")
+	}
+
+	f.clock.Advance(time.Minute)
+
+	pod, ok = f.pod(name)
+	if !ok {
+		t.Fatalf("pod %s not found on the later pass", name)
+	}
+	if err := r.markDraining(f.ctx, pod, true); err != nil {
+		t.Fatalf("markDraining on the later pass: %v", err)
+	}
+	if got := pod.Annotations[ProxyDrainingSinceAnnotation]; got != first {
+		t.Errorf("draining-since moved from %q to %q", first, got)
+	}
+}
+
+// TestACancelledScaleDownPutsTheProxyBack proves readiness is derived, not
+// remembered: an operator restart, or simply a later pass, recomputes which
+// pods are surplus from scratch, so a scale-down that is reversed before the
+// surplus pod is actually gone corrects itself with nothing left to clean
+// up.
+//
+// It uses deleteSuppressingClient for the same reason
+// TestSurplusProxyIsMarkedWithWhenTheDrainStarted does: reconcileReplicas'
+// delete loop is unchanged by this task and would otherwise remove the
+// surplus pod outright in the very reconcile that marks it, leaving no
+// object for the "scale back up" pass to correct. Suppressing the delete
+// keeps the same pod in play, which is what actually exercises "derived,
+// not remembered" rather than a coincidence of a fresh pod happening to
+// start out ready.
+func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	r.Client = deleteSuppressingClient{Client: r.Client}
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	sortPodsOldestFirst(before)
+	surplus := before[1]
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+
+	f.setProxyReplicas("gateway", 2)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pod, ok := f.pod(surplus.Name)
+	if !ok {
+		t.Fatalf("pod %s not found after the scale-down was cancelled", surplus.Name)
+	}
+	if got := f.proxies.lastReady(string(pod.UID)); got == nil || !*got {
+		t.Errorf("the proxy was told ready=%v after the scale-down was cancelled, want true", got)
+	}
+	if _, ok := pod.Annotations[ProxyDrainingSinceAnnotation]; ok {
+		t.Error("the draining-since annotation outlived the drain")
 	}
 }

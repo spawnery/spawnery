@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"time"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -237,4 +239,27 @@ type ProxyGroupList struct {
 
 func init() {
 	SchemeBuilder.Register(&ProxyGroup{}, &ProxyGroupList{})
+}
+
+// defaultProxyDrainTimeout is how long a proxy may take to empty before it is
+// removed anyway.
+//
+// Five minutes rather than the sixty seconds a ServerGroup uses, because the
+// two waits are not the same wait. A server drain moves its players to another
+// backend, which is quick; a proxy drain has nowhere to move them — the
+// client's connection terminates at the proxy being removed — so this waits
+// for people to leave on their own. There is no honest default: a play session
+// runs to tens of minutes, so every number short of that disconnects somebody.
+// Five minutes lets a scale-down in a quiet period finish without kicks while
+// still bounding a deploy. An operator who cares about this should set
+// spec.drain.timeoutSeconds.
+const defaultProxyDrainTimeout = 300 * time.Second
+
+// DrainTimeout is how long existing sessions may run out before a proxy being
+// removed is deleted anyway.
+func (g *ProxyGroup) DrainTimeout() time.Duration {
+	if g.Spec.Drain == nil || g.Spec.Drain.TimeoutSeconds < 1 {
+		return defaultProxyDrainTimeout
+	}
+	return time.Duration(g.Spec.Drain.TimeoutSeconds) * time.Second
 }

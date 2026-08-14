@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -40,6 +41,25 @@ import (
 	"github.com/spawnery/spawnery/internal/render"
 )
 
+// ProxyDrainingSinceAnnotation records when the operator first asked a proxy
+// pod to stop taking connections, as an RFC 3339 timestamp.
+//
+// It is on the pod because that is the only per-pod place that survives an
+// operator restart: a proxy has no CR of its own, and the ProxyGroup's status
+// is per group. Everything else about a drain is re-derived every pass — which
+// pods are surplus, and therefore what readiness each should have — so this is
+// the only thing that has to be written down.
+const ProxyDrainingSinceAnnotation = "spawnery.cloud/draining-since"
+
+// ProxyReadinessSetter is how the ProxyGroup controller tells one proxy pod
+// whether it should be taking connections. *proxyreg.Fleet satisfies it; the
+// narrow interface — not the concrete type — mirrors why Registrar exists for
+// the Server controller's wider write surface, and keeps this file's only
+// dependency on proxyreg to the one method it actually calls.
+type ProxyReadinessSetter interface {
+	SetReady(ctx context.Context, podUID string, ready bool) error
+}
+
 // NewProxyName builds a unique proxy pod name below the group prefix. Same
 // generator and same alphabet as NewServerName: a proxy has no CR of its own,
 // so the pod name is the only handle anyone has on it, and it has to be as
@@ -49,10 +69,13 @@ func NewProxyName(group string) string { return NewServerName(group) }
 // ProxyGroupReconciler keeps a proxy group at its replica count, keeps its
 // Service in step, and publishes where players connect.
 //
-// Unlike ServerGroupReconciler it manages pods directly. Proxies are fungible:
-// there is no per-proxy object, no state machine, and nothing to drain on the
-// operator's side — a proxy's own agent moves its players, and that is
-// milestone 4.
+// Unlike ServerGroupReconciler it manages pods directly. Proxies are
+// fungible: there is no per-proxy object and no state machine. Draining one
+// is only the readiness contract — telling a surplus pod's own agent to stop
+// taking connections and dating when that started — not a wait: the pod is
+// still deleted immediately in reconcileReplicas, exactly as before this
+// existed. Making deletion wait for the drain to actually finish belongs to
+// a later task.
 //
 // It emits no Kubernetes events: this milestone's only visible signal is the
 // Accepted condition, and events for pod creation or deletion are additional
@@ -71,6 +94,12 @@ type ProxyGroupReconciler struct {
 	Bootstrap *Bootstrapper
 	// AgentEndpoint is the address the in-game agent dials.
 	AgentEndpoint string
+	// Proxies is how a surplus proxy is told to stop taking connections, and
+	// a proxy that is no longer surplus is told to resume. See
+	// ProxyReadinessSetter.
+	Proxies ProxyReadinessSetter
+	// Clock is injectable so the drain deadline is testable.
+	Clock func() time.Time
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
@@ -211,10 +240,48 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 			return err
 		}
 	}
+
+	// The desired readiness is derived, not remembered: this loop already
+	// knows which pods are surplus, so it asserts the answer for every pod on
+	// every pass. An operator restart recomputes the same thing, and a
+	// cancelled scale-down corrects itself without anything to clean up.
+	for i := range pods {
+		surplus := i >= int(group.Spec.Replicas)
+		if err := r.Proxies.SetReady(ctx, string(pods[i].UID), !surplus); err != nil {
+			return err
+		}
+		if err := r.markDraining(ctx, &pods[i], surplus); err != nil {
+			return err
+		}
+	}
+
 	for i := len(pods) - 1; i >= int(group.Spec.Replicas); i-- {
 		if err := r.Delete(ctx, &pods[i]); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
+	}
+	return nil
+}
+
+// markDraining writes or removes the annotation that dates a proxy's drain.
+//
+// Written once and never moved: the deadline runs from the first assertion,
+// and re-stamping it on every five-second pass would push it forever and the
+// drain would never end.
+func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod, draining bool) error {
+	_, marked := pod.Annotations[ProxyDrainingSinceAnnotation]
+	switch {
+	case draining && !marked:
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[ProxyDrainingSinceAnnotation] = r.Clock().UTC().Format(time.RFC3339)
+		return r.Patch(ctx, pod, patch)
+	case !draining && marked:
+		patch := client.MergeFrom(pod.DeepCopy())
+		delete(pod.Annotations, ProxyDrainingSinceAnnotation)
+		return r.Patch(ctx, pod, patch)
 	}
 	return nil
 }

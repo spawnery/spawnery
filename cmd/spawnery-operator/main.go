@@ -254,6 +254,7 @@ func main() {
 			CA:     provider.CABundle,
 		},
 		AgentEndpoint: agentEndpoint(operatorNamespace),
+		Proxies:       proxies,
 	}); err != nil {
 		setupLog.Error(err, "unable to set up controllers")
 		os.Exit(1)

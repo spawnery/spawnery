@@ -46,6 +46,12 @@ type Options struct {
 	// AgentEndpoint is the address the in-game agent dials to reach the
 	// operator's gRPC endpoint.
 	AgentEndpoint string
+	// Proxies is how the ProxyGroup controller tells a surplus proxy to stop
+	// taking connections. Optional: a nil value leaves the ProxyGroup
+	// controller unable to set readiness, which is only safe for tests that
+	// never reconcile a ProxyGroup — the production binary always supplies
+	// the real *proxyreg.Fleet.
+	Proxies ProxyReadinessSetter
 }
 
 // Leader election locks on a Lease in the operator's own namespace. It is not
@@ -105,6 +111,8 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		Agents:        opts.Agents,
 		Bootstrap:     opts.Bootstrapper,
 		AgentEndpoint: opts.AgentEndpoint,
+		Proxies:       opts.Proxies,
+		Clock:         opts.Clock,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup proxy group controller: %w", err)
 	}
