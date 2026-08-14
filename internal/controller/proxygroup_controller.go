@@ -559,13 +559,17 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 		// the only observable — nothing logs a readiness withdrawal anywhere —
 		// so a real drain printed PLAYERS 0 with somebody in the game.
 		//
-		// The guard never bought anything here in the first place: a pod that
-		// is starting up, or broken, contributes 0 either way, because Lookup
-		// on a pod the registry has not heard from returns a zero count.
+		// The case the guard was written for is unaffected: a pod that is
+		// starting up has told the registry nothing, and Lookup returns a zero
+		// count for a pod it has not heard from, so it contributes 0 whether
+		// the guard is here or not.
 		//
-		// For a pod whose count is stale this reports the last known figure
-		// rather than nothing. That is a better answer than zero, and the
-		// field already had that property for ready pods.
+		// The case that does change is a pod whose count is stale — an agent
+		// that died with people on it, say. That one now contributes its last
+		// known figure rather than nothing, which is a better answer than
+		// zero and is the property this field already had for ready pods.
+		// Both the drain event and status.connectedPlayers are last-reported
+		// numbers, not measurements, and neither can be more than that.
 		players += r.Agents.Lookup(string(pods[i].UID)).Players
 		if !isPodReady(&pods[i]) {
 			continue
