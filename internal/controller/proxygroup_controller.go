@@ -300,12 +300,16 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// read through the manager's cached client: a reconcile triggered by its
 	// own create can run again before that create is visible, see the group
 	// still short by the same count, and decide to create it a second time.
-	// Unlike a Server's name, NewProxyName draws a fresh random suffix on every
-	// call (see NewServerName), so the race described above is not a retry of
-	// the name already in flight -- apierrors.IsAlreadyExists below has
-	// nothing to catch, because the second create asks for a different,
-	// genuinely distinct pod for the slot the first one already fills. key is
-	// namespace-qualified: see the comment on pods() for why.
+	// NewProxyName is NewServerName by direct delegation, so it draws the same
+	// fresh crypto/rand suffix on every call: the race described above is not
+	// a retry of the name already in flight -- apierrors.IsAlreadyExists below
+	// has nothing to catch, because the second create asks for a different,
+	// genuinely distinct pod for the slot the first one already fills. The
+	// real asymmetry with ServerGroupReconciler.createServer is elsewhere: it
+	// treats any Create error as fatal, where the loop below tolerates
+	// AlreadyExists -- a difference in error handling, not in how the two
+	// names are generated. key is namespace-qualified: see the comment on
+	// pods() for why.
 	//
 	// The correction is arithmetic, not a bare gate: capping at zero the
 	// moment anything is pending would also block a create the group still

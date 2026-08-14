@@ -326,14 +326,17 @@ func TestProxyGroupAddressComesFromAReadyPodsHostIP(t *testing.T) {
 // create already reserved and not yet visible in the list must not be created
 // again.
 //
-// A real cache lag cannot be staged here: the fixture's client talks straight
-// to envtest's API server (testenv.Client), so every List call this
-// reconciler makes already reflects true state and DecideRollout would never
-// see a short count on its own. Seeding the reservation directly is the same
-// state a lagging informer cache would produce -- Expectations believes a pod
-// exists under a name pods() cannot find, because nothing by that name was
-// ever actually created -- without depending on real cache timing that this
-// package's envtest suite cannot control.
+// The reservation here is a phantom -- a name no pod will ever carry --
+// rather than a real generated one, and that is deliberate: a full Reconcile
+// calls pods() twice (once before reconcileReplicas, once after for status),
+// and testenv's client talks straight to envtest's API server with no
+// informer cache in front of it, so a real reservation made during
+// reconcileReplicas would already be observed and cleared by that second
+// pods() call before this function returns. A phantom name is what stays
+// pending across both listings, which is what this test needs to observe the
+// cap actually subtract. TestProxyGroupReconcileReplicasReservesTheRealPodItCreated
+// below is the complementary test: it stops between the two pods() calls and
+// checks the real name, real key chain this one does not exercise.
 func TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -349,6 +352,56 @@ func TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown(t *testing.
 	if n := len(f.proxyPods("gateway")); n != 1 {
 		t.Errorf("proxy pods = %d, want 1: the phantom reservation should have "+
 			"cut DecideRollout's Create: 2 down by the one already pending", n)
+	}
+}
+
+// TestProxyGroupReconcileReplicasReservesTheRealPodItCreated exercises the
+// reservation's whole lifecycle with a name the API server actually assigned:
+// expectCreated fires with the pod's real generated name under the real
+// composite key, and that reservation is still pending immediately
+// afterward.
+//
+// Not driven through f.reconcileProxyGroup / a full Reconcile: Reconcile
+// calls pods() twice (once before reconcileReplicas, once after for status),
+// and both calls run observePods. With testenv's non-cached client and
+// reconcileReplicas completing without error -- the path both this test and
+// the one below take -- the second pods() call sees the very pods
+// reconcileReplicas just created and clears their reservations before
+// Reconcile returns, so a full Reconcile on that path cannot catch a
+// reservation mid-flight, real name or not. That is why
+// TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown above has
+// to use a name that can never appear in the API server: the real window this
+// test targets sits strictly between the two pods() calls, and on the
+// no-error path is only reachable by calling pods() and reconcileReplicas()
+// directly and reading pending() before anything else runs.
+func TestProxyGroupReconcileReplicasReservesTheRealPodItCreated(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway") // replicas: 2
+
+	pods, err := r.pods(f.ctx, group)
+	if err != nil {
+		t.Fatalf("pods: %v", err)
+	}
+	if len(pods) != 0 {
+		t.Fatalf("pods before any reconcile = %d, want 0", len(pods))
+	}
+	if err := r.reconcileReplicas(f.ctx, f.network, group, pods); err != nil {
+		t.Fatalf("reconcileReplicas: %v", err)
+	}
+
+	created := f.proxyPods("gateway")
+	if len(created) != 2 {
+		t.Fatalf("proxy pods created = %d, want the group's 2 replicas", len(created))
+	}
+
+	key := f.ns + "/gateway"
+	pendingCreates, _, _ := r.Expectations.pending(key)
+	if pendingCreates != int32(len(created)) {
+		t.Errorf("pending creates = %d, want %d: reconcileReplicas must reserve "+
+			"every pod it actually created, under that pod's real generated name "+
+			"and the real composite key -- not a name or key this test made up",
+			pendingCreates, len(created))
 	}
 }
 
