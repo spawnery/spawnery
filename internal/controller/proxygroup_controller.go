@@ -172,8 +172,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			fmt.Sprintf("Network %q does not exist", group.Spec.NetworkRef.Name))
 		// This group still exists, so nothing above forgets it -- but this
 		// return is before r.pods() and reconcileReplicas, so no observe call
-		// for it is coming on this pass either. See the comment on
-		// readinessDivergence.observe for why forgetting, not a TTL, is the
+		// for it is coming on this pass either. See the comment on the
+		// readinessDivergence type for why forgetting, not a TTL, is the
 		// right response to a gap in observation.
 		r.Divergence.forget(group.Namespace + "/" + group.Name)
 		return ctrl.Result{RequeueAfter: networkRetryInterval}, r.writeStatus(ctx, group)
@@ -228,6 +228,11 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	// A snapshot from before this pass's own creates: reconcileReplicas may
+	// create pods below, but pods itself is not refreshed to include them, so
+	// its per-pod logic -- the readiness assertion loop and the divergence
+	// check riding along with it -- sees a newly created pod for the first
+	// time on the pass after this one, not this one.
 	pods, err := r.pods(ctx, group)
 	if err != nil {
 		return ctrl.Result{}, err

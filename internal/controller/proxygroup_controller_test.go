@@ -1715,13 +1715,11 @@ func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
 	r.Recorder = rec
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
-	// The pods this pass creates are not in the list reconcileReplicas reads
-	// its readiness assertions from -- that list is fetched once at the top
-	// of Reconcile, before this pass's own creates land -- so a second pass
-	// is what first puts them through the divergence check at all. Without
-	// it, the clock advance below would land before the pods' first sight
-	// rather than after, and the test would pass whether or not the scope
-	// decision held.
+	// A second pass is required before the pods this one created reach the
+	// divergence check at all -- see the comment on Reconcile's pods, err :=
+	// r.pods(ctx, group) call. Without it, the clock advance below would land
+	// before the pods' first sight rather than after, and the test would
+	// pass whether or not the scope decision held.
 	f.reconcileProxyGroup(r, "gateway")
 
 	// Neither pod is ever marked ready, and neither is asked to drain: both
