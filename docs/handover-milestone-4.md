@@ -404,6 +404,205 @@ while the meaning of the state it filters on moves underneath it. Both were
 found by reading a description against what the code had come to do. Neither
 was found by a test.
 
+## 4c-2 has landed
+
+4c-2 (proxy rolling updates, 2026-08-15) makes a `ProxyGroup` whose spec
+changes replace its own proxies: the operator brings up a proxy of the new
+shape, waits for it to be `Ready`, then withdraws readiness from one old one —
+and from there 4c-1's contract runs unchanged. The pod goes `NotReady`, the
+`Service` drops its endpoint, the players already on it keep playing until they
+leave, and `spec.drain.timeoutSeconds` bounds the wait. **4c-2 adds nothing to
+the drain; it creates one from a new occasion.** Everything it had to get right
+is upstream of the drain: which pods are out of date, which one goes next, and
+when. What follows is what it built and what 4c-3 now finds in place.
+
+- **Staleness is a digest of the rendered pod.** `podspec.DesiredProxyHash`
+  renders the pod the operator
+  would build for this group right now — with the pod's name held empty, so
+  nothing derived from the name reaches the digest — serialises it with
+  `encoding/json`, which sorts map keys so labels and annotations do not flap
+  between passes, and takes a SHA-256 prefix of that. `BuildProxyPod` stamps
+  the result on every proxy pod it builds as `spawnery.cloud/pod-hash`
+  (`podspec.LabelPodHash`); a pod whose label differs from the current digest is
+  stale. Hashing the rendered output rather than a hand-picked field list is
+  what stops someone adding a spec field that shapes a pod and forgetting to
+  make it roll — the defect class this repository has counted repeatedly, a
+  claim outliving the code beneath it. It buys that at two costs, both recorded
+  under "From milestone 4c-2" in `known-issues.md` and both worth reading before
+  this is relied on: a change to the rendering code, or to the operator's own
+  namespace, moves the digest for every group with no spec edited at all and
+  the next upgrade rolls the fleet; and the guarantee reaches exactly as far as
+  the pod does, so the two `spec.config` fields that land only in the group's
+  ConfigMap — `motd` and `onlineMode` — change nothing about a running proxy,
+  while `spec.drain.timeoutSeconds`, which reaches the pod as
+  `terminationGracePeriodSeconds`, rolls the whole group.
+- **`metadata.generation` was deliberately not reused, and the reason is
+  specific to proxies.** 4b's rule is on the record above and in
+  `known-issues.md`: the generation moves on every edit, so tuning a scaling
+  knob replaces a group of functionally identical servers. On a `ProxyGroup`,
+  `replicas` is the routine edit, so that rule would turn every scale-up and
+  scale-down into a full replacement with a drain deadline behind each pod.
+  Scaling a proxy group had to stay scaling.
+- **`DecideRollout` (`internal/controller/rollout.go`) sizes and replaces in one
+  pure function**, over `[]ProxyView`, in the shape `DecideSize` established in
+  4a and `phase.Decide` before it. The reconciler carries the answer out and
+  makes none of it. The target is `replicas + surge`, where `surge` is 1 while
+  any pod is stale, and then four rules in order: create the difference if there
+  are fewer pods than the target; mark nothing further if anything is already
+  draining; mark the surplus if there are more pods than the target; otherwise,
+  if stale pods remain and the group has a ready pod to spare, mark one stale
+  pod.
+- **`surge` stays 1 while a *marked* pod still exists, and what that buys is
+  the create branch, not the mark.** The temptation is to drop the surge the
+  moment a pod is marked, on the reasoning that the replacement has been
+  decided. Do not, and the reason is worth deriving rather than repeating,
+  because the design's own reason for it is not the one that bites in the code
+  as it shipped. §3.2 argues that dropping the surge leaves the group at
+  `replicas + 1` against a target of `replicas`, so the surplus rule marks a
+  second pod and the whole group drains at once — but the rules ship with the
+  one-at-a-time guard *ahead* of the surplus rule, so that path is already
+  closed by the guard. What is not closed is the create branch, which is
+  checked before the guard: with the surge dropped, a group whose surge pod
+  **dies while the old one is still draining** stands at `replicas` pods
+  against a target of `replicas`, builds no replacement, and then drops to
+  `replicas - 1` ready the moment the draining pod goes. Surge outliving the
+  mark is what rebuilds it in place instead.
+  `TestDecideRollout`'s "the surge pod dying mid-drain is replaced, because
+  surge outlives the mark" is that case exactly. What advances the cycle either
+  way is 4c-1's deletion loop removing the drained pod, when it is empty or when
+  its deadline expires; until then the guard returns early and the pass decides
+  nothing else.
+- **Ready capacity is what the gate measures, not generation.** The last rule
+  waits on `readyBeyond`: the group holds more ready, non-draining pods than
+  `replicas`, counting stale and current alike. The design's §3.2 phrased that
+  rule as "a current-generation pod beyond `replicas` is `Ready`", and it
+  shipped the wider way on purpose — what protects a player is a ready proxy,
+  and which generation supplies it does not change that. It also matters for a
+  reverted spec, where the pod holding the spare capacity can be the stale one.
+- **The annotation is now the carrier of intent, and position carries
+  nothing.** 4c-1's loops walked the tail by index (`for i := len(pods)-1; i >=
+  replicas`), which cannot express "this particular pod is out of date" — a
+  stale pod may be the oldest in the group. `spawnery.cloud/draining-since` is
+  now the marker both loops derive from: the readiness loop asserts
+  `SetReady(!draining)` per pod, and the deletion loop iterates the pods
+  carrying the mark in any order, applying 4c-1's rule unchanged. A surplus pod
+  and a stale pod became the same case, distinguished only by what caused the
+  mark. This removed a coupling rather than adding a mechanism, and it is the
+  part of 4c-2 most worth knowing before touching this file: after it, nothing
+  about a pod's fate depends on where it sits in a sorted list.
+- **The marks are re-derived every pass, and holding one across passes is
+  arithmetic, not memory.** `DecideRollout` names nobody while another pod is
+  draining, so a mark made last pass has to be kept by the reconciler or it
+  would be cancelled and re-made on alternate passes — and each cancellation
+  deletes the annotation, so the deadline would restart from zero forever. A
+  stale pod's mark is kept per pod, because a stale pod has to go whatever else
+  is true. Being *surplus* is not a property of any pod at all: it is one number
+  short of another, so asking each marked pod "is the group over its count?"
+  gives every one of them the same answer, and a group that lowered `replicas`
+  twice and then raised them partway would keep every mark it ever made. The
+  count kept is `len(views) - staleMarks - replicas`, and it subtracts stale
+  *marks* rather than stale pods, because a stale pod nobody has marked is still
+  serving. `TestARevertedSpecChangeKeepsTheMarkItAlreadyMade` pins the one state
+  where those two counts come apart — a spec change reverted while a proxy is
+  draining for it, after which the marked pod matches the spec again and the
+  surge pod does not.
+- **One selection rule now serves every reason a pod goes** (`pick`, in
+  `rollout.go`): stale before current, because a stale pod has to go regardless
+  and taking a current one first would drain two pods for one replacement; then
+  fewest players, because the emptiest finishes soonest and disconnects fewest
+  people at the deadline; with an untrusted count sorting last, on the
+  repository's own occupancy rule — a pod whose agent stream is down may hold
+  players nobody can see, so unknown counts as occupied. It replaced 4c-1's
+  scale-down rule as well, and that is a behaviour change worth stating
+  outright: **lowering `replicas` no longer necessarily removes the newest
+  pod.** With one player on the newer of two proxies and both counts trusted,
+  the pod that goes is the older, empty one.
+- **The age tie-break points the way it does for a reason, and no envtest test
+  can see it.** Age breaks what the counts leave, newest first. That is not
+  symmetry and it is not arbitrary: it is the same guess 4c-1's rule was making,
+  that an older proxy has had longer to collect players. The guess is worth
+  nothing between two known counts, and it is the only thing there is when every
+  count is untrusted — an operator that has just restarted, or a fleet whose
+  agent streams are all down. Marking the oldest there picks the pod most likely
+  to be occupied, which then reads as occupied, which holds the drain open to
+  the full deadline before disconnecting whoever was on it. **No envtest test
+  here can catch a reversal of that clause**, by construction: envtest creates
+  a group's pods within one second of each other, `CreationTimestamp` has
+  second resolution, so they tie, the comparator's last clause does not fire,
+  and `sort.SliceStable` falls through to list order. What pins the direction
+  is `TestDecideRollout`'s table, in two subtests — "equal counts break by age,
+  newest first" and "untrusted counts all round still take the newest".
+  Somebody who flips the clause on symmetry grounds, runs the cluster-level
+  suite, and sees nothing break there is reintroducing a real defect with a
+  green run behind them.
+- **One at a time is a property of replacement, not of scaling.** Master design
+  §6.6's "one at a time" governs *replacement*, and `DecideRollout`'s
+  one-at-a-time guard is what implements it. A lowered `replicas` asked for all
+  the surplus pods to go, and the surplus rule marks all of them on one pass —
+  several proxies then drain simultaneously, each on its own deadline. That was
+  4c-1's behaviour, it is unchanged, and nothing in this milestone narrows it;
+  it is written down here because nobody had written it down.
+- **`ReadinessDiverged` reports; it does not repair.** The operator already held
+  both the readiness it asserted and the pod's own `Ready` condition in one
+  loop, and 4c-1's whole-branch review left closing that loop as 4c-2's to take
+  if it wanted it. It took it, as far as reporting.
+  `ConditionReadinessDiverged` (`api/v1alpha1/common_types.go`) is true while at
+  least one pod has disagreed for longer than `readinessDivergenceGrace` — 60
+  seconds, a constant, chosen to clear both known delays with margin: the
+  kubelet needs 10–15s to flip a condition (period 5s × failure threshold 3),
+  and `Fleet.Resync` re-asserts every 30s. One `Warning` on the false→true
+  flank, compared the way `ScalingLimited` does it. Repair was considered and
+  rejected rather than skipped: 4c-1's `Resync` already re-sends the last
+  asserted readiness every tick, so a divergence caused by a lost message heals
+  itself within one interval. What survives that is an agent that received the
+  withdrawal and did not act on it — a broken build, a leaked socket — and
+  re-sending does not fix it. Being told, before the deadline disconnects people
+  from a proxy that never stopped taking them, is what is actually useful there.
+- **The condition shipped narrower than the design's letter, deliberately.**
+  Design §3.6 says the condition is true when actual readiness "has disagreed
+  with" the asserted value, unqualified — both directions. It ships covering
+  only the withdrawal direction: asserted `false`, pod still `Ready`. The
+  reverse would have been a misdiagnosis rather than noise. Every non-draining
+  pod is asserted `SetReady(true)` from the moment it exists, before any kubelet
+  has probed it once, so a proxy pulling this repository's own images — the
+  Paper one is measured at 735 MB as a tarball under "From milestone 2b" in
+  `known-issues.md`, and the Velocity one is built the same way — onto a cold
+  node trips the 60-second grace and gets named in a `Warning` saying the agent
+  heard the instruction and did not act, when it is starting up and has
+  disobeyed nothing. That direction already has a better diagnosis elsewhere:
+  the group sits below its ready count, and "a proxy that cannot bind its ready
+  port is silent on the CR" — an entry in both `known-issues.md`'s "From
+  milestone 3c" section and in this document's own "What 3c leaves open,
+  briefly" —
+  is the diagnosis that direction actually needs. Widening the condition later
+  means solving the cold-start case first, not deleting a clause.
+- **`readinessDivergence` is per group and holds no TTL**, unlike
+  `expectations`. An entry measures how long a pod diverged *while something was
+  watching*, so a pass that does not observe a group voids its measurement
+  rather than letting a stale first-seen timestamp survive the gap and fire the
+  moment observation resumes. `Reconcile`'s three steady-state early returns
+  therefore call `forget` explicitly. The error returns above `reconcileReplicas`
+  leave the same shape and do not — `known-issues.md` records that, and the
+  structural fix that would make the type enforce it, as a deferred decision.
+- **`expectations` now covers the proxy create path**, closing the half of a
+  milestone-4 precondition that 4a left open — `known-issues.md`'s
+  "`ProxyGroupReconciler.pods()` has no expectations tracking", which 4a closed
+  for `ServerGroup` and left the rest to 4c. `observePods` is a second, narrow
+  method beside `observe`
+  rather than a generic one — a proxy has no per-pod CR and so no retire
+  reservation, and two small methods that each read clearly beat one that has to
+  explain an absent third case to half its callers. The correction is arithmetic
+  and sits on `DecideRollout`'s answer (`create = decision.Create -
+  pendingCreates`, floored at zero) rather than inside it, so `rollout.go`'s
+  sizing still knows nothing about reservations. This mattered more after 4c-2
+  than before: a rollout creates a pod per replacement rather than only at
+  scale-up, so the create path races the informer cache as a matter of course.
+- **4c-3's node drain depends on none of this.** It drains *servers*, which has
+  worked since 4b, and nothing in the operator reads `Node` objects yet. The
+  contract 4c-1 added is untouched here — no wire change, no new CRD field, and
+  `make agent-test` needed no extension — so what 4c-3 finds is exactly what 4c-1
+  left it, plus a proxy group that now replaces its own pods.
+
 ## The evidence run
 
 `docs/runbook-milestone-3-evidence.md` was run against a real `kind` cluster

@@ -822,6 +822,20 @@ reconcile delete the surplus once the cache catches up. This now belongs to
 4c, the milestone that makes proxy replica counts move: the mechanism to copy
 already exists in `expectations.go`, so 4c does not have to design it again.
 
+*Met* by milestone 4c-2, which copied it rather than designing it again, as
+this entry expected. `ProxyGroupReconciler` now carries an `Expectations`
+field, `pods()` observes the group's live pod list through
+`expectations.observePods` — a second, narrow method beside `observe`, because
+a proxy has no per-pod CR and therefore no retire reservation to model — and
+`reconcileReplicas` subtracts what is already reserved from `DecideRollout`'s
+create count and reserves each create and delete it carries out. The
+subtraction is arithmetic rather than a bare gate, matching what
+`ServerGroupReconciler.size` does through `DecideSize`: capping at zero the
+moment anything is pending would also block a create the group still
+legitimately needs beyond the one already reserved. 4c-2 is also what made the
+race ordinary rather than rare, since a rollout creates a pod per replacement
+instead of only at scale-up.
+
 **Orphaned `Server`s without a pod.** The sweep covers "pod without CR" and
 "server without group", but not "CR without pod": that is handled by the state
 machine through `PodLost`, which only applies once `status.podName` has been
@@ -1203,6 +1217,162 @@ shell milestone 3 was actually run in. The 4c-1 measurement is about `pkill -f`,
 which signals only the process it matched, and it does not settle the other
 case — evidence consistent with a conclusion is not evidence that establishes
 it, which is a lesson this milestone learned three separate times.
+
+## From milestone 4c-2 (proxy rolling updates)
+
+**Upgrading the operator can roll every proxy in the cluster, with nobody
+having edited a spec.** This is the accepted cost of the decision
+`docs/superpowers/specs/2026-08-14-proxy-rolling-updates-design.md` §3.1 made:
+a proxy pod is stale when its `spawnery.cloud/pod-hash` label differs
+from a digest of the pod the operator *would* render for its group right now
+(`podspec.DesiredProxyHash`), and that digest is taken over the rendered pod
+rather than over a chosen list of spec fields. So a change to the **rendering
+code** — a new default in `internal/podspec`, an added environment variable, a
+renamed label — moves the digest for every `ProxyGroup` in the cluster while
+every spec stays byte for byte what it was. The next operator upgrade then
+finds the whole fleet stale and rolls it.
+
+**What that looks like from outside.** Every group starts replacing its proxies
+within a reconcile of the new operator coming up, each group one pod at a time,
+all groups at once — nothing serialises a roll across groups. The group's own
+status is the wrong place to look for it: the surge pod comes up before any old
+pod is withdrawn, so `readyReplicas` holds at `replicas` and the phase reads
+`Ready` throughout, exactly as it does when nothing is happening. What says so
+is the pod label:
+
+```bash
+kubectl get pods -n <ns> -l spawnery.cloud/role=proxy -L spawnery.cloud/pod-hash
+```
+
+`-L` prints the label's value as a column of its own. Two distinct values
+inside one group means that group is mid-roll; one value everywhere means it is
+done or never started. Each replaced pod then runs 4c-1's drain unchanged —
+the players on it keep playing and are
+disconnected only if they are still there when `spec.drain.timeoutSeconds`
+elapses (300 seconds by default), with the same one `Warning ProxyDrainTimeout`
+event per pod naming what it cost. A busy fleet upgraded at peak therefore
+disconnects, per group, whoever is still on each proxy at each deadline.
+
+**What to do about it.** Two things, and the first is the one worth planning
+around:
+
+- **Find out in advance whether the digest moved**, because the label is
+  computable before the upgrade rather than only observable during it. Run the
+  new build against a scratch cluster over the same manifests and compare the
+  `pod-hash` it stamps on a fresh pod with the value the running pods carry. It
+  has to be the *same* manifests to mean anything: the digest covers the
+  rendered pod, so the group's namespace and name, the `Network`'s name, and
+  the operator's own `--operator-namespace` (see the next bullet) all reach it,
+  and a comparison run under different ones tells you nothing about your fleet.
+- **`spec.drain.timeoutSeconds` is the knob that bounds the damage**, and it is
+  read from the current spec on every pass, so raising it on a group already
+  rolling extends the drains still in flight. Raising it does not prevent a
+  disconnection, it buys the people on each proxy more time to leave on their
+  own; lowering it during a roll expires the drain in flight and disconnects
+  them sooner.
+
+**A second trigger for the same hazard, which nobody would guess from the
+spec.** The `agentEndpoint` handed to the renderer feeds the digest, and it is
+derived from the operator's own namespace —
+`spawnery-operator.<operator-namespace>.svc:9443`, from `agentEndpoint()` in
+`cmd/spawnery-operator/main.go`. Moving the operator to a different namespace,
+or restarting it with a different `--operator-namespace` (or `POD_NAMESPACE`),
+therefore moves the digest for every group in the cluster and rolls the whole
+fleet, with no image, no rendering change and no spec edit involved. Milestone
+6's Helm chart is the first thing that makes that a routine operation.
+
+**Why 4c-2 took this trade rather than 4b's.** The entry under "From milestone
+4b" above records the other side of it: `metadata.generation` moves on every
+edit, so for a `ServerGroup` "any spec change begins a changeover" and tuning a
+scaling knob replaces a whole group of functionally identical servers. For a
+`ProxyGroup` that rule would be worse, because changing `replicas` is the
+routine operation on a proxy group and a generation rule would make every
+scale-up and every scale-down a full replacement — every pod waiting out an
+attrition-bound drain, and the deadline disconnecting whoever is left. The two
+milestones bought opposite things: 4b's rule rolls on edits that change no pod,
+4c-2's rolls on changes nobody edited. Scaling a proxy group stays scaling, and
+the price is that upgrading the operator is not free.
+
+**Which edits roll a group, and which do not, is decided by what reaches the
+pod — and that is not the shape of the CRD.** The digest covers
+`podspec.BuildProxyPod`'s output, so an edit rolls the group exactly when it
+changes that pod. Read off `internal/podspec/proxy.go` as it stands: `image`,
+`resources`, `scheduling`, `config.playerLimit` (it is
+`SPAWNERY_PLAYER_LIMIT`), `routing.fallbackGroups` (`SPAWNERY_FALLBACK_GROUPS`),
+`configOverlay` (the ConfigMap's *name*, in a volume) and `drain.timeoutSeconds`
+all roll it, as do the `Network` fields the proxy pod inherits —
+`defaults.resources`, `defaults.scheduling`, `defaults.imagePullSecrets` and
+`forwardingSecretRef.name`. `replicas` does not, which is the whole point of that
+design's §3.1. Two others do not either, and those are the ones worth knowing
+in advance:
+
+- **`spec.config.motd` and `spec.config.onlineMode` do not roll a group, so
+  editing them changes nothing about a proxy that is already running.** Both
+  are rendered into the group's ConfigMap by `proxyConfigValues`, and the pod
+  references that ConfigMap by name; `spawnery-config` reads it at container
+  start and writes `velocity.toml` from it. So the new value applies to the
+  *next* proxy pod and to no existing one. For `motd` that is cosmetic. For
+  `onlineMode` it is not: turning it off, or back on, decides whether the proxy
+  authenticates players at all, and the change takes effect on a pod's next
+  restart rather than on the edit. Nothing on the CR says so — the group's
+  `status.observedGeneration` advances and the phase stays `Ready` — and
+  deleting the pods by hand is what applies it today, which is exactly the
+  state 4c-2 was built to end, now narrowed to the fields that land in the
+  ConfigMap instead of covering the whole spec. The same holds for the
+  *contents* of a user's own `configOverlay` ConfigMap and of the forwarding
+  secret: the pod names them, so editing what is inside them rolls nothing.
+- **`spec.drain.timeoutSeconds` does roll the group**, because it reaches the
+  pod as `TerminationGracePeriodSeconds`. Tuning a drain timeout is something
+  an operator does in the middle of an incident, and under this rule it also
+  replaces every proxy in the group. Raising it while a drain is already in
+  flight still behaves — the marked pod keeps its mark, since it is now stale
+  as well as draining, and the deadline it is measured against is read from the
+  current spec on every pass — but the edit adds a surge pod and a replacement
+  cycle on top of whatever was already happening.
+  `docs/runbook-milestone-4c1-evidence.md` §9 recommends exactly this edit for
+  a drain you want to give more room to; after 4c-2 it is no longer free.
+
+Neither of these is a defect in the digest — it covers what it says it covers —
+and both are arguments for a later milestone to hash the *rendered
+configuration* alongside the rendered pod, rather than for hand-picking fields,
+which is the trade that design already ruled on.
+
+**`ProxyGroupReconciler.pods()` is read once per `Reconcile` and is not
+refreshed by the creates that follow it.** `Reconcile` lists the pods, hands
+that slice to `reconcileReplicas`, and that function may create pods below —
+but the slice it is iterating is the one from before its own creates, so a pod
+created on this pass is first seen by the per-pod logic (the readiness
+assertion, the divergence check riding along with it, the deletion loop) on the
+pass *after* this one. The call site says so, and this entry exists because the
+property has caught test construction twice in this milestone: a test that
+creates a pod and asserts something about it within the same reconcile is
+asserting against a snapshot that predates it. Note that the status at the end
+of `Reconcile` does not have this property — it re-lists deliberately, so the
+published counts describe what is there rather than what was there when the
+pass began.
+
+**A deferred structural fix to `readinessDivergence`, recorded so that it is a
+decision rather than an omission.** An entry in that map measures how long a
+pod has been diverging *while something was watching*, so a pass that does not
+call `observe` for a group must not leave a first-seen timestamp behind to fire
+the moment observation resumes. Three of `Reconcile`'s steady-state early
+returns handle that by calling `forget` explicitly — `NetworkNotFound`,
+`NetworkNotAccepted` and `ExposeNotImplemented`, each of which returns before
+`reconcileReplicas` runs while the group itself still exists. Every error
+return above `reconcileReplicas` leaves the identical shape and does not
+forget: a `ProxyGroup` read that failed for any reason other than the object
+being gone, a failed `Network` read, the status write, `Bootstrap.Ensure`, the
+ConfigMap, the `Service`, and the first `pods()` call — seven at the time of
+writing, which is the point rather than a figure worth maintaining. Those are
+transient by nature and the cost is bounded the same way — a report delayed
+or, in the other
+direction, a stretch of unwatched time counted as if it had been watched, up to
+one grace period. The better fix is structural and was deliberately not made
+mid-milestone: have the entry carry when it was *last observed* rather than
+only when it first diverged, and treat an entry unobserved on the previous pass
+as void. The property is then enforced by the type instead of by remembering to
+call `forget` at each new exit, and the next person to add an early return to
+`ProxyGroupReconciler.Reconcile` does not have to know this rule exists.
 
 ## Preconditions for milestone 5 (persistent groups)
 
