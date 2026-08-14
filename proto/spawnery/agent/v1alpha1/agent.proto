@@ -135,6 +135,19 @@ message DrainPlayers {
   repeated string to_groups = 2;
 }
 
+// SetReady is the operator asserting whether this proxy should be taking new
+// connections. It is a state and not an event, the same way Hello.ready is:
+// the operator re-sends it whenever it syncs, so a reconnect cannot leave a
+// proxy stuck in the wrong one, and a cancelled drain simply reverts.
+//
+// The agent maps it onto its readiness gate, which the kubelet probes. So the
+// effect an operator is really asking for is "leave the Service's endpoints" —
+// established connections are not touched, because Kubernetes does not close
+// them when an endpoint is removed.
+message SetReady {
+  bool ready = 1;
+}
+
 message OperatorToProxy {
   oneof message {
     FullSync full_sync = 1;
@@ -143,5 +156,6 @@ message OperatorToProxy {
     DrainPlayers drain_players = 4;
     ReportInterval report_interval = 5;
     SessionDeadline session_deadline = 6;
+    SetReady set_ready = 7;
   }
 }

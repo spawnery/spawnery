@@ -102,6 +102,11 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_spawnery_agent_v1alpha1_DrainPlayers_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_spawnery_agent_v1alpha1_SetReady_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_spawnery_agent_v1alpha1_SetReady_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
     internal_static_spawnery_agent_v1alpha1_OperatorToProxy_descriptor;
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
@@ -146,26 +151,28 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
       "erServer\0229\n\006server\030\001 \001(\0132).spawnery.agen" +
       "t.v1alpha1.RegisteredServer\" \n\020Unregiste" +
       "rServer\022\014\n\004name\030\001 \001(\t\"6\n\014DrainPlayers\022\023\n" +
-      "\013from_server\030\001 \001(\t\022\021\n\tto_groups\030\002 \003(\t\"\252\003" +
-      "\n\017OperatorToProxy\0226\n\tfull_sync\030\001 \001(\0132!.s" +
-      "pawnery.agent.v1alpha1.FullSyncH\000\022B\n\017reg" +
-      "ister_server\030\002 \001(\0132\'.spawnery.agent.v1al" +
-      "pha1.RegisterServerH\000\022F\n\021unregister_serv" +
-      "er\030\003 \001(\0132).spawnery.agent.v1alpha1.Unreg" +
-      "isterServerH\000\022>\n\rdrain_players\030\004 \001(\0132%.s" +
-      "pawnery.agent.v1alpha1.DrainPlayersH\000\022B\n" +
-      "\017report_interval\030\005 \001(\0132\'.spawnery.agent." +
-      "v1alpha1.ReportIntervalH\000\022D\n\020session_dea" +
-      "dline\030\006 \001(\0132(.spawnery.agent.v1alpha1.Se" +
-      "ssionDeadlineH\000B\t\n\007message2\333\001\n\014AgentServ" +
-      "ice\022c\n\014ProxySession\022%.spawnery.agent.v1a" +
-      "lpha1.ProxyMessage\032(.spawnery.agent.v1al" +
-      "pha1.OperatorToProxy(\0010\001\022f\n\rServerSessio" +
-      "n\022&.spawnery.agent.v1alpha1.ServerMessag" +
-      "e\032).spawnery.agent.v1alpha1.OperatorToSe" +
-      "rver(\0010\001BV\n\027cloud.spawnery.agent.pbB\nAge" +
-      "ntProtoP\001Z-github.com/spawnery/spawnery/" +
-      "internal/agentpbb\006proto3"
+      "\013from_server\030\001 \001(\t\022\021\n\tto_groups\030\002 \003(\t\"\031\n" +
+      "\010SetReady\022\r\n\005ready\030\001 \001(\010\"\342\003\n\017OperatorToP" +
+      "roxy\0226\n\tfull_sync\030\001 \001(\0132!.spawnery.agent" +
+      ".v1alpha1.FullSyncH\000\022B\n\017register_server\030" +
+      "\002 \001(\0132\'.spawnery.agent.v1alpha1.Register" +
+      "ServerH\000\022F\n\021unregister_server\030\003 \001(\0132).sp" +
+      "awnery.agent.v1alpha1.UnregisterServerH\000" +
+      "\022>\n\rdrain_players\030\004 \001(\0132%.spawnery.agent" +
+      ".v1alpha1.DrainPlayersH\000\022B\n\017report_inter" +
+      "val\030\005 \001(\0132\'.spawnery.agent.v1alpha1.Repo" +
+      "rtIntervalH\000\022D\n\020session_deadline\030\006 \001(\0132(" +
+      ".spawnery.agent.v1alpha1.SessionDeadline" +
+      "H\000\0226\n\tset_ready\030\007 \001(\0132!.spawnery.agent.v" +
+      "1alpha1.SetReadyH\000B\t\n\007message2\333\001\n\014AgentS" +
+      "ervice\022c\n\014ProxySession\022%.spawnery.agent." +
+      "v1alpha1.ProxyMessage\032(.spawnery.agent.v" +
+      "1alpha1.OperatorToProxy(\0010\001\022f\n\rServerSes" +
+      "sion\022&.spawnery.agent.v1alpha1.ServerMes" +
+      "sage\032).spawnery.agent.v1alpha1.OperatorT" +
+      "oServer(\0010\001BV\n\027cloud.spawnery.agent.pbB\n" +
+      "AgentProtoP\001Z-github.com/spawnery/spawne" +
+      "ry/internal/agentpbb\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -261,12 +268,18 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_DrainPlayers_descriptor,
         new java.lang.String[] { "FromServer", "ToGroups", });
-    internal_static_spawnery_agent_v1alpha1_OperatorToProxy_descriptor =
+    internal_static_spawnery_agent_v1alpha1_SetReady_descriptor =
       getDescriptor().getMessageType(15);
+    internal_static_spawnery_agent_v1alpha1_SetReady_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_spawnery_agent_v1alpha1_SetReady_descriptor,
+        new java.lang.String[] { "Ready", });
+    internal_static_spawnery_agent_v1alpha1_OperatorToProxy_descriptor =
+      getDescriptor().getMessageType(16);
     internal_static_spawnery_agent_v1alpha1_OperatorToProxy_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_OperatorToProxy_descriptor,
-        new java.lang.String[] { "FullSync", "RegisterServer", "UnregisterServer", "DrainPlayers", "ReportInterval", "SessionDeadline", "Message", });
+        new java.lang.String[] { "FullSync", "RegisterServer", "UnregisterServer", "DrainPlayers", "ReportInterval", "SessionDeadline", "SetReady", "Message", });
     descriptor.resolveAllFeaturesImmutable();
   }
 

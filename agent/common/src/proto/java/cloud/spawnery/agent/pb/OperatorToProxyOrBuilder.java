@@ -100,5 +100,20 @@ public interface OperatorToProxyOrBuilder extends
    */
   cloud.spawnery.agent.pb.SessionDeadlineOrBuilder getSessionDeadlineOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+   * @return Whether the setReady field is set.
+   */
+  boolean hasSetReady();
+  /**
+   * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+   * @return The setReady.
+   */
+  cloud.spawnery.agent.pb.SetReady getSetReady();
+  /**
+   * <code>.spawnery.agent.v1alpha1.SetReady set_ready = 7;</code>
+   */
+  cloud.spawnery.agent.pb.SetReadyOrBuilder getSetReadyOrBuilder();
+
   cloud.spawnery.agent.pb.OperatorToProxy.MessageCase getMessageCase();
 }
