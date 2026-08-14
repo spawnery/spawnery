@@ -283,9 +283,18 @@ and the attempt wastes an afternoon.
 
 **Machine-specific notes** live in this repository's `docs/known-issues.md`
 and, on the machine 4a was built on, in that session's project memory: image
-builds there need `CONTAINER=podman` and a disk-backed `TMPDIR`, and Gradle
-daemons exhaust a small machine. None of it applies to 4b's Go-only path, and
-none of it should be assumed on a different machine.
+builds there needed `CONTAINER=podman` and a disk-backed `TMPDIR`, and Gradle
+daemons exhaust a small machine. **Both overrides are conditional on the
+machine, not unconditional requirements** — `CONTAINER=podman` is needed where
+there is no `docker` binary at all, and `TMPDIR` where `/tmp` is a tmpfs too
+small for Podman's OCI-archive extraction, which is how
+`docs/runbook-milestone-3-evidence.md` §0 states both. Measured 2026-08-14 on
+this repository's own machine, where `docker` is a symlink into
+`podman-docker-compat` and `/tmp` is disk-backed: neither override is needed,
+and `make agent-test`, `make image-test` and `make image-repro` all pass on
+plain defaults. None of it applies to 4b's Go-only path, and none of it —
+including the absence of the overrides — should be assumed on a different
+machine.
 
 ## 9. Where everything lives
 
