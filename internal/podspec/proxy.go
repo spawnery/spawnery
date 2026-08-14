@@ -79,6 +79,37 @@ func BuildProxyPod(
 	name string,
 	agentEndpoint string,
 ) (*corev1.Pod, error) {
+	pod, err := renderProxyPod(net, group, name, agentEndpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	// Stamped here rather than by the caller: every proxy pod this operator
+	// creates must carry it, and a caller that forgot would build a pod the
+	// rollout reads as stale on the very next pass. DesiredProxyHash renders
+	// its own pod with the name held empty rather than trying to redact this
+	// one after the fact — see its doc comment for why that is the safer
+	// shape.
+	hash, err := DesiredProxyHash(net, group, agentEndpoint)
+	if err != nil {
+		return nil, err
+	}
+	pod.Labels[LabelPodHash] = hash
+
+	return pod, nil
+}
+
+// renderProxyPod is the shared render behind both BuildProxyPod and
+// DesiredProxyHash: the latter calls it with name held empty so that nothing
+// derived from the pod's name — including fields that are not the pod's own
+// ObjectMeta.Name, such as the SPAWNERY_PROXY container env var below — can
+// reach the digest.
+func renderProxyPod(
+	net *spawneryv1alpha1.Network,
+	group *spawneryv1alpha1.ProxyGroup,
+	name string,
+	agentEndpoint string,
+) (*corev1.Pod, error) {
 	if group.Spec.Image == "" {
 		return nil, fmt.Errorf("proxy group %q has no image", group.Name)
 	}
