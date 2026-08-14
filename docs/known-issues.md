@@ -1100,7 +1100,10 @@ from "busy proxy". The other order is the safe one, and so is rolling the
 operator back on its own: an agent that supports `SetReady` and never receives
 one behaves exactly as 3c's did, because `ProxyRole`'s latch starts at
 `asserted = null` and its first `FullSync` opens the gate unless a `false` was
-asserted (`ProxyRole.kt:79` and `:203`).
+asserted — `ProxyRole.kt`'s `Latch(synced = false, asserted = null)` and, in
+its `FULL_SYNC` branch, `if (!previous.synced && previous.asserted != false)
+onFirstSync()`. Quoted rather than cited by line: this file's citations into
+that one have gone stale twice already.
 
 **`status.connectedPlayers` reads 0 while people are playing on a draining
 proxy, and this milestone changed what the field means without editing it.**

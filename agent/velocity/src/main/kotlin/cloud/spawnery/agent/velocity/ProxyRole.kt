@@ -51,10 +51,15 @@ class ProxyRole(
     private val drain: Drain,
     private val onFirstSync: () -> Unit,
     /**
-     * Sets the pod's readiness gate. Called for every SetReady the operator
-     * sends, and it sends the last value it asserted on every resync -- one
+     * Sets the pod's readiness gate.
+     *
+     * Called for every SetReady the operator sends, with one exception: a
+     * `true` that arrives before a FullSync has applied is recorded and not
+     * passed on, because readiness means routable. See the SET_READY branch.
+     *
+     * The operator re-sends the value it last asserted on every resync -- one
      * per `proxyreg.DefaultResyncInterval`, 30 seconds -- as well as when that
-     * value changes. So this is called with the value it already has, roughly
+     * value changes, so this is called with the value it already has, roughly
      * that often, for as long as a drain lasts.
      */
     private val onSetReady: (Boolean) -> Unit,
@@ -244,9 +249,29 @@ class ProxyRole(
                 // next resync repeats; recording second would leave a shut
                 // gate with `asserted` unset, which the next FullSync would
                 // reopen.
+                //
+                // `ready` reaches the gate only once a FullSync has applied;
+                // `!ready` always does. Readiness means routable, and a proxy
+                // with no server list routes nobody: it would take players out
+                // of the Service and disconnect each with "no available
+                // server". Nothing is lost by waiting -- `asserted` is
+                // recorded either way, and the FULL_SYNC branch above opens
+                // the gate on the first sync that applies, because
+                // `asserted != false` holds for a standing true.
+                //
+                // The one case this changes is a `directory.apply` that keeps
+                // throwing while the operator wants this proxy ready: the pod
+                // stays NotReady until a sync gets through, where it used to
+                // go Ready with an empty routing table. Closing is not gated
+                // for the mirror of the same reason: a proxy that cannot apply
+                // its directory has no business in the endpoints, and refusing
+                // a close is the one direction that leaves a draining pod
+                // ready.
+                val ready = message.setReady.ready
                 synchronized(readiness) {
-                    latch = latch.copy(asserted = message.setReady.ready)
-                    onSetReady(message.setReady.ready)
+                    val previous = latch
+                    latch = previous.copy(asserted = ready)
+                    if (!ready || previous.synced) onSetReady(ready)
                 }
                 Directive.None
             }

@@ -277,10 +277,48 @@ class ProxyRoleTest {
         val states = mutableListOf<Boolean>()
         val role = newRole(onSetReady = { states += it })
 
+        // The sync first, because the reopen is conditional on it: a proxy
+        // with no server list is not made ready by anything. The two tests
+        // below own that rule; this one owns the mapping once it is satisfied.
+        role.onMessage(fullSync())
         role.onMessage(setReady(false))
         role.onMessage(setReady(true))
 
         assertEquals(listOf(false, true), states)
+    }
+
+    @Test
+    fun `a ready before the first sync is recorded and not passed on`() {
+        // Readiness means routable. A proxy that opened its gate here would be
+        // in the Service's endpoints with an empty routing table, and every
+        // player sent to it is disconnected with "no available server".
+        //
+        // Reaching this needs a FullSync that threw -- Fleet queues a
+        // session's FullSync ahead of anything else -- which is why the same
+        // sequence ends with a sync that works: what is asserted is not lost
+        // while the fault lasts, it takes effect when the fault clears.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(setReady(true))
+        assertEquals(emptyList<Boolean>(), states, "an unsynced proxy was made ready with no server list")
+
+        role.onMessage(fullSync())
+        assertEquals(listOf(true), states, "the standing ready did not survive to the sync that could honour it")
+    }
+
+    @Test
+    fun `a not-ready before the first sync still reaches the gate`() {
+        // The mirror is not gated, and must not be. A proxy that cannot apply
+        // its directory has no business in the endpoints either, and refusing
+        // a close is the one direction that leaves a draining pod ready --
+        // which is the failure ReadyGate's own comment names.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(setReady(false))
+
+        assertEquals(listOf(false), states, "a not-ready was withheld from the gate for want of a sync")
     }
 
     @Test

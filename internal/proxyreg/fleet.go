@@ -421,10 +421,15 @@ func readyMessage(ready bool) *agentpb.OperatorToProxy {
 // such divergence to one interval (DefaultResyncInterval, 30s) whatever caused
 // it, which is a property no fix to a particular cause can give.
 //
-// After the snapshot, not before it: on an agent whose first FullSync failed,
-// a SetReady(true) arriving first would open its readiness gate while it still
-// has no server list, and every player routed there would be disconnected with
-// "no available server".
+// After the snapshot, not before it: a SetReady(true) that arrives before a
+// server list asks a proxy to advertise readiness with nothing to route to,
+// and every player sent there is disconnected with "no available server". This
+// repository's Velocity agent now refuses that on its own side — it records a
+// ready asserted before its first FullSync and opens the gate on that sync
+// instead — but that is the agent's guard and not this one's: an older build,
+// or another language's implementation of this proto, has no such rule, and
+// the order the operator sends in is the half of the contract the operator
+// owns.
 //
 // A session never told anything is sent nothing, rather than a default: the
 // operator has no readiness for a pod it has not decided about, and inventing

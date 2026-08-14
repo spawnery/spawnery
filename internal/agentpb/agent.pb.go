@@ -934,6 +934,13 @@ func (x *DrainPlayers) GetToGroups() []string {
 // effect an operator is really asking for is "leave the Service's endpoints" —
 // established connections are not touched, because Kubernetes does not close
 // them when an endpoint is removed.
+//
+// An agent must not open that gate before a FullSync has applied. Readiness
+// means routable, and a proxy with no server list disconnects every player it
+// is sent with "no available server", so a ready=true asserted that early is
+// recorded and takes effect with the first FullSync that applies rather than
+// on arrival. ready=false is applied whenever it arrives: an agent that cannot
+// build its server list has no business in the endpoints either.
 type SetReady struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ready         bool                   `protobuf:"varint,1,opt,name=ready,proto3" json:"ready,omitempty"`
