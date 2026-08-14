@@ -223,13 +223,25 @@ func TestDecideRollout(t *testing.T) {
 			want:     RolloutDecision{Drain: []string{"fallen"}},
 		},
 		{
-			name: "a cancelled rollout creates nothing and marks nothing",
+			// A rollout cancelled before any pod was marked: the spec went
+			// back, so nothing is stale any more, so surge drops to 0 and the
+			// target with it -- but the surge pod that was already built is
+			// still standing. The group leaves through the surplus branch,
+			// which is the whole content of the case and is why the fixture
+			// needs three pods rather than the two a quiet group has.
+			//
+			// The surge pod is deliberately not the emptiest here. Nothing
+			// undoes a surge as such; the surplus is resolved by the ordinary
+			// rule, so the emptiest goes even when that is one of the
+			// originals and the newcomer stays.
+			name: "a cancelled rollout retires a surplus pod by the ordinary rule, not the surge pod",
 			pods: []ProxyView{
-				{Name: "a", Ready: true, CreatedAt: at(0)},
-				{Name: "b", Ready: true, CreatedAt: at(1)},
+				{Name: "a", Ready: true, Players: 5, CreatedAt: at(0)},
+				{Name: "b", Ready: true, Players: 0, CreatedAt: at(1)},
+				{Name: "surge", Ready: true, Players: 2, CreatedAt: at(2)},
 			},
 			replicas: 2,
-			want:     RolloutDecision{},
+			want:     RolloutDecision{Drain: []string{"b"}},
 		},
 	}
 
