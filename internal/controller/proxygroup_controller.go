@@ -322,14 +322,26 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	//
 	// The term subtracts stale *marks* rather than stale pods because what the
 	// invariant is about is pods that are leaving, and a stale pod with no mark
-	// is still serving — it will be marked on a later pass, one at a time. The
-	// two counts do not differ in any state this operator can reach on its own,
-	// and a mutation swapping them kills nothing: a surplus mark only ever exists if some pass found the
-	// group over its target with no pod draining, and pick exhausts the stale
-	// pods before it reaches a current one, so every stale pod was marked on
-	// that same pass. Staleness arrives group-wide, from a spec change, which
-	// can only ever make the already-marked pods stale too. Marks is still what
-	// this means, so marks is what it counts.
+	// is still serving — it will be marked on a later pass, one at a time.
+	//
+	// The two counts come apart in one state, and it is a state this milestone
+	// exists to serve: a spec change reverted while a proxy is draining for it.
+	// Take a group of two on v1, change the image, wait for the surge pod, and
+	// let one old proxy be marked; then put the image back. The marked pod
+	// matches the spec again and the surge pod does not, so a pod that was a
+	// stale mark is now a surplus mark and the pod nobody has marked is the
+	// stale one. Subtracting stale pods would release the mark on the spot,
+	// because the surge pod's eventual departure is counted as if it had
+	// already happened; subtracting stale marks holds it, and the surge pod is
+	// marked on a later pass when this one has finished.
+	//
+	// Holding it is the conservative reading and the one that shipped: the
+	// budget is spent only on departures that are actually under way, so a spec
+	// that flaps does not release a drain it will want back. It costs the group
+	// one proxy more than the minimum, drained one at a time and bounded by the
+	// deadline like every other wait here.
+	// TestARevertedSpecChangeKeepsTheMarkItAlreadyMade pins it, so this is a
+	// decision the code states rather than one a comment claims.
 	//
 	// The count is what keeps a drain cancellable. Persisting every mark would
 	// make a marked pod's readiness remembered rather than derived, and a
@@ -352,6 +364,19 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// have made — the fullest and the least trusted go back into service first,
 	// and the pods that keep their marks are the ones the same rule would
 	// choose again.
+	//
+	// Ordering cannot make this oscillate, and the reason is stronger than
+	// pick being deterministic: a released pod loses its annotation on the same
+	// pass, so it is not Draining on the next one and drops out of this
+	// candidate set. Player counts moving underneath can therefore change which
+	// of the marks still standing would be kept, but nothing here can hand a
+	// mark back to a pod this loop released — only a fresh decision can, and
+	// DecideRollout makes none while anything is draining.
+	//
+	// The set is not monotone, and the exception is the rollback above: a mark
+	// held in the stale branch moves into this one when the spec comes back.
+	// That adds a candidate rather than restoring a released one, so it cannot
+	// start the cycle this paragraph rules out.
 	if want := int32(len(views)) - staleMarks - group.Spec.Replicas; want > 0 {
 		for _, name := range pick(surplusMarks, want) {
 			leaving[name] = true

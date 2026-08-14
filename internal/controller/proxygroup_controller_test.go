@@ -193,6 +193,11 @@ func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
 	return group
 }
 
+// proxyPodHostIP is the node address markProxyPodReady puts on a ready proxy
+// pod, named so the one test that reads it back out of status.address does not
+// have to repeat the literal.
+const proxyPodHostIP = "192.168.1.10"
+
 // markProxyPodReady does to a proxy pod what a kubelet would once its probe
 // passed: Running, on a node, and Ready. f.markReady is not this — it is for
 // Servers, and goes through bringUpNamed.
@@ -203,11 +208,6 @@ func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
 // in a group. Its address assertion reads that value back out of
 // status.address, so the constant is load-bearing there and inert everywhere
 // else — the rollout tests never look at the address.
-// proxyPodHostIP is the node address markProxyPodReady puts on a ready proxy
-// pod, named so the one test that reads it back out of status.address does not
-// have to repeat the literal.
-const proxyPodHostIP = "192.168.1.10"
-
 func (f *fixture) markProxyPodReady(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
 	pod.Status.Phase = corev1.PodRunning
@@ -1932,5 +1932,108 @@ func TestAStaleMarkDoesNotSpendTheSurplusBudget(t *testing.T) {
 	}
 	if serving != 3 {
 		t.Errorf("proxies still taking connections = %d, want the 3 replicas asked for", serving)
+	}
+}
+
+// TestARevertedSpecChangeKeepsTheMarkItAlreadyMade is the one state where a
+// pod's mark outlives the reason it was made, and it is the state a rollback
+// puts a group into.
+//
+// A spec change is not one-way. Change the image, wait for the surge pod, let a
+// proxy be marked for being stale — then put the image back, and that proxy
+// matches the spec again while the surge pod raised to replace it does not. The
+// mark that was a stale mark is now a surplus mark, and the pod nobody has
+// marked is the stale one.
+//
+// The group holds the mark, which is a choice and not an accident. Releasing it
+// would spend the surplus budget on the surge pod's departure before that
+// departure has started — the surge pod is stale but unmarked, and gets marked
+// only on a later pass, because a rolling update takes one proxy at a time. A
+// spec that flaps would then cancel and remake drains, restarting a deadline
+// that is supposed to bound them. The cost of holding is one proxy more than
+// the minimum leaving, one at a time and bounded by the same deadline as every
+// other wait here.
+func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	// One proxy has a player and the other has no agent at all, so which of the
+	// two is marked is decided by the occupancy rule rather than by a tie: a
+	// reported count outranks an unknown one, and the player keeps that pod in
+	// the group long enough for the revert below to land on it.
+	held := before[0]
+	f.reportProxyPlayers(t, held, 1)
+	for i := range before {
+		f.markProxyPodReady(t, &before[i])
+	}
+
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway")
+	surged := f.proxyPods("gateway")
+	if len(surged) != 3 {
+		t.Fatalf("proxy pods = %d after the spec change, want 3", len(surged))
+	}
+	for i := range surged {
+		f.markProxyPodReady(t, &surged[i])
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := markedProxies(f.proxyPods("gateway")); len(got) != 1 || got[0] != held.Name {
+		t.Fatalf("marked = %v, want just %s — the proxy with a reported count is the one the rule takes", got, held.Name)
+	}
+	marked, ok := f.pod(held.Name)
+	if !ok {
+		t.Fatalf("pod %s not found", held.Name)
+	}
+	at := marked.Annotations[ProxyDrainingSinceAnnotation]
+
+	// The rollback: the marked proxy matches the spec again, and the surge pod
+	// that was brought up to replace it does not.
+	g = f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.4.0-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("revert: %v", err)
+	}
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+
+	network := &spawneryv1alpha1.Network{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
+		t.Fatalf("get Network: %v", err)
+	}
+	current, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint)
+	if err != nil {
+		t.Fatalf("desired hash: %v", err)
+	}
+	after, ok := f.pod(held.Name)
+	if !ok {
+		t.Fatalf("the marked proxy %s was deleted with a player on it", held.Name)
+	}
+	if after.Labels[podspec.LabelPodHash] != current {
+		t.Fatalf("the marked proxy %s does not match the reverted spec, so this test is not in the state it "+
+			"describes", held.Name)
+	}
+
+	if got := markedProxies(f.proxyPods("gateway")); len(got) != 1 || got[0] != held.Name {
+		t.Errorf("marked = %v, want just %s still — the budget is spent on departures under way, and the surge "+
+			"pod's has not started", got, held.Name)
+	}
+	if got := after.Annotations[ProxyDrainingSinceAnnotation]; got != at {
+		t.Errorf("draining-since on %s is now %q, want the original %q — a rollback must not restart a deadline "+
+			"that is already running", held.Name, got, at)
+	}
+	if got := f.proxies.lastReady(string(after.UID)); got == nil || *got {
+		t.Errorf("the draining proxy was told ready=%v after the rollback, want false", got)
 	}
 }
