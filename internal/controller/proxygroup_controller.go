@@ -248,16 +248,30 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		}
 	}
 
+	// Which pods are going, decided once and used by both loops below. Today
+	// this is still the surplus tail; Task 4 replaces the right-hand side with
+	// the rollout decision, and nothing else here has to move.
+	//
+	// Derived rather than re-read from the annotation: on the pass that first
+	// marks a pod, the annotation is not on it yet when the readiness loop
+	// runs, and readiness would lag a whole pass behind the mark.
+	leaving := make(map[string]bool, len(pods))
+	for i := range pods {
+		if i >= int(group.Spec.Replicas) {
+			leaving[pods[i].Name] = true
+		}
+	}
+
 	// The desired readiness is derived, not remembered: this loop already
 	// knows which pods are surplus, so it asserts the answer for every pod on
 	// every pass. An operator restart recomputes the same thing, and a
 	// cancelled scale-down corrects itself without anything to clean up.
 	for i := range pods {
-		surplus := i >= int(group.Spec.Replicas)
-		if err := r.Proxies.SetReady(ctx, string(pods[i].UID), !surplus); err != nil {
+		going := leaving[pods[i].Name]
+		if err := r.Proxies.SetReady(ctx, string(pods[i].UID), !going); err != nil {
 			return err
 		}
-		if err := r.markDraining(ctx, &pods[i], surplus); err != nil {
+		if err := r.markDraining(ctx, &pods[i], going); err != nil {
 			return err
 		}
 	}
@@ -313,7 +327,10 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// but both err towards keeping a pod that might still have someone on it,
 	// and the wait is bounded. Reading pod state to decide it is a wider
 	// change than this task, which only ever asks the registry.
-	for i := len(pods) - 1; i >= int(group.Spec.Replicas); i-- {
+	for i := range pods {
+		if !leaving[pods[i].Name] {
+			continue
+		}
 		pod := &pods[i]
 		snap := r.Agents.Lookup(string(pod.UID))
 		players := snap.Players
