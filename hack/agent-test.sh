@@ -792,12 +792,13 @@ echo "the ready gate opened $((SECONDS - start))s after the first FullSync"
 # would have opened and closed inside this phase's own probe window, the
 # closed-gate assertion below would then succeed against a gate that was already
 # shut, and the phase would report "open, then closed on the operator's word"
-# having established neither. Both arms name SET_READY_AFTER because raising it
-# is the answer to either.
+# having established only the first half: the close it names would be one it
+# never saw happen. Both arms name SET_READY_AFTER because raising it is the
+# answer to either.
 withdrawn4="$(count_events set_ready_sent "$EVENTS4")"
 if [ "$withdrawn4" -ne 0 ]; then
 	echo "the SetReady went out before the gate could be probed open; raise SET_READY_AFTER" >&2
-	echo "the close below would then be asserted against a gate that had already shut, and this phase would pass having measured nothing" >&2
+	echo "the close below would then be asserted against a gate that had already shut, and this phase would pass having never observed the close it reports" >&2
 	jq -rs '.' <"$EVENTS4" >&2
 	exit 1
 fi
