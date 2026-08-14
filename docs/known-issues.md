@@ -1315,20 +1315,38 @@ in advance:
   `onlineMode` it is not: turning it off, or back on, decides whether the proxy
   authenticates players at all, and the change takes effect on a pod's next
   restart rather than on the edit. Nothing on the CR says so — the group's
-  `status.observedGeneration` advances and the phase stays `Ready` — and
-  deleting the pods by hand is what applies it today, which is exactly the
-  state 4c-2 was built to end, now narrowed to the fields that land in the
-  ConfigMap instead of covering the whole spec. The same holds for the
-  *contents* of a user's own `configOverlay` ConfigMap and of the forwarding
-  secret: the pod names them, so editing what is inside them rolls nothing.
+  `status.observedGeneration` advances and the phase stays `Ready` — so every
+  signal the API offers says the change is applied while the proxies go on
+  authenticating players the old way. That is exactly the state 4c-2 was built
+  to end, now narrowed to the fields that land in the ConfigMap instead of
+  covering the whole spec. The same holds for the *contents* of a user's own
+  `configOverlay` ConfigMap and of the forwarding secret: the pod names them,
+  so editing what is inside them rolls nothing.
+
+  **After changing `onlineMode`, delete the group's proxy pods, or edit a
+  field that does roll — `spec.config.playerLimit` is the cheapest.** Nothing
+  on the CR will tell you it has not been applied, and doing nothing is worse
+  than it looks: a pod that restarts later for an unrelated reason picks the
+  new value up on its own, so a group left alone drifts into running both
+  settings at once, with which proxy authenticates depending on which happened
+  to restart.
+
+  Note where the boundary actually falls, because it is not where the CRD
+  suggests: `spec.config` has three fields and two behaviours. `playerLimit`
+  rolls the group, because it reaches the pod as `SPAWNERY_PLAYER_LIMIT`.
+  `motd` and `onlineMode` are siblings of it under the same stanza and do not,
+  because they reach only the ConfigMap. Nothing about the stanza distinguishes
+  them; only `internal/podspec/proxy.go` does.
 - **`spec.drain.timeoutSeconds` does roll the group**, because it reaches the
   pod as `terminationGracePeriodSeconds`. Tuning a drain timeout is something
   an operator does in the middle of an incident, and under this rule it also
-  replaces every proxy in the group. Raising it while a drain is already in
-  flight still behaves — the marked pod keeps its mark, since it is now stale
-  as well as draining, and the deadline it is measured against is read from the
-  current spec on every pass — but the edit adds a surge pod and a replacement
-  cycle on top of whatever was already happening.
+  replaces every proxy in the group. **Expect the edit itself to add a surge
+  pod and a full replacement cycle on top of whatever incident prompted it**;
+  that is the operationally relevant part and it applies whether or not a drain
+  is under way. Raising it while a drain is already in flight does otherwise
+  behave — the marked pod keeps its mark, since it is now stale as well as
+  draining, and the deadline it is measured against is read from the current
+  spec on every pass.
   `docs/runbook-milestone-4c1-evidence.md` §9 recommends exactly this edit for
   a drain you want to give more room to; after 4c-2 it is no longer free.
 
