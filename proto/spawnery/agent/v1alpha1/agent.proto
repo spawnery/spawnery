@@ -137,8 +137,14 @@ message DrainPlayers {
 
 // SetReady is the operator asserting whether this proxy should be taking new
 // connections. It is a state and not an event, the same way Hello.ready is:
-// the operator re-sends it whenever it syncs, so a reconnect cannot leave a
-// proxy stuck in the wrong one, and a cancelled drain simply reverts.
+// the operator re-sends the value it last asserted on every resync — one every
+// 30 seconds, on the same tick as FullSync and after it — so a reconnect
+// cannot leave a proxy stuck in the wrong one, a cancelled drain simply
+// reverts, and an agent whose gate has come to disagree with what the operator
+// asserted is corrected within one interval rather than never. Between those
+// ticks it is sent only when the value changes, so an agent sees repeats at
+// the resync rate and not at the reconcile rate; applying a value the agent
+// already holds has to be harmless.
 //
 // The agent maps it onto its readiness gate, which the kubelet probes. So the
 // effect an operator is really asking for is "leave the Service's endpoints" —

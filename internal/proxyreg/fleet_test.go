@@ -629,3 +629,66 @@ func TestSetReadyToAnUnknownPodIsNotAnError(t *testing.T) {
 		t.Errorf("SetReady to an unknown pod = %v, want nil", err)
 	}
 }
+
+// The memo means SetReady itself never repeats a value on one session, so the
+// resync is the only thing that ever re-states it — and re-stating it is what
+// bounds a disagreement between the agent's readiness gate and what the
+// operator believes it asserted to one interval instead of to the life of the
+// session. The expensive direction of such a disagreement is a pod left Ready
+// while its drain deadline runs: it collects players who are then disconnected
+// when it is deleted.
+func TestResyncReassertsTheLastReadiness(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+
+	s, leave, err := f.Join(context.Background(), ns, group, "pod-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	recv(t, s) // the FullSync
+	if err := f.SetReady(context.Background(), "pod-a", false); err != nil {
+		t.Fatalf("SetReady: %v", err)
+	}
+	drain(t, s)
+
+	f.Resync(context.Background())
+
+	got := drain(t, s)
+	if len(got) != 2 {
+		t.Fatalf("the resync sent %d messages, want the FullSync and the readiness", len(got))
+	}
+	// The order is asserted, not just the pair. A SetReady(true) ahead of the
+	// FullSync would open the gate of an agent that has no server list, and
+	// every player routed there is disconnected with "no available server".
+	if got[0].GetFullSync() == nil {
+		t.Errorf("the resync's first message is %T, want the FullSync", got[0].GetMessage())
+	}
+	setReady := got[1].GetSetReady()
+	if setReady == nil {
+		t.Fatalf("the resync's second message is %T, want the readiness", got[1].GetMessage())
+	}
+	if setReady.GetReady() {
+		t.Error("the resync re-asserted ready=true on a session last told false")
+	}
+}
+
+func TestResyncAssertsNoReadinessOnASessionNeverTold(t *testing.T) {
+	// The operator has no readiness for a pod it has not decided about, and a
+	// default sent here would be an assertion it never made — ready=true would
+	// put a proxy into the Service's endpoints on a resync tick alone.
+	f := newFleet(t, proxyGroup("lobby"))
+
+	s, leave, err := f.Join(context.Background(), ns, group, "pod-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	drain(t, s)
+
+	f.Resync(context.Background())
+
+	got := drain(t, s)
+	if len(got) != 1 || got[0].GetFullSync() == nil {
+		t.Fatalf("the resync sent %d messages, want the FullSync alone", len(got))
+	}
+}
