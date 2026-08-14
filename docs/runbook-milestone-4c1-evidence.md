@@ -861,8 +861,24 @@ actually showed them, which is the part nobody can reconstruct later.
 
 ## 11. Clean up
 
+Stop the operator first and confirm it is stopped, before the cluster goes:
+until `kind delete cluster` finishes there is still an API server for a
+surviving operator to reconcile against, silently, on a cluster you have just
+finished measuring.
+
 ```bash
-pkill -f '[g]o run ./cmd/spawnery-operator'
+pkill -x spawnery-operat
+ps -eo pid,comm | grep spawnery   # expect no output
+```
+
+Both of those exit 1 when they find nothing — `pkill` because it matched no
+process, `grep` because it printed no line — which is the good outcome here
+and an aborted script under `set -e`. Give each a `|| true` if you are driving
+this from one.
+
+Then the rest:
+
+```bash
 podman rm -f spawnery-4c1-relay
 systemd-run --scope --user --property=Delegate=yes \
   env KIND_EXPERIMENTAL_PROVIDER=podman \
@@ -870,40 +886,70 @@ systemd-run --scope --user --property=Delegate=yes \
 rm -f /tmp/spawnery-4c1-kind.yaml /tmp/spawnery-join
 ```
 
-The brackets around the `g` are not decoration. `pkill -f` matches against
-every process's full command line, including the shell running this very
-line, and an unbracketed pattern that appears verbatim in that shell's own
-invocation kills the shell instead of — or as well as — the operator.
-Typed at an interactive prompt this cannot happen, because the shell's own
-command line is just the shell's name; it matters here because this runbook
-may be driven non-interactively for its cluster half, one script fed to a
-shell as `sh -c "<script text>"`, and a shell whose own invocation contains
-`go run ./cmd/spawnery-operator` — because an earlier step in that same
-script started it — is exactly such a match, and that shell's own command
-line then literally contains the bracketed cleanup text too, character for
-character. What saves it is what `pkill -f` actually matches against: `man
-pgrep` states it plainly — `pkill -f`'s pattern is an Extended Regular
-Expression, not a literal string. The pattern `[g]o run …` matches the
-*text* `go run …`; the `pkill` line itself contains only the bracketed
-spelling, so it can never match its own invocation, only a live process
-whose argument list spells the word unbracketed.
+**Neither the `pkill` nor the `ps` above matches on a command line, and that
+is the point.** `pkill -f` and `pgrep -f` match against every process's *full
+command line*, and a shell driving this document non-interactively — one fed to
+a shell as `sh -c "<script text>"` — carries the whole script in its own
+command line, including §4's `go run ./cmd/spawnery-operator`. Bracketing the
+pattern does not save it: `pkill -f`'s pattern is an Extended Regular
+Expression, so `[g]o run …` matches the *text* `go run …`, and §4 put that
+text in the driving shell's command line. Measured 2026-08-14 on this
+repository's machine: from inside an `sh -c` script containing both spellings,
+`pgrep -af '[g]o run ./cmd/spawnery-operator'` printed the driving shell's own
+PID — and the parent shell that had launched it, whose command line contained
+the script text too. With `pkill` in place of `pgrep` that is a script killing
+the shell running it. Earlier revisions of this section argued the opposite
+and were wrong; the bracket trick only holds while the pattern's text occurs
+nowhere else in that command line, and §4 is the occurrence that breaks it.
 
-**Confirm it, rather than trust it.** `go run` compiles to a temporary
-binary and runs it as a child process; killing the `go run` wrapper does not
-reliably kill that child — measured 2026-08-14 in this repository's
-devshell, Go 1.26.5: sending `SIGTERM` to the wrapper left the compiled
-binary running, reparented and orphaned. So:
+Without `-f`, `pkill`, `pgrep` and `ps -o comm` match the process *name*
+instead: the basename of the executable the process is actually running, which
+is set at `exec` and owes nothing to the arguments. A shell running this
+document as a script is therefore named after its own interpreter, not after
+the script or its contents — measured the same day, a script named
+`spawnery-operator-run.sh` runs under the name `bash`. That is what makes a
+name match answer "is the operator running" rather than "am I running a script
+that mentions the operator".
 
-```bash
-pgrep -af '[s]pawnery-operator'   # expect no output
-```
+The name is spelled `spawnery-operat` because Linux truncates it to 15
+characters and `spawnery-operator` is 17: `ps -eo comm` prints
+`spawnery-operat` for the running operator. Spelling it in full matches
+nothing, and both tools say so rather than failing quietly — `pkill -x
+spawnery-operator` answers *"pattern that searches for process name longer
+than 15 characters will result in zero matches"* and exits 1. All three
+measured 2026-08-14 against a binary of that name; `pkill -x spawnery-operat`
+against the same process exits 0 and terminates it.
 
-If anything is still listed, `kill` it by the PID `pgrep` printed. A
-surviving operator does not stop working just because you have moved on: it
-keeps reconciling, silently, for as long as the API server it is talking to
-still answers — which, until `kind delete cluster` above actually finishes,
-is the live cluster you have just measured. Confirm it is gone before
-trusting that the run is over.
+**Killing the compiled binary is the target, not the `go run` around it.**
+`go run` compiles to a temporary binary and runs it as a child process, and
+the signal does not travel down: sending `SIGTERM` to the wrapper left the
+compiled binary running and reparented — measured 2026-08-14 in this
+repository's devshell, Go 1.26.5. Upwards it does travel: killing the child by
+name ends it, `go run` prints `signal: terminated` and exits, and the
+backgrounded job ends with it — in the run measured that day, `nix develop -c`
+had `exec`ed into `go` itself, so the job's PID and `go`'s were one and the
+same. So the single `pkill` above is aimed at the process that actually
+matters and the wrappers follow it. The `ps` line is there because all of that
+is an argument, and an argument is not a check.
+
+That also settles what to do with the job number. If you started the operator
+at an *interactive* prompt, `kill %1` works, because job control puts the job
+in its own process group and the compiled child inherits it, so the signal
+reaches the whole group — measured 2026-08-14. In a script job control is off,
+the child sits in the shell's own process group, and `kill %1` there left the
+compiled operator running — measured in the same pair of runs, one with job
+control on and one with it off, differing in nothing else.
+`pkill -x spawnery-operat` behaves the same either way, which is why it is
+what this section uses.
+
+What the `ps` line answers is narrow, and worth knowing precisely. It lists
+the processes on this machine whose *executable* is named after this
+repository: the operator §4 started is one, and a `spawnery-stubop` left over
+from an interrupted `make agent-test` would be another. If it prints anything,
+`kill` that PID and run it again. The agents are not in scope for it — they
+are plugins inside a JVM in the cluster's own containers, and the executable
+there is Java's — and neither is anything running inside the cluster, which
+`kind delete cluster` takes below.
 
 `gateway-pin` and the `evidence.local/pin` label go with the cluster; neither
 exists anywhere in this repository's manifests, and neither should be
