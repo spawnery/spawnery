@@ -192,6 +192,28 @@ func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
 	return group
 }
 
+// markProxyPodReady does to a proxy pod what a kubelet would once its probe
+// passed: Running, on a node, and Ready. It is the block
+// TestProxyGroupAddressComesFromAReadyPodsHostIP used to spell out inline,
+// lifted out because the rollout tests need it for every pod in a group rather
+// than for one.
+//
+// f.markReady is not this: it is for Servers, and goes through bringUpNamed.
+// The hostIP is set because a ready proxy that publishes no address would make
+// status.address empty for a group these tests do read it on.
+func (f *fixture) markProxyPodReady(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.HostIP = "192.168.1.10"
+	pod.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodReady, Status: corev1.ConditionTrue,
+		LastTransitionTime: metav1.NewTime(f.clock.Now()),
+	}}
+	if err := f.c.Status().Update(f.ctx, pod); err != nil {
+		t.Fatalf("mark proxy pod %s ready: %v", pod.Name, err)
+	}
+}
+
 func TestProxyGroupCreatesItsPodsAndService(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -311,26 +333,35 @@ func TestProxyGroupAddressIsEmptyWithNoReadyPod(t *testing.T) {
 	}
 }
 
-// Scale-down has to remove the newest proxies, not just any two of the
-// three: an older proxy has had longer to collect players, and this
-// milestone has no way to move them off before deleting it. A test that only
-// counts survivors would stay green even if the comparator or the loop
-// direction in reconcileReplicas were inverted.
+// Scale-down has to remove the emptiest proxies, not a slice of the list they
+// happen to sit in.
 //
-// This test's expectation moved with Task 5's occupancy rule, and the move is
-// the point. It used to expect one survivor: it connects no agent, every pod
-// therefore reported zero players, and the old bare `players == 0` deleted
-// both surplus pods on the spot. But an agent that has reported nothing and an
-// agent that died with players on it are the same zero — Registry.Lookup
-// returns PlayersStale for both — so deleting on that zero would disconnect
-// everyone on a proxy whose only fault was a dropped stream. A count is now
-// only believed while it is fresh.
+// This test's expectation has now moved twice, and both moves are the point.
+// It first expected a single survivor: it connected no agent, every pod
+// therefore reported zero players, and the old bare `players == 0` deleted both
+// surplus pods on the spot. Task 5 made a count believable only while it is
+// fresh and its stream is still up — an agent that has reported nothing and an
+// agent that died with players on it are the same zero — so the pod with no
+// agent had to be kept, and there were two survivors.
 //
-// So the newest pod is given a fresh, genuine zero and must go; the middle one
-// is left with no agent at all and must stay, because nothing here knows
-// whether anyone is on it. Two survivors, and the test still fails if the
-// comparator or the loop direction is inverted — the newest pod is named as
-// the one that has to disappear, not merely counted.
+// The second move is this milestone's: which pods are surplus is no longer the
+// tail of a list ordered by age but DecideRollout's answer, and it picks by
+// occupancy. Scaling three down to one now marks the two pods that are known
+// empty — the oldest and the newest here, position notwithstanding — and keeps
+// the one nobody can vouch for. Both marked pods are empty, so both go on the
+// same pass and the group reaches the size that was asked for, having
+// disconnected nobody.
+//
+// The pod with no agent is what keeps the grip: it is named as the survivor
+// rather than counted, so a selection that stopped distinguishing a fresh
+// count from an untrusted one leaves a different pod standing and fails here —
+// checked by running that mutation, which also takes eight other tests with it.
+//
+// It does not pin pick's player comparison, and the first draft of this comment
+// claimed it did. Every count here is zero or unknown, so freshness alone
+// decides the order and dropping the comparison changes nothing. What holds
+// that term is TestSurplusProxyIsToldToStopTakingConnections, where the two
+// counts differ.
 func TestProxyGroupScalesDown(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -348,13 +379,11 @@ func TestProxyGroupScalesDown(t *testing.T) {
 	sortPodsOldestFirst(before)
 	oldest, unreported, newest := before[0].Name, before[1].Name, before[2].Name
 	f.reportProxyPlayers(t, before[2], 0)
-	// The oldest pod gets a fresh zero too, which is what keeps this test's
-	// grip on the loop's lower bound. Under correct code it is outside the
-	// deletion window entirely and nothing here touches it, so every assertion
-	// below is unchanged by this line. But widen the bound to `i >= 0` and the
-	// oldest becomes the one pod in range that is known empty — without this
-	// report it would read stale, be kept, and the mutation would produce the
-	// same two survivors the test expects and pass clean.
+	// The oldest pod gets a fresh zero too, and it is what makes this test
+	// about occupancy rather than about position: it sits at the head of the
+	// list the reconciler walks, where a rule that took its surplus off the
+	// tail would leave it, and the report is what puts it among the two that
+	// go.
 	f.reportProxyPlayers(t, before[0], 0)
 
 	group = f.proxyGroup("gateway")
@@ -365,19 +394,20 @@ func TestProxyGroupScalesDown(t *testing.T) {
 	f.reconcileProxyGroup(r, "gateway")
 
 	after := f.proxyPods("gateway")
-	if len(after) != 2 {
-		t.Fatalf("proxy pods = %d, want 2 after scaling down — the pod with no player count must be kept",
-			len(after))
+	if len(after) != 1 {
+		t.Fatalf("proxy pods = %d, want 1 after scaling down — both known-empty proxies must go and the pod with "+
+			"no player count must be kept", len(after))
 	}
 	if _, ok := f.pod(newest); ok {
-		t.Errorf("the newest pod %s survived; it reported a fresh zero and scale-down must remove the newest replicas first",
+		t.Errorf("the newest pod %s survived; it reported a fresh zero, so it is one of the two emptiest and must go",
 			newest)
 	}
-	if _, ok := f.pod(oldest); !ok {
-		t.Errorf("the oldest pod %s was removed; it is within the replica count", oldest)
+	if _, ok := f.pod(oldest); ok {
+		t.Errorf("the oldest pod %s survived; it reported a fresh zero, and being first in the list is not a reason "+
+			"to keep a proxy nobody is on", oldest)
 	}
 	if _, ok := f.pod(unreported); !ok {
-		t.Errorf("the surplus pod %s was removed on an unknown player count; an agent that has reported nothing "+
+		t.Errorf("the pod %s was removed on an unknown player count; an agent that has reported nothing "+
 			"is indistinguishable from one that died with players on it, and both must be treated as occupied",
 			unreported)
 	}
@@ -669,6 +699,13 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 // readiness for every proxy pod, not just the ones being removed: a surplus
 // pod is told ready=false and every survivor is told ready=true, both on the
 // same pass that discovers the surplus.
+//
+// The two player counts are what decide which pod is which, and they replaced
+// the pods' positions when this milestone made the surplus DecideRollout's
+// answer rather than the tail of a list. They are the honest version of the
+// setup either way: the pod the group keeps is the one with somebody on it,
+// and the test no longer turns on how ties between two indistinguishable pods
+// happen to break.
 func TestSurplusProxyIsToldToStopTakingConnections(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -681,6 +718,8 @@ func TestSurplusProxyIsToldToStopTakingConnections(t *testing.T) {
 	}
 	sortPodsOldestFirst(before)
 	survivor, surplus := before[0], before[1]
+	f.reportProxyPlayers(t, survivor, 1)
+	f.reportProxyPlayers(t, surplus, 0)
 
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
@@ -1339,5 +1378,342 @@ func TestTheDeadlineDeletesLoudly(t *testing.T) {
 	}
 	if !containsEventType(ev, "Warning") {
 		t.Errorf("events = %v, want the deadline recorded as a Warning — it cost somebody their session", ev)
+	}
+}
+
+// TestAStaleProxyIsReplacedOneAtATime is the milestone's subject: a spec
+// change replaces the group's proxies without the ready count ever dipping.
+func TestAStaleProxyIsReplacedOneAtATime(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	for i := range before {
+		f.markProxyPodReady(t, &before[i])
+	}
+
+	// A spec change every pod's digest disagrees with.
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	f.reconcileProxyGroup(r, "gateway")
+	after := f.proxyPods("gateway")
+	if len(after) != 3 {
+		t.Fatalf("proxy pods = %d after the spec change, want 3 — the surge pod must exist before anything is marked", len(after))
+	}
+	for i := range after {
+		if _, dated := drainingSince(&after[i]); dated {
+			t.Errorf("pod %s was marked while the surge pod is still unready; ready capacity would dip below replicas", after[i].Name)
+		}
+	}
+}
+
+// TestTheSurgePodMustBeReadyBeforeAnyPodIsMarked states the property the
+// surge exists for, and it is the one a pod count alone cannot show.
+//
+// The second reconcile with the surge pod still unready is what gives this
+// test its grip, and it was added after the mutation run said so. Without it
+// this test's one pass under an unready surge pod is the pass that creates it,
+// where the group is below its target and the decision is a create with no
+// drain in it whatever the readiness gate says: the gate could be deleted
+// outright and the test would not notice — which is what running that mutation
+// against the version without this pass actually did. On the second pass the
+// group is at its target, so the gate is the last thing standing between a
+// stale pod and the mark.
+func TestTheSurgePodMustBeReadyBeforeAnyPodIsMarked(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	for i := range before {
+		f.markProxyPodReady(t, &before[i])
+	}
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway")
+	// A resync with the surge pod still unready: the group is at its target
+	// size now, so nothing is created and nothing may be marked either.
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+
+	// Make the surge pod ready and reconcile again.
+	pods := f.proxyPods("gateway")
+	if len(pods) != 3 {
+		t.Fatalf("proxy pods = %d, want the group's 2 replicas plus one surge", len(pods))
+	}
+	for i := range pods {
+		if _, dated := drainingSince(&pods[i]); dated {
+			t.Fatalf("pod %s was marked before the surge pod turned ready; the group has 2 replicas and would "+
+				"have been left with 1 ready proxy", pods[i].Name)
+		}
+		f.markProxyPodReady(t, &pods[i])
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	marked := 0
+	for _, p := range f.proxyPods("gateway") {
+		if _, dated := drainingSince(&p); dated {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Errorf("marked = %d, want exactly 1 — a rolling update replaces one proxy at a time", marked)
+	}
+}
+
+// TestChangingReplicasAloneRollsNothing is the reason staleness is a digest of
+// the rendered pod rather than metadata.generation.
+func TestChangingReplicasAloneRollsNothing(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+	pods := f.proxyPods("gateway")
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	f.setProxyReplicas("gateway", 3)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods = f.proxyPods("gateway")
+	if len(pods) != 3 {
+		t.Fatalf("proxy pods = %d, want 3", len(pods))
+	}
+	for _, p := range pods {
+		if _, dated := drainingSince(&p); dated {
+			t.Errorf("pod %s was marked draining after a replicas change; scaling must not roll the group", p.Name)
+		}
+	}
+}
+
+// TestADrainingProxyKeepsItsMarkWhileTheRolloutWaits pins the one piece of
+// state a rollout cannot re-derive on the pass after it decides.
+//
+// DecideRollout deliberately names nobody while another pod is draining — that
+// is what makes the update one proxy at a time — so a caller that rebuilt
+// `leaving` from the decision alone would cancel its own drain on the very next
+// pass: readiness restored, annotation deleted, and then the same choice made
+// again five seconds later with the deadline running from zero. A proxy with a
+// player on it would be told to stop taking connections and to start again,
+// forever, and the drain would never end.
+//
+// Both proxies carry a player so that the one chosen is held open across the
+// passes rather than deleted the moment it is marked, which is what makes the
+// second pass observable at all.
+func TestADrainingProxyKeepsItsMarkWhileTheRolloutWaits(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	for i := range before {
+		f.markProxyPodReady(t, &before[i])
+		f.reportProxyPlayers(t, before[i], 1)
+	}
+
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+
+	// Pass one surges, pass two marks — once the surge pod is ready.
+	f.reconcileProxyGroup(r, "gateway")
+	surged := f.proxyPods("gateway")
+	for i := range surged {
+		f.markProxyPodReady(t, &surged[i])
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	marked, at := "", ""
+	for _, p := range f.proxyPods("gateway") {
+		if _, dated := drainingSince(&p); dated {
+			marked, at = p.Name, p.Annotations[ProxyDrainingSinceAnnotation]
+		}
+	}
+	if marked == "" {
+		t.Fatal("no proxy was marked once the surge pod was ready; there is no drain to keep")
+	}
+
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pod, ok := f.pod(marked)
+	if !ok {
+		t.Fatalf("the marked proxy %s was deleted with a player on it", marked)
+	}
+	if got := pod.Annotations[ProxyDrainingSinceAnnotation]; got != at {
+		t.Errorf("draining-since on %s is now %q, want the original %q — a mark that is dropped and rewritten "+
+			"is a deadline that starts again every pass",
+			marked, got, at)
+	}
+	if got := f.proxies.lastReady(string(pod.UID)); got == nil || *got {
+		t.Errorf("the draining proxy was told ready=%v on the pass after it was marked, want false", got)
+	}
+}
+
+// TestTheRolloutFinishesWithEveryProxyOnTheNewShape drives the whole thing:
+// one spec change, and the operator converges on a group of the new shape
+// without ever running more than the surge over its replica count.
+//
+// Every pod is reported empty, which is what lets a marked proxy go on the pass
+// it is marked; the point here is the sequence, not the wait, which
+// TestADrainingProxyWithPlayersIsNotDeleted already owns.
+func TestTheRolloutFinishesWithEveryProxyOnTheNewShape(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	network := &spawneryv1alpha1.Network{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
+		t.Fatalf("get Network: %v", err)
+	}
+	want, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint)
+	if err != nil {
+		t.Fatalf("desired hash: %v", err)
+	}
+
+	// Ten passes is well over the four this rollout takes — a create and then a
+	// mark for each of the two proxies, the count checked by running the loop
+	// short — so it leaves room for the operator to be slower than expected and
+	// none for it to never finish. The passes after the fourth are not padding
+	// either: they are what says a settled group stays settled instead of
+	// rolling itself forever.
+	for pass := 0; pass < 10; pass++ {
+		pods := f.proxyPods("gateway")
+		for i := range pods {
+			f.markProxyPodReady(t, &pods[i])
+			f.reportProxyPlayers(t, pods[i], 0)
+		}
+		f.reconcileProxyGroup(r, "gateway")
+		if n := len(f.proxyPods("gateway")); n > 3 {
+			t.Fatalf("proxy pods = %d on pass %d, want at most replicas + the surge of 1", n, pass)
+		}
+	}
+
+	done := f.proxyPods("gateway")
+	if len(done) != 2 {
+		t.Fatalf("proxy pods = %d once the rollout settled, want the group's 2 replicas", len(done))
+	}
+	for _, p := range done {
+		if got := p.Labels[podspec.LabelPodHash]; got != want {
+			t.Errorf("pod %s carries hash %q, want the current %q — the rollout left a proxy of the old shape behind",
+				p.Name, got, want)
+		}
+		if _, dated := drainingSince(&p); dated {
+			t.Errorf("pod %s is still marked draining once the rollout settled", p.Name)
+		}
+	}
+}
+
+// TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost covers the other half of
+// why a mark persists: the pod is stale, so it has to go whatever else happens
+// to the group around it.
+//
+// Losing the surge pod — evicted, or its node drained — puts the group back
+// below its target with a marked pod still in it. Nothing in the replica count
+// then argues for the mark, and dropping it would tell a proxy that has already
+// stopped taking connections to start again, only to mark it once more when the
+// replacement surge pod turns ready, with the drain deadline running from zero
+// each time. The mark stays; the operator brings up another surge pod
+// underneath it, which is what the create on this same pass is.
+func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	for i := range before {
+		f.markProxyPodReady(t, &before[i])
+		// A player each, so whichever proxy is chosen is held open long enough
+		// for the passes below to look at it.
+		f.reportProxyPlayers(t, before[i], 1)
+	}
+
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway")
+	surged := f.proxyPods("gateway")
+	for i := range surged {
+		f.markProxyPodReady(t, &surged[i])
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	network := &spawneryv1alpha1.Network{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
+		t.Fatalf("get Network: %v", err)
+	}
+	current, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint)
+	if err != nil {
+		t.Fatalf("desired hash: %v", err)
+	}
+
+	var marked, at, surge string
+	for _, p := range f.proxyPods("gateway") {
+		if p.Labels[podspec.LabelPodHash] == current {
+			surge = p.Name
+		}
+		if _, dated := drainingSince(&p); dated {
+			marked, at = p.Name, p.Annotations[ProxyDrainingSinceAnnotation]
+		}
+	}
+	if marked == "" || surge == "" {
+		t.Fatalf("marked = %q, surge = %q; want both — there is nothing to lose otherwise", marked, surge)
+	}
+
+	lost, ok := f.pod(surge)
+	if !ok {
+		t.Fatalf("surge pod %s not found", surge)
+	}
+	if err := f.c.Delete(f.ctx, lost); err != nil {
+		t.Fatalf("delete the surge pod: %v", err)
+	}
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pod, ok := f.pod(marked)
+	if !ok {
+		t.Fatalf("the marked proxy %s was deleted with a player on it", marked)
+	}
+	if got := pod.Annotations[ProxyDrainingSinceAnnotation]; got != at {
+		t.Errorf("draining-since on the stale proxy %s is now %q, want the original %q — losing the surge pod "+
+			"does not make a proxy of the old shape wanted again", marked, got, at)
+	}
+	if got := f.proxies.lastReady(string(pod.UID)); got == nil || *got {
+		t.Errorf("the stale draining proxy was told ready=%v after the surge pod was lost, want false", got)
+	}
+	if n := len(f.proxyPods("gateway")); n != 3 {
+		t.Errorf("proxy pods = %d, want 3 — a replacement surge pod must come up under the one that is going", n)
 	}
 }

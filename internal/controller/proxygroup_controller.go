@@ -229,16 +229,50 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 	return live, nil
 }
 
-// reconcileReplicas creates or removes pods until the count matches the spec.
-// Scale-down takes the newest first: an older proxy has had longer to collect
-// players, and this milestone has no way to move them.
+// reconcileReplicas creates or removes pods until the count matches the spec,
+// and replaces pods whose rendered shape no longer matches the group.
+//
+// Which pods go is DecideRollout's answer, not this function's: stale before
+// current, then the fewest players, then age. That replaces a rule which took
+// the newest first because an older proxy has had longer to collect players.
+// The old rule was a guess at the player count; the operator now has that
+// count reported by the proxies' own agents, so it uses the number rather than
+// the proxy for it — and falls back to age only when two pods are otherwise
+// indistinguishable. Staleness comes first because a stale pod has to go
+// regardless, and taking a current one ahead of it would drain two pods for
+// one replacement.
 func (r *ProxyGroupReconciler) reconcileReplicas(
 	ctx context.Context,
 	network *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
 ) error {
-	for i := int32(len(pods)); i < group.Spec.Replicas; i++ {
+	wantHash, err := podspec.DesiredProxyHash(network, group, r.AgentEndpoint)
+	if err != nil {
+		// The one place in this function where a single failure stops the
+		// pass: without the current digest no pod's staleness can be judged,
+		// so continuing would either roll nothing or roll everything.
+		return err
+	}
+
+	views := make([]ProxyView, 0, len(pods))
+	for i := range pods {
+		snap := r.Agents.Lookup(string(pods[i].UID))
+		_, dated := drainingSince(&pods[i])
+		views = append(views, ProxyView{
+			Name:         pods[i].Name,
+			Stale:        pods[i].Labels[podspec.LabelPodHash] != wantHash,
+			Ready:        isPodReady(&pods[i]),
+			Draining:     dated,
+			Players:      snap.Players,
+			PlayersStale: snap.PlayersStale,
+			CreatedAt:    pods[i].CreationTimestamp.Time,
+		})
+	}
+
+	decision := DecideRollout(views, group.Spec.Replicas)
+
+	for i := int32(0); i < decision.Create; i++ {
 		pod, err := podspec.BuildProxyPod(network, group, NewProxyName(group.Name), r.AgentEndpoint)
 		if err != nil {
 			return err
@@ -248,17 +282,34 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		}
 	}
 
-	// Which pods are going, decided once and used by both loops below. Today
-	// this is still the surplus tail; Task 4 replaces the right-hand side with
-	// the rollout decision, and nothing else here has to move.
+	// Which pods are going, decided once and used by both loops below.
 	//
 	// Derived rather than re-read from the annotation: on the pass that first
 	// marks a pod, the annotation is not on it yet when the readiness loop
 	// runs, and readiness would lag a whole pass behind the mark.
-	leaving := make(map[string]bool, len(pods))
-	for i := range pods {
-		if i >= int(group.Spec.Replicas) {
-			leaving[pods[i].Name] = true
+	leaving := make(map[string]bool, len(decision.Drain))
+	for _, name := range decision.Drain {
+		leaving[name] = true
+	}
+	// A pod already carrying the mark keeps it while the reason it was marked
+	// still holds — the group is over its replica count, or the pod's shape is
+	// out of date — because DecideRollout deliberately names nobody while
+	// another pod is draining, which is what makes the update one proxy at a
+	// time. Without this the drain started last pass would be cancelled on the
+	// next one and made again on the one after, and each cancellation deletes
+	// the annotation, so the deadline would start from zero every time.
+	//
+	// The condition is what keeps a drain cancellable. Persisting every mark
+	// unconditionally would make a marked pod's readiness remembered rather
+	// than derived, and a scale-down reversed before its pod was gone would
+	// not be reversed on the pod: it would sit NotReady until it emptied, and
+	// then be replaced by one of the same shape.
+	for _, v := range views {
+		if !v.Draining {
+			continue
+		}
+		if v.Stale || int32(len(views)) > group.Spec.Replicas {
+			leaving[v.Name] = true
 		}
 	}
 
