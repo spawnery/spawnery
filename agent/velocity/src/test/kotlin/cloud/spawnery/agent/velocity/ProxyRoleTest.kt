@@ -8,6 +8,7 @@ import cloud.spawnery.agent.pb.ProxyMessage
 import cloud.spawnery.agent.pb.RegisterServer
 import cloud.spawnery.agent.pb.ReportInterval
 import cloud.spawnery.agent.pb.SessionDeadline
+import cloud.spawnery.agent.pb.SetReady
 import cloud.spawnery.agent.pb.UnregisterServer
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -48,6 +49,7 @@ class ProxyRoleTest {
         directory = directory,
         drain = drain,
         onFirstSync = { syncs++ },
+        onSetReady = { },
         log = { message, error -> logs += message to error },
     )
 
@@ -267,12 +269,83 @@ class ProxyRoleTest {
         assertEquals(1, syncs, "a failed first sync consumed the gate's one opening")
     }
 
+    @Test
+    fun `set ready closes and reopens the gate`() {
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onSetReady = { states += it })
+
+        role.onMessage(setReady(false))
+        role.onMessage(setReady(true))
+
+        assertEquals(listOf(false, true), states)
+    }
+
+    @Test
+    fun `a standing not-ready survives the first sync`() {
+        // The pod became surplus while it was still starting: the operator's
+        // instruction arrives before the first FullSync. Opening the gate on that
+        // sync would put a draining proxy back into the Service's endpoints and
+        // send it new players.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(setReady(false))
+        role.onMessage(fullSync())
+
+        assertEquals(listOf(false), states, "the first sync must not open a gate the operator closed")
+    }
+
+    @Test
+    fun `the first sync still opens the gate when nothing was asserted`() {
+        // The ordinary case, and the guard above must not break it.
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(fullSync())
+
+        assertEquals(listOf(true), states)
+    }
+
+    @Test
+    fun `a not-ready after the first sync still closes the gate`() {
+        val states = mutableListOf<Boolean>()
+        val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
+
+        role.onMessage(fullSync())
+        role.onMessage(setReady(false))
+
+        assertEquals(listOf(true, false), states)
+    }
+
+    /**
+     * A second [ProxyRole] over the same collaborators as [role], for the tests
+     * above that need their own `onFirstSync`/`onSetReady` rather than the
+     * counting ones [role] was built with.
+     */
+    private fun newRole(
+        onFirstSync: () -> Unit = { syncs++ },
+        onSetReady: (Boolean) -> Unit = { },
+    ): ProxyRole =
+        ProxyRole(
+            state = state,
+            directory = directory,
+            drain = drain,
+            onFirstSync = onFirstSync,
+            onSetReady = onSetReady,
+            log = { message, error -> logs += message to error },
+        )
+
     private fun backend(name: String, address: String, group: String): PbServer =
         PbServer.newBuilder().setName(name).setAddress(address).setGroup(group).build()
 
     private fun fullSync(vararg servers: PbServer): OperatorToProxy =
         OperatorToProxy.newBuilder()
             .setFullSync(FullSync.newBuilder().addAllServers(servers.toList()))
+            .build()
+
+    private fun setReady(ready: Boolean): OperatorToProxy =
+        OperatorToProxy.newBuilder()
+            .setSetReady(SetReady.newBuilder().setReady(ready))
             .build()
 
     private fun info(name: String, host: String, port: Int) =

@@ -137,6 +137,7 @@ class AgentPlugin @Inject constructor(
             directory = directory,
             drain = Drain(players, router, ::warn),
             onFirstSync = gate::open,
+            onSetReady = { ready -> if (ready) gate.open() else gate.close() },
             log = ::warn,
         )
 

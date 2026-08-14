@@ -51,6 +51,12 @@ class ProxyRole(
     private val directory: ServerDirectory,
     private val drain: Drain,
     private val onFirstSync: () -> Unit,
+    /**
+     * Sets the pod's readiness gate. Called for every SetReady the operator
+     * sends, which it re-asserts whenever it syncs rather than only on a
+     * change -- so this may be called with the value it already has.
+     */
+    private val onSetReady: (Boolean) -> Unit,
     private val log: (String, Throwable?) -> Unit,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
@@ -61,6 +67,14 @@ class ProxyRole(
      * never.
      */
     private val synced = AtomicBoolean(false)
+
+    /**
+     * The last readiness the operator asserted, or null if it never has.
+     * Read by the FullSync branch so a standing instruction wins over the
+     * gate-opening that a first sync would otherwise do.
+     */
+    @Volatile
+    private var asserted: Boolean? = null
 
     override fun open(
         channel: ManagedChannel,
@@ -131,7 +145,7 @@ class ProxyRole(
                 // operator repeats FullSync roughly every 30 seconds. Claiming
                 // the latch first would spend the pod's one chance to become
                 // ready on the attempt that failed.
-                if (synced.compareAndSet(false, true)) onFirstSync()
+                if (synced.compareAndSet(false, true) && asserted != false) onFirstSync()
                 Directive.None
             }
 
@@ -150,6 +164,17 @@ class ProxyRole(
 
             OperatorToProxy.MessageCase.DRAIN_PLAYERS -> {
                 drain.run(message.drainPlayers.fromServer, message.drainPlayers.toGroupsList)
+                Directive.None
+            }
+
+            OperatorToProxy.MessageCase.SET_READY -> {
+                // Remembered as well as applied: the first FullSync must not
+                // open a gate the operator has already closed. A pod that goes
+                // surplus while it is still starting gets the instruction
+                // before its first sync, and opening on that sync would put a
+                // draining proxy back into the Service's endpoints.
+                asserted = message.setReady.ready
+                onSetReady(message.setReady.ready)
                 Directive.None
             }
 
