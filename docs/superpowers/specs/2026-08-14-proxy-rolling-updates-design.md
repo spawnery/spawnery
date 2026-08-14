@@ -75,6 +75,20 @@ builds a change that never rolls out and never says so. This repository counted
 eleven instances of that defect class in 4c-1 alone — a claim that outlives what
 the code beneath it does. A self-maintaining hash removes the opportunity.
 
+> **Amended during implementation (4c-2).** "No field can be forgotten" is true
+> of the rendered *pod* and not of the group's rendered state, and the
+> difference turned out to matter. The pod is not the only rendered artefact:
+> `reconcileConfigMap` renders a second one, and the pod references it by name
+> in a projected volume rather than embedding it. So a field that reaches only
+> the ConfigMap — `spec.config.motd`, `spec.config.onlineMode` — changes
+> nothing the digest can see, and its sibling `spec.config.playerLimit` rolls
+> the group because it reaches the pod as an env var. Three fields under one
+> stanza, two behaviours. The hash is self-maintaining over its own input; what
+> is not automatic is the choice of input. `known-issues.md` records the
+> boundary and the operator instruction; hashing the rendered configuration
+> alongside the rendered pod is left to a later milestone, because deciding
+> when a ConfigMap edit rolls is a milestone's worth of decisions on its own.
+
 **Why not `metadata.generation`, which 4b uses.** `known-issues.md` records
 4b's cost under "From milestone 4b": *"Any spec change begins a changeover.
 `metadata.generation` moves on every edit, so tuning `minReplicas`,
@@ -137,6 +151,21 @@ to drop to 0 the moment a pod was marked, the group would stand at
 immediately mark a second pod: a rolling update that drains the whole group at
 once, which is precisely what "one at a time" forbids.
 
+> **Amended during implementation (4c-2): the conclusion holds, this reason
+> does not.** It depends on the rule order printed below, and the code ships
+> rules 2 and 3 the other way round — see the next note. With the guard ahead
+> of the surplus rule, a group standing at `replicas + 1` with one pod marked
+> returns at the guard and the surplus rule is never reached, so that path is
+> closed with surge or without it.
+>
+> What surge outliving the mark actually buys is rule 1, which is checked
+> *before* the guard. With surge dropped, a group whose surge pod dies while
+> the old one is still draining stands at `replicas` against a target of
+> `replicas`, builds no replacement, and drops to `replicas - 1` ready when the
+> draining pod goes. `TestDecideRollout`'s "the surge pod dying mid-drain is
+> replaced, because surge outlives the mark" pins it, and
+> `docs/handover-milestone-4.md` carries the full derivation.
+
 **Then the rules, in order:**
 
 1. **Fewer pods than `target`** — create the difference. This covers cold
@@ -148,6 +177,36 @@ once, which is precisely what "one at a time" forbids.
    time", and it is one guard rather than a counter.
 4. **A current-generation pod beyond `replicas` is `Ready`, stale pods exist,
    nothing is draining** — mark **one** stale pod draining, chosen by §3.4.
+
+> **Amended during implementation (4c-2), three ways.**
+>
+> **Rules 2 and 3 ship swapped: the guard runs first.** Under the order printed
+> above, a scale-down issued while a replacement drain is in flight reaches the
+> surplus rule and marks a second pod while one is already going — the
+> all-at-once outcome rule 3 exists to prevent, arriving through rule 2. Put
+> the guard first and the drain in flight is finished before any surplus is
+> decided. The reorder is why the surge rationale above needed correcting; it
+> is the code that is right.
+>
+> **Rule 4 counts ready pods of any generation, not current-generation ones.**
+> The gate that shipped is `readyBeyond`: strictly more ready, non-draining
+> pods than `replicas`, stale and current alike. What protects a player is a
+> ready proxy and not which generation supplies it, and the distinction is load
+> bearing for a reverted spec, where the pod holding the spare capacity is the
+> stale one.
+>
+> **Rule 4 has a second disjunct: a stale pod that is not `Ready` may go
+> regardless.** Written as stated, rule 4 has a state it cannot leave. A stale
+> pod that never becomes `Ready` counts towards `stale`, so it holds the surge
+> open and keeps the group at `target`; it contributes nothing to the ready
+> count, so it can never supply the capacity the rule waits for. Every rule
+> declines, none changes the state they declined on, and the rollout stops —
+> silently, with `observedGeneration` advanced and the phase `Ready`. The way
+> in is the ordinary one: an operator bumps `spec.image` because a proxy is
+> crashlooping, and the crashlooping proxy deadlocks the roll issued to replace
+> it. Retiring a pod the kubelet does not call `Ready` costs zero ready
+> capacity, so the rule permits it, and §3.4's order was extended to match so
+> that the pod selected under the new disjunct is that pod.
 
 Rule 3 makes the sequence self-limiting: the cycle only advances when 4c-1's
 deletion loop removes the draining pod, which happens when it is empty or when
@@ -165,6 +224,15 @@ and the group rests at two current pods.
 **Ready capacity never dips below `replicas`.** That is the property the surge
 exists for and the one the tests must state directly rather than infer from a
 pod count.
+
+> **Read precisely, after the rule-4 amendment above.** The property is about
+> what a mark this function makes *costs*: no decision here lowers ready
+> capacity below `replicas`. It is not a claim that a group always has
+> `replicas` ready pods, which nothing in an operator can promise — a pod that
+> crashloops takes the group below its count without anything here having
+> decided anything. That is exactly why the new disjunct is sound: marking a
+> pod that is not `Ready` subtracts zero from a count that is already whatever
+> the cluster made it.
 
 ### 3.3 The annotation becomes the carrier of intent
 
@@ -212,6 +280,46 @@ count, which the operator now has directly.
 **Selection cannot oscillate.** The annotation is written once and never moved,
 so a pod chosen on one pass stays chosen even if the counts change on the next.
 
+> **Amended during implementation (4c-2).** Three differences; the first was
+> found by the whole-branch review, the other two while reconciling this
+> section against `pick` at HEAD.
+>
+> **A readiness clause was added, between 1 and 2: not-`Ready` before
+> `Ready`.** A pod the kubelet does not call `Ready` is behind no Service
+> endpoint, so retiring it costs zero ready capacity — the cheapest thing
+> there is to retire. It sits *above* the player clauses deliberately: a fallen
+> pod's last reported count is what it held before it fell over, so ranking it
+> on that figure ranks it on a number that has stopped meaning anything. This
+> is the half of the §3.2 rule-4 fix that decides *which* pod goes; without it
+> that rule's new disjunct would permit a mark and then hand back a ready pod.
+>
+> **The age tie-break ships newest-first, not oldest-first.** Rule 4 above says
+> oldest; the code sorts `CreatedAt.After`. The reasoning is in `pick`'s doc
+> comment and it is not symmetry: age is a stand-in for the occupancy the
+> operator cannot see, and the case where it carries any information is the one
+> where every count is untrusted — an operator that has just restarted, or a
+> fleet whose agent streams are all down. Marking the oldest there picks the
+> pod most likely to be occupied. Between two counts that are both trusted and
+> equal it decides nothing worth having either way, and only keeps the order
+> deterministic. Note this makes the paragraph above the list only half
+> right: "newest first" was dropped as the *primary* rule for scale-down, since
+> the player count is now had directly, but it survives as the tie-break for
+> exactly the case where that count is unavailable.
+>
+> **The annotation is not written once and never moved.** The surplus-release
+> loop in `reconcileReplicas` hands a mark back when a scale-down is cancelled
+> or partly reversed, and `markDraining` deletes the annotation to do it —
+> `TestACancelledScaleDownPutsTheProxyBack` pins that. Readiness is derived on
+> every pass rather than remembered, which is what makes a drain cancellable at
+> all; a persisted mark would leave a pod `NotReady` until it emptied and then
+> replace it with one of the same shape. Oscillation is still ruled out, but by
+> a different argument than the one printed here: a released pod loses its
+> annotation on the same pass, so it is not `Draining` on the next one and
+> drops out of the candidate set, and nothing but a fresh decision can re-mark
+> it — which `DecideRollout` makes none of while anything is draining. Note
+> also the cost of a release, recorded at the call site: the pod's deadline
+> restarts from zero if it is marked again.
+
 ### 3.5 Pacing: the existing deadline, reused
 
 A stale pod is treated exactly as a surplus one, including
@@ -238,6 +346,35 @@ ConditionReadinessDiverged = "ReadinessDiverged"   // api/v1alpha1/common_types.
 - **True** while at least one pod's `isPodReady()` has disagreed with the
   asserted value for longer than the grace period. The message names the pod.
 - **False** otherwise.
+
+> **Amended during implementation (4c-2): narrowed to the withdrawal
+> direction.** "Disagreed with the asserted value" is unqualified here, so it
+> reads bidirectionally. What shipped is `going && isPodReady(pod)` — a pod
+> just told to stop taking connections that the kubelet still calls `Ready`.
+>
+> The reverse direction, asserted ready but not yet actually `Ready`, is
+> deliberately not checked. `SetReady(true)` is asserted for a non-draining pod
+> from the moment it exists, before any kubelet has probed it once, and a cold
+> pull of the Velocity image outruns the 60s grace easily. Reporting that would
+> name a perfectly behaving pod and tell the operator its agent heard an
+> instruction and ignored it — a misdiagnosis, not noise, sending somebody
+> hunting a broken build while the kubelet is still pulling. The withdrawal
+> direction is the one this section's own "why report rather than repair"
+> argument is about. The other direction is already visible: the group sits
+> below its ready count, and `known-issues.md` carries 3c's
+> "a proxy that cannot bind its ready port is silent on the CR" for the
+> never-turns-ready case.
+>
+> Recorded as a narrowing of this section's letter rather than dressed up as a
+> clarification. If the bidirectional form can be had safely — by counting only
+> a pod that has been `Ready` at least once — that is a later milestone's to
+> weigh.
+>
+> One addition too, to the third bullet above: the event fires on *both*
+> flanks, not only false→true. A `Warning ReadinessDiverged` going in, and a
+> `Normal ReadinessAgrees` coming back out, so a divergence that clears says so
+> rather than leaving the last word on the object a Warning. The comparison is
+> still 4a's `ScalingLimited` shape.
 - One `Warning` event on the false→true edge, compared the way 4a's
   `ScalingLimited` does it — `meta.IsStatusConditionTrue` before and after
   `SetStatusCondition`, because that call only moves `lastTransitionTime` on an
