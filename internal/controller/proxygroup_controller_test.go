@@ -807,6 +807,12 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 		Clock:         f.clock.Now,
 		Expectations:  newExpectations(f.clock.Now),
 		Divergence:    newReadinessDivergence(f.clock.Now),
+		// This literal builds its own reconciler rather than taking the
+		// fixture's, so it has to repeat what newFixture's helper does — see
+		// the comment there. Without it this test kills a mutation on the
+		// divergence event by nil-dereferencing, which is a coincidence of
+		// this literal's shape rather than anything the test asserts.
+		Recorder: record.NewFakeRecorder(100),
 	}
 	f.createProxyGroup("gateway")
 
