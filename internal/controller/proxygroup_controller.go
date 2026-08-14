@@ -324,6 +324,18 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	if create < 0 {
 		create = 0
 	}
+	// A failure partway through this loop -- either return below -- leaves the
+	// reservations made by whichever earlier iterations already succeeded
+	// standing past this Reconcile: Reconcile's second pods() call, the one
+	// that would otherwise observe and clear them, never runs on an error
+	// return. That is deliberate, not a leak: the pods those reservations
+	// name were actually created, controller-runtime requeues on the
+	// returned error, and it is exactly this surviving reservation that stops
+	// the retried reconcile -- which may run before a real informer cache has
+	// caught up with those creates -- from creating duplicates for slots the
+	// failed pass already filled. It clears on the next pass's own pods()
+	// call once the cache shows it, or on the TTL if that call is somehow
+	// never reached.
 	for i := int32(0); i < create; i++ {
 		pod, err := podspec.BuildProxyPod(network, group, NewProxyName(group.Name), r.AgentEndpoint)
 		if err != nil {

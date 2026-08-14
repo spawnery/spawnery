@@ -358,14 +358,20 @@ func TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown(t *testing.
 // TestProxyGroupReconcileReplicasReservesTheRealPodItCreated exercises the
 // reservation's whole lifecycle with a name the API server actually assigned:
 // expectCreated fires with the pod's real generated name under the real
-// composite key, and that reservation is still pending immediately
-// afterward.
+// composite key, that reservation is still pending immediately afterward,
+// and a second pods() call -- the same one Reconcile's status pass makes --
+// clears it. Clearing is already covered structurally: the cap test's real
+// pod has to clear through the second pods() for its arithmetic to hold, and
+// the nine-victim mutation on observePods's create arm shows the rollout
+// suite cannot pass without real-name clearing working. This test names that
+// property directly, so a regression here is diagnosed as a clearing failure
+// rather than rediscovered through unrelated rollout test failures.
 //
 // Not driven through f.reconcileProxyGroup / a full Reconcile: Reconcile
 // calls pods() twice (once before reconcileReplicas, once after for status),
 // and both calls run observePods. With testenv's non-cached client and
 // reconcileReplicas completing without error -- the path both this test and
-// the one below take -- the second pods() call sees the very pods
+// the one above take -- the second pods() call sees the very pods
 // reconcileReplicas just created and clears their reservations before
 // Reconcile returns, so a full Reconcile on that path cannot catch a
 // reservation mid-flight, real name or not. That is why
@@ -402,6 +408,19 @@ func TestProxyGroupReconcileReplicasReservesTheRealPodItCreated(t *testing.T) {
 			"every pod it actually created, under that pod's real generated name "+
 			"and the real composite key -- not a name or key this test made up",
 			pendingCreates, len(created))
+	}
+
+	// The other half of the lifecycle: the status pass's pods() call is what
+	// actually clears a reservation once the cache -- real or, as here,
+	// immediate -- shows the pod. Without this second call the assertion
+	// above only proves expectCreated fires; it says nothing about
+	// observePods ever being satisfied by what expectCreated recorded.
+	if _, err := r.pods(f.ctx, group); err != nil {
+		t.Fatalf("pods (second call): %v", err)
+	}
+	if pendingCreates, _, _ := r.Expectations.pending(key); pendingCreates != 0 {
+		t.Errorf("pending creates = %d after the second pods() call, want 0: "+
+			"observePods must clear a reservation once its pod is listed", pendingCreates)
 	}
 }
 
