@@ -63,6 +63,7 @@ func TestSetupAllRegistersEveryController(t *testing.T) {
 			CA: func() []byte { return []byte("test-ca") },
 		},
 		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
+		Proxies:       &recordingFleet{},
 	}
 	if err := SetupAll(mgr, opts); err != nil {
 		t.Fatalf("SetupAll: %v", err)
@@ -102,12 +103,56 @@ func TestSetupAllRefusesWithoutABootstrapper(t *testing.T) {
 		OrphanInterval:       time.Minute,
 		Registrar:            NoopRegistrar{},
 		AgentEndpoint:        "spawnery-operator.spawnery-system.svc:9443",
+		// Proxies is set so the only possible reason to fail is the missing
+		// Bootstrapper, not the (equally refused) missing Proxies.
+		Proxies: &recordingFleet{},
 	})
 	if err == nil {
 		t.Fatal("SetupAll accepted a nil Bootstrapper")
 	}
 	if !strings.Contains(err.Error(), "bootstrapper") {
 		t.Errorf("error = %q, want it to name the missing bootstrapper", err)
+	}
+}
+
+// Without Proxies the ProxyGroup controller would panic the first time it
+// tries to assert readiness on a pod — in a reconcile goroutine, long after
+// start, exactly like the missing-Bootstrapper case above. Refusing at setup
+// turns that into a startup error nobody can miss.
+func TestSetupAllRefusesWithoutProxies(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: start}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:         testenv.Scheme(t),
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		LeaderElection: false,
+		// So the only possible reason to fail is the missing Proxies and not a
+		// controller name this test binary already used.
+		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	err = SetupAll(mgr, Options{
+		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Clock:                clock.Now,
+		StartupDeadline:      5 * time.Minute,
+		PlayerStatusInterval: 30 * time.Second,
+		OrphanInterval:       time.Minute,
+		Registrar:            NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
+	})
+	if err == nil {
+		t.Fatal("SetupAll accepted a nil Proxies")
+	}
+	if !strings.Contains(err.Error(), "proxies") {
+		t.Errorf("error = %q, want it to name the missing proxies", err)
 	}
 }
 
@@ -159,6 +204,7 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 			CA: func() []byte { return []byte("test-ca") },
 		},
 		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
+		Proxies:       &recordingFleet{},
 	}
 	if err := SetupAll(mgr, opts); err != nil {
 		t.Fatalf("SetupAll: %v", err)

@@ -253,6 +253,11 @@ func init() {
 // Five minutes lets a scale-down in a quiet period finish without kicks while
 // still bounding a deploy. An operator who cares about this should set
 // spec.drain.timeoutSeconds.
+//
+// This only fires for an in-memory zero value: ProxyGroupSpec.Drain's
+// +kubebuilder:default={timeoutSeconds:300} marker means a ProxyGroup that
+// came from the API server already carries 300 in Drain.TimeoutSeconds. The
+// two 300s are independent and must be kept in step by hand.
 const defaultProxyDrainTimeout = 300 * time.Second
 
 // DrainTimeout is how long existing sessions may run out before a proxy being

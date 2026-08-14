@@ -116,7 +116,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if !group.DeletionTimestamp.IsZero() {
 		// The pods and the Service are owned by this object, so the API server
 		// removes them. There is nothing to drain here: moving players is the
-		// proxy's own job and belongs to milestone 4.
+		// proxy's own job, and making deletion wait for it belongs to a later
+		// task.
 		return ctrl.Result{}, nil
 	}
 
@@ -268,6 +269,12 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 // Written once and never moved: the deadline runs from the first assertion,
 // and re-stamping it on every five-second pass would push it forever and the
 // drain would never end.
+//
+// The patch tolerates NotFound like every other API call reconcileReplicas
+// makes for a racing pod (Create tolerates AlreadyExists, Delete tolerates
+// NotFound, Fleet.SetReady is a no-op for a pod it has no session for): a
+// pod evicted or deleted between the informer list and this patch should
+// not fail the whole reconcile over a stamp that no longer matters.
 func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod, draining bool) error {
 	_, marked := pod.Annotations[ProxyDrainingSinceAnnotation]
 	switch {
@@ -277,11 +284,11 @@ func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod
 			pod.Annotations = map[string]string{}
 		}
 		pod.Annotations[ProxyDrainingSinceAnnotation] = r.Clock().UTC().Format(time.RFC3339)
-		return r.Patch(ctx, pod, patch)
+		return client.IgnoreNotFound(r.Patch(ctx, pod, patch))
 	case !draining && marked:
 		patch := client.MergeFrom(pod.DeepCopy())
 		delete(pod.Annotations, ProxyDrainingSinceAnnotation)
-		return r.Patch(ctx, pod, patch)
+		return client.IgnoreNotFound(r.Patch(ctx, pod, patch))
 	}
 	return nil
 }

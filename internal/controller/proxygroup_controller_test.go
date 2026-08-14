@@ -26,6 +26,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -662,22 +663,24 @@ func TestSurplusProxyIsMarkedWithWhenTheDrainStarted(t *testing.T) {
 	}
 }
 
-// TestTheMarkIsNotMovedOnLaterPasses proves markDraining's own guard: the
-// deadline runs from the first assertion, and re-stamping it on a later pass
+// TestMarkDrainingDoesNotMoveAnExistingMark pins markDraining's own guard: the
+// deadline runs from the first assertion, and re-stamping it on a later call
 // would push the deadline forever and the drain would never end.
 //
 // This calls markDraining directly rather than driving two full Reconcile
 // passes over a scaled-down group: reconcileReplicas' own delete loop is
-// unchanged by this task, so the surplus pod envtest leaves behind carries a
-// deletion timestamp, and ProxyGroupReconciler.pods excludes anything
-// terminating from every pass after the one that deleted it — a second
-// Reconcile would never revisit it regardless of whether the guard existed,
-// which would make that version of this test pass even after the mutation in
+// unchanged by this task, and a surplus pod here never leaves Pending —
+// envtest runs no kubelet — so, exactly as deleteSuppressingClient's comment
+// above explains, r.Delete removes it outright in the same reconcile that
+// marked it. There is no deletion timestamp and no pod left for a second
+// Reconcile to revisit, so driving two passes would prove nothing either
+// way: the second pass would never call markDraining on that pod at all,
+// guard or no guard, and this test would pass even after the mutation in
 // Step 6. Calling markDraining directly — the exact call reconcileReplicas
-// itself makes once per live pod per pass — is what actually exercises "on a
-// later pass" here, and the pod is re-read from the API server between the
-// two calls so the guard reacts to what was actually persisted.
-func TestTheMarkIsNotMovedOnLaterPasses(t *testing.T) {
+// itself makes once per live pod per pass — is what actually exercises a
+// second call to the guard, and the pod is re-read from the API server
+// between the two calls so the guard reacts to what was actually persisted.
+func TestMarkDrainingDoesNotMoveAnExistingMark(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
 	f.createProxyGroup("gateway")
@@ -743,6 +746,17 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
 
+	// The mark must actually be there to begin with: otherwise the absence
+	// asserted below would pass just as well against a markDraining whose
+	// write branch had been deleted entirely.
+	drained, ok := f.pod(surplus.Name)
+	if !ok {
+		t.Fatalf("pod %s not found after the scale-down", surplus.Name)
+	}
+	if _, ok := drained.Annotations[ProxyDrainingSinceAnnotation]; !ok {
+		t.Fatal("the surplus proxy carries no draining-since annotation after the scale-down; nothing for the cancel to remove")
+	}
+
 	f.setProxyReplicas("gateway", 2)
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -755,5 +769,82 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 	}
 	if _, ok := pod.Annotations[ProxyDrainingSinceAnnotation]; ok {
 		t.Error("the draining-since annotation outlived the drain")
+	}
+}
+
+// racingPodClient simulates a pod that was evicted or deleted between the
+// informer's list and markDraining's patch: Patch on the named pod returns
+// NotFound, exactly as the real client would if the object were already
+// gone server-side. Delete is also suppressed, the same way
+// deleteSuppressingClient's is, so every pod in reconcileReplicas' assertion
+// loop survives to be inspected afterward — including the pod after the
+// racing one in iteration order, which is what
+// TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile actually
+// checks.
+type racingPodClient struct {
+	client.Client
+	racingPod string
+}
+
+// Patch implements client.Client.
+func (c racingPodClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+	if obj.GetName() == c.racingPod {
+		return apierrors.NewNotFound(corev1.Resource("pods"), obj.GetName())
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+// Delete implements client.Client by doing nothing, for the same reason
+// deleteSuppressingClient's does.
+func (racingPodClient) Delete(context.Context, client.Object, ...client.DeleteOption) error {
+	return nil
+}
+
+// TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile proves
+// markDraining tolerates the same race every other API call in
+// reconcileReplicas already tolerates: Create ignores AlreadyExists, Delete
+// ignores NotFound, and Fleet.SetReady is a no-op for a pod it has no
+// session for. A pod evicted or deleted between the informer's list and this
+// patch must not abort the whole reconcile — the Service, the status, and
+// the other pods' assertions along with it — over a stamp that no longer
+// matters.
+//
+// Three replicas scaled down to one puts two pods in the assertion loop's
+// surplus tail. racingPodClient fails the patch for the first of them
+// (iteration order, not list order) and this test's real assertion is that
+// the second surplus pod — later in the same loop — still gets marked and
+// told ready=false. Without client.IgnoreNotFound around markDraining's
+// Patch, the racing pod's NotFound error propagates out of reconcileReplicas
+// and f.reconcileProxyGroup's own t.Fatalf fires before either check below
+// ever runs.
+func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 3
+	})
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 3 {
+		t.Fatalf("proxy pods = %d, want 3", len(before))
+	}
+	sortPodsOldestFirst(before)
+	racing, other := before[1], before[2]
+
+	r.Client = racingPodClient{Client: r.Client, racingPod: racing.Name}
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+
+	otherPod, ok := f.pod(other.Name)
+	if !ok {
+		t.Fatalf("pod %s not found", other.Name)
+	}
+	if _, ok := otherPod.Annotations[ProxyDrainingSinceAnnotation]; !ok {
+		t.Error("the pod after the racing one in iteration order was never marked; " +
+			"the racing pod's NotFound aborted the rest of the assertion loop")
+	}
+	if got := f.proxies.lastReady(string(otherPod.UID)); got == nil || *got {
+		t.Errorf("the pod after the racing one was told ready=%v, want false", got)
 	}
 }

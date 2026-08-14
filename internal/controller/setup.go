@@ -47,10 +47,9 @@ type Options struct {
 	// operator's gRPC endpoint.
 	AgentEndpoint string
 	// Proxies is how the ProxyGroup controller tells a surplus proxy to stop
-	// taking connections. Optional: a nil value leaves the ProxyGroup
-	// controller unable to set readiness, which is only safe for tests that
-	// never reconcile a ProxyGroup — the production binary always supplies
-	// the real *proxyreg.Fleet.
+	// taking connections. Required: the production binary always supplies the
+	// real *proxyreg.Fleet, and SetupAll refuses a nil value for the same
+	// reason it refuses a nil Bootstrapper.
 	Proxies ProxyReadinessSetter
 }
 
@@ -68,6 +67,12 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	// a goroutine, instead of as a startup error.
 	if opts.Bootstrapper == nil {
 		return fmt.Errorf("no bootstrapper: the server controller cannot create pods without one")
+	}
+	// Refused for the same reason as a nil Bootstrapper: a nil Proxies would
+	// surface as a panic inside a reconcile, minutes after start and in a
+	// goroutine, instead of as a startup error.
+	if opts.Proxies == nil {
+		return fmt.Errorf("no proxies: the proxy group controller cannot set readiness without one")
 	}
 
 	if err := (&NetworkReconciler{
