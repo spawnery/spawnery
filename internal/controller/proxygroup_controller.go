@@ -373,9 +373,11 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// mark back to a pod this loop released — only a fresh decision can, and
 	// DecideRollout makes none while anything is draining.
 	//
-	// The set is not monotone, and the exception is the rollback above: a mark
+	// The set is not monotone. It grows whenever a pass with nothing draining
+	// decides a surplus, which is how every mark here first appears; the
+	// exception while a drain is under way is the rollback above, where a mark
 	// held in the stale branch moves into this one when the spec comes back.
-	// That adds a candidate rather than restoring a released one, so it cannot
+	// Both add a candidate rather than restoring a released one, so neither can
 	// start the cycle this paragraph rules out.
 	if want := int32(len(views)) - staleMarks - group.Spec.Replicas; want > 0 {
 		for _, name := range pick(surplusMarks, want) {

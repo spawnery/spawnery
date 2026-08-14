@@ -1975,6 +1975,9 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	}
 
 	g := f.proxyGroup("gateway")
+	// Kept so the revert below is a revert rather than a second literal that
+	// has to be checked against the fixture's default by eye.
+	shipped := g.Spec.Image
 	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
 	if err := f.c.Update(f.ctx, g); err != nil {
 		t.Fatalf("update: %v", err)
@@ -2001,7 +2004,7 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	// The rollback: the marked proxy matches the spec again, and the surge pod
 	// that was brought up to replace it does not.
 	g = f.proxyGroup("gateway")
-	g.Spec.Image = "ghcr.io/spawnery/velocity:3.4.0-0.2.0"
+	g.Spec.Image = shipped
 	if err := f.c.Update(f.ctx, g); err != nil {
 		t.Fatalf("revert: %v", err)
 	}
