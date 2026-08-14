@@ -32,6 +32,12 @@ const (
 	// configured, and folding the two together would move the group's phase and
 	// make a real fault during peak load indistinguishable from peak load.
 	ConditionScalingLimited = "ScalingLimited"
+	// ConditionBackingOff reports that the group is waiting before it creates
+	// another server, because one or more failed to start. It is deliberately
+	// not folded into Degraded: derivePhase turns a true Degraded into the
+	// group's phase, and a group waiting ten seconds after a single hiccup
+	// would then be indistinguishable from one with a real fault.
+	ConditionBackingOff = "BackingOff"
 )
 
 // Condition reasons.
@@ -48,6 +54,7 @@ const (
 	ReasonExposeNotImplemented = "ExposeStrategyNotImplemented"
 	ReasonMaxReplicasReached   = "MaxReplicasReached"
 	ReasonWithinLimits         = "WithinLimits"
+	ReasonNoRecentFailures     = "NoRecentFailures"
 )
 
 // ObjectRef names another object in the same namespace.

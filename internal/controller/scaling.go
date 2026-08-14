@@ -225,23 +225,15 @@ func readyFree(views []ServerView) int32 {
 // that is not answering demand, and it is why the changeover costs at most one
 // extra server.
 //
-// It is suppressed while a Failed server of the *current* generation is being
-// retained. Without that, a broken new image fails, drops out of
-// countsTowardSize, and is re-created on the next five-second pass forever. The
-// retention window (an hour by default) becomes the interval: one attempt, the
-// old generation serving undisturbed, one corpse to diagnose from. A stale
-// failure does not suppress it — the old generation's corpse says nothing about
-// whether the new image works.
-//
-// That suppression is only as durable as the corpse it reads, and the corpse is
-// pruned by selectFailedForPruning rather than by anything here. Keeping the
-// *newest generation's* failure is what makes the two agree; that function's
-// comment carries the argument, and breaking it turns this window back into the
-// five-second one.
-//
-// This is deliberately not backoff. The floor rule has the same loop and keeps
-// it; giving it a real per-group backoff with a Degraded condition is its own
-// milestone.
+// A Failed server of the current generation does not suppress this. It used to
+// — milestone 4b's stopgap against a broken image being recreated every five
+// seconds — and the per-group backoff replaced it: the same loop is now bounded
+// by a window that starts at seconds and grows only if the failures keep
+// coming, rather than by a flat retention hour after any single failure.
+// DecideSize still returns Create >= 1 whenever coldStart applies — neither
+// this function nor DecideSize does the bounding. It happens on execution, at
+// the gate in servergroup_controller.go (`if backoff.MayCreate`), which skips
+// the create loop entirely while a window is open.
 func coldStart(in ScalingInputs) bool {
 	if in.PendingCreates > 0 {
 		// A pending create is of the current generation in every pass but one:
@@ -261,9 +253,7 @@ func coldStart(in ScalingInputs) bool {
 			continue
 		}
 		if v.Generation == in.Generation {
-			// A retained failure counts here even though countsTowardSize
-			// excludes it, and that is the suppression.
-			if v.Phase == phase.Failed || v.countsTowardSize() {
+			if v.countsTowardSize() {
 				current++
 			}
 			continue

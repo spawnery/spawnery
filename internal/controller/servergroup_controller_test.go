@@ -360,11 +360,25 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 
 	// setMinReplicas performs a real spec update, so the two servers already
 	// up go stale and the cold start orders one replacement. This fixture
-	// never reports for it, so it runs out its startup deadline and is kept:
-	// Failed servers are retained for failedRetentionSeconds (an hour by
-	// default), and the 65 passes above, at one resync each, do not run
-	// long enough to clear it. The corpse is asserted rather than filtered
-	// away, so a missing or a doubled one still fails this test.
+	// never reports for it, so it runs out its startup deadline and fails,
+	// and the corpse is kept: Failed servers are retained for
+	// failedRetentionSeconds (an hour by default), and the 65 passes above,
+	// at one resync each, do not run long enough to clear it.
+	//
+	// The group then builds one more replacement before the loop ends, and
+	// that second attempt is the backoff working rather than a leak. One
+	// failure buys ten seconds; the loop advances five seconds a pass, so
+	// the window closes two passes after the deadline expires and the cold
+	// start is permitted again. Nothing ever reports for that one either, so
+	// it is still starting when the loop stops — live, but not Ready.
+	//
+	// Until milestone 4d this settled on one live server, because 4b's
+	// cold-start suppression held every further attempt off for the whole
+	// retention hour after a single failure. Retiring that suppression is
+	// what makes the second attempt appear, and the wait that replaces it is
+	// ten seconds rather than an hour. Both live servers and the corpse are
+	// asserted rather than filtered away, so a missing or a doubled one
+	// still fails this test.
 	final := f.listServers(t)
 	var live, failed []spawneryv1alpha1.Server
 	for _, s := range final {
@@ -375,15 +389,35 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		live = append(live, s)
 	}
 
-	if len(live) != 1 || live[0].Name != busy {
+	var survivor, attempt *spawneryv1alpha1.Server
+	for i := range live {
+		if live[i].Name == busy {
+			survivor = &live[i]
+			continue
+		}
+		attempt = &live[i]
+	}
+	if len(live) != 2 || survivor == nil || attempt == nil {
 		names := make([]string, 0, len(live))
 		for _, s := range live {
 			names = append(names, s.Name)
 		}
-		t.Fatalf("live servers settled on %v, want only the occupied server %q", names, busy)
+		t.Fatalf("live servers settled on %v, want the occupied server %q and one further "+
+			"cold-start attempt: the backoff permits a second try ten seconds after the "+
+			"first replacement fails", names, busy)
 	}
-	if got := live[0].Status.Phase; got != string(phase.Ready) {
+	if got := survivor.Status.Phase; got != string(phase.Ready) {
 		t.Errorf("phase of the surviving server = %q, want Ready", got)
+	}
+	// The second live server is the attempt the closed window permitted, not
+	// a second survivor: the current generation's, and still starting.
+	if got := attempt.Spec.GroupGeneration; got != f.group.Generation {
+		t.Errorf("second live server's generation = %d, want %d: it is the current "+
+			"generation's next cold start, not a leftover", got, f.group.Generation)
+	}
+	if got := attempt.Status.Phase; got == string(phase.Ready) {
+		t.Errorf("second live server is %q; nothing reports for it in this fixture, so a "+
+			"Ready one means it is not the attempt this assertion is about", got)
 	}
 	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
 		t.Errorf("minAvailable = %d, want 1 — the surviving pod still carries players", got)
@@ -463,6 +497,12 @@ func TestGroupReplacesAFailedServer(t *testing.T) {
 	bringUpNamed(t, f, failed)
 	driveToFailed(t, f, failed)
 
+	// Milestone 4d: the first failure buys a ten-second window, so the
+	// replacement this test is about arrives after it rather than on the very
+	// next pass. What is asserted below is unchanged — a Failed server does not
+	// hold the group at its floor, and a replacement is created while it is
+	// kept for diagnosis — only when the group is allowed to act on it.
+	f.clock.Advance(backoffBase + time.Second)
 	f.reconcileGroup(t, r)
 
 	var replacement string
@@ -2062,5 +2102,921 @@ func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
 			t.Fatalf("%d servers of the new generation after pass %d, want exactly 1: "+
 				"cold start must create one server, not one per five-second pass while it boots", got, i+2)
 		}
+	}
+}
+
+func TestGroupBackoffFieldsRoundTripThroughTheAPIServer(t *testing.T) {
+	f := newFixture(t)
+	g := f.group
+
+	now := metav1.Now()
+	g.Status.ConsecutiveFailures = 3
+	g.Status.LastFailureAt = &now
+	if err := f.c.Status().Update(f.ctx, g); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(g), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status.ConsecutiveFailures != 3 {
+		t.Error("status.consecutiveFailures did not survive the API server; run make manifests")
+	}
+	if got.Status.LastFailureAt == nil {
+		t.Error("status.lastFailureAt did not survive the API server; run make manifests")
+	}
+}
+
+func TestCollectViewsCarriesTheFailureAndReadyTimestamps(t *testing.T) {
+	// Both fields exist on the Server status and were simply never lifted into
+	// the view. The backoff reads them, and a view that leaves them zero makes
+	// every failure look like it happened at the epoch — which counts once and
+	// then never again.
+	f := newFixture(t)
+	f.createServer("lobby-tsx1")
+	r := groupReconciler(f)
+
+	failed := metav1.NewTime(f.clock.Now().Add(-time.Minute))
+	ready := metav1.NewTime(f.clock.Now().Add(-time.Hour))
+	srv := f.server("lobby-tsx1")
+	srv.Status.Phase = string(phase.Failed)
+	srv.Status.FailedAt = &failed
+	srv.Status.ReadySince = &ready
+	if err := f.c.Status().Update(f.ctx, srv); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+
+	views, _, err := r.collectViews(f.ctx, f.group)
+	if err != nil {
+		t.Fatalf("collectViews: %v", err)
+	}
+	if len(views) != 1 {
+		t.Fatalf("got %d views, want 1", len(views))
+	}
+	if !views[0].FailedAt.Equal(failed.Time) {
+		t.Errorf("FailedAt = %v, want %v", views[0].FailedAt, failed.Time)
+	}
+	if !views[0].ReadySince.Equal(ready.Time) {
+		t.Errorf("ReadySince = %v, want %v", views[0].ReadySince, ready.Time)
+	}
+}
+
+// oneServerName is the name of the group's only server. It fails the test on
+// any other number, because every backoff test below reasons about one
+// specific corpse and a second server would change what the count means.
+func (f *fixture) oneServerName(t *testing.T) string {
+	t.Helper()
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want exactly 1", len(servers))
+	}
+	return servers[0].Name
+}
+
+// newestServerName returns the name of the group's one server not yet in
+// phase Failed — the replacement a closed backoff window just allowed — and
+// false once every server the group has ever created has failed and nothing
+// new was created this pass (a give-up, or a window still open).
+func (f *fixture) newestServerName(t *testing.T) (string, bool) {
+	t.Helper()
+	var name string
+	n := 0
+	for _, s := range f.listServers(t) {
+		if s.Status.Phase == string(phase.Failed) {
+			continue
+		}
+		name = s.Name
+		n++
+	}
+	if n != 1 {
+		return "", false
+	}
+	return name, true
+}
+
+// reloadGroup re-reads the group from the API server. The count lives on the
+// status precisely so that it survives a restart, so a test that asserts on it
+// has to read what was persisted rather than the fixture's own copy.
+func (f *fixture) reloadGroup(t *testing.T) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
+	g := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, g); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	return g
+}
+
+// setMaxReplicas moves the group's ceiling, the mirror of setMinReplicas.
+func (f *fixture) setMaxReplicas(t *testing.T, n int32) {
+	t.Helper()
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Scaling.MaxReplicas = n
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+}
+
+// failServer walks an existing server up to Ready and then past its readiness
+// losses into Failed — bringUpNamed and driveToFailed, named once for the
+// tests below. driveToFailed is what makes the Server controller stamp
+// status.failedAt, and that timestamp, not the moment the group observes it,
+// is what the count and the window are measured from.
+func (f *fixture) failServer(t *testing.T, name string) {
+	t.Helper()
+	bringUpNamed(t, f, name)
+	driveToFailed(t, f, name)
+	if f.server(name).Status.FailedAt == nil {
+		t.Fatalf("server %s reached Failed with no status.failedAt; that is the field the count reads", name)
+	}
+}
+
+// failServerNeverReady is failServer's other half, and the one the milestone is
+// actually named for: a server that never becomes playable at all, rather than
+// one that was Ready and flapped.
+//
+// failServer goes bringUpNamed then driveToFailed, so every failure it produces
+// belongs to a server that reached Ready first. That matters twice over. It is
+// not the broken-image scenario the backoff exists for; and it walks through
+// Starting, which clears status.readySince on its own, so it can never show
+// whether the Failed arm's own clearing is doing anything (see
+// TestServerFailedStraightFromReadyClearsReadySince).
+//
+// This walks the other path, with no new machinery: the pod runs, the server
+// enters Starting, and status.startedAt then ages past the reconciler's
+// StartupDeadline with the ready gate never satisfied — phase.Decide's
+// `StartupDeadlineReached && current != Ready` branch. The clock move is what
+// the failure is made of, so it is not a knob: it has to exceed the deadline.
+//
+// It does not, however, buy the caller anything against the backoff. The
+// advance happens *before* the failure, so the failedAt it produces is stamped
+// at the new time and the window opens from there — a caller driving a streak
+// still has to move the clock again afterwards to earn its next attempt.
+func (f *fixture) failServerNeverReady(t *testing.T, name string) {
+	t.Helper()
+	f.reconcile(name)
+	if _, ok := f.pod(name); !ok {
+		t.Fatalf("reconcile did not create the pod for %s", name)
+	}
+	// The kubelet's part, and only that part: the container is up, the probe
+	// never goes green, and no agent ever connects.
+	f.setPodRunning(name, false)
+	f.reconcile(name)
+	if got := f.server(name).Status.Phase; got != string(phase.Starting) {
+		t.Fatalf("phase of %s = %q, want Starting: the startup deadline is only armed on entry to Starting", name, got)
+	}
+
+	f.clock.Advance(f.reconc.StartupDeadline + time.Second)
+	f.reconcile(name)
+
+	srv := f.server(name)
+	if got := srv.Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase of %s = %q after its startup deadline elapsed, want Failed", name, got)
+	}
+	// This would fail regardless of whether the server was ever Ready: entering
+	// Starting or Failed clears status.readySince unconditionally (the phase
+	// switch in server_controller.go), so a failServer corpse — which did reach
+	// Ready — passes this identically. What actually shows this server was
+	// never Ready is the Starting assertion above and the fact that
+	// phase.Decide's Ready case, the only place that sets readySince, is never
+	// reached: the deadline advance runs out before the ready gate is ever
+	// satisfied.
+	if srv.Status.ReadySince != nil {
+		t.Fatalf("server %s carries status.readySince", name)
+	}
+	if srv.Status.FailedAt == nil {
+		t.Fatalf("server %s reached Failed with no status.failedAt; that is the field the count reads", name)
+	}
+}
+
+// shedCount counts the servers the group has asked to remove, ignoring the
+// named ones. envtest runs no kubelet and the Server controller holds a
+// finalizer through the drain, so a deleted Server lingers carrying a deletion
+// timestamp rather than disappearing.
+func (f *fixture) shedCount(t *testing.T, ignore ...string) int {
+	t.Helper()
+	n := 0
+	for _, s := range f.listServers(t) {
+		if containsString(ignore, s.Name) || s.DeletionTimestamp.IsZero() {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// TestGroupStopsCreatingWhileItBacksOff is the point of the milestone: a group
+// whose server failed does not build another one on the next five-second pass.
+func TestGroupStopsCreatingWhileItBacksOff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+
+	name := f.oneServerName(t)
+	f.failServer(t, name)
+
+	// The pass that counts the failure is already inside the window it opens:
+	// the clock has not moved since failedAt was stamped. So the replacement
+	// the floor asks for must not be created on this pass either, and
+	// asserting that here rather than only on the next pass is deliberate.
+	// With the gate removed the replacement appears on exactly this pass, and
+	// a test that took its baseline afterwards would take that replacement for
+	// the baseline and then see nothing wrong on the next pass — where the
+	// floor is satisfied and nothing more is created anyway.
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != 1 {
+		t.Fatalf("%d servers on the pass that counted the failure, want 1: "+
+			"the group built a replacement inside the backoff window it had just opened", got)
+	}
+
+	f.clock.Advance(resyncInterval)
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != 1 {
+		t.Errorf("%d servers five seconds into a ten-second window, want 1", got)
+	}
+
+	g := f.reloadGroup(t)
+	if g.Status.ConsecutiveFailures != 1 {
+		t.Errorf("consecutiveFailures = %d, want 1", g.Status.ConsecutiveFailures)
+	}
+	if g.Status.LastFailureAt == nil {
+		t.Error("lastFailureAt was not stamped, so the count could not survive an operator restart")
+	}
+}
+
+// TestGroupCreatesAgainOnceTheWindowCloses is the other half: the backoff is a
+// wait, not a stop. One failure buys ten seconds and no more.
+func TestGroupCreatesAgainOnceTheWindowCloses(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+
+	before := len(f.listServers(t))
+	f.clock.Advance(backoffBase + time.Second)
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != before+1 {
+		t.Errorf("servers = %d, want %d: the window closed and the group should build again", got, before+1)
+	}
+}
+
+// TestGroupStillShedsWhileItBacksOff pins that the backoff holds back
+// building, not tidying up. A deletion path that waited on an unrelated
+// failure would leave surplus servers standing for the whole window.
+//
+// The window is open by construction rather than by reading a condition:
+// consecutiveFailures is 1 below and the clock has not moved past the failedAt
+// the window runs from, which is DecideBackoff's "must wait" case exactly.
+// Task 4 could only assert consecutiveFailures as a stand-in because the
+// BackingOff condition did not exist yet; now that Task 5 has added it, the
+// assertion below is strengthened to read the condition itself.
+func TestGroupStillShedsWhileItBacksOff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	// No floor and a ceiling of one, so a removal is the only thing this pass
+	// can decide: nothing is short, and the surplus is unambiguous.
+	f.setMinReplicas(t, 0)
+	f.setMaxReplicas(t, 1)
+
+	// Two idle servers against that ceiling, plus a third that fails and opens
+	// the window. The failure does not count toward the group's size, so the
+	// surplus is exactly one of the two idle servers.
+	idle := []string{"lobby-idle-a", "lobby-idle-b"}
+	for _, name := range idle {
+		bringUpReady(t, f, name)
+	}
+	// The failure has to be newer than those two readySince stamps or it is
+	// not a failure since the last success and the streak never starts. The
+	// fixture's clock only moves when a test moves it, so without this the
+	// whole scenario happens in one instant and CountFailures is right to
+	// count nothing.
+	f.clock.Advance(time.Second)
+	broken := "lobby-broken"
+	f.createServer(broken)
+	f.failServer(t, broken)
+
+	f.reconcileGroup(t, r)
+
+	c := meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("BackingOff = %+v, want True: with no window open this proves nothing about shedding while one is", c)
+	}
+	if got := f.shedCount(t, broken); got != 1 {
+		t.Errorf("%d of the two idle servers were shed while the group was backing off, want 1", got)
+	}
+}
+
+// TestGroupStillRetiresWhileItBacksOff pins the other half of the same
+// promise as TestGroupStillSheds: the retire loop in size() must not wait on
+// backoff.MayCreate either. The delete loop is covered above; this is the
+// path a rolling update actually depends on, because a retirement is what
+// starts a soft drain — the only thing in this diff that moves a player's
+// session. A retirement stalled behind the window would be a changeover that
+// stops mid-flight over a failure that has nothing to do with it.
+//
+// The fixture is a group mid-changeover: a stale (previous-generation) Ready
+// server, which is the retirement candidate, and a Ready server of the
+// current generation, which selectRetirement refuses to nominate anything
+// without (design §3.4's "at least one ready server of the current
+// generation"). Both are brought up with the fixture's default scaling
+// (spareSlots 40, maxReplicas 10) so that each Ready server's 100 free slots
+// already clears spare-slot demand and DecideSize reaches the retirement
+// branch rather than a create or a ceiling-driven delete.
+//
+// As in TestGroupStillSheds, the window is proved open by construction:
+// consecutiveFailures reads 1 with the clock still short of failedAt +
+// backoffBase, DecideBackoff's must-wait case exactly.
+func TestGroupStillRetiresWhileItBacksOff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// The retirement candidate, created and readied under the group's
+	// starting generation, before the bump below makes it stale.
+	stale := "lobby-stale"
+	bringUpReady(t, f, stale)
+
+	// The operator's fix in flight: a real generation bump, so the group is
+	// genuinely mid-changeover rather than merely holding one old server.
+	f.bumpGeneration(t)
+
+	// The current-generation Ready server selectRetirement requires before it
+	// will nominate anything. Its readySince is the watermark the failure
+	// below has to clear.
+	current := "lobby-current"
+	bringUpReady(t, f, current)
+
+	// The failure has to be newer than lobby-current's readySince or it is
+	// not a failure since the last success and the streak never starts — see
+	// CountFailures and the identical comment on TestGroupStillSheds above.
+	// ofGeneration excludes the stale server from the count entirely, so only
+	// this watermark matters here.
+	f.clock.Advance(time.Second)
+	broken := "lobby-broken"
+	f.createServer(broken)
+	f.failServer(t, broken)
+
+	f.reconcileGroup(t, r)
+
+	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got != 1 {
+		t.Fatalf("consecutiveFailures = %d, want 1: with no window open this proves nothing about retiring while one is", got)
+	}
+	if !f.server(stale).Spec.Retire {
+		t.Errorf("the stale server was not asked to retire while the group was backing off")
+	}
+}
+
+// TestGenerationChangeClearsTheBackoff pins the way out. A spec change is the
+// operator's answer to whatever broke, so the streak it caused is over and the
+// next attempt is immediate.
+func TestGenerationChangeClearsTheBackoff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got != 1 {
+		t.Fatalf("consecutiveFailures = %d before the spec change, want 1: there is no streak here to clear", got)
+	}
+
+	// The operator's answer to whatever failed.
+	f.bumpGeneration(t)
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	if g.Status.ConsecutiveFailures != 0 {
+		t.Errorf("consecutiveFailures = %d after a spec change, want 0", g.Status.ConsecutiveFailures)
+	}
+	if g.Status.LastFailureAt != nil {
+		t.Error("lastFailureAt survived a spec change")
+	}
+	// A cleared counter means no window, so the group builds at once rather
+	// than serving out the wait the old spec earned.
+	if len(f.serversOfGeneration(t, g.Generation)) == 0 {
+		t.Error("the group created nothing on the pass that cleared the streak; after a spec change the next attempt is immediate")
+	}
+}
+
+// TestBackingOffConditionNamesTheCountAndTheWait pins the waiting half of the
+// two conditions Task 5 adds: after a single failure the group must say it is
+// waiting, name the count, and say roughly how long — and it must not claim a
+// fault. derivePhase turns a true Degraded into the group's phase, so
+// conflating the two would make a ten-second wait look identical to a broken
+// image.
+func TestBackingOffConditionNamesTheCountAndTheWait(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("BackingOff = %+v, want True", c)
+	}
+	if c.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("reason = %q, want %q", c.Reason, spawneryv1alpha1.ReasonCrashLoopBackoff)
+	}
+	if !strings.Contains(c.Message, "1 server") || !strings.Contains(c.Message, "next attempt in") {
+		t.Errorf("message = %q, want the count and the remaining wait", c.Message)
+	}
+	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Error("Degraded is true after a single failure")
+	}
+}
+
+// TestGroupGivesUpAndSaysSo drives the streak all the way to
+// backoffGiveUpAt and checks the other half: once the group has given up,
+// Degraded goes true (so the phase reflects the real fault) and BackingOff
+// goes false — but with a reason and a message that say why, because
+// NoRecentFailures there would be a lie. It then proves the give-up sticks:
+// an hour later, with nothing about the spec changed, the group is carrying
+// its six corpses and nothing live — an absolute count, for the reason the
+// comment on that block gives.
+func TestGroupGivesUpAndSaysSo(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	// Drive the streak to the threshold: fail, wait out the window, repeat.
+	for i := int32(0); i < backoffGiveUpAt; i++ {
+		f.reconcileGroup(t, r)
+		if name, ok := f.newestServerName(t); ok {
+			f.failServer(t, name)
+		}
+		f.reconcileGroup(t, r)
+		f.clock.Advance(backoffCap)
+	}
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	if !meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Fatalf("Degraded is not true after %d failures", backoffGiveUpAt)
+	}
+	if got := meta.FindStatusCondition(g.Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded).Reason; got != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("Degraded reason = %q, want CrashLoopBackoff", got)
+	}
+	if g.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded: derivePhase already maps the condition", g.Status.Phase)
+	}
+	c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if c == nil || c.Status != metav1.ConditionFalse {
+		t.Fatalf("BackingOff = %+v, want False once the group gave up", c)
+	}
+	if c.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("reason = %q, want CrashLoopBackoff rather than an all-clear", c.Reason)
+	}
+
+	// The terminal proof, stated as an absolute count rather than a delta.
+	//
+	// A `before := len(f.listServers(t))` taken here would measure nothing: the
+	// pass that established the give-up has already run, so a mutant that
+	// creates anyway has already created its extra server and that server is
+	// absorbed into the baseline — after which the pass an hour later builds
+	// nothing either way, because the floor is by then satisfied. That is
+	// exactly what the whole-branch review found by mutating DecideBackoff's
+	// threshold branch to {GaveUp: true, MayCreate: true} and watching the
+	// entire envtest suite stay green.
+	//
+	// So count the state itself. backoffGiveUpAt failures produce
+	// backoffGiveUpAt corpses — pruneFailed asks for all but one to go, but the
+	// Server controller holds a finalizer through the drain and this test never
+	// reconciles a Server again, so every corpse lingers in phase Failed — and
+	// **nothing live at all**. A group that gave up and created anyway shows up
+	// here as a live server, whenever in the run it was built.
+	f.clock.Advance(time.Hour)
+	f.reconcileGroup(t, r)
+	live, corpses := 0, 0
+	for _, s := range f.listServers(t) {
+		if s.Status.Phase == string(phase.Failed) {
+			corpses++
+			continue
+		}
+		live++
+	}
+	if live != 0 {
+		t.Errorf("%d live server(s) after the group gave up, want 0: a group past the threshold creates nothing", live)
+	}
+	if corpses != int(backoffGiveUpAt) {
+		t.Errorf("%d corpses, want %d — one per counted failure", corpses, backoffGiveUpAt)
+	}
+}
+
+// TestGroupGivesUpOnServersThatNeverBecomeReady drives the milestone's headline
+// case end to end, which nothing else in this package did: a group whose
+// servers run out their startup deadline without ever becoming playable — a
+// broken image, an unpullable tag, a config the server rejects on boot — makes
+// its six attempts and then gives up.
+//
+// Every other backoff test here fails its servers with failServer, which is
+// bringUpNamed plus driveToFailed: a server that reached Ready and then
+// flapped. Those are valid assertions about the state at count 6, but they are
+// a different scenario, and one that a production reconciler at a five-second
+// resync would see differently — it would observe the Ready state in between
+// and CountFailures would correctly reset the streak. Nothing was checking that
+// a server which is *never* Ready climbs the same ladder. It does, and this is
+// where that is written down.
+//
+// The round is the same shape as TestGroupGivesUpAndSaysSo's — fail, wait out
+// the window, repeat — and the wait is backoffCap for the same reason: it
+// exceeds every window the schedule can open before the threshold (160s at the
+// most), so no round is held back by a wait this test is not about. Aging the
+// server out of its startup deadline does not serve as that wait, because the
+// advance precedes the failure it causes and the window runs from the failedAt
+// it stamps.
+func TestGroupGivesUpOnServersThatNeverBecomeReady(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+
+	for i := int32(0); i < backoffGiveUpAt; i++ {
+		f.reconcileGroup(t, r)
+		name, ok := f.newestServerName(t)
+		if !ok {
+			t.Fatalf("round %d: the group has no live server to fail, so it stopped creating early", i+1)
+		}
+		f.failServerNeverReady(t, name)
+		f.reconcileGroup(t, r)
+		f.clock.Advance(backoffCap)
+	}
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	if got := g.Status.ConsecutiveFailures; got != backoffGiveUpAt {
+		t.Fatalf("consecutiveFailures = %d, want %d", got, backoffGiveUpAt)
+	}
+	if !meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Fatalf("Degraded is not true after %d servers failed to start at all", backoffGiveUpAt)
+	}
+	if got := meta.FindStatusCondition(g.Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded).Reason; got != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("Degraded reason = %q, want CrashLoopBackoff", got)
+	}
+	if g.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded", g.Status.Phase)
+	}
+
+	// The absolute state, for the reason TestGroupGivesUpAndSaysSo's tail gives:
+	// six corpses, none of which was ever Ready, and nothing live.
+	live, corpses := 0, 0
+	for _, s := range f.listServers(t) {
+		if s.Status.Phase != string(phase.Failed) {
+			live++
+			continue
+		}
+		corpses++
+		// This would fail regardless of whether the server was ever Ready:
+		// entering Starting or Failed clears status.readySince unconditionally,
+		// so a failServer corpse — which did reach Ready — passes this
+		// identically. What actually establishes that these six were never
+		// Ready is failServerNeverReady's own Starting assertion and the ready
+		// gate its deadline advance never satisfies.
+		if s.Status.ReadySince != nil {
+			t.Errorf("corpse %s carries status.readySince", s.Name)
+		}
+	}
+	if live != 0 {
+		t.Errorf("%d live server(s) after the group gave up, want 0", live)
+	}
+	if corpses != int(backoffGiveUpAt) {
+		t.Errorf("%d corpses, want %d — one per counted failure", corpses, backoffGiveUpAt)
+	}
+}
+
+// TestBackingOffEventFiresOnTheFlankOnly pins the same non-spam rule
+// ScalingLimited already carries: SetStatusCondition moves lastTransitionTime
+// only on a real change of status, so comparing across the call is what tells
+// a transition apart from a five-second resync, and an event belongs only on
+// the former.
+func TestBackingOffEventFiresOnTheFlankOnly(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+
+	// scalingEvents drains the recorder, so this first call also empties it of
+	// whatever fired on the two passes above.
+	if first := scalingEvents(rec, spawneryv1alpha1.ReasonCrashLoopBackoff); first != 1 {
+		t.Fatalf("events = %d after the first failure, want 1", first)
+	}
+	f.clock.Advance(time.Second)
+	f.reconcileGroup(t, r)
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonCrashLoopBackoff); got != 0 {
+		t.Errorf("events = %d after a resync inside the same window, want 0: the event goes on the flank", got)
+	}
+}
+
+// TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff pins the review's
+// finding 1 on Task 5: the BackingOff/Degraded event guards must check sized
+// the same way ScalingLimited's guard does (`if sized && decision.Limited !=
+// was`). Without that check, a group whose Network dies while it is actively
+// backing off flips BackingOff from True to the !sized case's False on the
+// very next pass — a real transition by IsStatusConditionTrue's bookkeeping,
+// even though nothing was decided — and fires an event carrying the
+// condition's default NoRecentFailures reason next to a message that says
+// the opposite: that backoff is not being decided, not that servers are
+// healthy. A reassuring Reason paired with an unresolved-problem Message is
+// exactly what the sized guard exists to prevent.
+func TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.failServer(t, f.oneServerName(t))
+	f.reconcileGroup(t, r)
+
+	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionBackingOff) {
+		t.Fatalf("BackingOff is not true after a failure; the network-dies-mid-backoff pass below would prove nothing")
+	}
+	// Drains the recorder of everything that fired getting here (this test is
+	// about the next pass only); scalingEvents empties the whole channel
+	// regardless of which reason it is asked to count.
+	scalingEvents(rec, spawneryv1alpha1.ReasonCrashLoopBackoff)
+
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete network: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonNoRecentFailures); got != 0 {
+		t.Errorf("events = %d when the network died mid-backoff, want 0: nothing was decided this pass, so no event should fire", got)
+	}
+}
+
+// TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp is the mirror of
+// TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff, and it exists
+// because the whole-branch review reproduced the asymmetry: dropping `sized &&`
+// from the *Degraded* event guard alone left the entire suite green, while its
+// byte-identical twin on the backingOff guard was already pinned by that test.
+// An unpinned guard sitting beside a pinned identical one is a trap — the next
+// person to touch the block has a test telling them one of the two matters and
+// nothing telling them the other does.
+//
+// The mechanism is the same as the twin's, one condition over. A group that has
+// given up carries Degraded: True. If its Network then dies, the !sized case
+// forces Degraded back to the false-by-default condition, whose reason is
+// NoRecentFailures — a real transition by IsStatusConditionTrue's bookkeeping,
+// even though nothing was decided this pass. Without the sized check that fires
+// an all-clear "servers are starting normally" reason next to a message saying
+// the opposite, for a group that is six failures deep and creating nothing.
+//
+// NoRecentFailures is the right thing to count and it is unambiguous here:
+// backingOff is False on both passes (CrashLoopBackoff at the give-up, then
+// NoRecentFailures under !sized), so its own guard sees no transition and
+// cannot contribute an event, and ScalingLimited's reason on the !sized pass is
+// WithinLimits. Any NoRecentFailures event reaching the recorder came from the
+// Degraded guard.
+func TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+	f.setMinReplicas(t, 1)
+	for i := int32(0); i < backoffGiveUpAt; i++ {
+		f.reconcileGroup(t, r)
+		if name, ok := f.newestServerName(t); ok {
+			f.failServer(t, name)
+		}
+		f.reconcileGroup(t, r)
+		f.clock.Advance(backoffCap)
+		// The recorder's channel blocks its writer once full and nothing else
+		// here drains it; six failures' worth of group events is close enough
+		// to a hundred to be worth not finding out. See drainRecorder.
+		drainRecorder(rec)
+	}
+	f.reconcileGroup(t, r)
+
+	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Fatalf("Degraded is not true after %d failures; the network-dies pass below would prove nothing", backoffGiveUpAt)
+	}
+	// Drains everything that fired getting here: this test is about the next
+	// pass only.
+	drainRecorder(rec)
+
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete network: %v", err)
+	}
+	f.reconcileGroup(t, r)
+
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonNoRecentFailures); got != 0 {
+		t.Errorf("events = %d when the network died after a give-up, want 0: "+
+			"nothing was decided this pass, so no all-clear event should fire", got)
+	}
+}
+
+// TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened pins the
+// !newestFailure.IsZero() guard in Reconcile around the write to
+// group.Status.LastFailureAt. No test that reloads the group can ever tell a
+// guarded write apart from an unguarded one: a zero metav1.Time marshals to
+// null and round-trips back to nil either way, so the field itself carries no
+// evidence. What the guard actually protects is the in-memory value on this
+// same pass, and the default BackingOff message is what reads it back — so a
+// group that has never failed must render the plain, dateless message, not a
+// zero time smuggled in by an unconditional write.
+func TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+
+	c := meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if c == nil {
+		t.Fatal("BackingOff condition was not published")
+	}
+	if c.Message != "no server has failed to start recently" {
+		t.Errorf("message = %q, want the plain no-history message with no timestamp", c.Message)
+	}
+}
+
+// TestGenerationChangeClearsAGaveUpGroupsConditions closes out the carried
+// finding that the generation-change RemoveStatusCondition calls were
+// completely untested: until this task nothing ever set either condition, so
+// the removal had nothing to prove. Driving a real give-up first, then a real
+// spec change, is what makes this a test of the clear rather than of two
+// conditions that were already absent.
+func TestGenerationChangeClearsAGaveUpGroupsConditions(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	for i := int32(0); i < backoffGiveUpAt; i++ {
+		f.reconcileGroup(t, r)
+		if name, ok := f.newestServerName(t); ok {
+			f.failServer(t, name)
+		}
+		f.reconcileGroup(t, r)
+		f.clock.Advance(backoffCap)
+	}
+	f.reconcileGroup(t, r)
+
+	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Fatalf("Degraded is not true after %d failures; the generation change below would prove nothing", backoffGiveUpAt)
+	}
+
+	// The operator's answer to whatever failed.
+	f.bumpGeneration(t)
+	f.reconcileGroup(t, r)
+
+	g := f.reloadGroup(t)
+	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+		t.Error("Degraded still true after the spec change that answers it")
+	}
+	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff) {
+		t.Error("BackingOff still true after the spec change")
+	}
+	if got := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff).Reason; got != spawneryv1alpha1.ReasonNoRecentFailures {
+		t.Errorf("BackingOff reason = %q after the spec change, want %q: the give-up reason must not survive it", got, spawneryv1alpha1.ReasonNoRecentFailures)
+	}
+	if got := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded).Reason; got != spawneryv1alpha1.ReasonNoRecentFailures {
+		t.Errorf("Degraded reason = %q after the spec change, want %q: the give-up reason must not survive it", got, spawneryv1alpha1.ReasonNoRecentFailures)
+	}
+}
+
+// TestBackingOffIsNotDecidedWithoutAUsableNetwork closes out the carried
+// finding that the counting block sits ahead of the networkUsable &&
+// IsEphemeral guard: a group whose Network does not exist still counts and
+// still computes a real backoff decision it cannot act on. Publishing that
+// decision as BackingOff/Degraded would sit a second, differently-worded
+// explanation for the same standstill next to Accepted: False. It has to say
+// nothing was decided instead, mirroring ScalingLimited's own !sized case
+// exactly.
+func TestBackingOffIsNotDecidedWithoutAUsableNetwork(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	orphan := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "nowhere", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: spawneryv1alpha1.ObjectRef{Name: "missing"},
+			Type:       spawneryv1alpha1.ServerGroupEphemeral,
+			Image:      "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers: 100,
+			Scaling:    &spawneryv1alpha1.ScalingSpec{MinReplicas: 1, MaxReplicas: 2, SpareSlots: 10},
+		},
+	}
+	if err := f.c.Create(f.ctx, orphan); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "nowhere", Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "nowhere", Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	backingOff := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if backingOff == nil || backingOff.Status != metav1.ConditionFalse {
+		t.Fatalf("BackingOff = %+v on a group without its Network, want False", backingOff)
+	}
+	if backingOff.Message != "backoff is not being decided: the group's network is not usable" {
+		t.Errorf("message = %q, want the not-decided message", backingOff.Message)
+	}
+	degraded := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionFalse {
+		t.Fatalf("Degraded = %+v on a group without its Network, want False", degraded)
+	}
+	if degraded.Message != "backoff is not being decided: the group's network is not usable" {
+		t.Errorf("message = %q, want the not-decided message", degraded.Message)
+	}
+}
+
+// drainRecorder empties a FakeRecorder's buffer and throws the events away.
+// The channel is bounded and blocks its writer once full, and nothing in this
+// suite drains it, so a test that walks many servers through a whole lifecycle
+// wedges the reconciler mid-event rather than reaching its assertion. Only a
+// test that deliberately drives that much lifecycle needs this; scalingEvents
+// above drains as a side effect of counting, which is enough everywhere else.
+func drainRecorder(rec *record.FakeRecorder) {
+	for {
+		select {
+		case <-rec.Events:
+		default:
+			return
+		}
+	}
+}
+
+// TestGroupWithABrokenNewImageDoesNotRebuildEveryPass is the loop milestone
+// 4b's cold-start suppression was a stopgap for: a broken new image fails,
+// stops counting toward the group's size, and is recreated on the next
+// five-second pass, forever. It asserts the backoff bounds that loop, so the
+// stopgap can be removed without reopening it.
+//
+// Three deliberate departures from the obvious way to write this:
+//
+// Every server of the new generation is failed on each pass, rather than "the
+// one server that has not failed yet". The stale server the changeover is
+// replacing stays Ready throughout, so that description matches two servers
+// whenever a replacement exists and identifies neither — and a loop that
+// failed nothing would pass this test with the backoff, the stopgap and
+// everything else removed.
+//
+// The clock advances before each failure rather than after, so the first
+// failedAt is strictly newer than the stale server's readySince.
+// CountFailures restarts the streak on a success newer than the last counted
+// failure and a same-instant stamp is not after it, so without this the run
+// would count no failures at all.
+//
+// The bound is read off the backoff schedule rather than set at one more than
+// the cold start built. Ten passes move the clock fifty seconds:
+// passes * resyncInterval = 10 * 5s = 50s. backoffDelay(n) = backoffBase *
+// backoffFactor^(n-1) gives windows of 10s, 20s, 40s for n = 1, 2, 3
+// (backoffBase = 10s, backoffFactor = 2, both in backoff.go). Two windows'
+// worth fit inside 50s (10s, then 20s more — 30s elapsed) and the third does
+// not (40s more would need 70s), so two replacements are legitimately built
+// on top of the cold start's own server: bound = 1 + 2 = 3. A group
+// rebuilding every pass would have built eleven. Changing passes,
+// backoffBase, backoffFactor or resyncInterval moves this arithmetic and
+// will turn this red — that is a fixture change, not a backoff regression.
+func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
+	const (
+		passes = 10
+		bound  = 3
+	)
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	f.markReady(t, f.oneServerName(t))
+
+	f.bumpGeneration(t) // the changeover begins; the cold start builds one
+	f.reconcileGroup(t, r)
+	generation := f.reloadGroup(t).Generation
+
+	// Every replacement fails immediately, and the clock moves only by the
+	// resync interval — far less than the backoff's first window.
+	for i := 0; i < passes; i++ {
+		// Both recorders, every pass: a group that rebuilt every pass — the
+		// failure this test exists to catch — produces ten servers' worth of
+		// lifecycle events, which is more than a FakeRecorder holds.
+		drainRecorder(f.reconc.Recorder.(*record.FakeRecorder))
+		drainRecorder(r.Recorder.(*record.FakeRecorder))
+		f.clock.Advance(resyncInterval)
+		for _, s := range f.serversOfGeneration(t, generation) {
+			if s.Status.Phase != string(phase.Failed) {
+				f.failServer(t, s.Name)
+			}
+		}
+		f.reconcileGroup(t, r)
+	}
+
+	if got := len(f.serversOfGeneration(t, generation)); got > bound {
+		t.Errorf("group built %d servers of the new generation across %d passes, want at most %d: "+
+			"the backoff must bound the loop", got, passes, bound)
 	}
 }

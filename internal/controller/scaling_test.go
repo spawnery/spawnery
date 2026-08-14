@@ -494,38 +494,6 @@ func TestDecideSizeDoesNotColdStartWhenAReplacementIsAlreadyUp(t *testing.T) {
 	}
 }
 
-func TestDecideSizeDoesNotColdStartAgainstARetainedFailure(t *testing.T) {
-	// A broken image is the most likely way an update goes wrong, and the
-	// cold start would otherwise re-create against it every five seconds
-	// forever. The retained failure is the window: one attempt per
-	// failedRetentionSeconds, the old generation serving throughout, one
-	// corpse left to diagnose from. This is not backoff and does nothing
-	// for the floor rule's own loop.
-	failed := ServerView{Name: "b", Phase: phase.Failed, Generation: 4}
-	got := DecideSize(ScalingInputs{
-		Views:       []ServerView{staleReady("a", 60, 100, 3), failed},
-		Generation:  4,
-		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
-	})
-	if got.Create != 0 {
-		t.Errorf("Create = %d, want 0 while a failure of the current generation is retained", got.Create)
-	}
-}
-
-func TestDecideSizeStaleFailureDoesNotBlockTheColdStart(t *testing.T) {
-	// The corpse of the *old* generation says nothing about whether the new
-	// image works, so it must not hold the update back.
-	failed := ServerView{Name: "b", Phase: phase.Failed, Generation: 3}
-	got := DecideSize(ScalingInputs{
-		Views:       []ServerView{staleReady("a", 60, 100, 3), failed},
-		Generation:  4,
-		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
-	})
-	if got.Create != 1 {
-		t.Errorf("Create = %d, want 1 — a stale failure is not evidence about the new generation", got.Create)
-	}
-}
-
 func TestDecideSizeReportsAColdStartTheCeilingRefuses(t *testing.T) {
 	// A group pinned at maxReplicas has no room for the one extra server the
 	// changeover needs, so the update cannot begin. Stalling is right — the
@@ -1187,48 +1155,6 @@ func TestDecideSizeDoesNotShedForARealShortfallEvenWhenTheColdStartIsRefused(t *
 	}
 	if !got.Limited {
 		t.Errorf("Limited = %v, want true — the shortfall is real and stays visible", got.Limited)
-	}
-}
-
-// TestPruningDoesNotTakeAwayTheColdStartSuppression is the interaction §3.7's
-// guard depends on and no task-scoped review was positioned to see. The
-// suppression reads a Failed server of the current generation; pruning decides
-// which failure survives. If pruning takes that one, the guard lasts exactly as
-// long as the reconcile that observed it.
-func TestPruningDoesNotTakeAwayTheColdStartSuppression(t *testing.T) {
-	base := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
-	fOld := ServerView{Name: "f-old", Phase: phase.Failed, Generation: 3, CreatedAt: base.Add(-2 * time.Hour)}
-	cNew := ServerView{Name: "c-new", Phase: phase.Failed, Generation: 4, CreatedAt: base}
-	views := []ServerView{fOld, staleReady("a", 60, 100, 3), cNew}
-
-	in := ScalingInputs{
-		Views:      views,
-		Generation: 4, MaxUnavailable: 1,
-		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
-	}
-	if got := DecideSize(in).Create; got != 0 {
-		t.Fatalf("Create = %d, want 0 while a failure of the current generation is retained", got)
-	}
-
-	pruned := selectFailedForPruning(views, maxRetainedFailures)
-	if len(pruned) != 1 || pruned[0] != "f-old" {
-		t.Fatalf("selectFailedForPruning = %v, want [f-old]: pruning c-new deletes the "+
-			"only thing suppressing the cold start", pruned)
-	}
-
-	// What the next reconcile sees, once the prune has landed.
-	survivors := make([]ServerView, 0, len(views))
-	for _, v := range views {
-		if v.Name == pruned[0] {
-			continue
-		}
-		survivors = append(survivors, v)
-	}
-	in.Views = survivors
-	if got := DecideSize(in).Create; got != 0 {
-		t.Errorf("Create = %d after the prune, want 0 — the suppression has to survive "+
-			"pruning, or the create/fail loop runs at time-to-fail instead of once "+
-			"per failedRetentionSeconds", got)
 	}
 }
 

@@ -796,6 +796,20 @@ drain, which needs the same real cluster to prove.
 has only an upper bound of one retained failure per group. Belongs to 4b,
 alongside its per-group backoff on rolling-update failures.
 
+*Met* by milestone 4d's `CountFailures` and `DecideBackoff`
+(`internal/controller/backoff.go`): a counter on `ServerGroupStatus`
+(`consecutiveFailures`, `lastFailureAt`) tracks the streak, `ConditionBackingOff`
+reports the wait with the count and the remaining time in its message, and at
+six consecutive failures the group sets `Degraded` with reason
+`CrashLoopBackoff` and creates nothing further until `metadata.generation`
+moves. It shipped as its own sub-milestone rather than folded into 4b — cut out
+during 4b's own brainstorm on the measurement that it shares no code with the
+rolling update — but it is the same backoff this entry pointed at. The bound
+this entry named, "an upper bound of one retained failure per group," is
+`maxRetainedFailures = 1` and it stays: it still caps the footprint of a
+failure, not the rate of retrying after one, which is now bounded separately.
+See `docs/superpowers/specs/2026-08-13-per-group-backoff-design.md`.
+
 **`ProxyGroupReconciler.pods()` has no expectations tracking — half of this is
 now closed.** The `ServerGroup` side is: `internal/controller/expectations.go`
 gives `ServerGroupReconciler` create and delete reservations keyed by name, so
@@ -971,6 +985,80 @@ rate at which the group tries again. Real per-group exponential backoff with
 the `Degraded` condition (master design §7) belongs to its own spec, which is
 next.
 
+*Met* by milestone 4d's per-group backoff, which subsumes this suppression
+rather than fixing its ordering further. `CountFailures` and `DecideBackoff`
+(`internal/controller/backoff.go`) count consecutive failures on
+`ServerGroupStatus` and gate the create call site in
+`ServerGroupReconciler.size()` with a window that starts at ten seconds and
+doubles, rather than this suppression's flat `failedRetentionSeconds` hour
+after any single failure. The `coldStart` branch this entry describes — the
+one counting a retained current-generation `Failed` server — is removed,
+along with the tests that pinned it, and the loop it closed is now closed by
+the backoff instead: `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`
+holds a group with a permanently broken new generation to at most 3 servers
+across 10 five-second passes, and fails without the backoff gate (20
+servers built against that bound) — the mutation was run, not assumed.
+Restoring the removed suppression itself was also tried, and fails only the
+rewritten tail of `TestOccupiedServerSurvivesAContinuousScaleDown`, so that
+test is what now pins the removal.
+`maxRetainedFailures = 1` stays, and still bounds only the footprint — one
+corpse retained for diagnosis — not the rate; the rate is what the backoff
+now bounds. `selectFailedForPruning`'s newest-generation-first ordering,
+which this entry's own fix made load-bearing for the suppression, stays too,
+for the reason it always had independent of the suppression: the first
+failure after a generation bump is the one that says what broke, and the
+previous generation's corpse says nothing about the new image. See
+`docs/superpowers/specs/2026-08-13-per-group-backoff-design.md`.
+
+## From milestone 4d
+
+**A group whose `minReplicas` is 6 or more gives up after a single round of
+failures, with no retry at all.** The backoff's threshold
+(`backoffGiveUpAt = 6`, `internal/controller/backoff.go`) counts failed
+*servers*, not failed rounds. `size()` creates the whole shortfall in one pass
+— for a group starting from nothing the floor term `minReplicas - alive` is
+the entire floor at once — and `CountFailures` then counts every `Failed` view
+in a single pass. So the budget of six is spent in `⌈6 / minReplicas⌉` rounds:
+three attempts at `minReplicas 2`, two at 3, and exactly one at 6 or above.
+Verified rather than reasoned about:
+`DecideSize({MinReplicas: 6, MaxReplicas: 10, SpareSlots: 10, MaxPlayers: 100})`
+returns `Create: 6`, `CountFailures` over those six same-instant `Failed` views
+returns 6, and `DecideBackoff` turns that straight into
+`GaveUp: true, MayCreate: false`.
+
+The operational consequence is what matters here, because giving up is
+terminal: a transient scheduler, registry or quota problem that fails a whole
+floor's worth of servers at once takes a large group straight to
+`Degraded`/`CrashLoopBackoff`, and design §3.5 makes the way back a spec edit
+by a human — the group will not recover on its own however long the problem
+lasted or how quickly it cleared. Nothing is lost and no player is
+disconnected by this on its own; the group simply stays at zero new servers
+until somebody touches it. If a group with a floor above one is found
+`Degraded` shortly after a cluster-wide hiccup, this is very likely why, and
+any spec change clears it (a `metadata.generation` bump is all the reconciler
+looks at).
+
+Design §3.6 and §5 are both narrated at `minReplicas 1`, where the schedule is
+the intended one free attempt plus five growing waits. §3.6 now says so
+explicitly and §11 carries the open design question — whether the schedule
+should count rounds, or the threshold should scale with the floor. Neither was
+decided in 4d, and changing it is a behaviour change, not a fix.
+
+**Which message an operator sees first when a group has both given up and a
+dead `Network` is unpinned.** The `BackingOff`/`Degraded` switch in
+`ServerGroupReconciler.Reconcile` tests `!sized` before `backoff.GaveUp`, so a
+group whose `Network` died while it was also six failures deep gets "backoff
+is not being decided: the group's network is not usable" rather than "not
+retrying: change the group's spec to try again" — even though the failure
+count that produced `GaveUp` is computed from the views before `sized` is
+known, and does not depend on the `Network` at all. Moving the `!sized` case
+after `GaveUp` in the switch leaves the whole suite green: both messages are
+true of a group in that state, which is likely why nothing distinguishes
+them, but which one an operator should see first is a real question and
+nothing checked in answers it. Worth a deliberate ruling, and a test that
+pins whichever order is chosen, rather than leaving the switch's current
+order as an accident of how it was written.
+
 ## Preconditions for milestone 5 (persistent groups)
 
 If a server's `ServerGroup` is missing, the server controller carries on with
@@ -1120,3 +1208,28 @@ intentional — the following points each concern only one of the two halves.
   the shared symlink, up to a half-written one mid-swap. `nix build
   --out-link` with two distinct names (e.g. `result-paper` and
   `result-velocity`) closes it; nothing does that today.
+- **`record.FakeRecorder`'s buffered channel blocks its writer once full.**
+  Almost every fixture in `internal/controller` builds its recorder with
+  `record.NewFakeRecorder(100)`, but the buffer is per call site and not a
+  package-wide constant: `server_controller_test.go` builds one with 20. The
+  channel holds exactly as many events as its own call site asked for,
+  and a reconciler that emits one more blocks inside the `Send` call instead of
+  dropping it or erroring. Budget against the buffer the test in front of you
+  actually built, not against 100. A test that walks enough lifecycle to cross that
+  line does not fail — it hangs, and the only symptom is the package's
+  ten-minute `go test` timeout, with nothing in the output naming the
+  recorder or the channel; a mutant that should take a second to disprove can
+  look like a wedge instead. Milestone 4d hit this once, in
+  `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`
+  (`internal/controller/servergroup_controller_test.go`), which fails a
+  server on every one of ten passes and, unguarded, produces more than 100
+  events across the two recorders it shares. The fix there is local: a
+  `drainRecorder` helper next to the test empties both recorders once per
+  pass, a workaround for that one test, not of the fixture. Nothing stops the
+  next event-heavy test from hitting the same wall unwarned — milestone 4c's
+  proxy-drain and node-drain suites are the likeliest next hit, being the
+  same shape, many servers walked through many lifecycle events in one test.
+  The real fix belongs in the fixture itself, a recorder that grows or drops
+  past its buffer instead of blocking, the next time someone touches
+  `record.NewFakeRecorder`'s call sites in this package rather than adding a
+  second local drain.

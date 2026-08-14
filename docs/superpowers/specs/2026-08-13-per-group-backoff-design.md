@@ -132,8 +132,22 @@ creates nothing at all.
 
 The way back is a spec change: `metadata.generation` moves, and the reconcile
 that observes a generation newer than `status.observedGeneration` clears both
-fields and removes both conditions. The next attempt is then immediate,
-because the counter is zero.
+fields — `status.consecutiveFailures` and `status.lastFailureAt`. The next
+attempt is then immediate, because the counter is zero.
+
+**The conditions are not removed; they are republished as `False` with reason
+`NoRecentFailures` on that same pass.** The `BackingOff`/`Degraded` switch
+below — the one whose first case is `!sized` — builds both conditions
+false-by-default and calls `meta.SetStatusCondition` on each of them
+unconditionally, on every pass, in every case including the one where nothing
+was decided. That runs after the clear, so an explicit
+`RemoveStatusCondition` beside the clear would be overwritten before anything
+could ever observe its absence, which is why there is not one: the switch is
+the only writer of these two conditions and it always writes. The operator's
+`kubectl describe` therefore shows `BackingOff: False`/`NoRecentFailures` and
+`Degraded: False`/`NoRecentFailures` after the fix, not two conditions that
+have vanished — and `derivePhase`, which reads `Degraded`, moves the group off
+`Degraded` for the same reason.
 
 **This matches the cause.** A broken image does not become correct by waiting;
 it becomes correct when somebody fixes it, and fixing it is a spec change. The
@@ -163,6 +177,33 @@ container that takes about ninety seconds to exhaust its restarts, the whole
 run is roughly fourteen minutes, of which about five are waiting. That is the
 intended balance: relieve the cluster, do not delay the diagnosis.
 
+**That sequence is the experience of a group at `minReplicas 1`, and only of
+such a group. The threshold counts failed *servers*, not failed rounds.**
+`CountFailures` counts every `Failed` view in a pass, and `size()` creates the
+whole shortfall in one pass — for a group starting from nothing the floor term
+`minReplicas - alive` is the entire floor at once. So a group's budget of six
+is spent in `⌈6 / minReplicas⌉` rounds: at `minReplicas 2` the group gets three
+attempts, at `minReplicas 3` two, and at `minReplicas 6` or above it gives up
+after **one round, with no retry at all**. Measured, not reasoned about:
+`DecideSize({MinReplicas: 6, MaxReplicas: 10, SpareSlots: 10, MaxPlayers: 100})`
+returns `Create: 6`; `CountFailures` over those six same-instant `Failed` views
+returns 6; `DecideBackoff` turns that straight into
+`GaveUp: true, MayCreate: false`.
+
+Acceptance criterion 1 is an upper bound — "at most six creation attempts" —
+so this satisfies it, and the group still stops rather than hammering, which
+is the property the milestone exists for. But the consequence is real and is
+not what the paragraph above describes: a transient scheduler or registry
+problem that fails a whole floor at once takes a group with a large
+`minReplicas` straight to `Degraded`, and §3.5 makes that terminal until a
+human edits the spec. An operator running a floor above one should know this
+before it happens; it is in `docs/known-issues.md` under "From milestone 4d"
+for that reason.
+
+Counting rounds instead of servers, or scaling the threshold with
+`minReplicas`, would change the schedule's meaning and is a design decision
+this milestone did not make. It is left open in §11.
+
 **The cap is not reached at the shipped threshold, and that is deliberate
 rather than an oversight.** The largest delay before giving up is 160 seconds,
 well under the five-minute cap. The cap is there so that raising the threshold
@@ -190,6 +231,37 @@ again". Once the group gives up there is no pending retry, so `BackingOff`
 goes false — but with reason `CrashLoopBackoff` and a message saying it is not
 retrying and a spec change is the way back. A false with `NoRecentFailures`
 there would be a lie.
+
+### 3.8 Counting is scoped to the current generation
+
+`CountFailures` is given the views of the servers the group's *current*
+generation produced, and no others. It is a filter at the call site in
+`Reconcile`; the function itself takes whatever views it is handed.
+
+**The counter answers "how many attempts under this spec have failed", and
+only a current-generation server can answer it.** The previous generation's
+corpse says nothing about the current spec — which is the reasoning
+`selectFailedForPruning` already carries when it keeps the newest
+generation's failure — and by the same token a previous generation's server
+going `Ready` says nothing about it either.
+
+**Without the filter, §3.5's clear undoes itself on the very pass that
+performs it.** The clear sets `lastFailureAt` to nil, so the comparison point
+becomes the zero time, and the retained corpse of the spec just replaced is
+newer than that and is counted straight back in. The group comes out of the
+operator's fix with one failure already against it and a window it did not
+earn. This was measured, not reasoned about: with the filter removed the
+group creates *nothing* on the pass that observes the generation bump.
+
+**This does not weaken the standing constraint, because it runs in the
+opposite direction.** The rule that the *capacity arithmetic* stays
+generation-blind — `provisionalCapacity`, `readyContribution`, `readyFree`,
+carried in `ScalingInputs`' type comment — exists because a generation filter
+there makes every running server stop counting the instant the spec changes,
+so the group orders a full replacement set up to `maxReplicas`: runaway
+creates, the failure that disconnects players. A filter on *counting
+failures* can only hold a create back. It cannot order one, and it never
+reaches `DecideSize`.
 
 ## 4. Components
 
@@ -265,8 +337,9 @@ the status fields that have carried them since milestone 1.
 - The `BackingOff` condition, built false-by-default and flipped, with an
   event on the flank — the `ScalingLimited` block is the template, including
   its "nothing was decided this pass" case.
-- `Degraded` with `ReasonCrashLoopBackoff` when `GaveUp`, removed when the
-  generation moves.
+- `Degraded` with `ReasonCrashLoopBackoff` when `GaveUp`, and back to
+  `False`/`NoRecentFailures` when the generation moves — republished by the
+  same switch, not removed (§3.5).
 
 ### 4.5 `internal/controller/scaling.go`
 
@@ -277,11 +350,14 @@ milestone's feature.
 
 ## 5. Data flow
 
-A group at `minReplicas 1`. Someone points `spec.image` at a broken tag.
+A group at `minReplicas 1`. Someone points `spec.image` at a broken tag. The
+floor matters to how this table reads: the threshold counts failed servers,
+so a group with a larger floor gets through the same six in fewer rounds —
+§3.6.
 
 | Time | What happens | State |
 |---|---|---|
-| 0 | generation 3 → 4, both fields cleared | the cold start creates `C` immediately — a zero counter means no window |
+| 0 | generation 3 → 4, both fields cleared | the cold start creates `C` immediately — a zero counter means no window, and generation 3's retained corpse is not counted against generation 4 (§3.8) |
 | ~90 s | `C` exhausts its restarts and fails | `failedAt` stamped |
 | +5 s | the next reconcile counts it | `consecutiveFailures 1`, `BackingOff` true with the count and the remaining time, one event |
 | +10 s | the window closes | `D` is created |
@@ -315,12 +391,41 @@ fields and conditions clear, and the cold start builds at once.
 - **`ScalingLimited` and `BackingOff` at once** — no conflict; each is true for
   its own reason.
 - **A changeover whose new generation keeps failing** — the group backs off and
-  gives up, **and the old generation keeps serving**. Retirement never starts,
-  because it requires a `Ready` server of the current generation and there
-  never is one. The changeover stalls without anybody being disconnected, and
-  the operator sees `Degraded`/`CrashLoopBackoff`. This is exactly what 4b's
-  §3.4 describes as the correct outcome; the backoff makes it visible sooner
-  and far cheaper.
+  gives up, the operator sees `Degraded`/`CrashLoopBackoff`, and the changeover
+  stalls. What happens to the old generation depends on whether any
+  new-generation server ever reached `Ready`.
+
+  **If none ever did**, the old generation keeps serving untouched.
+  `selectRetirement` requires a `Ready` server of the current generation before
+  it will nominate a stale one, there is none, so retirement never starts. This
+  is what 4b's §3.4 describes as the correct outcome, made visible sooner and
+  far more cheaply by the backoff.
+
+  **If one did, retirement starts and stale servers drain.** That case is not
+  exotic — it is §3.3's own scenario, a group with one server that comes up and
+  one that crash-loops, put into a changeover. The first new-generation server
+  reaches `Ready`, later ones fail, and §3.3's rule that a success must be
+  *since* the failure is precisely what stops that early success from resetting
+  the streak. So the group reaches the threshold **with a `Ready`
+  current-generation server standing**, which is exactly what
+  `selectRetirement`'s gate asks for. It nominates a stale server, and
+  `maxStaleSeconds` escalates that retirement to `Draining`, which moves
+  players off.
+
+  **This is bounded, and the bound is one below the floor.** Retirements are
+  not gated — §3.4's rule is right and stays; a retirement stalled behind an
+  unrelated failure is a changeover that stops mid-flight. But `DecideSize`
+  checks capacity before it reaches the retirement branch, and the floor term
+  (`in.MinReplicas - alive`) only makes `create > 0` once `alive` is *strictly
+  below* `minReplicas` — one retirement later than "at the floor". So the last
+  retirement still fires with `alive == minReplicas`, and only the pass after
+  that, with `alive` one short, takes the `create > 0` return instead. The
+  group settles at `minReplicas - 1` rather than emptying. What it does not do
+  is guarantee that nobody is moved: a stalled
+  changeover under this shape drains part of its old generation with no
+  replacement ever created, and an operator should read `Degraded` here as
+  "sessions are being moved and not replaced", not as "everything is frozen
+  where it stood".
 
 ## 7. What this milestone deliberately does not do
 
@@ -415,5 +520,10 @@ rather than trusting a green run.
   scaling-knob edit also clears a `Degraded` a broken image caused. That is
   harmless — the retry it permits is exactly one — but it is worth knowing
   before someone treats `Degraded` as sticky.
+- **The threshold counts failed servers, not failed rounds** (§3.6), so a
+  group's six attempts become `⌈6 / minReplicas⌉` rounds and a group at
+  `minReplicas 6` or above gives up after one. Whether the schedule should be
+  per-round, or the threshold should scale with the floor, is the design
+  decision this milestone did not make.
 - **Milestone 4c**: proxy drain, node drain, and the readiness contract
   `internal/agent/registry.go` still cannot express.

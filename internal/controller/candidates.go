@@ -60,6 +60,15 @@ type ServerView struct {
 	Retire bool
 	// CreatedAt is the creation timestamp of the Server object.
 	CreatedAt time.Time
+	// FailedAt is status.failedAt: when this server entered phase Failed.
+	// Zero for a server that has not. The backoff counts a failure from this
+	// rather than from the moment it observed one, so a window cannot be
+	// extended by being looked at.
+	FailedAt time.Time
+	// ReadySince is status.readySince: when this server last entered phase
+	// Ready. Zero for one that never did — and the Server controller clears
+	// it on every exit from Ready, so a Failed server carries no ReadySince.
+	ReadySince time.Time
 }
 
 // isOccupied is the single occupancy rule of the system. Both sides of the
@@ -239,9 +248,11 @@ func SelectDeletionCandidates(views []ServerView, count int) []string {
 // per floor replica before the first one expires.
 //
 // One retained failure is enough to diagnose from, and it is the retention
-// window that then bounds the footprint rather than the failure rate. Proper
-// backoff, a Degraded condition and giving up on repeated failures belong to
-// milestone 4; this is only the bound that keeps the cluster usable until then.
+// window that then bounds the footprint rather than the failure rate — the
+// rate is bounded separately, by the per-group backoff (DecideBackoff in
+// backoff.go, gated at the create call site in servergroup_controller.go).
+// This cap and that backoff answer different questions: this is how many
+// corpses stick around, that is how often a new one gets made.
 const maxRetainedFailures = 1
 
 // selectFailedForPruning names the Failed servers beyond the retention cap.
@@ -258,16 +269,13 @@ const maxRetainedFailures = 1
 // says what broke; the previous generation's corpse says nothing about the new
 // image.
 //
-// It is load-bearing as well as truer. coldStart is suppressed only while a
-// Failed server of the *current* generation is retained (design §3.7), and that
-// suppression is the whole of 4b's guard against a broken new image being
-// re-created every five seconds. With maxRetainedFailures at 1, a purely
-// oldest-first rule keeps any inherited older failure and prunes the current
-// generation's — deleting the one thing doing the suppressing, on the same
-// reconcile that observes it, so the loop runs at time-to-fail instead of once
-// per retention window, and the corpse the operator is left with is the one that
-// says nothing. Preferring the newest generation is what gives coldStart a
-// suppression this function cannot take away.
+// It used to be load-bearing as well as truer: coldStart was suppressed while a
+// Failed server of the *current* generation was retained, and a purely
+// oldest-first rule would have pruned the very corpse doing the suppressing.
+// Milestone 4d retired that suppression — the per-group backoff bounds the loop
+// it stood in for, and the count it works from lives on the group's status
+// rather than on a corpse — so what is left here is the diagnosis argument
+// above, which was always the reason and is now the whole of it.
 //
 // Generations are compared numerically rather than against the group's current
 // one, which keeps this a pure two-argument selector: a Server is stamped with
