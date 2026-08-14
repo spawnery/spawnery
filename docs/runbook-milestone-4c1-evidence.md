@@ -131,8 +131,12 @@ machine on 2026-08-14:
 machine with plain defaults. **Check your own machine rather than copying
 either answer** — `readlink -f "$(command -v docker)"` and `findmnt -no FSTYPE
 /tmp` settle both in two commands. The overrides below are written out in full
-because a different machine needs them; drop them if yours does not. Nothing
-in this runbook depends on which branch you are on.
+because a different machine needs them; drop them if yours does not. Both of
+them depend on your machine rather than on your checkout. Almost nothing else
+here does: §1 builds the Velocity jar from the working tree and says what an
+older jar silently costs you, §4 runs the operator out of this checkout with
+`go run`, and the header names the branch the whole procedure was written
+against. Run it from another branch and what you measure is that branch.
 
 Beyond §0, this runbook needs what milestone 3's manual sections needed:
 
@@ -528,15 +532,24 @@ true whatever the disconnect line looks like. The marker is needed for a
 different reason: on the very join this command is looking for, the
 accepting pod's own log carries a *second* line that also contains `has
 connected` — `[server connection] <player> -> <backend> has connected`,
-logged immediately after the `[connected player]` line
-(`docs/handover-milestone-4.md:333-334`, also `:217` and `:358`). A
-verb-only grep matches both lines from the one join and turns one accepted
-player into two matching lines; keeping the `connected player` marker
-excludes the second. (This repository's own record of the marker,
-`docs/handover-milestone-4.md:333`, shows only the connect spelling under
-`[connected player]`; it does not record what a disconnect on that marker
-looks like, so the verb's exclusion above rests on the words themselves, not
-on a disconnect line anyone has observed here.)
+logged immediately after the `[connected player]` line. A verb-only grep
+matches both lines from the one join and turns one accepted player into two
+matching lines; keeping the `connected player` marker excludes the second.
+
+This repository's record of that pair is in `docs/handover-milestone-4.md`,
+under **The manual session**, in the block beginning `[connected player]
+paul_wtf (/10.244.0.1:50113) has connected`. The `[server connection] … has
+connected` spelling appears twice more there: under **The evidence run** for
+`spawnery_probe -> lobby-q7mv`, and under **The manual session** again for
+`paul_wtf -> hub-tmdd`. Cited by heading and quoted text rather than by line
+number deliberately — those three were line numbers until 2026-08-14, when a
+later commit in this same milestone inserted 110 lines above them and left
+every one of them pointing at unrelated prose. What that record does *not*
+hold is a disconnect on the `[connected player]` marker; the one disconnect
+line in it, `[server connection] paul_wtf -> lobby-6yw2 has disconnected`, is
+on the other marker. So the verb's exclusion above rests on the words
+themselves rather than on a `[connected player]` disconnect anyone has seen
+here.
 
 Expect one line, prefixed with the pod it came from and timestamped by
 `kubectl` itself ahead of Velocity's own embedded time:
