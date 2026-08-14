@@ -224,6 +224,27 @@ func (f *fixture) markProxyPodReady(t *testing.T, pod *corev1.Pod) {
 	}
 }
 
+// setProxyPodReadyCondition flips just the PodReady condition, the way a
+// kubelet would once a probe's answer changed -- unlike markProxyPodReady it
+// does not also stamp Phase or HostIP, because the callers that need this
+// (toggling a pod between Ready and NotReady more than once, to move it in
+// and out of agreement with what the operator asserted) already ran
+// markProxyPodReady once and have no reason to touch either again.
+func (f *fixture) setProxyPodReadyCondition(t *testing.T, pod *corev1.Pod, ready bool) {
+	t.Helper()
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	pod.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodReady, Status: status,
+		LastTransitionTime: metav1.NewTime(f.clock.Now()),
+	}}
+	if err := f.c.Status().Update(f.ctx, pod); err != nil {
+		t.Fatalf("set proxy pod %s ready=%v: %v", pod.Name, ready, err)
+	}
+}
+
 func TestProxyGroupCreatesItsPodsAndService(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1586,19 +1607,28 @@ func TestAProxyThatIgnoresItsWithdrawalIsReported(t *testing.T) {
 }
 
 // TestAProxyThatAgreesAgainClearsItsDivergenceEntry proves the half of the
-// grace-period map that no assertion on the group's condition can: that a
-// pod's tracked start time is actually deleted once its readiness agrees
-// again, not merely outvoted. Without this, a pod that flickered once and
-// then spent the rest of its life in agreement would still be sitting in
-// readinessDivergence's map, and a long-running operator would carry one
-// stale entry for every pod it had ever seen disagree even briefly.
+// grace-period map that no assertion on the group's condition can prove by
+// itself: that a pod's tracked start time is actually deleted once its
+// readiness agrees again, not merely made irrelevant for as long as it stays
+// agreeing. Without a real deletion, a pod that flickered once, agreed
+// again, and then disagreed a second time would resume its grace clock from
+// the *original* mismatch instead of restarting it -- reporting a span of
+// divergence nobody actually watched, in violation of the same principle
+// that makes readinessDivergence.forget correct on the early-return paths
+// above: an entry measures divergence while something was watching, and a
+// gap voids the measurement.
 //
-// The proof has to be indirect, because the map is unexported reconciler
-// state: advance the clock past the grace period *after* the pod is back in
-// agreement, then reconcile again. If the entry had survived, this pass
-// would treat it as still running from its original start time and report
-// it; a cleared entry reports nothing, because agreement restarts the count
-// from scratch on this pass, and this pass's own elapsed time is zero.
+// The proof has to re-diverge the pod, or it proves nothing: a pod that
+// simply stays in agreement forever never reaches the branch that reads a
+// tracked entry back out of the map, so a correct delete and a delete that
+// silently no-ops would be indistinguishable to a test that only ever
+// checks agreement. Re-diverging past the point where the *original*
+// mismatch would already have crossed the grace period, and finding the
+// condition still false, is what tells a restarted clock from a merely
+// resumed one -- and the final advance-and-check below confirms it is a
+// restart and not just a clock stuck off, by showing the report does
+// eventually arrive once a fresh grace period has actually elapsed from
+// the second mismatch.
 func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1614,23 +1644,21 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
+	// The first mismatch begins here (call it T0): the withdrawn pod is
+	// still Ready.
 
 	// Half the grace period: not enough to report on its own, and here only
-	// to prove the eventual all-clear is not just "never got far enough."
+	// to prove the eventual all-clear below is not just "never got far
+	// enough."
 	f.clock.Advance(readinessDivergenceGrace/2 + time.Second)
 
 	// The withdrawal is honored before the deadline: the surplus pod goes
-	// NotReady, same as a real agent that closed its listener.
+	// NotReady, same as a real agent that closed its listener. This is
+	// meant to clear its entry.
 	pods = f.proxyPods("gateway")
 	sortPodsOldestFirst(pods)
-	surplus := pods[1]
-	surplus.Status.Conditions = []corev1.PodCondition{{
-		Type: corev1.PodReady, Status: corev1.ConditionFalse,
-		LastTransitionTime: metav1.NewTime(f.clock.Now()),
-	}}
-	if err := f.c.Status().Update(f.ctx, &surplus); err != nil {
-		t.Fatalf("mark surplus proxy NotReady: %v", err)
-	}
+	surplus := &pods[1]
+	f.setProxyPodReadyCondition(t, surplus, false)
 	f.reconcileProxyGroup(r, "gateway")
 
 	g := f.proxyGroup("gateway")
@@ -1638,16 +1666,31 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 		t.Fatal("reported even though the pod agreed again before the grace period elapsed")
 	}
 
-	// If the pod's earlier start time had survived instead of being
-	// cleared, this alone would be enough to cross the grace period and
-	// report it, since it is more than readinessDivergenceGrace past the
-	// original mismatch.
-	f.clock.Advance(readinessDivergenceGrace)
+	// Past the point (T0 + readinessDivergenceGrace) where the original
+	// mismatch would already have crossed the grace period, if its
+	// timestamp had survived instead of being cleared.
+	f.clock.Advance(readinessDivergenceGrace/2 + time.Second)
+
+	// Diverge the same pod again: still marked to leave, but Ready again, as
+	// if the agent had reopened its listener. This is the only way to reach
+	// the code path a leaked entry would betray.
+	f.setProxyPodReadyCondition(t, surplus, true)
 	f.reconcileProxyGroup(r, "gateway")
 
 	g = f.proxyGroup("gateway")
 	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionReadinessDiverged) {
-		t.Error("a pod that agreed again still tripped the condition later: its divergence entry was not cleared")
+		t.Fatal("reported the instant it re-diverged: the entry's original start time survived instead of " +
+			"being cleared, so the grace period was measured from the first mismatch rather than restarting")
+	}
+
+	// The clock did restart, not just fail to fire early: a full grace
+	// period measured from the *second* mismatch does report it.
+	f.clock.Advance(readinessDivergenceGrace + time.Second)
+	f.reconcileProxyGroup(r, "gateway")
+
+	g = f.proxyGroup("gateway")
+	if !meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionReadinessDiverged) {
+		t.Error("re-diverging was never reported at all: something other than a restarted clock is wrong")
 	}
 }
 
