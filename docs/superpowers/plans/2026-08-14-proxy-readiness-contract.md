@@ -585,7 +585,9 @@ const ProxyDrainingSinceAnnotation = "spawnery.cloud/draining-since"
 
 - [ ] **Step 4: Assert the state and mark the drain**
 
-In `reconcileReplicas`, replace the deletion loop's body with the assertion for now — the wait and the deletion are Task 5. Keep the create loop as it is.
+In `reconcileReplicas`, add the assertion loop **before** the existing deletion loop, and leave both the create loop and the deletion loop exactly as they are. Task 5 changes when deletion happens; this task only adds what the operator says and writes down.
+
+Leaving the immediate deletion in place for one task is deliberate. Removing it here would leave a commit where a `ProxyGroup` cannot scale down at all — green, because no test asserts the old behaviour, and behaviourally broken, which is worse than a failing build because nothing announces it.
 
 ```go
 	// The desired readiness is derived, not remembered: this loop already
@@ -735,11 +737,11 @@ Placeholders again — `f.reportPlayers`, `f.events`, `containsEvent`, `contains
 nix develop -c go test ./internal/controller/ -run 'TestADraining|TestTheDeadline' -v
 ```
 
-Expected: the first passes (Task 4 already stopped deleting), the other two fail — nothing deletes at all yet. Report which is which rather than implying all three failed.
+Expected: all three fail, and for different reasons worth telling apart in the report. The first two fail because Task 4 left the immediate deletion in place, so the surplus pod is gone on the first pass whether or not anyone is on it. The third fails because no code path emits the event yet.
 
 - [ ] **Step 3: Delete when empty or when the deadline passes**
 
-In `reconcileReplicas`, after the assertion loop:
+In `reconcileReplicas`, replace the existing deletion loop — the one Task 4 deliberately left alone — with this:
 
 ```go
 	for i := len(pods) - 1; i >= int(group.Spec.Replicas); i-- {
