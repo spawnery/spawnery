@@ -993,6 +993,21 @@ func (r *ProxyGroupReconciler) writeStatus(ctx context.Context, group *spawneryv
 
 // SetupWithManager registers the controller.
 func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	// A construction site that forgets either of these would otherwise panic
+	// inside a reconcile, in a goroutine, minutes after start — the same
+	// failure mode SetupAll refuses a nil Bootstrapper for, and the same guard
+	// ServerGroupReconciler.SetupWithManager carries for Expectations. Cheap
+	// insurance twice over here: 4c-1 shipped exactly this defect once, and
+	// Divergence.forget now sits on five of Reconcile's paths, every one of
+	// which returns before reconcileReplicas — so a nil field would be
+	// dereferenced there first, and the earliest of the five is reachable on
+	// the very first reconcile of a group that is already gone.
+	if r.Expectations == nil {
+		r.Expectations = newExpectations(r.Clock)
+	}
+	if r.Divergence == nil {
+		r.Divergence = newReadinessDivergence(r.Clock)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.ProxyGroup{}).
 		Owns(&corev1.Pod{}).
