@@ -272,9 +272,28 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// terminates at the proxy, which stays; a draining proxy has no such
 	// option, because the connection terminates at the proxy being removed.
 	// So the deadline below is the only path here that disconnects anyone.
+	//
+	// Empty means the count is fresh and zero. A count we cannot trust is
+	// treated as occupied — the single occupancy rule of this repository, the
+	// one candidates.go's isOccupied states and the Server controller obeys.
+	// It matters more here than the phrasing suggests: an agent's gRPC stream
+	// breaking does not disconnect anybody, because Velocity goes on serving
+	// the sessions it already holds, and the registry then reports a pod it
+	// has never heard of and a pod whose agent died three minutes ago
+	// identically — both as zero players. Deleting on a bare zero would
+	// disconnect everyone on a proxy whose only fault was a dropped stream,
+	// which is precisely the failure this wait exists to prevent.
+	//
+	// isOccupied's own rule also requires wasRegistered, because nobody is
+	// ever routed to a server the proxies were not told about. A proxy has no
+	// such qualifier: it sits behind the Service and players reach it
+	// directly, so there is no state in which a stale count is safe to read as
+	// empty. Staleness alone is enough, and the cost is bounded — a proxy
+	// whose agent never appears is removed by the deadline rather than never.
 	for i := len(pods) - 1; i >= int(group.Spec.Replicas); i-- {
 		pod := &pods[i]
-		players := r.Agents.Lookup(string(pod.UID)).Players
+		snap := r.Agents.Lookup(string(pod.UID))
+		players := snap.Players
 		since, err := drainingSince(pod)
 		if err != nil {
 			return err
@@ -282,8 +301,8 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		expired := !since.IsZero() && r.Clock().Sub(since) >= group.DrainTimeout()
 
 		switch {
-		case players == 0:
-			// Empty: nobody is on it, so removing it costs nothing.
+		case players == 0 && !snap.PlayersStale:
+			// Known empty: nobody is on it, so removing it costs nothing.
 		case expired:
 			// The one path in this milestone that disconnects anybody. It is
 			// configured rather than accidental, so it says so loudly and

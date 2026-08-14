@@ -113,6 +113,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	if err := (&ProxyGroupReconciler{
 		Client:        mgr.GetClient(),
 		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("proxygroup"),
 		Agents:        opts.Agents,
 		Bootstrap:     opts.Bootstrapper,
 		AgentEndpoint: opts.AgentEndpoint,

@@ -316,6 +316,21 @@ func TestProxyGroupAddressIsEmptyWithNoReadyPod(t *testing.T) {
 // milestone has no way to move them off before deleting it. A test that only
 // counts survivors would stay green even if the comparator or the loop
 // direction in reconcileReplicas were inverted.
+//
+// This test's expectation moved with Task 5's occupancy rule, and the move is
+// the point. It used to expect one survivor: it connects no agent, every pod
+// therefore reported zero players, and the old bare `players == 0` deleted
+// both surplus pods on the spot. But an agent that has reported nothing and an
+// agent that died with players on it are the same zero — Registry.Lookup
+// returns PlayersStale for both — so deleting on that zero would disconnect
+// everyone on a proxy whose only fault was a dropped stream. A count is now
+// only believed while it is fresh.
+//
+// So the newest pod is given a fresh, genuine zero and must go; the middle one
+// is left with no agent at all and must stay, because nothing here knows
+// whether anyone is on it. Two survivors, and the test still fails if the
+// comparator or the loop direction is inverted — the newest pod is named as
+// the one that has to disappear, not merely counted.
 func TestProxyGroupScalesDown(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -330,13 +345,9 @@ func TestProxyGroupScalesDown(t *testing.T) {
 	// Sorted the same way ProxyGroupReconciler.pods sorts its own list —
 	// oldest first, ties broken by name — so the expected survivor is
 	// determined the same way the reconciler determines it, not guessed.
-	sort.Slice(before, func(i, j int) bool {
-		if before[i].CreationTimestamp.Equal(&before[j].CreationTimestamp) {
-			return before[i].Name < before[j].Name
-		}
-		return before[i].CreationTimestamp.Before(&before[j].CreationTimestamp)
-	})
-	oldest := before[0].Name
+	sortPodsOldestFirst(before)
+	oldest, unreported, newest := before[0].Name, before[1].Name, before[2].Name
+	f.reportProxyPlayers(t, before[2], 0)
 
 	group = f.proxyGroup("gateway")
 	group.Spec.Replicas = 1
@@ -346,12 +357,63 @@ func TestProxyGroupScalesDown(t *testing.T) {
 	f.reconcileProxyGroup(r, "gateway")
 
 	after := f.proxyPods("gateway")
-	if len(after) != 1 {
-		t.Fatalf("proxy pods = %d, want 1 after scaling down", len(after))
+	if len(after) != 2 {
+		t.Fatalf("proxy pods = %d, want 2 after scaling down — the pod with no player count must be kept",
+			len(after))
 	}
-	if after[0].Name != oldest {
-		t.Errorf("survivor = %s, want the oldest pod %s — scale-down must remove the newest replicas first",
-			after[0].Name, oldest)
+	if _, ok := f.pod(newest); ok {
+		t.Errorf("the newest pod %s survived; it reported a fresh zero and scale-down must remove the newest replicas first",
+			newest)
+	}
+	if _, ok := f.pod(oldest); !ok {
+		t.Errorf("the oldest pod %s was removed; it is within the replica count", oldest)
+	}
+	if _, ok := f.pod(unreported); !ok {
+		t.Errorf("the surplus pod %s was removed on an unknown player count; an agent that has reported nothing "+
+			"is indistinguishable from one that died with players on it, and both must be treated as occupied",
+			unreported)
+	}
+}
+
+// TestAProxyWithAStalePlayerCountWaitsForTheDeadline is the other half of the
+// occupancy rule: the wait it buys is bounded.
+//
+// A proxy whose agent never appears, or whose stream broke and never came
+// back, would otherwise be kept forever by "unknown counts as occupied" —
+// nothing would ever arrive to say it was empty, and a scale-down would
+// silently never complete. The deadline is what makes treating unknown as
+// occupied safe to do rather than merely cautious.
+func TestAProxyWithAStalePlayerCountWaitsForTheDeadline(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	surplus := before[1]
+
+	// No agent is connected for this pod at all, so the registry reports it
+	// exactly as it reports one whose stream died with players on it.
+	if snap := f.agents.Lookup(string(surplus.UID)); !snap.PlayersStale {
+		t.Fatalf("registry reports a fresh count for a proxy with no agent: %+v", snap)
+	}
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if _, ok := f.pod(surplus.Name); !ok {
+		t.Fatal("the surplus proxy was deleted on an unknown player count")
+	}
+
+	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := len(f.proxyPods("gateway")); got != 1 {
+		t.Errorf("proxy pods = %d after the deadline, want 1 — an unknown count must not hold a pod forever", got)
 	}
 }
 
