@@ -14,6 +14,9 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.util.concurrent.CyclicBarrier
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 import cloud.spawnery.agent.pb.RegisteredServer as PbServer
 
 /**
@@ -338,6 +341,61 @@ class ProxyRoleTest {
         // and the cancellation must reopen it directly through onSetReady
         // rather than through the FullSync's spent latch.
         assertEquals(listOf(false, true), states, "the cancelled drain did not leave a working proxy behind")
+    }
+
+    @Test
+    fun `a not-ready racing the first sync leaves the gate closed`() {
+        // The only case in this class that is not single-threaded, and the one
+        // ProxyRole's readiness monitor exists for: SessionLoop's
+        // make-before-break renewal puts two gRPC callback threads inside
+        // onMessage at once, one per live stream. The operator's SET_READY
+        // arrives on one of them while the other is applying the FullSync that
+        // would open the gate.
+        //
+        // `asserted` ends false however the two land -- SET_READY(false) is the
+        // only message here that writes it -- so "the gate agrees with
+        // asserted" is exactly "the gate ends closed". The failure this pins is
+        // a FullSync thread that read the pair before the SET_READY wrote it
+        // and then opened the gate after the SET_READY had closed it: a pod
+        // left Ready, in the Service's endpoints and taking new players, with
+        // the operator's drain deadline already running against it.
+        //
+        // TRIALS is chosen against a measurement rather than a guess. With the
+        // gate call outside the atomic read (the shape this replaced) the bad
+        // interleaving landed 35 times in 20 000 trials on 2026-08-14 -- about
+        // one in 570 -- so 20 000 makes a run that sees none of them
+        // vanishingly unlikely rather than merely lucky, and costs about a
+        // second. A machine slower or less parallel than that one may hit it
+        // less often; that changes how loudly this fails on a regression, not
+        // whether it can pass one.
+        val trials = 20_000
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            repeat(trials) { trial ->
+                // The last gate operation either callback made. Both run inside
+                // the role's readiness monitor, so the last write is the state
+                // the pod is left in and not one of two racing writes.
+                val gate = AtomicBoolean(false)
+                val role = newRole(onFirstSync = { gate.set(true) }, onSetReady = { gate.set(it) })
+
+                val start = CyclicBarrier(2)
+                val sync = pool.submit { start.await(); role.onMessage(fullSync()) }
+                val notReady = pool.submit { start.await(); role.onMessage(setReady(false)) }
+                sync.get()
+                notReady.get()
+
+                assertFalse(gate.get(), "trial $trial left the gate open on a proxy the operator had closed")
+            }
+        } finally {
+            pool.shutdownNow()
+        }
+
+        // onMessage swallows and logs whatever its branches throw, so an empty
+        // log is what says the trials raced inside those branches rather than
+        // failing before they got there. It is also what makes `logs` -- a
+        // plain ArrayList the role holds and two threads could have reached --
+        // safe here: nothing wrote to it.
+        assertEquals(emptyList<Pair<String, Throwable?>>(), logs, "a trial failed inside apply instead of racing")
     }
 
     /**
