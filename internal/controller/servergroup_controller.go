@@ -746,6 +746,15 @@ func (r *ServerGroupReconciler) pruneFailed(
 // allows neither maxUnavailable nor percentages in a PDB. The absolute number
 // of occupied pods is the only formulation that works — and it makes the
 // eviction API refuse to evict any of them.
+//
+// Named through podspec.GroupPDBName, not the bare group.Name it used before
+// -- see that function's doc comment for why a ServerGroup and a same-named
+// ProxyGroup collide over it. This is the side whose object name actually
+// changed when GroupPDBName was introduced, and an operator upgrading across
+// that change strands whatever PodDisruptionBudget previously sat at the
+// bare group.Name: it stays owned by this ServerGroup, keeps whatever
+// minAvailable it last had, and goes on blocking evictions of whatever pods
+// it still selects, because nothing here ever renames or deletes it.
 func (r *ServerGroupReconciler) reconcilePDB(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,

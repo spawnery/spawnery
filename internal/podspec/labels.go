@@ -99,8 +99,12 @@ func ProxyLabels(network, group string) map[string]string {
 // namespace; a name that was only the group's own name collided the moment
 // that happened — the second controller's SetControllerReference returned
 // AlreadyOwnedError inside its mutate function, so that group's reconcile
-// failed early and it never got its Service or its pods, in an error loop
-// naming neither the group nor the cause. The role suffix also keeps a
+// failed early and it never got its Service or its pods. AlreadyOwnedError's
+// own message names both the object and the owning controller, so that part
+// is not silent; what actually goes unnoticed is the group's own status: no
+// condition is written for this failure, so whatever was last there (often a
+// stale Accepted=True) stays, and `kubectl get` on the group alone shows
+// nothing wrong. The role suffix also keeps a
 // user's own ConfigMap named after their group — their configOverlay
 // ConfigMap being the likeliest way to do that — from ever coinciding with
 // the one the operator owns and deletes when the group goes: without it, the
@@ -123,9 +127,10 @@ func GroupConfigMapName(group, role string) string {
 // moment a user does that — the losing controller's SetControllerReference
 // returns AlreadyOwnedError from inside CreateOrUpdate's mutate function on
 // every pass, and that group's Reconcile fails before it ever reaches
-// setStatus, in a loop naming neither the group nor the cause. The same
-// failure GroupConfigMapName already documents for the ConfigMap, on the same
-// two Kinds.
+// setStatus. As with the ConfigMap collision GroupConfigMapName documents,
+// AlreadyOwnedError's own message names both the object and the owning
+// controller; what stays silent is the group's own status, which carries no
+// condition for this failure and so goes on showing whatever it last did.
 //
 // role must be RoleServer or RoleProxy, matching GroupConfigMapName.
 func GroupPDBName(group, role string) string {

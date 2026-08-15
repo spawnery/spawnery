@@ -2622,8 +2622,13 @@ func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
 // name alone. Before the fix, reconcileProxyPDB named its object group.Name,
 // exactly like reconcilePDB, so the second of the two controllers to
 // reconcile here would have its SetControllerReference call fail with
-// AlreadyOwnedError, and its Reconcile would return before setStatus, in a
-// backoff loop naming neither the group nor the cause.
+// AlreadyOwnedError, and its Reconcile would return before setStatus. The
+// error itself would have named both the object and the owning controller —
+// confirmed by mutation-testing this exact scenario, which reproduced
+// "Object .../lobby is already owned by another ServerGroup controller
+// lobby" verbatim — but the losing group's own status would carry no sign of
+// it: no condition is written for this failure, so a stale Accepted=True (or
+// whatever was last there) stays, invisible to anyone reading the CR alone.
 func TestServerAndProxyGroupsSharingANameGetDistinctBudgets(t *testing.T) {
 	f := newFixture(t)
 	// f.group is already a ServerGroup named "lobby" (see newFixture);
@@ -2660,5 +2665,118 @@ func TestServerAndProxyGroupsSharingANameGetDistinctBudgets(t *testing.T) {
 	}
 	if len(proxyPDB.OwnerReferences) == 0 || proxyPDB.OwnerReferences[0].Kind != "ProxyGroup" {
 		t.Errorf("ProxyGroup PDB owner references = %+v, want it controlled by the ProxyGroup", proxyPDB.OwnerReferences)
+	}
+}
+
+// stepAfterPriming is the clock TestTheProxyGroupBudgetReadsTheRegistryOnce
+// uses to reproduce task 7 review's Critical 2 deterministically, with no
+// goroutines and no real concurrency.
+//
+// ProxyGroupReconciler.Agents is a concrete *agent.Registry, not an
+// interface, so there is no seam to intercept Lookup itself or tell one call
+// site's reads from another's. The one hook agent.New exposes is the clock
+// function -- its own doc comment says "the clock is injectable so the
+// staleness rules are testable" -- and that is enough: Registry.Lookup calls
+// it fresh on every invocation and derives PlayersStale from the delta, so a
+// clock that changes its answer partway through a single Reconcile pass
+// changes what Lookup says without anything running concurrently at all.
+//
+// While priming, Now always returns the fixed instant fresh -- this is for
+// setup (Connect, ReportPlayers), which must not be counted against the
+// pass under test. Once priming stops, Now counts its own calls: the first
+// freshCalls of them still return fresh, and every one after that returns
+// fresh stepped forward by step. Choosing freshCalls precisely -- see the
+// test for the count and why -- places the step exactly between
+// syncOccupiedLabels's read and whatever runs after it.
+type stepAfterPriming struct {
+	fresh      time.Time
+	step       time.Duration
+	priming    bool
+	freshCalls int
+	calls      int
+}
+
+func (c *stepAfterPriming) Now() time.Time {
+	if c.priming {
+		return c.fresh
+	}
+	c.calls++
+	if c.calls > c.freshCalls {
+		return c.fresh.Add(c.step)
+	}
+	return c.fresh
+}
+
+// TestTheProxyGroupBudgetReadsTheRegistryOnce is the regression test for
+// task 7 review's Critical 2: reconcileProxyPDB used to call r.Agents.Lookup
+// a second time for the same pod, independently of syncOccupiedLabels's own
+// call, and the registry's answer can change between two calls a few lines
+// apart with no concurrency at all -- Lookup re-derives PlayersStale from
+// the clock on every call.
+//
+// One Reconcile pass, in the shape both before and after the fix, makes
+// exactly two registry reads before whatever runs immediately after
+// syncOccupiedLabels: reconcileReplicas builds its rollout view (one Lookup
+// per pod; this fixture uses one pod so this is one call), and
+// syncOccupiedLabels itself makes the other. freshCalls: 2 lets both see a
+// fresh count; the clock steps forward by twice the report interval starting
+// on the call after that. Before the fix, that next call is
+// reconcileProxyPDB's own second read of the same pod, and it lands on the
+// stepped, now-stale side -- producing minAvailable=1 while the pod carries
+// no occupied label at all, confirmed by mutation-testing this exact
+// scenario against the pre-fix shape in a throwaway worktree. After the fix,
+// that next call is setStatus's unrelated read of Players (which does not
+// care about staleness), and minAvailable is sized from the one evaluation
+// syncOccupiedLabels already made -- 0, agreeing with the unlabelled pod.
+func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+
+	const reportInterval = 5 * time.Second
+	clk := &stepAfterPriming{
+		fresh:      f.clock.Now(),
+		step:       2 * reportInterval,
+		priming:    true,
+		freshCalls: 2,
+	}
+	customAgents := agent.New(clk.Now, reportInterval, f.clock.Now())
+	r.Agents = customAgents
+
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 1
+	})
+	// Creates the one pod. The clock is still priming, so this pass cannot
+	// affect the step count the pass under test relies on.
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 1 {
+		t.Fatalf("proxy pods = %d, want 1 -- the step count below assumes exactly one", len(pods))
+	}
+	uid := string(pods[0].UID)
+	customAgents.Connect(uid, agent.RoleProxy)
+	if err := customAgents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+
+	// The pass under test: the clock steps from fresh to stale partway
+	// through it.
+	clk.priming = false
+	f.reconcileProxyGroup(r, "gateway")
+
+	got := f.proxyPods("gateway")[0]
+	if _, labelled := got.Labels[podspec.LabelOccupied]; labelled {
+		t.Errorf("pod carries the occupied label, but the count read at the same fresh moment was not stale")
+	}
+
+	pdb := &policyv1.PodDisruptionBudget{}
+	key := types.NamespacedName{Name: podspec.GroupPDBName("gateway", podspec.RoleProxy), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, key, pdb); err != nil {
+		t.Fatalf("get proxy PDB: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 0 {
+		t.Errorf("minAvailable = %v, want 0: the pod carries no occupied label, and the budget must be sized "+
+			"from the same evaluation the label came from, not a second, later read of the registry",
+			pdb.Spec.MinAvailable)
 	}
 }

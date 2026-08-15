@@ -347,7 +347,10 @@ func proxyOccupied(snap agent.Snapshot) bool {
 // for why a second, independent call could answer differently and leave the
 // label and the budget disagreeing pod for pod. A budget that counts fewer
 // pods than carry the label hands the eviction API a disruption to spend on
-// an occupied one; one that counts more blocks every eviction in the group.
+// an occupied one; one that counts more blocks every eviction of a pod the
+// selector matches — the occupied-labelled proxies, not an empty one, which
+// this budget does not cover at all and which the eviction API can still
+// take freely.
 func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []corev1.Pod) (int32, error) {
 	var occupiedCount int32
 	for i := range pods {
