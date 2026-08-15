@@ -1778,6 +1778,128 @@ func TestAPersistentServerGetsItsClaimBeforeItsPod(t *testing.T) {
 	}
 }
 
+// retirePodTheWayAKubeletWould removes a pod object that is only carrying a
+// deletion timestamp, which is the last step of a termination and the one step
+// envtest cannot take on its own: with no kubelet, a pod that was bound to a
+// node keeps its timestamp and answers Get for the rest of the test. A force
+// delete does what the kubelet's confirmation would.
+func (f *fixture) retirePodTheWayAKubeletWould(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	if err := f.c.Delete(f.ctx, pod, client.GracePeriodSeconds(0)); err != nil {
+		t.Fatalf("force delete pod %s: %v", pod.Name, err)
+	}
+}
+
+// recreateOrdinalOverATerminatingPod builds the state finding 1 of the
+// whole-branch review is about: a persistent ordinal whose Server object has
+// been replaced while the pod of the previous one is still terminating.
+//
+// It is a persistent group's state in practice: the name is derived from the
+// ordinal and reused across every generation of the Server object, so the
+// group's replacement meets its predecessor's pod under the identical name.
+//
+// The pod is bound to a node before it is deleted, and that step is the
+// mechanism rather than scenery: the API server force-deletes an *unscheduled*
+// pod outright, because no kubelet owes it a confirmation. Once a pod is bound
+// it waits for one, and envtest runs no kubelet to send it — so the deleted pod
+// keeps its deletion timestamp for the rest of the test, which is what a node
+// gone NotReady looks like on a real cluster.
+//
+// It returns the terminating pod so a test can finish the termination.
+func recreateOrdinalOverATerminatingPod(t *testing.T, f *fixture) *corev1.Pod {
+	t.Helper()
+	f.createPersistentGroup(t, "survival", 1)
+	first := f.createPersistentServer(t, "survival", 0)
+	f.reconcile(first.Name)
+
+	pod, ok := f.pod("survival-0")
+	if !ok {
+		t.Fatal("no pod for the first server, so there is no name for the second one to collide with")
+	}
+	f.bindPodToNode(t, pod, f.ensureNode(t, "node-holding-"+f.ns, false).Name)
+	if err := f.c.Delete(f.ctx, pod); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	if _, stillLive := f.pod(pod.Name); stillLive {
+		t.Fatal("the deleted pod is not terminating, so nothing holds its name")
+	}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: pod.Name, Namespace: f.ns}, &corev1.Pod{}); err != nil {
+		t.Fatalf("the deleted pod left the API server outright, so the collision this test is about "+
+			"cannot happen: %v", err)
+	}
+	if err := f.c.Delete(f.ctx, f.server(first.Name)); err != nil {
+		t.Fatalf("delete the first server: %v", err)
+	}
+	f.reconcile(first.Name)
+	if _, present := f.serverIfPresent(first.Name); present {
+		t.Fatal("the first server kept its finalizer, so the ordinal was never free to be rebuilt")
+	}
+
+	f.createPersistentServer(t, "survival", 0)
+	return pod
+}
+
+// TestARecreatedOrdinalWaitsForItsPredecessorsPod pins the first step of a
+// cycle nothing inside this operator bounds. What ends it from outside is the
+// pod finishing termination — a grace period ordinarily, and never, on a node
+// that has gone away.
+//
+// Creating into a name the API server still holds gets AlreadyExists on the
+// pod, which the create block tolerates — so the controller would record
+// status.podName and emit PodCreated for a pod it did not create, and the next
+// pass would read that pod as lost and delete this Server. The group rebuilds
+// the ordinal, and round it goes at the five-second resync: nothing reaches
+// Failed, so consecutiveFailures never moves and neither BackingOff nor
+// Degraded ever fires. A fresh Server with an empty status.podName cannot raise
+// PodLost, which is why waiting is the whole fix.
+func TestARecreatedOrdinalWaitsForItsPredecessorsPod(t *testing.T) {
+	f := newFixture(t)
+	recreateOrdinalOverATerminatingPod(t, f)
+
+	f.reconcile("survival-0")
+
+	got := f.server("survival-0")
+	if got.Status.PodName != "" {
+		t.Errorf("status.podName = %q while the predecessor's pod is still terminating; "+
+			"the controller claimed a pod it did not create, and the next pass reads it as lost",
+			got.Status.PodName)
+	}
+	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Reason != ReasonPodNameTerminating {
+		t.Errorf("Accepted = %+v, want reason %s: an ordinal waiting on its predecessor's pod "+
+			"is indistinguishable from a slow start otherwise", accepted, ReasonPodNameTerminating)
+	}
+}
+
+// TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone is the other half:
+// the wait ends by itself, and ends with a pod this controller really did
+// create. Without it the fix above would be indistinguishable from a Server
+// that never gets a pod at all.
+func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
+	f := newFixture(t)
+	terminating := recreateOrdinalOverATerminatingPod(t, f)
+	f.reconcile("survival-0")
+
+	f.retirePodTheWayAKubeletWould(t, terminating)
+	f.reconcile("survival-0")
+
+	got := f.server("survival-0")
+	if got.Status.PodName != "survival-0" {
+		t.Fatalf("status.podName = %q once the predecessor's pod is gone, want survival-0", got.Status.PodName)
+	}
+	if _, ok := f.pod("survival-0"); !ok {
+		t.Error("no pod once the name was free")
+	}
+	// The wait clears rather than sticking: the switch at the top of Reconcile
+	// sets Accepted back to True on every pass that resolves the group and the
+	// network, and this is what says the block above did not park a reason on
+	// the object that outlives what it described.
+	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted = %+v once the pod was created, want True: the wait has to clear", accepted)
+	}
+}
+
 // TestDeletingAPersistentServerLeavesItsClaim is the property the whole
 // milestone turns on.
 //

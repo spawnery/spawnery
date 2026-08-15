@@ -55,6 +55,12 @@ const ReasonPodNameConflict = "PodNameConflict"
 // hold the CA bundle and the agent ServiceAccount its pod would mount.
 const ReasonNamespaceNotBootstrapped = "NamespaceNotBootstrapped"
 
+// ReasonPodNameTerminating marks a Server whose pod name is still held by the
+// pod of an earlier server of the same name that has not finished terminating.
+// Its neighbour ReasonPodNameConflict is the same question about a pod this
+// Server does not control; this one is about a pod its own predecessor left.
+const ReasonPodNameTerminating = "PodNameTerminating"
+
 // defaultDrainTimeoutSeconds and defaultFailedRetentionSeconds mirror the
 // kubebuilder defaults on ServerGroupSpec. They are what a Server falls back to
 // when its group is gone, so drain and cleanup keep sane timings.
@@ -191,11 +197,58 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// A pod of this name that the API server still holds, even one on its way
+	// out. fetchPod reports a pod carrying a deletion timestamp as gone, and
+	// that is right for every decision the state machine makes about a pod —
+	// its players are leaving with it and nothing can bring it back. It is
+	// wrong for the one decision below that is about the *name*, because the
+	// object is still there and a Create against it returns AlreadyExists.
+	//
+	// A persistent server is what reaches this in practice. Its name is derived
+	// from its ordinal and is therefore reused across every generation of the
+	// Server object, so a recreated ordinal meets the pod its predecessor left
+	// behind. An ephemeral name would have to have NewServerName's random
+	// four-character suffix come up twice running for the same collision — not
+	// the case this was written for, and covered anyway, since the test below
+	// reads the name and not the type.
+	// Without this test the create fires, the pod Create's AlreadyExists is
+	// tolerated below, and the block goes on to record status.podName and emit
+	// PodCreated for a pod this controller did not create — whose absence one
+	// reconcile later is PodLost, which deletes this fresh Server. The group
+	// then rebuilds the ordinal into the same collision, once per resync,
+	// reaching Failed at no point and so counted by no backoff.
+	nameStillHeld := !podFound && pod != nil
+
 	// Create the pod once, and only for a server that has not been asked to go
 	// away. status.podName is the record that a pod once existed; it is never
 	// reused for a different pod, which is what makes PodLost detectable.
-	createPod := groupFound && networkFound && !nameConflict &&
+	createPod := groupFound && networkFound && !nameConflict && !nameStillHeld &&
 		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero()
+
+	// Say so on the object, and only where nothing above has already put a
+	// truer reason there: a Server whose group or network is missing carries
+	// one from the switch above, and one that has itself been deleted is not
+	// waiting for anything. status.podName being empty is what makes this the
+	// fresh Server rather than the one whose pod is terminating. Nothing below
+	// overwrites it while the wait lasts either — the bootstrap check is inside
+	// `if createPod`, which this case is exactly what turns off.
+	//
+	// A condition and no event, deliberately. The wait is one termination
+	// grace period in the ordinary case and unbounded when the pod cannot
+	// finish terminating — a node gone NotReady — and it is the unbounded case
+	// that needs a name: phase.Decide leaves the server Pending with "waiting
+	// for the pod", which reads exactly like a slow image pull.
+	// meta.SetStatusCondition writes no new transition while the reason and
+	// message are unchanged, so a five-second resync stays quiet for the whole
+	// wait, and an operator sees the two transitions that matter on the object
+	// the rest of this server's state is already on. An event would announce an
+	// ordinary pod replacement as a warning, once per pass.
+	if nameStillHeld && groupFound && networkFound && !nameConflict &&
+		srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
+		setAccepted(srv, false, ReasonPodNameTerminating,
+			fmt.Sprintf("pod %q is still terminating; this server's own pod is created "+
+				"once that name is free", pod.Name))
+	}
 
 	// The namespace has to hold the CA and the ServiceAccount before the pod
 	// does, not after: the kubelet mounts both at container start, and a pod
@@ -329,6 +382,11 @@ func (r *ServerReconciler) ensureFinalizer(ctx context.Context, srv *spawneryv1a
 // nothing we could decide would bring it back. Without this rule the Server
 // object would wait for a pod that only the kubelet can finally remove — and
 // in envtest, where no kubelet runs, it would wait forever.
+//
+// It still hands the caller that pod rather than nil, and the difference
+// between the two returns is load-bearing in exactly one place: Reconcile's
+// nameStillHeld, which asks whether the *name* is free rather than whether the
+// pod is usable. Keep the object on this path.
 func (r *ServerReconciler) fetchPod(ctx context.Context, srv *spawneryv1alpha1.Server) (*corev1.Pod, bool, error) {
 	name := srv.Status.PodName
 	if name == "" {
