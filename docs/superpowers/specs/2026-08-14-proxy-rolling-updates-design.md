@@ -213,6 +213,33 @@ deletion loop removes the draining pod, which happens when it is empty or when
 its deadline expires. Rule 4's wait for `Ready` is what holds ready capacity at
 `replicas` — the surge pod is serving before the old one stops.
 
+> **Amended during implementation (4c-2): that last clause is the healthy path,
+> not the rule.** Rule 4 waits for ready capacity *or* for a stale pod that is
+> not serving, so the surge pod is not always serving when an old pod is
+> marked. At `replicas: 2` with A stale and `Ready`, B stale and unready, and
+> the surge pod S itself still unready, `readyBeyond` is false and
+> `anyStaleNotReady` is true, so B is marked while S is still pulling its
+> image. Confirmed against the code, not derived on paper: `DecideRollout`
+> returns `Create=0 Drain=[b]` for exactly that input.
+>
+> No ready capacity is lost by it: it is 1 before the mark and 1 after,
+> because B was contributing nothing — see the note under "Ready capacity never
+> dips below `replicas`" below for the exact sense in which that property still
+> holds. There is a cost, and it is time rather than capacity: B waits out
+> `drain.timeoutSeconds` before deletion, because a pod whose agent stream is
+> down has an untrusted count and is not "known empty".
+>
+> What the surge wait buys is that a *serving* pod is not stopped before its
+> replacement is serving, and that survives by construction rather than by
+> luck. The new disjunct fires only when a stale pod is not serving, and §3.4's
+> readiness clause guarantees that is the pod handed back — so the mark it
+> permits always lands on a pod behind no Service endpoint. A is not marked
+> here; B is.
+>
+> The walk-through that follows is therefore the ready path — the ordinary
+> rollout where every pod comes up healthy. It is still the right thing to read
+> first. It is no longer the only sequence rule 4 admits.
+
 Walking a group of two through it: both stale, so target is 3 and rule 1
 creates one. It comes up; nothing changes while it is unready. It turns
 `Ready`, and rule 4 marks one stale pod. Stale pods still exist, so target
@@ -463,16 +490,34 @@ as 4c-1's two runs; only the trigger differs.
 1. Changing a `ProxyGroup`'s image replaces every proxy pod, and the group ends
    with `replicas` pods all carrying the current hash.
 2. Changing `spec.replicas` alone rolls nothing: the hash does not move.
-3. Ready capacity never falls below `replicas` during a rollout.
+3. No decision this milestone makes lowers ready capacity below `replicas`
+   during a rollout. **Amended during implementation (4c-2)** — it read "Ready
+   capacity never falls below `replicas`", which is not a criterion an operator
+   can meet: a proxy that crashloops takes the group below its count without
+   anything here having decided anything, and rule 4's second disjunct
+   deliberately marks such a pod, subtracting zero from a count the cluster
+   already set. See the two notes in §3.2.
 4. At most one pod is draining at any moment during a rollout.
 5. A player connected to a replaced proxy keeps playing until they leave or the
    drain deadline expires — proved on a real cluster with a real client.
 6. Editing the spec back before a marked pod is deleted cancels its drain and
    restores its readiness.
-7. The scale-down selection prefers the emptiest proxy, and an untrusted count
-   is treated as occupied.
-8. A pod whose readiness disagrees with the asserted value for 60 seconds sets
-   `ReadinessDiverged` and fires one `Warning` naming the pod.
+7. The scale-down selection prefers a proxy that is not `Ready`, then the
+   emptiest, and an untrusted count is treated as occupied. **Amended during
+   implementation (4c-2)** — it read "prefers the emptiest proxy", which the
+   readiness clause added to §3.4 makes false as stated, and not only in a
+   rollout: with no staleness anywhere, a plain scale-down from 3 to 2 over an
+   empty `Ready` pod, a `Ready` pod with 3 players and an unready pod with 7
+   returns the *unready* one. Checked against the code rather than reasoned
+   about. That is the intended order — a pod behind no Service endpoint costs
+   nothing to retire — but "emptiest" alone no longer describes it.
+8. A pod that is still `Ready` 60 seconds after the operator withdrew its
+   readiness sets `ReadinessDiverged` and fires one `Warning` naming the pod;
+   the condition clearing fires a `Normal`. **Amended during implementation
+   (4c-2)** — it read "whose readiness disagrees with the asserted value",
+   which is bidirectional, and named only the `Warning`. Both were narrowed and
+   widened respectively in §3.6; see the note there for why the
+   asserted-ready-but-not-yet-`Ready` direction is deliberately not checked.
 9. The create path no longer double-creates when the informer cache lags.
 10. `make manifests` produces **no** diff. This milestone adds no CRD field: the
     hash is a pod label, the condition type is a Go constant, and
