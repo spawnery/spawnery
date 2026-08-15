@@ -3621,3 +3621,140 @@ func TestAPersistentGroupPublishesTheReadinessItsPodsSupport(t *testing.T) {
 			"removals on the same clock as an ephemeral one", res.RequeueAfter, resyncInterval)
 	}
 }
+
+// clearFailedOrdinal takes away the corpse of a persistent ordinal down the
+// one path that removes it for having failed: the Server controller's
+// failed-retention path.
+//
+// It is a step of its own, and not folded into the failure that precedes it,
+// because the two are on opposite sides of the state this test is about.
+// Failing the server opens the backoff window; clearing the corpse costs an
+// hour of the fixture clock and closes that window again. A helper that did
+// both would make the waiting state unobservable -- which is exactly how the
+// first draft of this test reported False and was right to.
+//
+// The clearing itself is why a persistent round is not shaped like the
+// ephemeral ones above: pruneFailed runs only for an ephemeral group, and
+// DecidePersistentSize holds an ordinal whatever phase its server is in, so
+// nothing on the group's side removes a persistent server for having failed --
+// its own removals answer to a lower spec.replicas or a departing node, and
+// neither is happening here. Retention is what is left, which makes the
+// advance below part of the mechanism rather than a convenience: without it
+// the group has no second attempt to back off from.
+func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
+	t.Helper()
+	f.clock.Advance(time.Hour + time.Second)
+	for i := 0; i < 4; i++ {
+		if _, present := f.serverIfPresent(name); !present {
+			return
+		}
+		f.reconcile(name)
+	}
+	t.Fatalf("the corpse of %s was not taken away by its failed retention", name)
+}
+
+// TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp is what the design owed
+// and did not have. §3.5 of the persistent-groups design said of a claim that
+// never binds that "the server goes Failed, the group reports Degraded, and
+// 4d's per-group backoff stops it throwing the same ordinal at the same broken
+// volume in a loop" -- and has since been rewritten, because the reporting
+// half was false. The backoff half held: size() runs its CreateOrdinals loop
+// under the same backoff.MayCreate as the ephemeral count. The reporting half
+// did not: BackingOff and Degraded were published only inside
+// an `if group.IsEphemeral()` block, so a persistent group stalled in silence
+// and its phase read Pending, which is what a group that is merely still
+// starting reads too.
+//
+// The round below is also the answer to a question the design got wrong in
+// both directions, so it is worth naming here rather than leaving to whoever
+// next reads §3.5: a persistent group does have a retry loop, and the count
+// could not climb to the threshold if it did not. Nothing on the group's side
+// clears a persistent corpse, but the Server controller's failed-retention
+// path does, and the ordinal is then created again -- which is why each round
+// here ends by aging the corpse out. The loop's period is
+// spec.failedRetentionSeconds -- an hour at the CRD default, which is what
+// this group carries -- so at that default the backoff's own windows (160s at
+// the most) never delay an attempt; what the backoff does for this group is
+// end the attempts, which is the last assertion below.
+//
+// The failure driven here is a startup deadline rather than an unbound claim.
+// envtest runs no provisioner and no scheduler, so a pod's volume never binds
+// and never fails to bind -- nothing in this environment can make a claim
+// stall a server. What the two have in common is the only thing this test is
+// about: a server that never becomes playable, and a group that must say so.
+// Whether an unbound claim really does end in Failed is a cluster question,
+// and it belongs to the runbook.
+func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 1)
+
+	for i := int32(0); i < backoffGiveUpAt; i++ {
+		f.reconcilePersistentGroup(t, r, "survival")
+		if _, present := f.serverIfPresent("survival-0"); !present {
+			t.Fatalf("round %d: the group did not rebuild its ordinal, so it stopped creating early", i+1)
+		}
+		f.failServerNeverReady(t, "survival-0")
+		f.reconcilePersistentGroup(t, r, "survival")
+
+		if i == 0 {
+			// The waiting half, taken on the flank rather than after the loop:
+			// once the count reaches the threshold BackingOff goes back to
+			// False and this state is gone.
+			g := f.persistentGroup(t, "survival")
+			c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+			if c == nil || c.Status != metav1.ConditionTrue {
+				t.Fatalf("BackingOff = %+v after the first failure, want True: a persistent group "+
+					"that is waiting before its next attempt has to say so", c)
+			}
+			if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+				t.Error("Degraded is true after a single failure; one hiccup is not a fault")
+			}
+		}
+
+		// Last in the round, so the assertions above see the group while its
+		// window is still open.
+		f.clearFailedOrdinal(t, "survival-0")
+	}
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	g := f.persistentGroup(t, "survival")
+	if got := g.Status.ConsecutiveFailures; got != backoffGiveUpAt {
+		t.Fatalf("consecutiveFailures = %d, want %d", got, backoffGiveUpAt)
+	}
+	degraded := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionTrue {
+		t.Fatalf("Degraded = %+v after %d failures, want True", degraded, backoffGiveUpAt)
+	}
+	if degraded.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("Degraded reason = %q, want %s", degraded.Reason, spawneryv1alpha1.ReasonCrashLoopBackoff)
+	}
+	if g.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded: derivePhase maps the condition, and Pending here would "+
+			"be indistinguishable from a group that is still starting", g.Status.Phase)
+	}
+	// Given up, not waiting -- and the reason carries the real cause rather
+	// than an all-clear.
+	backingOff := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if backingOff == nil || backingOff.Status != metav1.ConditionFalse ||
+		backingOff.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("BackingOff = %+v once the group gave up, want False/%s", backingOff,
+			spawneryv1alpha1.ReasonCrashLoopBackoff)
+	}
+	// And the stall is real: the ordinal is not rebuilt, which is the
+	// behaviour the condition exists to explain rather than to change.
+	if _, present := f.serverIfPresent("survival-0"); present {
+		t.Error("the group rebuilt its ordinal after giving up; the backoff gates persistent creates too")
+	}
+}
+
+// persistentGroup re-reads a ServerGroup named here, rather than the fixture's
+// own, which is what reloadGroup does.
+func (f *fixture) persistentGroup(t *testing.T, name string) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group %s: %v", name, err)
+	}
+	return group
+}

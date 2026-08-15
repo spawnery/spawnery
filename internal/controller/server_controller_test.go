@@ -1745,10 +1745,20 @@ func (f *fixture) claim(name string) *corev1.PersistentVolumeClaim {
 // cheaper than a reader finding out: both objects exist by the time a
 // reconcile returns, so what these assertions actually catch is a claim that
 // is never created at all, or a pod that is not. Swapping the two Creates
-// round was mutation-tested and passes this test unchanged. The order still
-// matters to a real cluster — a kubelet that meets the pod first cannot mount
-// a claim that does not exist yet — it is simply not observable from here, and
-// no assertion below pretends otherwise.
+// round was mutation-tested and passes this test unchanged.
+//
+// Not pinned is not the same as unpinnable, and the difference is worth being
+// precise about. A client.Client decorator recording the order of Create calls
+// would pin it — recordingRegistrar.onRegister in suite_test.go is this
+// fixture's existing instance of that technique, for an ordering that likewise
+// "cannot be seen from outside the call". It is left undone because the
+// consequence of a swap is soft rather than because the tool is missing: both
+// objects land in the same reconcile, the API server does not check that a
+// pod's claim exists, and a pod whose claim is not there yet is merely
+// unschedulable — the scheduler retries it, and the claim arrives
+// microseconds later. Add the decorator on the day something between the two
+// Creates can return early with the pod already made; today nothing between
+// them can.
 func TestAPersistentServerGetsItsClaimBeforeItsPod(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)

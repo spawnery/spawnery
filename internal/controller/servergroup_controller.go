@@ -210,9 +210,18 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		group.Status.LastFailureAt = nil
 		// The two conditions need no explicit removal: the BackingOff/Degraded
 		// switch below (the one with the "!sized" case) republishes both with
-		// meta.SetStatusCondition unconditionally on every pass, including the
-		// case where nothing was decided, so a Remove here would be
-		// overwritten before it could ever be observed.
+		// meta.SetStatusCondition unconditionally on every pass, for a group
+		// of either type, including the case where nothing was decided — so a
+		// Remove here would be overwritten before it could ever be observed.
+		//
+		// "Either type" is newer than the sentence above it and is what makes
+		// it true. While the two conditions were published only inside an
+		// `if group.IsEphemeral()` block, the sentence held for a persistent
+		// group only by accident: nothing published them there, so this reset
+		// had nothing to overwrite and equally nothing to remove. Now they are
+		// published for both, and the republishing below is what carries the
+		// reset onto the status of either — so if either condition is ever put
+		// back behind a type test, this reset needs a Remove of its own.
 	}
 
 	var lastFailure time.Time
@@ -339,83 +348,118 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 			r.Recorder.Event(group, eventType, limited.Reason, limited.Message)
 		}
-		// Built false-by-default and flipped, like ScalingLimited above.
-		backingOff := metav1.Condition{
-			Type:    spawneryv1alpha1.ConditionBackingOff,
-			Status:  metav1.ConditionFalse,
-			Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
-			Message: "no server has failed to start recently",
-		}
-		degraded := metav1.Condition{
-			Type:    spawneryv1alpha1.ConditionDegraded,
-			Status:  metav1.ConditionFalse,
-			Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
-			Message: "servers are starting normally",
-		}
-		switch {
-		case !sized:
-			// Nothing was decided this pass, so the False above is the
-			// absence of a verdict rather than one — the same reasoning
-			// ScalingLimited's own !sized case gives above. The counting two
-			// blocks up runs whether or not the Network is usable, so
-			// without this case a group with a dead Network would advertise
-			// a wait (or a give-up) it is not serving, beside an Accepted:
-			// False that already explains the same standstill differently.
-			backingOff.Message = "backoff is not being decided: the group's network is not usable"
-			degraded.Message = "backoff is not being decided: the group's network is not usable"
-		case backoff.GaveUp:
-			// No pending retry, so BackingOff is false — but an all-clear
-			// reason here would be a lie, so it carries the real one.
-			backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
-			backingOff.Message = fmt.Sprintf(
-				"not retrying: %d servers failed to start in a row; change the group's spec to try again",
-				group.Status.ConsecutiveFailures)
-			degraded.Status = metav1.ConditionTrue
-			degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
-			degraded.Message = backingOff.Message
-		case backoff.RetryAfter > 0:
-			backingOff.Status = metav1.ConditionTrue
-			backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
-			backingOff.Message = fmt.Sprintf(
-				"%d server(s) failed to start in a row; next attempt in %s",
-				group.Status.ConsecutiveFailures, backoff.RetryAfter.Round(time.Second))
-		default:
-			// Nothing has failed this streak. Only reachable with a non-nil
-			// LastFailureAt when a past failure's watermark is still stuck
-			// on the status (the residual edge Task 1 and Task 4 both
-			// accepted) — a genuinely clean history leaves it nil, which the
-			// !newestFailure.IsZero() guard above is what keeps true: drop
-			// that guard and this renders the zero time instead.
-			if group.Status.LastFailureAt != nil {
-				backingOff.Message = fmt.Sprintf(
-					"no server has failed to start recently (last failure at %s)",
-					group.Status.LastFailureAt.Time.Format(time.RFC3339))
-			}
-		}
+	}
 
-		// The event goes on the flank only, for the reason the
-		// ScalingLimited block gives: a five-second resync would otherwise
-		// announce the same wait over and over for its whole duration.
-		wasBackingOff := meta.IsStatusConditionTrue(group.Status.Conditions,
-			spawneryv1alpha1.ConditionBackingOff)
-		wasDegraded := meta.IsStatusConditionTrue(group.Status.Conditions,
-			spawneryv1alpha1.ConditionDegraded)
-		meta.SetStatusCondition(&group.Status.Conditions, backingOff)
-		meta.SetStatusCondition(&group.Status.Conditions, degraded)
-		if isTrue := backingOff.Status == metav1.ConditionTrue; sized && isTrue != wasBackingOff {
-			eventType := corev1.EventTypeNormal
-			if isTrue {
-				eventType = corev1.EventTypeWarning
-			}
-			r.Recorder.Event(group, eventType, backingOff.Reason, backingOff.Message)
+	// BackingOff and Degraded belong to a group of either type, and the line
+	// between them and ScalingLimited above is what kind of question each
+	// answers. ScalingLimited is about capacity the players need: free slots
+	// against spec.scaling.spareSlots, and the maxReplicas ceiling that can
+	// stop the group covering them. A persistent group has no such question --
+	// its size is spec.replicas, a number nobody's play session moves -- so
+	// the condition stays inside the block above, where a reader looking for
+	// it will find it beside the rule it reports on.
+	//
+	// These two are about failures, and either kind of group can have those.
+	// The backoff already gated a persistent group's creates -- size() runs
+	// its CreateOrdinals loop under the same backoff.MayCreate as the
+	// ephemeral count -- so until this was lifted out, a persistent group was
+	// backing off and giving up in silence, with nothing on its status saying
+	// why nothing was happening.
+	//
+	// Its likeliest failure is the one this milestone introduces: a claim that
+	// never binds, which no replacement can fix, because the world is on that
+	// volume and a rebuilt ordinal would only run at the same one. It does
+	// rebuild, slowly: nothing on the group's side removes a persistent server
+	// for having failed -- pruneFailed is ephemeral-only and
+	// DecidePersistentSize holds an ordinal in any phase, so the removals that
+	// do exist here are about other things, a lower spec.replicas or a
+	// departing node -- but the Server controller's failed-retention path
+	// takes the corpse away eventually, and the ordinal is created again on
+	// the next pass. So the attempts are spaced by spec.failedRetentionSeconds,
+	// an hour at the CRD default, against backoff windows of at most 160s
+	// before the threshold: at that default the waiting half of the backoff
+	// never delays an attempt, and what it contributes is the end of them --
+	// GaveUp at the threshold, after which the group stalls and waits for a
+	// human. None of that is visible anywhere else -- the phase
+	// reads Pending throughout, exactly like a slow start. Saying it is the
+	// whole of what these two conditions do for a persistent group.
+	//
+	// Both are built false-by-default and flipped, like ScalingLimited above.
+	backingOff := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionBackingOff,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
+		Message: "no server has failed to start recently",
+	}
+	degraded := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionDegraded,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
+		Message: "servers are starting normally",
+	}
+	switch {
+	case !sized:
+		// Nothing was decided this pass, so the False above is the
+		// absence of a verdict rather than one — the same reasoning
+		// ScalingLimited's own !sized case gives above. The counting two
+		// blocks up runs whether or not the Network is usable, so
+		// without this case a group with a dead Network would advertise
+		// a wait (or a give-up) it is not serving, beside an Accepted:
+		// False that already explains the same standstill differently.
+		backingOff.Message = "backoff is not being decided: the group's network is not usable"
+		degraded.Message = "backoff is not being decided: the group's network is not usable"
+	case backoff.GaveUp:
+		// No pending retry, so BackingOff is false — but an all-clear
+		// reason here would be a lie, so it carries the real one.
+		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+		backingOff.Message = fmt.Sprintf(
+			"not retrying: %d servers failed to start in a row; change the group's spec to try again",
+			group.Status.ConsecutiveFailures)
+		degraded.Status = metav1.ConditionTrue
+		degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+		degraded.Message = backingOff.Message
+	case backoff.RetryAfter > 0:
+		backingOff.Status = metav1.ConditionTrue
+		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+		backingOff.Message = fmt.Sprintf(
+			"%d server(s) failed to start in a row; next attempt in %s",
+			group.Status.ConsecutiveFailures, backoff.RetryAfter.Round(time.Second))
+	default:
+		// Nothing has failed this streak. Only reachable with a non-nil
+		// LastFailureAt when a past failure's watermark is still stuck
+		// on the status (the residual edge Task 1 and Task 4 both
+		// accepted) — a genuinely clean history leaves it nil, which the
+		// !newestFailure.IsZero() guard above is what keeps true: drop
+		// that guard and this renders the zero time instead.
+		if group.Status.LastFailureAt != nil {
+			backingOff.Message = fmt.Sprintf(
+				"no server has failed to start recently (last failure at %s)",
+				group.Status.LastFailureAt.Time.Format(time.RFC3339))
 		}
-		if isTrue := degraded.Status == metav1.ConditionTrue; sized && isTrue != wasDegraded {
-			eventType := corev1.EventTypeNormal
-			if isTrue {
-				eventType = corev1.EventTypeWarning
-			}
-			r.Recorder.Event(group, eventType, degraded.Reason, degraded.Message)
+	}
+
+	// The event goes on the flank only, for the reason the
+	// ScalingLimited block gives: a five-second resync would otherwise
+	// announce the same wait over and over for its whole duration.
+	wasBackingOff := meta.IsStatusConditionTrue(group.Status.Conditions,
+		spawneryv1alpha1.ConditionBackingOff)
+	wasDegraded := meta.IsStatusConditionTrue(group.Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded)
+	meta.SetStatusCondition(&group.Status.Conditions, backingOff)
+	meta.SetStatusCondition(&group.Status.Conditions, degraded)
+	if isTrue := backingOff.Status == metav1.ConditionTrue; sized && isTrue != wasBackingOff {
+		eventType := corev1.EventTypeNormal
+		if isTrue {
+			eventType = corev1.EventTypeWarning
 		}
+		r.Recorder.Event(group, eventType, backingOff.Reason, backingOff.Message)
+	}
+	if isTrue := degraded.Status == metav1.ConditionTrue; sized && isTrue != wasDegraded {
+		eventType := corev1.EventTypeNormal
+		if isTrue {
+			eventType = corev1.EventTypeWarning
+		}
+		r.Recorder.Event(group, eventType, degraded.Reason, degraded.Message)
 	}
 
 	if group.IsEphemeral() {
