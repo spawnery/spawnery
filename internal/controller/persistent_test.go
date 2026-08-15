@@ -81,6 +81,15 @@ func TestDecidePersistentSize(t *testing.T) {
 		// survival-1 is draining. It still holds ordinal 1, so nothing may be
 		// built on its claim -- and it is already going, so it must not be
 		// named for deletion a second time.
+		//
+		// Only the CreateOrdinals assertion below actually discriminates
+		// here: held is built with no phase filter at all, so this is what
+		// tests that an ordinal counts as taken whatever phase its server is
+		// in. The Delete assertion cannot fail on its own in this case --
+		// ordinal 1 sits below Replicas and never reaches the surplus set,
+		// so it never reaches the leaving() guard either. That guard has its
+		// own case below, where the held ordinal is surplus as well as
+		// leaving.
 		got := DecidePersistentSize(PersistentInputs{
 			Group: "survival", Replicas: 2,
 			Views: []ServerView{ordinalView("survival-0", 0, phase.Ready), ordinalView("survival-1", 1, phase.Draining)},
@@ -90,6 +99,25 @@ func TestDecidePersistentSize(t *testing.T) {
 		}
 		if len(got.Delete) != 0 {
 			t.Errorf("Delete = %v, want none: survival-1 is already leaving", got.Delete)
+		}
+	})
+
+	t.Run("a surplus ordinal held by a leaving server is not named for deletion again", func(t *testing.T) {
+		// survival-1's ordinal is surplus (>= Replicas) as well as already
+		// draining. PendingDeletes does not cover this on its own: observe()
+		// clears that reservation as soon as the cache shows a leaving
+		// phase -- typically the very next pass after the delete was issued
+		// -- while the drain itself keeps the server around for up to
+		// spec.drain.timeoutSeconds, which can far outlast the reservation's
+		// own TTL. leaving() is what keeps this rule from naming survival-1
+		// again for the rest of that drain, with no reservation left to lean
+		// on.
+		got := DecidePersistentSize(PersistentInputs{
+			Group: "survival", Replicas: 1,
+			Views: []ServerView{ordinalView("survival-0", 0, phase.Ready), ordinalView("survival-1", 1, phase.Draining)},
+		})
+		if len(got.Delete) != 0 {
+			t.Fatalf("Delete = %v, want none: survival-1 is already leaving", got.Delete)
 		}
 	})
 
