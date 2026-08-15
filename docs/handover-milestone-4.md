@@ -806,6 +806,44 @@ is what it built and what the next milestone finds in place.
   a table case for this passed for the wrong reason, which is exactly why the
   envtest exists.
 
+- **The absolute-word sweep is this repository's one countermeasure that has
+  caught this milestone's signature defect prospectively, and it needs a
+  correction before the next milestone inherits it broken.** The sweep —
+  `git diff -U0 | grep -nE '\b(never|only|nothing|exactly one|cannot|always|
+  every)\b'` over a staged diff, then re-deriving each hit against the code
+  beneath it — is what this milestone leaned on to catch a sentence, a
+  comment or a test name whose claim had outlived what the code actually
+  does: sixteen instances across 4c-3 alone, four of them introduced *by the
+  fix for another instance*, the same shape recurring one layer down each
+  time a sentence was rewritten to be more precise and the rewrite's own new
+  clause went unchecked. **The grep has to be case-insensitive, and for this
+  entire milestone it was not.** A sentence-initial capitalised "Only" went
+  straight through a case-sensitive sweep — in a sentence that was itself
+  written to fix an overclaim the sweep had just caught, and that opened with
+  the very word the sweep exists to find. That is not an edge case: a
+  sentence *opening* with an absolute word is where an overclaim is likeliest
+  to sit, since the word states the sentence's whole force before anything
+  qualifies it, and the case-sensitive form was blind to exactly that
+  position. **Two other shapes the sweep does not catch at all, and each
+  needs its own separate pass, because grep only ever reads the lines a diff
+  touches — added or removed — never a line that sat there unchanged.** A
+  claim in the present tense about wiring that does not exist yet — "the
+  watch and the resync bring the answer back within seconds," written before
+  anything watched anything — reads as ordinary present-tense prose and
+  contains none of the sweep's flagged words; the same sentence can just as
+  easily go stale from the other direction, once the wiring it once
+  correctly denied has since been built and nobody returns to update it,
+  which is exactly what happened to this one once two later tasks registered
+  the watch it had described before either existed. And a new addition can falsify an
+  *old* sentence sitting undisturbed nearby: a fixture comment said NodePorts
+  were cluster-scoped "unlike every other object these tests create," true
+  when it was written and false the moment a later helper started creating a
+  `Node` — itself cluster-scoped — beside it. A diff-based grep never
+  surfaces that: the sentence that became wrong is not among the lines that
+  changed, only the addition sitting next to it is. Neither was found by the
+  sweep or any other mechanical pass; both were found by a person reading the
+  surrounding prose rather than only the diff in front of them.
+
 **4c is now complete as three sub-milestones — 4c-1 the readiness contract,
 4c-2 proxy rolling updates, 4c-3 node drain — and what remains is proof, not
 code.** §12 of `docs/runbook-milestone-4c1-evidence.md` is written for the two
