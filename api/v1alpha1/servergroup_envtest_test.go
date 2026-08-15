@@ -140,6 +140,18 @@ func TestServerGroupCELRejections(t *testing.T) {
 			},
 		},
 		{
+			// The one CRD change this milestone makes. Without the rule such a
+			// group is accepted and runs zero servers for good:
+			// DesiredReplicas() returns 0 for a nil spec.replicas,
+			// DecidePersistentSize is asked for no ordinals, and derivePhase
+			// reports Pending against a group nobody asked anything of.
+			name: "persistent without replicas",
+			base: persistentGroup,
+			mutate: func(g *spawneryv1alpha1.ServerGroup) {
+				g.Spec.Replicas = nil
+			},
+		},
+		{
 			name: "ephemeral without scaling",
 			base: ephemeralGroup,
 			mutate: func(g *spawneryv1alpha1.ServerGroup) {
