@@ -64,6 +64,12 @@ type ServerView struct {
 	// sizing rules stay free of node vocabulary, the same way Stale carries a
 	// conclusion about the player count.
 	Condemned bool
+	// NodeName is pod.spec.nodeName, carried alongside Condemned so the
+	// NodeDraining condition can name the node a condemned server is on
+	// without asking nodeDeparting about the same pod a second time. Empty
+	// when the pod could not be resolved, in which case Condemned is false
+	// too and nothing reads this field.
+	NodeName string
 	// CreatedAt is the creation timestamp of the Server object.
 	CreatedAt time.Time
 	// FailedAt is status.failedAt: when this server entered phase Failed.

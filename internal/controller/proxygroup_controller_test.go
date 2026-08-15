@@ -2780,3 +2780,167 @@ func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
 			pdb.Spec.MinAvailable)
 	}
 }
+
+// TestNodeDrainingConditionNamesTheNodeOnAProxyGroup is the proxy half of
+// TestNodeDrainingConditionNamesTheNode: the same condition, built from the
+// same fact -- a live pod on a departing node -- reported the same way
+// regardless of which group kind noticed it.
+func TestNodeDrainingConditionNamesTheNodeOnAProxyGroup(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.bindPodToNode(t, &pods[0], node.Name)
+	f.ensureNode(t, node.Name, true)
+	f.reconcileProxyGroup(r, "gateway")
+
+	cond := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("NodeDraining = %v, want True", cond)
+	}
+	if !strings.Contains(cond.Message, node.Name) {
+		t.Errorf("message %q does not name the node", cond.Message)
+	}
+
+	// Release it. The condition reports where pods are, not what has been
+	// decided about them, so it drops to False on the fact alone -- nothing
+	// here waits for the mark this pass never got around to making.
+	f.ensureNode(t, node.Name, false)
+	f.reconcileProxyGroup(r, "gateway")
+	cond = meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("NodeDraining after uncordon = %v, want False", cond)
+	}
+}
+
+// TestANodeDrainMarkFiresANodeDrainingEvent is the event half of §3.7 for the
+// ProxyGroup: Task 5 marked a proxy for its departing node without telling
+// the operator why. It has to reach the actual mark, not just the surge, so
+// this mirrors TestAProxyOnACordonedNodeIsReplaced's two-reconcile shape
+// rather than stopping at the first pass, where nothing is marked yet and the
+// event assertion below would pass for no reason.
+func TestANodeDrainMarkFiresANodeDrainingEvent(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := r.Recorder.(*record.FakeRecorder)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	going := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.bindPodToNode(t, &pods[0], going.Name)
+	f.ensureNode(t, going.Name, true)
+
+	f.reconcileProxyGroup(r, "gateway") // surges the replacement; nothing marked yet
+	if containsEvent(drainEvents(rec), spawneryv1alpha1.ReasonNodeDraining) {
+		t.Fatal("NodeDraining event fired before any proxy was actually marked")
+	}
+
+	after := f.proxyPods("gateway")
+	for i := range after {
+		f.markProxyPodReady(t, &after[i])
+	}
+	f.reconcileProxyGroup(r, "gateway") // marks the pod on the departing node
+
+	marked := 0
+	for _, p := range f.proxyPods("gateway") {
+		if _, dated := drainingSince(&p); dated {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Fatalf("marked = %d, want 1; nothing below tests the event without a mark to attach it to", marked)
+	}
+
+	events := drainEvents(rec)
+	count := 0
+	for _, e := range events {
+		if strings.Contains(e, spawneryv1alpha1.ReasonNodeDraining) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("NodeDraining events = %d, want exactly 1: %v", count, events)
+	}
+
+	// A resync with the mark and the departing node both unchanged must not
+	// re-fire: the event is for the moment of decision, not a status the
+	// group repeats every pass. Without the guard against re-stamping an
+	// existing mark, this would announce the same drain once per resync for
+	// as long as the pod takes to empty.
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+	if containsEvent(drainEvents(rec), spawneryv1alpha1.ReasonNodeDraining) {
+		t.Error("NodeDraining event fired again on a resync that changed nothing about the mark")
+	}
+}
+
+// TestAHashMismatchMarkDoesNotFireANodeDrainingEvent is the negative half of
+// the same gate: a rolling update marks a proxy too, and §3.7 reserves
+// NodeDraining for the occasion a departing node causes, not the occasion a
+// spec change does -- that one is already a rolling update, not a drain.
+func TestAHashMismatchMarkDoesNotFireANodeDrainingEvent(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := r.Recorder.(*record.FakeRecorder)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	drainEvents(rec) // discard anything from setup
+
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway") // surges the replacement; nothing marked yet
+
+	after := f.proxyPods("gateway")
+	if len(after) != 3 {
+		t.Fatalf("proxy pods = %d after the spec change, want 3", len(after))
+	}
+	for i := range after {
+		f.markProxyPodReady(t, &after[i])
+	}
+	f.reconcileProxyGroup(r, "gateway") // marks exactly one pod, for the hash mismatch
+
+	marked := 0
+	for _, p := range f.proxyPods("gateway") {
+		if _, dated := drainingSince(&p); dated {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Fatalf("marked = %d, want 1; nothing below tests the gate without a mark to test it against", marked)
+	}
+
+	if containsEvent(drainEvents(rec), spawneryv1alpha1.ReasonNodeDraining) {
+		t.Error("NodeDraining event fired for a mark caused by a hash mismatch, not a departing node")
+	}
+}

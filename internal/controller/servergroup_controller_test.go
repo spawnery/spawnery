@@ -3117,3 +3117,42 @@ func TestCondemnedServersAreReplaced(t *testing.T) {
 		t.Fatal("no replacement was ordered in the pass that condemned; the group would sit empty until the next one")
 	}
 }
+
+// TestNodeDrainingConditionNamesTheNode is what an operator sees in
+// kubectl describe. A bare True would tell them something is happening
+// without telling them where.
+func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	f.markReady(t, servers[0].Name)
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	pod, ok := f.pod(f.server(servers[0].Name).Status.PodName)
+	if !ok {
+		t.Fatal("pod not found")
+	}
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+	f.reconcileGroup(t, r)
+
+	cond := meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions,
+		spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("NodeDraining = %v, want True", cond)
+	}
+	if !strings.Contains(cond.Message, node.Name) {
+		t.Errorf("message %q does not name the node", cond.Message)
+	}
+
+	// Release it: with no pods left on a departing node the condition goes
+	// False rather than staying True until something else clears it.
+	f.ensureNode(t, node.Name, false)
+	f.reconcileGroup(t, r)
+	cond = meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions,
+		spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("NodeDraining after uncordon = %v, want False", cond)
+	}
+}

@@ -189,6 +189,20 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
+	// Carries the node names collectViews already resolved (ServerView.NodeName)
+	// for every view it found condemned, rather than asking nodeDeparting about
+	// any pod again here. No event accompanies this: the condemn loop in size()
+	// below already emits one NodeDraining event per server it condemns, and a
+	// second event tied to this condition's own transition would report the
+	// same occasion twice.
+	drainingNodes := make([]string, 0, len(views))
+	for _, v := range views {
+		if v.Condemned {
+			drainingNodes = append(drainingNodes, v.NodeName)
+		}
+	}
+	meta.SetStatusCondition(&group.Status.Conditions, drainingCondition(drainingNodes))
+
 	// The counter and the two conditions belong to the spec that produced the
 	// failures. A generation change is the operator's answer to whatever broke,
 	// so the streak it caused is over and the next attempt is immediate.
@@ -596,6 +610,9 @@ func (r *ServerGroupReconciler) collectViews(
 			// and re-condemning it would only reserve a second delete for a
 			// server that is going.
 			Condemned: podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
+		}
+		if podFound {
+			v.NodeName = pod.Spec.NodeName
 		}
 		if srv.Status.FailedAt != nil {
 			v.FailedAt = srv.Status.FailedAt.Time

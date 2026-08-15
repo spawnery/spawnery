@@ -467,10 +467,18 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		return err
 	}
 
+	// nodeGoing is this pass's nodeDeparting verdict for each live pod, kept
+	// alongside views by the same index so it can be reused below (the
+	// draining mark's event gate, and the NodeDraining condition) instead of
+	// being asked a second time. Task 8's brief names the hazard directly:
+	// the same fact computed twice from the same source at two different
+	// moments can disagree.
+	nodeGoing := make([]bool, len(pods))
 	views := make([]ProxyView, 0, len(pods))
 	for i := range pods {
 		snap := r.Agents.Lookup(string(pods[i].UID))
 		_, dated := drainingSince(&pods[i])
+		nodeGoing[i] = nodeDeparting(ctx, r.Client, pods[i].Spec.NodeName, r.DrainTaintKeys)
 		views = append(views, ProxyView{
 			Name: pods[i].Name,
 			// Two ways to be out of date, and the rollout does not distinguish
@@ -478,8 +486,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 			// a pod on a node that is going away. Both have to be replaced by a
 			// pod somewhere else, one at a time, without disconnecting anyone —
 			// which is the sentence DecideRollout already implements.
-			Stale: pods[i].Labels[podspec.LabelPodHash] != wantHash ||
-				nodeDeparting(ctx, r.Client, pods[i].Spec.NodeName, r.DrainTaintKeys),
+			Stale:        pods[i].Labels[podspec.LabelPodHash] != wantHash || nodeGoing[i],
 			Ready:        isPodReady(&pods[i]),
 			Draining:     dated,
 			Players:      snap.Players,
@@ -487,6 +494,15 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 			CreatedAt:    pods[i].CreationTimestamp.Time,
 		})
 	}
+	// The group's NodeDraining condition is built from this pass's live set,
+	// independent of whether DecideRollout has actually picked any of these
+	// pods to drain yet -- it reports where pods are, not what has been
+	// decided about them. No event accompanies it: the per-proxy event fired
+	// below, at the point a proxy is actually marked, is the one §3.7 asks
+	// for, and a second event tied to this condition's own transition would
+	// under-report a group where a second departing node appears while the
+	// condition is already True.
+	r.reportNodeDraining(group, pods, nodeGoing)
 
 	decision := DecideRollout(views, group.Spec.Replicas)
 
@@ -712,11 +728,30 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	names := make(map[types.UID]string, len(pods))
 	for i := range pods {
 		going := leaving[pods[i].Name]
+		// Read before markDraining below can change it: views[i].Draining is
+		// this same pod's drainingSince verdict from the loop that built
+		// views, taken before anything in this pass patched its annotations,
+		// so it is what "already marked, before this call" means for the
+		// event gate two lines down.
+		wasMarked := views[i].Draining
 		if err := r.Proxies.SetReady(ctx, string(pods[i].UID), !going); err != nil {
 			return err
 		}
 		if err := r.markDraining(ctx, &pods[i], going); err != nil {
 			return err
+		}
+		// The event §3.7 asks for on the ProxyGroup: fired once, on the pass
+		// that actually marks a proxy, and only when the node is a reason it
+		// was marked -- not when a hash mismatch is the only reason. going is
+		// leaving[pods[i].Name] and can be true for reasons nodeGoing[i] does
+		// not cover (a plain surplus reduction, a hash mismatch alone), so
+		// nodeGoing[i] is what keeps this from firing on those. !wasMarked is
+		// what keeps it from firing again on every later pass the same pod
+		// spends draining, matching markDraining's own guard against
+		// re-stamping a mark it already made.
+		if going && !wasMarked && nodeGoing[i] {
+			r.Recorder.Eventf(group, corev1.EventTypeNormal, spawneryv1alpha1.ReasonNodeDraining,
+				"draining proxy %s off a node that is going away", pods[i].Name)
 		}
 		diverging[pods[i].UID] = going && isPodReady(&pods[i])
 		names[pods[i].UID] = pods[i].Name
@@ -868,6 +903,27 @@ func (r *ProxyGroupReconciler) reportReadinessDivergence(
 		}
 		r.Recorder.Event(group, eventType, diverged.Reason, diverged.Message)
 	}
+}
+
+// reportNodeDraining tells the group's NodeDraining condition which nodes,
+// among this pass's live pods, are on their way out of service. nodeGoing is
+// reconcileReplicas's own per-pod nodeDeparting verdict from the loop that
+// built views -- not asked a second time here -- indexed the same way as
+// pods.
+//
+// No event goes with this: the one §3.7 asks for is fired in reconcileReplicas
+// at the point a proxy is actually marked, which is a per-proxy occasion this
+// condition's own True/False flank cannot stand in for -- a second departing
+// node while the condition is already True marks another proxy without the
+// condition changing at all.
+func (r *ProxyGroupReconciler) reportNodeDraining(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, nodeGoing []bool) {
+	names := make([]string, 0, len(pods))
+	for i, going := range nodeGoing {
+		if going {
+			names = append(names, pods[i].Spec.NodeName)
+		}
+	}
+	meta.SetStatusCondition(&group.Status.Conditions, drainingCondition(names))
 }
 
 // drainingSince reads the annotation markDraining writes. ok is false when

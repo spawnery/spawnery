@@ -49,6 +49,10 @@ const (
 	// group's phase, and a group waiting ten seconds after a single hiccup
 	// would then be indistinguishable from one with a real fault.
 	ConditionBackingOff = "BackingOff"
+	// ConditionNodeDraining is true while this group has pods on nodes that
+	// are on their way out of service, and names them. It reports; the
+	// removals it describes are decided elsewhere.
+	ConditionNodeDraining = "NodeDraining"
 )
 
 // Condition reasons.
@@ -68,6 +72,8 @@ const (
 	ReasonNoRecentFailures     = "NoRecentFailures"
 	ReasonReadinessDiverged    = "ReadinessDiverged"
 	ReasonReadinessAgrees      = "ReadinessAgrees"
+	ReasonNodeDraining         = "NodeDraining"
+	ReasonNoNodesDraining      = "NoNodesDraining"
 )
 
 // ObjectRef names another object in the same namespace.

@@ -18,11 +18,17 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"slices"
+	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
 // IsDeparting reports whether this node is on its way out of service, and the
@@ -80,4 +86,39 @@ func nodeDeparting(ctx context.Context, reader client.Reader, nodeName string, t
 		return false
 	}
 	return IsDeparting(node, taintKeys)
+}
+
+// drainingCondition builds the NodeDraining condition from the names of
+// departing nodes carrying at least one of this group's live pods. Both
+// ServerGroupReconciler.Reconcile and ProxyGroupReconciler.reconcileReplicas
+// call this over names collected from a fact they have already computed this
+// pass -- ServerView.Condemned and reconcileReplicas's own per-pod
+// nodeDeparting check, respectively -- rather than asking nodeDeparting about
+// any pod a second time. Duplicates and empty names (an unresolvable pod) are
+// tolerated here so neither caller has to dedupe or filter before calling.
+func drainingCondition(nodeNames []string) metav1.Condition {
+	cond := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionNodeDraining,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonNoNodesDraining,
+		Message: "no pods are on nodes that are on their way out of service",
+	}
+	seen := make(map[string]bool, len(nodeNames))
+	names := make([]string, 0, len(nodeNames))
+	for _, n := range nodeNames {
+		if n == "" || seen[n] {
+			continue
+		}
+		seen[n] = true
+		names = append(names, n)
+	}
+	if len(names) == 0 {
+		return cond
+	}
+	sort.Strings(names)
+	cond.Status = metav1.ConditionTrue
+	cond.Reason = spawneryv1alpha1.ReasonNodeDraining
+	cond.Message = fmt.Sprintf("pods are on node(s) %s, which are on their way out of service",
+		strings.Join(names, ", "))
+	return cond
 }
