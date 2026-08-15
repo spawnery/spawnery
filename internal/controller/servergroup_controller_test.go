@@ -27,6 +27,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -3364,5 +3365,180 @@ func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
 		spawneryv1alpha1.ConditionNodeDraining)
 	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Fatalf("NodeDraining after uncordon = %v, want False", cond)
+	}
+}
+
+// createPersistentGroup adds a persistent ServerGroup beside the fixture's
+// ephemeral one, in the same namespace and on the same Network.
+//
+// It is built from scratch rather than by editing the fixture's group,
+// because spec.type is immutable and no edit can turn an ephemeral group into
+// a persistent one. The field sets differ besides: the CRD requires
+// spec.replicas and spec.storage here, and forbids spec.scaling.
+func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int32) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: f.network.Name},
+			Type:                          spawneryv1alpha1.ServerGroupPersistent,
+			Image:                         "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers:                    100,
+			Replicas:                      &replicas,
+			TerminationGracePeriodSeconds: 60,
+			FailedRetentionSeconds:        3600,
+			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
+			Storage:                       &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")},
+		},
+	}
+	if err := f.c.Create(f.ctx, group); err != nil {
+		t.Fatalf("create persistent ServerGroup %s: %v", name, err)
+	}
+	return group
+}
+
+// reconcilePersistentGroup runs the group reconciler once against a group
+// named here, rather than against the fixture's own.
+func (f *fixture) reconcilePersistentGroup(t *testing.T, r *ServerGroupReconciler, name string) {
+	t.Helper()
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("reconcile group %s: %v", name, err)
+	}
+}
+
+// setPersistentReplicas moves spec.replicas of a persistent group.
+func (f *fixture) setPersistentReplicas(t *testing.T, name string, n int32) {
+	t.Helper()
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group %s: %v", name, err)
+	}
+	group.Spec.Replicas = &n
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("update group %s: %v", name, err)
+	}
+}
+
+// serverNamesOfGroup is the names of the servers a group owns that still
+// exist, sorted, so an assertion can name what it expects to see.
+func (f *fixture) serverNamesOfGroup(t *testing.T, group string) []string {
+	t.Helper()
+	list := &spawneryv1alpha1.ServerList{}
+	if err := f.c.List(f.ctx, list, ctrlclientInNamespace(f.ns)); err != nil {
+		t.Fatalf("list servers: %v", err)
+	}
+	names := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		if list.Items[i].Spec.GroupRef.Name == group {
+			names = append(names, list.Items[i].Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// serverIfPresent reads a Server without failing the test when it is gone,
+// which f.server cannot do and a removal has to be able to ask.
+func (f *fixture) serverIfPresent(name string) (*spawneryv1alpha1.Server, bool) {
+	srv := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, srv); err != nil {
+		return nil, false
+	}
+	return srv, true
+}
+
+// TestAPersistentGroupBuildsItsOrdinals is the milestone's subject: a number
+// in spec.replicas becomes servers with stable names.
+func TestAPersistentGroupBuildsItsOrdinals(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 2)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	names := f.serverNamesOfGroup(t, "survival")
+	if len(names) != 2 || names[0] != "survival-0" || names[1] != "survival-1" {
+		t.Fatalf("servers = %v, want [survival-0 survival-1]", names)
+	}
+	// names is sorted and pinned above, so its index is the ordinal the name
+	// carries. Deriving the expectation with OrdinalOf instead would only ask
+	// the name what the name already says.
+	for i, name := range names {
+		srv := f.server(name)
+		if srv.Spec.Ordinal == nil || *srv.Spec.Ordinal != int32(i) {
+			t.Errorf("%s spec.ordinal = %v, want %d", name, srv.Spec.Ordinal, i)
+		}
+	}
+}
+
+// TestAPersistentGroupRemovesTheHighestOrdinal is the other direction. The
+// group reconciler asks for the removal by deleting the Server object; the
+// drain finalizer that would otherwise hold it in Terminating is the Server
+// controller's, and this test drives only the group, so the surplus ordinal
+// leaves the API server outright.
+func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 3)
+	f.reconcilePersistentGroup(t, r, "survival")
+	if got := len(f.serverNamesOfGroup(t, "survival")); got != 3 {
+		t.Fatalf("servers = %d, want 3", got)
+	}
+
+	f.setPersistentReplicas(t, "survival", 2)
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	if _, present := f.serverIfPresent("survival-2"); present {
+		t.Error("survival-2 is still here; the highest ordinal is the one that goes")
+	}
+	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 2 ||
+		names[0] != "survival-0" || names[1] != "survival-1" {
+		t.Errorf("surviving servers = %v, want [survival-0 survival-1]", names)
+	}
+}
+
+// TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken pins the one thing a
+// derived name can run into that a random one effectively cannot: the name it
+// is about to create is already on an object.
+//
+// The server built here holds no spec.ordinal, which is how an object this
+// rule did not create looks to it -- the rule reads spec.ordinal and never the
+// name, so this one fills no ordinal and the create is asked for anyway. A
+// lagging cache produces the same collision by a shorter route. Either way the
+// object is already what the create wanted, and a reconcile that returned the
+// error would come back to the same refusal on every pass for as long as the
+// object exists, never reaching the status, the PDB or anything else below it.
+func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	group := f.createPersistentGroup(t, "survival", 1)
+
+	squatter := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PersistentServerName("survival", 0),
+			Namespace: f.ns,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: spawneryv1alpha1.GroupVersion.String(),
+				Kind:       "ServerGroup",
+				Name:       group.Name,
+				UID:        group.UID,
+			}},
+		},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: group.Name},
+		},
+	}
+	if err := f.c.Create(f.ctx, squatter); err != nil {
+		t.Fatalf("create the server already holding the name: %v", err)
+	}
+
+	// The failure this pins is the reconcile erroring out, which
+	// reconcilePersistentGroup reports.
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 1 || names[0] != "survival-0" {
+		t.Errorf("servers = %v, want [survival-0]", names)
 	}
 }

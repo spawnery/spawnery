@@ -289,13 +289,15 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// the create-backoff case, which docs/known-issues.md documents under "a
 	// group in create-backoff condemns without replacing".
 	//
-	// IsEphemeral rides along with networkUsable here rather than gating the
-	// call, so a persistent group's servers are condemned too. That is what
-	// known-issues already describes — a departing node takes a server
-	// regardless of what kind of server it is — and it costs nothing while
-	// milestone 5 is unwritten and nothing in this operator creates a server
-	// for a persistent group.
-	mayResize := networkUsable && group.IsEphemeral()
+	// The group's type is not part of this flag, and that is the second half of
+	// the same rule. The Network gates sizing of either kind, because neither
+	// kind can render a pod without one; the type selects *which* rule sizes
+	// the group — the spare-slot rule for an ephemeral group, spec.replicas for
+	// a persistent one — and size() branches on it internally. A persistent
+	// group's servers are condemned on the way through either way, which is
+	// what known-issues already describes: a departing node takes a server
+	// regardless of what kind of server it is.
+	mayResize := networkUsable
 	decision, err := r.size(ctx, group, views, servers, backoff, mayResize)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -494,20 +496,23 @@ func ofGeneration(views []ServerView, generation int64) []ServerView {
 	return out
 }
 
-// size brings the group to the size DecideSize asks for and reports that
+// size brings the group to the size its own rule asks for and reports that
 // decision, so Reconcile can publish the part of it that belongs on the
-// status. It also condemns the servers a departing node has claimed, and that
-// half runs whether or not the group may resize.
+// status. Which rule that is follows from the group's type: the spare-slot
+// rule of DecideSize for an ephemeral group, the number in spec.replicas by
+// way of DecidePersistentSize for a persistent one. It also condemns the
+// servers a departing node has claimed, and that half runs whether or not the
+// group may resize.
 //
-// mayResize is false when the group's Network is unusable, or when it is not
-// an ephemeral group. Both stop the group deciding a size; neither stops a
-// node leaving. See the rule at the call site for why those are different
-// questions. A nil spec.scaling is a third way to have no size to decide, and
-// it lands in the same place for the same reason.
+// mayResize is false when the group's Network is unusable, which stops the
+// group deciding a size of either kind and does not stop a node leaving. See
+// the rule at the call site for why those are different questions. A nil
+// spec.scaling on an ephemeral group is a second way to have no size to
+// decide, and it lands in the same place for the same reason.
 //
-// The returned decision is the zero value whenever the group did not resize,
-// so a caller publishing ScalingLimited from it says "nothing was decided"
-// rather than a verdict nothing computed.
+// The returned decision carries nothing but Condemn whenever no rule decided a
+// size, so a caller publishing ScalingLimited from it says "nothing was
+// decided" rather than a verdict nothing computed.
 func (r *ServerGroupReconciler) size(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -519,33 +524,56 @@ func (r *ServerGroupReconciler) size(
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
 
-	// Above the early return below, not inside the resizing half: the
+	// Before the switch below and outside every one of its branches: the
 	// reservations are what keep condemned() from naming the same server twice
 	// across two passes, so a group that only ever condemns still has to
 	// observe them and still has to read them.
 	r.Expectations.observe(key, views)
 	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
 
-	if !mayResize || group.Spec.Scaling == nil {
-		return SizeDecision{}, r.condemn(ctx, group, servers, key,
-			condemned(ScalingInputs{Views: views, PendingDeletes: pendingDeletes}))
+	var decision SizeDecision
+	switch {
+	case !mayResize:
+		// No size is decided, and the condemnation attached below is the whole
+		// of what this function does on this path: every loop under it is fed
+		// by a field no rule filled in.
+	case group.IsEphemeral():
+		if group.Spec.Scaling != nil {
+			decision = DecideSize(ScalingInputs{
+				Views:         views,
+				MinReplicas:   group.Spec.Scaling.MinReplicas,
+				MaxReplicas:   group.Spec.Scaling.MaxReplicas,
+				SpareSlots:    group.Spec.Scaling.SpareSlots,
+				MaxPlayers:    group.Spec.MaxPlayers,
+				Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
+
+				Generation:     group.Generation,
+				MaxUnavailable: group.UpdateMaxUnavailable(),
+
+				PendingCreates: int32(len(pendingCreates)),
+				PendingDeletes: pendingDeletes,
+				PendingRetires: pendingRetires,
+			})
+		}
+	default:
+		decision = DecidePersistentSize(PersistentInputs{
+			Group:          group.Name,
+			Replicas:       group.DesiredReplicas(),
+			Views:          views,
+			PendingCreates: pendingCreates,
+			PendingDeletes: pendingDeletes,
+		})
 	}
 
-	decision := DecideSize(ScalingInputs{
-		Views:         views,
-		MinReplicas:   group.Spec.Scaling.MinReplicas,
-		MaxReplicas:   group.Spec.Scaling.MaxReplicas,
-		SpareSlots:    group.Spec.Scaling.SpareSlots,
-		MaxPlayers:    group.Spec.MaxPlayers,
-		Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
-
-		Generation:     group.Generation,
-		MaxUnavailable: group.UpdateMaxUnavailable(),
-
-		PendingCreates: int32(len(pendingCreates)),
-		PendingDeletes: pendingDeletes,
-		PendingRetires: pendingRetires,
-	})
+	// Condemnation is attached here, once, for every path out of the switch
+	// above rather than by each branch remembering to do it. DecideSize
+	// attaches it too, and condemned() reads nothing but the two fields handed
+	// to it here, so for that branch this assigns the same names a second
+	// time; the persistent rule and the two paths that decide no size have no
+	// attachment of their own, and this is theirs. Two neighbouring branches
+	// that must each remember one step is the shape where one of them
+	// eventually does not.
+	decision.Condemn = condemned(ScalingInputs{Views: views, PendingDeletes: pendingDeletes})
 
 	// The backoff gate is on execution, not on the decision. DecideSize keeps
 	// computing what the group needs, so Limited and ColdStartBlocked go on
@@ -557,9 +585,23 @@ func (r *ServerGroupReconciler) size(
 	// and retirements below run whatever it decided: they touch players, and
 	// must not wait on an unrelated failure. The Network gate above is a
 	// different question with a different answer, settled at the call site.
+	//
+	// Two loops under one gate, because the two rules ask for creation in the
+	// two different currencies they decide in: a count for the ephemeral rule,
+	// which builds interchangeable servers, and a list of ordinals for the
+	// persistent one, which builds identities. At most one of them is ever
+	// non-empty -- the switch above ran one branch, and neither rule fills the
+	// other's field -- and neither loop needs to know that.
 	if backoff.MayCreate {
 		for i := int32(0); i < decision.Create; i++ {
 			name, err := r.createServer(ctx, group)
+			if err != nil {
+				return decision, err
+			}
+			r.Expectations.expectCreated(key, name)
+		}
+		for _, ordinal := range decision.CreateOrdinals {
+			name, err := r.createPersistentServer(ctx, group, ordinal)
 			if err != nil {
 				return decision, err
 			}
@@ -579,8 +621,8 @@ func (r *ServerGroupReconciler) size(
 	}
 	// Ungated by the backoff, like the deletes and retirements around it and
 	// for the same reason: this touches players and must not wait on an
-	// unrelated failure. The same call runs on the early-return path above,
-	// which is how it also stays ungated by the Network.
+	// unrelated failure. It is ungated by the Network too, because Condemn is
+	// attached above whether or not any rule decided a size.
 	if err := r.condemn(ctx, group, servers, key, decision.Condemn); err != nil {
 		return decision, err
 	}
@@ -596,10 +638,11 @@ func (r *ServerGroupReconciler) size(
 // condemn removes the named servers and reserves each removal, one delete per
 // server on a node that is going away.
 //
-// It is a method of its own rather than a loop inside size() because it has
-// two callers on two sides of the Network gate, and they must not be allowed
-// to drift into two loops that emit different events for the same occasion.
-// Reserved after the delete, matching size()'s other removal loops.
+// It stayed a method of its own after the Network gate stopped needing a
+// second call site for it, because the occasion it names is not the one the
+// deletes beside it in size() name — a node leaving rather than a size
+// decision — and the event it emits says so. Reserved after the delete,
+// matching size()'s other removal loops.
 func (r *ServerGroupReconciler) condemn(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -737,10 +780,16 @@ func (r *ServerGroupReconciler) podFor(ctx context.Context, srv *spawneryv1alpha
 	return pod, true
 }
 
-func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) (string, error) {
+// newServer builds the Server object both create paths write. Everything a
+// server of this group carries is here except the two things that tell the
+// kinds apart: where the name came from, and spec.ordinal.
+func (r *ServerGroupReconciler) newServer(
+	group *spawneryv1alpha1.ServerGroup,
+	name string,
+) (*spawneryv1alpha1.Server, error) {
 	srv := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      NewServerName(group.Name),
+			Name:      name,
 			Namespace: group.Namespace,
 			Labels: map[string]string{
 				podspec.LabelManagedBy: podspec.ManagedByValue,
@@ -754,10 +803,52 @@ func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawner
 		},
 	}
 	if err := controllerutil.SetControllerReference(group, srv, r.Scheme); err != nil {
+		return nil, err
+	}
+	return srv, nil
+}
+
+// createServer creates one interchangeable server of an ephemeral group, under
+// a name with a random suffix because it has no identity to preserve.
+func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) (string, error) {
+	srv, err := r.newServer(group, NewServerName(group.Name))
+	if err != nil {
 		return "", err
 	}
 	if err := r.Create(ctx, srv); err != nil {
 		return "", err
+	}
+	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerCreated", "created server %s", srv.Name)
+	return srv.Name, nil
+}
+
+// createPersistentServer creates the server holding one ordinal. Unlike
+// createServer's random suffix, this name is derived and stable: it is what
+// makes the claim name stable, which is what makes the world survive.
+func (r *ServerGroupReconciler) createPersistentServer(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	ordinal int32,
+) (string, error) {
+	srv, err := r.newServer(group, PersistentServerName(group.Name, ordinal))
+	if err != nil {
+		return "", err
+	}
+	srv.Spec.Ordinal = &ordinal
+	if err := r.Create(ctx, srv); err != nil {
+		// A name this reconciler derives can already be taken, which a random
+		// one effectively cannot: the cache that DecidePersistentSize read may
+		// simply not have shown the server this same reconciler created a
+		// moment ago. The object is already what this call wanted, so the
+		// caller reserves it as it would any other create -- returning the
+		// error instead would fail the whole reconcile, status and PDB with
+		// it, for as long as the collision lasts: a pass or two while a cache
+		// catches up, and without end for an object that holds the name
+		// without holding the ordinal. No event: nothing was created here.
+		if !apierrors.IsAlreadyExists(err) {
+			return "", err
+		}
+		return srv.Name, nil
 	}
 	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerCreated", "created server %s", srv.Name)
 	return srv.Name, nil
