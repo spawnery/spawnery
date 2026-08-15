@@ -1989,6 +1989,41 @@ publishes `Accepted: True`, `Degraded: False`, `replicas: 0`,
 except the phase. Nothing else is affected: no condition depends on the phase,
 and the group is sized, PDB'd and reconciled as normal.
 
+**An ordinal waits, visibly, for a pod that a dead node will never finish
+terminating.** As of the branch review closing this milestone, the Server
+controller refuses to create a pod while a pod of the same name still exists,
+terminating or not (`internal/controller/server_controller.go`). That is what
+it must do — creating into the name gets `AlreadyExists`, and the controller
+would then adopt a pod it did not create and delete its own `Server` one pass
+later — but it means the wait inherits whatever bound the termination has. For
+an ordinary pod deletion that is `spec.terminationGracePeriodSeconds`. For a
+pod on a node that has gone `NotReady`, there is none: the API server keeps the
+object until a kubelet confirms the kill, and there is no kubelet to confirm
+it.
+
+The `Server` says so rather than sitting silent — `Accepted: False` with reason
+`PodNameTerminating` and the pod's name in the message — and it says nothing
+else, because no pod means no `status.startedAt`, so the startup deadline never
+arms, the server never reaches `Failed`, and the per-group backoff never counts
+it. The phase stays `Pending`.
+
+```bash
+kubectl get server <group>-<ordinal> -n <namespace> \
+  -o jsonpath='{range .status.conditions[?(@.type=="Accepted")]}{.reason}: {.message}{"\n"}{end}'
+```
+
+The remedy is the same one a `StatefulSet` needs in this situation, and it
+carries the same warning: force-deleting the pod object tells the API server
+the container is gone without anything having verified that it is. On a node
+that is merely unreachable rather than dead, the process may still be running
+and still holding the volume, and the replacement will then contend for a
+`ReadWriteOnce` claim the old pod has not released — which hangs on the volume.
+Confirm the node is really gone first.
+
+```bash
+kubectl delete pod <group>-<ordinal> -n <namespace> --force --grace-period=0
+```
+
 **A squatter can stall an ordinal silently.** `DecidePersistentSize` decides
 which ordinal is missing by reading `ServerView.Ordinal`, sourced from
 `spec.ordinal` — never by parsing the candidate name. If some other object
