@@ -142,23 +142,21 @@ Two costs, stated rather than discovered:
 
 ### 3.3 The server path: deletion is already the drain
 
-**The group needs the node name, and the Server controller is the one holding
-the pod.** `ServerGroupReconciler.collectViews` reads `Server` objects and no
-pods; making it list pods to learn one string per server would add a list per
-pass to the busiest reconciler in the repository. Instead the Server controller,
-which reads its pod on every pass anyway, records it:
-
-```go
-// ServerStatus
-// NodeName is the node the pod was scheduled onto, mirrored from
-// pod.spec.nodeName. Empty while the pod is unscheduled.
-NodeName string `json:"nodeName,omitempty"`
-```
+**The group already holds the pod, so nothing new has to be stored.**
+`collectViews` resolves each server's pod through `podFor`
+(`servergroup_controller.go:545`) to key the registry lookup for its player
+count, and `pod.Spec.NodeName` is on that object. No mirror into
+`ServerStatus`, no second copy of a truth Kubernetes already keeps — the shape
+`candidates.go:74` records the cost of.
 
 `ServerView` gains `Condemned bool`, set in `collectViews` from
-`status.nodeName` and the departing set. The view carries the conclusion rather
-than the node name, so `DecideSize` stays free of node vocabulary — the same
-treatment `Stale` gets for player counts.
+`pod.Spec.NodeName` and the departing set. The view carries the conclusion
+rather than the node name, so `DecideSize` stays free of node vocabulary — the
+same treatment `Stale` gets for player counts.
+
+A server whose pod `podFor` does not resolve is not condemned: either it has no
+pod yet, or the pod already carries a deletion timestamp and is on its way out
+under its own power.
 
 `DecideSize` gains one rule and one output field:
 
