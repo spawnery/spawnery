@@ -236,10 +236,16 @@ remains, and it goes in `docs/known-issues.md`:** at the default retention the
 group is visibly backing off for only ten to a hundred and sixty seconds of
 each roughly hourly cycle. For the rest of it the backoff window is shut and
 the group publishes `BackingOff: False` — "no server has failed to start
-recently" — beside a `Failed` corpse. `Degraded` therefore first appears around
-six hours after the first failure. The condition is right and the wait is
-deliberate; the delay before either is visible is not something this milestone
-fixes.
+recently" — beside a `Failed` corpse.
+
+**`Degraded` therefore first appears roughly five hours after the first
+failure**, and the arithmetic is worth writing out because the obvious number
+is wrong: `backoffGiveUpAt` is 6, so the condition needs six counted failures,
+and six failures are separated by **five** retention cycles rather than six.
+At the 3600-second default that is five hours, plus the startup deadline each
+attempt burns before it fails — about five and a half in practice. The
+condition is right and the wait is deliberate; the delay before either becomes
+visible is not something this milestone fixes.
 
 ## 4. Out of scope, deliberately
 
