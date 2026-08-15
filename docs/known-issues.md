@@ -89,31 +89,47 @@ that share immediately. Neither `ServerGroup` nor `Network` is required to set
 `resources`, and no CEL rule demands it; the sample manifest sets 2Gi and
 nothing makes anyone else do so.
 
-**`fsGroup` is missing.** For ephemeral groups this does not bite: the kubelet
-creates an `emptyDir` world-writable, so uid 10001 writes into `/data` fine. A
-PVC in milestone 5 arrives owned by root, and uid 10001 does not. The fix
-belongs in `podspec.BuildServerPod`'s `PodSecurityContext` and has to land
-before the first persistent server exists.
+**`fsGroup` was missing — closed in 5a, before the first persistent server
+shipped.** For ephemeral groups this never bit: the kubelet creates an
+`emptyDir` world-writable, so uid 10001 writes into `/data` fine. A PVC
+arrives owned by root, and uid 10001 does not. This entry tracked the gap
+from milestone 2b, when only ephemeral groups existed and the risk was
+theoretical, through milestone 5a, the first milestone that could create a
+persistent server — the fix landed inside 5a rather than after it, so no
+persistent server has ever shipped without it.
 
-**Still missing as of 5a, and now live rather than hypothetical** — verified
-against `internal/podspec/server.go`: `SecurityContext` on the pod sets only
-`RunAsNonRoot` and a `SeccompProfile`, and nothing anywhere in
-`BuildServerPod` or `image/entrypoint.sh` sets `fsGroup` or runs a `chown`.
-5a's own evidence runbook (`docs/runbook-milestone-5a-evidence.md`) is not
-blocked by this, but only because of a property of the specific storage class
-it uses rather than a fix in this repository: `kind`'s default local-path
-provisioner runs `mkdir -m 0777 -p "$VOL_DIR"` when it provisions a volume
-(verified against `rancher/local-path-provisioner`'s own
-`local-path-storage.yaml`), so the directory a persistent server's claim binds
-to is world-writable regardless of which uid asks. A storage class that does
-not do that — most CSI drivers backing a real cloud volume, which typically
-hand back a directory owned by root with mode `0750` or narrower — leaves uid
-10001 unable to write into `/data` at all, and Paper fails to start with
-nothing on the `Server` object saying why beyond a generic startup-deadline
-failure. This is still the fix milestone 5's own preconditions asked for
-before the first persistent server existed; 5a is the milestone where that
-stopped being hypothetical, on any storage class other than the one this
-repository's own runbook happens to use.
+`BuildServerPod`'s `PodSecurityContext` (`internal/podspec/server.go`) now
+sets `FSGroup` to `10001` — `nix/oci-common.nix`'s `uid` and `gid` for the
+image, both the same value — and `FSGroupChangePolicy` to
+`OnRootMismatch` rather than the kubelet's own default of `Always`: `Always`
+walks and `chown`s the entire volume on every pod start, a real cost against
+a large Minecraft world, where `OnRootMismatch` pays that cost only when the
+volume's top-level directory ownership doesn't already match, which is
+precisely the case a freshly bound, root-owned PVC starts in. It is set for
+every server pod, ephemeral groups included, rather than only persistent
+ones: one `PodSecurityContext` shape for both group types is one fewer thing
+to keep in sync, and the kubelet's ownership check costs nothing extra
+against an empty, freshly created `emptyDir`.
+
+What this closes: on a storage class that hands back a claim owned by root at
+a narrower mode than world-writable — most CSI drivers backing a real cloud
+volume — uid 10001 can now write into `/data`, where before this fix it could
+not, and Paper would fail to start with nothing on the `Server` object saying
+why beyond a generic startup-deadline failure.
+
+What this does not close, and cannot from `internal/podspec` alone:
+`envtest` runs no kubelet, so nothing at that layer observes the ownership
+change actually happening — `internal/podspec/server_test.go`'s assertions
+confirm only that the pod spec asks for it, which is as much as that layer
+can ever show. Confirming the chown itself takes a real cluster and a
+storage class that does not already hand back a world-writable directory:
+`kind`'s default local-path provisioner runs `mkdir -m 0777 -p "$VOL_DIR"`
+when it provisions a volume (verified against
+`rancher/local-path-provisioner`'s own `local-path-storage.yaml`), which
+means a `kind` cluster can never exercise this fix — the directory it hands
+back is already writable by any uid regardless of `fsGroup`. That
+verification has not happened yet and belongs to whichever run first tries
+this against a storage class that does not do that.
 
 **Following Paper upstream is manual.** A new build means new hashes in
 `nix/paper.nix`, by hand, including the Mojang hash out of the new jar's

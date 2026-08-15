@@ -76,25 +76,29 @@ anywhere else") — this run's cluster only ever has one node, so that finding
 does not apply here; it belongs to whatever run first tries this against a
 multi-node cluster.
 
-**A second property, checked rather than assumed, because a known gap in this
-repository could otherwise have blocked this exact run.**
-`docs/known-issues.md`'s "From milestone 2b" section records that
-`podspec.BuildServerPod` sets no `fsGroup`, so a `PersistentVolumeClaim`
-arriving owned by root would leave the pod's uid 10001 unable to write into
-`/data` at all — and that entry says the fix "has to land before the first
-persistent server exists." It has not landed (verified against
-`internal/podspec/server.go`: `SecurityContext` sets only `RunAsNonRoot` and a
-`SeccompProfile`). **This run is not blocked by it, but only because of a
-property of the specific storage class it uses, not a fix in this
-repository:** `kind`'s local-path provisioner runs `mkdir -m 0777 -p
-"$VOL_DIR"` when it provisions a volume (verified against
-`rancher/local-path-provisioner`'s own `local-path-storage.yaml` on
-2026-08-15), so the directory a claim binds to is world-writable regardless of
-uid. A real cloud storage class handing back a directory owned by root at a
-narrower mode would still hit the gap this entry describes. If Paper fails to
-start against a freshly bound claim with a permissions error in its log, that
-gap — not this runbook — is the first thing to suspect, and the fix belongs in
-`podspec.BuildServerPod`'s `PodSecurityContext`, not here.
+**A second property, worth knowing even though it no longer blocks anything.**
+`docs/known-issues.md`'s "From milestone 2b" section records that `fsGroup`
+was missing from `podspec.BuildServerPod`'s `PodSecurityContext`, and that the
+fix "has to land before the first persistent server exists." It landed inside
+this same milestone, before this runbook was written against the branch that
+carries it: `SecurityContext` now sets `FSGroup` to `10001` and
+`FSGroupChangePolicy` to `OnRootMismatch` (verified against
+`internal/podspec/server.go`), so a `PersistentVolumeClaim` arriving owned by
+root no longer leaves the pod's uid 10001 unable to write into `/data`.
+
+**This run's own cluster cannot exercise that fix either way, and that is
+worth knowing before treating a clean run here as evidence of it working.**
+`kind`'s local-path provisioner runs `mkdir -m 0777 -p "$VOL_DIR"` when it
+provisions a volume (verified against `rancher/local-path-provisioner`'s own
+`local-path-storage.yaml` on 2026-08-15), so the directory a claim binds to on
+this cluster is world-writable regardless of `fsGroup` — the fix has nothing
+to do here that the directory's own permissions weren't already doing. A real
+cloud storage class handing back a directory owned by root at a narrower mode
+is the case the fix exists for, and confirming it there is future work, not
+something this runbook's `kind` cluster can settle. If Paper fails to start
+against a freshly bound claim with a permissions error in its log on such a
+cluster, `podspec.BuildServerPod`'s `PodSecurityContext` is the first thing to
+check rather than assume fixed.
 
 ## 1. Build and load the images
 
@@ -364,7 +368,10 @@ are where a `kind` cluster's own provisioner explains itself.
 **If `survival` never leaves `Pending`, and specifically if the pod is stuck
 `ContainerCreating` or `CrashLoopBackOff` rather than merely slow,** check the
 pod's own events and its container log before assuming the operator is at
-fault — §0's fsGroup note above is the first thing to rule out.
+fault. A permissions error writing to `/data` is not expected on this
+cluster — §0's second note above explains why this `kind` cluster's own
+provisioner cannot surface one either way — but is still worth ruling out on
+any other cluster this runbook gets run against.
 
 ## 6. Confirm the objects, before touching the world
 
