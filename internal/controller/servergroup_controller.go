@@ -660,6 +660,7 @@ func (r *ServerGroupReconciler) collectViews(
 		}
 		v := ServerView{
 			Name:     srv.Name,
+			Ordinal:  srv.Spec.Ordinal,
 			Phase:    phase.Phase(srv.Status.Phase),
 			Players:  players,
 			Slots:    slots,

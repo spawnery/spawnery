@@ -73,6 +73,10 @@ type ScalingInputs struct {
 type SizeDecision struct {
 	// Create is how many servers to create now.
 	Create int32
+	// CreateOrdinals names the ordinals a persistent group is missing, lowest
+	// first. Empty for an ephemeral group, which builds servers by count and
+	// not by identity -- that is what Create carries instead.
+	CreateOrdinals []int32
 	// Delete names the servers to remove now.
 	Delete []string
 	// Retire names the stale servers to put into soft drain now. Never the

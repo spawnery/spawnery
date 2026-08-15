@@ -28,6 +28,12 @@ import (
 type ServerView struct {
 	// Name of the Server object.
 	Name string
+	// Ordinal is spec.ordinal: the stable index of a persistent server within
+	// its group, the identity its storage claim is built from. Nil for an
+	// ephemeral server, which has no identity to preserve — and a nil ordinal
+	// is what "this is not an ordinal server of its group" honestly means to
+	// a rule that reads it, whatever put the server there.
+	Ordinal *int32
 	// Phase is its current state machine position.
 	Phase phase.Phase
 	// Players is the last reported count.

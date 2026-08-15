@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -56,4 +57,92 @@ func OrdinalOf(group, server string) (int32, bool) {
 		return 0, false
 	}
 	return int32(n), true
+}
+
+// PersistentInputs is everything the persistent sizing rule may look at. It
+// carries none of what ScalingInputs holds about slots, capacity, player
+// counts or generations, because a persistent group is sized by a number a
+// user wrote down and by nothing else.
+type PersistentInputs struct {
+	// Group is the group's name, which is the prefix every one of its ordinal
+	// names is built from.
+	Group string
+	// Replicas is spec.replicas: how many ordinals this group should have.
+	Replicas int32
+	// Views are the group's servers.
+	Views []ServerView
+	// PendingCreates are the servers this reconciler has asked to create and
+	// the cache has not shown yet, by name. Without them a create in flight is
+	// issued a second time under the same name.
+	PendingCreates map[string]bool
+	// PendingDeletes are the removals it has asked for and not yet seen.
+	PendingDeletes map[string]bool
+}
+
+// DecidePersistentSize decides which ordinals a persistent group is missing
+// and which it has too many of.
+//
+// It stands beside DecideSize rather than inside it: the two share a decision
+// type and nothing else. The slot rule asks what capacity the players need;
+// this one asks what number the user wrote in spec.replicas. The CRD forbids
+// spec.scaling on a persistent group for exactly that reason.
+//
+// An ordinal counts as taken while any server carrying it exists, whatever
+// phase that server is in. A draining server has not released its claim, and
+// building its replacement now would mean two pods mounting one ReadWriteOnce
+// volume -- which does not fail cleanly, it hangs on the volume. So the
+// replacement waits for the drain, bounded by spec.drain.timeoutSeconds.
+//
+// A view's Ordinal, read from spec.ordinal by way of ServerView.Ordinal --
+// never re-derived by parsing the name -- decides which ordinal a server
+// holds. A view whose Ordinal is nil is ignored in both directions: it fills
+// no ordinal, and it is not deleted as surplus. This rule removes what it can
+// name, and something it cannot name is not its to remove.
+func DecidePersistentSize(in PersistentInputs) SizeDecision {
+	held := make(map[int32]string, len(in.Views))
+	for _, v := range in.Views {
+		if v.Ordinal == nil {
+			continue
+		}
+		held[*v.Ordinal] = v.Name
+	}
+
+	var decision SizeDecision
+	for ordinal := int32(0); ordinal < in.Replicas; ordinal++ {
+		if _, taken := held[ordinal]; taken {
+			continue
+		}
+		if in.PendingCreates[PersistentServerName(in.Group, ordinal)] {
+			continue
+		}
+		decision.CreateOrdinals = append(decision.CreateOrdinals, ordinal)
+	}
+
+	surplus := make([]int32, 0, len(held))
+	for ordinal := range held {
+		if ordinal >= in.Replicas {
+			surplus = append(surplus, ordinal)
+		}
+	}
+	sort.Slice(surplus, func(i, j int) bool { return surplus[i] > surplus[j] })
+	for _, ordinal := range surplus {
+		name := held[ordinal]
+		if in.PendingDeletes[name] {
+			continue
+		}
+		if viewByName(in.Views, name).leaving() {
+			continue
+		}
+		decision.Delete = append(decision.Delete, name)
+	}
+	return decision
+}
+
+func viewByName(views []ServerView, name string) ServerView {
+	for _, v := range views {
+		if v.Name == name {
+			return v
+		}
+	}
+	return ServerView{}
 }
