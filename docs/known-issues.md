@@ -1401,6 +1401,123 @@ as void. The property is then enforced by the type instead of by remembering to
 call `forget` at each new exit, and the next person to add an early return to
 `ProxyGroupReconciler.Reconcile` does not have to know this rule exists.
 
+## From milestone 4c-3 (node drain)
+
+**An operator running cluster-autoscaler must pass `-drain-taint
+ToBeDeletedByClusterAutoscaler`, or a scale-in is invisible to this operator
+until something else cordons the node.** `IsDeparting` (`internal/controller/nodes.go`)
+has two ways in: `spec.unschedulable`, which is hardwired, and a taint whose
+key appears in the operator's `-drain-taint` list — repeatable, and empty by
+default. An earlier draft of the design that produced this milestone claimed
+cluster-autoscaler cordons a node in addition to tainting it, so that the
+empty default would still see a scale-in a moment later; that claim did not
+survive the milestone's own review and was corrected in place
+(`bc4122a`, "cluster-autoscaler does not cordon, so say what stays true").
+What is actually true: cluster-autoscaler taints
+`ToBeDeletedByClusterAutoscaler:NoSchedule` and deletes the node without
+touching `spec.unschedulable` unless `--cordon-node-before-terminating` is
+turned on, and that flag defaults to off. Karpenter was not re-checked and is
+not claimed here either way. The default stays empty regardless — a default
+that reacted to another project's taint key would couple this operator to a
+vocabulary that project is free to rename, which is exactly the coupling a
+configurable list exists to avoid — so this is a configuration step every
+cluster-autoscaler user has to take themselves, and nothing in the operator
+will tell them they missed it: an unset flag and a genuinely quiet node look
+identical from here.
+
+**The ServerGroup's PodDisruptionBudget was renamed this milestone, and
+upgrading an already-running cluster strands the old object.** Before 4c-3,
+`reconcilePDB` named the budget after the bare group name; this milestone's
+own review caught that a `ProxyGroup` sharing that name would collide with it
+— exactly the incident `podspec.GroupConfigMapName`'s doc comment already
+narrates for the ConfigMap, reproduced one object type over — so both group
+kinds' budgets now go through `podspec.GroupPDBName(group, role)`, which
+appends `-server-pdb` or `-proxy-pdb`. `reconcilePDB` and
+`reconcileProxyPDB` only ever `CreateOrUpdate` the new name; nothing renames
+or deletes the old one. A `ServerGroup` reconciled under pre-4c-3 code
+therefore leaves a `PodDisruptionBudget` sitting at its own bare name,
+selecting the same occupied server pods it always did
+(`spawnery.cloud/managed-by`, `spawnery.cloud/group`,
+`spawnery.cloud/occupied`), with `minAvailable` frozen at whatever the last
+old-code reconcile wrote — and nothing updates it again, because the
+reconciler has moved on to writing the new-named object exclusively. It goes
+on blocking evictions of matching server pods against a stale count for as
+long as it exists. To find it: `kubectl get pdb -n <namespace>` and look for
+one named exactly the `ServerGroup`'s own name, rather than
+`<group>-server-pdb` — `kubectl get pdb <name> -n <namespace> -o
+jsonpath='{.metadata.ownerReferences[0].name}'` confirms it is owned by that
+group. `kubectl delete pdb <name> -n <namespace>` removes it; the group's
+protection continues uninterrupted through the new-named object, which
+`reconcilePDB` has been maintaining all along.
+
+**A group in create-backoff condemns without replacing.** `size()`
+(`internal/controller/servergroup_controller.go`) gates only the create loop
+behind `backoff.MayCreate` — the condemn loop that runs `decision.Condemn`
+through `deleteServer` with event reason `NodeDraining` is not gated, and
+runs on every pass regardless of the group's backoff state, the same as the
+ordinary delete and retire loops beside it. So a group whose creates are
+failing for a reason that has nothing to do with node drain — a broken image,
+a quota limit, anything `CountFailures` is counting — still condemns every
+server on a departing node while it is in backoff, and does not replace them
+until the backoff window next permits a create. This was a deliberate ruling
+during the milestone's implementation, not an oversight: the alternative is
+holding players on a node that is going away, and they get evicted from it
+regardless of what the group's backoff thinks — moving them onto a fallback
+group beats being kicked off the node with nowhere chosen for them at all.
+The group runs below capacity for the length of whatever backoff window it
+was already in; nothing about node drain makes that window longer or
+shorter, and once it lifts the group rebuilds to its normal size the way it
+would after any other backoff.
+
+**A node holding a whole group empties it at once**, so its players go to the
+fallback groups rather than to the group's own replacements, which are not
+ready yet. `DecideSize`'s `Condemn` rule names every server on a departing
+node in the same pass, unconditionally and all at once — described in
+`docs/superpowers/specs/2026-08-15-node-drain-design.md` §3.3, along with the
+reason it is not throttled: draining one server at a time would make `kubectl
+drain` wait out `drain.timeoutSeconds` once per occupied server on the node
+rather than once for the whole node, turning ten occupied servers at the
+default 60-second deadline into ten minutes of exactly the hanging this
+milestone exists to end. So a `ServerGroup` whose every live server happens
+to sit on one node — a small group, or an unlucky scheduling run — condemns
+its entire population in one pass. The replacement servers are ordered in the
+same pass, but they take a cold start to come up, and in the meantime every
+player who was on that node has nowhere to land but a `fallbackGroups` entry.
+This is the nature of losing the node those servers were on, not a choice
+this design makes differently than it could have; an operator meeting it
+should recognise it rather than read it as a fallback-routing defect.
+
+**A `Persistent` server on a node-pinned RWO volume may not be schedulable
+anywhere else.** `Condemn` names a server whose pod sits on a departing node
+regardless of what kind of server it is or what volume it carries — the node
+is leaving either way, and the alternative is leaving the server's players
+to whatever eviction the node's own departure eventually forces. Its
+replacement, once ordered, then sits `Pending` if the storage class backing
+its `PersistentVolumeClaim` is bound to the node that is going away: a local
+or node-pinned RWO volume does not follow the pod to a different node, and
+nothing in this milestone — or in the storage class itself — can move it.
+This is out of scope by the design's own §4 rather than an oversight
+discovered afterwards, and it stays a limit of the storage class a `Persistent`
+group is configured against, not something node drain can be taught to work
+around.
+
+**The taint list is trusted, not validated.** `-drain-taint` accepts any
+string, and `IsDeparting` matches it only against a taint whose effect is
+`NoSchedule` or `NoExecute` — deliberately, per §3.1's own reasoning: a
+`PreferNoSchedule` taint does not stop the scheduler putting a replacement
+pod straight back on the same node, so matching on it would condemn a pod,
+rebuild it in place, and condemn it again next pass. That correctness comes
+at a cost this operator never reports: a key configured with an effect it
+ignores — a real taint on a real node, `PreferNoSchedule` or any future
+effect Kubernetes adds — simply never matches, silently, with nothing on any
+group's conditions or events distinguishing "this taint does not apply" from
+"there is no such taint at all". Nor is the key itself checked against
+anything — a typo in `-drain-taint` is indistinguishable from a taint key
+that legitimately does not exist in this cluster. An operator relying on a
+taint to drain a node should confirm independently, with `kubectl describe
+node`, that the taint is present with an effect this operator honours; there
+is no warning if it is not.
+
 ## Preconditions for milestone 5 (persistent groups)
 
 If a server's `ServerGroup` is missing, the server controller carries on with

@@ -637,6 +637,187 @@ new digest, none marked, `READY 2 PLAYERS 0`, and no `ProxyDrainTimeout` event
 anywhere — nobody was disconnected, because the player left of their own accord
 and the deadline never came into it.
 
+## 4c-3 has landed
+
+4c-3 (node drain, 2026-08-15) closes the gap `2026-08-15-node-drain-design.md`
+opened with: until this milestone the operator did not read `Node` objects at
+all, so a node being cordoned or drained was invisible to it, and what
+happened next depended entirely on which kind of pod sat there — an occupied
+server was protected by its group's `PodDisruptionBudget` and `kubectl drain`
+simply hung for as long as somebody was playing, and an occupied proxy had no
+protection at all and every player on it was disconnected the moment the
+eviction API reached the pod. 4c-3 gives both sides a way to empty themselves
+proactively, so `kubectl drain` finishes instead of hanging and nobody on a
+departing node is disconnected by surprise. **It adds no drain of its own** —
+the same restraint 4c-2 exercised on the rollout side: a departing node is a
+new *occasion* for drains that already exist and were already proven by
+earlier milestones, not a second mechanism running beside them. What follows
+is what it built and what the next milestone finds in place.
+
+- **Deleting a `Server` CR *is* the drain sequence, and a departing node is
+  simply a new occasion for it.** Nothing was added to the drain itself:
+  `DeletionRequested` is still fed from exactly one source, the state machine
+  in `internal/phase` runs exactly as milestone 4b left it, and a condemned
+  server is deleted the same way a scale-down's surplus server or a rolling
+  update's retiree is — through `deleteServer` and
+  `Expectations.expectDeleted`, with only the event reason changed to
+  `NodeDraining` so an operator reading events can tell why a given server
+  went. Whoever next touches drain timing, the finalizer, or the phase state
+  machine is not touching anything node-drain-specific by doing so; there is
+  nothing node-drain-specific there to touch.
+- **A proxy on a departing node is *stale*, and 4c-2's rollout does the rest
+  unchanged.** `DecideRollout` (`internal/controller/rollout.go`) itself did
+  not move; the node fact feeds in at the single site where
+  `ProxyGroupReconciler.reconcileReplicas` builds each pod's view, alongside
+  the pod-hash mismatch that already made a pod stale for 4c-2's reasons. A
+  pod stale for a departing node and a pod stale for an out-of-date spec are
+  not distinguished anywhere downstream — the same surge, the same
+  one-at-a-time guard, the same `pick` ordering (stale before current, fewest
+  players, untrusted counts last, ties broken by age) decides both, which is
+  deliberate: §3.4 of the design argues that ranking a node reason against a
+  hash reason would need a new clause for no behavioural gain, since the
+  property that actually matters at a deadline — who gets disconnected — is
+  occupancy, and `pick` already sorts on that.
+- **`ServerView` gained `Condemned bool` and `NodeName string`; `SizeDecision`
+  gained `Condemn []string`; no `Server` status field was added.** The group
+  already resolves each server's pod through `podFor` to read its player
+  count, and `pod.Spec.NodeName` is right there on the same object — so
+  `collectViews` (`internal/controller/servergroup_controller.go`) reads it
+  directly rather than mirroring it into `ServerStatus`, the same discipline
+  `candidates.go` already keeps for player counts. `NodeName` is
+  reporting-only: it rides on the view alongside `Condemned` but the only
+  thing that reads it is diagnostic, and no sizing rule branches on it —
+  `Condemned` alone is what `DecideSize` consumes, so node vocabulary never
+  reaches the scaling arithmetic. A server whose pod `podFor` cannot resolve
+  is never condemned — `podFound` is false on any of that function's three
+  routes: no `status.podName` yet, a `Get` that failed, or a pod already
+  carrying a deletion timestamp and leaving under its own power regardless
+  of the node. The middle route is the one worth naming separately: a failed
+  `Get` may in truth be a live pod on a departing node this pass simply
+  could not read, so "never condemned" there is the safe direction chosen
+  rather than a claim that no such pod exists — the next reconcile tries
+  again. `collectViews`'s own comment currently states this as "in all
+  three cases there is no such pod to make the claim about," which is exact
+  for the other two routes and not for this one; it is a standing parked
+  finding from this milestone's own review (`.superpowers/sdd/2026-08-15-node-drain/progress.md`,
+  Task 4's parked minor 2) rather than something Task 9 corrects, since
+  Task 9 writes no code.
+- **`Condemn` is unconditional, all-at-once, and counted as leaving in the
+  same pass — three separate properties, each load-bearing.** Unconditional,
+  because the node is leaving with or without this operator's consent and a
+  budget that declined the deletion would only delay moving those players
+  rather than keep the server running. All at once, because draining one
+  condemned server per pass would turn `kubectl drain` into the sum of one
+  `drain.timeoutSeconds` window per occupied server on the node rather than
+  one window for the whole node. Counted as leaving in the same pass, because
+  the capacity arithmetic that orders a replacement has to see a condemned
+  server as gone in the identical pass that condemns it, or the replacement
+  would not be ordered until a pass later. **Only the create half of `size()`
+  is gated by the group's backoff** — the condemn loop runs every pass
+  regardless, the same as the delete and retire loops beside it, because it
+  touches players and must not wait on a failure that has nothing to do with
+  the node leaving; `docs/known-issues.md`'s "From milestone 4c-3" records
+  what that costs a group already in backoff when the two coincide.
+- **`ServerView.leaving()` was split into `leavingByPhase() || Condemned`,
+  because `expectations.go`'s delete reservation must be satisfied by
+  evidence of a removal, not by a node signal alone.** The first draft simply
+  added `Condemned` to the existing three-phase `leaving` predicate; the
+  milestone's own review caught that `expectations.go` reused that same
+  predicate to decide whether a delete reservation had been satisfied, and a
+  node being condemned is not evidence the server actually left — only
+  `Draining`, `Terminating` or `Retiring` are. `leavingByPhase()` now carries
+  the original three-phase test alone, and `expectations.go` calls that;
+  `leaving()` stays `leavingByPhase() || Condemned` for the capacity
+  arithmetic, which does need to know about a condemnation the instant it is
+  decided, before the phase has had a chance to move.
+- **Both group kinds now carry a `PodDisruptionBudget`, both maintain
+  `spawnery.cloud/occupied`, and there are two occupancy rules that differ
+  for a stated reason.** The `ServerGroup` has had `isOccupied`
+  (`candidates.go`) since milestone 4b; the `ProxyGroup` gains
+  `proxyOccupied` (`proxygroup_controller.go`) this milestone, evaluated
+  exactly once per pod per pass by `syncOccupiedLabels` and handed both to
+  the label it writes and to the count `reconcileProxyPDB` sizes
+  `minAvailable` from — never two separate registry reads for one budget,
+  which the milestone's own review found reachable as a real race
+  (`docs/known-issues.md`'s Critical 2 under the 4c-3 review, closed
+  structurally rather than by a comment). The two rules disagree on purpose:
+  `isOccupied` treats a stale count as empty unless the server was ever
+  `WasRegistered`, because an unregistered server's stream going stale is
+  ordinary during startup; `proxyOccupied` has no such qualifier and treats
+  *any* stale or disconnected count as occupied, because a proxy sits behind
+  the `Service` directly and a stream nobody is updating says nothing about
+  who Velocity itself is still serving. Both `PodDisruptionBudget`s are
+  named through `podspec.GroupPDBName(group, role)` now, not through the
+  group's bare name — the `ServerGroup`'s budget was renamed to this scheme
+  in the same milestone that introduced the `ProxyGroup`'s, because a
+  `ServerGroup` and a `ProxyGroup` sharing a name would otherwise fight over
+  one budget the way `GroupConfigMapName`'s own doc comment already
+  narrates for the ConfigMap collision this repository lived through once
+  before. `docs/known-issues.md` says what an already-running cluster finds
+  left behind by that rename and how to clear it.
+- **The operator now caches every `Node` in the cluster, with
+  `status.images` stripped on the way in.** `cmd/spawnery-operator/main.go`'s
+  `Cache.ByObject` entry for `corev1.Node{}` carries a `Transform` that nils
+  `Status.Images` before the object ever reaches an informer, beside the
+  `ConfigMap` and `ServiceAccount` restrictions already there for the same
+  reason: nothing in this operator reads that field, and it is tens of
+  kilobytes per node. `Node` is cluster-scoped, so `-namespace` does not
+  narrow it — the design flagged this as needing verification against the
+  vendored controller-runtime, and it does not need an explicit
+  `Cache.DefaultNamespaces` override: this version (v0.24.1) routes
+  cluster-scoped kinds to a separate cluster-wide cache regardless of that
+  setting. `ServerGroupReconciler` and `ProxyGroupReconciler` each
+  `Watches(&corev1.Node{}, ...)`, mapping a node event onto the groups with
+  pods on it — no new controller, and no `NodeReconciler` writing behind
+  `expectations.go`'s back.
+- **`IsDeparting(node, taintKeys)` is a pure function, table-tested without a
+  cluster** (`internal/controller/nodes.go`), and it is the one place both
+  reconcilers ask whether a node is on its way out: `spec.unschedulable`,
+  always honoured, or a taint whose key is in the operator's `-drain-taint`
+  list *and* whose effect is `NoSchedule` or `NoExecute` — deliberately not
+  `PreferNoSchedule`, which does not stop the scheduler placing a replacement
+  right back where it started. The list is a repeatable flag, empty by
+  default; `docs/known-issues.md` says what an empty default costs a
+  cluster-autoscaler user, corrected in place during this milestone's own
+  review after an earlier design draft overclaimed that cluster-autoscaler
+  cordons a node in addition to tainting it.
+- **A `NodeDraining` condition and a matching event exist on both group
+  kinds.** `drainingCondition` (`nodes.go`) builds `ConditionNodeDraining`
+  from the departing node names each reconciler has already computed this
+  pass — `ServerView.Condemned` on the `ServerGroup` side,
+  `reconcileReplicas`'s own per-pod verdict on the `ProxyGroup` side — so
+  neither caller asks `nodeDeparting` about the same pod twice. One event per
+  group, reason `NodeDraining`, fired on the transition a server is condemned
+  or a proxy is marked, not on every pass it stays that way — the same
+  restraint `retireServer` already used for exactly this reason.
+- **Uncordon: begun stays begun, and this is established by an envtest, not a
+  table case, because the mechanism does not live where the design first
+  looked for it.** The design's own §3.6 originally located the
+  mark-preservation in `DecideRollout` and asked for a table case to prove
+  it; the milestone's own review found that with nothing stale, `DecideRollout`'s
+  `draining > 0` guard returns before `pick` is ever reached, so a table case
+  over that function cannot exercise the constraint at all. The mark actually
+  survives in `reconcileReplicas`, which reconstructs `surplusMarks` fresh
+  every pass — an uncordoned pod is still draining but no longer stale, so it
+  lands in the surplus set on arithmetic alone and keeps the mark it already
+  has. The design was corrected in place (`b568fb2`) to name the real
+  mechanism, and `TestAnUncordonedNodeKeepsTheMarkAlreadyMade` drives the real
+  reconciler rather than the pure function to prove it — the first attempt at
+  a table case for this passed for the wrong reason, which is exactly why the
+  envtest exists.
+
+**4c is now complete as three sub-milestones — 4c-1 the readiness contract,
+4c-2 proxy rolling updates, 4c-3 node drain — and what remains is proof, not
+code.** §12 of `docs/runbook-milestone-4c1-evidence.md` is written for the two
+claims envtest cannot make — that `kubectl drain` actually completes on a real
+kubelet, and that a real player survives a real cordon — but it is marked not
+yet driven: it is run by the human partner and the acting agent together,
+after the whole-branch review this milestone's own implementation record
+(`.superpowers/sdd/2026-08-15-node-drain/progress.md`) has not yet had. Until
+that run, criteria 1 through 5 of the design's §7 acceptance criteria are
+proven only at the envtest level named in the design's §6, the same limit
+4c-1's own evidence runs existed to close for the readiness contract.
+
 ## The evidence run
 
 `docs/runbook-milestone-3-evidence.md` was run against a real `kind` cluster
