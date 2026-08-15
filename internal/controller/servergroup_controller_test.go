@@ -3541,6 +3541,20 @@ func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 1 || names[0] != "survival-0" {
 		t.Errorf("servers = %v, want [survival-0]", names)
 	}
+	// And nothing announces a creation that did not happen. This was the
+	// quietest part of the AlreadyExists branch and the part nothing held: the
+	// branch's own comment says "No event: nothing was created here", and until
+	// now that was prose. What makes it matter is that the collision is not
+	// always a blip: a squatter holding the name without spec.ordinal is a
+	// steady state, not a lagging cache — the rule reads spec.ordinal, so the
+	// ordinal stays missing and the create is asked for again on every
+	// five-second pass, for as long as the object sits there
+	// (docs/known-issues.md). What fires per pass is the difference between a
+	// quiet wait and an event stream nobody can read past.
+	if n := scalingEvents(r.Recorder.(*record.FakeRecorder), "ServerCreated"); n != 0 {
+		t.Errorf("ServerCreated events = %d, want none: the object was already there, "+
+			"and this collision repeats every pass for as long as it lasts", n)
+	}
 }
 
 // TestAPersistentServerOnACordonedNodeIsCondemned pins acceptance criterion 5.

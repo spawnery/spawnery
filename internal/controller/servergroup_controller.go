@@ -622,7 +622,18 @@ func (r *ServerGroupReconciler) size(
 	// computing what the group needs, so Limited and ColdStartBlocked go on
 	// telling the truth about the shortfall while the backoff separately says
 	// the group is waiting — two facts an operator needs to see apart. It also
-	// means expectations never reserves a create that did not happen.
+	// means no create is reserved on a pass where the gate refused every
+	// attempt. (The deletes, condemnations and retirements below reserve their
+	// own removals whatever the gate said, because the gate does not reach
+	// them.)
+	//
+	// That is narrower than "a reservation implies an object was created", and
+	// the difference is worth stating because the sentence above is the one a
+	// future reader would otherwise cite for the wider claim.
+	// createPersistentServer returns the name on AlreadyExists as well, and the
+	// loop below reserves it just the same: a reservation's job is to stop the
+	// next pass asking for the same name again, not to record what this pass
+	// made.
 	//
 	// Creation is the only thing the backoff gates. The deletes, condemnations
 	// and retirements below run whatever it decided: they touch players, and

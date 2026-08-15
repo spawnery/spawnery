@@ -38,11 +38,12 @@ func PersistentServerName(group string, ordinal int32) string {
 // OrdinalOf reads the ordinal back out of a server name, and reports whether
 // the name is one PersistentServerName could have produced for this group.
 //
-// The boundary is the last hyphen and the prefix must equal the group exactly,
-// which is what keeps a group whose own name ends in a number from reading its
-// own name as an ordinal. The digits are parsed strictly: "survival-01" is
-// refused rather than read as 1, because no name this package writes looks like
-// that and accepting it would let two strings claim one identity.
+// The prefix must equal the group exactly, and everything after it is the
+// ordinal, which is what keeps a group whose own name ends in a number from
+// reading its own name as an ordinal. The digits are parsed strictly:
+// "survival-01" is refused rather than read as 1, because no name this package
+// writes looks like that and accepting it would let two strings claim one
+// identity.
 func OrdinalOf(group, server string) (int32, bool) {
 	prefix := group + "-"
 	if !strings.HasPrefix(server, prefix) {

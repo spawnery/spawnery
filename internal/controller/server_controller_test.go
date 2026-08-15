@@ -1679,9 +1679,16 @@ func TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely(t *testing.T) {
 
 // createPersistentServer adds the Server holding one ordinal of a persistent
 // group, the way ServerGroupReconciler.createPersistentServer builds it: the
-// derived name, spec.ordinal filled in, and the group as controller. It lets a
-// test drive the Server controller alone, without the group controller in the
+// derived name, spec.ordinal filled in, the three labels newServer stamps, and
+// the group as its *controller* rather than merely an owner. It lets a test
+// drive the Server controller alone, without the group controller in the
 // picture.
+//
+// Controller: true is the part that would be easy to leave off and is not
+// decoration. metav1.IsControlledBy is what the Server controller's adoption
+// path asks about a pod, and a fixture that builds ownership a second way is a
+// fixture that can make a controller look right about a shape production never
+// hands it.
 func (f *fixture) createPersistentServer(t *testing.T, group string, ordinal int32) *spawneryv1alpha1.Server {
 	t.Helper()
 	owner := &spawneryv1alpha1.ServerGroup{}
@@ -1692,11 +1699,18 @@ func (f *fixture) createPersistentServer(t *testing.T, group string, ordinal int
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      PersistentServerName(group, ordinal),
 			Namespace: f.ns,
+			Labels: map[string]string{
+				podspec.LabelManagedBy: podspec.ManagedByValue,
+				podspec.LabelNetwork:   owner.Spec.NetworkRef.Name,
+				podspec.LabelGroup:     owner.Name,
+			},
 			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: spawneryv1alpha1.GroupVersion.String(),
-				Kind:       "ServerGroup",
-				Name:       owner.Name,
-				UID:        owner.UID,
+				APIVersion:         spawneryv1alpha1.GroupVersion.String(),
+				Kind:               "ServerGroup",
+				Name:               owner.Name,
+				UID:                owner.UID,
+				Controller:         ptr.To(true),
+				BlockOwnerDeletion: ptr.To(true),
 			}},
 		},
 		Spec: spawneryv1alpha1.ServerSpec{

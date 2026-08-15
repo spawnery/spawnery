@@ -155,6 +155,13 @@ func TestPendingSeparatesCreatesFromDeletes(t *testing.T) {
 
 // TestPendingNamesItsCreates is what the persistent sizing rule needs: not how
 // many creates are in flight, but which ordinals they are for.
+//
+// The first two assertions report rather than halt, and that is the whole
+// reason the third one exists. Pinning creates to exactly two named keys with
+// a t.Fatalf makes the third assertion dead: a mutation that let a delete
+// reservation leak into the creates map trips the first one and stops the test
+// there, so "a delete must not appear among the creates" could never be the
+// thing that failed.
 func TestPendingNamesItsCreates(t *testing.T) {
 	e := newExpectations(func() time.Time { return time.Unix(0, 0) })
 	e.expectCreated("ns/survival", "survival-0")
@@ -163,10 +170,10 @@ func TestPendingNamesItsCreates(t *testing.T) {
 
 	creates, deletes, _ := e.pending("ns/survival")
 	if len(creates) != 2 || !creates["survival-0"] || !creates["survival-2"] {
-		t.Fatalf("creates = %v, want survival-0 and survival-2", creates)
+		t.Errorf("creates = %v, want survival-0 and survival-2", creates)
 	}
 	if len(deletes) != 1 || !deletes["survival-5"] {
-		t.Fatalf("deletes = %v, want survival-5", deletes)
+		t.Errorf("deletes = %v, want survival-5", deletes)
 	}
 	if creates["survival-5"] {
 		t.Error("a delete reservation must not appear among the creates")
