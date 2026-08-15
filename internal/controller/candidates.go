@@ -330,10 +330,25 @@ const maxRetainedFailures = 1
 // Servers already on their way out are left alone — they are being removed
 // anyway, and counting them would let a second failure through while the first
 // drains.
+//
+// leaving(), not the phase alone, and the difference is not cosmetic. While
+// "on the way out" meant only Draining, Terminating or Retiring, the phase
+// filter carried this clause on its own: those three are mutually exclusive
+// with Failed, so no server could be both and there was nothing for a second
+// test to exclude. leaving() is now leavingByPhase() || Condemned, and a
+// Failed server on a departing node is both. Without this test it is
+// collected here as well, and because size() and pruneFailed run over the
+// same in-memory map in one pass — r.Delete stamps no deletion timestamp back
+// onto the local object, so deleteServer's own guard does not see the first
+// removal — it gets deleted twice and announced twice, once as NodeDraining
+// and once as FailedServerPruned, for one server going away once. For a
+// Failed view the test reduces to !Condemned; it is written as leaving()
+// because the clause above is what it means, and the next term added there
+// should land here without anybody having to notice.
 func selectFailedForPruning(views []ServerView, keep int) []string {
 	failed := make([]ServerView, 0, len(views))
 	for _, v := range views {
-		if v.Phase == phase.Failed {
+		if v.Phase == phase.Failed && !v.leaving() {
 			failed = append(failed, v)
 		}
 	}
