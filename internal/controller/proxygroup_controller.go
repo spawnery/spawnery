@@ -481,9 +481,18 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		}
 	}
 	// pick, so that the marks released are the ones a fresh decision would not
-	// have made — the fullest and the least trusted go back into service first,
-	// and the pods that keep their marks are the ones the same rule would
-	// choose again.
+	// have made: a pod the kubelet still calls Ready goes back into service
+	// ahead of anything else, then the least trusted, then the fullest — and
+	// the pods that keep their marks are the ones the same rule would choose
+	// again. That last clause is the load-bearing one and it holds by
+	// construction, because a fresh DecideRollout sorts with this same
+	// comparator.
+	//
+	// Readiness leads the enumeration because the clause added for the
+	// unready-stale stall sits above both player clauses, and it reads well
+	// here for a reason of this loop's own: a draining pod the kubelet still
+	// calls Ready is one whose withdrawal has not taken effect yet, so it is
+	// the mark that has made the least progress and the cheapest to give back.
 	//
 	// Ordering cannot make this oscillate, and the reason is stronger than
 	// pick being deterministic: a released pod loses its annotation on the same
