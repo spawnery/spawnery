@@ -77,15 +77,21 @@ type ServerView struct {
 	ReadySince time.Time
 }
 
-// isOccupied is the single occupancy rule of the system. Both sides of the
-// PodDisruptionBudget are computed from it: the Server controller labels pods
-// with it (syncOccupiedLabel) and the ServerGroup controller sizes the budget's
-// minAvailable from it (ServerView.Occupied). The two have to agree pod for
-// pod. Counting fewer pods than carry the label hands the eviction API a
-// disruption to spend on a pod that still has players; counting a pod the label
-// has released pins minAvailable above a budget that can never be met, and
-// kubectl drain then wedges on a pod nobody is on. They used to be two
-// implementations kept in step by a comment, and they drifted.
+// isOccupied is the occupancy rule for a server pod — one of two in the
+// system, the other being proxyOccupied (proxygroup_controller.go), which
+// answers the same question for a proxy pod under a different signature: a
+// proxy has no wasRegistered qualifier, because it sits behind the Service
+// and players reach it directly, so there is no state in which a stale count
+// is safe to read as empty. Both sides of the ServerGroup's
+// PodDisruptionBudget are computed from this one: the Server controller
+// labels pods with it (syncOccupiedLabel) and the ServerGroup controller
+// sizes the budget's minAvailable from it (ServerView.Occupied). The two have
+// to agree pod for pod. Counting fewer pods than carry the label hands the
+// eviction API a disruption to spend on a pod that still has players;
+// counting a pod the label has released pins minAvailable above a budget
+// that can never be met, and kubectl drain then wedges on a pod nobody is
+// on. They used to be two implementations kept in step by a comment, and
+// they drifted.
 //
 // players > 0 is the plain case. A count we cannot trust hides players only
 // where players could be, and that takes the server having been registered with

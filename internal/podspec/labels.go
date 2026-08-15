@@ -33,7 +33,10 @@ const (
 	LabelRole = "spawnery.cloud/role"
 	// LabelOccupied is set to "true" while players are online. The group's
 	// PodDisruptionBudget selects on it, which is what stops the eviction API
-	// from removing an occupied pod. Maintained by the Server controller.
+	// from removing an occupied pod. Maintained by the Server controller on
+	// server pods and by the ProxyGroup controller on proxy pods, each from
+	// its own occupancy rule — see isOccupied (candidates.go) and
+	// proxyOccupied (proxygroup_controller.go).
 	LabelOccupied = "spawnery.cloud/occupied"
 	// LabelPodHash is a digest of the pod this operator would render for its
 	// group right now, with the pod's own name and this label excluded. A pod

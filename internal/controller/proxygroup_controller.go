@@ -350,7 +350,16 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 		} else {
 			delete(patched.Labels, podspec.LabelOccupied)
 		}
-		if err := r.Patch(ctx, patched, client.MergeFrom(pod)); err != nil {
+		// NotFound tolerated for the same race markDraining's patch documents:
+		// this loop runs over a pods() read taken after reconcileReplicas has
+		// already deleted this pass's newly-empty pods. A pod that just went
+		// from occupied to empty and was deleted for it still carries the
+		// occupied label in that read — occupied recomputes false, labelled
+		// is still true, and the mismatch above builds a patch for a pod the
+		// API server no longer has. Failing the whole Reconcile over a label
+		// write for a pod that is already gone would abort setStatus and
+		// writeStatus for every other pod in the group.
+		if err := r.Patch(ctx, patched, client.MergeFrom(pod)); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
 	}
