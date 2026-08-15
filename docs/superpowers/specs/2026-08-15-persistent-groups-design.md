@@ -209,8 +209,13 @@ re-review:
   backoff window, which is at most 160. At that default the backoff's *waiting*
   half never delays an attempt; what it contributes is the **give-up**, after
   six counted failures.
-- **After the give-up the group waits indefinitely**, with no `Server` object
-  for that ordinal at all. The claim and the world are untouched: nothing in
+- **After the give-up the group waits indefinitely** — and it does not start
+  out with no `Server` object for that ordinal, which is how an earlier version
+  of this line read. At the moment the count reaches the threshold the sixth
+  corpse is still standing, and it holds the ordinal for one more
+  `failedRetentionSeconds` before the Server controller takes it away. The
+  no-object state is where this settles, an hour later at the default, not
+  where it begins. The claim and the world are untouched throughout: nothing in
   this operator deletes or updates a claim, and the ClusterRole grants neither
   verb. A spec change resets the counter and brings the ordinal back.
 
@@ -238,16 +243,38 @@ each roughly hourly cycle. For the rest of it the backoff window is shut and
 the group publishes `BackingOff: False` — "no server has failed to start
 recently" — beside a `Failed` corpse.
 
-**`Degraded` therefore first appears roughly five and a half hours after the
-first failure**, and the arithmetic is worth writing out because the obvious
-number is wrong twice over. `backoffGiveUpAt` is 6, so the condition needs six
-counted failures — and six failures are separated by **five** cycles, not six.
-Each cycle is `failedRetentionSeconds` (3600 at the CRD default) plus the
-startup deadline each attempt burns before it fails (300 by the operator's
-`--startup-deadline` flag): about 65 minutes. Five of those is five hours and
-twenty-five minutes. The
+**At `replicas: 1`, `Degraded` therefore first appears roughly five and a half
+hours after the first failure**, and the arithmetic is worth writing out
+because the obvious number is wrong twice over. `backoffGiveUpAt` is 6, so the
+condition needs six counted failures — and six failures are separated by
+**five** cycles, not six. Each cycle is `failedRetentionSeconds` (3600 at the
+CRD default) plus the startup deadline each attempt burns before it fails (300
+by the operator's `--startup-deadline` flag): about 65 minutes. Five of those
+is five hours and twenty-five minutes. The
 condition is right and the wait is deliberate; the delay before either becomes
 visible is not something this milestone fixes.
+
+**And five hours twenty-five is a floor, not an estimate: at `replicas: 2` or
+more it has no ceiling.** The mechanism is `CountFailures`, which resets the
+streak to zero whenever *any* view's `ReadySince` is newer than the last
+counted failure. For an ephemeral group that is exactly right — its servers are
+interchangeable, and one of them coming up is evidence about the group. For a
+persistent group they are not interchangeable, which is this section's own
+premise: the world is on that claim and nothing else can serve it. So in this
+design's own headline example, `replicas: 2`, `survival-0`'s claim never
+binding while `survival-1` merely flaps readiness once resets the streak, the
+six-failure count restarts from zero, and `Degraded` need never arrive at all.
+
+**Documented here, fixed in 5b, and that split is deliberate.** A per-ordinal
+streak changes what `BackoffInputs` means for a group of either kind and
+deserves a design of its own rather than being bolted onto the end of a
+milestone whose scope is "persistent groups exist"; and the damage is a late or
+absent condition, not lost data or a disconnected player. What an operator has
+in the meantime is `status.consecutiveFailures` and `status.lastFailureAt`,
+which are written unconditionally and from the first counted failure. Note that
+the one test exercising the give-up,
+`TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp`, runs a single ordinal —
+the one configuration in which this cannot show.
 
 ## 4. Out of scope, deliberately
 
@@ -307,8 +334,17 @@ rejoin, and the block is still there.
 2. Deleting a persistent server's pod brings the same ordinal back on the same
    claim, and the world it contains is unchanged — proven on a real cluster by
    an artefact placed before the deletion and found after it.
-3. Lowering `replicas` removes the highest ordinal through the existing drain,
-   without disconnecting a player on it, and leaves its claim behind.
+3. Lowering `replicas` removes the highest ordinal through the existing drain
+   and leaves its claim behind. The drain moves the players on it, bounded like
+   every other drain in this operator by `spec.drain.timeoutSeconds`, after
+   which whoever has not left is disconnected. The qualifier is needed because
+   the two sizing rules do not agree about this: `SelectDeletionCandidates`
+   never nominates a server that `mayHavePlayers()`, and
+   `DecidePersistentSize`'s surplus loop has no such guard, so the top ordinal
+   is nominated whoever is on it. The drain then protects those players for
+   `spec.drain.timeoutSeconds` and no longer, which is the same bound every
+   other removal in this operator carries. `docs/known-issues.md` carries the
+   operator-facing version, including what the alternative would cost.
 4. Raising `replicas` again brings that ordinal back onto the claim it left.
 5. A persistent server on a cordoned node is condemned like any other, and
    `kubectl drain` completes where the storage can follow.

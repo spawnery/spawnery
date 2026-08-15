@@ -1734,9 +1734,12 @@ kubectl get pvc -l spawnery.cloud/managed-by=spawnery-operator -n <namespace>
 ```
 
 Every claim this operator ever created carries that label
-(`podspec.LabelManagedBy`) — it is also what restricts the manager's own cache
-over claims, alongside `spawnery.cloud/network`, `spawnery.cloud/group` and
-`spawnery.cloud/server` (`podspec.BuildDataClaim`). To tell a claim still in
+(`podspec.LabelManagedBy`), and it is the one — the only one — that restricts
+the manager's own cache over claims (`cmd/spawnery-operator/main.go`).
+`podspec.BuildDataClaim` puts three more on every claim it renders,
+`spawnery.cloud/network`, `spawnery.cloud/group` and `spawnery.cloud/server`;
+none of those narrows anything the operator does, and they are there for
+whoever is reading claims by hand. To tell a claim still in
 service from an orphan, compare each claim's `spawnery.cloud/server` label
 against the `Server` objects that currently exist for that group: a claim
 named `<group>-<ordinal>-data` whose `spawnery.cloud/server` names a `Server`
@@ -1793,11 +1796,16 @@ as it stands rather than repeated from memory:
   160s across five gaps before the sixth failure), which at the CRD's
   3600-second default never actually delays an attempt. What the backoff
   contributes here is only the give-up.
-- After the give-up, the group holds no `Server` object for that ordinal at
-  all and waits indefinitely. The claim and the world on it are untouched —
-  nothing in this operator can update or delete a claim, per the RBAC point
-  above — and a spec change (any edit that moves `metadata.generation`) resets
-  the counter and brings the ordinal back.
+- After the give-up the group waits indefinitely — but not, at first, with no
+  `Server` object for that ordinal. At the moment the count reaches the
+  threshold the sixth corpse is still standing and still holding its ordinal,
+  and it stays for one more `failedRetentionSeconds` before the Server
+  controller takes it away. The empty-ordinal state is where this settles,
+  roughly an hour later at the CRD default, not where it begins. The claim and
+  the world on it are untouched throughout — nothing in this operator can
+  update or delete a claim, per the RBAC point above — and a spec change (any
+  edit that moves `metadata.generation`) resets the counter and brings the
+  ordinal back.
 
 **This is correct, not merely tolerated.** A persistent world lives on one
 claim and nothing else can serve it, so a rebuild only ever meets the same
@@ -1822,15 +1830,164 @@ before it can fail in turn and be counted as the next failure. Each gap is
 therefore close to `3600 + 300` = 3900 seconds, about sixty-five minutes, not
 an even hour. `Degraded` therefore does not turn true until roughly **five
 and a half hours** after the first failure — five gaps of about sixty-five
-minutes each — not six. An operator watching for a stall in that window
-should not wait for `Degraded` or for `BackingOff: True`: both
+minutes each — not six. **That figure holds at `replicas: 1`, and is a floor
+with no ceiling above it; the next entry is why.** An operator watching for a
+stall in that window should not wait for `Degraded` or for `BackingOff: True`: both
 `status.consecutiveFailures` and `status.lastFailureAt` are written from the
 very first counted failure, for a group of either type — that counting is
 unconditional in `Reconcile`, not behind `if group.IsEphemeral()` the way the
 two conditions used to be before this milestone's own review lifted them out.
 `kubectl get servergroup <name> -o jsonpath='{.status.consecutiveFailures}
 {.status.lastFailureAt}'` says something true from the first failure onward,
-hours before either condition would.
+hours before either condition would — at `replicas: 1`. At two or more, the
+same reset that delays `Degraded` clears those two fields as well, and the next
+entry says what to read instead.
+
+**A healthy sibling resets a broken ordinal's failure streak, so with two or
+more ordinals `Degraded` may never arrive.** `CountFailures`
+(`internal/controller/backoff.go`) takes the newest `ReadySince` across the
+group's servers of the current generation — the set `ofGeneration` narrows the
+views to before handing them over — and, when it is newer than the last counted
+failure, restarts the count at zero. For an ephemeral group that is the right rule, and its own
+doc comment says why: those servers are interchangeable, so one of them
+becoming ready is evidence about the group. A persistent group's are not
+interchangeable — the world is on one claim and no other server can serve it.
+
+So with `replicas: 2`: `survival-0`'s claim never binds and its server fails
+roughly hourly, while `survival-1` runs normally and loses its readiness probe
+once — a container restart, a slow tick, a node blip. That one recovery stamps
+a `ReadySince` newer than `survival-0`'s last counted failure; the streak goes
+back to zero, the six-failure give-up starts over, and the condition that
+exists to name this stall need never turn true. There is no bound on how long
+that can go on, because there is no bound on how often a healthy server may
+blip.
+
+Recorded rather than fixed in 5a, and the reasoning is on the record: a
+per-ordinal streak changes what `BackoffInputs` means for a group of either
+kind and deserves a design of its own rather than being appended to a milestone
+whose scope is "persistent groups exist", and what it costs is a late or absent
+condition rather than lost data or a disconnected player. 5b takes it, as
+either a per-ordinal streak or a reset restricted to the ordinal that failed.
+
+Until then `status.consecutiveFailures` and `status.lastFailureAt` do not help
+for a multi-ordinal group either — the same rule resets them. What does not lie
+is the `Server` objects:
+
+```bash
+kubectl get server -n <namespace> -l spawnery.cloud/group=<group> \
+  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,FAILED:.status.failedAt
+```
+
+A persistent ordinal sitting in `Failed`, or one that keeps reappearing with a
+newer `.status.failedAt` and never reaching `Ready`, is what `Degraded` would
+have told you about. The one test that exercises the give-up
+(`TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp`) runs a single ordinal,
+which is the one configuration in which none of this can show.
+
+**Lowering `replicas` nominates the top ordinal whoever is on it.** The two
+sizing rules do not agree about this, and they share one delete path.
+`SelectDeletionCandidates` (`internal/controller/candidates.go`) skips any
+server that `mayHavePlayers()`, so an ephemeral group shrinks around its
+players and takes an empty server instead. `DecidePersistentSize`
+(`internal/controller/persistent.go`) has no such guard in its surplus loop: it
+sorts the ordinals at or above the new `replicas` and names them, highest
+first. Lowering `replicas` from 3 to 2 therefore asks for `survival-2` with
+players still on it.
+
+What protects them from there is the ordinary drain, and only that: the Server
+controller moves them through the proxies and waits
+`spec.drain.timeoutSeconds` (60 by the CRD default), and anyone still connected
+when that deadline passes is disconnected with the pod. Design §7's acceptance
+criterion 3 now carries that qualifier; it previously read "without
+disconnecting a player on it", unconditionally, which is true only of a drain
+that finishes in time.
+
+The alternative is worth naming rather than assuming: a `mayHavePlayers()`
+guard here would mean a lowered `replicas` is not honoured at all while anyone
+is online, because no other server can take ordinal N's place — an ephemeral
+group has a different server to delete instead, and a persistent group does
+not. Neither direction is free. If you need the players off first, empty the
+ordinal before lowering `replicas`, or raise `spec.drain.timeoutSeconds` on the
+group beforehand so the drain has time to finish.
+
+**Two servers carrying the same `spec.ordinal` are invisible in both
+directions.** `DecidePersistentSize` builds its `held` map as
+`held[*v.Ordinal] = v.Name`, which is last-write-wins over the list order. If
+two `Server` objects of the group carry the same `spec.ordinal` — hand-created,
+restored from a backup, or copied — one of them wins the map entry and the
+other exists as far as the rule is concerned only in that it is never named.
+It is never surplus, because the surplus loop walks `held` and the loser is not
+in it; it is never recreated, because the ordinal is taken; and it goes on
+running its own pod, mounting the claim named after *its own* name. If that
+name is not `<group>-<ordinal>` the claim is a second world nobody is looking
+at; if it is, two pods contend for one `ReadWriteOnce` volume, which hangs on
+the volume rather than failing cleanly. This is the mirror of the squatter
+entry below — there an object holds the *name* without the ordinal, here it
+holds the *ordinal* without being reachable. The tell is the same shape:
+
+```bash
+kubectl get server -n <namespace> -l spawnery.cloud/group=<group> \
+  -o custom-columns=NAME:.metadata.name,ORDINAL:.spec.ordinal
+```
+
+Two rows with one ordinal between them is the state; nothing on the group's
+conditions, events or logs says so.
+
+**A `Persistent` group that existed before this upgrade keeps a stale `Ready:
+False` forever.** Before 5a the ServerGroup controller published
+`Ready: False` with reason `NotImplementedInThisVersion` and the message
+"persistent groups arrive in milestone 5" on every persistent group,
+unconditionally. 5a removed that block, and it was the only thing that ever set
+`ConditionReady` on a `ServerGroup` of either type — readiness is
+`status.phase`, which `derivePhase` computes from `readyReplicas` against
+`DesiredReplicas()`. Nothing removes the condition an older operator wrote, so
+such a group carries `Ready: False / NotImplementedInThisVersion` beside pods
+that are up and players who are online, while `status.phase` next to it reports
+whatever those pods actually support — `Ready` among them. Nothing in the operator reads the condition, so nothing behaves
+differently; it misleads a person, and any alert written on
+`.status.conditions[?(@.type=="Ready")]` for a ServerGroup.
+
+Clearing it is one command per affected group, and it is safe precisely because
+nothing republishes it:
+
+```bash
+kubectl patch servergroup <name> -n <namespace> --subresource=status --type=json \
+  -p '[{"op":"test","path":"/status/conditions/<index>/type","value":"Ready"},
+       {"op":"remove","path":"/status/conditions/<index>"}]'
+```
+
+`<index>` is the position of the `Ready` entry in `.status.conditions`; the
+`test` operation is there so the patch fails loudly rather than removing a
+neighbouring condition if the index has moved between the read and the write.
+Find it with:
+
+```bash
+kubectl get servergroup <name> -n <namespace> \
+  -o jsonpath='{range .status.conditions[*]}{.type}{"\n"}{end}' | grep -n Ready
+```
+
+`ReasonNotImplemented` (`api/v1alpha1/common_types.go`) has no user left in the
+codebase after this milestone: grepping `.go` and `.yaml` finds the identifier
+only at its own definition, and the string `NotImplementedInThisVersion` only
+in a test comment describing the block that was removed and in
+`docs/superpowers/plans/`, which is a historical record rather than live code.
+The constant is kept rather than deleted: it costs a line, and it is the exact
+string an operator meets on the stale condition above, so removing it would
+make that string unsearchable in the repository it came from.
+
+**A `Persistent` group with `replicas: 0` reports `Pending` forever.**
+`derivePhase` (`internal/controller/servergroup_controller.go`) returns `Ready`
+only when `readyReplicas >= DesiredReplicas()` **and** `readyReplicas > 0`, so a
+group that has been asked for zero servers, and correctly has zero, never
+reaches `Ready`. The shape predates this milestone — it is the same arithmetic
+an ephemeral group with `minReplicas: 0` meets — but 5a is what makes zero a
+deliberate operator action: `spec.replicas: 0` is the accepted way to park a
+persistent group and keep its claims, since deleting the group would leave the
+claims behind but take the ordinals' `Server` objects with it. Such a group
+publishes `Accepted: True`, `Degraded: False`, `replicas: 0`,
+`readyReplicas: 0` and `phase: Pending`, which is the truth about every field
+except the phase. Nothing else is affected: no condition depends on the phase,
+and the group is sized, PDB'd and reconciled as normal.
 
 **A squatter can stall an ordinal silently.** `DecidePersistentSize` decides
 which ordinal is missing by reading `ServerView.Ordinal`, sourced from

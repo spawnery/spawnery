@@ -1,9 +1,11 @@
 # Handover to milestone 5
 
-Status: end of milestone 5a, persistent groups exist (2026-08-15). Written
-before the whole-branch review that closes this milestone (Task 8 of
-`.superpowers/sdd/2026-08-15-persistent-groups/`); anything that review moves
-will be recorded in place here, the way milestone 4's own reviews were.
+Status: end of milestone 5a, persistent groups exist (2026-08-15). First
+written before the whole-branch review that closes this milestone (Task 8 of
+`.superpowers/sdd/2026-08-15-persistent-groups/`), and revised in place after
+it, the way milestone 4's own reviews were: that review's three Important
+findings and its triage of the parked minors are recorded where they belong
+below rather than appended as a postscript.
 
 This document is not a spec. It says where 5a stopped and what 5b — ordered
 shutdown, `Recreate` updates, `storage.size` growth — and 5c — secret rotation
@@ -148,6 +150,24 @@ Master design §8, carried forward rather than re-derived:
   run to start from rather than rebuild. It is marked **NOT YET DRIVEN**; see
   that document's own header for what driving it will need and what its
   acceptance test is.
+- **`fsGroup` is on every server pod now**, and 5b and 5c inherit it whether
+  or not they think about storage. `podspec.BuildServerPod` sets
+  `PodSecurityContext.FSGroup` to 10001 — the uid and gid `nix/oci-common.nix`
+  builds the image with — together with `FSGroupChangePolicy: OnRootMismatch`.
+  It closed a precondition `docs/known-issues.md` recorded two milestones ago
+  under "From milestone 2b", which said the missing `fsGroup` "has to land
+  before the first persistent server exists": without it a freshly provisioned
+  claim arrives root-owned, the container runs as 10001, and Paper cannot write
+  `/data` at all. 5a is what creates the first persistent server, so the
+  precondition came due here. Two decisions inside it are worth carrying rather
+  than rediscovering. It is set on **every** server pod rather than gated on
+  the group's type — one `PodSecurityContext` shape to reason about, and an
+  `emptyDir` is created fresh and empty so the chown costs nothing there. And
+  the policy is `OnRootMismatch` rather than the kubelet's `Always` default,
+  because `Always` recursively chowns a whole persistent world on every pod
+  start; the cost of that choice, stated in the code, is that files deep in the
+  tree with wrong ownership are not corrected. `BuildProxyPod` is untouched: a
+  proxy mounts no claim.
 - **The failure path is a stall, not a loop, and it is documented.** A claim
   that never binds fails its server, which is deleted and recreated onto the
   same claim roughly once an hour (`spec.failedRetentionSeconds`) until the
@@ -157,6 +177,22 @@ Master design §8, carried forward rather than re-derived:
   rotation both touch persistent servers and should read that entry before
   assuming a `Failed` persistent server behaves the way an ephemeral one
   does.
+- **The failure streak is per group, and for a persistent group it should not
+  be — that is 5b's, and it was ruled so deliberately.** `CountFailures`
+  (`internal/controller/backoff.go`) resets the streak to zero whenever any of
+  the group's servers carries a `ReadySince` newer than the last counted
+  failure. For interchangeable servers that is the right rule; for ordinals
+  that each own a world it is not, so a broken `survival-0` beside a
+  `survival-1` that blips readiness once can keep `Degraded` from ever
+  arriving. The durable fix is a **per-ordinal streak**, or more cheaply a
+  reset restricted to the ordinal whose failure it would clear; either changes
+  what `BackoffInputs` means for both kinds of group, which is why it is a
+  design of its own rather than an appendix to "persistent groups exist".
+  Whoever takes it should start from `CountFailures`' own doc comment, which
+  argues the current rule correctly for the case it was written for, and from
+  `TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp`, which runs a single
+  ordinal and therefore cannot show the problem — a second ordinal in that test
+  is the first thing to write.
 
 ## What 5a leaves open, briefly
 
@@ -168,13 +204,34 @@ against the code; restated in one line each:
 - **A persistent server on a node-pinned volume cannot follow a node
   drain** — 4c-3 recorded the limit before anything could reach it; 5a is
   what makes it reachable.
-- **A claim that never binds ends in a deliberate stall**, and `Degraded`
-  does not appear until roughly five and a half hours after the first failure
-  at the CRD's default retention — six counted failures span five gaps, not
-  six, and each gap runs close to `failedRetentionSeconds` (3600s) plus the
-  replacement's own `--startup-deadline` (300s) before it can fail in turn,
-  not an even hour. `status.consecutiveFailures` and `status.lastFailureAt`
-  are the earlier signal.
+- **A claim that never binds ends in a deliberate stall**, and at
+  `replicas: 1` `Degraded` does not appear until roughly five and a half hours
+  after the first failure at the CRD's default retention — six counted
+  failures span five gaps, not six, and each gap runs close to
+  `failedRetentionSeconds` (3600s) plus the replacement's own
+  `--startup-deadline` (300s) before it can fail in turn, not an even hour.
+  `status.consecutiveFailures` and `status.lastFailureAt` are the earlier
+  signal at that replica count. Note also that the give-up does not begin with
+  an empty ordinal: the sixth corpse holds it for one more
+  `failedRetentionSeconds` first, and the empty-ordinal state is where the path
+  settles rather than where it starts.
+- **With two or more ordinals that figure has no ceiling at all**, because
+  `CountFailures` resets the streak on any sibling's newer `ReadySince` — see
+  the next section for the durable fix 5b takes.
+- **Lowering `replicas` nominates the top ordinal whoever is on it**, unlike
+  the ephemeral rule, which skips a server that `mayHavePlayers()`. The
+  players are protected by the drain and by `spec.drain.timeoutSeconds`, and
+  by nothing after it.
+- **Two servers carrying one `spec.ordinal` are invisible in both
+  directions** — never surplus, never recreated — the mirror of the squatter
+  entry.
+- **A persistent group from before this upgrade keeps a stale `Ready: False`**
+  saying persistent groups arrive in milestone 5, beside running pods. Nothing
+  republishes it and nothing removes it; known-issues carries the patch that
+  clears it.
+- **`replicas: 0` reports `Pending` forever**, because `derivePhase` requires
+  `readyReplicas > 0`. Pre-existing arithmetic; 5a is what makes zero a
+  deliberate action.
 - **A squatter — an object already holding a persistent ordinal's name
   without `spec.ordinal` — stalls that ordinal silently**, retried once every
   five-second pass forever, with no event, condition or log naming it.
@@ -194,11 +251,13 @@ grep flagged a line: how often the flagged sentence really was wrong, and how
 a test that looks like it is checking something can pass while checking
 nothing at all.
 
-**Seven instances of the signature defect** — a sentence that reads plausibly
+**Nine instances of the signature defect** — a sentence that reads plausibly
 while describing a mechanism the code does not have — surfaced across this
-milestone's seven tasks, checked against
-`.superpowers/sdd/2026-08-15-persistent-groups/progress.md` and the task
-reports rather than repeated from memory:
+milestone's eight tasks. The count and its distribution are read off
+`.superpowers/sdd/2026-08-15-persistent-groups/progress.md`, which numbers them
+to nine, rather than repeated from memory; an earlier version of this paragraph
+said seven across seven, and being wrong about the tally of this particular
+defect in the document that exists to record it is itself the defect:
 
 - Task 4's implementer caught two, in the plan's own doc-comment text, before
   committing: present-tense claims that `docs/known-issues.md` already
@@ -233,6 +292,22 @@ reports rather than repeated from memory:
   unconditionally regardless of which conditions publish. Caught in the same
   pass, before committing, which is the argument for re-reading a fix rather
   than trusting that fixing one defect could not introduce a neighbour.
+- The eighth is a shape the earlier seven do not cover: **cross-file within
+  one task.** Task 8's own test comment claimed the runbook's `kind` run "is
+  exactly" what verifies the `fsGroup` chown on a real cluster, while the
+  runbook rewrite the same implementer had just made two files away said
+  `kind`'s local-path provisioner masks the fix entirely. Both files were in
+  one staged diff and the absolute-word sweep over that diff is what found it.
+  A per-file read would not have: neither sentence is wrong on its own.
+- The ninth is the tally's own author's, in a correction to a correction to a
+  correction. The design-spec fix for the `Degraded` delay led with a bolded
+  "roughly five hours" and conceded "five and a half in practice" two clauses
+  later, while both operator-facing documents led with five and a half — and
+  two paragraphs above it the unhedged "after six attempts at an hour apart"
+  survived untouched, the same phrase that fix round had just softened in
+  `docs/known-issues.md`. Caught by a re-review asked to judge the reviewer's
+  own commit by the standard it had applied to the implementer's, and fixed in
+  `9905713`.
 
 **Six assertions that could not discriminate — that passed whether the
 production behaviour they claimed to test was present or not — surfaced
@@ -279,6 +354,21 @@ found none of them:**
    window" from "the retention clock closes it" into two explicit steps is
    what made the assertion mean what it claimed to.
 
+**The closing review's fix wave found a seventh assertion of shape 2 —
+*never reaching the branch it named* — and it was on the test guarding this
+milestone's entire point.** `TestDeletingAPersistentServerLeavesItsClaim` ran
+one reconcile after deleting the Server. That reconcile still sees the pod, so
+it only asks for the pod's deletion; the branch that releases the finalizer and
+lets the Server object go needs the pod already gone, and runs on the *next*
+one. A `Delete` on the claim added to that release branch — the single line
+that destroys a world — was therefore invisible to the test written to catch
+exactly it. Mutation found this too, and reading did not, in a test that had
+already been mutation-tested once for a different mutation on a different
+branch. The lesson is narrower than "mutate more": a mutation kills only the
+lines the test actually executes, so a single passing mutation says nothing
+about a branch the test never enters. The test now runs two reconciles and
+asserts the object is gone, which is what proves it got there.
+
 **The envtest trap worth more than the rest of them together.** The API
 server's `StorageObjectInUseProtection` admission plugin stamps
 `kubernetes.io/pvc-protection` on every `PersistentVolumeClaim` at creation,
@@ -302,5 +392,6 @@ Unchanged from `docs/handover-milestone-4.md`'s own "The environment" section:
 `nix develop`, `make test`, `make agent-test`, `make image-test`,
 `make image-repro`. Nothing under `proto/` or `agent/` moved on this branch
 (`git diff master...HEAD --name-only`), so 5a added no agent-facing message and
-`make agent-test` needed no extension — a claim checked against the diff
-rather than against a run of the target itself, which Task 7 did not perform.
+`make agent-test` needed no extension. That was first written as a claim
+checked against the diff alone, because nobody had run the target; it has since
+been run, at the close of Task 7, and exited 0.
