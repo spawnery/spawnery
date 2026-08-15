@@ -1329,8 +1329,8 @@ reports an entirely uninterrupted session (§9's expectation 4, criterion 1) —
 now running through a `Service` whose `externalTrafficPolicy` is `Local`, the
 path §8's pin exists to substitute for and §11 already reached without it.
 
-**Only the `NodeDraining` condition and its event are bounded by the
-operator's `resyncInterval` (5 seconds); the annotation is not.**
+**Only the `NodeDraining` *condition* is bounded by the operator's
+`resyncInterval` (5 seconds); its event and the annotation are not.**
 `reportNodeDraining` computes the `ProxyGroup`'s `NodeDraining` condition
 straight from the node fact, with no dependency on the surge pod or the mark
 — and `ProxyGroupReconciler`'s own `Watches(&corev1.Node{}, ...)` fires a
@@ -1338,11 +1338,17 @@ reconcile the moment the cache sees `$DOOMED_NODE`'s `spec.unschedulable`
 flip, rather than waiting for the periodic resync at all. Expect `kubectl get
 proxygroup gateway -n minecraft -o jsonpath='{.status.conditions}'` to show
 `NodeDraining: True` naming `$DOOMED_NODE` within a couple of seconds of the
-`kubectl cordon` above returning. The `draining-since` annotation on the pod
-itself has no comparable bound: it is written only once the surge pod is
-`Ready`, and how long that takes depends on scheduling, image pull and the
-Velocity agent's own start-up — the same unclocked wait §11's own expectation
-1 already asks the driver to watch for rather than time.
+`kubectl cordon` above returning. **The per-proxy `NodeDraining` event is a
+different thing, on the same unclocked wait as the annotation, not the
+condition it shares a reason string with**: `reconcileReplicas`'s own comment
+says so directly — "No event accompanies [the condition]: the per-proxy event
+fired below, at the point a proxy is actually marked, is the one §3.7 asks
+for" — and that event is gated on `going && !wasMarked && nodeGoing[i]` inside
+the same per-pod loop that calls `markDraining`, so it fires at mark time,
+exactly when the annotation is written. Both wait on the surge pod reaching
+`Ready`, which depends on scheduling, image pull and the Velocity agent's own
+start-up — the same unclocked wait §11's own expectation 1 already asks the
+driver to watch for rather than time.
 
 Now, in a third shell, the acceptance test this whole section exists for:
 
