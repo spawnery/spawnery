@@ -1329,7 +1329,16 @@ in advance:
   than it looks: a pod that restarts later for an unrelated reason picks the
   new value up on its own, so a group left alone drifts into running both
   settings at once, with which proxy authenticates depending on which happened
-  to restart.
+  to restart. That drift is not random, and knowing where it starts is the
+  point: a crashlooping proxy is by definition a pod that restarts, so it takes
+  the new value first while any sibling that stays up keeps the old — the
+  broken proxy is the one that diverges, and it diverges soonest. The mechanism,
+  if you need to confirm it on a cluster: the group ConfigMap reaches the pod
+  as a projected volume with no `subPath`, so the kubelet updates the file in
+  place, and `image/velocity-entrypoint.sh` re-runs `spawnery-config` on every
+  container start — including an in-place restart under `RestartPolicy:
+  Always` — while the pod carries a readiness probe and no liveness probe, so a
+  restart means the process exited rather than a probe having killed it.
 
   Note where the boundary actually falls, because it is not where the CRD
   suggests: `spec.config` has three fields and two behaviours. `playerLimit`
