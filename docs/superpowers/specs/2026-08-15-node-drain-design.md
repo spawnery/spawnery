@@ -291,11 +291,20 @@ counting players, not reasons — and holding both sides to one answer is worth
 more than the pod a reversal would save. An accidental `cordon` costs one proxy
 rotation and no player.
 
-This is expected to fall out of the existing release path rather than needing a
-clause: once marked, the pod is draining and not Ready, `pick` sorts it first,
-and the surplus branch keeps the mark on what `pick` returns
-(`rollout.go:209ff`). **Expected, not established** — the implementation proves
-it with a table case rather than asserting it.
+This falls out of the existing release path rather than needing a clause, and
+the path is one layer above where this section first looked for it. Not
+`DecideRollout`: with nothing stale any more, its `draining > 0` guard returns
+before `pick` is ever reached, so that function decides nothing here. The mark
+survives in `reconcileReplicas`, which reconstructs the surplus marks each pass
+— the uncordoned pod is draining but no longer stale, so it lands in
+`surplusMarks`, the budget keeps one, and `pick` is called over that set and
+returns it.
+
+**Established, and by an envtest rather than a table case.** The distinction is
+not bookkeeping: a table case over `DecideRollout` cannot reach the mechanism at
+all, and the first attempt at one passed for that reason while carrying this
+constraint's name. `TestAnUncordonedNodeKeepsTheMarkAlreadyMade` drives the real
+reconciler and fails when the mark is released.
 
 ### 3.7 Reporting
 
