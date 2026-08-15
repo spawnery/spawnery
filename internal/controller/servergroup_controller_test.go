@@ -3157,6 +3157,72 @@ func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 	}
 }
 
+// TestAFailedServerOnACordonedNodeGoesAwayOnce is the cost of the same
+// omission, seen from outside: a Failed server on a departing node used to be
+// both condemned by size() and collected by pruneFailed, which run over the
+// same in-memory map in one pass. r.Delete stamps no deletion timestamp back
+// onto the local object, so deleteServer's guard against repeating itself
+// never sees the first removal, and one server going away once was deleted
+// twice and announced twice under two different reasons.
+//
+// Both failures sit on the cordoned node, which is what makes the
+// FailedServerPruned count below discriminating: with both condemned there is
+// nothing left for the retention cap to prune, so any such event is the
+// duplicate.
+func TestAFailedServerOnACordonedNodeGoesAwayOnce(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := r.Recorder.(*record.FakeRecorder)
+
+	f.setMinReplicas(t, 2)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 2 {
+		t.Fatalf("servers = %d, want 2", len(servers))
+	}
+	// Two failures, one more than maxRetainedFailures, so the retention cap
+	// really would nominate one of them if it were still looking at them.
+	for _, s := range servers {
+		f.failServer(t, s.Name)
+	}
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	for _, s := range servers {
+		pod, ok := f.pod(f.server(s.Name).Status.PodName)
+		if !ok {
+			t.Fatalf("pod of %s not found", s.Name)
+		}
+		f.bindPodToNode(t, pod, node.Name)
+	}
+	f.ensureNode(t, node.Name, true)
+	drainEvents(rec) // discard anything the setup recorded
+
+	f.reconcileGroup(t, r)
+
+	// Counted from one read of the channel: each event is delivered once, so
+	// asking twice would empty it before the second question.
+	events := drainEvents(rec)
+	count := func(reason string) int {
+		n := 0
+		for _, e := range events {
+			if fields := strings.SplitN(e, " ", 3); len(fields) >= 2 && fields[1] == reason {
+				n++
+			}
+		}
+		return n
+	}
+
+	if got := count("NodeDraining"); got != 2 {
+		t.Fatalf("NodeDraining events = %d, want 2: without both failures actually being condemned "+
+			"the assertion below holds for a reason that has nothing to do with pruning: %v", got, events)
+	}
+	if got := count("FailedServerPruned"); got != 0 {
+		t.Errorf("FailedServerPruned events = %d, want 0: both failures are already going as "+
+			"condemned servers, and a second removal of the same server announces one departure "+
+			"twice under two reasons: %v", got, events)
+	}
+}
+
 // TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying pins the ruling that
 // moved condemnation below the Network gate. Design §3.3 calls condemnation
 // "unconditional. The node is leaving with or without our consent", and size()

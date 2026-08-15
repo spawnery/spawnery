@@ -390,6 +390,46 @@ func TestSelectFailedForPruning(t *testing.T) {
 			keep: 1,
 			want: []string{"new-second", "old"},
 		},
+		{
+			// "Servers already on their way out are left alone" used to be
+			// carried by the phase filter on its own: Draining, Terminating and
+			// Retiring are mutually exclusive with Failed, so the case above
+			// ("never prunes a server that is not failed") was the whole of it.
+			// leaving() is now leavingByPhase() || Condemned, and a Failed
+			// server on a departing node is both — collected here as well as
+			// condemned, and deleted and announced twice for one removal,
+			// because size() and pruneFailed run over the same in-memory map in
+			// one pass and r.Delete stamps nothing back onto the local object.
+			name: "leaves a condemned failure to the node drain that is already taking it",
+			views: []ServerView{
+				view("kept", phase.Failed, 0, 100, false, 1, 0),
+				view("prunable", phase.Failed, 0, 100, false, 1, 60),
+				func() ServerView {
+					v := view("condemned", phase.Failed, 0, 100, false, 1, 120)
+					v.Condemned = true
+					return v
+				}(),
+			},
+			keep: 1,
+			want: []string{"prunable"},
+		},
+		{
+			// And it drops out of the count as well as the list, which is the
+			// same sentence the doc comment already made about the phases:
+			// counting a departure that is already under way would let a
+			// second failure through while the first drains.
+			name: "a condemned failure does not push another failure past the cap",
+			views: []ServerView{
+				view("kept", phase.Failed, 0, 100, false, 1, 0),
+				func() ServerView {
+					v := view("condemned", phase.Failed, 0, 100, false, 1, 60)
+					v.Condemned = true
+					return v
+				}(),
+			},
+			keep: 1,
+			want: nil,
+		},
 	}
 
 	for _, tc := range cases {
