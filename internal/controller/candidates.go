@@ -83,12 +83,16 @@ type ServerView struct {
 	ReadySince time.Time
 }
 
-// isOccupied is the occupancy rule for a server pod — one of two in the
-// system, the other being proxyOccupied (proxygroup_controller.go), which
-// answers the same question for a proxy pod under a different signature: a
-// proxy has no wasRegistered qualifier, because it sits behind the Service
-// and players reach it directly, so there is no state in which a stale count
-// is safe to read as empty. Both sides of the ServerGroup's
+// isOccupied is the occupancy rule for a server pod. The proxy side has its
+// own, proxyOccupied (proxygroup_controller.go), which answers the same
+// question under a different signature: a proxy has no wasRegistered
+// qualifier, because it sits behind the Service and players reach it
+// directly, so there is no state in which a stale count is safe to read as
+// empty. That side then splits once more — proxyOccupiedForBudget is
+// proxyOccupied plus a term its unbounded consumers need — where this side
+// does not, because status.wasRegistered is persisted and so survives an
+// operator restart, which is the case that split is about. Both sides of the
+// ServerGroup's
 // PodDisruptionBudget are computed from this one: the Server controller
 // labels pods with it (syncOccupiedLabel) and the ServerGroup controller
 // sizes the budget's minAvailable from it (ServerView.Occupied). The two have

@@ -36,7 +36,12 @@ const (
 	// from removing an occupied pod. Maintained by the Server controller on
 	// server pods and by the ProxyGroup controller on proxy pods, each from
 	// its own occupancy rule — see isOccupied (candidates.go) and
-	// proxyOccupied (proxygroup_controller.go).
+	// proxyOccupiedForBudget (proxygroup_controller.go).
+	//
+	// Two writers over two populations, so a budget selecting on this key has
+	// to pin LabelRole as well or it matches the other one's pods: see
+	// ServerGroupReconciler.reconcilePDB, which shipped without that term and
+	// let the eviction API take an occupied server pod.
 	LabelOccupied = "spawnery.cloud/occupied"
 	// LabelPodHash is a digest of the pod this operator would render for its
 	// group right now, with the pod's own name and this label excluded. A pod

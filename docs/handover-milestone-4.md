@@ -735,8 +735,10 @@ is what it built and what the next milestone finds in place.
   for a stated reason.** The `ServerGroup` has had `isOccupied`
   (`candidates.go`) since milestone 4b; the `ProxyGroup` gains
   `proxyOccupied` (`proxygroup_controller.go`) this milestone, evaluated
-  exactly once per pod per pass by `syncOccupiedLabels` and handed both to
-  the label it writes and to the count `reconcileProxyPDB` sizes
+  exactly once per pod per pass by `syncOccupiedLabels` — through the
+  `proxyOccupiedForBudget` wrapper the final fix wave added, see the bullet
+  below — and handed both to the label it writes and to the count
+  `reconcileProxyPDB` sizes
   `minAvailable` from — never two separate registry reads for one budget,
   which the milestone's own review found reachable as a real race
   (`docs/known-issues.md`'s Critical 2 under the 4c-3 review, closed
@@ -843,6 +845,52 @@ is what it built and what the next milestone finds in place.
   changed, only the addition sitting next to it is. Neither was found by the
   sweep or any other mechanical pass; both were found by a person reading the
   surrounding prose rather than only the diff in front of them.
+
+- **The whole-branch review's fix wave changed four things about behaviour,
+  and each is the same shape: a half that was correct in its own task, wrong
+  once composed with another task's half.** (1) `reconcilePDB`'s selector
+  gained `spawnery.cloud/role`. It had been `{managed-by, group, occupied}`
+  for the life of the repository, which was safe while only server pods
+  carried `spawnery.cloud/occupied`; this milestone put that label on proxy
+  pods, so a `ServerGroup` sharing its name with a `ProxyGroup` selected the
+  other's occupied proxies while counting only its own servers, and the
+  eviction API could then take an occupied *server* pod. (2) Condemnation and
+  both budgets moved below the `Network` gate. `size()` had been called only
+  under `networkUsable && IsEphemeral`, and `syncOccupiedLabels`,
+  `reconcileProxyPDB` and `reportNodeDraining` all sat below the
+  `ProxyGroup`'s own early returns, so a group whose `Network` broke published
+  `NodeDraining: True` and condemned nobody, and a proxy that was empty at the
+  last good pass stayed at `minAvailable: 0` however many players joined
+  afterwards. The rule is now written at the gate in
+  `ServerGroupReconciler.Reconcile`: a step that keeps the eviction API off an
+  occupied pod, or that moves players off a node that is going away, does not
+  depend on the `Network`. (3) `proxyOccupiedForBudget` splits the occupancy
+  question by consumer. `Registry.Lookup` calls an unknown pod occupied, which
+  the *deletion wait* can afford because `spec.drain.timeoutSeconds` bounds
+  it, and a *budget* cannot, because nothing bounds that — a crash-looping
+  proxy wedged every eviction of an occupied proxy in its group,
+  permanently. Its qualifier is
+  `Known` **or** the registry itself being younger than
+  `phase.StreamDownGrace`, and the second half of that is not decoration: the
+  registry is in-process, so after an operator restart every proxy in the
+  fleet is unknown while being `Ready` and full of players, and an operator
+  evicted off the node being drained is an ordinary way to arrive there.
+  `docs/known-issues.md` records the 15-second stall that buys. (4)
+  `selectFailedForPruning` filters `leaving()` rather than the phase alone: a
+  `Failed` server on a departing node was condemned *and* pruned in one pass,
+  and announced twice for going away once.
+- **Two of those needed the constructors in `setup.go` and the shared budget
+  assertion in the tests, and both are worth knowing about.**
+  `newServerGroupReconciler` and `newProxyGroupReconciler` exist because
+  `Options.DrainTaintKeys` was otherwise unassertable — a registered
+  controller is not reachable from outside the manager, so deleting either
+  assignment left the whole suite green and acceptance criterion 4 had no test
+  at all. `fixture.assertBudgetSelectsExactlyWhatItCounts` reads a
+  `PodDisruptionBudget`'s selector off the object, enumerates what Kubernetes
+  will actually match, and compares that set to the `minAvailable` it was
+  given. Every earlier budget assertion checked one side or the other and
+  never the two against each other, which is exactly why a selector matching
+  the wrong population survived a milestone.
 
 **4c is now complete as three sub-milestones — 4c-1 the readiness contract,
 4c-2 proxy rolling updates, 4c-3 node drain — and what remains is proof, not

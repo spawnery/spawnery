@@ -412,15 +412,17 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 	return live, nil
 }
 
-// proxyOccupied is the single occupancy rule for a proxy pod. syncOccupiedLabels
-// evaluates it exactly once per pod per pass and hands that one verdict to
-// both the label it writes and the count reconcileProxyPDB sizes minAvailable
-// from — not two separate calls to it that would merely apply the same rule.
-// A second call is not guaranteed to repeat the first: the registry this
-// reads from is mutated by live agent streams, and Lookup re-derives
-// PlayersStale from the clock on every call, so two calls a few lines apart
-// can disagree even with nothing running concurrently, purely because the
-// clock moved between them.
+// proxyOccupied is the occupancy rule for a proxy pod, and the base of the
+// only other one — proxyOccupiedForBudget below, which is this plus a single
+// term. Whichever of the two a caller asks, it must ask once per pod per
+// pass: syncOccupiedLabels evaluates its own exactly once and hands that one
+// verdict to both the label it writes and the count reconcileProxyPDB sizes
+// minAvailable from, rather than making two calls that would merely apply the
+// same rule. A second call is not guaranteed to repeat the first: the
+// registry these read from is mutated by live agent streams, and Lookup
+// re-derives PlayersStale from the clock on every call, so two calls a few
+// lines apart can disagree even with nothing running concurrently, purely
+// because the clock moved between them.
 //
 // A proxy has no wasRegistered qualifier the way a server does — it sits behind
 // the Service and players reach it directly — so for a running pod there is no
@@ -454,10 +456,9 @@ func proxyOccupied(snap agent.Snapshot) bool {
 // full drain deadline and no more. On a budget nothing puts a clock on it at
 // all: a surge pod pushes minAvailable above the currentHealthy the group can
 // reach and blocks every eviction in it until that pod's own agent finally
-// reports, which for a proxy stuck in CrashLoopBackOff is never. The
-// argument for dropping the
-// server side's wasRegistered qualifier was written about the bounded
-// consumer and does not carry to the unbounded one.
+// reports, which for a proxy stuck in CrashLoopBackOff is never. The argument
+// for dropping the server side's wasRegistered qualifier was written about
+// the bounded consumer and does not carry to the unbounded one.
 //
 // snap.Known is the discriminator, and it is precise: Registry.Disconnect
 // leaves it true, so a proxy whose agent connected and then died still counts
