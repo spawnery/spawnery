@@ -1343,4 +1343,18 @@ func TestDecideSizeCondemns(t *testing.T) {
 			t.Fatalf("Condemn = %v, want nil", got.Condemn)
 		}
 	})
+
+	t.Run("a condemned server already reserved for delete is not named again", func(t *testing.T) {
+		// The guard condemned() relies on: a server this reconciler already
+		// reserved an ordinary delete for must not be re-listed just because
+		// its node also reads Condemned.
+		in := ScalingInputs{
+			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true}},
+			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+			PendingDeletes: map[string]bool{"a": true},
+		}
+		if got := DecideSize(in); len(got.Condemn) != 0 {
+			t.Fatalf("Condemn = %v, want none: %q already has a reserved delete", got.Condemn, "a")
+		}
+	})
 }

@@ -89,6 +89,24 @@ func TestExpectedDeleteIsSatisfiedByDisappearanceOrDeparture(t *testing.T) {
 	}
 }
 
+func TestExpectedDeleteIsNotSatisfiedByCondemnedAlone(t *testing.T) {
+	// Condemned is an independent node-level signal, not evidence that the
+	// reserved removal has landed: a server this reconciler already
+	// reserved an ordinary delete for can have its node cordoned before the
+	// cache shows any consequence of that delete. Clearing the reservation
+	// on Condemned alone would drop the guard that keeps condemned() from
+	// re-listing the same server on the next pass.
+	e, _ := newTestExpectations()
+	e.expectDeleted("ns/lobby", "lobby-aaaa")
+
+	e.observe("ns/lobby", []ServerView{{Name: "lobby-aaaa", Phase: phase.Ready, Condemned: true}})
+
+	_, deletes, _ := e.pending("ns/lobby")
+	if len(deletes) != 1 {
+		t.Fatalf("pending deletes = %v, want the reservation still held", deletes)
+	}
+}
+
 func TestExpectationsAreKeptPerGroup(t *testing.T) {
 	e, _ := newTestExpectations()
 	e.expectCreated("ns/lobby", "lobby-aaaa")

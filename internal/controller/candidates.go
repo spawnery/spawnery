@@ -168,6 +168,15 @@ func (v ServerView) mayHavePlayers() bool {
 	return v.Players > 0 || (v.Stale && v.WasRegistered)
 }
 
+// leavingByPhase is the part of leaving() that is evidence of a removal
+// already under way: these three phases are reached only as a consequence of
+// a removal this reconciler itself issued. Kept apart from Condemned because
+// one caller needs exactly this narrower question and not the wider one: see
+// expectations.go's expectationDelete case.
+func (v ServerView) leavingByPhase() bool {
+	return v.Phase == phase.Draining || v.Phase == phase.Terminating || v.Phase == phase.Retiring
+}
+
 // leaving reports whether the server is already on its way out, so the group
 // must not count it as a candidate again.
 //
@@ -181,8 +190,7 @@ func (v ServerView) mayHavePlayers() bool {
 // the same pass, and it is also what stops the deletion nomination from
 // naming a server that is already going by another route.
 func (v ServerView) leaving() bool {
-	return v.Phase == phase.Draining || v.Phase == phase.Terminating ||
-		v.Phase == phase.Retiring || v.Condemned
+	return v.leavingByPhase() || v.Condemned
 }
 
 // countsTowardSize reports whether this server holds the group at its floor.
