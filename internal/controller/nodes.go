@@ -66,9 +66,10 @@ func IsDeparting(node *corev1.Node, taintKeys []string) bool {
 //
 // Every failure answers false. An empty name is an unscheduled pod, which is
 // on no node; a Get that fails is a node we cannot read, and a group must not
-// be emptied on the strength of a cache miss. The watch and the periodic
-// resync both bring the question back within seconds, so a false answer here
-// costs a few seconds and never a wrong deletion.
+// be emptied on the strength of a cache miss. The next reconcile asks again,
+// so a false answer here costs at most a delay and never a wrong deletion —
+// once a watch on Node is wired in (a later task), that delay shrinks to the
+// time a cordon or taint takes to reach the cache.
 func nodeDeparting(ctx context.Context, reader client.Reader, nodeName string, taintKeys []string) bool {
 	if nodeName == "" {
 		return false

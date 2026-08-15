@@ -52,9 +52,10 @@ type Options struct {
 	// reason it refuses a nil Bootstrapper.
 	Proxies ProxyReadinessSetter
 	// DrainTaintKeys are the taint keys that mark a node as departing, beside
-	// spec.unschedulable. Empty is the default and the ordinary case: both
-	// cluster-autoscaler and Karpenter cordon a node as well as tainting it,
-	// so an empty list still sees them, a moment later.
+	// spec.unschedulable. spec.unschedulable is what kubectl cordon and
+	// kubectl drain set, and it is always honoured; an autoscaler may taint a
+	// node without cordoning it first, which is what this list is for. Empty
+	// is the default: only cordoned nodes count.
 	DrainTaintKeys []string
 }
 

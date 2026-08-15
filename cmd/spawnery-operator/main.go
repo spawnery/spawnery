@@ -82,9 +82,10 @@ func validateAgentFlags(operatorNamespace string, renewAfter, hardDeadline time.
 	return nil
 }
 
-// taintKeys collects a repeatable flag. A cluster may mark a departing node
-// with more than one vendor's taint, and one flag per key beats parsing a
-// separator out of a key that is allowed to contain almost anything.
+// taintKeys collects a repeatable flag, the same shape as the names collector
+// in cmd/spawnery-stubop. A cluster may mark a departing node with more than
+// one vendor's taint, and one flag per key needs no separator convention of
+// its own.
 type taintKeys []string
 
 func (t *taintKeys) String() string { return strings.Join(*t, ",") }
@@ -186,6 +187,8 @@ func main() {
 	// every ConfigMap in the cluster — kube-root-ca.crt from every namespace
 	// included — for the sake of one per namespace that is ours.
 	managed := labels.SelectorFromSet(labels.Set{podspec.LabelManagedBy: podspec.ManagedByValue})
+	// Per-kind cache restrictions; see the comment on each entry for why it is
+	// there.
 	mgrOptions.Cache.ByObject = map[client.Object]cache.ByObject{
 		&corev1.ConfigMap{}:      {Label: managed},
 		&corev1.ServiceAccount{}: {Label: managed},
