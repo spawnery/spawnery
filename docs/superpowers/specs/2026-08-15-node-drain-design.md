@@ -109,10 +109,25 @@ It takes the key list rather than reading configuration, so it is table-tested
 without a cluster and without a manager — the shape `DecideSize` and
 `DecideRollout` already have.
 
-Both cluster-autoscaler and Karpenter cordon a node in addition to tainting it,
-so the default empty list still sees autoscaler-driven scale-in; the flag exists
-to see it a moment earlier, and to cover a taint vocabulary this project does not
-have to know in advance.
+**The empty default sees cordoned nodes and nothing else, and that is a real
+limit rather than a formality.** An earlier draft of this section claimed both
+cluster-autoscaler and Karpenter cordon a node in addition to tainting it, so
+that an empty list would still see autoscaler-driven scale-in a moment later.
+That is wrong for cluster-autoscaler, which taints
+`ToBeDeletedByClusterAutoscaler:NoSchedule` and deletes the node without setting
+`spec.unschedulable` unless `--cordon-node-before-terminating` is turned on, and
+it defaults to off. An operator running cluster-autoscaler therefore has to pass
+`-drain-taint ToBeDeletedByClusterAutoscaler` to get anything out of this
+milestone on a scale-in.
+
+The default stays empty regardless. A default that reacts to another project's
+taint key would couple this operator to a vocabulary that project is free to
+change, which is the coupling a configurable list was chosen to avoid — and a
+justification resting on a third party's flag defaults rots whatever is written
+here today. So the code says only what stays true: `spec.unschedulable` is
+always honoured, an autoscaler may taint without cordoning, and that is what the
+list is for. Which key to set for which autoscaler belongs in
+`docs/known-issues.md`, where it can be corrected without a code change.
 
 ### 3.2 How the operator learns it
 
