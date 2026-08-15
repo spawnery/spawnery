@@ -2514,3 +2514,52 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 		t.Errorf("the draining proxy was told ready=%v after the rollback, want false", got)
 	}
 }
+
+func TestProxyOccupied(t *testing.T) {
+	tests := []struct {
+		name string
+		snap agent.Snapshot
+		want bool
+	}{
+		{"known empty on a live stream", agent.Snapshot{Players: 0, Connected: true}, false},
+		{"players on a live stream", agent.Snapshot{Players: 3, Connected: true}, true},
+		{"a stale count counts as occupied", agent.Snapshot{Players: 0, PlayersStale: true, Connected: true}, true},
+		{"a dead stream counts as occupied", agent.Snapshot{Players: 0, Connected: false}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := proxyOccupied(tc.snap); got != tc.want {
+				t.Fatalf("proxyOccupied() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestTheOccupiedLabelFollowsTheProxyPlayerCount is what makes the budget in
+// Task 7 mean anything: the selector matches occupied pods and stops matching
+// when they empty.
+func TestTheOccupiedLabelFollowsTheProxyPlayerCount(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	f.reportProxyPlayers(t, pods[0], 4)
+	f.reportProxyPlayers(t, pods[1], 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	byName := map[string]corev1.Pod{}
+	for _, p := range f.proxyPods("gateway") {
+		byName[p.Name] = p
+	}
+	if _, ok := byName[pods[0].Name].Labels[podspec.LabelOccupied]; !ok {
+		t.Errorf("pod %s has players and no occupied label; the budget would let it be evicted", pods[0].Name)
+	}
+	if _, ok := byName[pods[1].Name].Labels[podspec.LabelOccupied]; ok {
+		t.Errorf("pod %s is known empty and still labelled occupied; the budget would block a drain for nobody", pods[1].Name)
+	}
+}

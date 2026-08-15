@@ -267,6 +267,12 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// Before setStatus, and — from Task 7 — before reconcileProxyPDB: the
+	// budget's selector has to find the label already on the pods it is
+	// sizing minAvailable for, on the same pass.
+	if err := r.syncOccupiedLabels(ctx, pods); err != nil {
+		return ctrl.Result{}, err
+	}
 	r.setStatus(group, pods)
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.writeStatus(ctx, group)
 }
@@ -302,6 +308,53 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 	// by -- a bare group.Name would collide across namespaces.
 	r.Expectations.observePods(group.Namespace+"/"+group.Name, live)
 	return live, nil
+}
+
+// proxyOccupied is the single occupancy rule for a proxy pod. Both sides of
+// the PodDisruptionBudget are computed from it: this reconciler labels pods
+// with it and sizes the budget's minAvailable from the same answer, and the
+// two have to agree pod for pod.
+//
+// A proxy has no wasRegistered qualifier the way a server does — it sits behind
+// the Service and players reach it directly — so for a running pod there is no
+// state in which a stale count is safe to read as empty. Staleness alone is
+// enough, and so is a stream that is down: Velocity goes on serving the
+// sessions it holds after its agent's stream breaks, so a count nobody is
+// updating says nothing about who is on it.
+func proxyOccupied(snap agent.Snapshot) bool {
+	return !(snap.Players == 0 && !snap.PlayersStale && snap.Connected)
+}
+
+// syncOccupiedLabels keeps podspec.LabelOccupied on the group's pods in step
+// with proxyOccupied, so the PodDisruptionBudget's selector and its
+// minAvailable are computed from the same answer pod for pod. A budget that
+// counts fewer pods than carry the label hands the eviction API a disruption
+// to spend on an occupied one.
+func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []corev1.Pod) error {
+	for i := range pods {
+		pod := &pods[i]
+		occupied := proxyOccupied(r.Agents.Lookup(string(pod.UID)))
+		_, labelled := pod.Labels[podspec.LabelOccupied]
+		// No write when nothing changed: this runs every five seconds per pod,
+		// and a patch per pass would be a write per pod per pass for the life
+		// of the group.
+		if occupied == labelled {
+			continue
+		}
+		patched := pod.DeepCopy()
+		if occupied {
+			if patched.Labels == nil {
+				patched.Labels = map[string]string{}
+			}
+			patched.Labels[podspec.LabelOccupied] = "true"
+		} else {
+			delete(patched.Labels, podspec.LabelOccupied)
+		}
+		if err := r.Patch(ctx, patched, client.MergeFrom(pod)); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // reconcileReplicas creates or removes pods until the count matches the spec,
@@ -600,9 +653,9 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// So the deadline below is the only path here that disconnects anyone.
 	//
 	// Empty means the count is fresh, zero, and reported by a stream that is
-	// still up. A count we cannot trust is treated as occupied — the single
-	// occupancy rule of this repository, the one candidates.go's isOccupied
-	// states and the Server controller obeys. It matters more here than the
+	// still up. A count we cannot trust is treated as occupied — proxyOccupied
+	// above states it for a proxy pod, on the same principle candidates.go's
+	// isOccupied states for the Server controller. It matters more here than the
 	// phrasing suggests: an agent's gRPC stream breaking does not disconnect
 	// anybody, because Velocity goes on serving the sessions it already holds,
 	// and the registry then reports a pod it has never heard of and a pod
@@ -653,7 +706,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		expired := dated && r.Clock().Sub(since) >= group.DrainTimeout()
 
 		switch {
-		case players == 0 && !snap.PlayersStale && snap.Connected:
+		case !proxyOccupied(snap):
 			// Known empty: nobody is on it, so removing it costs nothing.
 		case expired:
 			// The one path in this milestone that disconnects anybody. It is
