@@ -58,6 +58,12 @@ type ServerView struct {
 	// survives the escalation to Draining that maxStaleSeconds can force —
 	// which is what tells that drain apart from one a scale-down started.
 	Retire bool
+	// Condemned is true when this server's pod sits on a node that is on its
+	// way out of service. Set by collectViews from pod.spec.nodeName and the
+	// operator's departing-node test; the view carries the conclusion so the
+	// sizing rules stay free of node vocabulary, the same way Stale carries a
+	// conclusion about the player count.
+	Condemned bool
 	// CreatedAt is the creation timestamp of the Server object.
 	CreatedAt time.Time
 	// FailedAt is status.failedAt: when this server entered phase Failed.
@@ -169,8 +175,14 @@ func (v ServerView) mayHavePlayers() bool {
 // the group's size is exactly what makes the spare-slot rule order a
 // replacement for a server a rolling update has retired. The generation never
 // enters the capacity arithmetic; this does the work instead.
+//
+// Condemned is in here for the same reason Retiring is. Dropping out of the
+// group's size is what makes the spare-slot rule order the replacement, in
+// the same pass, and it is also what stops the deletion nomination from
+// naming a server that is already going by another route.
 func (v ServerView) leaving() bool {
-	return v.Phase == phase.Draining || v.Phase == phase.Terminating || v.Phase == phase.Retiring
+	return v.Phase == phase.Draining || v.Phase == phase.Terminating ||
+		v.Phase == phase.Retiring || v.Condemned
 }
 
 // countsTowardSize reports whether this server holds the group at its floor.

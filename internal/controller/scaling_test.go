@@ -1254,3 +1254,93 @@ func TestProvisionalCapacityStillCreditsAStartingServer(t *testing.T) {
 		t.Errorf("provisionalCapacity = %d, want the full 100 for a starting server", got)
 	}
 }
+
+func TestDecideSizeCondemns(t *testing.T) {
+	t.Run("a condemned server is named even with no surplus", func(t *testing.T) {
+		in := ScalingInputs{
+			Views: []ServerView{
+				{Name: "a", Phase: phase.Ready, Slots: 10, Players: 3},
+				{Name: "b", Phase: phase.Ready, Slots: 10, Players: 3, Condemned: true},
+			},
+			MinReplicas: 2, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		if len(got.Condemn) != 1 || got.Condemn[0] != "b" {
+			t.Fatalf("Condemn = %v, want [b]", got.Condemn)
+		}
+		if got.Surplus != 0 {
+			t.Fatalf("Surplus = %d, want 0: a node drain is not a scale-down", got.Surplus)
+		}
+	})
+
+	t.Run("minReplicas does not hold a condemned server back", func(t *testing.T) {
+		in := ScalingInputs{
+			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true}},
+			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		if len(got.Condemn) != 1 || got.Condemn[0] != "a" {
+			t.Fatalf("Condemn = %v, want [a]", got.Condemn)
+		}
+	})
+
+	t.Run("the replacement is asked for in the same pass", func(t *testing.T) {
+		// The only server is condemned, so it stops holding the floor and
+		// stops contributing capacity: the same pass that condemns it must
+		// order its replacement.
+		in := ScalingInputs{
+			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true}},
+			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		if got.Create < 1 {
+			t.Fatalf("Create = %d, want at least 1", got.Create)
+		}
+	})
+
+	t.Run("all condemned servers go in one pass", func(t *testing.T) {
+		in := ScalingInputs{
+			Views: []ServerView{
+				{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true},
+				{Name: "b", Phase: phase.Ready, Slots: 10, Condemned: true},
+				{Name: "c", Phase: phase.Ready, Slots: 10},
+			},
+			MinReplicas: 3, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		if len(got.Condemn) != 2 {
+			t.Fatalf("Condemn = %v, want two names", got.Condemn)
+		}
+	})
+
+	t.Run("Delete and Condemn never name the same server", func(t *testing.T) {
+		// A group over its ceiling with a condemned server in it: the surplus
+		// rule must not nominate the pod the node drain is already taking.
+		in := ScalingInputs{
+			Views: []ServerView{
+				{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true},
+				{Name: "b", Phase: phase.Ready, Slots: 10},
+				{Name: "c", Phase: phase.Ready, Slots: 10},
+			},
+			MinReplicas: 1, MaxReplicas: 2, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		for _, d := range got.Delete {
+			for _, c := range got.Condemn {
+				if d == c {
+					t.Fatalf("%q is in both Delete and Condemn", d)
+				}
+			}
+		}
+	})
+
+	t.Run("no condemned servers leaves Condemn nil", func(t *testing.T) {
+		in := ScalingInputs{
+			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10}},
+			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		if got := DecideSize(in); got.Condemn != nil {
+			t.Fatalf("Condemn = %v, want nil", got.Condemn)
+		}
+	})
+}

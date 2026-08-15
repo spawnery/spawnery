@@ -98,6 +98,13 @@ type SizeDecision struct {
 	// this field is the explicit signal the caller that builds the
 	// operator-facing ScalingLimited message needs to tell them apart.
 	ColdStartBlocked bool
+	// Condemn names the servers whose node is departing. They are deleted
+	// unconditionally: not bounded by Surplus, not held back by MinReplicas,
+	// and all of them in one pass. It is a separate field from Delete so the
+	// two reasons never share a number — Delete is the scale-down nomination
+	// and Surplus is what the ceiling asked for, and a node drain is about
+	// neither.
+	Condemn []string
 }
 
 // provisionalCapacity is one server's contribution to the figure the scale-up
@@ -178,7 +185,10 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 func deletable(in ScalingInputs) []ServerView {
 	out := make([]ServerView, 0, len(in.Views))
 	for _, v := range in.Views {
-		if in.PendingDeletes[v.Name] || in.PendingRetires[v.Name] || v.Retire {
+		// Condemned is skipped for the same reason as Retire: this server is
+		// already leaving by another route, and naming it here would put it in
+		// Delete and Condemn at once.
+		if in.PendingDeletes[v.Name] || in.PendingRetires[v.Name] || v.Retire || v.Condemned {
 			continue
 		}
 		out = append(out, v)
@@ -384,12 +394,40 @@ func staleRemains(in ScalingInputs) bool {
 	return false
 }
 
-// DecideSize is the group's sizing rule.
+// DecideSize is the group's sizing rule, plus the one removal that is not a
+// sizing decision at all.
+//
+// Condemnation rides alongside the size decision rather than inside it. The
+// chain in decideSize is an ordered set of early returns — capacity, then the
+// ceiling, then demand — and a node drain answers to none of those three: the
+// node is leaving with or without the group's consent, so no branch may
+// decline it and no branch may bound it. Attaching it to whichever decision
+// comes back keeps that independence visible and keeps the chain unchanged.
+func DecideSize(in ScalingInputs) SizeDecision {
+	decision := decideSize(in)
+	decision.Condemn = condemned(in)
+	return decision
+}
+
+// condemned names every server whose node is departing and whose removal has
+// not already been reserved. Nil when there are none, so a caller can tell
+// "nothing to condemn" from "an empty list was built".
+func condemned(in ScalingInputs) []string {
+	var out []string
+	for _, v := range in.Views {
+		if v.Condemned && !in.PendingDeletes[v.Name] {
+			out = append(out, v.Name)
+		}
+	}
+	return out
+}
+
+// decideSize is the group's sizing rule.
 //
 // The order matters and is the design's, not an accident: capacity first, then
 // the ceiling, then demand. A group that is short of capacity never also
 // shrinks in the same pass.
-func DecideSize(in ScalingInputs) SizeDecision {
+func decideSize(in ScalingInputs) SizeDecision {
 	alive := in.PendingCreates
 	provisional := in.PendingCreates * in.MaxPlayers
 	for _, v := range in.Views {
