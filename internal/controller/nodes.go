@@ -68,9 +68,9 @@ func IsDeparting(node *corev1.Node, taintKeys []string) bool {
 // on no node; a Get that fails is a node we cannot read, and a group must not
 // be emptied on the strength of a cache miss. The next reconcile asks again,
 // so a false answer here costs at most a delay and never a wrong deletion.
-// ServerGroupReconciler watches Node and maps an event onto the groups with
-// pods on it, so that delay is the time a cordon or taint takes to reach the
-// cache rather than a whole resync interval.
+// ServerGroupReconciler and ProxyGroupReconciler each watch Node and map an
+// event onto the groups with pods on it, so that delay is the time a cordon
+// or taint takes to reach the cache rather than a whole resync interval.
 func nodeDeparting(ctx context.Context, reader client.Reader, nodeName string, taintKeys []string) bool {
 	if nodeName == "" {
 		return false

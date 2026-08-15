@@ -34,7 +34,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -303,7 +305,8 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 }
 
 // reconcileReplicas creates or removes pods until the count matches the spec,
-// and replaces pods whose rendered shape no longer matches the group.
+// and replaces pods that are stale: whose rendered shape no longer matches
+// the group, or that sit on a node that is going away.
 //
 // Which pods go is DecideRollout's answer, not this function's: stale before
 // current, then the fewest players, then the newest. That replaces a rule
@@ -333,8 +336,14 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		snap := r.Agents.Lookup(string(pods[i].UID))
 		_, dated := drainingSince(&pods[i])
 		views = append(views, ProxyView{
-			Name:         pods[i].Name,
-			Stale:        pods[i].Labels[podspec.LabelPodHash] != wantHash,
+			Name: pods[i].Name,
+			// Two ways to be out of date, and the rollout does not distinguish
+			// them: a pod whose rendered shape no longer matches the group, and
+			// a pod on a node that is going away. Both have to be replaced by a
+			// pod somewhere else, one at a time, without disconnecting anyone —
+			// which is the sentence DecideRollout already implements.
+			Stale: pods[i].Labels[podspec.LabelPodHash] != wantHash ||
+				nodeDeparting(ctx, r.Client, pods[i].Spec.NodeName, r.DrainTaintKeys),
 			Ready:        isPodReady(&pods[i]),
 			Draining:     dated,
 			Players:      snap.Players,
@@ -1021,6 +1030,59 @@ func (r *ProxyGroupReconciler) writeStatus(ctx context.Context, group *spawneryv
 	return r.Status().Update(ctx, group)
 }
 
+// groupsOnNode maps a Node event onto the ProxyGroups with pods on that node.
+//
+// Mirrors ServerGroupReconciler.groupsOnNode: the five-second resync would
+// find a cordoned node on its own, and the watch is what makes the answer
+// immediate. It lists this operator's pods and filters by node rather than
+// asking for a spec.nodeName field index, for the same reason that function
+// gives — an index shared by two controllers would have to be registered
+// once, registering it twice fails at manager start, and a label-scoped list
+// over a warm cache is cheaper than that coordination is worth. The role
+// label pins RoleProxy rather than only ManagedBy, so a server pod that
+// happens to share a node is never in the candidate set to begin with —
+// neither network nor group is known yet at this point, which is what
+// r.pods's podspec.ProxyLabels selector has and this one does not, so the
+// two fields it can name are the ones ProxyLabels always sets regardless.
+func (r *ProxyGroupReconciler) groupsOnNode(ctx context.Context, obj client.Object) []reconcile.Request {
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods, client.MatchingLabels{
+		podspec.LabelManagedBy: podspec.ManagedByValue,
+		podspec.LabelRole:      podspec.RoleProxy,
+	}); err != nil {
+		// Enqueue nothing rather than guess. A map function has no way to
+		// return an error and no queue of its own to retry from, so dropping
+		// the event is the only option here; the five-second resync is the
+		// fallback, and it reaches the same conclusion from reconcileReplicas.
+		// That costs this cordon its immediacy, which is the whole point of
+		// the watch, so it is logged rather than swallowed — the same rule
+		// nodeDeparting follows when it cannot read a node, and the same
+		// choice ServerGroupReconciler.groupsOnNode makes for the same reason.
+		log.FromContext(ctx).V(1).Info("listing proxy pods for a node event failed, "+
+			"leaving this cordon to the resync", "node", obj.GetName(), "error", err)
+		return nil
+	}
+	seen := map[types.NamespacedName]bool{}
+	var out []reconcile.Request
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Spec.NodeName != obj.GetName() {
+			continue
+		}
+		group := pod.Labels[podspec.LabelGroup]
+		if group == "" {
+			continue
+		}
+		key := types.NamespacedName{Name: group, Namespace: pod.Namespace}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, reconcile.Request{NamespacedName: key})
+	}
+	return out
+}
+
 // SetupWithManager registers the controller.
 func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// A construction site that forgets either of these would otherwise panic
@@ -1043,5 +1105,6 @@ func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
 		Complete(r)
 }

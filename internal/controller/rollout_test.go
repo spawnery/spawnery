@@ -25,6 +25,25 @@ func at(min int) time.Time {
 	return time.Date(2026, 8, 14, 12, min, 0, 0, time.UTC)
 }
 
+// Releasing the node mid-flight leaves the work already begun to finish: the
+// marked pod is draining and not Ready, pick sorts it first, and the surplus
+// branch keeps the mark on what pick returns. Spec §3.6 expects this to fall
+// out of the existing rules; this test is what establishes it.
+func TestDecideRolloutKeepsTheMarkAfterUncordon(t *testing.T) {
+	pods := []ProxyView{
+		{Name: "old", Stale: false, Ready: false, Draining: true, Players: 2},
+		{Name: "new", Stale: false, Ready: true},
+		{Name: "other", Stale: false, Ready: true},
+	}
+	got := DecideRollout(pods, 2)
+	if got.Create != 0 {
+		t.Fatalf("Create = %d, want 0", got.Create)
+	}
+	if len(got.Drain) != 0 {
+		t.Fatalf("Drain = %v, want none: the draining guard holds", got.Drain)
+	}
+}
+
 func TestDecideRollout(t *testing.T) {
 	tests := []struct {
 		name     string

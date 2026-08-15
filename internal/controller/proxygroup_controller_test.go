@@ -1233,6 +1233,59 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	}
 }
 
+// TestAProxyOnACordonedNodeIsReplaced is the proxy half of the milestone. It
+// asserts the order, not just the outcome: the replacement is ready before
+// anything is withdrawn, which is what keeps the group's ready capacity from
+// dipping while a player is connected.
+func TestAProxyOnACordonedNodeIsReplaced(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	going := f.ensureNode(t, "node-going-"+f.ns, false)
+	staying := f.ensureNode(t, "node-staying-"+f.ns, false)
+	f.bindPodToNode(t, &pods[0], going.Name)
+	f.bindPodToNode(t, &pods[1], staying.Name)
+	f.ensureNode(t, going.Name, true)
+
+	// The surge pod comes first, and nothing is marked while it is unready.
+	f.reconcileProxyGroup(r, "gateway")
+	after := f.proxyPods("gateway")
+	if len(after) != 3 {
+		t.Fatalf("proxy pods = %d after the cordon, want 3 — the replacement must exist before anything is marked", len(after))
+	}
+	for i := range after {
+		if _, dated := drainingSince(&after[i]); dated {
+			t.Fatalf("pod %s was marked while the replacement is still unready", after[i].Name)
+		}
+	}
+
+	// Once it is ready, the pod on the departing node is the one that goes.
+	for i := range after {
+		f.markProxyPodReady(t, &after[i])
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	var marked []string
+	for _, p := range f.proxyPods("gateway") {
+		if _, dated := drainingSince(&p); dated {
+			marked = append(marked, p.Name)
+		}
+	}
+	if len(marked) != 1 || marked[0] != pods[0].Name {
+		t.Fatalf("marked = %v, want exactly [%s]: the pod on the departing node and no other", marked, pods[0].Name)
+	}
+}
+
 // reportProxyPlayers puts a player count on a proxy pod the way that pod's own
 // agent would, and proves the registry took it.
 //
