@@ -811,40 +811,67 @@ is what it built and what the next milestone finds in place.
 - **The absolute-word sweep is this repository's one countermeasure that has
   caught this milestone's signature defect prospectively, and it needs a
   correction before the next milestone inherits it broken.** The sweep —
-  `git diff -U0 | grep -nE '\b(never|only|nothing|exactly one|cannot|always|
-  every)\b'` over a staged diff, then re-deriving each hit against the code
-  beneath it — is what this milestone leaned on to catch a sentence, a
-  comment or a test name whose claim had outlived what the code actually
-  does: sixteen instances across 4c-3 alone, four of them introduced *by the
-  fix for another instance*, the same shape recurring one layer down each
-  time a sentence was rewritten to be more precise and the rewrite's own new
-  clause went unchecked. **The grep has to be case-insensitive, and for this
-  entire milestone it was not.** A sentence-initial capitalised "Only" went
-  straight through a case-sensitive sweep — in a sentence that was itself
-  written to fix an overclaim the sweep had just caught, and that opened with
-  the very word the sweep exists to find. That is not an edge case: a
-  sentence *opening* with an absolute word is where an overclaim is likeliest
-  to sit, since the word states the sentence's whole force before anything
-  qualifies it, and the case-sensitive form was blind to exactly that
-  position. **Two other shapes the sweep does not catch at all, and each
-  needs its own separate pass, because grep only ever reads the lines a diff
-  touches — added or removed — never a line that sat there unchanged.** A
-  claim in the present tense about wiring that does not exist yet — "the
-  watch and the resync bring the answer back within seconds," written before
-  anything watched anything — reads as ordinary present-tense prose and
-  contains none of the sweep's flagged words; the same sentence can just as
-  easily go stale from the other direction, once the wiring it once
-  correctly denied has since been built and nobody returns to update it,
-  which is exactly what happened to this one once two later tasks registered
-  the watch it had described before either existed. And a new addition can falsify an
-  *old* sentence sitting undisturbed nearby: a fixture comment said NodePorts
-  were cluster-scoped "unlike every other object these tests create," true
-  when it was written and false the moment a later helper started creating a
-  `Node` — itself cluster-scoped — beside it. A diff-based grep never
-  surfaces that: the sentence that became wrong is not among the lines that
-  changed, only the addition sitting next to it is. Neither was found by the
-  sweep or any other mechanical pass; both were found by a person reading the
-  surrounding prose rather than only the diff in front of them.
+  `git diff -U0 | grep -nEi '\b(no|none|any|all|both|never|only|nothing|
+  exactly one|cannot|always|every)\b'` over a staged diff, then re-deriving
+  each hit against the code beneath it — is what this milestone leaned on to
+  catch a sentence, a comment or a test name whose claim had outlived what
+  the code actually does: seventeen instances across 4c-3 alone, six of them
+  introduced *by the fix for another instance*, the same shape recurring one
+  layer down each time a sentence was rewritten to be more precise and the
+  rewrite's own new clause went unchecked. **The grep has to be
+  case-insensitive, and for this entire milestone it was not.** A
+  sentence-initial capitalised "Only" went straight through a case-sensitive
+  sweep — in a sentence that was itself written to fix an overclaim the sweep
+  had just caught, and that opened with the very word the sweep exists to
+  find. That is not an edge case: a sentence *opening* with an absolute word
+  is where an overclaim is likeliest to sit, since the word states the
+  sentence's whole force before anything qualifies it, and the
+  case-sensitive form was blind to exactly that position. **The word list
+  itself was too short, and stayed too short even after the case fix — `no`,
+  `none`, `any`, `all` and `both` were missing, and the seventeenth instance
+  is the worked example of why that mattered.** A known-issues.md heading
+  read "No proxy in any group is evictable for the first 15 seconds after the
+  operator starts" — a claim its own body contradicted four lines down, where
+  a proxy whose agent reconnects early and reports zero players carries no
+  label and is evictable well inside that window. None of `never`, `only`,
+  `nothing`, `exactly one`, `cannot`, `always` or `every` appears anywhere in
+  it; only `no` and `any` do, and neither was on the list. It was found the
+  same way the two shapes below are found: by a person reading the
+  surrounding prose in a document about this exact defect, not by any
+  mechanical pass — which is the strongest argument for widening the list
+  rather than trusting it to be exhaustive. **Two other shapes the sweep does
+  not catch at all, and each needs its own separate pass, because grep only
+  ever reads the lines a diff touches — added or removed — never a line that
+  sat there unchanged.** A claim in the present tense about wiring that does
+  not exist yet — "the watch and the resync bring the answer back within
+  seconds," written before anything watched anything — reads as ordinary
+  present-tense prose and contains none of the sweep's flagged words; the
+  same sentence can just as easily go stale from the other direction, once
+  the wiring it once correctly denied has since been built and nobody
+  returns to update it, which is exactly what happened to this one once two
+  later tasks registered the watch it had described before either existed.
+  And a new addition can falsify an *old* sentence sitting undisturbed
+  nearby: a fixture comment said NodePorts were cluster-scoped "unlike every
+  other object these tests create," true when it was written and false the
+  moment a later helper started creating a `Node` — itself cluster-scoped —
+  beside it. A diff-based grep never surfaces that: the sentence that became
+  wrong is not among the lines that changed, only the addition sitting next
+  to it is. Neither was found by the sweep or any other mechanical pass;
+  both were found by a person reading the surrounding prose rather than only
+  the diff in front of them.
+
+  The sixth fix-introduced instance was found later than the other five, and
+  is worth naming because the commit that fixed it misdescribes its own
+  history. `8ebb153` ("one tail for the three ProxyGroup refusals") frames
+  the bug it fixes — a `protectPlayersOnly` error skipping the status write —
+  as something "the triplication hid," which reads as a hazard that had sat
+  in the three copied blocks since before this milestone. It had not: those
+  blocks did not call `protectPlayersOnly` at all until `ee22d5e`, two
+  commits earlier in the same wave, added the call and, with it, the early
+  return that skipped `writeStatus` on its error. `8ebb153` fixed a defect
+  `ee22d5e` introduced, not one the triplication had been quietly carrying —
+  the same shape as the other five, one fix's new clause going unchecked by
+  the next, just discovered a commit later than the rest.
 
 - **The whole-branch review's fix wave changed four things about behaviour,
   and each is the same shape: a half that was correct in its own task, wrong
@@ -855,16 +882,24 @@ is what it built and what the next milestone finds in place.
   pods, so a `ServerGroup` sharing its name with a `ProxyGroup` selected the
   other's occupied proxies while counting only its own servers, and the
   eviction API could then take an occupied *server* pod. (2) Condemnation and
-  both budgets moved below the `Network` gate. `size()` had been called only
-  under `networkUsable && IsEphemeral`, and `syncOccupiedLabels`,
-  `reconcileProxyPDB` and `reportNodeDraining` all sat below the
-  `ProxyGroup`'s own early returns, so a group whose `Network` broke published
-  `NodeDraining: True` and condemned nobody, and a proxy that was empty at the
-  last good pass stayed at `minAvailable: 0` however many players joined
-  afterwards. The rule is now written at the gate in
-  `ServerGroupReconciler.Reconcile`: a step that keeps the eviction API off an
-  occupied pod, or that moves players off a node that is going away, does not
-  depend on the `Network`. (3) `proxyOccupiedForBudget` splits the occupancy
+  the `ProxyGroup`'s budget moved below the `Network` gate; the `ServerGroup`'s
+  budget was already there. `size()` had been called only under
+  `networkUsable && IsEphemeral`, and `syncOccupiedLabels`, `reconcileProxyPDB`
+  and `reportNodeDraining` all sat below the `ProxyGroup`'s own early returns,
+  so a group whose `Network` broke published `NodeDraining: True` and
+  condemned nobody, and a proxy that was empty at the last good pass stayed at
+  `minAvailable: 0` however many players joined afterwards. `reconcilePDB`,
+  the `ServerGroup`'s own budget, never moved, because it was never gated in
+  the first place: it sat outside the `networkUsable && IsEphemeral`
+  conditional before this milestone too, on the reasoning the comment above
+  its call site already gave — "the PodDisruptionBudget that keeps the
+  eviction API off the occupied pods, and the published status — has nothing
+  to do with the Network, so a group whose Network was deleted or rejected
+  must keep doing both." This milestone only restated that reasoning as the
+  rule now written at the gate in `ServerGroupReconciler.Reconcile`: a step
+  that keeps the eviction API off an occupied pod, or that moves players off
+  a node that is going away, does not depend on the `Network`. (3)
+  `proxyOccupiedForBudget` splits the occupancy
   question by consumer. `Registry.Lookup` calls an unknown pod occupied, which
   the *deletion wait* can afford because `spec.drain.timeoutSeconds` bounds
   it, and a *budget* cannot, because nothing bounds that — a crash-looping

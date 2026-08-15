@@ -1484,8 +1484,11 @@ would after any other backoff.
 
 The same holds, for the same reason and by the same ruling, when a group's
 `Network` has been deleted or has lost the one-per-namespace contest.
-`Reconcile` calls `size()` on both sides of that gate: the sizing arithmetic
-and the creates, deletes and retirements it produces wait for a usable
+`Reconcile` calls `size()` once, on every pass, and passes it a `mayResize`
+flag that is false whenever the `Network` is unusable; the branch is inside
+`size()` itself, not at the call site. When `mayResize` is false, `size()`
+skips straight to condemning and returns — the sizing arithmetic and the
+creates, deletes and retirements it would otherwise produce wait for a usable
 `Network`, and the condemnation does not. A group in that state condemns the
 servers on a departing node and cannot build replacements at all until the
 `Network` is fixed — a longer wait than a backoff window, and an unbounded
@@ -1497,29 +1500,54 @@ was worse in a way that is easy to miss — the group published
 drain` hanging on an occupied pod indefinitely, which is the exact failure
 this milestone exists to end.
 
-**A `ProxyGroup` whose `Network` is broken keeps its PodDisruptionBudget, but
-refreshes it six times more slowly.** `Reconcile`
+**A `ProxyGroup` whose `Network` is broken cannot be drained at all.** Its
+budget still protects players, but nothing moves them off. `Reconcile`
 (`internal/controller/proxygroup_controller.go`) gives up before
 `reconcileReplicas` on three paths — a missing `Network`, one that is not
 `Accepted`, and an `expose.type` this milestone refuses — and each of them
-now calls `protectPlayersOnly`, which re-derives the `spawnery.cloud/occupied`
-labels, re-sizes the budget from them, and republishes the `NodeDraining`
-condition. What it cannot do is run at the ordinary five-second cadence:
-those paths requeue at `networkRetryInterval` (30 s), so a proxy that picks
-up its first player while its group is in that state waits up to 30 seconds
-to be counted into `minAvailable`, against 5 on a healthy group. Nothing
-watches the agent registry — occupancy is in-process state, not an API
-object — so no event corresponds to a player joining; the group's other
-watches fire on `Pod`, `Node`, `Service` and `ConfigMap` changes, and a
-reconcile any of those happens to trigger brings the budget forward as a side
-effect rather than because anybody asked it to. The
-window is bounded and the previous behaviour was not: before this, such a
-group stopped maintaining its budget entirely, and a proxy that was empty at
-the last good pass stayed at `minAvailable: 0` with no label on it however
-many players joined afterwards.
+calls `protectPlayersOnly` instead, which re-derives the
+`spawnery.cloud/occupied` labels, re-sizes the budget from them, and
+republishes the `NodeDraining` condition. What `protectPlayersOnly` does not
+do is anything `reconcileReplicas` owns: `markDraining`, the readiness
+withdrawal (`Proxies.SetReady`) that stops new connections from arriving, and
+the drain-deadline deletion that finally removes an empty or timed-out pod
+all live inside `reconcileReplicas` and run nowhere else. So such a group
+publishes `NodeDraining: True` naming the node, sizes `minAvailable` to cover
+every occupied proxy — which now makes the eviction API refuse every attempt
+to take the occupied proxy on the departing node — and never marks that
+proxy draining, never starts its removal deadline, and never replaces it.
+`kubectl drain` cannot complete against a `ProxyGroup` in this state until
+its `Network` is fixed; the budget refuses the disruption, it does not act
+on it.
 
-**No proxy in any group is evictable for the first 15 seconds after the
-operator starts.** `proxyOccupiedForBudget`
+That is a change from before this milestone, and it is worth being precise
+about what moved and what did not. In the case that matters most, the same
+group already hung: a proxy that already had a player was already counted
+(its frozen `minAvailable` was at least 1 against a pod the kubelet still
+called Ready), so `disruptionsAllowed` was already 0 and the eviction API
+already refused it, node drain or not. The one case that moved is the proxy
+that was empty at the group's last good pass and picked up a player
+afterwards: before, nothing on these paths re-derived the label or the
+budget, so that pod sat at `minAvailable: 0` with no label and the eviction
+API could take it — a disconnect. Now `protectPlayersOnly` counts it and the
+eviction API refuses it too — a hang instead of a disconnect. That trade is
+deliberate, for the same reason the create-backoff case above accepts a
+longer wait: a hung eviction recovers once the `Network` is fixed, and a
+disconnected player does not.
+
+The cadence cost the previous version of this entry described still applies
+on top: those three early-return paths requeue at `networkRetryInterval`
+(30 s) rather than the ordinary five-second `resyncInterval`, so even the
+label and budget `protectPlayersOnly` does maintain lag behind a healthy
+group's by up to 6×. Nothing watches the agent registry — occupancy is
+in-process state, not an API object — so no event corresponds to a player
+joining; the group's other watches fire on `Pod`, `Node`, `Service` and
+`ConfigMap` changes, and a reconcile any of those happens to trigger brings
+the budget forward as a side effect rather than because anybody asked it to.
+
+**A proxy the registry has not yet heard from is not evictable for up to 15
+seconds after the operator starts — and that window can matter well past the
+fifteenth second.** `proxyOccupiedForBudget`
 (`internal/controller/proxygroup_controller.go`) is what sizes a
 `ProxyGroup`'s budget and writes the `spawnery.cloud/occupied` label, and it
 treats a pod the registry has never heard of as occupied while
@@ -1534,10 +1562,53 @@ stalls for up to 15 seconds beyond whatever it was already waiting for. That
 is the deliberate direction: the alternative reads a fleet of Ready proxies
 full of players as empty, at exactly the moment a drain is retrying
 evictions in a loop — and an operator evicted off the node being drained is
-an ordinary way to arrive there. Once an agent reconnects its pod is judged
-on what it reports, and a proxy whose agent never arrives at all stops being
-counted when the grace expires, which is what keeps a `CrashLoopBackOff`
-proxy from wedging its group's evictions permanently.
+an ordinary way to arrive there. A proxy whose agent reconnects inside the
+grace and reports, say, zero players on a live stream is judged on that
+report immediately: it carries no label and is evictable well before the
+fifteenth second.
+
+The 15-second figure is a floor on the stall, not a ceiling on how late an
+agent can still be un-dialled, and that gap is worth naming rather than
+leaving as an implicit risk. The agents' own reconnect backoff
+(`SessionLoop.backoffMillis`,
+`agent/common/src/main/kotlin/cloud/spawnery/agent/SessionLoop.kt`) is
+`min(30 s, 1 s << attempt)` with jitter and no give-up point, reset only when
+the operator actually answers a stream. After an operator outage long enough
+to push agents up against that 30-second cap, a meaningful share of the
+fleet can still be un-dialled at second 15 — not because those agents ever
+stop trying, but because they are mid-backoff — and every one of them drops
+out of `minAvailable` at the same fifteenth second regardless of how much
+longer its own reconnect is going to take. The grace does not distinguish a
+proxy whose agent never arrives from one whose agent arrives at, say, second
+22: both are treated identically until the moment either one actually
+reports. That identical treatment is what keeps a `CrashLoopBackOff` proxy
+from wedging its group's evictions permanently — at the cost of the same
+30-second tail applying to every other proxy still reconnecting.
+
+This is recorded as a decision, not left as an unweighed risk. A tighter
+bound needs the distribution of how long agents actually take to reconnect
+after a real outage, and nobody has measured it; 15 seconds is a number
+chosen for being finite, not one derived from the agents' own behaviour. It
+sits between two failures neither of which it is allowed to become: no grace
+at all, and a grace that never ends. The alternative that was considered and
+rejected was the first of those — qualifying occupancy on `Known` alone, with
+no grace period — which would report every un-dialled proxy as unoccupied the
+instant the operator starts, collapsing every group's budget to
+`minAvailable: 0` at second zero and exposing a live, player-carrying fleet to
+eviction at exactly the moment an operator restart is likeliest to coincide
+with a drain; fifteen seconds of blanket protection is safer than none. The
+second failure is the one this section's own reasoning names for the grace
+existing at all: an unbounded grace would let a proxy whose agent never
+arrives — `CrashLoopBackOff`, or simply gone — wedge its group's evictions
+permanently, which is the exact failure this mechanism exists to end. Fifteen
+seconds sits between those two without being derived from either, and the
+30-second backoff cap is why it does not fully close the gap: a proxy that is
+genuinely still reconnecting, not dead, can lose its protection at the
+fifteenth second before it has had a chance to answer, and nothing after that
+point tells its group's budget the difference from the pod that never will.
+That residual is not eliminated by the choice of a bound, only left bounded
+by one. A number derived from a measured reconnect distribution would narrow
+it further; that is work for a later milestone.
 
 **A node holding a whole group empties it at once**, so its players go to the
 fallback groups rather than to the group's own replacements, which are not
