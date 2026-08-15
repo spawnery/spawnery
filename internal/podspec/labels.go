@@ -115,6 +115,23 @@ func GroupConfigMapName(group, role string) string {
 	return group + "-" + role + "-config"
 }
 
+// GroupPDBName is the PodDisruptionBudget a group's controller keeps sized to
+// its occupied pods, following GroupConfigMapName's scheme for the same
+// reason that function's own doc comment narrates: a ServerGroup and a
+// ProxyGroup are different Kinds and Kubernetes lets them share a name in one
+// namespace, so a PodDisruptionBudget named only after the group collides the
+// moment a user does that — the losing controller's SetControllerReference
+// returns AlreadyOwnedError from inside CreateOrUpdate's mutate function on
+// every pass, and that group's Reconcile fails before it ever reaches
+// setStatus, in a loop naming neither the group nor the cause. The same
+// failure GroupConfigMapName already documents for the ConfigMap, on the same
+// two Kinds.
+//
+// role must be RoleServer or RoleProxy, matching GroupConfigMapName.
+func GroupPDBName(group, role string) string {
+	return group + "-" + role + "-pdb"
+}
+
 // ManagedSelector matches every pod Spawnery manages for one network.
 func ManagedSelector(network string) map[string]string {
 	return map[string]string{

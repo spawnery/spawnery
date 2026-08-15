@@ -271,10 +271,16 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Before setStatus, and — from Task 7 — before reconcileProxyPDB: the
 	// budget's selector has to find the label already on the pods it is
 	// sizing minAvailable for, on the same pass.
-	if err := r.syncOccupiedLabels(ctx, pods); err != nil {
+	//
+	// occupied is syncOccupiedLabels's own tally of proxyOccupied, taken while
+	// it is already looking at each pod to decide the label -- not a second
+	// count reconcileProxyPDB derives by asking the registry again. See the
+	// comment on syncOccupiedLabels for why a second call is not safe here.
+	occupied, err := r.syncOccupiedLabels(ctx, pods)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.reconcileProxyPDB(ctx, group, pods); err != nil {
+	if err := r.reconcileProxyPDB(ctx, group, occupied); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.setStatus(group, pods)
@@ -314,10 +320,15 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 	return live, nil
 }
 
-// proxyOccupied is the single occupancy rule for a proxy pod. Both sides of
-// the PodDisruptionBudget are computed from it: this reconciler labels pods
-// with it and sizes the budget's minAvailable from the same answer, and the
-// two have to agree pod for pod.
+// proxyOccupied is the single occupancy rule for a proxy pod. syncOccupiedLabels
+// evaluates it exactly once per pod per pass and hands that one verdict to
+// both the label it writes and the count reconcileProxyPDB sizes minAvailable
+// from — not two separate calls to it that would merely apply the same rule.
+// A second call is not guaranteed to repeat the first: the registry this
+// reads from is mutated by live agent streams, and Lookup re-derives
+// PlayersStale from the clock on every call, so two calls a few lines apart
+// can disagree even with nothing running concurrently, purely because the
+// clock moved between them.
 //
 // A proxy has no wasRegistered qualifier the way a server does — it sits behind
 // the Service and players reach it directly — so for a running pod there is no
@@ -330,14 +341,21 @@ func proxyOccupied(snap agent.Snapshot) bool {
 }
 
 // syncOccupiedLabels keeps podspec.LabelOccupied on the group's pods in step
-// with proxyOccupied, so the PodDisruptionBudget's selector and its
-// minAvailable are computed from the same answer pod for pod. A budget that
-// counts fewer pods than carry the label hands the eviction API a disruption
-// to spend on an occupied one.
-func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []corev1.Pod) error {
+// with proxyOccupied, and returns how many pods it found occupied while doing
+// so. reconcileProxyPDB sizes minAvailable from that returned count rather
+// than asking the registry again itself — see the comment on proxyOccupied
+// for why a second, independent call could answer differently and leave the
+// label and the budget disagreeing pod for pod. A budget that counts fewer
+// pods than carry the label hands the eviction API a disruption to spend on
+// an occupied one; one that counts more blocks every eviction in the group.
+func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []corev1.Pod) (int32, error) {
+	var occupiedCount int32
 	for i := range pods {
 		pod := &pods[i]
 		occupied := proxyOccupied(r.Agents.Lookup(string(pod.UID)))
+		if occupied {
+			occupiedCount++
+		}
 		_, labelled := pod.Labels[podspec.LabelOccupied]
 		// No write when nothing changed: this runs every five seconds per pod,
 		// and a patch per pass would be a write per pod per pass for the life
@@ -364,14 +382,16 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 		// write for a pod that is already gone would abort setStatus and
 		// writeStatus for every other pod in the group.
 		if err := r.Patch(ctx, patched, client.MergeFrom(pod)); err != nil && !apierrors.IsNotFound(err) {
-			return err
+			return 0, err
 		}
 	}
-	return nil
+	return occupiedCount, nil
 }
 
 // reconcileProxyPDB keeps the group's PodDisruptionBudget in step with the
-// number of occupied proxy pods.
+// number of occupied proxy pods. occupied is syncOccupiedLabels's own tally,
+// not a second count this function derives on its own — see the comment on
+// proxyOccupied for why a second registry read is not safe here.
 //
 // The same formulation as the ServerGroup's, for the same reason: for pods
 // without a controller carrying a scale subresource, Kubernetes allows
@@ -383,21 +403,23 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 // node is cordoned, while the replacement this operator ordered is still
 // pulling its image -- and everyone on that proxy is disconnected by the
 // eviction rather than carried by the drain.
+//
+// Named through podspec.GroupPDBName, not group.Name: a ServerGroup and a
+// ProxyGroup can share a name in one namespace, and GroupPDBName's own doc
+// comment narrates what naming this object after the bare group name would
+// do about it.
 func (r *ProxyGroupReconciler) reconcileProxyPDB(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
-	pods []corev1.Pod,
+	occupied int32,
 ) error {
-	var occupied int32
-	for i := range pods {
-		if proxyOccupied(r.Agents.Lookup(string(pods[i].UID))) {
-			occupied++
-		}
-	}
 	minAvailable := intstr.FromInt32(occupied)
 
 	pdb := &policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{Name: group.Name, Namespace: group.Namespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podspec.GroupPDBName(group.Name, podspec.RoleProxy),
+			Namespace: group.Namespace,
+		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
 		pdb.Spec.MinAvailable = &minAvailable

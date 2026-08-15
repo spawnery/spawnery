@@ -111,11 +111,12 @@ func (f *fixture) setMinReplicas(t *testing.T, n int32) {
 	}
 }
 
-// groupPDB re-reads the group's PodDisruptionBudget.
+// groupPDB re-reads the fixture's ServerGroup's PodDisruptionBudget.
 func (f *fixture) groupPDB(t *testing.T) *policyv1.PodDisruptionBudget {
 	t.Helper()
 	pdb := &policyv1.PodDisruptionBudget{}
-	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, pdb); err != nil {
+	key := types.NamespacedName{Name: podspec.GroupPDBName(f.group.Name, podspec.RoleServer), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, key, pdb); err != nil {
 		t.Fatalf("get PDB: %v", err)
 	}
 	return pdb
@@ -588,7 +589,8 @@ func TestGroupMaintainsAPodDisruptionBudget(t *testing.T) {
 	f.reconcileGroup(t, r)
 
 	pdb := &policyv1.PodDisruptionBudget{}
-	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, pdb); err != nil {
+	key := types.NamespacedName{Name: podspec.GroupPDBName("lobby", podspec.RoleServer), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, key, pdb); err != nil {
 		t.Fatalf("get PDB: %v", err)
 	}
 	if pdb.Spec.MaxUnavailable != nil {

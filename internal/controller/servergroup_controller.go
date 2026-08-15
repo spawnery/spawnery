@@ -754,7 +754,10 @@ func (r *ServerGroupReconciler) reconcilePDB(
 	minAvailable := intstr.FromInt32(occupiedPods(views))
 
 	pdb := &policyv1.PodDisruptionBudget{
-		ObjectMeta: metav1.ObjectMeta{Name: group.Name, Namespace: group.Namespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podspec.GroupPDBName(group.Name, podspec.RoleServer),
+			Namespace: group.Namespace,
+		},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
 		pdb.Spec.MinAvailable = &minAvailable

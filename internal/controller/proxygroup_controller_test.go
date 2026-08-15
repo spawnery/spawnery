@@ -2583,7 +2583,8 @@ func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
 	f.reconcileProxyGroup(r, "gateway")
 
 	pdb := &policyv1.PodDisruptionBudget{}
-	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "gateway", Namespace: f.ns}, pdb); err != nil {
+	pdbKey := types.NamespacedName{Name: podspec.GroupPDBName("gateway", podspec.RoleProxy), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, pdbKey, pdb); err != nil {
 		t.Fatalf("get proxy PDB: %v", err)
 	}
 	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
@@ -2605,10 +2606,59 @@ func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
 	f.reportProxyPlayers(t, pods[1], 0)
 	f.reconcileProxyGroup(r, "gateway")
 
-	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "gateway", Namespace: f.ns}, pdb); err != nil {
+	if err := f.c.Get(f.ctx, pdbKey, pdb); err != nil {
 		t.Fatalf("get proxy PDB after both proxies emptied: %v", err)
 	}
 	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 0 {
 		t.Errorf("minAvailable = %v after both proxies emptied, want 0", pdb.Spec.MinAvailable)
+	}
+}
+
+// TestServerAndProxyGroupsSharingANameGetDistinctBudgets pins the fix for
+// task 7's review Critical 1: a ServerGroup and a ProxyGroup are different
+// Kinds, so Kubernetes lets a namespace hold one of each under the same
+// name -- podspec.GroupConfigMapName's doc comment narrates the incident this
+// repository already had from naming a per-group object after the bare group
+// name alone. Before the fix, reconcileProxyPDB named its object group.Name,
+// exactly like reconcilePDB, so the second of the two controllers to
+// reconcile here would have its SetControllerReference call fail with
+// AlreadyOwnedError, and its Reconcile would return before setStatus, in a
+// backoff loop naming neither the group nor the cause.
+func TestServerAndProxyGroupsSharingANameGetDistinctBudgets(t *testing.T) {
+	f := newFixture(t)
+	// f.group is already a ServerGroup named "lobby" (see newFixture);
+	// giving the ProxyGroup the same name is the whole point of this test.
+	f.createProxyGroup(f.group.Name)
+
+	sr := groupReconciler(f)
+	pr := proxyGroupReconciler(f)
+	f.reconcileGroup(t, sr)
+	f.reconcileProxyGroup(pr, f.group.Name)
+	// Reconcile the ServerGroup again: had the ProxyGroup pass above already
+	// stolen the object's controller reference, this call would either error
+	// outright or silently leave the ServerGroup without a budget of its own.
+	f.reconcileGroup(t, sr)
+
+	serverPDB := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{
+		Name: podspec.GroupPDBName(f.group.Name, podspec.RoleServer), Namespace: f.ns,
+	}, serverPDB); err != nil {
+		t.Fatalf("get ServerGroup PDB: %v", err)
+	}
+	proxyPDB := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{
+		Name: podspec.GroupPDBName(f.group.Name, podspec.RoleProxy), Namespace: f.ns,
+	}, proxyPDB); err != nil {
+		t.Fatalf("get ProxyGroup PDB: %v", err)
+	}
+
+	if serverPDB.Name == proxyPDB.Name {
+		t.Fatalf("both budgets are named %q; a same-named ServerGroup and ProxyGroup collide", serverPDB.Name)
+	}
+	if len(serverPDB.OwnerReferences) == 0 || serverPDB.OwnerReferences[0].Kind != "ServerGroup" {
+		t.Errorf("ServerGroup PDB owner references = %+v, want it controlled by the ServerGroup", serverPDB.OwnerReferences)
+	}
+	if len(proxyPDB.OwnerReferences) == 0 || proxyPDB.OwnerReferences[0].Kind != "ProxyGroup" {
+		t.Errorf("ProxyGroup PDB owner references = %+v, want it controlled by the ProxyGroup", proxyPDB.OwnerReferences)
 	}
 }
