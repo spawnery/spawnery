@@ -31,14 +31,17 @@ import (
 // since a recreated ordinal is meant to find its old world -- and it outlives
 // its group, and the operator who deletes the wrong object. A StatefulSet
 // retains its claims on both scale-down and deletion for the same reason. The
-// cost is that claims accumulate and must be found and removed by hand; a
-// later task in this milestone documents how.
+// cost is that claims accumulate and must be found and removed by hand;
+// docs/known-issues.md's "From milestone 5a" section is where that is written
+// down, with the selector for finding them and the warning that removing one
+// destroys a world.
 //
-// LabelManagedBy is not decoration: cmd/spawnery-operator restricts the
-// manager's cache to that label for several kinds, claims among them as of the
-// task that started creating these. Nothing reads a claim back yet, so an
-// unlabelled one would go unnoticed today -- and be invisible to the very
-// first Get anybody adds.
+// LabelManagedBy is not decoration: cmd/spawnery-operator.main restricts the
+// manager's cache to that label for several kinds, claims among them. It is
+// the only one of the four labels here that does -- the other three are for
+// whoever is reading claims with kubectl. Nothing in this operator reads a
+// claim back yet, so an unlabelled one would go unnoticed today, and be
+// invisible to the very first Get anybody adds.
 func BuildDataClaim(
 	group *spawneryv1alpha1.ServerGroup,
 	srv *spawneryv1alpha1.Server,
