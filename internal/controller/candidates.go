@@ -99,6 +99,18 @@ type ServerView struct {
 // on. They used to be two implementations kept in step by a comment, and
 // they drifted.
 //
+// podspec.LabelOccupied is not this rule's private property, and that is why
+// the agreement above needs a third participant to hold. The ProxyGroup
+// controller writes the same label key on proxy pods from proxyOccupied — a
+// different rule over a different population — so "the two have to agree pod
+// for pod" is a statement about the pods this rule owns and about no others.
+// What confines the budget to those is the podspec.LabelRole term in
+// reconcilePDB's selector. Drop that term and the agreement is between two
+// different sets of pods rather than between two answers about one; see
+// reconcilePDB's own comment for what the eviction API then does with the
+// difference. A further writer of this label would have to be answered the
+// same way.
+//
 // players > 0 is the plain case. A count we cannot trust hides players only
 // where players could be, and that takes the server having been registered with
 // the proxies at some point in the life of this pod, because nobody is ever

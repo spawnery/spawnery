@@ -1435,16 +1435,29 @@ kinds' budgets now go through `podspec.GroupPDBName(group, role)`, which
 appends `-server-pdb` or `-proxy-pdb`. `reconcilePDB` and
 `reconcileProxyPDB` only ever `CreateOrUpdate` the new name; nothing renames
 or deletes the old one. A `ServerGroup` reconciled under pre-4c-3 code
-therefore leaves a `PodDisruptionBudget` sitting at its own bare name,
-selecting the same occupied server pods it always did
+therefore leaves a `PodDisruptionBudget` sitting at its own bare name, with
+`minAvailable` frozen at whatever the last old-code reconcile wrote — and
+nothing updates it again, because the reconciler has moved on to writing the
+new-named object exclusively. **Delete it promptly.** The frozen count is the
+smaller of the two problems it causes: the stranded object also carries the
+pre-4c-3 *selector*
 (`spawnery.cloud/managed-by`, `spawnery.cloud/group`,
-`spawnery.cloud/occupied`), with `minAvailable` frozen at whatever the last
-old-code reconcile wrote — and nothing updates it again, because the
-reconciler has moved on to writing the new-named object exclusively. It goes
-on blocking evictions of matching server pods against a stale count for as
-long as it exists. To find it: `kubectl get pdb -n <namespace>` and look for
-one named exactly the `ServerGroup`'s own name, rather than
-`<group>-server-pdb` — `kubectl get pdb <name> -n <namespace> -o
+`spawnery.cloud/occupied`), which has no `spawnery.cloud/role` term, and this
+milestone is the one that put `spawnery.cloud/occupied` on proxy pods as well
+as server pods. So in a namespace holding a `ProxyGroup` of the same name,
+that selector matches the occupied *proxies* too, while its `minAvailable`
+was only ever counted from occupied *servers*. `currentHealthy` counts the
+ready pods among everything the selector matches, proxies included;
+`desiredHealthy` is the frozen server-only figure; `disruptionsAllowed` is
+the difference, and the ready occupied proxies push it up. The eviction API
+can then spend those disruptions on occupied server pods — disconnecting the
+players on them. That is the exact
+defect this milestone's own final review found in the live `reconcilePDB`
+selector and fixed there by adding the role term; the stranded object is a
+frozen copy of the broken selector that no fix can reach. To find it:
+`kubectl get pdb -n <namespace>` and look for one named exactly the
+`ServerGroup`'s own name, rather than `<group>-server-pdb` — `kubectl get pdb
+<name> -n <namespace> -o
 jsonpath='{.metadata.ownerReferences[0].name}'` confirms it is owned by that
 group. `kubectl delete pdb <name> -n <namespace>` removes it; the group's
 protection continues uninterrupted through the new-named object, which

@@ -772,6 +772,22 @@ func (r *ServerGroupReconciler) pruneFailed(
 // bare group.Name: it stays owned by this ServerGroup, keeps whatever
 // minAvailable it last had, and goes on blocking evictions of whatever pods
 // it still selects, because nothing here ever renames or deletes it.
+//
+// The selector pins podspec.LabelRole as well as the group, and that term is
+// load-bearing rather than tidiness. minAvailable is counted from
+// occupiedPods(views), which sees this group's *servers* and nothing else. A
+// selector without the role term matches on managed-by, group and occupied,
+// and a ProxyGroup may share this group's name in this namespace — the very
+// case GroupPDBName exists for. From the milestone that put
+// podspec.LabelOccupied on proxy pods too, such a selector matches the
+// occupied proxies of the same-named ProxyGroup as well: currentHealthy
+// counts the ready ones among them and minAvailable counts none of them, so
+// disruptionsAllowed goes positive, and the eviction API can spend every one
+// of those disruptions on an occupied *server* pod, disconnecting its
+// players. The role term is what keeps the pods the selector matches and the
+// pods minAvailable is counted over one and the same set. See isOccupied
+// (candidates.go) for the two-sides-must-agree requirement this term is the
+// third participant in.
 func (r *ServerGroupReconciler) reconcilePDB(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -792,6 +808,7 @@ func (r *ServerGroupReconciler) reconcilePDB(
 			MatchLabels: map[string]string{
 				podspec.LabelManagedBy: podspec.ManagedByValue,
 				podspec.LabelGroup:     group.Name,
+				podspec.LabelRole:      podspec.RoleServer,
 				podspec.LabelOccupied:  "true",
 			},
 		}
