@@ -123,6 +123,13 @@ var RequiredCluster = []Permission{
 	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "watch", Why: "ProxyGroupReconciler For(&ProxyGroup{})"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "status", Verb: "update", Why: "ProxyGroupReconciler writes replicas, address and conditions"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod and Service owner references"},
+
+	// Nodes — nodeDeparting resolves a pod's node to ask IsDeparting whether it
+	// is cordoned or tainted to repel, so a group can empty a pod off a node
+	// leaving service before somebody else moves it the hard way.
+	{Group: "", Resource: "nodes", Verb: "get", Why: "nodeDeparting resolves a pod's node name"},
+	{Group: "", Resource: "nodes", Verb: "list", Why: "the restricted cache over Nodes"},
+	{Group: "", Resource: "nodes", Verb: "watch", Why: "the restricted cache over Nodes"},
 }
 
 // RequiredNamespaced is what the operator does in its own namespace only, and

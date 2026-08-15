@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -81,6 +82,21 @@ func validateAgentFlags(operatorNamespace string, renewAfter, hardDeadline time.
 	return nil
 }
 
+// taintKeys collects a repeatable flag. A cluster may mark a departing node
+// with more than one vendor's taint, and one flag per key beats parsing a
+// separator out of a key that is allowed to contain almost anything.
+type taintKeys []string
+
+func (t *taintKeys) String() string { return strings.Join(*t, ",") }
+
+func (t *taintKeys) Set(value string) error {
+	if value == "" {
+		return fmt.Errorf("an empty taint key would match nothing")
+	}
+	*t = append(*t, value)
+	return nil
+}
+
 // leaderReadyCheck reports ready only once this replica holds the leader lock.
 //
 // The agent gRPC service is a leader-bound runnable, so a standby serves
@@ -114,6 +130,7 @@ func main() {
 		agentBindAddress     string
 		renewAfter           time.Duration
 		hardDeadline         time.Duration
+		drainTaints          taintKeys
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
@@ -138,6 +155,8 @@ func main() {
 		"when an agent should open a fresh stream; must be below the hard deadline")
 	flag.DurationVar(&hardDeadline, "agent-session-deadline", 10*time.Minute,
 		"when the operator closes an agent stream regardless")
+	flag.Var(&drainTaints, "drain-taint",
+		"taint key that marks a node as departing, beside spec.unschedulable; repeatable")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -170,6 +189,18 @@ func main() {
 	mgrOptions.Cache.ByObject = map[client.Object]cache.ByObject{
 		&corev1.ConfigMap{}:      {Label: managed},
 		&corev1.ServiceAccount{}: {Label: managed},
+		// The node cache exists for one bool per node — cordoned, or tainted to
+		// repel. status.images is tens of kilobytes per node and nothing here
+		// reads it, so it is dropped on the way in, for the same reason the
+		// ConfigMap restriction above exists.
+		&corev1.Node{}: {
+			Transform: func(obj any) (any, error) {
+				if node, ok := obj.(*corev1.Node); ok {
+					node.Status.Images = nil
+				}
+				return obj, nil
+			},
+		},
 	}
 
 	restConfig := ctrl.GetConfigOrDie()
@@ -253,8 +284,9 @@ func main() {
 			Reader: mgr.GetAPIReader(),
 			CA:     provider.CABundle,
 		},
-		AgentEndpoint: agentEndpoint(operatorNamespace),
-		Proxies:       proxies,
+		AgentEndpoint:  agentEndpoint(operatorNamespace),
+		Proxies:        proxies,
+		DrainTaintKeys: drainTaints,
 	}); err != nil {
 		setupLog.Error(err, "unable to set up controllers")
 		os.Exit(1)

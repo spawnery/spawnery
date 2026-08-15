@@ -143,6 +143,9 @@ type ProxyGroupReconciler struct {
 	// readinessDivergenceGrace. One instance is shared across groups, like
 	// Expectations.
 	Divergence *readinessDivergence
+	// DrainTaintKeys is Options.DrainTaintKeys. Nil means only cordoned nodes
+	// count.
+	DrainTaintKeys []string
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch

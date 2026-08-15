@@ -51,6 +51,11 @@ type Options struct {
 	// real *proxyreg.Fleet, and SetupAll refuses a nil value for the same
 	// reason it refuses a nil Bootstrapper.
 	Proxies ProxyReadinessSetter
+	// DrainTaintKeys are the taint keys that mark a node as departing, beside
+	// spec.unschedulable. Empty is the default and the ordinary case: both
+	// cluster-autoscaler and Karpenter cordon a node as well as tainting it,
+	// so an empty list still sees them, a moment later.
+	DrainTaintKeys []string
 }
 
 // Leader election locks on a Lease in the operator's own namespace. It is not
@@ -85,12 +90,13 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	}
 
 	if err := (&ServerGroupReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorderFor("servergroup"),
-		Agents:       opts.Agents,
-		Clock:        opts.Clock,
-		Expectations: newExpectations(opts.Clock),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("servergroup"),
+		Agents:         opts.Agents,
+		Clock:          opts.Clock,
+		Expectations:   newExpectations(opts.Clock),
+		DrainTaintKeys: opts.DrainTaintKeys,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server group controller: %w", err)
 	}
@@ -111,16 +117,17 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	}
 
 	if err := (&ProxyGroupReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("proxygroup"),
-		Agents:        opts.Agents,
-		Bootstrap:     opts.Bootstrapper,
-		AgentEndpoint: opts.AgentEndpoint,
-		Proxies:       opts.Proxies,
-		Clock:         opts.Clock,
-		Expectations:  newExpectations(opts.Clock),
-		Divergence:    newReadinessDivergence(opts.Clock),
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("proxygroup"),
+		Agents:         opts.Agents,
+		Bootstrap:      opts.Bootstrapper,
+		AgentEndpoint:  opts.AgentEndpoint,
+		Proxies:        opts.Proxies,
+		Clock:          opts.Clock,
+		Expectations:   newExpectations(opts.Clock),
+		Divergence:     newReadinessDivergence(opts.Clock),
+		DrainTaintKeys: opts.DrainTaintKeys,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup proxy group controller: %w", err)
 	}

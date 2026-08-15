@@ -77,12 +77,16 @@ type ServerGroupReconciler struct {
 	// Expectations reserves the creates and deletes this reconciler has issued
 	// and the cache has not shown yet. One instance is shared across groups.
 	Expectations *expectations
+	// DrainTaintKeys is Options.DrainTaintKeys. Nil means only cordoned nodes
+	// count.
+	DrainTaintKeys []string
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/status,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
 
 // Reconcile sizes the group and updates its status.
 func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

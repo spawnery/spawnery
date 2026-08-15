@@ -17,9 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"slices"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // IsDeparting reports whether this node is on its way out of service, and the
@@ -57,4 +60,22 @@ func IsDeparting(node *corev1.Node, taintKeys []string) bool {
 		}
 	}
 	return false
+}
+
+// nodeDeparting resolves a pod's node and asks IsDeparting about it.
+//
+// Every failure answers false. An empty name is an unscheduled pod, which is
+// on no node; a Get that fails is a node we cannot read, and a group must not
+// be emptied on the strength of a cache miss. The watch and the periodic
+// resync both bring the question back within seconds, so a false answer here
+// costs a few seconds and never a wrong deletion.
+func nodeDeparting(ctx context.Context, reader client.Reader, nodeName string, taintKeys []string) bool {
+	if nodeName == "" {
+		return false
+	}
+	node := &corev1.Node{}
+	if err := reader.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+		return false
+	}
+	return IsDeparting(node, taintKeys)
 }

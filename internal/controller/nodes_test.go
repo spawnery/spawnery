@@ -4,6 +4,9 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/spawnery/spawnery/internal/testenv"
 )
 
 func taintedNode(unschedulable bool, taints ...corev1.Taint) *corev1.Node {
@@ -79,5 +82,38 @@ func TestIsDeparting(t *testing.T) {
 				t.Fatalf("IsDeparting() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestNodeDeparting(t *testing.T) {
+	c, ctx := testenv.Client(t)
+
+	// An unresolvable node is not departing: failing towards "stay" keeps an
+	// unreadable Node from emptying a group on the strength of a cache miss.
+	if nodeDeparting(ctx, c, "no-such-node", nil) {
+		t.Error("an unreadable node must not read as departing")
+	}
+	// An empty node name is an unscheduled pod, which is on no node at all.
+	if nodeDeparting(ctx, c, "", nil) {
+		t.Error("an empty node name must not read as departing")
+	}
+
+	// A real node, before and after the cordon. Nodes are cluster-scoped, so
+	// the name has to be unique across this whole test binary.
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-departing-test"}}
+	if err := c.Create(ctx, node); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Delete(ctx, node) })
+
+	if nodeDeparting(ctx, c, node.Name, nil) {
+		t.Error("a plain node reads as departing")
+	}
+	node.Spec.Unschedulable = true
+	if err := c.Update(ctx, node); err != nil {
+		t.Fatalf("cordon node: %v", err)
+	}
+	if !nodeDeparting(ctx, c, node.Name, nil) {
+		t.Error("a cordoned node does not read as departing")
 	}
 }
