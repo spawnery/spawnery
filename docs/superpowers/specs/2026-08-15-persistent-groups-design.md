@@ -218,8 +218,8 @@ re-review:
 one claim and nothing else can serve it, so a rebuild meets the *same* broken
 volume — sequentially, never concurrently, since the corpse's pod goes first.
 `ReadWriteOnce` forces that serialization but not the waiting; the waiting is
-the give-up's doing, and it is correct: after six attempts at an hour apart,
-the thing that is broken is the storage, and only a human fixes that.
+the give-up's doing, and it is correct: after six attempts, roughly an hour
+apart, the thing that is broken is the storage, and only a human fixes that.
 
 So 5a lifts `BackingOff` and `Degraded` out of the ephemeral-only block; both
 describe failures either kind of group can have. `ScalingLimited` stays
@@ -238,12 +238,14 @@ each roughly hourly cycle. For the rest of it the backoff window is shut and
 the group publishes `BackingOff: False` — "no server has failed to start
 recently" — beside a `Failed` corpse.
 
-**`Degraded` therefore first appears roughly five hours after the first
-failure**, and the arithmetic is worth writing out because the obvious number
-is wrong: `backoffGiveUpAt` is 6, so the condition needs six counted failures,
-and six failures are separated by **five** retention cycles rather than six.
-At the 3600-second default that is five hours, plus the startup deadline each
-attempt burns before it fails — about five and a half in practice. The
+**`Degraded` therefore first appears roughly five and a half hours after the
+first failure**, and the arithmetic is worth writing out because the obvious
+number is wrong twice over. `backoffGiveUpAt` is 6, so the condition needs six
+counted failures — and six failures are separated by **five** cycles, not six.
+Each cycle is `failedRetentionSeconds` (3600 at the CRD default) plus the
+startup deadline each attempt burns before it fails (300 by the operator's
+`--startup-deadline` flag): about 65 minutes. Five of those is five hours and
+twenty-five minutes. The
 condition is right and the wait is deliberate; the delay before either becomes
 visible is not something this milestone fixes.
 
