@@ -3667,11 +3667,15 @@ func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
 //
 // The round below is also the answer to a question the design got wrong in
 // both directions, so it is worth naming here rather than leaving to whoever
-// next reads §3.5: a persistent group does have a retry loop, and the count
-// could not climb to the threshold if it did not. Nothing on the group's side
-// clears a persistent corpse, but the Server controller's failed-retention
-// path does, and the ordinal is then created again -- which is why each round
-// here ends by aging the corpse out. The loop's period is
+// next reads §3.5: a persistent group does have a retry loop. Nothing on the
+// group's side clears a persistent corpse for having failed, but the Server
+// controller's failed-retention path does, and the ordinal is then created
+// again -- which is why each round here ends by aging the corpse out. With
+// the one ordinal this group has, that loop is also the only way the count
+// can reach the threshold at all, since CountFailures counts a corpse once;
+// a group with six or more ordinals could reach it on six distinct first
+// failures and never retry anything, so that half of the argument is this
+// test's, not a general proof. The loop's period is
 // spec.failedRetentionSeconds -- an hour at the CRD default, which is what
 // this group carries -- so at that default the backoff's own windows (160s at
 // the most) never delay an attempt; what the backoff does for this group is

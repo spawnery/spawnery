@@ -241,8 +241,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// forward to the success instead would be durable, but it would write a
 	// time at which nothing failed into a status field an operator reads as
 	// lastFailureAt. The residual edge — a corpse older than a success that has
-	// since left the views being counted once more — is bounded by what
-	// pruneFailed retains, which is one.
+	// since left the views being counted once more — is bounded by how many
+	// corpses the group can be holding at all, and that number differs by
+	// type. For an ephemeral group it is what pruneFailed retains, which is
+	// one. pruneFailed does not run for a persistent group: there each corpse
+	// keeps its ordinal until its own failed retention elapses and the Server
+	// controller removes it, so the bound is one per ordinal, up to
+	// spec.replicas.
 	if !newestFailure.IsZero() {
 		stamped := metav1.NewTime(newestFailure)
 		group.Status.LastFailureAt = &stamped
@@ -380,9 +385,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// before the threshold: at that default the waiting half of the backoff
 	// never delays an attempt, and what it contributes is the end of them --
 	// GaveUp at the threshold, after which the group stalls and waits for a
-	// human. None of that is visible anywhere else -- the phase
-	// reads Pending throughout, exactly like a slow start. Saying it is the
-	// whole of what these two conditions do for a persistent group.
+	// human. Without these two conditions the verdict would be the part nobody
+	// could see: status.consecutiveFailures is counted for either type and
+	// would climb, but a number is not a verdict, and the phase would read
+	// Pending throughout, exactly like a slow start. With them the group says
+	// which of the two it is doing, and the give-up reaches derivePhase as
+	// Degraded -- which is the whole of what they do for a persistent group,
+	// and the whole of why they were lifted out.
 	//
 	// Both are built false-by-default and flipped, like ScalingLimited above.
 	backingOff := metav1.Condition{
