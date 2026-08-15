@@ -542,7 +542,7 @@ func (r *ServerGroupReconciler) size(
 		Generation:     group.Generation,
 		MaxUnavailable: group.UpdateMaxUnavailable(),
 
-		PendingCreates: pendingCreates,
+		PendingCreates: int32(len(pendingCreates)),
 		PendingDeletes: pendingDeletes,
 		PendingRetires: pendingRetires,
 	})

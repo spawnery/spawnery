@@ -208,19 +208,28 @@ func (e *expectations) observePods(group string, pods []corev1.Pod) {
 	}
 }
 
-// pending is what the group has outstanding: how many creates, which names are
-// already on their way out, and which have been asked to retire.
-func (e *expectations) pending(group string) (int32, map[string]bool, map[string]bool) {
+// pending is what the group has outstanding: which creates are reserved,
+// which names are already on their way out, and which have been asked to
+// retire -- all keyed by name.
+//
+// Creates come back named, not counted, because two callers want different
+// things from the same reservations. The slot rule only needs how many are in
+// flight, and takes len() at its call site. The persistent rule needs to know
+// which ordinals they are for, so it does not recreate one whose create the
+// cache has not shown yet. One accessor keeps both reading the same
+// reservations, rather than adding a second view of the map for the count the
+// first one already answers.
+func (e *expectations) pending(group string) (map[string]bool, map[string]bool, map[string]bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	var creates int32
+	creates := make(map[string]bool)
 	deletes := make(map[string]bool)
 	retires := make(map[string]bool)
 	for name, exp := range e.byGroup[group] {
 		switch exp.kind {
 		case expectationCreate:
-			creates++
+			creates[name] = true
 		case expectationDelete:
 			deletes[name] = true
 		case expectationRetire:
