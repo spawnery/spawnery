@@ -175,17 +175,109 @@ returns. That is a limit of the storage class and not one this milestone can
 move; `docs/known-issues.md` already records it from 4c-3, written before
 anything could reach it, and 5a is what makes it reachable.
 
-### 3.5 The failure path is the one that already exists
+### 3.5 The failure path: the group stalls, and says so
 
-A claim that never binds — stuck after a node failure, a storage class that
-cannot provision, no capacity — shows up as a pod that stays `Pending`. From
-there: the server's startup deadline expires, the server goes `Failed`, the
-group reports `Degraded`, and **4d's per-group backoff stops it throwing the
-same ordinal at the same broken volume in a loop**.
+**This is the third version of this section. The first was wrong, the second
+was wrong about how the first was wrong, and the third is the one whose every
+link was verified in the code rather than argued from.** That history is worth
+keeping, because the failure it describes is the one this repository keeps
+producing: a sentence that reads plausibly and describes a mechanism the code
+does not have.
 
-Master design §7 asks for "a condition instead of waiting silently" at this
-point. That condition exists, it is `Degraded`, and this path already reaches
-it. No second one is built.
+The first version said: a claim that never binds makes the pod stay `Pending`,
+the startup deadline expires, the server goes `Failed`, *"the group reports
+`Degraded`, and 4d's per-group backoff stops it throwing the same ordinal at
+the same broken volume in a loop."* The second version declared both halves
+false. **Only the first half was.**
+
+**What is actually true**, each link established in code by the Task 6
+re-review:
+
+- **The reporting half was false.** Neither `ConditionBackingOff` nor
+  `ConditionDegraded` was published outside `if group.IsEphemeral()`, so
+  `derivePhase` could never return `Degraded` for a persistent group; the phase
+  merely dropped to `Pending`, indistinguishable from a slow start.
+- **The backoff half was true.** `size()` runs the `CreateOrdinals` loop under
+  `backoff.MayCreate`, and `GaveUp` ends the attempts. The backoff does gate a
+  persistent group's rebuilds, exactly as the first version claimed.
+- **There is a retry loop, and it is not the group's.** A `Failed` server is
+  moved to `Terminating` by `phase.Decide` once `FailedRetentionElapsed`; the
+  **Server** controller then deletes the object; the ordinal is free; the group
+  creates it again next pass, and the deterministic name re-finds its claim
+  through `AlreadyExists`. So the period of the loop is
+  `spec.failedRetentionSeconds` — 3600 seconds at the CRD default — not the
+  backoff window, which is at most 160. At that default the backoff's *waiting*
+  half never delays an attempt; what it contributes is the **give-up**, after
+  six counted failures.
+- **After the give-up the group waits indefinitely** — and it does not start
+  out with no `Server` object for that ordinal, which is how an earlier version
+  of this line read. At the moment the count reaches the threshold the sixth
+  corpse is still standing, and it holds the ordinal for one more
+  `failedRetentionSeconds` before the Server controller takes it away. The
+  no-object state is where this settles, an hour later at the default, not
+  where it begins. The claim and the world are untouched throughout: nothing in
+  this operator deletes or updates a claim, and the ClusterRole grants neither
+  verb. A spec change resets the counter and brings the ordinal back.
+
+**The stall is right; the silence was the defect.** A persistent world lives on
+one claim and nothing else can serve it, so a rebuild meets the *same* broken
+volume — sequentially, never concurrently, since the corpse's pod goes first.
+`ReadWriteOnce` forces that serialization but not the waiting; the waiting is
+the give-up's doing, and it is correct: after six attempts, roughly an hour
+apart, the thing that is broken is the storage, and only a human fixes that.
+
+So 5a lifts `BackingOff` and `Degraded` out of the ephemeral-only block; both
+describe failures either kind of group can have. `ScalingLimited` stays
+ephemeral-only — it reads fields only `DecideSize` fills, and a fixed replica
+count has no ceiling to be limited by. `pruneFailed` stays too: it caps
+retained corpses because an ephemeral group rebuilds every five seconds, while
+for a persistent group the corpse *is* what holds the ordinal, and pruning it
+would free ordinals early and accelerate the very thrash this section wants
+stalled.
+
+Master design §7 asks for "a condition instead of waiting silently" here. After
+the lift that condition exists and this path reaches it. **One honest limit
+remains, and it goes in `docs/known-issues.md`:** at the default retention the
+group is visibly backing off for only ten to a hundred and sixty seconds of
+each roughly hourly cycle. For the rest of it the backoff window is shut and
+the group publishes `BackingOff: False` — "no server has failed to start
+recently" — beside a `Failed` corpse.
+
+**At `replicas: 1`, `Degraded` therefore first appears roughly five and a half
+hours after the first failure**, and the arithmetic is worth writing out
+because the obvious number is wrong twice over. `backoffGiveUpAt` is 6, so the
+condition needs six counted failures — and six failures are separated by
+**five** cycles, not six. Each cycle is `failedRetentionSeconds` (3600 at the
+CRD default) plus the startup deadline each attempt burns before it fails (300
+by the operator's `--startup-deadline` flag): about 65 minutes. Five of those
+is five hours and twenty-five minutes. The
+condition is right and the wait is deliberate; the delay before either becomes
+visible is not something this milestone fixes.
+
+**And five hours twenty-five is a floor, not an estimate: at `replicas: 2` or
+more it has no ceiling.** The mechanism is `CountFailures`, which resets the
+streak to zero whenever *any* view's `ReadySince` is newer than the last
+counted failure. For an ephemeral group that is exactly right — its servers are
+interchangeable, and one of them coming up is evidence about the group. For a
+persistent group they are not interchangeable, which is this section's own
+premise: the world is on that claim and nothing else can serve it. So in this
+design's own headline example, `replicas: 2`, `survival-0`'s claim never
+binding while `survival-1` merely flaps readiness once resets the streak, the
+six-failure count restarts from zero, and `Degraded` need never arrive at all.
+
+**Documented here, fixed in 5b, and that split is deliberate.** A per-ordinal
+streak changes what `BackoffInputs` means for a group of either kind and
+deserves a design of its own rather than being bolted onto the end of a
+milestone whose scope is "persistent groups exist"; and the damage is a late or
+absent condition, not lost data or a disconnected player. What an operator has
+in the meantime is `status.lastFailureAt`, which survives the reset and keeps
+advancing — `status.consecutiveFailures` does **not**, since the reset is
+precisely what zeroes it, so in the multi-ordinal case that field reads as
+though nothing were wrong. A `lastFailureAt` far in the past beside a low
+`consecutiveFailures` is the signature of this issue. Note that
+the one test exercising the give-up,
+`TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp`, runs a single ordinal —
+the one configuration in which this cannot show.
 
 ## 4. Out of scope, deliberately
 
@@ -245,8 +337,17 @@ rejoin, and the block is still there.
 2. Deleting a persistent server's pod brings the same ordinal back on the same
    claim, and the world it contains is unchanged — proven on a real cluster by
    an artefact placed before the deletion and found after it.
-3. Lowering `replicas` removes the highest ordinal through the existing drain,
-   without disconnecting a player on it, and leaves its claim behind.
+3. Lowering `replicas` removes the highest ordinal through the existing drain
+   and leaves its claim behind. The drain moves the players on it, bounded like
+   every other drain in this operator by `spec.drain.timeoutSeconds`, after
+   which whoever has not left is disconnected. The qualifier is needed because
+   the two sizing rules do not agree about this: `SelectDeletionCandidates`
+   never nominates a server that `mayHavePlayers()`, and
+   `DecidePersistentSize`'s surplus loop has no such guard, so the top ordinal
+   is nominated whoever is on it. The drain then protects those players for
+   `spec.drain.timeoutSeconds` and no longer, which is the same bound every
+   other removal in this operator carries. `docs/known-issues.md` carries the
+   operator-facing version, including what the alternative would cost.
 4. Raising `replicas` again brings that ordinal back onto the claim it left.
 5. A persistent server on a cordoned node is condemned like any other, and
    `kubectl drain` completes where the storage can follow.

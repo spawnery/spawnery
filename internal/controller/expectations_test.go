@@ -36,13 +36,13 @@ func TestExpectedCreateCountsUntilTheCacheShowsIt(t *testing.T) {
 	e.expectCreated("ns/lobby", "lobby-aaaa")
 
 	creates, deletes, _ := e.pending("ns/lobby")
-	if creates != 1 || len(deletes) != 0 {
-		t.Fatalf("pending = (%d, %v), want (1, empty)", creates, deletes)
+	if len(creates) != 1 || len(deletes) != 0 {
+		t.Fatalf("pending = (%v, %v), want (1, empty)", creates, deletes)
 	}
 
 	e.observe("ns/lobby", []ServerView{{Name: "lobby-aaaa", Phase: phase.Pending}})
-	if creates, _, _ := e.pending("ns/lobby"); creates != 0 {
-		t.Errorf("creates = %d once the cache shows it, want 0", creates)
+	if creates, _, _ := e.pending("ns/lobby"); len(creates) != 0 {
+		t.Errorf("creates = %v once the cache shows it, want empty", creates)
 	}
 }
 
@@ -52,14 +52,14 @@ func TestExpectationsExpire(t *testing.T) {
 
 	clock.Advance(expectationTTL - time.Second)
 	e.observe("ns/lobby", nil)
-	if creates, _, _ := e.pending("ns/lobby"); creates != 1 {
-		t.Errorf("creates = %d before the TTL, want 1", creates)
+	if creates, _, _ := e.pending("ns/lobby"); len(creates) != 1 {
+		t.Errorf("creates = %v before the TTL, want 1", creates)
 	}
 
 	clock.Advance(2 * time.Second)
 	e.observe("ns/lobby", nil)
-	if creates, _, _ := e.pending("ns/lobby"); creates != 0 {
-		t.Errorf("creates = %d after the TTL, want 0: a lost watch event must "+
+	if creates, _, _ := e.pending("ns/lobby"); len(creates) != 0 {
+		t.Errorf("creates = %v after the TTL, want empty: a lost watch event must "+
 			"delay the group, not blind it", creates)
 	}
 }
@@ -112,12 +112,12 @@ func TestExpectationsAreKeptPerGroup(t *testing.T) {
 	e.expectCreated("ns/lobby", "lobby-aaaa")
 	e.expectCreated("ns/arena", "arena-bbbb")
 
-	if creates, _, _ := e.pending("ns/arena"); creates != 1 {
-		t.Errorf("arena creates = %d, want 1", creates)
+	if creates, _, _ := e.pending("ns/arena"); len(creates) != 1 {
+		t.Errorf("arena creates = %v, want 1", creates)
 	}
 	e.observe("ns/lobby", []ServerView{{Name: "lobby-aaaa"}})
-	if creates, _, _ := e.pending("ns/arena"); creates != 1 {
-		t.Errorf("arena creates = %d after observing lobby, want 1", creates)
+	if creates, _, _ := e.pending("ns/arena"); len(creates) != 1 {
+		t.Errorf("arena creates = %v after observing lobby, want 1", creates)
 	}
 }
 
@@ -129,8 +129,8 @@ func TestForgetDropsAGroupEntirely(t *testing.T) {
 	e.forget("ns/lobby")
 
 	creates, deletes, _ := e.pending("ns/lobby")
-	if creates != 0 || len(deletes) != 0 {
-		t.Errorf("pending = (%d, %v) after forget, want (0, empty)", creates, deletes)
+	if len(creates) != 0 || len(deletes) != 0 {
+		t.Errorf("pending = (%v, %v) after forget, want (empty, empty)", creates, deletes)
 	}
 }
 
@@ -145,11 +145,38 @@ func TestPendingSeparatesCreatesFromDeletes(t *testing.T) {
 	e.expectDeleted("ns/lobby", "lobby-cccc")
 
 	creates, deletes, _ := e.pending("ns/lobby")
-	if creates != 2 {
-		t.Errorf("creates = %d, want 2", creates)
+	if len(creates) != 2 {
+		t.Errorf("creates = %v, want 2", creates)
 	}
 	if len(deletes) != 1 || !deletes["lobby-cccc"] {
 		t.Errorf("deletes = %v, want exactly lobby-cccc", deletes)
+	}
+}
+
+// TestPendingNamesItsCreates is what the persistent sizing rule needs: not how
+// many creates are in flight, but which ordinals they are for.
+//
+// The first two assertions report rather than halt, and that is the whole
+// reason the third one exists. Pinning creates to exactly two named keys with
+// a t.Fatalf makes the third assertion dead: a mutation that let a delete
+// reservation leak into the creates map trips the first one and stops the test
+// there, so "a delete must not appear among the creates" could never be the
+// thing that failed.
+func TestPendingNamesItsCreates(t *testing.T) {
+	e := newExpectations(func() time.Time { return time.Unix(0, 0) })
+	e.expectCreated("ns/survival", "survival-0")
+	e.expectCreated("ns/survival", "survival-2")
+	e.expectDeleted("ns/survival", "survival-5")
+
+	creates, deletes, _ := e.pending("ns/survival")
+	if len(creates) != 2 || !creates["survival-0"] || !creates["survival-2"] {
+		t.Errorf("creates = %v, want survival-0 and survival-2", creates)
+	}
+	if len(deletes) != 1 || !deletes["survival-5"] {
+		t.Errorf("deletes = %v, want survival-5", deletes)
+	}
+	if creates["survival-5"] {
+		t.Error("a delete reservation must not appear among the creates")
 	}
 }
 
@@ -186,15 +213,15 @@ func TestObservePodsClearsACreateReservation(t *testing.T) {
 	e.expectCreated("gateway", "gateway-aaaa")
 
 	pending, _, _ := e.pending("gateway")
-	if pending != 1 {
-		t.Fatalf("pending = %d, want 1 before the pod appears", pending)
+	if len(pending) != 1 {
+		t.Fatalf("pending = %v, want 1 before the pod appears", pending)
 	}
 
 	e.observePods("gateway", []corev1.Pod{{ObjectMeta: metav1.ObjectMeta{Name: "gateway-aaaa"}}})
 
 	pending, _, _ = e.pending("gateway")
-	if pending != 0 {
-		t.Errorf("pending = %d, want 0 once the cache shows the pod", pending)
+	if len(pending) != 0 {
+		t.Errorf("pending = %v, want empty once the cache shows the pod", pending)
 	}
 }
 
@@ -205,8 +232,8 @@ func TestObservePodsClearsADeleteReservationWhenThePodIsGone(t *testing.T) {
 	e.observePods("gateway", nil)
 
 	pending, leaving, _ := e.pending("gateway")
-	if pending != 0 || len(leaving) != 0 {
-		t.Errorf("pending = %d, leaving = %v, want both empty once the pod is gone", pending, leaving)
+	if len(pending) != 0 || len(leaving) != 0 {
+		t.Errorf("pending = %v, leaving = %v, want both empty once the pod is gone", pending, leaving)
 	}
 }
 

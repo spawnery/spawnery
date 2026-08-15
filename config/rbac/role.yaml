@@ -33,6 +33,16 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - pods
   verbs:
   - create
@@ -40,15 +50,6 @@ rules:
   - get
   - list
   - patch
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts
-  verbs:
-  - create
-  - get
-  - list
   - watch
 - apiGroups:
   - authentication.k8s.io

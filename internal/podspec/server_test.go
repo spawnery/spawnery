@@ -147,6 +147,7 @@ func TestPodIsRestrictedCompliant(t *testing.T) {
 		pod.Spec.SecurityContext.SeccompProfile.Type != corev1.SeccompProfileTypeRuntimeDefault {
 		t.Error("seccompProfile must be RuntimeDefault")
 	}
+	assertFSGroup(t, pod)
 
 	c := pod.Spec.Containers[0]
 	if c.SecurityContext == nil {
@@ -162,6 +163,31 @@ func TestPodIsRestrictedCompliant(t *testing.T) {
 		len(c.SecurityContext.Capabilities.Drop) != 1 ||
 		c.SecurityContext.Capabilities.Drop[0] != "ALL" {
 		t.Errorf("capabilities = %+v, want drop ALL", c.SecurityContext.Capabilities)
+	}
+}
+
+// assertFSGroup checks that the pod asks the kubelet to chown
+// DataVolumeName to FSGroupID before the container starts, with a change
+// policy that skips the walk once the volume's top-level directory already
+// matches. envtest runs no kubelet, so this — like the rest of this file —
+// can only observe what the pod spec asks for, never that the chown
+// actually happened. That needs a real cluster on a storage class that does
+// not already hand back a world-writable directory — not
+// docs/runbook-milestone-5a-evidence.md's kind cluster, whose local-path
+// provisioner does exactly that regardless of fsGroup, so even a manual run
+// against it would not exercise this fix either. See docs/known-issues.md's
+// "From milestone 2b" entry for what confirming this still needs.
+func assertFSGroup(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	sc := pod.Spec.SecurityContext
+	if sc == nil {
+		t.Fatal("pod security context missing")
+	}
+	if sc.FSGroup == nil || *sc.FSGroup != FSGroupID {
+		t.Errorf("fsGroup = %v, want %d", sc.FSGroup, FSGroupID)
+	}
+	if sc.FSGroupChangePolicy == nil || *sc.FSGroupChangePolicy != corev1.FSGroupChangeOnRootMismatch {
+		t.Errorf("fsGroupChangePolicy = %v, want %s", sc.FSGroupChangePolicy, corev1.FSGroupChangeOnRootMismatch)
 	}
 }
 
@@ -555,6 +581,12 @@ func TestPersistentGroupMountsItsPVC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServerPod: %v", err)
 	}
+	// The gap this closes is specific to a PVC: an emptyDir already arrives
+	// world-writable, but a claim arrives owned by root. Checking it here,
+	// on the pod BuildServerPod actually gives a persistent group, is what
+	// TestPodIsRestrictedCompliant's ephemeral-group check cannot stand in
+	// for.
+	assertFSGroup(t, pod)
 
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == DataVolumeName {

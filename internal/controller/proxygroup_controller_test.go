@@ -428,8 +428,8 @@ func TestProxyGroupReconcileReplicasReservesTheRealPodItCreated(t *testing.T) {
 
 	key := f.ns + "/gateway"
 	pendingCreates, _, _ := r.Expectations.pending(key)
-	if pendingCreates != int32(len(created)) {
-		t.Errorf("pending creates = %d, want %d: reconcileReplicas must reserve "+
+	if len(pendingCreates) != len(created) {
+		t.Errorf("pending creates = %v, want %d: reconcileReplicas must reserve "+
 			"every pod it actually created, under that pod's real generated name "+
 			"and the real composite key -- not a name or key this test made up",
 			pendingCreates, len(created))
@@ -443,8 +443,8 @@ func TestProxyGroupReconcileReplicasReservesTheRealPodItCreated(t *testing.T) {
 	if _, err := r.pods(f.ctx, group); err != nil {
 		t.Fatalf("pods (second call): %v", err)
 	}
-	if pendingCreates, _, _ := r.Expectations.pending(key); pendingCreates != 0 {
-		t.Errorf("pending creates = %d after the second pods() call, want 0: "+
+	if pendingCreates, _, _ := r.Expectations.pending(key); len(pendingCreates) != 0 {
+		t.Errorf("pending creates = %v after the second pods() call, want empty: "+
 			"observePods must clear a reservation once its pod is listed", pendingCreates)
 	}
 }

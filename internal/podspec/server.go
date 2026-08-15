@@ -141,6 +141,16 @@ const (
 	// because it keeps the replay window small; the kubelet rotates it
 	// well before it runs out.
 	TokenExpirationSeconds int64 = 600
+
+	// FSGroupID is the supplemental group the kubelet chowns DataVolumeName
+	// to before the container starts, so uid 10001 — the container's own
+	// uid, per nix/oci-common.nix's `uid` and `gid`, which set both to the
+	// same 10001 — can write into a PersistentVolumeClaim that arrives
+	// owned by root. It is not a separate identity: nix/oci-common.nix
+	// gives the image one uid and one matching gid, both 10001, so the
+	// value that must appear here is the same 10001 the container already
+	// runs as.
+	FSGroupID int64 = 10001
 )
 
 // DataClaimName is the name of the PVC of a persistent server.
@@ -383,9 +393,36 @@ func BuildServerPod(
 			AutomountServiceAccountToken:  ptr.To(false),
 			ImagePullSecrets:              pullSecrets,
 			TerminationGracePeriodSeconds: ptr.To(group.Spec.TerminationGracePeriodSeconds),
+			// FSGroup is set for every server pod, ephemeral and persistent
+			// alike, not only for the persistent ones that need it. An
+			// emptyDir already arrives world-writable, so an ephemeral pod
+			// gains nothing from it — but a PersistentVolumeClaim arrives
+			// owned by root, and uid 10001 (nix/oci-common.nix's `uid` and
+			// `gid` for this image) cannot write into it without this. One
+			// PodSecurityContext shape for every server pod, rather than a
+			// second one that only a persistent group gets, is one fewer
+			// thing to keep in sync as the two group types' pod specs
+			// otherwise diverge — and the kubelet's ownership walk below
+			// costs nothing extra on a freshly created, empty emptyDir.
+			//
+			// FSGroupChangePolicy is OnRootMismatch, not the kubelet's own
+			// default of Always. Always recursively chowns every file under
+			// the volume on every single pod start; for a Minecraft world
+			// that can be gigabytes of region files, that cost is paid on
+			// every restart forever. OnRootMismatch instead checks only the
+			// volume's top-level directory: if its group already matches
+			// FSGroup — true for an emptyDir after its first mount, and true
+			// for a PVC after this fix's first chown — the kubelet skips the
+			// walk entirely. The trade-off this accepts: a file deep in the
+			// tree with the wrong group ownership (from a manual chmod,
+			// say) is not corrected once the root already matches. Nothing
+			// short of Always closes that, and Always is not affordable
+			// here.
 			SecurityContext: &corev1.PodSecurityContext{
-				RunAsNonRoot:   ptr.To(true),
-				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				RunAsNonRoot:        ptr.To(true),
+				SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				FSGroup:             ptr.To(FSGroupID),
+				FSGroupChangePolicy: ptr.To(corev1.FSGroupChangeOnRootMismatch),
 			},
 		},
 	}

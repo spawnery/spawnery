@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -552,91 +553,40 @@ func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
 	}
 }
 
-// TestServerInAPersistentGroupStillDrainsAndReleasesItself pins that "not
-// implemented yet" bounds the pod, not the object's lifecycle. Persistent
-// groups arrive in milestone 5, so no pod is built for them — but an early
-// return on that check would skip the finalizer, the drain and the release
-// exactly as the missing-group case used to, and such a Server could never be
-// deleted at all.
-func TestServerInAPersistentGroupStillDrainsAndReleasesItself(t *testing.T) {
+// TestAPersistentServerDrainsAndReleasesItself pins that a group's type bounds
+// nothing about its servers' lifecycle. It was written while the Server
+// controller refused to build a pod for a persistent group, to prove that the
+// refusal was not an early return skipping the finalizer, the drain and the
+// release — a Server that could never be deleted is the same deadlock as one
+// whose group is gone. The refusal is gone as of this milestone; the ordering
+// it was deliberately placed after is not, and neither is what that ordering
+// protects, so the walk stays and the pod now comes from the controller
+// itself rather than being stood in for.
+func TestAPersistentServerDrainsAndReleasesItself(t *testing.T) {
 	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	f.createPersistentServer(t, "survival", 0)
 
-	persistent := &spawneryv1alpha1.ServerGroup{
-		ObjectMeta: metav1.ObjectMeta{Name: "survival", Namespace: f.ns},
-		Spec: spawneryv1alpha1.ServerGroupSpec{
-			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: "production"},
-			Type:                          spawneryv1alpha1.ServerGroupPersistent,
-			Image:                         "ghcr.io/spawnery/paper:1.21.4-0.1.0",
-			MaxPlayers:                    50,
-			Replicas:                      ptr.To(int32(1)),
-			TerminationGracePeriodSeconds: 60,
-			FailedRetentionSeconds:        3600,
-			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
-			Storage:                       &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")},
-		},
-	}
-	if err := f.c.Create(f.ctx, persistent); err != nil {
-		t.Fatalf("create persistent ServerGroup: %v", err)
-	}
-
-	srv := &spawneryv1alpha1.Server{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "survival-0",
-			Namespace: f.ns,
-			OwnerReferences: []metav1.OwnerReference{{
-				APIVersion: spawneryv1alpha1.GroupVersion.String(),
-				Kind:       "ServerGroup",
-				Name:       persistent.Name,
-				UID:        persistent.UID,
-			}},
-		},
-		Spec: spawneryv1alpha1.ServerSpec{
-			GroupRef: spawneryv1alpha1.ObjectRef{Name: persistent.Name},
-			Ordinal:  ptr.To(int32(0)),
-		},
-	}
-	if err := f.c.Create(f.ctx, srv); err != nil {
-		t.Fatalf("create Server: %v", err)
-	}
-
-	// No pod is built, but the object is managed: finalizer on, reason stated.
 	f.reconcile("survival-0")
-	srv = f.server("survival-0")
-	if _, ok := f.pod("survival-0"); ok {
-		t.Fatal("a pod was built for a persistent group")
-	}
-	if !containsString(srv.Finalizers, ServerFinalizer) {
-		t.Fatalf("finalizers = %v, want %s even for a persistent group", srv.Finalizers, ServerFinalizer)
-	}
-	accepted := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
-	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
-		accepted.Reason != spawneryv1alpha1.ReasonNotImplemented {
-		t.Errorf("Accepted condition = %+v, want False/%s", accepted, spawneryv1alpha1.ReasonNotImplemented)
-	}
-
-	// Milestone 5 will create this pod; stand in for it so the drain path is
-	// exercised rather than merely the empty release.
-	built, err := podspec.BuildServerPod(f.network, persistent, srv, f.reconc.AgentEndpoint)
-	if err != nil {
-		t.Fatalf("BuildServerPod: %v", err)
-	}
-	if err := f.c.Create(f.ctx, built); err != nil {
-		t.Fatalf("create pod: %v", err)
-	}
-	f.reconcile("survival-0")
-	if got := f.server("survival-0").Status.PodName; got != "survival-0" {
-		t.Fatalf("status.podName = %q, want the pod adopted", got)
-	}
-
+	srv := f.server("survival-0")
 	pod, ok := f.pod("survival-0")
 	if !ok {
-		t.Fatal("pod vanished")
+		t.Fatal("no pod was built for the persistent server")
 	}
+	if !containsString(srv.Finalizers, ServerFinalizer) {
+		t.Fatalf("finalizers = %v, want %s", srv.Finalizers, ServerFinalizer)
+	}
+	accepted := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionTrue ||
+		accepted.Reason != spawneryv1alpha1.ReasonAccepted {
+		t.Errorf("Accepted condition = %+v, want True/%s", accepted, spawneryv1alpha1.ReasonAccepted)
+	}
+
 	uid := string(pod.UID)
 	f.setPodRunning("survival-0", true)
 	f.agents.Connect(uid, agent.RoleServer)
 	f.agents.MarkReady(uid)
-	if err := f.agents.ReportPlayers(uid, 5, 50); err != nil {
+	if err := f.agents.ReportPlayers(uid, 5, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
 	f.reconcile("survival-0") // Pending -> Starting
@@ -660,7 +610,7 @@ func TestServerInAPersistentGroupStillDrainsAndReleasesItself(t *testing.T) {
 		t.Fatal("pod deleted while 5 players were online — core invariant broken")
 	}
 
-	if err := f.agents.ReportPlayers(uid, 0, 50); err != nil {
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
 	f.reconcile("survival-0")
@@ -669,9 +619,18 @@ func TestServerInAPersistentGroupStillDrainsAndReleasesItself(t *testing.T) {
 	}
 
 	f.reconcile("survival-0")
-	err = f.c.Get(f.ctx, types.NamespacedName{Name: "survival-0", Namespace: f.ns}, &spawneryv1alpha1.Server{})
+	err := f.c.Get(f.ctx, types.NamespacedName{Name: "survival-0", Namespace: f.ns}, &spawneryv1alpha1.Server{})
 	if !apierrors.IsNotFound(err) {
 		t.Fatalf("finalizer never released on a persistent-group server: %v", err)
+	}
+
+	// And the world is still there once everything that referenced it has
+	// gone. TestDeletingAPersistentServerLeavesItsClaim asks the same question
+	// one reconcile after the deletion; this asks it after the object itself
+	// has been released, which is the state a recreated ordinal actually
+	// arrives in.
+	if f.claim("survival-0-data") == nil {
+		t.Error("the claim went with the server it outlived; the world is gone")
 	}
 }
 
@@ -1715,5 +1674,438 @@ func TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely(t *testing.T) {
 	}
 	if _, ok := f.pod("lobby-zero"); !ok {
 		t.Fatal("pod deleted while players were still online — core invariant broken")
+	}
+}
+
+// createPersistentServer adds the Server holding one ordinal of a persistent
+// group, the way ServerGroupReconciler.createPersistentServer builds it: the
+// derived name, spec.ordinal filled in, the three labels newServer stamps, and
+// the group as its *controller* rather than merely an owner. It lets a test
+// drive the Server controller alone, without the group controller in the
+// picture.
+//
+// Controller: true is the part that would be easy to leave off and is not
+// decoration. metav1.IsControlledBy is what the Server controller's adoption
+// path asks about a pod, and a fixture that builds ownership a second way is a
+// fixture that can make a controller look right about a shape production never
+// hands it.
+func (f *fixture) createPersistentServer(t *testing.T, group string, ordinal int32) *spawneryv1alpha1.Server {
+	t.Helper()
+	owner := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: group, Namespace: f.ns}, owner); err != nil {
+		t.Fatalf("get ServerGroup %s: %v", group, err)
+	}
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PersistentServerName(group, ordinal),
+			Namespace: f.ns,
+			Labels: map[string]string{
+				podspec.LabelManagedBy: podspec.ManagedByValue,
+				podspec.LabelNetwork:   owner.Spec.NetworkRef.Name,
+				podspec.LabelGroup:     owner.Name,
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion:         spawneryv1alpha1.GroupVersion.String(),
+				Kind:               "ServerGroup",
+				Name:               owner.Name,
+				UID:                owner.UID,
+				Controller:         ptr.To(true),
+				BlockOwnerDeletion: ptr.To(true),
+			}},
+		},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef:        spawneryv1alpha1.ObjectRef{Name: owner.Name},
+			GroupGeneration: owner.Generation,
+			Ordinal:         &ordinal,
+		},
+	}
+	if err := f.c.Create(f.ctx, srv); err != nil {
+		t.Fatalf("create Server %s: %v", srv.Name, err)
+	}
+	return srv
+}
+
+// claim reads a PersistentVolumeClaim by name and returns nil when there is
+// none, rather than failing the test the way f.server does. Absence is exactly
+// what the assertions below have to be able to ask about.
+//
+// A claim carrying a deletion timestamp counts as gone, the same rule f.pod
+// applies to a pod and for a sharper reason: the API server's
+// StorageObjectInUseProtection admission plugin puts a pvc-protection
+// finalizer on every claim at creation, and no controller runs in envtest to
+// take it off again. A deleted claim therefore stays readable for the rest of
+// the test, and without this rule "the claim is still here" would be true of a
+// world somebody had just asked to be destroyed — verified by mutation: a
+// Delete added to the Server controller's deletion path is invisible to
+// TestDeletingAPersistentServerLeavesItsClaim without it.
+func (f *fixture) claim(name string) *corev1.PersistentVolumeClaim {
+	f.t.Helper()
+	pvc := &corev1.PersistentVolumeClaim{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, pvc); err != nil {
+		return nil
+	}
+	if !pvc.DeletionTimestamp.IsZero() {
+		return nil
+	}
+	return pvc
+}
+
+// TestAPersistentServerGetsItsClaimBeforeItsPod pins the order master design
+// 6.1 asks for, and the retention that makes a world survive.
+//
+// envtest runs no provisioner, so the claim never reaches Bound and the pod
+// never runs. No test in this file asserts either — they assert the objects,
+// which is all this layer can honestly show.
+//
+// The order in the name is the weakest of the three, and saying so here is
+// cheaper than a reader finding out: both objects exist by the time a
+// reconcile returns, so what these assertions actually catch is a claim that
+// is never created at all, or a pod that is not. Swapping the two Creates
+// round was mutation-tested and passes this test unchanged.
+//
+// Not pinned is not the same as unpinnable, and the difference is worth being
+// precise about. A client.Client decorator recording the order of Create calls
+// would pin it — recordingRegistrar.onRegister in suite_test.go is this
+// fixture's existing instance of that technique, for an ordering that likewise
+// "cannot be seen from outside the call". It is left undone because the
+// consequence of a swap is soft rather than because the tool is missing: both
+// objects land in the same reconcile, the API server does not check that a
+// pod's claim exists, and a pod whose claim is not there yet is merely
+// unschedulable — the scheduler retries it, and the claim arrives
+// microseconds later. Add the decorator on the day something between the two
+// Creates can return early with the pod already made; today nothing between
+// them can.
+func TestAPersistentServerGetsItsClaimBeforeItsPod(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	srv := f.createPersistentServer(t, "survival", 0)
+
+	f.reconcile(srv.Name)
+
+	claim := f.claim("survival-0-data")
+	if claim == nil {
+		t.Fatal("no claim was created; a persistent pod would reference one that does not exist and stay Pending forever")
+	}
+	if len(claim.OwnerReferences) != 0 {
+		t.Error("the claim carries an owner reference; deleting the server would take the world with it")
+	}
+	if _, ok := f.pod(srv.Name); !ok {
+		t.Error("no pod was created")
+	}
+}
+
+// retirePodTheWayAKubeletWould removes a pod object that is only carrying a
+// deletion timestamp, which is the last step of a termination and the one step
+// envtest cannot take on its own: with no kubelet, a pod that was bound to a
+// node keeps its timestamp and answers Get for the rest of the test. A force
+// delete does what the kubelet's confirmation would.
+func (f *fixture) retirePodTheWayAKubeletWould(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	if err := f.c.Delete(f.ctx, pod, client.GracePeriodSeconds(0)); err != nil {
+		t.Fatalf("force delete pod %s: %v", pod.Name, err)
+	}
+}
+
+// recreateOrdinalOverATerminatingPod builds the state finding 1 of the
+// whole-branch review is about: a persistent ordinal whose Server object has
+// been replaced while the pod of the previous one is still terminating.
+//
+// It is a persistent group's state in practice: the name is derived from the
+// ordinal and reused across every generation of the Server object, so the
+// group's replacement meets its predecessor's pod under the identical name.
+//
+// The pod is bound to a node before it is deleted, and that step is the
+// mechanism rather than scenery: the API server force-deletes an *unscheduled*
+// pod outright, because no kubelet owes it a confirmation. Once a pod is bound
+// it waits for one, and envtest runs no kubelet to send it — so the deleted pod
+// keeps its deletion timestamp for the rest of the test, which is what a node
+// gone NotReady looks like on a real cluster.
+//
+// It returns the terminating pod so a test can finish the termination.
+func recreateOrdinalOverATerminatingPod(t *testing.T, f *fixture) *corev1.Pod {
+	t.Helper()
+	f.createPersistentGroup(t, "survival", 1)
+	first := f.createPersistentServer(t, "survival", 0)
+	f.reconcile(first.Name)
+
+	pod, ok := f.pod("survival-0")
+	if !ok {
+		t.Fatal("no pod for the first server, so there is no name for the second one to collide with")
+	}
+	f.bindPodToNode(t, pod, f.ensureNode(t, "node-holding-"+f.ns, false).Name)
+	if err := f.c.Delete(f.ctx, pod); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	if _, stillLive := f.pod(pod.Name); stillLive {
+		t.Fatal("the deleted pod is not terminating, so nothing holds its name")
+	}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: pod.Name, Namespace: f.ns}, &corev1.Pod{}); err != nil {
+		t.Fatalf("the deleted pod left the API server outright, so the collision this test is about "+
+			"cannot happen: %v", err)
+	}
+	if err := f.c.Delete(f.ctx, f.server(first.Name)); err != nil {
+		t.Fatalf("delete the first server: %v", err)
+	}
+	f.reconcile(first.Name)
+	if _, present := f.serverIfPresent(first.Name); present {
+		t.Fatal("the first server kept its finalizer, so the ordinal was never free to be rebuilt")
+	}
+
+	f.createPersistentServer(t, "survival", 0)
+	return pod
+}
+
+// TestARecreatedOrdinalWaitsForItsPredecessorsPod pins the first step of a
+// cycle nothing inside this operator bounds. What ends it from outside is the
+// pod finishing termination — a grace period ordinarily, and never, on a node
+// that has gone away.
+//
+// Creating into a name the API server still holds gets AlreadyExists on the
+// pod, which the create block tolerates — so the controller would record
+// status.podName and emit PodCreated for a pod it did not create, and the next
+// pass would read that pod as lost and delete this Server. The group rebuilds
+// the ordinal, and round it goes at the five-second resync: nothing reaches
+// Failed, so consecutiveFailures never moves and neither BackingOff nor
+// Degraded ever fires. A fresh Server with an empty status.podName cannot raise
+// PodLost, which is why waiting is the whole fix.
+func TestARecreatedOrdinalWaitsForItsPredecessorsPod(t *testing.T) {
+	f := newFixture(t)
+	recreateOrdinalOverATerminatingPod(t, f)
+
+	f.reconcile("survival-0")
+
+	got := f.server("survival-0")
+	if got.Status.PodName != "" {
+		t.Errorf("status.podName = %q while the predecessor's pod is still terminating; "+
+			"the controller claimed a pod it did not create, and the next pass reads it as lost",
+			got.Status.PodName)
+	}
+	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Reason != ReasonPodNameTerminating {
+		t.Errorf("Accepted = %+v, want reason %s: an ordinal waiting on its predecessor's pod "+
+			"is indistinguishable from a slow start otherwise", accepted, ReasonPodNameTerminating)
+	}
+}
+
+// TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone is the other half:
+// the wait ends by itself, and ends with a pod this controller really did
+// create. Without it the fix above would be indistinguishable from a Server
+// that never gets a pod at all.
+func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
+	f := newFixture(t)
+	terminating := recreateOrdinalOverATerminatingPod(t, f)
+	f.reconcile("survival-0")
+
+	f.retirePodTheWayAKubeletWould(t, terminating)
+	f.reconcile("survival-0")
+
+	got := f.server("survival-0")
+	if got.Status.PodName != "survival-0" {
+		t.Fatalf("status.podName = %q once the predecessor's pod is gone, want survival-0", got.Status.PodName)
+	}
+	if _, ok := f.pod("survival-0"); !ok {
+		t.Error("no pod once the name was free")
+	}
+	// The wait clears rather than sticking: the switch at the top of Reconcile
+	// sets Accepted back to True on every pass that resolves the group and the
+	// network, and this is what says the block above did not park a reason on
+	// the object that outlives what it described.
+	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionTrue {
+		t.Errorf("Accepted = %+v once the pod was created, want True: the wait has to clear", accepted)
+	}
+}
+
+// TestAnExistingClaimIsLeftExactlyAsItIs pins design §3.3's second property,
+// "created, never updated", which until this test was pinned by nothing: no
+// test put a claim in the way that disagreed with spec.storage, so replacing
+// the claim Create in server_controller.go with the controllerutil.CreateOrUpdate
+// this same package uses six times over left the suite green.
+//
+// It is what stands between 5b and a world that has been resized or
+// reconfigured underneath the group. A claim already carrying a size, a class
+// or an access mode other than the one spec.storage asks for is the ordinary
+// case rather than a corruption — a world grown by hand, or created under an
+// earlier spec — and 5a's answer is to leave it alone and let 5b decide what
+// growth means. An update would at best be rejected by the API server (a PVC's
+// storageClassName and accessModes are immutable, and its size may not shrink)
+// and at worst succeed.
+//
+// resourceVersion is the assertion that makes "byte-identical" mean it: any
+// write at all moves it, including one that lands the same values, and a
+// CreateOrUpdate that rewrote only the labels was mutation-tested and fails
+// exactly this line and no other.
+//
+// The three field assertions under it cannot fail while that one holds, and
+// saying so is cheaper than a reader assuming otherwise: the API server
+// forbids changing the spec of an existing claim, bar a bound claim's resource
+// request and its volumeAttributesClassName, and envtest binds nothing — so a
+// write that reached these
+// fields would be rejected and fail the reconcile before any assertion ran —
+// which is what the full CreateOrUpdate mutation did. They are here to say
+// what byte-identical is protecting, in the terms 5b will change.
+func TestAnExistingClaimIsLeftExactlyAsItIs(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+
+	// Disagreeing with spec.storage (10Gi, no class, ReadWriteOnce by the CRD
+	// default) on each of the three fields BuildDataClaim renders.
+	existing := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podspec.DataClaimName("survival-0"),
+			Namespace: f.ns,
+			Labels:    map[string]string{podspec.LabelManagedBy: podspec.ManagedByValue},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			StorageClassName: ptr.To("chosen-when-the-world-was-made"),
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("50Gi")},
+			},
+		},
+	}
+	if err := f.c.Create(f.ctx, existing); err != nil {
+		t.Fatalf("create the claim already holding the world: %v", err)
+	}
+	before := f.claim("survival-0-data")
+	if before == nil {
+		t.Fatal("no claim to begin with")
+	}
+
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+
+	after := f.claim("survival-0-data")
+	if after == nil {
+		t.Fatal("the claim is gone")
+	}
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("the claim was written to (resourceVersion %s -> %s): size %v, class %s, modes %v",
+			before.ResourceVersion, after.ResourceVersion,
+			after.Spec.Resources.Requests[corev1.ResourceStorage],
+			ptr.Deref(after.Spec.StorageClassName, "<unset>"), after.Spec.AccessModes)
+	}
+	if got := after.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(resource.MustParse("50Gi")) != 0 {
+		t.Errorf("storage request = %v, want the 50Gi the claim already had", got)
+	}
+	if after.Spec.StorageClassName == nil || *after.Spec.StorageClassName != "chosen-when-the-world-was-made" {
+		t.Errorf("storageClassName = %v, want the class the volume was provisioned from", after.Spec.StorageClassName)
+	}
+	if len(after.Spec.AccessModes) != 1 || after.Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Errorf("accessModes = %v, want the modes the claim already had", after.Spec.AccessModes)
+	}
+}
+
+// TestARecreatedOrdinalMountsTheClaimItLeft is the half of design §6's own
+// headline test that was never written. That section names the one envtest
+// case that matters as "deleting a Server leaves its claim standing, **and the
+// same ordinal picks it up again**"; only the first clause had a test.
+//
+// Writing this is what would have surfaced the terminating-pod collision the
+// two tests above are about, which is why the recreation here goes through the
+// same helper rather than around it: the ordinal cannot pick anything up until
+// its predecessor's pod has finished.
+//
+// What "picks it up again" has to mean at this layer is that the claim that
+// was there is still there, and is the one the new pod mounts. A claim deleted
+// and remade under the same name shows up here as
+// an *absent* claim rather than a changed one, and that is worth stating: the
+// pvc-protection finalizer envtest never clears means a deleted claim cannot
+// leave, so the remake gets AlreadyExists and f.claim — which counts a
+// deletion timestamp as gone — reports nothing. The "no claim" assertion is
+// therefore the one that catches a stray Delete on this path, and it was
+// mutation-tested against exactly that: a Delete added to the finalizer-release
+// branch, which TestDeletingAPersistentServerLeavesItsClaim did not reach
+// before this commit.
+func TestARecreatedOrdinalMountsTheClaimItLeft(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	first := f.createPersistentServer(t, "survival", 0)
+	f.reconcile(first.Name)
+	if f.claim("survival-0-data") == nil {
+		t.Fatal("no claim to begin with")
+	}
+
+	pod, ok := f.pod("survival-0")
+	if !ok {
+		t.Fatal("no pod for the first server")
+	}
+	f.bindPodToNode(t, pod, f.ensureNode(t, "node-holding-"+f.ns, false).Name)
+	if err := f.c.Delete(f.ctx, f.server(first.Name)); err != nil {
+		t.Fatalf("delete the first server: %v", err)
+	}
+	f.reconcile(first.Name)
+	f.retirePodTheWayAKubeletWould(t, pod)
+	f.reconcile(first.Name)
+	if _, present := f.serverIfPresent(first.Name); present {
+		t.Fatal("the first server kept its finalizer, so the ordinal was never free to be rebuilt")
+	}
+
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+
+	after := f.claim("survival-0-data")
+	if after == nil {
+		t.Fatal("the recreated ordinal has no claim")
+	}
+	newPod, ok := f.pod("survival-0")
+	if !ok {
+		t.Fatal("the recreated ordinal has no pod")
+	}
+	if got := claimsMounted(newPod); !slices.Contains(got, "survival-0-data") {
+		t.Errorf("the new pod mounts claims %v, want survival-0-data among them: the ordinal came "+
+			"back onto a different volume, so its world is still on the one it left", got)
+	}
+}
+
+// claimsMounted is the claim names a pod's volumes are backed by. It reads the
+// pod rather than trusting BuildServerPod, because the question here is what
+// the ordinal actually came back onto.
+func claimsMounted(pod *corev1.Pod) []string {
+	var names []string
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			names = append(names, v.PersistentVolumeClaim.ClaimName)
+		}
+	}
+	return names
+}
+
+// TestDeletingAPersistentServerLeavesItsClaim is the property the whole
+// milestone turns on.
+//
+// What it catches is a Delete on the claim from the Server controller's
+// deletion path. It cannot catch an owner reference: envtest runs no garbage
+// collector, so an owned claim survives its owner here exactly as an unowned
+// one does — which is why the ownerReferences assertion sits in
+// TestAPersistentServerGetsItsClaimBeforeItsPod and is checked on the object
+// rather than through a deletion.
+//
+// It takes two reconciles, and the second is not a belt-and-braces repeat. The
+// first sees the pod still there and only asks for its deletion; the branch
+// that releases the finalizer and lets the object go needs the pod already
+// gone, so it runs on the second. A Delete added to that branch was invisible
+// to the single-reconcile version of this test — mutation-tested — while the
+// object it destroyed was the world.
+func TestDeletingAPersistentServerLeavesItsClaim(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	srv := f.createPersistentServer(t, "survival", 0)
+	f.reconcile(srv.Name)
+	if f.claim("survival-0-data") == nil {
+		t.Fatal("no claim to begin with")
+	}
+
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete server: %v", err)
+	}
+	f.reconcile(srv.Name)
+	f.reconcile(srv.Name)
+	if _, present := f.serverIfPresent(srv.Name); present {
+		t.Fatal("the server is still here, so the deletion path this test is about never finished")
+	}
+
+	if f.claim("survival-0-data") == nil {
+		t.Fatal("the claim went with the server; the world is gone")
 	}
 }

@@ -162,16 +162,6 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		})
 	}
 
-	if !group.IsEphemeral() {
-		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
-			Type:    spawneryv1alpha1.ConditionReady,
-			Status:  metav1.ConditionFalse,
-			Reason:  spawneryv1alpha1.ReasonNotImplemented,
-			Message: "persistent groups arrive in milestone 5",
-		})
-		requeue = time.Minute
-	}
-
 	// Rendered before anything that can create a Server, and unconditionally —
 	// not gated on networkUsable, because the ConfigMap has nothing to do with
 	// the Network, and a spec.maxPlayers edit has to reach it even on a
@@ -220,9 +210,18 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		group.Status.LastFailureAt = nil
 		// The two conditions need no explicit removal: the BackingOff/Degraded
 		// switch below (the one with the "!sized" case) republishes both with
-		// meta.SetStatusCondition unconditionally on every pass, including the
-		// case where nothing was decided, so a Remove here would be
-		// overwritten before it could ever be observed.
+		// meta.SetStatusCondition unconditionally on every pass, for a group
+		// of either type, including the case where nothing was decided — so a
+		// Remove here would be overwritten before it could ever be observed.
+		//
+		// "Either type" is newer than the sentence above it and is what makes
+		// it true. While the two conditions were published only inside an
+		// `if group.IsEphemeral()` block, the sentence held for a persistent
+		// group only by accident: nothing published them there, so this reset
+		// had nothing to overwrite and equally nothing to remove. Now they are
+		// published for both, and the republishing below is what carries the
+		// reset onto the status of either — so if either condition is ever put
+		// back behind a type test, this reset needs a Remove of its own.
 	}
 
 	var lastFailure time.Time
@@ -242,8 +241,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// forward to the success instead would be durable, but it would write a
 	// time at which nothing failed into a status field an operator reads as
 	// lastFailureAt. The residual edge — a corpse older than a success that has
-	// since left the views being counted once more — is bounded by what
-	// pruneFailed retains, which is one.
+	// since left the views being counted once more — is bounded by how many
+	// corpses the group can be holding at all, and that number differs by
+	// type. For an ephemeral group it is what pruneFailed retains, which is
+	// one. pruneFailed does not run for a persistent group: there each corpse
+	// keeps its ordinal until its own failed retention elapses and the Server
+	// controller removes it, so the bound is one per ordinal, up to
+	// spec.replicas.
 	if !newestFailure.IsZero() {
 		stamped := metav1.NewTime(newestFailure)
 		group.Status.LastFailureAt = &stamped
@@ -289,13 +293,15 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// the create-backoff case, which docs/known-issues.md documents under "a
 	// group in create-backoff condemns without replacing".
 	//
-	// IsEphemeral rides along with networkUsable here rather than gating the
-	// call, so a persistent group's servers are condemned too. That is what
-	// known-issues already describes — a departing node takes a server
-	// regardless of what kind of server it is — and it costs nothing while
-	// milestone 5 is unwritten and nothing in this operator creates a server
-	// for a persistent group.
-	mayResize := networkUsable && group.IsEphemeral()
+	// The group's type is not part of this flag, and that is the second half of
+	// the same rule. The Network gates sizing of either kind, because neither
+	// kind can render a pod without one; the type selects *which* rule sizes
+	// the group — the spare-slot rule for an ephemeral group, spec.replicas for
+	// a persistent one — and size() branches on it internally. A persistent
+	// group's servers are condemned on the way through either way, which is
+	// what known-issues already describes: a departing node takes a server
+	// regardless of what kind of server it is.
+	mayResize := networkUsable
 	decision, err := r.size(ctx, group, views, servers, backoff, mayResize)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -347,83 +353,122 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 			r.Recorder.Event(group, eventType, limited.Reason, limited.Message)
 		}
-		// Built false-by-default and flipped, like ScalingLimited above.
-		backingOff := metav1.Condition{
-			Type:    spawneryv1alpha1.ConditionBackingOff,
-			Status:  metav1.ConditionFalse,
-			Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
-			Message: "no server has failed to start recently",
-		}
-		degraded := metav1.Condition{
-			Type:    spawneryv1alpha1.ConditionDegraded,
-			Status:  metav1.ConditionFalse,
-			Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
-			Message: "servers are starting normally",
-		}
-		switch {
-		case !sized:
-			// Nothing was decided this pass, so the False above is the
-			// absence of a verdict rather than one — the same reasoning
-			// ScalingLimited's own !sized case gives above. The counting two
-			// blocks up runs whether or not the Network is usable, so
-			// without this case a group with a dead Network would advertise
-			// a wait (or a give-up) it is not serving, beside an Accepted:
-			// False that already explains the same standstill differently.
-			backingOff.Message = "backoff is not being decided: the group's network is not usable"
-			degraded.Message = "backoff is not being decided: the group's network is not usable"
-		case backoff.GaveUp:
-			// No pending retry, so BackingOff is false — but an all-clear
-			// reason here would be a lie, so it carries the real one.
-			backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
-			backingOff.Message = fmt.Sprintf(
-				"not retrying: %d servers failed to start in a row; change the group's spec to try again",
-				group.Status.ConsecutiveFailures)
-			degraded.Status = metav1.ConditionTrue
-			degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
-			degraded.Message = backingOff.Message
-		case backoff.RetryAfter > 0:
-			backingOff.Status = metav1.ConditionTrue
-			backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
-			backingOff.Message = fmt.Sprintf(
-				"%d server(s) failed to start in a row; next attempt in %s",
-				group.Status.ConsecutiveFailures, backoff.RetryAfter.Round(time.Second))
-		default:
-			// Nothing has failed this streak. Only reachable with a non-nil
-			// LastFailureAt when a past failure's watermark is still stuck
-			// on the status (the residual edge Task 1 and Task 4 both
-			// accepted) — a genuinely clean history leaves it nil, which the
-			// !newestFailure.IsZero() guard above is what keeps true: drop
-			// that guard and this renders the zero time instead.
-			if group.Status.LastFailureAt != nil {
-				backingOff.Message = fmt.Sprintf(
-					"no server has failed to start recently (last failure at %s)",
-					group.Status.LastFailureAt.Time.Format(time.RFC3339))
-			}
-		}
+	}
 
-		// The event goes on the flank only, for the reason the
-		// ScalingLimited block gives: a five-second resync would otherwise
-		// announce the same wait over and over for its whole duration.
-		wasBackingOff := meta.IsStatusConditionTrue(group.Status.Conditions,
-			spawneryv1alpha1.ConditionBackingOff)
-		wasDegraded := meta.IsStatusConditionTrue(group.Status.Conditions,
-			spawneryv1alpha1.ConditionDegraded)
-		meta.SetStatusCondition(&group.Status.Conditions, backingOff)
-		meta.SetStatusCondition(&group.Status.Conditions, degraded)
-		if isTrue := backingOff.Status == metav1.ConditionTrue; sized && isTrue != wasBackingOff {
-			eventType := corev1.EventTypeNormal
-			if isTrue {
-				eventType = corev1.EventTypeWarning
-			}
-			r.Recorder.Event(group, eventType, backingOff.Reason, backingOff.Message)
+	// BackingOff and Degraded belong to a group of either type, and the line
+	// between them and ScalingLimited above is what kind of question each
+	// answers. ScalingLimited is about capacity the players need: free slots
+	// against spec.scaling.spareSlots, and the maxReplicas ceiling that can
+	// stop the group covering them. A persistent group has no such question --
+	// its size is spec.replicas, a number nobody's play session moves -- so
+	// the condition stays inside the block above, where a reader looking for
+	// it will find it beside the rule it reports on.
+	//
+	// These two are about failures, and either kind of group can have those.
+	// The backoff already gated a persistent group's creates -- size() runs
+	// its CreateOrdinals loop under the same backoff.MayCreate as the
+	// ephemeral count -- so until this was lifted out, a persistent group was
+	// backing off and giving up in silence, with nothing on its status saying
+	// why nothing was happening.
+	//
+	// Its likeliest failure is the one this milestone introduces: a claim that
+	// never binds, which no replacement can fix, because the world is on that
+	// volume and a rebuilt ordinal would only run at the same one. It does
+	// rebuild, slowly: nothing on the group's side removes a persistent server
+	// for having failed -- pruneFailed is ephemeral-only and
+	// DecidePersistentSize holds an ordinal in any phase, so the removals that
+	// do exist here are about other things, a lower spec.replicas or a
+	// departing node -- but the Server controller's failed-retention path
+	// takes the corpse away eventually, and the ordinal is created again on
+	// the next pass. So the attempts are spaced by spec.failedRetentionSeconds,
+	// an hour at the CRD default, against backoff windows of at most 160s
+	// before the threshold: at that default the waiting half of the backoff
+	// never delays an attempt, and what it contributes is the end of them --
+	// GaveUp at the threshold, after which the group stalls and waits for a
+	// human. Without these two conditions the verdict would be the part nobody
+	// could see: status.consecutiveFailures is counted for either type and
+	// would climb, but a number is not a verdict, and the phase would read
+	// Pending throughout, exactly like a slow start. With them the group says
+	// which of the two it is doing, and the give-up reaches derivePhase as
+	// Degraded -- which is the whole of what they do for a persistent group,
+	// and the whole of why they were lifted out.
+	//
+	// Both are built false-by-default and flipped, like ScalingLimited above.
+	backingOff := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionBackingOff,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
+		Message: "no server has failed to start recently",
+	}
+	degraded := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionDegraded,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonNoRecentFailures,
+		Message: "servers are starting normally",
+	}
+	switch {
+	case !sized:
+		// Nothing was decided this pass, so the False above is the
+		// absence of a verdict rather than one — the same reasoning
+		// ScalingLimited's own !sized case gives above. The counting two
+		// blocks up runs whether or not the Network is usable, so
+		// without this case a group with a dead Network would advertise
+		// a wait (or a give-up) it is not serving, beside an Accepted:
+		// False that already explains the same standstill differently.
+		backingOff.Message = "backoff is not being decided: the group's network is not usable"
+		degraded.Message = "backoff is not being decided: the group's network is not usable"
+	case backoff.GaveUp:
+		// No pending retry, so BackingOff is false — but an all-clear
+		// reason here would be a lie, so it carries the real one.
+		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+		backingOff.Message = fmt.Sprintf(
+			"not retrying: %d servers failed to start in a row; change the group's spec to try again",
+			group.Status.ConsecutiveFailures)
+		degraded.Status = metav1.ConditionTrue
+		degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+		degraded.Message = backingOff.Message
+	case backoff.RetryAfter > 0:
+		backingOff.Status = metav1.ConditionTrue
+		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+		backingOff.Message = fmt.Sprintf(
+			"%d server(s) failed to start in a row; next attempt in %s",
+			group.Status.ConsecutiveFailures, backoff.RetryAfter.Round(time.Second))
+	default:
+		// Nothing has failed this streak. Only reachable with a non-nil
+		// LastFailureAt when a past failure's watermark is still stuck
+		// on the status (the residual edge Task 1 and Task 4 both
+		// accepted) — a genuinely clean history leaves it nil, which the
+		// !newestFailure.IsZero() guard above is what keeps true: drop
+		// that guard and this renders the zero time instead.
+		if group.Status.LastFailureAt != nil {
+			backingOff.Message = fmt.Sprintf(
+				"no server has failed to start recently (last failure at %s)",
+				group.Status.LastFailureAt.Time.Format(time.RFC3339))
 		}
-		if isTrue := degraded.Status == metav1.ConditionTrue; sized && isTrue != wasDegraded {
-			eventType := corev1.EventTypeNormal
-			if isTrue {
-				eventType = corev1.EventTypeWarning
-			}
-			r.Recorder.Event(group, eventType, degraded.Reason, degraded.Message)
+	}
+
+	// The event goes on the flank only, for the reason the
+	// ScalingLimited block gives: a five-second resync would otherwise
+	// announce the same wait over and over for its whole duration.
+	wasBackingOff := meta.IsStatusConditionTrue(group.Status.Conditions,
+		spawneryv1alpha1.ConditionBackingOff)
+	wasDegraded := meta.IsStatusConditionTrue(group.Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded)
+	meta.SetStatusCondition(&group.Status.Conditions, backingOff)
+	meta.SetStatusCondition(&group.Status.Conditions, degraded)
+	if isTrue := backingOff.Status == metav1.ConditionTrue; sized && isTrue != wasBackingOff {
+		eventType := corev1.EventTypeNormal
+		if isTrue {
+			eventType = corev1.EventTypeWarning
 		}
+		r.Recorder.Event(group, eventType, backingOff.Reason, backingOff.Message)
+	}
+	if isTrue := degraded.Status == metav1.ConditionTrue; sized && isTrue != wasDegraded {
+		eventType := corev1.EventTypeNormal
+		if isTrue {
+			eventType = corev1.EventTypeWarning
+		}
+		r.Recorder.Event(group, eventType, degraded.Reason, degraded.Message)
 	}
 
 	if group.IsEphemeral() {
@@ -494,20 +539,23 @@ func ofGeneration(views []ServerView, generation int64) []ServerView {
 	return out
 }
 
-// size brings the group to the size DecideSize asks for and reports that
+// size brings the group to the size its own rule asks for and reports that
 // decision, so Reconcile can publish the part of it that belongs on the
-// status. It also condemns the servers a departing node has claimed, and that
-// half runs whether or not the group may resize.
+// status. Which rule that is follows from the group's type: the spare-slot
+// rule of DecideSize for an ephemeral group, the number in spec.replicas by
+// way of DecidePersistentSize for a persistent one. It also condemns the
+// servers a departing node has claimed, and that half runs whether or not the
+// group may resize.
 //
-// mayResize is false when the group's Network is unusable, or when it is not
-// an ephemeral group. Both stop the group deciding a size; neither stops a
-// node leaving. See the rule at the call site for why those are different
-// questions. A nil spec.scaling is a third way to have no size to decide, and
-// it lands in the same place for the same reason.
+// mayResize is false when the group's Network is unusable, which stops the
+// group deciding a size of either kind and does not stop a node leaving. See
+// the rule at the call site for why those are different questions. A nil
+// spec.scaling on an ephemeral group is a second way to have no size to
+// decide, and it lands in the same place for the same reason.
 //
-// The returned decision is the zero value whenever the group did not resize,
-// so a caller publishing ScalingLimited from it says "nothing was decided"
-// rather than a verdict nothing computed.
+// The returned decision carries nothing but Condemn whenever no rule decided a
+// size, so a caller publishing ScalingLimited from it says "nothing was
+// decided" rather than a verdict nothing computed.
 func (r *ServerGroupReconciler) size(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -519,47 +567,95 @@ func (r *ServerGroupReconciler) size(
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
 
-	// Above the early return below, not inside the resizing half: the
+	// Before the switch below and outside every one of its branches: the
 	// reservations are what keep condemned() from naming the same server twice
 	// across two passes, so a group that only ever condemns still has to
 	// observe them and still has to read them.
 	r.Expectations.observe(key, views)
 	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
 
-	if !mayResize || group.Spec.Scaling == nil {
-		return SizeDecision{}, r.condemn(ctx, group, servers, key,
-			condemned(ScalingInputs{Views: views, PendingDeletes: pendingDeletes}))
+	var decision SizeDecision
+	switch {
+	case !mayResize:
+		// No size is decided, and the condemnation attached below is the whole
+		// of what this function does on this path: every loop under it is fed
+		// by a field no rule filled in.
+	case group.IsEphemeral():
+		if group.Spec.Scaling != nil {
+			decision = DecideSize(ScalingInputs{
+				Views:         views,
+				MinReplicas:   group.Spec.Scaling.MinReplicas,
+				MaxReplicas:   group.Spec.Scaling.MaxReplicas,
+				SpareSlots:    group.Spec.Scaling.SpareSlots,
+				MaxPlayers:    group.Spec.MaxPlayers,
+				Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
+
+				Generation:     group.Generation,
+				MaxUnavailable: group.UpdateMaxUnavailable(),
+
+				PendingCreates: int32(len(pendingCreates)),
+				PendingDeletes: pendingDeletes,
+				PendingRetires: pendingRetires,
+			})
+		}
+	default:
+		decision = DecidePersistentSize(PersistentInputs{
+			Group:          group.Name,
+			Replicas:       group.DesiredReplicas(),
+			Views:          views,
+			PendingCreates: pendingCreates,
+			PendingDeletes: pendingDeletes,
+		})
 	}
 
-	decision := DecideSize(ScalingInputs{
-		Views:         views,
-		MinReplicas:   group.Spec.Scaling.MinReplicas,
-		MaxReplicas:   group.Spec.Scaling.MaxReplicas,
-		SpareSlots:    group.Spec.Scaling.SpareSlots,
-		MaxPlayers:    group.Spec.MaxPlayers,
-		Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
-
-		Generation:     group.Generation,
-		MaxUnavailable: group.UpdateMaxUnavailable(),
-
-		PendingCreates: pendingCreates,
-		PendingDeletes: pendingDeletes,
-		PendingRetires: pendingRetires,
-	})
+	// Condemnation is attached here, once, for every path out of the switch
+	// above rather than by each branch remembering to do it. DecideSize
+	// attaches it too, and condemned() reads nothing but the two fields handed
+	// to it here, so for that branch this assigns the same names a second
+	// time; the persistent rule and the two paths that decide no size have no
+	// attachment of their own, and this is theirs. Two neighbouring branches
+	// that must each remember one step is the shape where one of them
+	// eventually does not.
+	decision.Condemn = condemned(ScalingInputs{Views: views, PendingDeletes: pendingDeletes})
 
 	// The backoff gate is on execution, not on the decision. DecideSize keeps
 	// computing what the group needs, so Limited and ColdStartBlocked go on
 	// telling the truth about the shortfall while the backoff separately says
 	// the group is waiting — two facts an operator needs to see apart. It also
-	// means expectations never reserves a create that did not happen.
+	// means no create is reserved on a pass where the gate refused every
+	// attempt. (The deletes, condemnations and retirements below reserve their
+	// own removals whatever the gate said, because the gate does not reach
+	// them.)
+	//
+	// That is narrower than "a reservation implies an object was created", and
+	// the difference is worth stating because the sentence above is the one a
+	// future reader would otherwise cite for the wider claim.
+	// createPersistentServer returns the name on AlreadyExists as well, and the
+	// loop below reserves it just the same: a reservation's job is to stop the
+	// next pass asking for the same name again, not to record what this pass
+	// made.
 	//
 	// Creation is the only thing the backoff gates. The deletes, condemnations
 	// and retirements below run whatever it decided: they touch players, and
 	// must not wait on an unrelated failure. The Network gate above is a
 	// different question with a different answer, settled at the call site.
+	//
+	// Two loops under one gate, because the two rules ask for creation in the
+	// two different currencies they decide in: a count for the ephemeral rule,
+	// which builds interchangeable servers, and a list of ordinals for the
+	// persistent one, which builds identities. At most one of them is ever
+	// non-empty -- the switch above ran one branch, and neither rule fills the
+	// other's field -- and neither loop needs to know that.
 	if backoff.MayCreate {
 		for i := int32(0); i < decision.Create; i++ {
 			name, err := r.createServer(ctx, group)
+			if err != nil {
+				return decision, err
+			}
+			r.Expectations.expectCreated(key, name)
+		}
+		for _, ordinal := range decision.CreateOrdinals {
+			name, err := r.createPersistentServer(ctx, group, ordinal)
 			if err != nil {
 				return decision, err
 			}
@@ -579,8 +675,8 @@ func (r *ServerGroupReconciler) size(
 	}
 	// Ungated by the backoff, like the deletes and retirements around it and
 	// for the same reason: this touches players and must not wait on an
-	// unrelated failure. The same call runs on the early-return path above,
-	// which is how it also stays ungated by the Network.
+	// unrelated failure. It is ungated by the Network too, because Condemn is
+	// attached above whether or not any rule decided a size.
 	if err := r.condemn(ctx, group, servers, key, decision.Condemn); err != nil {
 		return decision, err
 	}
@@ -596,10 +692,11 @@ func (r *ServerGroupReconciler) size(
 // condemn removes the named servers and reserves each removal, one delete per
 // server on a node that is going away.
 //
-// It is a method of its own rather than a loop inside size() because it has
-// two callers on two sides of the Network gate, and they must not be allowed
-// to drift into two loops that emit different events for the same occasion.
-// Reserved after the delete, matching size()'s other removal loops.
+// It stayed a method of its own after the Network gate stopped needing a
+// second call site for it, because the occasion it names is not the one the
+// deletes beside it in size() name — a node leaving rather than a size
+// decision — and the event it emits says so. Reserved after the delete,
+// matching size()'s other removal loops.
 func (r *ServerGroupReconciler) condemn(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -660,6 +757,7 @@ func (r *ServerGroupReconciler) collectViews(
 		}
 		v := ServerView{
 			Name:     srv.Name,
+			Ordinal:  srv.Spec.Ordinal,
 			Phase:    phase.Phase(srv.Status.Phase),
 			Players:  players,
 			Slots:    slots,
@@ -736,10 +834,16 @@ func (r *ServerGroupReconciler) podFor(ctx context.Context, srv *spawneryv1alpha
 	return pod, true
 }
 
-func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) (string, error) {
+// newServer builds the Server object both create paths write. Everything a
+// server of this group carries is here except the two things that tell the
+// kinds apart: where the name came from, and spec.ordinal.
+func (r *ServerGroupReconciler) newServer(
+	group *spawneryv1alpha1.ServerGroup,
+	name string,
+) (*spawneryv1alpha1.Server, error) {
 	srv := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      NewServerName(group.Name),
+			Name:      name,
 			Namespace: group.Namespace,
 			Labels: map[string]string{
 				podspec.LabelManagedBy: podspec.ManagedByValue,
@@ -753,10 +857,52 @@ func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawner
 		},
 	}
 	if err := controllerutil.SetControllerReference(group, srv, r.Scheme); err != nil {
+		return nil, err
+	}
+	return srv, nil
+}
+
+// createServer creates one interchangeable server of an ephemeral group, under
+// a name with a random suffix because it has no identity to preserve.
+func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) (string, error) {
+	srv, err := r.newServer(group, NewServerName(group.Name))
+	if err != nil {
 		return "", err
 	}
 	if err := r.Create(ctx, srv); err != nil {
 		return "", err
+	}
+	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerCreated", "created server %s", srv.Name)
+	return srv.Name, nil
+}
+
+// createPersistentServer creates the server holding one ordinal. Unlike
+// createServer's random suffix, this name is derived and stable: it is what
+// makes the claim name stable, which is what makes the world survive.
+func (r *ServerGroupReconciler) createPersistentServer(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	ordinal int32,
+) (string, error) {
+	srv, err := r.newServer(group, PersistentServerName(group.Name, ordinal))
+	if err != nil {
+		return "", err
+	}
+	srv.Spec.Ordinal = &ordinal
+	if err := r.Create(ctx, srv); err != nil {
+		// A name this reconciler derives can already be taken, which a random
+		// one effectively cannot: the cache that DecidePersistentSize read may
+		// simply not have shown the server this same reconciler created a
+		// moment ago. The object is already what this call wanted, so the
+		// caller reserves it as it would any other create -- returning the
+		// error instead would fail the whole reconcile, status and PDB with
+		// it, for as long as the collision lasts: a pass or two while a cache
+		// catches up, and without end for an object that holds the name
+		// without holding the ordinal. No event: nothing was created here.
+		if !apierrors.IsAlreadyExists(err) {
+			return "", err
+		}
+		return srv.Name, nil
 	}
 	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerCreated", "created server %s", srv.Name)
 	return srv.Name, nil

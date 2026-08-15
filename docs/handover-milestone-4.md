@@ -10,6 +10,13 @@ criteria that run left open; nothing before that section changed.
 document remains the one to start 4c from, and the record of milestone 3's
 evidence.
 
+**If you are starting milestone 5 or later, read
+[`handover-milestone-5.md`](handover-milestone-5.md) instead.** Milestone 4 is
+complete as of 4c-3 (2026-08-15); this document is its record, kept for the
+same reason milestone 3's own evidence stays on file. Milestone 5 is a
+different subsystem — persistent storage, not scaling or the proxy layer —
+built against its own spec, `docs/superpowers/specs/2026-08-15-persistent-groups-design.md`.
+
 This document is not a spec. It says where 3c stopped and what milestone 4 —
 scaling and drain — already finds in place. The design decisions live in
 `docs/superpowers/specs/2026-08-11-velocity-agent-design.md`; the open points

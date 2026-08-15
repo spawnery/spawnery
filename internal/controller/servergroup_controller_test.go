@@ -27,6 +27,7 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
@@ -1625,8 +1626,8 @@ func TestGroupRecordsWhatItIssued(t *testing.T) {
 	f.reconcileGroup(t, r)
 
 	creates, _, _ := r.Expectations.pending(f.ns + "/lobby")
-	if creates != 1 {
-		t.Errorf("pending creates = %d right after the create, want 1: size() "+
+	if len(creates) != 1 {
+		t.Errorf("pending creates = %v right after the create, want 1: size() "+
 			"did not record what it issued", creates)
 	}
 }
@@ -3365,4 +3366,413 @@ func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
 	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Fatalf("NodeDraining after uncordon = %v, want False", cond)
 	}
+}
+
+// createPersistentGroup adds a persistent ServerGroup beside the fixture's
+// ephemeral one, in the same namespace and on the same Network.
+//
+// It is built from scratch rather than by editing the fixture's group,
+// because spec.type is immutable and no edit can turn an ephemeral group into
+// a persistent one. The field sets differ besides: the CRD requires
+// spec.replicas and spec.storage here, and forbids spec.scaling.
+func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int32) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: f.network.Name},
+			Type:                          spawneryv1alpha1.ServerGroupPersistent,
+			Image:                         "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers:                    100,
+			Replicas:                      &replicas,
+			TerminationGracePeriodSeconds: 60,
+			FailedRetentionSeconds:        3600,
+			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
+			Storage:                       &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")},
+		},
+	}
+	if err := f.c.Create(f.ctx, group); err != nil {
+		t.Fatalf("create persistent ServerGroup %s: %v", name, err)
+	}
+	return group
+}
+
+// reconcilePersistentGroup runs the group reconciler once against a group
+// named here, rather than against the fixture's own.
+func (f *fixture) reconcilePersistentGroup(t *testing.T, r *ServerGroupReconciler, name string) {
+	t.Helper()
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("reconcile group %s: %v", name, err)
+	}
+}
+
+// setPersistentReplicas moves spec.replicas of a persistent group.
+func (f *fixture) setPersistentReplicas(t *testing.T, name string, n int32) {
+	t.Helper()
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group %s: %v", name, err)
+	}
+	group.Spec.Replicas = &n
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("update group %s: %v", name, err)
+	}
+}
+
+// serverNamesOfGroup is the names of the servers a group owns that still
+// exist, sorted, so an assertion can name what it expects to see.
+func (f *fixture) serverNamesOfGroup(t *testing.T, group string) []string {
+	t.Helper()
+	list := &spawneryv1alpha1.ServerList{}
+	if err := f.c.List(f.ctx, list, ctrlclientInNamespace(f.ns)); err != nil {
+		t.Fatalf("list servers: %v", err)
+	}
+	names := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		if list.Items[i].Spec.GroupRef.Name == group {
+			names = append(names, list.Items[i].Name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+// serverIfPresent reads a Server without failing the test when it is gone,
+// which f.server cannot do and a removal has to be able to ask.
+func (f *fixture) serverIfPresent(name string) (*spawneryv1alpha1.Server, bool) {
+	srv := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, srv); err != nil {
+		return nil, false
+	}
+	return srv, true
+}
+
+// TestAPersistentGroupBuildsItsOrdinals is the milestone's subject: a number
+// in spec.replicas becomes servers with stable names.
+func TestAPersistentGroupBuildsItsOrdinals(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 2)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	names := f.serverNamesOfGroup(t, "survival")
+	if len(names) != 2 || names[0] != "survival-0" || names[1] != "survival-1" {
+		t.Fatalf("servers = %v, want [survival-0 survival-1]", names)
+	}
+	// names is sorted and pinned above, so its index is the ordinal the name
+	// carries. Deriving the expectation with OrdinalOf instead would only ask
+	// the name what the name already says.
+	for i, name := range names {
+		srv := f.server(name)
+		if srv.Spec.Ordinal == nil || *srv.Spec.Ordinal != int32(i) {
+			t.Errorf("%s spec.ordinal = %v, want %d", name, srv.Spec.Ordinal, i)
+		}
+	}
+}
+
+// TestAPersistentGroupRemovesTheHighestOrdinal is the other direction. The
+// group reconciler asks for the removal by deleting the Server object; the
+// drain finalizer that would otherwise hold it in Terminating is the Server
+// controller's, and this test drives only the group, so the surplus ordinal
+// leaves the API server outright.
+func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 3)
+	f.reconcilePersistentGroup(t, r, "survival")
+	if got := len(f.serverNamesOfGroup(t, "survival")); got != 3 {
+		t.Fatalf("servers = %d, want 3", got)
+	}
+
+	f.setPersistentReplicas(t, "survival", 2)
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	if _, present := f.serverIfPresent("survival-2"); present {
+		t.Error("survival-2 is still here; the highest ordinal is the one that goes")
+	}
+	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 2 ||
+		names[0] != "survival-0" || names[1] != "survival-1" {
+		t.Errorf("surviving servers = %v, want [survival-0 survival-1]", names)
+	}
+}
+
+// TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken pins the one thing a
+// derived name can run into that a random one effectively cannot: the name it
+// is about to create is already on an object.
+//
+// The server built here holds no spec.ordinal, which is how an object this
+// rule did not create looks to it -- the rule reads spec.ordinal and never the
+// name, so this one fills no ordinal and the create is asked for anyway. A
+// lagging cache produces the same collision by a shorter route. Either way the
+// object is already what the create wanted, and a reconcile that returned the
+// error would come back to the same refusal on every pass for as long as the
+// object exists, never reaching the status, the PDB or anything else below it.
+func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	group := f.createPersistentGroup(t, "survival", 1)
+
+	squatter := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      PersistentServerName("survival", 0),
+			Namespace: f.ns,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: spawneryv1alpha1.GroupVersion.String(),
+				Kind:       "ServerGroup",
+				Name:       group.Name,
+				UID:        group.UID,
+			}},
+		},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: group.Name},
+		},
+	}
+	if err := f.c.Create(f.ctx, squatter); err != nil {
+		t.Fatalf("create the server already holding the name: %v", err)
+	}
+
+	// The failure this pins is the reconcile erroring out, which
+	// reconcilePersistentGroup reports.
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 1 || names[0] != "survival-0" {
+		t.Errorf("servers = %v, want [survival-0]", names)
+	}
+	// And nothing announces a creation that did not happen. This was the
+	// quietest part of the AlreadyExists branch and the part nothing held: the
+	// branch's own comment says "No event: nothing was created here", and until
+	// now that was prose. What makes it matter is that the collision is not
+	// always a blip: a squatter holding the name without spec.ordinal is a
+	// steady state, not a lagging cache — the rule reads spec.ordinal, so the
+	// ordinal stays missing and the create is asked for again on every
+	// five-second pass, for as long as the object sits there
+	// (docs/known-issues.md). What fires per pass is the difference between a
+	// quiet wait and an event stream nobody can read past.
+	if n := scalingEvents(r.Recorder.(*record.FakeRecorder), "ServerCreated"); n != 0 {
+		t.Errorf("ServerCreated events = %d, want none: the object was already there, "+
+			"and this collision repeats every pass for as long as it lasts", n)
+	}
+}
+
+// TestAPersistentServerOnACordonedNodeIsCondemned pins acceptance criterion 5.
+// Nothing in the production code is specific to persistent groups here -- that
+// is the claim, and this is what holds it.
+//
+// The removal takes the shape a deletion takes once the Server controller has
+// run: markReady drives that controller, so the drain finalizer is on the
+// object and the delete leaves a deletion timestamp rather than removing the
+// object outright. TestAPersistentGroupRemovesTheHighestOrdinal, which drives
+// only the group, sees the other shape for exactly that reason.
+func TestAPersistentServerOnACordonedNodeIsCondemned(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 1)
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	srv := f.server("survival-0")
+	f.markReady(t, srv.Name)
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	pod, ok := f.pod(f.server(srv.Name).Status.PodName)
+	if !ok {
+		t.Fatal("pod not found")
+	}
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	condemned, present := f.serverIfPresent("survival-0")
+	if !present {
+		t.Fatal("survival-0 is gone outright, which the drain finalizer should have prevented")
+	}
+	if condemned.DeletionTimestamp.IsZero() {
+		t.Fatal("the persistent server on the cordoned node was not condemned; its players will be evicted instead of moved")
+	}
+}
+
+// TestAPersistentGroupPublishesTheReadinessItsPodsSupport pins the removal of
+// the group controller's own refusal. That refusal set Ready: False with
+// reason NotImplementedInThisVersion on every persistent group unconditionally
+// and slowed the group to a one-minute requeue; as of this task such a group
+// builds ordinals that get pods, so the condition contradicted its own
+// servers and the requeue delayed every removal decision behind it.
+//
+// Nothing replaced it, and the three assertions below are what say so rather
+// than a fourth derivation nobody would maintain: no ServerGroup of either
+// type publishes a Ready condition at all — readiness is status.phase, which
+// derivePhase reads off ReadyReplicas against DesiredReplicas() for both kinds
+// — and the requeue is the ordinary resync an ephemeral group gets.
+func TestAPersistentGroupPublishesTheReadinessItsPodsSupport(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 1)
+	f.reconcilePersistentGroup(t, r, "survival")
+	f.markReady(t, "survival-0")
+
+	res, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "survival", Namespace: f.ns},
+	})
+	if err != nil {
+		t.Fatalf("reconcile group survival: %v", err)
+	}
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "survival", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group survival: %v", err)
+	}
+	if cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionReady); cond != nil {
+		t.Errorf("Ready condition = %+v; no ServerGroup publishes one, and a persistent group "+
+			"that did would be contradicting the pods it now has", cond)
+	}
+	if got := group.Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase = %q with its one replica Ready, want %s", got, phase.Ready)
+	}
+	if res.RequeueAfter != resyncInterval {
+		t.Errorf("RequeueAfter = %s, want the ordinary resync %s: a persistent group decides "+
+			"removals on the same clock as an ephemeral one", res.RequeueAfter, resyncInterval)
+	}
+}
+
+// clearFailedOrdinal takes away the corpse of a persistent ordinal down the
+// one path that removes it for having failed: the Server controller's
+// failed-retention path.
+//
+// It is a step of its own, and not folded into the failure that precedes it,
+// because the two are on opposite sides of the state this test is about.
+// Failing the server opens the backoff window; clearing the corpse costs an
+// hour of the fixture clock and closes that window again. A helper that did
+// both would make the waiting state unobservable -- which is exactly how the
+// first draft of this test reported False and was right to.
+//
+// The clearing itself is why a persistent round is not shaped like the
+// ephemeral ones above: pruneFailed runs only for an ephemeral group, and
+// DecidePersistentSize holds an ordinal whatever phase its server is in, so
+// nothing on the group's side removes a persistent server for having failed --
+// its own removals answer to a lower spec.replicas or a departing node, and
+// neither is happening here. Retention is what is left, which makes the
+// advance below part of the mechanism rather than a convenience: without it
+// the group has no second attempt to back off from.
+func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
+	t.Helper()
+	f.clock.Advance(time.Hour + time.Second)
+	for i := 0; i < 4; i++ {
+		if _, present := f.serverIfPresent(name); !present {
+			return
+		}
+		f.reconcile(name)
+	}
+	t.Fatalf("the corpse of %s was not taken away by its failed retention", name)
+}
+
+// TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp is what the design owed
+// and did not have. §3.5 of the persistent-groups design said of a claim that
+// never binds that "the server goes Failed, the group reports Degraded, and
+// 4d's per-group backoff stops it throwing the same ordinal at the same broken
+// volume in a loop" -- and has since been rewritten, because the reporting
+// half was false. The backoff half held: size() runs its CreateOrdinals loop
+// under the same backoff.MayCreate as the ephemeral count. The reporting half
+// did not: BackingOff and Degraded were published only inside
+// an `if group.IsEphemeral()` block, so a persistent group stalled in silence
+// and its phase read Pending, which is what a group that is merely still
+// starting reads too.
+//
+// The round below is also the answer to a question the design got wrong in
+// both directions, so it is worth naming here rather than leaving to whoever
+// next reads §3.5: a persistent group does have a retry loop. Nothing on the
+// group's side clears a persistent corpse for having failed, but the Server
+// controller's failed-retention path does, and the ordinal is then created
+// again -- which is why each round here ends by aging the corpse out. With
+// the one ordinal this group has, that loop is also the only way the count
+// can reach the threshold at all, since CountFailures counts a corpse once;
+// a group with six or more ordinals could reach it on six distinct first
+// failures and never retry anything, so that half of the argument is this
+// test's, not a general proof. The loop's period is
+// spec.failedRetentionSeconds -- an hour at the CRD default, which is what
+// this group carries -- so at that default the backoff's own windows (160s at
+// the most) never delay an attempt; what the backoff does for this group is
+// end the attempts, which is the last assertion below.
+//
+// The failure driven here is a startup deadline rather than an unbound claim.
+// envtest runs no provisioner and no scheduler, so a pod's volume never binds
+// and never fails to bind -- nothing in this environment can make a claim
+// stall a server. What the two have in common is the only thing this test is
+// about: a server that never becomes playable, and a group that must say so.
+// Whether an unbound claim really does end in Failed is a cluster question,
+// and it belongs to the runbook.
+func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 1)
+
+	for i := int32(0); i < backoffGiveUpAt; i++ {
+		f.reconcilePersistentGroup(t, r, "survival")
+		if _, present := f.serverIfPresent("survival-0"); !present {
+			t.Fatalf("round %d: the group did not rebuild its ordinal, so it stopped creating early", i+1)
+		}
+		f.failServerNeverReady(t, "survival-0")
+		f.reconcilePersistentGroup(t, r, "survival")
+
+		if i == 0 {
+			// The waiting half, taken on the flank rather than after the loop:
+			// once the count reaches the threshold BackingOff goes back to
+			// False and this state is gone.
+			g := f.persistentGroup(t, "survival")
+			c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+			if c == nil || c.Status != metav1.ConditionTrue {
+				t.Fatalf("BackingOff = %+v after the first failure, want True: a persistent group "+
+					"that is waiting before its next attempt has to say so", c)
+			}
+			if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
+				t.Error("Degraded is true after a single failure; one hiccup is not a fault")
+			}
+		}
+
+		// Last in the round, so the assertions above see the group while its
+		// window is still open.
+		f.clearFailedOrdinal(t, "survival-0")
+	}
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	g := f.persistentGroup(t, "survival")
+	if got := g.Status.ConsecutiveFailures; got != backoffGiveUpAt {
+		t.Fatalf("consecutiveFailures = %d, want %d", got, backoffGiveUpAt)
+	}
+	degraded := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if degraded == nil || degraded.Status != metav1.ConditionTrue {
+		t.Fatalf("Degraded = %+v after %d failures, want True", degraded, backoffGiveUpAt)
+	}
+	if degraded.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("Degraded reason = %q, want %s", degraded.Reason, spawneryv1alpha1.ReasonCrashLoopBackoff)
+	}
+	if g.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded: derivePhase maps the condition, and Pending here would "+
+			"be indistinguishable from a group that is still starting", g.Status.Phase)
+	}
+	// Given up, not waiting -- and the reason carries the real cause rather
+	// than an all-clear.
+	backingOff := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
+	if backingOff == nil || backingOff.Status != metav1.ConditionFalse ||
+		backingOff.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("BackingOff = %+v once the group gave up, want False/%s", backingOff,
+			spawneryv1alpha1.ReasonCrashLoopBackoff)
+	}
+	// And the stall is real: the ordinal is not rebuilt, which is the
+	// behaviour the condition exists to explain rather than to change.
+	if _, present := f.serverIfPresent("survival-0"); present {
+		t.Error("the group rebuilt its ordinal after giving up; the backoff gates persistent creates too")
+	}
+}
+
+// persistentGroup re-reads a ServerGroup named here, rather than the fixture's
+// own, which is what reloadGroup does.
+func (f *fixture) persistentGroup(t *testing.T, name string) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group %s: %v", name, err)
+	}
+	return group
 }

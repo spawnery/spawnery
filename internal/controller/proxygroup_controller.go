@@ -696,7 +696,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// instead, so rollout.go's sizing keeps knowing nothing about reservations.
 	key := group.Namespace + "/" + group.Name
 	pendingCreates, _, _ := r.Expectations.pending(key)
-	create := decision.Create - pendingCreates
+	create := decision.Create - int32(len(pendingCreates))
 	if create < 0 {
 		create = 0
 	}
