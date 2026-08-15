@@ -95,6 +95,26 @@ PVC in milestone 5 arrives owned by root, and uid 10001 does not. The fix
 belongs in `podspec.BuildServerPod`'s `PodSecurityContext` and has to land
 before the first persistent server exists.
 
+**Still missing as of 5a, and now live rather than hypothetical** — verified
+against `internal/podspec/server.go`: `SecurityContext` on the pod sets only
+`RunAsNonRoot` and a `SeccompProfile`, and nothing anywhere in
+`BuildServerPod` or `image/entrypoint.sh` sets `fsGroup` or runs a `chown`.
+5a's own evidence runbook (`docs/runbook-milestone-5a-evidence.md`) is not
+blocked by this, but only because of a property of the specific storage class
+it uses rather than a fix in this repository: `kind`'s default local-path
+provisioner runs `mkdir -m 0777 -p "$VOL_DIR"` when it provisions a volume
+(verified against `rancher/local-path-provisioner`'s own
+`local-path-storage.yaml`), so the directory a persistent server's claim binds
+to is world-writable regardless of which uid asks. A storage class that does
+not do that — most CSI drivers backing a real cloud volume, which typically
+hand back a directory owned by root with mode `0750` or narrower — leaves uid
+10001 unable to write into `/data` at all, and Paper fails to start with
+nothing on the `Server` object saying why beyond a generic startup-deadline
+failure. This is still the fix milestone 5's own preconditions asked for
+before the first persistent server existed; 5a is the milestone where that
+stopped being hypothetical, on any storage class other than the one this
+repository's own runbook happens to use.
+
 **Following Paper upstream is manual.** A new build means new hashes in
 `nix/paper.nix`, by hand, including the Mojang hash out of the new jar's
 `META-INF/download-context`. The automated image pipeline is project 3 in the
@@ -1663,7 +1683,161 @@ is no warning if it is not.
 
 If a server's `ServerGroup` is missing, the server controller carries on with
 ephemeral fallback timings. For a persistent server those are the wrong
-deadlines.
+deadlines. 5a did not touch `fallbackGroup` (`internal/controller/server_controller.go`),
+which still stamps `Type: ServerGroupEphemeral` unconditionally; this
+precondition is therefore still open.
+
+## From milestone 5a (persistent groups exist)
+
+5a gives a `Persistent` group ordinals, a `PersistentVolumeClaim` per ordinal
+and both directions of `spec.replicas`. What follows is what that leaves for
+an operator to know, and for 5b and 5c to find in place — the fuller record is
+`docs/handover-milestone-5.md`.
+
+**Claims accumulate, and this operator can never remove one.** Deleting a
+`Server` — by scaling down, by hand, or through the failed-retention path
+below — never deletes the `PersistentVolumeClaim` it mounted:
+`podspec.BuildDataClaim` stamps no owner reference, and nothing in this
+operator calls `Delete` on a claim anywhere. That is not merely the observed
+behaviour, it is enforced structurally: the ClusterRole
+(`config/rbac/role.yaml`) grants `persistentvolumeclaims:
+create;get;list;watch` and nothing else, and `internal/rbacaudit/required.go`
+documents exactly those four verbs with a comment explaining why `delete` and
+`update` are absent on purpose. `internal/rbacaudit`'s tests compare the
+generated role against that table in both directions — extra grants as well as
+missing ones — so a future `delete` marker added anywhere in the codebase
+turns the audit red before it can ship. A lowered `spec.replicas`, a group
+deleted outright, or an ordinal simply never brought back all leave their
+claims standing, by design: §3.3 of the persistent-groups design settles that
+a mistake here should cost a stray object, never a world.
+
+To find what a namespace has accumulated:
+
+```bash
+kubectl get pvc -l spawnery.cloud/managed-by=spawnery -n <namespace>
+```
+
+Every claim this operator ever created carries that label
+(`podspec.LabelManagedBy`) — it is also what restricts the manager's own cache
+over claims, alongside `spawnery.cloud/network`, `spawnery.cloud/group` and
+`spawnery.cloud/server` (`podspec.BuildDataClaim`). To tell a claim still in
+service from an orphan, compare each claim's `spawnery.cloud/server` label
+against the `Server` objects that currently exist for that group: a claim
+named `<group>-<ordinal>-data` whose `spawnery.cloud/server` names a `Server`
+that is gone (scaled away, or the group itself deleted) is an orphan.
+**Deleting a claim deletes a world** — there is no undelete, and no
+confirmation this operator can offer, because it never performs the deletion
+itself. Removing one is a deliberate human act with `kubectl delete pvc`,
+outside this operator entirely, and belongs on the runbook that grows up
+around this operator's use rather than in its own code.
+
+**A persistent server on a node-pinned volume cannot follow a node drain.**
+`docs/known-issues.md`'s own "From milestone 4c-3" section recorded this
+before 5a existed to make it real: `Condemn` names a server whose pod sits on
+a departing node regardless of what kind of server it is, and its replacement
+then sits `Pending` if the storage class backing its claim is bound to the
+node that is leaving — a local or node-pinned `ReadWriteOnce` volume does not
+follow a pod to a different node, and nothing in this operator or in the
+storage class itself can move it. That entry is not repeated here in full; 5a
+is what turns it from a recorded limit into one an operator can actually run
+into, because before 5a no persistent server existed to condemn.
+
+**A claim that never binds ends in a stall, and the stall is deliberate.**
+`docs/superpowers/specs/2026-08-15-persistent-groups-design.md` §3.5 is on its
+third version for exactly this mechanism — the first two were wrong, and its
+own top-of-section note says so — so what follows is checked against the code
+as it stands rather than repeated from memory:
+
+- A pod that never becomes playable fails its server's startup deadline the
+  same way an ephemeral one would; `phase.Decide`'s `Failed` case is
+  type-blind.
+- Nothing on the *group's* side ever removes a persistent server for having
+  failed. `pruneFailed` only runs `if group.IsEphemeral()`
+  (`internal/controller/servergroup_controller.go`), and
+  `DecidePersistentSize` holds an ordinal for as long as any server carries
+  it, in any phase — so a `Failed` corpse keeps its ordinal.
+- What does eventually move it is `phase.Decide`'s own retention clock: once
+  `now - status.failedAt >= spec.failedRetentionSeconds` (3600 seconds at the
+  CRD default), the `Failed` case returns `Terminating`, and the **Server**
+  controller deletes the object once its pod is gone
+  (`internal/controller/server_controller.go`, the `decision.Next ==
+  phase.Terminating && !podFound` branch). The ordinal is free the moment that
+  delete lands.
+- The group's very next pass sees the ordinal missing and creates it again,
+  under the identical deterministic name — `podspec.DataClaimName` derives the
+  claim name from the server name, and the server name is `<group>-<ordinal>`
+  — so the new server's claim-create call gets `AlreadyExists` and mounts the
+  same, still-broken volume. `DecideBackoff`'s create gate
+  (`backoff.MayCreate`, gating `CreateOrdinals` the same way it gates the
+  ephemeral count in `internal/controller/servergroup_controller.go`'s
+  `size()`) is what turns this from an unbounded loop into a bounded one: six
+  counted failures and the group gives up.
+- So the period of the retry loop is `spec.failedRetentionSeconds`, not the
+  backoff window — the backoff window is at most 160 seconds (10s doubling to
+  160s across five gaps before the sixth failure), which at the CRD's
+  3600-second default never actually delays an attempt. What the backoff
+  contributes here is only the give-up.
+- After the give-up, the group holds no `Server` object for that ordinal at
+  all and waits indefinitely. The claim and the world on it are untouched —
+  nothing in this operator can update or delete a claim, per the RBAC point
+  above — and a spec change (any edit that moves `metadata.generation`) resets
+  the counter and brings the ordinal back.
+
+**This is correct, not merely tolerated.** A persistent world lives on one
+claim and nothing else can serve it, so a rebuild only ever meets the same
+broken volume — sequentially, never concurrently, since the corpse's pod is
+deleted before its replacement is created. Waiting for a human after six
+attempts an hour apart is the right call: at that point the thing that is
+broken is the storage, not the server, and only a human can fix a storage
+class, a quota, or a stuck `WaitForFirstConsumer` binding.
+
+**`Degraded` is late, and that is worth knowing before it fires.** At the
+default `failedRetentionSeconds` of 3600 the group is visibly backing off
+(`BackingOff: True`) for only ten to a hundred and sixty seconds of each
+roughly hourly cycle. For the rest of each cycle it publishes `BackingOff:
+False` with the reason "no server has failed to start recently" — true in the
+narrow sense the field means, and easy to read as "nothing is wrong" while a
+`Failed` corpse is sitting right there holding the ordinal. `Degraded`
+therefore does not turn true until around six hours after the first failure
+(six attempts, roughly an hour apart). An operator watching for a stall in
+that window should not wait for `Degraded` or for `BackingOff: True`: both
+`status.consecutiveFailures` and `status.lastFailureAt` are written from the
+very first counted failure, for a group of either type — that counting is
+unconditional in `Reconcile`, not behind `if group.IsEphemeral()` the way the
+two conditions used to be before this milestone's own review lifted them out.
+`kubectl get servergroup <name> -o jsonpath='{.status.consecutiveFailures}
+{.status.lastFailureAt}'` says something true from the first failure onward,
+hours before either condition would.
+
+**A squatter can stall an ordinal silently.** `DecidePersistentSize` decides
+which ordinal is missing by reading `ServerView.Ordinal`, sourced from
+`spec.ordinal` — never by parsing the candidate name. If some other object
+already holds a persistent ordinal's exact name (`<group>-<ordinal>`) without
+carrying `spec.ordinal` — created by hand, or left over from something else —
+that object never appears in `DecidePersistentSize`'s `held` map, so the group
+goes on believing the ordinal is missing forever. `createPersistentServer`
+(`internal/controller/servergroup_controller.go`) then retries the `Create`
+every pass, gets `AlreadyExists`, and returns success without an error,
+without an event ("No event: nothing was created here", by its own comment)
+and without a log line. The reservation this creates
+(`Expectations.expectCreated`) does not save the next pass either: `observe`
+clears a create reservation the instant the name is `present` in the group's
+own view list, and the squatter is present from the very first pass onward —
+so the reservation never survives past the pass that made it, and the group
+retries at its ordinary five-second resync cadence, forever. Nothing on the
+group's conditions, events or logs distinguishes this from an ordinary
+transient collision. The tell, today, is `kubectl get server <group>-<ordinal>
+-o jsonpath='{.spec.ordinal}'` returning empty on an object that exists.
+
+**`spec.replicas` is now required for `Persistent`.** A CEL rule —
+`self.type != 'Persistent' || has(self.replicas)`
+(`api/v1alpha1/servergroup_types.go`, `config/crd/bases/spawnery.cloud_servergroups.yaml`)
+— rejects a `Persistent` group with no `spec.replicas` on its next apply. Before
+this milestone such a group was accepted, sized nothing (`DecidePersistentSize`
+did not exist, and nothing called it), and reported `Ready` while running zero
+servers. In practice no such group can already be running: nothing in this
+repository could create a persistent server before this milestone, so there is
+nothing for the new rule to reject that was not already useless.
 
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 
