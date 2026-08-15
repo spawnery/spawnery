@@ -175,17 +175,43 @@ returns. That is a limit of the storage class and not one this milestone can
 move; `docs/known-issues.md` already records it from 4c-3, written before
 anything could reach it, and 5a is what makes it reachable.
 
-### 3.5 The failure path is the one that already exists
+### 3.5 The failure path: the group stalls, and says so
 
-A claim that never binds — stuck after a node failure, a storage class that
-cannot provision, no capacity — shows up as a pod that stays `Pending`. From
-there: the server's startup deadline expires, the server goes `Failed`, the
-group reports `Degraded`, and **4d's per-group backoff stops it throwing the
-same ordinal at the same broken volume in a loop**.
+**This section was wrong when it was written, on both of its claims, and the
+correction is the more interesting half of it.** It said: a claim that never
+binds makes the pod stay `Pending`, the startup deadline expires, the server
+goes `Failed`, *"the group reports `Degraded`, and 4d's per-group backoff stops
+it throwing the same ordinal at the same broken volume in a loop"*. Task 6's
+review established that neither half describes a persistent group.
 
-Master design §7 asks for "a condition instead of waiting silently" at this
-point. That condition exists, it is `Degraded`, and this path already reaches
-it. No second one is built.
+Neither `ConditionBackingOff` nor `ConditionDegraded` was published outside
+`if group.IsEphemeral()`, so `derivePhase` could never return `Degraded` for
+one; the phase merely dropped to `Pending`, which is indistinguishable from
+"still starting". And there was no loop for the backoff to stop:
+`DecidePersistentSize` holds an ordinal while any server carries it, whatever
+phase that server is in, and `pruneFailed` runs only for ephemeral groups — so
+the failed ordinal keeps its number, no replacement is ever ordered, and
+`status.consecutiveFailures` climbs toward `GaveUp` with nothing to gate.
+
+**The stall is right. The silence was the defect.** A persistent world lives on
+one claim and nothing else can serve it, so ordering a replacement would only
+run a second server at the same broken volume. Holding the ordinal until a
+human repairs the storage is the correct behaviour, and it is what a
+`ReadWriteOnce` volume would force in any case. What this milestone owes an
+operator is that the group *says* it is stalled rather than sitting at
+`Pending` looking like a slow start.
+
+So 5a lifts `BackingOff` and `Degraded` out of the ephemeral-only block; both
+describe failures either kind of group can have. `ScalingLimited` stays
+ephemeral-only, because it is about the slot ceiling and a fixed replica count
+has none.
+
+Master design §7 asks for "a condition instead of waiting silently" here. After
+that change the condition exists and this path reaches it — which is what this
+section originally claimed without it being true. That the group then waits
+indefinitely rather than retrying is deliberate and belongs in
+`docs/known-issues.md`, because an operator meeting a stalled ordinal needs to
+know the operator is waiting for them and not the other way round.
 
 ## 4. Out of scope, deliberately
 
