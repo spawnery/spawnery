@@ -24,6 +24,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -273,6 +274,9 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.syncOccupiedLabels(ctx, pods); err != nil {
 		return ctrl.Result{}, err
 	}
+	if err := r.reconcileProxyPDB(ctx, group, pods); err != nil {
+		return ctrl.Result{}, err
+	}
 	r.setStatus(group, pods)
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.writeStatus(ctx, group)
 }
@@ -364,6 +368,51 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 		}
 	}
 	return nil
+}
+
+// reconcileProxyPDB keeps the group's PodDisruptionBudget in step with the
+// number of occupied proxy pods.
+//
+// The same formulation as the ServerGroup's, for the same reason: for pods
+// without a controller carrying a scale subresource, Kubernetes allows
+// neither maxUnavailable nor percentages in a PDB. The absolute number of
+// occupied pods is the only one that works, and it makes the eviction API
+// refuse to evict any of them.
+//
+// Without this object, kubectl drain evicts a proxy in the same second the
+// node is cordoned, while the replacement this operator ordered is still
+// pulling its image -- and everyone on that proxy is disconnected by the
+// eviction rather than carried by the drain.
+func (r *ProxyGroupReconciler) reconcileProxyPDB(
+	ctx context.Context,
+	group *spawneryv1alpha1.ProxyGroup,
+	pods []corev1.Pod,
+) error {
+	var occupied int32
+	for i := range pods {
+		if proxyOccupied(r.Agents.Lookup(string(pods[i].UID))) {
+			occupied++
+		}
+	}
+	minAvailable := intstr.FromInt32(occupied)
+
+	pdb := &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{Name: group.Name, Namespace: group.Namespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
+		pdb.Spec.MinAvailable = &minAvailable
+		pdb.Spec.MaxUnavailable = nil
+		// Derived from ProxyLabels, the same function reconcileService uses as
+		// the Service selector, plus the occupancy label -- not a hand-written
+		// map that happens to match one. ProxyLabels returns a fresh map
+		// literal on every call, so mutating it here cannot reach back into
+		// the Service selector.
+		selector := podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
+		selector[podspec.LabelOccupied] = "true"
+		pdb.Spec.Selector = &metav1.LabelSelector{MatchLabels: selector}
+		return controllerutil.SetControllerReference(group, pdb, r.Scheme)
+	})
+	return err
 }
 
 // reconcileReplicas creates or removes pods until the count matches the spec,
@@ -1167,6 +1216,7 @@ func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Pod{}).
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
+		Owns(&policyv1.PodDisruptionBudget{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
 		Complete(r)
 }

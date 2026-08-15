@@ -27,6 +27,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -2561,5 +2562,53 @@ func TestTheOccupiedLabelFollowsTheProxyPlayerCount(t *testing.T) {
 	}
 	if _, ok := byName[pods[1].Name].Labels[podspec.LabelOccupied]; ok {
 		t.Errorf("pod %s is known empty and still labelled occupied; the budget would block a drain for nobody", pods[1].Name)
+	}
+}
+
+// TestTheProxyGroupBudgetSizesToOccupiedPods is the object the eviction API
+// consults. Every assertion here is a way the budget can be present and still
+// protect nobody.
+func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	f.reportProxyPlayers(t, pods[0], 4)
+	f.reportProxyPlayers(t, pods[1], 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pdb := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "gateway", Namespace: f.ns}, pdb); err != nil {
+		t.Fatalf("get proxy PDB: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("minAvailable = %v, want 1 — exactly one proxy is occupied", pdb.Spec.MinAvailable)
+	}
+	if pdb.Spec.MaxUnavailable != nil {
+		t.Error("maxUnavailable is set; Kubernetes rejects it for pods with no controller carrying a scale subresource")
+	}
+	if got := pdb.Spec.Selector.MatchLabels[podspec.LabelOccupied]; got != "true" {
+		t.Errorf("selector occupied = %q, want \"true\": a selector that matches empty pods blocks drains for nobody", got)
+	}
+	if len(pdb.OwnerReferences) == 0 {
+		t.Error("the PDB carries no owner reference; it would outlive the group and block evictions forever")
+	}
+
+	// Both proxies now report a fresh zero: minAvailable has to drop back to
+	// 0, or a drained group would still block its own node.
+	f.reportProxyPlayers(t, pods[0], 0)
+	f.reportProxyPlayers(t, pods[1], 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "gateway", Namespace: f.ns}, pdb); err != nil {
+		t.Fatalf("get proxy PDB after both proxies emptied: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 0 {
+		t.Errorf("minAvailable = %v after both proxies emptied, want 0", pdb.Spec.MinAvailable)
 	}
 }
