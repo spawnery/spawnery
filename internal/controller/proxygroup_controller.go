@@ -191,30 +191,14 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	case apierrors.IsNotFound(err):
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonNetworkNotFound,
 			fmt.Sprintf("Network %q does not exist", group.Spec.NetworkRef.Name))
-		// This group still exists, so nothing above forgets it -- but this
-		// return is before reconcileReplicas, and reportReadinessDivergence is
-		// called from nowhere else, so no observe call for it is coming on
-		// this pass either. See the comment on the readinessDivergence type
-		// for why forgetting, not a TTL, is the right response to a gap in
-		// observation. protectPlayersOnly below does call r.pods(), which
-		// observes the *expectations* -- a different structure, with its own
-		// TTL, that is not affected by this.
-		r.Divergence.forget(group.Namespace + "/" + group.Name)
-		if err := r.protectPlayersOnly(ctx, group); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: networkRetryInterval}, r.writeStatus(ctx, group)
+		return r.refuse(ctx, group)
 	case err != nil:
 		return ctrl.Result{}, err
 	}
 	if !meta.IsStatusConditionTrue(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonNetworkNotAccepted,
 			networkNotAcceptedMessage(network))
-		r.Divergence.forget(group.Namespace + "/" + group.Name)
-		if err := r.protectPlayersOnly(ctx, group); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: networkRetryInterval}, r.writeStatus(ctx, group)
+		return r.refuse(ctx, group)
 	}
 
 	// Milestone 6 owns the other two strategies. Refusing is the honest
@@ -226,19 +210,16 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonExposeNotImplemented,
 			fmt.Sprintf("expose.type %s arrives with milestone 6; only NodePort is implemented",
 				group.Spec.Expose.Type))
-		r.Divergence.forget(group.Namespace + "/" + group.Name)
-		if err := r.protectPlayersOnly(ctx, group); err != nil {
-			return ctrl.Result{}, err
-		}
 		// This path used to requeue never: a refusal only changes when the
-		// spec does, and a spec change reconciles on its own. It requeues
-		// now because protectPlayersOnly above has to be run again: whether a
-		// proxy is occupied is a fact about the agent registry, which nothing
-		// watches, so without a timer the budget written here would be the
-		// last one this group ever gets. A user who switched an already
-		// running group from NodePort to LoadBalancer has real pods with real
-		// players on them for as long as this refusal stands.
-		return ctrl.Result{RequeueAfter: networkRetryInterval}, r.writeStatus(ctx, group)
+		// spec does, and a spec change reconciles on its own. refuse requeues
+		// it like the other two, because the player-safety pass it runs has to
+		// happen again -- whether a proxy is occupied is a fact about the agent
+		// registry, which nothing watches, so without a timer the budget
+		// written here would be the last one this group ever gets. A user who
+		// switched an already running group from NodePort to LoadBalancer has
+		// real pods with real players on them for as long as this refusal
+		// stands.
+		return r.refuse(ctx, group)
 	}
 	setProxyGroupAccepted(group, true, spawneryv1alpha1.ReasonAccepted, "")
 	// Persisted now, before any of the side effects below can fail: without
@@ -295,6 +276,42 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 	r.setStatus(group, pods)
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.writeStatus(ctx, group)
+}
+
+// refuse is the shared tail of the three paths that give up before
+// reconcileReplicas: a missing Network, one that is not Accepted, and an
+// expose.type this milestone does not implement. The caller has already put
+// the reason on the group's Accepted condition; this does everything that is
+// the same for all three.
+//
+// Divergence is forgotten because this return is before reconcileReplicas,
+// and reportReadinessDivergence -- the only caller of Divergence.observe --
+// runs nowhere else, so no observation of this group is coming on this pass.
+// See the comment on the readinessDivergence type for why forgetting, not a
+// TTL, is the right response to a gap in observation. protectPlayersOnly does
+// call r.pods(), which observes the *expectations*: a different structure,
+// with its own TTL, that this reasoning does not touch.
+//
+// The status is written whether or not protectPlayersOnly succeeded, and the
+// reason is the one the accepted path states for its own early write: a
+// reconcile that returned having recorded nothing leaves the object with no
+// conditions and no phase, indistinguishable from one no reconcile has ever
+// touched. A permanent failure in protectPlayersOnly -- a PodDisruptionBudget
+// sitting at this group's name and owned by something else is a way to get
+// one -- would otherwise hide the refusal that explains the group's whole
+// state, on exactly the groups whose state most needs explaining.
+//
+// The requeue is networkRetryInterval rather than resyncInterval, which is
+// what bounds how stale the budget can get here; see protectPlayersOnly.
+// controller-runtime ignores it when the error is non-nil and backs off
+// instead, which is the behaviour wanted for a failed protection pass.
+func (r *ProxyGroupReconciler) refuse(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) (ctrl.Result, error) {
+	r.Divergence.forget(group.Namespace + "/" + group.Name)
+	protectErr := r.protectPlayersOnly(ctx, group)
+	if err := r.writeStatus(ctx, group); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: networkRetryInterval}, protectErr
 }
 
 // protectOccupiedProxies is the pair that keeps the eviction API off a proxy

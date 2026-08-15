@@ -198,10 +198,12 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	//
 	// This condition and that condemnation are computed from the same
 	// Condemned flags on the same views, and size() is now called whether or
-	// not the group's Network is usable, so the two cannot disagree. They did
+	// not the group's Network is usable — so a node named here is one whose
+	// servers this group has actually condemned, on this pass or on an
+	// earlier one whose reservation is still standing. That was not true
 	// before: a group with a broken Network published this condition naming
-	// the node and condemned nobody, which left kubectl drain hanging on the
-	// strength of a status that said the operator was on it.
+	// the node and condemned nobody, ever, which left kubectl drain hanging on
+	// the strength of a status saying the operator was on it.
 	drainingNodes := make([]string, 0, len(views))
 	for _, v := range views {
 		if v.Condemned {
