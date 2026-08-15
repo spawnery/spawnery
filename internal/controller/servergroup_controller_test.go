@@ -3578,3 +3578,46 @@ func TestAPersistentServerOnACordonedNodeIsCondemned(t *testing.T) {
 		t.Fatal("the persistent server on the cordoned node was not condemned; its players will be evicted instead of moved")
 	}
 }
+
+// TestAPersistentGroupPublishesTheReadinessItsPodsSupport pins the removal of
+// the group controller's own refusal. That refusal set Ready: False with
+// reason NotImplementedInThisVersion on every persistent group unconditionally
+// and slowed the group to a one-minute requeue; as of this task such a group
+// builds ordinals that get pods, so the condition contradicted its own
+// servers and the requeue delayed every removal decision behind it.
+//
+// Nothing replaced it, and the three assertions below are what say so rather
+// than a fourth derivation nobody would maintain: no ServerGroup of either
+// type publishes a Ready condition at all — readiness is status.phase, which
+// derivePhase reads off ReadyReplicas against DesiredReplicas() for both kinds
+// — and the requeue is the ordinary resync an ephemeral group gets.
+func TestAPersistentGroupPublishesTheReadinessItsPodsSupport(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 1)
+	f.reconcilePersistentGroup(t, r, "survival")
+	f.markReady(t, "survival-0")
+
+	res, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "survival", Namespace: f.ns},
+	})
+	if err != nil {
+		t.Fatalf("reconcile group survival: %v", err)
+	}
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "survival", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group survival: %v", err)
+	}
+	if cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionReady); cond != nil {
+		t.Errorf("Ready condition = %+v; no ServerGroup publishes one, and a persistent group "+
+			"that did would be contradicting the pods it now has", cond)
+	}
+	if got := group.Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase = %q with its one replica Ready, want %s", got, phase.Ready)
+	}
+	if res.RequeueAfter != resyncInterval {
+		t.Errorf("RequeueAfter = %s, want the ordinary resync %s: a persistent group decides "+
+			"removals on the same clock as an ephemeral one", res.RequeueAfter, resyncInterval)
+	}
+}

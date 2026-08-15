@@ -162,16 +162,6 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		})
 	}
 
-	if !group.IsEphemeral() {
-		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
-			Type:    spawneryv1alpha1.ConditionReady,
-			Status:  metav1.ConditionFalse,
-			Reason:  spawneryv1alpha1.ReasonNotImplemented,
-			Message: "persistent groups arrive in milestone 5",
-		})
-		requeue = time.Minute
-	}
-
 	// Rendered before anything that can create a Server, and unconditionally —
 	// not gated on networkUsable, because the ConfigMap has nothing to do with
 	// the Network, and a spec.maxPlayers edit has to reach it even on a
