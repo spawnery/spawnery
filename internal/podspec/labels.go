@@ -35,6 +35,16 @@ const (
 	// PodDisruptionBudget selects on it, which is what stops the eviction API
 	// from removing an occupied pod. Maintained by the Server controller.
 	LabelOccupied = "spawnery.cloud/occupied"
+	// LabelPodHash is a digest of the pod this operator would render for its
+	// group right now, with the pod's own name and this label excluded. A pod
+	// whose label differs from the current digest is stale and gets replaced.
+	//
+	// It covers the rendered pod rather than a chosen list of spec fields, so a
+	// spec field added later cannot be forgotten here and silently never roll
+	// out. The cost is recorded in docs/known-issues.md: a change to the
+	// rendering code moves the digest for every group, so an operator upgrade
+	// that touches podspec rolls the fleet.
+	LabelPodHash = "spawnery.cloud/pod-hash"
 )
 
 // Label values.

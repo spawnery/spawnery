@@ -32,6 +32,17 @@ const (
 	// configured, and folding the two together would move the group's phase and
 	// make a real fault during peak load indistinguishable from peak load.
 	ConditionScalingLimited = "ScalingLimited"
+	// ConditionReadinessDiverged is true while a proxy pod that was told to
+	// stop taking connections has stayed Ready for longer than the grace
+	// period. The operator does not try to repair it: a divergence from a
+	// lost message is already corrected by the next resync, so what remains
+	// is an agent that heard the withdrawal and did not act on it. The
+	// reverse -- a pod that is supposed to be Ready and never gets there --
+	// is deliberately not reported here: every pod is asserted ready from the
+	// moment it exists, before it has had any chance to pass its first
+	// probe, and treating that as a divergence would misname an ordinary
+	// slow start as a proxy that disobeyed an instruction.
+	ConditionReadinessDiverged = "ReadinessDiverged"
 	// ConditionBackingOff reports that the group is waiting before it creates
 	// another server, because one or more failed to start. It is deliberately
 	// not folded into Degraded: derivePhase turns a true Degraded into the
@@ -55,6 +66,8 @@ const (
 	ReasonMaxReplicasReached   = "MaxReplicasReached"
 	ReasonWithinLimits         = "WithinLimits"
 	ReasonNoRecentFailures     = "NoRecentFailures"
+	ReasonReadinessDiverged    = "ReadinessDiverged"
+	ReasonReadinessAgrees      = "ReadinessAgrees"
 )
 
 // ObjectRef names another object in the same namespace.

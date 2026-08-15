@@ -78,16 +78,16 @@ const LabelPodHash = "spawnery.cloud/pod-hash"
 
 - [ ] **Step 2: Write the failing tests**
 
-Create `internal/podspec/hash_test.go`. Read `internal/podspec/proxy_test.go` first and use its `buildProxy` helper's fixture shape for the `Network` and `ProxyGroup` values; the tests below assume a helper that returns a group you can mutate.
+Create `internal/podspec/hash_test.go`. Read `internal/podspec/proxy_test.go` first: it already has `testNetwork()`, `testProxyGroup()` and the `testEndpoint` constant, which the tests below use. `testProxyGroup()` returns a fresh value each call, so mutating it in one test cannot leak into another — confirm that before relying on it.
 
 ```go
 func TestPodHashIsStableAcrossBuilds(t *testing.T) {
-	net, group := proxyFixture(t)
-	a, err := BuildProxyPod(net, group, "gateway-aaaa", "operator:9443")
+	net, group := testNetwork(), testProxyGroup()
+	a, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	b, err := BuildProxyPod(net, group, "gateway-bbbb", "operator:9443")
+	b, err := BuildProxyPod(net, group, "gateway-bbbb", testEndpoint)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -98,13 +98,13 @@ func TestPodHashIsStableAcrossBuilds(t *testing.T) {
 }
 
 func TestPodHashMovesWithTheImage(t *testing.T) {
-	net, group := proxyFixture(t)
-	before, err := BuildProxyPod(net, group, "gateway-aaaa", "operator:9443")
+	net, group := testNetwork(), testProxyGroup()
+	before, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	group.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
-	after, err := BuildProxyPod(net, group, "gateway-aaaa", "operator:9443")
+	after, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -114,14 +114,14 @@ func TestPodHashMovesWithTheImage(t *testing.T) {
 }
 
 func TestPodHashIgnoresReplicas(t *testing.T) {
-	net, group := proxyFixture(t)
+	net, group := testNetwork(), testProxyGroup()
 	group.Spec.Replicas = 2
-	before, err := BuildProxyPod(net, group, "gateway-aaaa", "operator:9443")
+	before, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	group.Spec.Replicas = 5
-	after, err := BuildProxyPod(net, group, "gateway-aaaa", "operator:9443")
+	after, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -131,8 +131,8 @@ func TestPodHashIgnoresReplicas(t *testing.T) {
 }
 
 func TestPodHashDoesNotIncludeItself(t *testing.T) {
-	net, group := proxyFixture(t)
-	pod, err := BuildProxyPod(net, group, "gateway-aaaa", "operator:9443")
+	net, group := testNetwork(), testProxyGroup()
+	pod, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -734,13 +734,13 @@ func TestAStaleProxyIsReplacedOneAtATime(t *testing.T) {
 		t.Fatalf("proxy pods = %d, want 2", len(before))
 	}
 	for i := range before {
-		f.markPodReady(t, &before[i])
+		f.markProxyPodReady(t, &before[i])
 	}
 
 	// A spec change every pod's digest disagrees with.
 	g := f.proxyGroup("gateway")
 	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
-	if err := f.client.Update(f.ctx, g); err != nil {
+	if err := f.c.Update(f.ctx, g); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -766,11 +766,11 @@ func TestTheSurgePodMustBeReadyBeforeAnyPodIsMarked(t *testing.T) {
 
 	before := f.proxyPods("gateway")
 	for i := range before {
-		f.markPodReady(t, &before[i])
+		f.markProxyPodReady(t, &before[i])
 	}
 	g := f.proxyGroup("gateway")
 	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
-	if err := f.client.Update(f.ctx, g); err != nil {
+	if err := f.c.Update(f.ctx, g); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 	f.reconcileProxyGroup(r, "gateway")
@@ -781,7 +781,7 @@ func TestTheSurgePodMustBeReadyBeforeAnyPodIsMarked(t *testing.T) {
 		if _, dated := drainingSince(&pods[i]); dated {
 			t.Fatal("a pod was marked before the surge pod turned ready")
 		}
-		f.markPodReady(t, &pods[i])
+		f.markProxyPodReady(t, &pods[i])
 	}
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -803,9 +803,9 @@ func TestChangingReplicasAloneRollsNothing(t *testing.T) {
 	r := proxyGroupReconciler(f)
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
-	for i, p := range f.proxyPods("gateway") {
-		_ = i
-		f.markPodReady(t, &p)
+	pods := f.proxyPods("gateway")
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
 	}
 
 	f.setProxyReplicas("gateway", 3)
@@ -823,7 +823,9 @@ func TestChangingReplicasAloneRollsNothing(t *testing.T) {
 }
 ```
 
-If the fixture has no `markPodReady`, write one next to the existing helpers that patches the pod's `Ready` condition to `True`, and say in your report that you added it.
+**`markPodReady` does not exist — you write it, and this was checked while planning.** `f.markReady(t, name)` is for *servers* (it calls `bringUpNamed`), and the proxy tests currently mark readiness inline: set `pod.Status.Phase = corev1.PodRunning`, a `HostIP`, and a `corev1.PodReady` condition with `LastTransitionTime: metav1.NewTime(f.clock.Now())`, then `f.c.Status().Update(f.ctx, pod)`. There is one such block in `proxygroup_controller_test.go` around the address test — read it and lift it into `func (f *fixture) markProxyPodReady(t *testing.T, pod *corev1.Pod)`, then use that name in the tests above. Say in your report that you added it.
+
+**The fixture's client field is `f.c`, not `f.client`**, and `f.ctx` is the context. Every other helper these tests call already exists: `proxyGroup`, `proxyPods`, `reconcileProxyGroup`, `createProxyGroup`, `reportProxyPlayers`, `setProxyReplicas`, `pod`, `sortPodsOldestFirst`, `containsEvent`.
 
 - [ ] **Step 3: Run them and watch them fail**
 
@@ -1008,7 +1010,7 @@ func TestAProxyThatIgnoresItsWithdrawalIsReported(t *testing.T) {
 	pods := f.proxyPods("gateway")
 	sortPodsOldestFirst(pods)
 	for i := range pods {
-		f.markPodReady(t, &pods[i])
+		f.markProxyPodReady(t, &pods[i])
 	}
 	f.reportProxyPlayers(t, pods[1], 1)
 

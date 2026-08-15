@@ -19,6 +19,8 @@ package controller
 import (
 	"sync"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // expectationTTL bounds how long an unobserved create, delete or retire is
@@ -145,6 +147,45 @@ func (e *expectations) observe(group string, views []ServerView) {
 			// server is gone: a retirement that completed between the patch
 			// and this list has nothing left to reserve.
 			if !present || v.Retire {
+				delete(m, name)
+			}
+		}
+	}
+	if len(m) == 0 {
+		delete(e.byGroup, group)
+	}
+}
+
+// observePods is observe for pods. A proxy has no retire reservation -- only
+// the ServerGroup controller retires anything -- so this handles create and
+// delete and nothing else, rather than sharing a generic method that would
+// have to explain an absent third case to half its callers.
+func (e *expectations) observePods(group string, pods []corev1.Pod) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	m := e.byGroup[group]
+	if len(m) == 0 {
+		return
+	}
+	seen := make(map[string]bool, len(pods))
+	for i := range pods {
+		seen[pods[i].Name] = true
+	}
+
+	now := e.now()
+	for name, exp := range m {
+		if !now.Before(exp.expires) {
+			delete(m, name)
+			continue
+		}
+		switch exp.kind {
+		case expectationCreate:
+			if seen[name] {
+				delete(m, name)
+			}
+		case expectationDelete:
+			if !seen[name] {
 				delete(m, name)
 			}
 		}

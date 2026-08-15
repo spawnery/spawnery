@@ -119,6 +119,8 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		AgentEndpoint: opts.AgentEndpoint,
 		Proxies:       opts.Proxies,
 		Clock:         opts.Clock,
+		Expectations:  newExpectations(opts.Clock),
+		Divergence:    newReadinessDivergence(opts.Clock),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup proxy group controller: %w", err)
 	}

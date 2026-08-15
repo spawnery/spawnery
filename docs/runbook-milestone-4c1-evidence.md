@@ -1,13 +1,23 @@
 # Runbook: milestone 4c-1's two cluster claims
 
-Status: written 2026-08-14, at the end of milestone 4c-1, against branch
-`milestone-4c1-readiness-contract`. Not yet run. Every command below was
-checked against the repository it names — the Makefile targets, the CRD field
-names, the label keys, the constants in `internal/podspec` — but the cluster
-behaviour it predicts has not been observed. The first person to run this is
-also its first corrector; do what
-`docs/runbook-milestone-3-evidence.md` did after its first real run and fix
-defects in place rather than noting them as a fork.
+Status: §§0–10 written 2026-08-14, at the end of milestone 4c-1, against branch
+`milestone-4c1-readiness-contract`, and **driven twice against a real cluster
+with a real client that same day** — see `docs/handover-milestone-4.md`, "The
+4c-1 evidence runs", for what they measured and what the first of them found.
+Both runs corrected this document in place, which is what its first runner was
+asked to do.
+
+**§11 was added 2026-08-15 for milestone 4c-2 (proxy rolling updates), on
+branch `milestone-4c2-rolling-updates`, and has not been run.** Every command in
+it was checked against the repository it names — the Makefile targets, the CRD
+field names, the label keys, the constants in `internal/podspec` — but the
+cluster behaviour it predicts has not been observed. Its first runner is also
+its first corrector; do what `docs/runbook-milestone-3-evidence.md` did after
+its first real run and fix defects in place rather than noting them as a fork.
+The same milestone changed which proxy a scale-down removes, so fact 1 below
+and the notes it adds to §6 and §8 were rewritten against the code as it stands
+now; §§9 and 10's own measurements were made under the older rule and are
+recorded, not re-predicted.
 
 Design `docs/superpowers/specs/2026-08-14-proxy-readiness-contract-design.md`
 §10 lists eight acceptance criteria. Five of them — criteria 3, 4, 5, 6 and 7
@@ -45,14 +55,31 @@ Six facts, read out of the code rather than assumed. Each of them is a place a
 reader could otherwise spend an hour chasing something that is working
 correctly.
 
-1. **The proxy that gets removed is the newest one.**
-   `ProxyGroupReconciler.pods` sorts live pods by `creationTimestamp`, oldest
-   first, tie-broken by name; `reconcileReplicas` deletes from index
-   `spec.replicas` upward — the end of that list. So at `replicas: 2 → 1` the
-   pod that goes is the one with the *later* `creationTimestamp`. This is the
-   whole reason §8 exists: the client is routed by kube-proxy, which does not
-   care which pod is doomed, so landing on the right one is chance unless you
-   force it.
+1. **The proxy that gets removed is the emptiest one, and only then the
+   newest.** This changed with milestone 4c-2 (2026-08-15) and the old rule is
+   worth knowing because §8 and §9 were written against it: until then,
+   `reconcileReplicas` deleted by position — from index `spec.replicas` upward
+   in a list `ProxyGroupReconciler.pods` sorts oldest first — so the pod that
+   went at `replicas: 2 → 1` was simply the newest. 4c-2 replaced that with one
+   selection rule for every reason a pod goes (`pick`, in
+   `internal/controller/rollout.go`): stale before current, then **fewest
+   players first**, with an untrusted count sorting last, and age — newest first
+   — breaking what is left. The old rule was a guess at the player count; the
+   operator now has that count from the proxies' own agents and uses the number
+   where it has one.
+
+   **The consequence for §8 and §9 is not a detail.** With one player connected
+   and two proxies, the player's pod is the fuller of the two, so a scale-down
+   to 1 marks the *other* one — whichever pod §8 pinned the client to. Run as
+   written, §9 now measures the survival of a session on a proxy that was never
+   going anywhere, which is precisely the false pass §7 warns about. Criterion 1
+   was proven twice on 2026-08-14, under the old rule, and does not need
+   re-proving; a re-run of §8 and §9 against this branch does need the counts
+   made to tie or tipped the other way — a `cmd/spawnery-join --hold` probe on
+   the *surviving* proxy, so both report one player and the age tie-break puts
+   the pinned newest pod first. §11 is the exercise that now puts a real
+   session in the path of a removal without any of that arranging, because a
+   rollout replaces every pod in the group including the occupied one.
 
 2. **Nothing logs when a proxy is told to stop being ready.** `ReadyGate.close()`
    releases the socket and returns; it logs only a *failed* bind or a failed
@@ -109,6 +136,15 @@ correctly.
    flight therefore expires it on the next pass. §10 uses this deliberately as
    a shortcut; know that it is why, so you do not do it by accident in §9.
 
+   **Since 4c-2, editing that field also rolls the group.** It reaches the pod
+   as `terminationGracePeriodSeconds`, so changing it moves the `pod-hash`
+   digest and every proxy in the group becomes stale — a surge pod comes up and
+   the group replaces itself, one pod at a time, alongside whatever drain
+   prompted the edit. Nobody is disconnected by that on its own, and the
+   deadline itself still applies from the current spec on the next pass. But
+   §9's advice to raise the timeout mid-drain, and §10's patch to lower it, are
+   both rollout triggers now as well as deadline changes.
+
 ## 0. Prerequisites
 
 **Read `docs/runbook-milestone-3-evidence.md` §0 and satisfy it.** It is
@@ -144,8 +180,8 @@ Beyond §0, this runbook needs what milestone 3's manual sections needed:
   Microsoft account that owns the game. Paper 26.2 refuses any other protocol
   with a loud "Outdated client!" naming the version to install. This is not a
   number to approximate.
-- **A person to drive that client**, in the game, for the length of §9 and
-  §10. Both measurements turn on what the client did — whether the session
+- **A person to drive that client**, in the game, for the length of §9, §10 and
+  §11. All three measurements turn on what the client did — whether the session
   survived, and whether it was cut. Only the person at the keyboard can attest
   to that; the logs say what the proxy did, not what the game showed.
 - **Network reach from the client's machine to the cluster host's NodePorts
@@ -495,8 +531,11 @@ nix develop -c kubectl get pods -n minecraft \
 ```
 
 Expect two lines in creation order, both `True`, both with `-` for the
-annotation. **The second line is the pod that a scale-down to 1 will remove**
-— fact 1 above. Write its name down; §8 needs it.
+annotation. **While both proxies are empty, the second line is the pod that a
+scale-down to 1 will remove** — equal player counts, so fact 1's age tie-break
+decides and the newer pod goes. Write its name down; §8 needs it. Once a player
+is on one of them the counts are no longer equal and fact 1's second paragraph
+applies instead.
 
 `spawnery.cloud/draining-since` is the exact annotation the operator stamps
 (`internal/controller/proxygroup_controller.go`), an RFC 3339 timestamp
@@ -581,6 +620,14 @@ The cheap fix is to quit and rejoin: two ready endpoints on one node means
 roughly a coin flip each time. The reliable fix is §8.
 
 ## 8. Forcing the client onto the proxy that will be removed
+
+**Read fact 1 first if you are running this against milestone 4c-2 or later.**
+This section pins the client to the newest pod because that is the pod the old
+position-based rule removed. Under the selection rule 4c-2 shipped, a single
+connected player makes their own pod the fuller one and a scale-down takes the
+other; the pin is still what makes the run deterministic, but on its own it now
+points the client at the survivor. Fact 1 says what to add to tie the counts.
+The pin itself is also what §11 uses, where none of this arises.
 
 Deterministic, and it keeps kube-proxy in the path — which matters, because
 "an established connection survives" is a claim about kube-proxy's handling of
@@ -912,7 +959,203 @@ Record the event verbatim, the annotation timestamp it should be 60 seconds
 after, and the player's account of the disconnect — including what the client
 actually showed them, which is the part nobody can reconstruct later.
 
-## 11. Clean up
+## 11. The rolling update: change the image with a client connected
+
+Milestone 4c-2's own evidence, appended here rather than given a document of
+its own, because the setup is identical and only the trigger differs: §9 and
+§10 create a drain by lowering `replicas`, and this creates one by editing the
+spec. What happens downstream of the mark is 4c-1's contract unchanged — that
+is the whole claim of 4c-2 — so this section measures the part that is new:
+that the replacement happens at all, that it happens one pod at a time, that
+ready capacity never drops below `replicas` while it does, and that the session
+on the proxy being replaced survives it.
+
+It also measures through **the group's own `Service` on 30567**, not §8's pin.
+Nothing has to be pinned here: the selection rule takes the emptiest stale pod
+first (fact 1), so the pod the client is on is the one replaced *last*,
+whichever pod that turns out to be. That removes the one honest limit the
+second 4c-1 run carried — a criterion measured through a hand-built `Service`
+whose `externalTrafficPolicy` differs from the operator's.
+
+**Reset the group first.** §10 left `drain.timeoutSeconds` at 60 and `replicas`
+at 1, and both matter here: 60 seconds is not enough time to walk through a
+replacement with a person in the game, and the rollout needs two pods to be a
+rollout.
+
+```bash
+nix develop -c kubectl patch proxygroup gateway -n minecraft --type=merge \
+  -p '{"spec":{"replicas":2,"drain":{"timeoutSeconds":900}}}'
+```
+
+**That patch is itself a rollout trigger, and it is worth watching as a free
+rehearsal.** `drain.timeoutSeconds` reaches the pod as
+`terminationGracePeriodSeconds` (fact 6), so restoring it to 900 moves the
+digest and the group replaces the proxy that survived §10 as well as building
+back up to two. Nobody is connected yet, so every pod involved is empty and the
+whole thing is over in a couple of reconciles.
+
+Wait for it to settle before going on: **two** pods, both `1/1`, none carrying
+`draining-since`, and — the check that says the rollout is finished rather than
+merely quiet — both carrying the same `pod-hash`, which the next command reads.
+
+**Record the starting digest.** The label is the whole observable of this
+section, so read it before anything moves:
+
+```bash
+nix develop -c kubectl get pods -n minecraft \
+  -l spawnery.cloud/role=proxy,spawnery.cloud/group=gateway \
+  --sort-by=.metadata.creationTimestamp \
+  -L spawnery.cloud/pod-hash
+```
+
+`-L` adds a column carrying that label's value, headed with the label key
+itself. Expect two pods with the **same** digest in it — 16 hex characters, the
+digest of the pod the operator would render for this group right now
+(`podspec.DesiredProxyHash`). Write it down. One value across the group is what
+"nothing is pending" looks like; two values is a rollout in progress.
+
+**Join, and find out which pod you are on.** Point the client at
+`127.0.0.1:30567` and use §7's log command, with §7's rule — take the most
+recent line by the `kubectl`-added timestamp, not by its position in the
+output, because `kubectl logs -l` prints one pod's matches and then the next's.
+Call that pod `$OCCUPIED`. Unlike §8 you do not need it to be a particular one;
+you need to know which it is, because it is the pod whose drain is the
+measurement, and it is the pod that goes last.
+
+**Now give the group a new image.** The point is a digest that moves, and the
+honest way to move it is the operation an operator actually performs. The
+images live in the node's own containerd store (§3), so tag a second name onto
+the one already there rather than building anything:
+
+```bash
+podman exec spawnery-4c1-control-plane ctr -n k8s.io images tag \
+  ghcr.io/spawnery/velocity:3.5.1-0.2.0 \
+  ghcr.io/spawnery/velocity:3.5.1-0.2.0-roll
+podman exec spawnery-4c1-control-plane crictl images | grep velocity
+```
+
+Expect both tags listed. The pods carry no explicit `imagePullPolicy`, and
+neither tag ends in `:latest`, so Kubernetes' default of `IfNotPresent`
+applies and nothing is fetched from a registry.
+
+```bash
+nix develop -c kubectl patch proxygroup gateway -n minecraft --type=merge \
+  -p '{"spec":{"image":"ghcr.io/spawnery/velocity:3.5.1-0.2.0-roll"}}'
+```
+
+**If `ctr` is not available on your node**, patch `spec.resources.requests.cpu`
+from `500m` to `600m` instead. Staleness is a digest of the whole rendered pod,
+so the operator's behaviour downstream is identical; what that substitute does
+not exercise is a genuinely different image starting, which is the one thing
+the image path adds.
+
+Then watch, in this order. `resyncInterval` is 5 seconds, so nothing here needs
+catching in a particular second, but the first two steps happen quickly.
+
+**Expectation 1 — a third pod appears, before anything is marked.** Re-run the
+pod command above. Expect three pods: the two originals on the old digest, and
+a new one whose digest differs. Re-run §6's pod command too and expect the
+`draining-since` column to read `-` on all three. The surge pod comes up
+*first*; a mark written before it is `Ready` would be the defect this ordering
+exists to prevent.
+
+**Expectation 2 — the first old pod goes once the surge pod is `Ready`, and it
+is not yours.** The pod that goes is the old one that is **not** `$OCCUPIED` —
+the selection rule taking the emptiest stale pod (fact 1) — and it goes only
+after the new pod's `Ready` column reads `True`.
+
+**Expect to see it disappear rather than drain.** An empty pod is marked and
+deleted inside the same reconcile: `reconcileReplicas` writes the annotation in
+its readiness loop and then reaches its deletion loop in the same pass, where a
+count that is fresh, zero and still streaming is the delete condition, and that
+is already true of a pod nobody is on. So the `draining-since` column on that
+pod may be visible for a single 5-second window or not at all, and its `Ready`
+condition and its endpoint may never be seen to flip — there is no wait to
+observe, because the wait exists for players and there are none. That is not
+the case §9 measured, where the same pod had somebody on it. Expect **no
+`ProxyDrainTimeout` event** either way, and nothing at all involving the
+player's session in this step.
+
+**Expectation 3 — one at a time, and ready capacity holds.** Through the whole
+of the rollout, expect at most **one** pod carrying `draining-since` at any
+moment, and expect
+
+```bash
+nix develop -c kubectl get pods -n minecraft \
+  -l spawnery.cloud/role=proxy,spawnery.cloud/group=gateway
+```
+
+to show **at least two** proxies at `1/1` on every look — `replicas` is 2, and
+holding ready capacity at `replicas` is what the surge pod exists for. A moment
+showing `1/1` on fewer than two is the failure this expectation is here to
+catch, and it is worth polling for rather than sampling twice. `kubectl get
+proxygroup gateway -n minecraft` should read `READY 2` throughout for the same
+reason, and `PLAYERS 1` for as long as your client is connected — including
+while the pod it is on is draining (fact 3).
+
+**Expectation 4 — the second replacement starts, and the pod chosen is
+yours.** Once the first old pod is gone the group is back to two pods, one of
+them stale, so another new pod is created; when it turns `Ready`, `$OCCUPIED`
+is marked. Expect its `draining-since` to appear, its `Ready` to go `False`
+about 10 to 15 seconds later, and its endpoint to go `ready=false` while its
+address stays listed — §9's expectation 3, reached by a different route.
+
+**Expectation 5, and this is the criterion — the session survives it.** Ask the
+person at the client. Expect an entirely uninterrupted session across both
+replacements: no disconnect screen, no rubber-banding, no lost chunks. The
+proxy they are on has been taken out of rotation, not shut down, and the TCP
+session terminating on it was never touched. Only the person driving can attest
+to this; record what they say, in their words.
+
+**Expectation 6 — the pod is not deleted while they are on it.** `$OCCUPIED`
+stays `0/1 Running` for as long as the session lasts, up to the 900 seconds
+this section reset the timeout to. Start following its log before the client
+quits, for §9's reason: a pod's log dies with the pod, and the departure is
+what evidences "deleted only after the player left".
+
+**Expectation 7 — the end state.** Have the client quit. Expect `$OCCUPIED` to
+disappear within roughly 10 to 15 seconds, and then:
+
+```bash
+nix develop -c kubectl get pods -n minecraft \
+  -l spawnery.cloud/role=proxy,spawnery.cloud/group=gateway \
+  -L spawnery.cloud/pod-hash
+nix develop -c kubectl get proxygroup gateway -n minecraft
+nix develop -c kubectl get events -n minecraft \
+  --field-selector involvedObject.kind=ProxyGroup,involvedObject.name=gateway
+```
+
+A correct end state is exactly this: **two pods — `replicas`, not three — both
+`1/1`, both carrying the same digest, and that value different from the one
+written down at the start; no pod carrying `draining-since`; the group reading
+`READY 2 PLAYERS 0 PHASE Ready`; and no `ProxyDrainTimeout` event.** A third pod
+still standing means the rollout has not finished. Two distinct digests among
+the pods means it has not either. A `ProxyDrainTimeout` event means a deadline
+fired, which for this exercise means the player was still connected at 900
+seconds — the same disconnection §10 runs on purpose, arriving here by
+accident.
+
+**One thing worth trying deliberately, if you have the session to spare.** Edit
+the image back to `ghcr.io/spawnery/velocity:3.5.1-0.2.0` while `$OCCUPIED` is
+marked and still occupied. The pod that was stale now matches the spec again,
+and the surge pod built for the abandoned rollout is the stale one. What ships
+holds the mark rather than releasing it — the drain in flight finishes, and the
+now-stale surge pod is replaced on a later pass, one at a time like everything
+else here. It is the conservative reading and it is a deliberate decision, not
+an accident of the code; `docs/handover-milestone-4.md`'s "4c-2 has landed"
+says why, and `TestARevertedSpecChangeKeepsTheMarkItAlreadyMade` pins it.
+Nobody is disconnected either way, which is what makes this cheap to try.
+
+**A failure mode worth knowing before you meet it.** If the new image is not in
+the node's store — a typo'd tag, or a registry the cluster cannot reach — the
+surge pod sits in `ImagePullBackOff` and the rollout stalls *there*, with all
+of `replicas` old pods still `Ready` and serving. No mark is written, because
+the mark waits on the surge pod being `Ready`, and nobody is withdrawn or
+disconnected. A rollout that cannot build its replacement does not take the
+original out of service. The tell is a third pod that never turns `1/1` and a
+`draining-since` column that stays `-`.
+
+## 12. Clean up
 
 Stop the operator first and confirm it is stopped, before the cluster goes:
 until `kind delete cluster` finishes there is still an API server for a
@@ -1010,9 +1253,10 @@ recreated outside this runbook.
 
 ## Where this goes
 
-Everything §9 and §10 produce — the endpointslice lines at each stage, the
-annotation timestamps, the pod lists, the `ProxyDrainTimeout` event, and the
-player's own account of both sessions — belongs in
+Everything §9, §10 and §11 produce — the endpointslice lines at each stage, the
+annotation timestamps, the pod lists, the `pod-hash` values before and after,
+the `ProxyDrainTimeout` event, and the player's own account of each session —
+belongs in
 `docs/handover-milestone-4.md`, beside the record of milestone 3's manual
 session, unless milestone 4c-1 gets a handover document of its own, in which
 case there. This file is the procedure; that one is the record of what running
@@ -1028,6 +1272,7 @@ Three things are worth stating explicitly in whatever you write:
   `externalTrafficPolicy` (`Local` versus `Cluster`), and a later reader of
   the evidence cannot reconstruct which path was actually measured without
   being told.
-- **what the player saw**, in both §9 and §10. The logs prove what the proxy
+- **what the player saw**, in §9, §10 and §11. The logs prove what the proxy
   did. Only the person at the keyboard can say what the game showed, and in
-  §10 the whole finding is that it showed a disconnect.
+  §10 the whole finding is that it showed a disconnect — where in §11 the whole
+  finding is that it showed nothing at all, across two replacements.
