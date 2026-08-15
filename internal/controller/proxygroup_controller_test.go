@@ -1286,6 +1286,98 @@ func TestAProxyOnACordonedNodeIsReplaced(t *testing.T) {
 	}
 }
 
+// TestAnUncordonedNodeKeepsTheMarkAlreadyMade is spec §3.6's promise, driven
+// end to end: releasing a node mid-drain does not undo the drain already
+// begun.
+//
+// TestDecideRolloutCountsDrainingIndependentlyOfStale in rollout_test.go
+// pins the one clause of DecideRollout the one-at-a-time guard depends on,
+// but DecideRollout has no concept of a mark already made -- it only reads
+// this pass's Draining flag. What actually keeps the mark here is one layer
+// up: reconcileReplicas derives Stale fresh on every pass, so once the node
+// is uncordoned the marked pod reads Stale: false again, and it is the
+// surplus-marks budget documented above reconcileReplicas's staleMarks loop
+// -- the same mechanism TestARevertedSpecChangeKeepsTheMarkItAlreadyMade
+// exercises for a reverted spec.image -- that re-nominates the same pod
+// rather than releasing it. A node drain reverted mid-flight is the same
+// shape of state, and this test is what proves the shape holds for it too
+// rather than assuming the spec-image case generalizes.
+func TestAnUncordonedNodeKeepsTheMarkAlreadyMade(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	going := f.ensureNode(t, "node-going-"+f.ns, false)
+	staying := f.ensureNode(t, "node-staying-"+f.ns, false)
+	f.bindPodToNode(t, &pods[0], going.Name)
+	f.bindPodToNode(t, &pods[1], staying.Name)
+	f.ensureNode(t, going.Name, true)
+
+	f.reconcileProxyGroup(r, "gateway") // surges the replacement
+	after := f.proxyPods("gateway")
+	if len(after) != 3 {
+		t.Fatalf("proxy pods = %d after the cordon, want 3", len(after))
+	}
+	for i := range after {
+		f.markProxyPodReady(t, &after[i])
+	}
+	// A player on the departing pod, so occupancy holds it open across the
+	// assertions below rather than it being removed the instant it is marked.
+	f.reportProxyPlayers(t, pods[0], 1)
+
+	f.reconcileProxyGroup(r, "gateway") // marks the pod on the departing node
+
+	marked, ok := f.pod(pods[0].Name)
+	if !ok {
+		t.Fatalf("pod %s not found after being marked", pods[0].Name)
+	}
+	if _, dated := drainingSince(marked); !dated {
+		t.Fatalf("pod %s was not marked draining; nothing here would be released by the step below", pods[0].Name)
+	}
+
+	// Release the node mid-drain.
+	f.ensureNode(t, going.Name, false)
+	f.reconcileProxyGroup(r, "gateway")
+
+	stillMarked, ok := f.pod(pods[0].Name)
+	if !ok {
+		t.Fatal("the marked pod was removed after the node was released; " +
+			"the drain should have held rather than running to completion faster than it would have on the departing node")
+	}
+	if _, dated := drainingSince(stillMarked); !dated {
+		t.Error("the draining-since annotation was removed after the node was uncordoned; the mark must be kept, not released")
+	}
+	if got := f.proxies.lastReady(string(stillMarked.UID)); got == nil || *got {
+		t.Errorf("the marked pod was told ready=%v after the node was released, want false: "+
+			"releasing the node must not resume the withdrawal it was already mid-way through", got)
+	}
+
+	// The replacement still completes: once the marked pod is empty, it is
+	// removed like any other drain reaching zero players, and the group
+	// settles at its replica count with the mark gone from the object it was
+	// on -- not cancelled the instant the node was released, and not stuck
+	// forever either.
+	f.reportProxyPlayers(t, *stillMarked, 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	final := f.proxyPods("gateway")
+	if len(final) != 2 {
+		t.Fatalf("proxy pods = %d once the marked pod emptied, want 2", len(final))
+	}
+	if _, ok := f.pod(pods[0].Name); ok {
+		t.Error("the marked pod survived becoming empty; the drain the uncordon was supposed to only pause never completed")
+	}
+}
+
 // reportProxyPlayers puts a player count on a proxy pod the way that pod's own
 // agent would, and proves the registry took it.
 //
