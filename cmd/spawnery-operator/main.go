@@ -192,6 +192,14 @@ func main() {
 	mgrOptions.Cache.ByObject = map[client.Object]cache.ByObject{
 		&corev1.ConfigMap{}:      {Label: managed},
 		&corev1.ServiceAccount{}: {Label: managed},
+		// A persistent server's world claim carries the same label, and there
+		// is one per server. Nothing reads a claim back yet — the Server
+		// controller only creates them — but the restriction belongs beside
+		// the two above rather than with the first read: without it that read
+		// would start an informer holding every claim in every watched
+		// namespace, ours and everybody else's, for the sake of the one it
+		// asked for.
+		&corev1.PersistentVolumeClaim{}: {Label: managed},
 		// The node cache exists for one bool per node — cordoned, or tainted to
 		// repel. status.images is tens of kilobytes per node and nothing here
 		// reads it, so it is dropped on the way in, for the same reason the

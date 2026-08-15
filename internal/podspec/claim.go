@@ -34,11 +34,11 @@ import (
 // cost is that claims accumulate and must be found and removed by hand; a
 // later task in this milestone documents how.
 //
-// LabelManagedBy is not decoration: cmd/spawnery-operator already restricts
-// the manager's cache for several other kinds to that label, and a later
-// task extends the same restriction to claims -- at which point an
-// unlabelled claim this function wrote would be invisible to the very next
-// Get.
+// LabelManagedBy is not decoration: cmd/spawnery-operator restricts the
+// manager's cache to that label for several kinds, claims among them as of the
+// task that started creating these. Nothing reads a claim back yet, so an
+// unlabelled one would go unnoticed today -- and be invisible to the very
+// first Get anybody adds.
 func BuildDataClaim(
 	group *spawneryv1alpha1.ServerGroup,
 	srv *spawneryv1alpha1.Server,

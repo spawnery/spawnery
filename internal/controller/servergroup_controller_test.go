@@ -3542,3 +3542,39 @@ func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 		t.Errorf("servers = %v, want [survival-0]", names)
 	}
 }
+
+// TestAPersistentServerOnACordonedNodeIsCondemned pins acceptance criterion 5.
+// Nothing in the production code is specific to persistent groups here -- that
+// is the claim, and this is what holds it.
+//
+// The removal takes the shape a deletion takes once the Server controller has
+// run: markReady drives that controller, so the drain finalizer is on the
+// object and the delete leaves a deletion timestamp rather than removing the
+// object outright. TestAPersistentGroupRemovesTheHighestOrdinal, which drives
+// only the group, sees the other shape for exactly that reason.
+func TestAPersistentServerOnACordonedNodeIsCondemned(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 1)
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	srv := f.server("survival-0")
+	f.markReady(t, srv.Name)
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	pod, ok := f.pod(f.server(srv.Name).Status.PodName)
+	if !ok {
+		t.Fatal("pod not found")
+	}
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	condemned, present := f.serverIfPresent("survival-0")
+	if !present {
+		t.Fatal("survival-0 is gone outright, which the drain finalizer should have prevented")
+	}
+	if condemned.DeletionTimestamp.IsZero() {
+		t.Fatal("the persistent server on the cordoned node was not condemned; its players will be evicted instead of moved")
+	}
+}

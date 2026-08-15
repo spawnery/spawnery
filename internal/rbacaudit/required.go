@@ -53,6 +53,30 @@ var RequiredCluster = []Permission{
 	{Group: "", Resource: "pods", Verb: "delete", Why: "the terminating decision, the orphan sweep, and ProxyGroupReconciler scaling down"},
 	{Group: "", Resource: "pods", Verb: "patch", Why: "syncOccupiedLabel patches the occupied label"},
 
+	// PersistentVolumeClaims — one per persistent server, created before the
+	// pod that mounts it.
+	//
+	// Note what is absent, because the absence is the safety property and not
+	// an oversight: no delete and no update. The operator never removes a
+	// world — a claim carries no owner reference and outlives its server, its
+	// group, and the operator who deleted the wrong object, so the right to
+	// delete one is a right nothing here wants — and it never resizes one in
+	// 5a, which is what an update would be for. Reclaiming a world is a
+	// deliberate human act, done with kubectl against a documented runbook;
+	// growing one is a later milestone's, and adding `update` here is part of
+	// that milestone's work rather than something to grant in advance.
+	//
+	// get, list and watch serve the restricted cache cmd/spawnery-operator
+	// declares over claims. No claim is read back today: the Create below is
+	// the only call, and BuildDataClaim renders the object from the group's
+	// spec.storage without consulting the API. They are the read half of a
+	// kind the manager caches, kept together so the first read is a code
+	// change and not also an RBAC one.
+	{Group: "", Resource: "persistentvolumeclaims", Verb: "get", Why: "the restricted cache over the world claims"},
+	{Group: "", Resource: "persistentvolumeclaims", Verb: "list", Why: "the restricted cache over the world claims"},
+	{Group: "", Resource: "persistentvolumeclaims", Verb: "watch", Why: "the restricted cache over the world claims"},
+	{Group: "", Resource: "persistentvolumeclaims", Verb: "create", Why: "ServerReconciler creates a persistent server's claim before its pod"},
+
 	// PodDisruptionBudgets — one per group (ServerGroup and ProxyGroup each own
 	// one, distinguished by podspec.GroupPDBName's role suffix), kept in step
 	// with the occupied count.

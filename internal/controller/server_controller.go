@@ -98,6 +98,7 @@ type ServerReconciler struct {
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile collects the inputs, asks the state machine and executes the
@@ -123,16 +124,6 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		groupFound = false
-	}
-
-	// Persistent groups need a PVC and an ordered shutdown; that is milestone 5,
-	// so no pod is built for them. That must not stop anything else: an early
-	// return here would skip the finalizer, the drain and the release, and a
-	// Server in a persistent group could then never be deleted — the same
-	// deadlock as a Server whose group is gone.
-	persistentUnsupported := groupFound && !group.IsEphemeral()
-	if persistentUnsupported {
-		logger.Info("persistent groups are not implemented yet", "group", group.Name)
 	}
 
 	network := &spawneryv1alpha1.Network{}
@@ -161,9 +152,6 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		setAccepted(srv, false, spawneryv1alpha1.ReasonGroupNotFound,
 			fmt.Sprintf("server group %q not found; draining and cleanup continue on the default timings", srv.Spec.GroupRef.Name))
 		group = fallbackGroup(srv)
-	case persistentUnsupported:
-		setAccepted(srv, false, spawneryv1alpha1.ReasonNotImplemented,
-			fmt.Sprintf("server group %q is persistent; persistent groups arrive in milestone 5, so no pod is created for this server", group.Name))
 	case !networkFound:
 		logger.Info("network not found, running on the CRD defaults", "network", group.Spec.NetworkRef.Name)
 		setAccepted(srv, false, spawneryv1alpha1.ReasonNetworkNotFound,
@@ -206,7 +194,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Create the pod once, and only for a server that has not been asked to go
 	// away. status.podName is the record that a pod once existed; it is never
 	// reused for a different pod, which is what makes PodLost detectable.
-	createPod := groupFound && networkFound && !persistentUnsupported && !nameConflict &&
+	createPod := groupFound && networkFound && !nameConflict &&
 		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero()
 
 	// The namespace has to hold the CA and the ServiceAccount before the pod
@@ -238,6 +226,25 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	if createPod {
+		// The claim goes in before the pod that mounts it, and nothing here
+		// waits for it to reach Bound. Under volumeBindingMode:
+		// WaitForFirstConsumer — the default of most topology-aware storage
+		// classes, and of the node-local ones this milestone's failure modes
+		// are about — a volume binds only once a pod demands it, so waiting
+		// for Bound would deadlock against the pod this block goes on to
+		// create.
+		//
+		// AlreadyExists is the ordinary case rather than an error: an ordinal
+		// recreated after its server was deleted is *supposed* to find the
+		// claim it had before, and that is the whole point of the milestone.
+		// Nothing updates the claim either — growing a world is 5b's.
+		if !group.IsEphemeral() {
+			claim := podspec.BuildDataClaim(group, srv)
+			if err := r.Create(ctx, claim); err != nil && !apierrors.IsAlreadyExists(err) {
+				return ctrl.Result{}, err
+			}
+		}
+
 		built, err := podspec.BuildServerPod(network, group, srv, r.AgentEndpoint)
 		if err != nil {
 			return ctrl.Result{}, err
