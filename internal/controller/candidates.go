@@ -193,10 +193,20 @@ func (v ServerView) mayHavePlayers() bool {
 }
 
 // leavingByPhase is the part of leaving() that is evidence of a removal
-// already under way: these three phases are reached only as a consequence of
-// a removal this reconciler itself issued. Kept apart from Condemned because
-// one caller needs exactly this narrower question and not the wider one: see
-// expectations.go's expectationDelete case.
+// already under way: these three phases are reached only after something has
+// asked this particular server to go. Kept apart from Condemned because one
+// caller needs exactly this narrower question and not the wider one: see
+// expectations.go's expectationDelete case, which reads them as evidence that
+// the deletion its reservation was made for is happening.
+//
+// "Something", and deliberately not "this reconciler". The claim used to be
+// that these phases are reached only as a consequence of a removal this
+// reconciler itself issued, and that is false — a hand-run `kubectl delete
+// server/foo` drives exactly the same phases and is nobody's reservation.
+// (The orphan sweep is not the counterexample: it only touches Servers whose
+// group is gone, which this reconciler never sees.) The caller does not need
+// the stronger version anyway: a reservation is satisfied by evidence that
+// the server it named is going, whoever asked.
 func (v ServerView) leavingByPhase() bool {
 	return v.Phase == phase.Draining || v.Phase == phase.Terminating || v.Phase == phase.Retiring
 }

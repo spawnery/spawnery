@@ -674,15 +674,27 @@ func (r *ServerGroupReconciler) collectViews(
 			// podFound is required, and it is what makes pod safe to
 			// dereference here. It is false on all three of podFor's routes: no
 			// status.podName, a Get that failed, and a pod already carrying a
-			// deletion timestamp. None of the three can be condemned, for the
-			// same underlying reason rather than three: condemnation is a claim
-			// about the node a live pod is sitting on, and in all three cases
-			// there is no such pod to make the claim about. The last is worth
-			// stating plainly because a drain is the likeliest thing to have
-			// put that timestamp there — the eviction may well be this very
-			// node's doing — but the removal is already under way either way,
-			// and re-condemning it would only reserve a second delete for a
-			// server that is going.
+			// deletion timestamp. None of the three is condemned, but not for
+			// one reason — two of them and then a third.
+			//
+			// For two of them there is no pod to make the claim about, and
+			// condemnation is a claim about the node a live pod is sitting on.
+			// A server with no status.podName has no pod at all. One whose pod
+			// already carries a deletion timestamp is worth stating plainly,
+			// because a drain is the likeliest thing to have put that
+			// timestamp there — the eviction may well be this very node's
+			// doing — but the removal is under way either way, and
+			// re-condemning it would only reserve a second delete for a server
+			// that is going.
+			//
+			// The failed Get is the different one, and it is not the same
+			// sentence at a discount: a live pod on a departing node may exist
+			// and simply be unreadable, so this is a claim we decline to make
+			// rather than one with no subject. Declining is the same choice
+			// nodeDeparting makes when it cannot read a Node, for the same
+			// reason it gives — a group must not be emptied on the strength of
+			// a cache miss — and it costs at most a delay, because the next
+			// pass asks again.
 			Condemned: podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
 		}
 		if podFound {

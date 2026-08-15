@@ -76,9 +76,19 @@ type SizeDecision struct {
 	// Delete names the servers to remove now.
 	Delete []string
 	// Retire names the stale servers to put into soft drain now. Never the
-	// same server as Delete, and never in the same pass: retirement is how a
-	// server leaves during a changeover, deletion is how it leaves for lack
-	// of demand.
+	// same server as Delete, and never in the same pass as one: retirement is
+	// how a server leaves during a changeover, deletion is how it leaves for
+	// lack of demand, and decideSize's chain of early returns takes one of
+	// those branches or the other.
+	//
+	// Only half of that carries over to Condemn, which is worth saying here
+	// because this is the sentence somebody reasoning about Condemn will
+	// reach for. Retire and Condemn never name the same server either —
+	// selectRetirement excludes a condemned one, and its own comment says why
+	// — but they do occur in the same pass, on different servers. DecideSize
+	// attaches Condemn alongside whichever branch decideSize returned,
+	// precisely because a node drain answers to none of those branches. Same
+	// server: no. Same pass: yes.
 	Retire []string
 	// Wanted is how many servers the spare-slot rule asked for, before the
 	// ceiling. Limited is true either because Wanted exceeds Create — the
