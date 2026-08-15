@@ -1422,6 +1422,8 @@ spec:
               rule: self.type != 'Persistent' || !has(self.update)
             - message: spec.storage is required for type Persistent
               rule: self.type != 'Persistent' || has(self.storage)
+            - message: spec.replicas is required for type Persistent
+              rule: self.type != 'Persistent' || has(self.replicas)
             - message: scaling.minReplicas must not exceed scaling.maxReplicas
               rule: '!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas'
             - message: storage.storageClassName is immutable

@@ -105,6 +105,7 @@ type StorageSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.scaling)",message="spec.scaling is not allowed for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update)",message="spec.update is not allowed for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.storage)",message="spec.storage is required for type Persistent"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.replicas)",message="spec.replicas is required for type Persistent"
 // +kubebuilder:validation:XValidation:rule="!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas",message="scaling.minReplicas must not exceed scaling.maxReplicas"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
