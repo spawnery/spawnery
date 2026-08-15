@@ -1518,6 +1518,27 @@ group stopped maintaining its budget entirely, and a proxy that was empty at
 the last good pass stayed at `minAvailable: 0` with no label on it however
 many players joined afterwards.
 
+**No proxy in any group is evictable for the first 15 seconds after the
+operator starts.** `proxyOccupiedForBudget`
+(`internal/controller/proxygroup_controller.go`) is what sizes a
+`ProxyGroup`'s budget and writes the `spawnery.cloud/occupied` label, and it
+treats a pod the registry has never heard of as occupied while
+`Snapshot.StreamDownFor` is still under `phase.StreamDownGrace` — which, for
+an unknown pod, `Registry.Lookup` reports as the time since the operator
+process came up. The agent registry is in-process state and does not survive
+a restart, so during that grace every proxy whose agent has not yet dialled
+back in reads as unknown, gets the label, and is counted into its group's
+`minAvailable`; where that covers the whole group, `currentHealthy` equals
+`desiredHealthy` and the eviction API refuses everything. A `kubectl drain` running across an operator restart therefore
+stalls for up to 15 seconds beyond whatever it was already waiting for. That
+is the deliberate direction: the alternative reads a fleet of Ready proxies
+full of players as empty, at exactly the moment a drain is retrying
+evictions in a loop — and an operator evicted off the node being drained is
+an ordinary way to arrive there. Once an agent reconnects its pod is judged
+on what it reports, and a proxy whose agent never arrives at all stops being
+counted when the grace expires, which is what keeps a `CrashLoopBackOff`
+proxy from wedging its group's evictions permanently.
+
 **A node holding a whole group empties it at once**, so its players go to the
 fallback groups rather than to the group's own replacements, which are not
 ready yet. `DecideSize`'s `Condemn` rule names every server on a departing

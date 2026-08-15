@@ -411,12 +411,76 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 // enough, and so is a stream that is down: Velocity goes on serving the
 // sessions it holds after its agent's stream breaks, so a count nobody is
 // updating says nothing about who is on it.
+//
+// This is the unqualified rule. It is read directly in one place — the
+// deletion wait at the bottom of reconcileReplicas — and everywhere else
+// through proxyOccupiedForBudget, which wraps it. The deletion wait can
+// afford it unqualified because spec.drain.timeoutSeconds bounds that wait: a
+// proxy this calls occupied forever is still deleted at its deadline. The
+// label and the budget have no such bound, which is the whole of the
+// difference between the two functions; see the wrapper for the term it adds
+// and why the two consumers cannot share an answer.
 func proxyOccupied(snap agent.Snapshot) bool {
 	return !(snap.Players == 0 && !snap.PlayersStale && snap.Connected)
 }
 
+// proxyOccupiedForBudget is proxyOccupied asked by the two consumers that have
+// no deadline behind them: the podspec.LabelOccupied label, and the
+// PodDisruptionBudget whose minAvailable is counted from it.
+//
+// The difference is one term, and the reason for it is that the two consumers
+// are wrong in different directions. Registry.Lookup answers for a pod it has
+// never seen with {Known: false, Connected: false, PlayersStale: true}, which
+// proxyOccupied reads as occupied — so without this, every proxy pod counts
+// and is labelled as occupied from the moment it appears until its agent
+// connects and reports. On the deletion wait that costs a surplus pod its
+// full drain deadline and no more. On a budget nothing puts a clock on it at
+// all: a surge pod pushes minAvailable above the currentHealthy the group can
+// reach and blocks every eviction in it until that pod's own agent finally
+// reports, which for a proxy stuck in CrashLoopBackOff is never. The
+// argument for dropping the
+// server side's wasRegistered qualifier was written about the bounded
+// consumer and does not carry to the unbounded one.
+//
+// snap.Known is the discriminator, and it is precise: Registry.Disconnect
+// leaves it true, so a proxy whose agent connected and then died still counts
+// as occupied — which is the case the conservative rule exists for, since
+// Velocity goes on serving the sessions it holds after its agent's stream
+// breaks. What is excluded is the pod the registry has never heard of at all
+// — which, outside the window the next paragraph is entirely about, cannot be
+// holding players: a proxy pod's readiness probe is served by its own agent
+// (podspec.BuildProxyPod's TCP probe on ProxyReadyPort), so a pod whose agent
+// has never come up is not Ready, is not an endpoint of the group's Service,
+// and has no other route a player could arrive by — it publishes no hostPort
+// and runs on no host network.
+//
+// Except in one window, which is what the grace is for. "Never seen" also
+// describes every pod in the fleet in the moments after the operator itself
+// restarts, and those pods are Ready and full of players: an operator evicted
+// off the very node being drained is an ordinary way to reach that state, and
+// kubectl drain will be retrying evictions throughout it. Registry.Lookup
+// already answers this — for an unknown pod it reports StreamDownFor as the
+// time since the operator started, which agent.Snapshot's own field comment
+// describes as "a grace period to reconnect after an operator restart", and
+// phase.StreamDownGrace is the length the server side already reads it at.
+// Inside that window an unknown pod is treated as occupied, which is what
+// protects the whole fleet while its agents dial back in. Outside it, an
+// unknown pod is one whose agent has failed to appear for longer than the
+// grace the server side already gives a stream that has gone quiet, and the
+// group stops paying for it — deliberately, because that is the crash-looping
+// pod the wedge above is about.
+func proxyOccupiedForBudget(snap agent.Snapshot) bool {
+	if !snap.Known && snap.StreamDownFor >= phase.StreamDownGrace {
+		return false
+	}
+	return proxyOccupied(snap)
+}
+
 // syncOccupiedLabels keeps podspec.LabelOccupied on the group's pods in step
-// with proxyOccupied, and returns how many pods it found occupied while doing
+// with proxyOccupiedForBudget — not the bare proxyOccupied the deletion wait
+// uses; see that pair of functions for the one term between them and why
+// only the deadline-bounded consumer can afford the conservative answer — and
+// returns how many pods it found occupied while doing
 // so. reconcileProxyPDB sizes minAvailable from that returned count rather
 // than asking the registry again itself — see the comment on proxyOccupied
 // for why a second, independent call could answer differently and leave the
@@ -430,7 +494,7 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 	var occupiedCount int32
 	for i := range pods {
 		pod := &pods[i]
-		occupied := proxyOccupied(r.Agents.Lookup(string(pod.UID)))
+		occupied := proxyOccupiedForBudget(r.Agents.Lookup(string(pod.UID)))
 		if occupied {
 			occupiedCount++
 		}
@@ -878,6 +942,18 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// a stale count is safe to read as empty. Staleness alone is enough, and
 	// the cost is bounded — a proxy whose agent never appears is removed by
 	// the deadline rather than never.
+	//
+	// That bound is why this call is proxyOccupied and the label and budget
+	// use proxyOccupiedForBudget instead. The two ask the same question of
+	// the same snapshot; only this one has a deadline underneath it, so only
+	// this one can afford to be wrong in the conservative direction with
+	// nothing to end it. A budget has no such deadline: a minAvailable held
+	// above an achievable currentHealthy lifts when the pod's agent finally
+	// reports and not before, so the same conservative answer applied there
+	// blocks every eviction in the group for as long as that takes — for a
+	// pod whose agent never arrives, for as long as the pod exists. Same
+	// question, different consequence for being wrong, so the two consumers
+	// do not share an answer.
 	//
 	// isOccupied has a third term this deliberately does not model:
 	// sessionsGone, which overrides even a non-zero count, because a pod that
