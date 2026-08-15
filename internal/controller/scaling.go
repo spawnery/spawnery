@@ -228,12 +228,19 @@ func readyFree(views []ServerView) int32 {
 // coldStart reports whether the group must create the first server of its
 // current generation before anything can retire.
 //
-// Retirement needs a ready server of the current generation to exist. When
-// every server is stale none does, so nothing may retire, so nothing drops out
-// of the size count, so the spare-slot rule creates nothing — a deadlock that
-// only an unconditional create breaks. This is the one create in the system
-// that is not answering demand, and it is why the changeover costs at most one
-// extra server.
+// Retirement needs a ready server of the current generation that is staying to
+// exist — selectRetirement discounts one nominated for deletion or condemned by
+// its node, for the reasons given there. When every server is stale none does,
+// so nothing may retire, so nothing drops out of the size count, so the
+// spare-slot rule creates nothing — a deadlock that only an unconditional
+// create breaks. This is the one create in the system that is not answering
+// demand, and it is why the changeover costs at most one extra server.
+//
+// This function's own test is countsTowardSize rather than Ready, so the two
+// agree about a condemned server — leaving() covers it, so it does not suppress
+// a cold start — and differ about a Starting one, which suppresses the cold
+// start without yet licensing a retirement. That gap is intended: the group
+// waits the few seconds for it to become Ready rather than building another.
 //
 // A Failed server of the current generation does not suppress this. It used to
 // — milestone 4b's stopgap against a broken image being recreated every five
@@ -316,7 +323,27 @@ func selectRetirement(in ScalingInputs) string {
 			// is not retractable by the next pass. coldStart and staleRemains
 			// both skip PendingDeletes before counting anything; this is the
 			// same rule.
-			if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] {
+			//
+			// Condemned is that same rule reached by the other route. A
+			// condemned server is nominated for deletion in this very pass, by
+			// Condemn rather than by Delete, so counting it as the replacement
+			// a changeover waits for licenses a retirement against a server
+			// that is itself being drained off a departing node. It is the
+			// clause the nomination branch below carries, and it is here for
+			// the same reason: the two branches ask the same question of a
+			// server, and a reader who found the clause on one and not the
+			// other could not reconstruct why.
+			//
+			// The two failure directions are not symmetric, and this picks the
+			// safe one deliberately. With the clause, retirement declines more
+			// often: a changeover that happens to coincide with a node drain
+			// waits for a replacement that is not on the departing node, which
+			// costs the changeover time and costs no player a connection.
+			// Without it, a stale server is retired against a replacement that
+			// is going away, and a retirement cannot be taken back — so the
+			// group deregisters capacity it still needs. Slower beats
+			// irreversible.
+			if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] && !v.Condemned {
 				readyCurrent = true
 			}
 			continue
@@ -358,11 +385,12 @@ func selectRetirement(in ScalingInputs) string {
 	if budget < 1 {
 		budget = 1
 	}
-	// At least one ready server of the current generation, for every group
-	// and not only for fallback targets: a ServerGroup cannot tell whether a
-	// ProxyGroup names it, and learning to would cost a watch and a cache
-	// that can be wrong for a distinction that only permits emptying a
-	// non-fallback group faster.
+	// At least one ready server of the current generation that is staying —
+	// not one already nominated for deletion, and not one condemned by its
+	// node — for every group and not only for fallback targets: a ServerGroup
+	// cannot tell whether a ProxyGroup names it, and learning to would cost a
+	// watch and a cache that can be wrong for a distinction that only permits
+	// emptying a non-fallback group faster.
 	if !readyCurrent || unavailable >= budget || len(stale) == 0 {
 		return ""
 	}

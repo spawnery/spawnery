@@ -1376,6 +1376,51 @@ func TestDecideSizeCondemns(t *testing.T) {
 		}
 	})
 
+	t.Run("a condemned current-generation server is not the replacement a retirement waits for", func(t *testing.T) {
+		// The mirror of the case above, on the other branch of the same loop:
+		// here the stale server is healthy and the current-generation server
+		// beside it is the one on the departing node. Counting that one as the
+		// replacement would retire "old" against capacity that is itself being
+		// drained away, and a retirement cannot be taken back. Declining is the
+		// deliberate choice — the changeover waits for a replacement that is
+		// staying, which costs it time and costs no player a connection.
+		//
+		// "warming" is load-bearing and not scenery. Without a current-
+		// generation server that counts toward the group's size, the cold-start
+		// branch fires and decideSize returns a Create long before the
+		// retirement branch is reached, so the assertion below would hold for a
+		// reason that has nothing to do with the clause under test. Starting
+		// rather than Ready is what makes it suppress the cold start without
+		// also satisfying readyCurrent by itself. Verified by removing the
+		// clause: this case then reports Retire = [old], while the simpler
+		// two-server version still reports none.
+		in := ScalingInputs{
+			Views: []ServerView{
+				staleReady("old", 60, 100, 3),
+				{Name: "warming", Phase: phase.Starting, Generation: 0},
+				func() ServerView {
+					v := ready("new", 0, 100)
+					v.Condemned = true
+					return v
+				}(),
+			},
+			Generation: 0, MaxUnavailable: 1,
+			MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		}
+		got := DecideSize(in)
+		if got.Create != 0 {
+			t.Fatalf("Create = %d, want 0: a create means decideSize returned before the "+
+				"retirement branch and this case tests nothing", got.Create)
+		}
+		if len(got.Retire) != 0 {
+			t.Errorf("Retire = %v, want none: the only Ready current-generation server is "+
+				"condemned, so it is not a replacement to retire against", got.Retire)
+		}
+		if len(got.Condemn) != 1 || got.Condemn[0] != "new" {
+			t.Errorf("Condemn = %v, want [new]: the node drain still takes it", got.Condemn)
+		}
+	})
+
 	t.Run("a condemned server already reserved for delete is not named again", func(t *testing.T) {
 		// The guard condemned() relies on: a server this reconciler already
 		// reserved an ordinary delete for must not be re-listed just because
