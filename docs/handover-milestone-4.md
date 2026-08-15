@@ -927,17 +927,46 @@ is what it built and what the next milestone finds in place.
   never the two against each other, which is exactly why a selector matching
   the wrong population survived a milestone.
 
-**4c is now complete as three sub-milestones — 4c-1 the readiness contract,
-4c-2 proxy rolling updates, 4c-3 node drain — and what remains is proof, not
-code.** §12 of `docs/runbook-milestone-4c1-evidence.md` is written for the two
-claims envtest cannot make — that `kubectl drain` actually completes on a real
-kubelet, and that a real player survives a real cordon — but it is marked not
-yet driven: it is run by the human partner and the acting agent together,
-after the whole-branch review this milestone's own implementation record
-(`.superpowers/sdd/2026-08-15-node-drain/progress.md`) has not yet had. Until
-that run, criteria 1 through 5 of the design's §7 acceptance criteria are
-proven only at the envtest level named in the design's §6, the same limit
-4c-1's own evidence runs existed to close for the readiness contract.
+**4c is complete as three sub-milestones — 4c-1 the readiness contract, 4c-2
+proxy rolling updates, 4c-3 node drain — and all three are now proven on a
+real cluster.** §12 of `docs/runbook-milestone-4c1-evidence.md` was driven on
+2026-08-15, the evening 4c-3 merged, on a three-node `kind` cluster with a
+licensed client. What it measured:
+
+- **`kubectl drain` completed rather than hung.** Its eviction was refused
+  thirteen times — "Cannot evict pod as it would violate the pod's disruption
+  budget", retried on `kubectl`'s own five-second schedule — for as long as
+  the player stayed connected, then exited 0 with `node/… drained` once they
+  left. Before this milestone there was no `ProxyGroup` budget for it to
+  be refused by, so the first eviction would have succeeded and taken the
+  session with it.
+- **The surge came first, and only timestamps show it.** Cordon `18:11:40`;
+  replacement pod created `18:11:41` on the other worker; replacement `Ready`
+  `18:11:52`; the occupied pod marked `18:11:52`, the same second. Eleven
+  seconds in which the node was cordoned and nothing was marked. Its readiness
+  went `False` twelve seconds after the mark, inside the window the probe's own
+  configuration predicts. Five-second polling saw all of it as one state and
+  proved none of the order — a lesson for whoever drives this next.
+- **The player was moved, not kicked, and the log shows the order.**
+  `paul_wtf -> lobby-yb28 has connected` at `18:11:41.501`, then
+  `paul_wtf -> lobby-rt2k has disconnected` 34 milliseconds later. Connect
+  first, disconnect second: the session never had no server. What the person
+  at the keyboard reported was a brief "connecting…" screen and nothing else.
+- **The server half proved itself inside the proxy half.** Both of the
+  client's pods happened to sit on the cordoned worker, so the `Server` was
+  condemned one second after the cordon while the proxy was still waiting for
+  its replacement — the design's own asymmetry, visible: deleting a `Server`
+  CR *is* its drain, so there is nothing to wait for.
+
+Three limits the run did not close, recorded rather than rounded off. The
+**taint path** — acceptance criterion 4 — was not driven; only the cordon path
+was, and while `IsDeparting` reaches the same answer through a different field,
+nothing has yet exercised `-drain-taint` against a real cluster. **Whether the
+operator deleted the emptied proxy pod or the eviction took it** could not be
+distinguished: both open in the same instant and for the same reason, and the
+evidence points at the eviction without settling it. And **§12.6's own case —
+the client's proxy and backend on different workers** — remains unrun, because
+on this cluster they landed together.
 
 ## The evidence run
 

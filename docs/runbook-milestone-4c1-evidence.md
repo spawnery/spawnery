@@ -22,24 +22,61 @@ and the notes it adds to §6 and §8 were rewritten against the code as it stand
 now; §§9 and 10's own measurements were made under the older rule and are
 recorded, not re-predicted.
 
-**§12 was added 2026-08-15 for milestone 4c-3 (node drain) and has NOT been
-driven.** Every earlier section here was also written before it was first
-run — that is how this procedure has always been produced — but §§0–11 were
-driven the same day or the same night they were written, as part of the
-milestone that added them, and corrected in place from what that run found.
-§12 is different: `.superpowers/sdd/2026-08-15-node-drain/task-9-brief.md`
-asks for the procedure to be committed with the run deliberately deferred,
-to be driven by the human partner and the acting agent together once the
-branch review that follows this document's own commit has happened — so this
-is the first section of this document to reach the branch, and possibly a
-reader, before it has ever been run at all. Its "Expect" lines are therefore
-predictions grounded in the code and in the mechanisms §§1–11 already
-measured — 4c-1's readiness contract and 4c-2's rollout, both reused here
-unchanged — not measurements. The old §12, "Clean up", is renumbered §13 to
-make room for it; nothing else in this document numbers a section by cross
-reference, so nothing else needed to move. Whoever drives §12 first should
-correct it in place exactly as every prior run corrected this document, and
-rewrite this paragraph once it has been.
+**§12 was added 2026-08-15 for milestone 4c-3 (node drain) and was driven the
+same evening, against merged `master`, with a real client.** It was the one
+section of this document ever committed ahead of its own run — deliberately,
+so the branch review could see the procedure — and it is the only one whose
+"Expect" lines were predictions when they were written. They held, and where
+the run departed from them it is recorded below rather than smoothed over.
+The old §12, "Clean up", is renumbered §13 to make room for it.
+
+Three things the run established that its own predictions did not name:
+
+- **The ordering held with room to spare, and only timestamps showed it.**
+  Polling at five seconds saw the surge pod, the mark and the condition all
+  true at once, which proves nothing about their order. The object timestamps
+  do: cordon at `18:11:40`, surge pod created `18:11:41` on the *other*
+  worker, surge pod `Ready` at `18:11:52`, and the occupied pod marked at
+  `18:11:52` — the same second, after eleven seconds in which the node was
+  cordoned and nothing was marked. Its readiness went `False` twelve seconds
+  later, inside the 10–15 second window §9's expectation 2 predicts. Whoever
+  drives this again should read the timestamps and not the polling.
+- **The proxy and the server halves ran together, not one after the other.**
+  §12.6 is written as a separate exercise, and on this cluster it happened
+  inside §12.5: the client's proxy *and* the client's backend both sat on the
+  cordoned worker, so the server was condemned one second after the cordon
+  while the proxy was still waiting for its replacement. That is the design's
+  own asymmetry made visible — deleting a `Server` CR *is* its drain, so
+  there is nothing to wait for, while the proxy waits for a ready
+  replacement. §12.6 remains worth running on its own when the two land
+  apart.
+- **The move was a connect-then-disconnect, 34 milliseconds apart.** The
+  proxy log shows `paul_wtf -> lobby-yb28 has connected` at `18:11:41.501`
+  and `paul_wtf -> lobby-rt2k has disconnected` at `18:11:41.535`. The player
+  was never without a server, and what they reported seeing was a brief
+  "connecting…" screen and nothing else. That is what "moved, not kicked"
+  looks like from the one side no log can show.
+
+Two corrections the run made to this section in place, and one limit it could
+not settle:
+
+- §12.5 told the driver to point the client at 30567. Which host port a
+  client uses decides nothing here; **which pod accepted the join** is what
+  the section needs, and only the proxy's own log says it. The instruction is
+  rewritten to name both ports and to settle the question from the log, the
+  way §7 already insists.
+- §12.5 predicted the operator would delete the emptied proxy pod itself and
+  that `kubectl drain`'s next retry would then succeed. The run cannot tell
+  those apart: the last `evicting pod` line returned without an error, which
+  says the eviction was permitted, and the operator's log says nothing about
+  a deletion. Both paths open at the same instant and for the same reason —
+  the player left, the `occupied` label came off, and the budget stopped
+  selecting anything (`gateway-proxy-pdb  NoPods` at `18:14:48`). The
+  sentence now says that rather than choosing.
+- The taint path — acceptance criterion 4 — was **not** driven. The cordon
+  path was, and `IsDeparting` reaches the same answer through a different
+  field, but nothing in this document has yet exercised `-drain-taint`
+  against a real cluster.
 
 Design `docs/superpowers/specs/2026-08-14-proxy-readiness-contract-design.md`
 §10 lists eight acceptance criteria. Five of them — criteria 3, 4, 5, 6 and 7
@@ -1181,11 +1218,11 @@ original out of service. The tell is a third pod that never turns `1/1` and a
 
 ## 12. Node drain: `kubectl cordon` and `kubectl drain` on an occupied node
 
-**NOT YET DRIVEN** — see the note at the top of this document. Everything
-below is written from the code (`internal/controller/nodes.go`,
-`docs/superpowers/specs/2026-08-15-node-drain-design.md`) and from the
-mechanisms §§1–11 already measured on a real cluster, not from a run of its
-own. `kubectl cordon` sets exactly the field `IsDeparting` checks first,
+**DRIVEN 2026-08-15**, against merged `master`, on a three-node `kind`
+cluster with a real client — see the top of this document for what the run
+established beyond these predictions and what it corrected. The measurements
+quoted below are from that run. `kubectl cordon` sets exactly the field
+`IsDeparting` checks first,
 `spec.unschedulable`, so this section needs no `-drain-taint` flag on the
 operator at all — that flag exists for a taint-only departure such as
 cluster-autoscaler's, and is not this section's concern. An operator wanting
@@ -1297,11 +1334,22 @@ whichever group that happened to.
 
 ### 12.5 The proxy: join, cordon the worker holding it, watch the replacement
 
-Point the client at whichever of `127.0.0.1:30567` or `:30568` reaches a
-proxy — both should, since both workers hold one — and log in. Identify
-which pod and which worker accepted the join with §7's log command and
-`kubectl get pods -o wide`, the same pairing §6 and §7 use together
-elsewhere in this document. Call the worker `$DOOMED_NODE`.
+Point the client at either `127.0.0.1:30567` or `127.0.0.1:30568` — both
+reach a proxy, since both workers hold one — and log in. **Which port you
+used decides nothing; which pod accepted the join decides everything, and
+only the proxy's own log says which.** The 2026-08-15 run confirmed the trap
+by walking into it: the driver was told to use 30567 and the session landed
+on the pod behind 30568, which would have condemned the wrong worker had the
+port been trusted. Settle it from the log, the way §7 already insists:
+
+```bash
+nix develop -c kubectl logs -n minecraft -l spawnery.cloud/role=proxy \
+  --prefix=true --tail=-1 --timestamps | grep 'has connected'
+```
+
+Take the most recent `[connected player]` line by timestamp; the `pod/…`
+prefix names the proxy. Then `kubectl get pods -o wide` gives that pod's
+worker. Call it `$DOOMED_NODE`.
 
 ```bash
 nix develop -c kubectl cordon "$DOOMED_NODE"
@@ -1363,17 +1411,40 @@ pod meets the `ProxyGroup`'s own `PodDisruptionBudget`
 evict pod as it would violate the pod's disruption budget", and `kubectl
 drain` retries on its own schedule rather than giving up. That refusal is
 the point: nothing about running `kubectl drain` bypasses the readiness
-contract, and the pod is not kicked by it. Once the player leaves (or
-`spec.drain.timeoutSeconds` elapses — §5's manifest sets `gateway`'s to 900,
-not the CRD's own 300-second default; raise it first if you want longer to
-look around, per §9's fact 6) the operator
-deletes the now-empty pod itself, the `PodDisruptionBudget` no longer
-selects anything on that node, and `kubectl drain`'s next retry succeeds.
+contract, and the pod is not kicked by it. The 2026-08-15 run counted that
+message thirteen times, on `kubectl`'s own five-second retry schedule, for as
+long as the player stayed connected.
+
+Once the player leaves (or `spec.drain.timeoutSeconds` elapses — §5's
+manifest sets `gateway`'s to 900, not the CRD's own 300-second default;
+raise it first if you want longer to look around, per §9's fact 6), two
+things become possible in the same instant, and this document does not claim
+to know which of them fires: the pod stops being occupied, so the operator's
+own deletion loop may remove it, and the `occupied` label comes off, so the
+budget stops selecting it and the next eviction retry is permitted. The
+2026-08-15 run could not tell them apart — its last `evicting pod` line
+returned without an error, which points at the eviction, while the
+operator's log said nothing about a deletion. Both open for the same reason
+and neither opens before the player is gone, which is the part that matters.
+Watch for `gateway-proxy-pdb` reporting `NoPods` (`kubectl get events`) as
+the moment the budget let go.
+
 **Expect the command to exit 0** and print `node/<name> drained`, completing
 rather than hanging — the whole claim of this milestone, on the door 4c-1
-and 4c-2 did not watch.
+and 4c-2 did not watch. The 2026-08-15 run got exactly that.
 
 ### 12.6 The server: an occupied pod is moved, not kicked
+
+**On the 2026-08-15 run this section proved itself inside §12.5 and was not
+run separately.** The client's proxy and the client's backend both happened
+to sit on the cordoned worker, so `lobby-rt2k` was condemned one second
+after the cordon — event `NodeDraining`, "draining server lobby-rt2k off a
+node that is going away" — and the player was moved to `lobby-yb28` before
+the proxy had even finished waiting for its replacement. The group rebuilt
+itself as `lobby-xyyr` on the surviving worker. What is left unmeasured is
+the case where the two land on different workers, which is what the steps
+below still exercise; run them when the `NODE` column in §12.4 puts them
+apart.
 
 Uncordon `$DOOMED_NODE` first (`kubectl uncordon`), so both workers are
 schedulable again before this exercise starts — leaving one cordoned would
@@ -1551,10 +1622,10 @@ belongs in
 `docs/handover-milestone-4.md`, beside the record of milestone 3's manual
 session, unless milestone 4c-1 gets a handover document of its own, in which
 case there. This file is the procedure; that one is the record of what running
-it produced. §12, once it is driven, is the same arrangement: its own record
-belongs in `docs/handover-milestone-4.md`'s "4c-3 has landed" section, and
-this file's own top-of-document note marking §12 as not yet driven is what
-gets rewritten in place, the way every earlier addition's own such note was.
+it produced. §12 followed the same arrangement when it was driven on
+2026-08-15: its record is in `docs/handover-milestone-4.md`'s "4c-3 has
+landed" section, and this file's top-of-document note was rewritten in place,
+the way every earlier addition's own such note was.
 
 Three things are worth stating explicitly in whatever you write:
 
