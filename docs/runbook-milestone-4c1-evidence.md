@@ -1200,10 +1200,11 @@ design (§6) and neither present in §§0–11.
 
 1. **A multi-node cluster.** Every earlier section in this document runs
    against a single-node `kind` cluster (§2: "one node is not a limitation
-   here, it is a requirement" — true for §§7–11, which pin a client to a
-   specific pod and rely on every pod answering the one node's NodePort).
-   `kubectl cordon` and `kubectl drain` are meaningless against a cluster
-   with nowhere else for a replacement to go: the replacement would have to
+   here, it is a requirement"), because a single node is what makes the one
+   NodePort mapping reach whichever pod a client lands on — pinned to it, the
+   way only §8 (and, by reuse, §9 and §10) actually pin, or not, the way §7
+   and §11 both leave it. `kubectl cordon` and `kubectl drain` are meaningless
+   against a cluster with nowhere else for a replacement to go: the replacement would have to
    land back on the only node there is, which the cordon itself forbids, and
    the group would simply stall the way §3.4 of the design says a group with
    nowhere to move to should. This section therefore builds its own cluster,
@@ -1306,23 +1307,42 @@ elsewhere in this document. Call the worker `$DOOMED_NODE`.
 nix develop -c kubectl cordon "$DOOMED_NODE"
 ```
 
-**Expect, in the same order §9 already established for a scale-down, because
-this is the identical mechanism reached by a different door:** within a
-reconcile or two, a third `gateway-*` pod appears on the *other* worker,
-before anything is marked; once it is `Ready`, the occupied pod's
-`draining-since` annotation appears (§9's expectation 1); its `Ready`
-condition flips `False` some 10–15 seconds later with neither log saying
-anything (§9's fact 2 and expectation 2); its `EndpointSlice` entry goes
-`ready=false serving=false` while its address is still listed (§9's
-expectation 3, criterion 2); and the person at the client reports an
-entirely uninterrupted session (§9's expectation 4, criterion 1) — now
-running through a `Service` whose `externalTrafficPolicy` is `Local`, the
+**Expect the surge-then-mark ordering §11 established for a rolling update,
+not §9's plain scale-down.** §9 lowers `spec.replicas` with no pod stale, so
+`DecideRollout` marks the surplus pod directly — no third pod, ever. Here the
+cordoned pod is stale for the identical reason a pod-hash mismatch is: `Stale`
+carries the `nodeGoing[i]` disjunct either way (§3.4 of the design), and
+`DecideRollout` cannot tell the two reasons apart. So `surge` opens to 1 the
+moment the cordon lands, and — per §11's expectation 1 — a third `gateway-*`
+pod appears on the *other* worker first, before anything is marked. Only once
+that surge pod is `Ready` does the occupied pod get marked, per §11's
+expectation 2. From there the individual marked pod's own sequence is what §9
+already established, because marking is the one 4c-1 mechanism both exercises
+reach: the `draining-since` annotation appears (§9's expectation 1); its
+`Ready` condition flips `False` some 10–15 seconds later with neither log
+saying anything (§9's fact 2 and expectation 2 — that window is the readiness
+probe's own `InitialDelaySeconds: 10` plus up to `FailureThreshold: 3` ×
+`PeriodSeconds: 5` of failing probes, `internal/podspec/proxy.go`); its
+`EndpointSlice` entry goes `ready=false serving=false` while its address is
+still listed (§9's expectation 3, criterion 2); and the person at the client
+reports an entirely uninterrupted session (§9's expectation 4, criterion 1) —
+now running through a `Service` whose `externalTrafficPolicy` is `Local`, the
 path §8's pin exists to substitute for and §11 already reached without it.
-The one thing this exercise adds over §9's: a proxy pod on a cordoned node
-still counts as "on a departing node" the moment the cordon lands, so the
-mark should appear within one `resyncInterval` (5 seconds) of the `kubectl
-cordon` above returning — no `spec.replicas` edit and no image change
-involved this time, only the node fact from §3.4 of the design.
+
+**Only the `NodeDraining` condition and its event are bounded by the
+operator's `resyncInterval` (5 seconds); the annotation is not.**
+`reportNodeDraining` computes the `ProxyGroup`'s `NodeDraining` condition
+straight from the node fact, with no dependency on the surge pod or the mark
+— and `ProxyGroupReconciler`'s own `Watches(&corev1.Node{}, ...)` fires a
+reconcile the moment the cache sees `$DOOMED_NODE`'s `spec.unschedulable`
+flip, rather than waiting for the periodic resync at all. Expect `kubectl get
+proxygroup gateway -n minecraft -o jsonpath='{.status.conditions}'` to show
+`NodeDraining: True` naming `$DOOMED_NODE` within a couple of seconds of the
+`kubectl cordon` above returning. The `draining-since` annotation on the pod
+itself has no comparable bound: it is written only once the surge pod is
+`Ready`, and how long that takes depends on scheduling, image pull and the
+Velocity agent's own start-up — the same unclocked wait §11's own expectation
+1 already asks the driver to watch for rather than time.
 
 Now, in a third shell, the acceptance test this whole section exists for:
 
@@ -1332,7 +1352,8 @@ nix develop -c kubectl drain "$DOOMED_NODE" --ignore-daemonsets --delete-emptydi
 
 **Expect this command to block, not fail, while the player is still
 connected** — `kubectl drain`'s own eviction call against the occupied proxy
-pod meets the same `PodDisruptionBudget` §7 built, refuses with "Cannot
+pod meets the `ProxyGroup`'s own `PodDisruptionBudget`
+(`reconcileProxyPDB`, introduced this milestone), refuses with "Cannot
 evict pod as it would violate the pod's disruption budget", and `kubectl
 drain` retries on its own schedule rather than giving up. That refusal is
 the point: nothing about running `kubectl drain` bypasses the readiness
