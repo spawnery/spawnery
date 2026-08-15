@@ -603,6 +603,40 @@ when. What follows is what it built and what 4c-3 now finds in place.
   `make agent-test` needed no extension — so what 4c-3 finds is exactly what 4c-1
   left it, plus a proxy group that now replaces its own pods.
 
+## The 4c-2 evidence run
+
+Driven 2026-08-15 against merged `master` on the same `kind` setup as 4c-1's
+two runs, with a licensed client and the repository's owner at the keyboard,
+following the runbook's §11. All seven expectations held.
+
+**The rollout, as it happened.** Both proxies started on one digest. Four
+seconds after the image was patched a third pod existed on a new digest and
+nobody was marked; eight seconds later that pod was ready, the *empty* old
+proxy was already gone, and the second replacement had been created. The
+occupied proxy was marked at twenty seconds and left the endpoints at
+thirty-two. Through all of it the group never showed fewer than two proxies at
+`1/1` — briefly three, which is the surge — never more than one
+`draining-since`, and `PLAYERS 1` throughout, including while the pod the
+player was on was draining.
+
+**The criterion, which only the person driving can attest:** two replacements,
+one of them on their own proxy, and the session ran through untouched — no
+disconnect, no stutter, nothing noticed at all.
+
+**Three things the run established that reading could not.** The `ctr` retag
+§11 depends on was the one step nobody had ever executed, and it works. The
+empty old proxy vanishes without its `draining-since` ever becoming
+observable — four-second polling never caught it — which is what §11's
+expectation 2 predicts and is a rare case of a runbook correctly predicting an
+*absence*. And the departure was captured this time, four seconds before the
+pod disappeared, which is the ordering 4c-1's §9 wanted to evidence and whose
+evidence died with the pod that day.
+
+**The end state was exactly as specified:** two pods, not three, both on the
+new digest, none marked, `READY 2 PLAYERS 0`, and no `ProxyDrainTimeout` event
+anywhere — nobody was disconnected, because the player left of their own accord
+and the deadline never came into it.
+
 ## The evidence run
 
 `docs/runbook-milestone-3-evidence.md` was run against a real `kind` cluster

@@ -7,13 +7,16 @@ with a real client that same day** — see `docs/handover-milestone-4.md`, "The
 Both runs corrected this document in place, which is what its first runner was
 asked to do.
 
-**§11 was added 2026-08-15 for milestone 4c-2 (proxy rolling updates), on
-branch `milestone-4c2-rolling-updates`, and has not been run.** Every command in
-it was checked against the repository it names — the Makefile targets, the CRD
-field names, the label keys, the constants in `internal/podspec` — but the
-cluster behaviour it predicts has not been observed. Its first runner is also
-its first corrector; do what `docs/runbook-milestone-3-evidence.md` did after
-its first real run and fix defects in place rather than noting them as a fork.
+**§11 was added 2026-08-15 for milestone 4c-2 (proxy rolling updates) and was
+driven the same night, against merged `master`, with a real client.** All seven
+of its expectations held; `docs/handover-milestone-4.md`, "The 4c-2 evidence
+run", records what it measured. Two things in it are worth knowing before you
+follow it: the `ctr` retag it depends on was the one step nobody had executed,
+and it works; and the empty old proxy really does vanish without its
+`draining-since` ever becoming visible, which expectation 2 predicts and
+four-second polling did not catch. The run corrected one sentence in place — the
+`-L` column header — which is what its first runner was asked to do.
+
 The same milestone changed which proxy a scale-down removes, so fact 1 below
 and the notes it adds to §6 and §8 were rewritten against the code as it stands
 now; §§9 and 10's own measurements were made under the older rule and are
@@ -1008,11 +1011,13 @@ nix develop -c kubectl get pods -n minecraft \
   -L spawnery.cloud/pod-hash
 ```
 
-`-L` adds a column carrying that label's value, headed with the label key
-itself. Expect two pods with the **same** digest in it — 16 hex characters, the
-digest of the pod the operator would render for this group right now
-(`podspec.DesiredProxyHash`). Write it down. One value across the group is what
-"nothing is pending" looks like; two values is a rollout in progress.
+`-L` adds a column carrying that label's value, headed `POD-HASH` — `kubectl`
+drops the `spawnery.cloud/` prefix and upper-cases what is left, so do not look
+for the whole key (measured 2026-08-15). Expect two pods with the **same**
+digest in it — 16 hex characters, the digest of the pod the operator would
+render for this group right now (`podspec.DesiredProxyHash`). Write it down.
+One value across the group is what "nothing is pending" looks like; two values
+is a rollout in progress.
 
 **Join, and find out which pod you are on.** Point the client at
 `127.0.0.1:30567` and use §7's log command, with §7's rule — take the most
