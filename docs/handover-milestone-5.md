@@ -112,7 +112,7 @@ see `docs/runbook-milestone-5a-evidence.md`, marked **NOT YET DRIVEN**.
   compare the generated role against the hand-maintained table in both
   directions, so a `delete` or `update` marker added anywhere later turns the
   suite red before it can ship. The manager's cache over claims is restricted
-  to `spawnery.cloud/managed-by=spawnery`
+  to `spawnery.cloud/managed-by=spawnery-operator`
   (`cmd/spawnery-operator/main.go`), the same mechanism already narrowing the
   cache over ConfigMaps and ServiceAccounts, so the informer this grants does
   not hold every claim in every watched namespace.
@@ -169,8 +169,11 @@ against the code; restated in one line each:
   drain** — 4c-3 recorded the limit before anything could reach it; 5a is
   what makes it reachable.
 - **A claim that never binds ends in a deliberate stall**, and `Degraded`
-  does not appear until roughly six hours after the first failure at the CRD's
-  default retention — `status.consecutiveFailures` and `status.lastFailureAt`
+  does not appear until roughly five and a half hours after the first failure
+  at the CRD's default retention — six counted failures span five gaps, not
+  six, and each gap runs close to `failedRetentionSeconds` (3600s) plus the
+  replacement's own `--startup-deadline` (300s) before it can fail in turn,
+  not an even hour. `status.consecutiveFailures` and `status.lastFailureAt`
   are the earlier signal.
 - **A squatter — an object already holding a persistent ordinal's name
   without `spec.ordinal` — stalls that ordinal silently**, retried once every

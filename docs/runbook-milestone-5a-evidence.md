@@ -387,9 +387,9 @@ nix develop -c kubectl get pvc survival-0-data -n minecraft -o jsonpath='{.metad
 
 **Expect `0`** — the ordinal is on the object, not just implied by the name.
 
-**Expect the labels to include `spawnery.cloud/managed-by: spawnery`,
+**Expect the labels to include `spawnery.cloud/managed-by: spawnery-operator`,
 `spawnery.cloud/server: survival-0`, `spawnery.cloud/group: survival`.** This
-is what lets `kubectl get pvc -l spawnery.cloud/managed-by=spawnery` find
+is what lets `kubectl get pvc -l spawnery.cloud/managed-by=spawnery-operator` find
 every claim this operator has ever created, and what `docs/known-issues.md`'s
 "From milestone 5a" section names as how to tell a live claim from an orphan.
 
@@ -500,12 +500,26 @@ nix develop -c kubectl get pvc survival-0-data -n minecraft
 nix develop -c kubectl get events -n minecraft \
   --field-selector involvedObject.kind=Server,involvedObject.name=survival-0 \
   --sort-by=.lastTimestamp
+nix develop -c kubectl get events -n minecraft \
+  --field-selector involvedObject.kind=ServerGroup,involvedObject.name=survival \
+  --sort-by=.lastTimestamp
 ```
 
-Expect the event list to show a `PodLost` reason, then a fresh `ServerCreated`
-from the group and a fresh `PodCreated`, naming the identical `survival-0` for
-both the server and the pod — this is what "the same claim, found by the same
-name" looks like as an event trail rather than an assertion.
+**Two separate queries, because the events land on two different objects.**
+`PodLost` and the later `PodCreated` are both recorded on the `Server`
+(`r.Recorder.Eventf(srv, ...)` — `internal/controller/server_controller.go`),
+so the first query is where to expect them: a `PodLost` reason from the phase
+transition, and a `PodCreated` naming the new pod once the replacement comes
+up. `ServerCreated`, by contrast, is recorded on the **`ServerGroup`**, not
+the `Server` — `createPersistentServer` calls
+`r.Recorder.Eventf(group, ...)`, not `Eventf(srv, ...)` — so it can never
+appear under the first query's `involvedObject.kind=Server` filter, however
+long you wait. The second query is where to find it, naming `survival-0` in
+its message rather than as its `involvedObject`. Together the two show what
+"the same claim, found by the same name" looks like as an event trail:
+`PodLost` and `PodCreated` on the server named `survival-0` across two
+different objects that carried that name, and `ServerCreated` on the group
+in between them, naming the server it just (re)built.
 
 ## 9. Rejoin, and confirm the block is where it was left
 

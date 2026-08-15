@@ -1730,7 +1730,7 @@ a mistake here should cost a stray object, never a world.
 To find what a namespace has accumulated:
 
 ```bash
-kubectl get pvc -l spawnery.cloud/managed-by=spawnery -n <namespace>
+kubectl get pvc -l spawnery.cloud/managed-by=spawnery-operator -n <namespace>
 ```
 
 Every claim this operator ever created carries that label
@@ -1803,9 +1803,9 @@ as it stands rather than repeated from memory:
 claim and nothing else can serve it, so a rebuild only ever meets the same
 broken volume — sequentially, never concurrently, since the corpse's pod is
 deleted before its replacement is created. Waiting for a human after six
-attempts an hour apart is the right call: at that point the thing that is
-broken is the storage, not the server, and only a human can fix a storage
-class, a quota, or a stuck `WaitForFirstConsumer` binding.
+attempts roughly an hour apart is the right call: at that point the thing
+that is broken is the storage, not the server, and only a human can fix a
+storage class, a quota, or a stuck `WaitForFirstConsumer` binding.
 
 **`Degraded` is late, and that is worth knowing before it fires.** At the
 default `failedRetentionSeconds` of 3600 the group is visibly backing off
@@ -1813,10 +1813,17 @@ default `failedRetentionSeconds` of 3600 the group is visibly backing off
 roughly hourly cycle. For the rest of each cycle it publishes `BackingOff:
 False` with the reason "no server has failed to start recently" — true in the
 narrow sense the field means, and easy to read as "nothing is wrong" while a
-`Failed` corpse is sitting right there holding the ordinal. `Degraded`
-therefore does not turn true until around six hours after the first failure
-(six attempts, roughly an hour apart). An operator watching for a stall in
-that window should not wait for `Degraded` or for `BackingOff: True`: both
+`Failed` corpse is sitting right there holding the ordinal. **Six counted
+failures span five gaps, not six**, and each gap is longer than the
+retention window alone: the corpse's `failedRetentionSeconds` (3600s) has to
+elapse before the `Server` object is removed and a replacement created, and
+that replacement then runs its own `--startup-deadline` (300s by default)
+before it can fail in turn and be counted as the next failure. Each gap is
+therefore close to `3600 + 300` = 3900 seconds, about sixty-five minutes, not
+an even hour. `Degraded` therefore does not turn true until roughly **five
+and a half hours** after the first failure — five gaps of about sixty-five
+minutes each — not six. An operator watching for a stall in that window
+should not wait for `Degraded` or for `BackingOff: True`: both
 `status.consecutiveFailures` and `status.lastFailureAt` are written from the
 very first counted failure, for a group of either type — that counting is
 unconditional in `Reconcile`, not behind `if group.IsEphemeral()` the way the
