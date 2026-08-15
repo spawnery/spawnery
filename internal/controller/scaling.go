@@ -281,7 +281,8 @@ func coldStart(in ScalingInputs) bool {
 // that may be carrying players, and those are precisely the ones a changeover
 // has to retire. This is not a loosening of that rule — a retiring server is
 // still never nominated for deletion — it is a different question asked of a
-// narrower set: Ready, stale, not already retiring.
+// narrower set: Ready, stale, not already retiring, not already nominated for
+// deletion, and not condemned.
 //
 // Empty servers first, because retiring one costs nobody anything, then the
 // oldest, so the longest-lived sessions are disturbed last. Ties by name, so
@@ -320,7 +321,17 @@ func selectRetirement(in ScalingInputs) string {
 			}
 			continue
 		}
-		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] {
+		// Condemned is excluded for the reason deletable() excludes it, running
+		// the other way. A condemned server is named by Condemn in this same
+		// pass, and the caller reserves a delete for it; retiring it as well
+		// would have expectRetired overwrite that reservation in the
+		// name-keyed expectations map moments after it was made. It would also
+		// spend a maxUnavailable slot on a server the node drain is taking
+		// anyway — spec.retire holds that slot for the whole of the drain, so
+		// the changeover would lose a slot it never got any work out of. A
+		// server already leaving by one route may not also be spent from the
+		// update budget.
+		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] && !v.Condemned {
 			stale = append(stale, v)
 		}
 	}

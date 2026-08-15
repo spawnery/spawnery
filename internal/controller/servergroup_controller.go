@@ -484,8 +484,9 @@ func (r *ServerGroupReconciler) size(
 	// waiting — two facts an operator needs to see apart. It also means
 	// expectations never reserves a create that did not happen.
 	//
-	// Only creation is gated. The deletes and retirements below run either way:
-	// they touch players, and must not wait on an unrelated failure.
+	// Only creation is gated. The deletes, condemnations and retirements below
+	// run either way: they touch players, and must not wait on an unrelated
+	// failure.
 	if backoff.MayCreate {
 		for i := int32(0); i < decision.Create; i++ {
 			name, err := r.createServer(ctx, group)
@@ -582,9 +583,18 @@ func (r *ServerGroupReconciler) collectViews(
 			Generation:   srv.Spec.GroupGeneration,
 			Retire:       srv.Spec.Retire,
 			CreatedAt:    srv.CreationTimestamp.Time,
-			// podFound is required: a server with no pod is on no node, and one
-			// whose pod already carries a deletion timestamp is leaving under
-			// its own power. Neither is condemned by a node.
+			// podFound is required, and it is what makes pod safe to
+			// dereference here. It is false on all three of podFor's routes: no
+			// status.podName, a Get that failed, and a pod already carrying a
+			// deletion timestamp. None of the three can be condemned, for the
+			// same underlying reason rather than three: condemnation is a claim
+			// about the node a live pod is sitting on, and in all three cases
+			// there is no such pod to make the claim about. The last is worth
+			// stating plainly because a drain is the likeliest thing to have
+			// put that timestamp there — the eviction may well be this very
+			// node's doing — but the removal is already under way either way,
+			// and re-condemning it would only reserve a second delete for a
+			// server that is going.
 			Condemned: podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
 		}
 		if srv.Status.FailedAt != nil {
@@ -819,6 +829,15 @@ func (r *ServerGroupReconciler) groupsOnNode(ctx context.Context, obj client.Obj
 		podspec.LabelManagedBy: podspec.ManagedByValue,
 		podspec.LabelRole:      podspec.RoleServer,
 	}); err != nil {
+		// Enqueue nothing rather than guess. A map function has no way to
+		// return an error and no queue of its own to retry from, so dropping
+		// the event is the only option here; the five-second resync is the
+		// fallback, and it reaches the same conclusion from collectViews. That
+		// costs this cordon its immediacy, which is the whole point of the
+		// watch, so it is logged rather than swallowed — the same rule
+		// nodeDeparting follows when it cannot read a node.
+		log.FromContext(ctx).V(1).Info("listing server pods for a node event failed, "+
+			"leaving this cordon to the resync", "node", obj.GetName(), "error", err)
 		return nil
 	}
 	seen := map[types.NamespacedName]bool{}

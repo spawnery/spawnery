@@ -253,10 +253,14 @@ func newFixture(t *testing.T) *fixture {
 
 	// envtest runs no namespace controller, so a Service created by this test
 	// would otherwise hold its NodePort allocated for the rest of the binary —
-	// NodePorts are cluster-scoped, unlike every other object these tests
-	// create, so per-test namespace isolation alone does not free one for the
-	// next test to reuse. Deleting it here releases the port synchronously,
-	// the same way a real cluster would on deletion.
+	// a NodePort is cluster-scoped even though the Service holding it is not,
+	// so per-test namespace isolation alone does not free one for the next
+	// test to reuse. Deleting it here releases the port synchronously, the
+	// same way a real cluster would on deletion.
+	//
+	// It is not the only cluster-scoped thing in play: ensureNode creates
+	// Nodes, which are cluster-scoped objects outright and carry their own
+	// per-test cleanup and unique names for the same reason.
 	t.Cleanup(func() {
 		svcs := &corev1.ServiceList{}
 		if err := c.List(ctx, svcs, client.InNamespace(ns)); err != nil {

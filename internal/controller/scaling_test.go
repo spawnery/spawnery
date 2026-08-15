@@ -1344,6 +1344,38 @@ func TestDecideSizeCondemns(t *testing.T) {
 		}
 	})
 
+	t.Run("a condemned stale server is not also nominated for retirement", func(t *testing.T) {
+		// The two removals must not both claim the same server. Condemn
+		// reserves a delete for it; a retirement patched in the same pass
+		// would overwrite that reservation in the name-keyed expectations map,
+		// and spec.retire would then hold a maxUnavailable slot for the whole
+		// of a drain the node was going to force regardless.
+		//
+		// The stale server is Ready and of an older generation with a Ready
+		// current-generation replacement beside it, which is exactly the state
+		// selectRetirement nominates from — so without the Condemned clause
+		// this case retires "old".
+		in := ScalingInputs{
+			Views: []ServerView{
+				func() ServerView {
+					v := staleReady("old", 60, 100, 3)
+					v.Condemned = true
+					return v
+				}(),
+				ready("new", 0, 100),
+			},
+			Generation: 0, MaxUnavailable: 1,
+			MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		}
+		got := DecideSize(in)
+		if len(got.Retire) != 0 {
+			t.Errorf("Retire = %v, want none: %q is condemned and may not also be retired", got.Retire, "old")
+		}
+		if len(got.Condemn) != 1 || got.Condemn[0] != "old" {
+			t.Errorf("Condemn = %v, want [old]: the node drain still takes it", got.Condemn)
+		}
+	})
+
 	t.Run("a condemned server already reserved for delete is not named again", func(t *testing.T) {
 		// The guard condemned() relies on: a server this reconciler already
 		// reserved an ordinary delete for must not be re-listed just because
