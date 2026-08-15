@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -1738,8 +1740,8 @@ func (f *fixture) claim(name string) *corev1.PersistentVolumeClaim {
 // 6.1 asks for, and the retention that makes a world survive.
 //
 // envtest runs no provisioner, so the claim never reaches Bound and the pod
-// never runs. Neither this test nor the one below asserts either — they assert
-// the objects, which is all this layer can honestly show.
+// never runs. No test in this file asserts either — they assert the objects,
+// which is all this layer can honestly show.
 //
 // The order in the name is the weakest of the three, and saying so here is
 // cheaper than a reader finding out: both objects exist by the time a
@@ -1900,14 +1902,177 @@ func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
 	}
 }
 
+// TestAnExistingClaimIsLeftExactlyAsItIs pins design §3.3's second property,
+// "created, never updated", which until this test was pinned by nothing: no
+// test put a claim in the way that disagreed with spec.storage, so replacing
+// the claim Create in server_controller.go with the controllerutil.CreateOrUpdate
+// this same package uses six times over left the suite green.
+//
+// It is what stands between 5b and a world that has been resized or
+// reconfigured underneath the group. A claim already carrying a size, a class
+// or an access mode other than the one spec.storage asks for is the ordinary
+// case rather than a corruption — a world grown by hand, or created under an
+// earlier spec — and 5a's answer is to leave it alone and let 5b decide what
+// growth means. An update would at best be rejected by the API server (a PVC's
+// storageClassName and accessModes are immutable, and its size may not shrink)
+// and at worst succeed.
+//
+// resourceVersion is the assertion that makes "byte-identical" mean it: any
+// write at all moves it, including one that lands the same values, and a
+// CreateOrUpdate that rewrote only the labels was mutation-tested and fails
+// exactly this line and no other.
+//
+// The three field assertions under it cannot fail while that one holds, and
+// saying so is cheaper than a reader assuming otherwise: the API server
+// forbids changing the spec of an existing claim, bar a bound claim's resource
+// request and its volumeAttributesClassName, and envtest binds nothing — so a
+// write that reached these
+// fields would be rejected and fail the reconcile before any assertion ran —
+// which is what the full CreateOrUpdate mutation did. They are here to say
+// what byte-identical is protecting, in the terms 5b will change.
+func TestAnExistingClaimIsLeftExactlyAsItIs(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+
+	// Disagreeing with spec.storage (10Gi, no class, ReadWriteOnce by the CRD
+	// default) on each of the three fields BuildDataClaim renders.
+	existing := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podspec.DataClaimName("survival-0"),
+			Namespace: f.ns,
+			Labels:    map[string]string{podspec.LabelManagedBy: podspec.ManagedByValue},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteMany},
+			StorageClassName: ptr.To("chosen-when-the-world-was-made"),
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("50Gi")},
+			},
+		},
+	}
+	if err := f.c.Create(f.ctx, existing); err != nil {
+		t.Fatalf("create the claim already holding the world: %v", err)
+	}
+	before := f.claim("survival-0-data")
+	if before == nil {
+		t.Fatal("no claim to begin with")
+	}
+
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+
+	after := f.claim("survival-0-data")
+	if after == nil {
+		t.Fatal("the claim is gone")
+	}
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("the claim was written to (resourceVersion %s -> %s): size %v, class %s, modes %v",
+			before.ResourceVersion, after.ResourceVersion,
+			after.Spec.Resources.Requests[corev1.ResourceStorage],
+			ptr.Deref(after.Spec.StorageClassName, "<unset>"), after.Spec.AccessModes)
+	}
+	if got := after.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(resource.MustParse("50Gi")) != 0 {
+		t.Errorf("storage request = %v, want the 50Gi the claim already had", got)
+	}
+	if after.Spec.StorageClassName == nil || *after.Spec.StorageClassName != "chosen-when-the-world-was-made" {
+		t.Errorf("storageClassName = %v, want the class the volume was provisioned from", after.Spec.StorageClassName)
+	}
+	if len(after.Spec.AccessModes) != 1 || after.Spec.AccessModes[0] != corev1.ReadWriteMany {
+		t.Errorf("accessModes = %v, want the modes the claim already had", after.Spec.AccessModes)
+	}
+}
+
+// TestARecreatedOrdinalMountsTheClaimItLeft is the half of design §6's own
+// headline test that was never written. That section names the one envtest
+// case that matters as "deleting a Server leaves its claim standing, **and the
+// same ordinal picks it up again**"; only the first clause had a test.
+//
+// Writing this is what would have surfaced the terminating-pod collision the
+// two tests above are about, which is why the recreation here goes through the
+// same helper rather than around it: the ordinal cannot pick anything up until
+// its predecessor's pod has finished.
+//
+// What "picks it up again" has to mean at this layer is that the claim that
+// was there is still there, and is the one the new pod mounts. A claim deleted
+// and remade under the same name shows up here as
+// an *absent* claim rather than a changed one, and that is worth stating: the
+// pvc-protection finalizer envtest never clears means a deleted claim cannot
+// leave, so the remake gets AlreadyExists and f.claim — which counts a
+// deletion timestamp as gone — reports nothing. The "no claim" assertion is
+// therefore the one that catches a stray Delete on this path, and it was
+// mutation-tested against exactly that: a Delete added to the finalizer-release
+// branch, which TestDeletingAPersistentServerLeavesItsClaim did not reach
+// before this commit.
+func TestARecreatedOrdinalMountsTheClaimItLeft(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	first := f.createPersistentServer(t, "survival", 0)
+	f.reconcile(first.Name)
+	if f.claim("survival-0-data") == nil {
+		t.Fatal("no claim to begin with")
+	}
+
+	pod, ok := f.pod("survival-0")
+	if !ok {
+		t.Fatal("no pod for the first server")
+	}
+	f.bindPodToNode(t, pod, f.ensureNode(t, "node-holding-"+f.ns, false).Name)
+	if err := f.c.Delete(f.ctx, f.server(first.Name)); err != nil {
+		t.Fatalf("delete the first server: %v", err)
+	}
+	f.reconcile(first.Name)
+	f.retirePodTheWayAKubeletWould(t, pod)
+	f.reconcile(first.Name)
+	if _, present := f.serverIfPresent(first.Name); present {
+		t.Fatal("the first server kept its finalizer, so the ordinal was never free to be rebuilt")
+	}
+
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+
+	after := f.claim("survival-0-data")
+	if after == nil {
+		t.Fatal("the recreated ordinal has no claim")
+	}
+	newPod, ok := f.pod("survival-0")
+	if !ok {
+		t.Fatal("the recreated ordinal has no pod")
+	}
+	if got := claimsMounted(newPod); !slices.Contains(got, "survival-0-data") {
+		t.Errorf("the new pod mounts claims %v, want survival-0-data among them: the ordinal came "+
+			"back onto a different volume, so its world is still on the one it left", got)
+	}
+}
+
+// claimsMounted is the claim names a pod's volumes are backed by. It reads the
+// pod rather than trusting BuildServerPod, because the question here is what
+// the ordinal actually came back onto.
+func claimsMounted(pod *corev1.Pod) []string {
+	var names []string
+	for _, v := range pod.Spec.Volumes {
+		if v.PersistentVolumeClaim != nil {
+			names = append(names, v.PersistentVolumeClaim.ClaimName)
+		}
+	}
+	return names
+}
+
 // TestDeletingAPersistentServerLeavesItsClaim is the property the whole
 // milestone turns on.
 //
 // What it catches is a Delete on the claim from the Server controller's
 // deletion path. It cannot catch an owner reference: envtest runs no garbage
 // collector, so an owned claim survives its owner here exactly as an unowned
-// one does — which is why the ownerReferences assertion sits in the test above
-// and is checked on the object rather than through a deletion.
+// one does — which is why the ownerReferences assertion sits in
+// TestAPersistentServerGetsItsClaimBeforeItsPod and is checked on the object
+// rather than through a deletion.
+//
+// It takes two reconciles, and the second is not a belt-and-braces repeat. The
+// first sees the pod still there and only asks for its deletion; the branch
+// that releases the finalizer and lets the object go needs the pod already
+// gone, so it runs on the second. A Delete added to that branch was invisible
+// to the single-reconcile version of this test — mutation-tested — while the
+// object it destroyed was the world.
 func TestDeletingAPersistentServerLeavesItsClaim(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)
@@ -1921,6 +2086,10 @@ func TestDeletingAPersistentServerLeavesItsClaim(t *testing.T) {
 		t.Fatalf("delete server: %v", err)
 	}
 	f.reconcile(srv.Name)
+	f.reconcile(srv.Name)
+	if _, present := f.serverIfPresent(srv.Name); present {
+		t.Fatal("the server is still here, so the deletion path this test is about never finished")
+	}
 
 	if f.claim("survival-0-data") == nil {
 		t.Fatal("the claim went with the server; the world is gone")
