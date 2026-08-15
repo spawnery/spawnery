@@ -76,9 +76,19 @@ type SizeDecision struct {
 	// Delete names the servers to remove now.
 	Delete []string
 	// Retire names the stale servers to put into soft drain now. Never the
-	// same server as Delete, and never in the same pass: retirement is how a
-	// server leaves during a changeover, deletion is how it leaves for lack
-	// of demand.
+	// same server as Delete, and never in the same pass as one: retirement is
+	// how a server leaves during a changeover, deletion is how it leaves for
+	// lack of demand, and decideSize's chain of early returns takes one of
+	// those branches or the other.
+	//
+	// Only half of that carries over to Condemn, which is worth saying here
+	// because this is the sentence somebody reasoning about Condemn will
+	// reach for. Retire and Condemn never name the same server either —
+	// selectRetirement excludes a condemned one, and its own comment says why
+	// — but they do occur in the same pass, on different servers. DecideSize
+	// attaches Condemn alongside whichever branch decideSize returned,
+	// precisely because a node drain answers to none of those branches. Same
+	// server: no. Same pass: yes.
 	Retire []string
 	// Wanted is how many servers the spare-slot rule asked for, before the
 	// ceiling. Limited is true either because Wanted exceeds Create — the
@@ -98,6 +108,13 @@ type SizeDecision struct {
 	// this field is the explicit signal the caller that builds the
 	// operator-facing ScalingLimited message needs to tell them apart.
 	ColdStartBlocked bool
+	// Condemn names the servers whose node is departing. They are deleted
+	// unconditionally: not bounded by Surplus, not held back by MinReplicas,
+	// and all of them in one pass. It is a separate field from Delete so the
+	// two reasons never share a number — Delete is the scale-down nomination
+	// and Surplus is what the ceiling asked for, and a node drain is about
+	// neither.
+	Condemn []string
 }
 
 // provisionalCapacity is one server's contribution to the figure the scale-up
@@ -178,7 +195,10 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 func deletable(in ScalingInputs) []ServerView {
 	out := make([]ServerView, 0, len(in.Views))
 	for _, v := range in.Views {
-		if in.PendingDeletes[v.Name] || in.PendingRetires[v.Name] || v.Retire {
+		// Condemned is skipped for the same reason as Retire: this server is
+		// already leaving by another route, and naming it here would put it in
+		// Delete and Condemn at once.
+		if in.PendingDeletes[v.Name] || in.PendingRetires[v.Name] || v.Retire || v.Condemned {
 			continue
 		}
 		out = append(out, v)
@@ -218,12 +238,19 @@ func readyFree(views []ServerView) int32 {
 // coldStart reports whether the group must create the first server of its
 // current generation before anything can retire.
 //
-// Retirement needs a ready server of the current generation to exist. When
-// every server is stale none does, so nothing may retire, so nothing drops out
-// of the size count, so the spare-slot rule creates nothing — a deadlock that
-// only an unconditional create breaks. This is the one create in the system
-// that is not answering demand, and it is why the changeover costs at most one
-// extra server.
+// Retirement needs a ready server of the current generation that is staying to
+// exist — selectRetirement discounts one nominated for deletion or condemned by
+// its node, for the reasons given there. When every server is stale none does,
+// so nothing may retire, so nothing drops out of the size count, so the
+// spare-slot rule creates nothing — a deadlock that only an unconditional
+// create breaks. This is the one create in the system that is not answering
+// demand, and it is why the changeover costs at most one extra server.
+//
+// This function's own test is countsTowardSize rather than Ready, so the two
+// agree about a condemned server — leaving() covers it, so it does not suppress
+// a cold start — and differ about a Starting one, which suppresses the cold
+// start without yet licensing a retirement. That gap is intended: the group
+// waits the few seconds for it to become Ready rather than building another.
 //
 // A Failed server of the current generation does not suppress this. It used to
 // — milestone 4b's stopgap against a broken image being recreated every five
@@ -271,7 +298,8 @@ func coldStart(in ScalingInputs) bool {
 // that may be carrying players, and those are precisely the ones a changeover
 // has to retire. This is not a loosening of that rule — a retiring server is
 // still never nominated for deletion — it is a different question asked of a
-// narrower set: Ready, stale, not already retiring.
+// narrower set: Ready, stale, not already retiring, not already nominated for
+// deletion, and not condemned.
 //
 // Empty servers first, because retiring one costs nobody anything, then the
 // oldest, so the longest-lived sessions are disturbed last. Ties by name, so
@@ -305,12 +333,42 @@ func selectRetirement(in ScalingInputs) string {
 			// is not retractable by the next pass. coldStart and staleRemains
 			// both skip PendingDeletes before counting anything; this is the
 			// same rule.
-			if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] {
+			//
+			// Condemned is that same rule reached by the other route. A
+			// condemned server is nominated for deletion in this very pass, by
+			// Condemn rather than by Delete, so counting it as the replacement
+			// a changeover waits for licenses a retirement against a server
+			// that is itself being drained off a departing node. It is the
+			// clause the nomination branch below carries, and it is here for
+			// the same reason: the two branches ask the same question of a
+			// server, and a reader who found the clause on one and not the
+			// other could not reconstruct why.
+			//
+			// The two failure directions are not symmetric, and this picks the
+			// safe one deliberately. With the clause, retirement declines more
+			// often: a changeover that happens to coincide with a node drain
+			// waits for a replacement that is not on the departing node, which
+			// costs the changeover time and costs no player a connection.
+			// Without it, a stale server is retired against a replacement that
+			// is going away, and a retirement cannot be taken back — so the
+			// group deregisters capacity it still needs. Slower beats
+			// irreversible.
+			if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] && !v.Condemned {
 				readyCurrent = true
 			}
 			continue
 		}
-		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] {
+		// Condemned is excluded for the reason deletable() excludes it, running
+		// the other way. A condemned server is named by Condemn in this same
+		// pass, and the caller reserves a delete for it; retiring it as well
+		// would have expectRetired overwrite that reservation in the
+		// name-keyed expectations map moments after it was made. It would also
+		// spend a maxUnavailable slot on a server the node drain is taking
+		// anyway — spec.retire holds that slot for the whole of the drain, so
+		// the changeover would lose a slot it never got any work out of. A
+		// server already leaving by one route may not also be spent from the
+		// update budget.
+		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] && !v.Condemned {
 			stale = append(stale, v)
 		}
 	}
@@ -337,11 +395,12 @@ func selectRetirement(in ScalingInputs) string {
 	if budget < 1 {
 		budget = 1
 	}
-	// At least one ready server of the current generation, for every group
-	// and not only for fallback targets: a ServerGroup cannot tell whether a
-	// ProxyGroup names it, and learning to would cost a watch and a cache
-	// that can be wrong for a distinction that only permits emptying a
-	// non-fallback group faster.
+	// At least one ready server of the current generation that is staying —
+	// not one already nominated for deletion, and not one condemned by its
+	// node — for every group and not only for fallback targets: a ServerGroup
+	// cannot tell whether a ProxyGroup names it, and learning to would cost a
+	// watch and a cache that can be wrong for a distinction that only permits
+	// emptying a non-fallback group faster.
 	if !readyCurrent || unavailable >= budget || len(stale) == 0 {
 		return ""
 	}
@@ -384,12 +443,40 @@ func staleRemains(in ScalingInputs) bool {
 	return false
 }
 
-// DecideSize is the group's sizing rule.
+// DecideSize is the group's sizing rule, plus the one removal that is not a
+// sizing decision at all.
+//
+// Condemnation rides alongside the size decision rather than inside it. The
+// chain in decideSize is an ordered set of early returns — capacity, then the
+// ceiling, then demand — and a node drain answers to none of those three: the
+// node is leaving with or without the group's consent, so no branch may
+// decline it and no branch may bound it. Attaching it to whichever decision
+// comes back keeps that independence visible and keeps the chain unchanged.
+func DecideSize(in ScalingInputs) SizeDecision {
+	decision := decideSize(in)
+	decision.Condemn = condemned(in)
+	return decision
+}
+
+// condemned names every server whose node is departing and whose removal has
+// not already been reserved. Nil when there are none, so a caller can tell
+// "nothing to condemn" from "an empty list was built".
+func condemned(in ScalingInputs) []string {
+	var out []string
+	for _, v := range in.Views {
+		if v.Condemned && !in.PendingDeletes[v.Name] {
+			out = append(out, v.Name)
+		}
+	}
+	return out
+}
+
+// decideSize is the group's sizing rule.
 //
 // The order matters and is the design's, not an accident: capacity first, then
 // the ceiling, then demand. A group that is short of capacity never also
 // shrinks in the same pass.
-func DecideSize(in ScalingInputs) SizeDecision {
+func decideSize(in ScalingInputs) SizeDecision {
 	alive := in.PendingCreates
 	provisional := in.PendingCreates * in.MaxPlayers
 	for _, v := range in.Views {

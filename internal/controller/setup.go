@@ -51,6 +51,12 @@ type Options struct {
 	// real *proxyreg.Fleet, and SetupAll refuses a nil value for the same
 	// reason it refuses a nil Bootstrapper.
 	Proxies ProxyReadinessSetter
+	// DrainTaintKeys are the taint keys that mark a node as departing, beside
+	// spec.unschedulable. spec.unschedulable is what kubectl cordon and
+	// kubectl drain set, and it is always honoured; an autoscaler may taint a
+	// node without cordoning it first, which is what this list is for. Empty
+	// is the default: only cordoned nodes count.
+	DrainTaintKeys []string
 }
 
 // Leader election locks on a Lease in the operator's own namespace. It is not
@@ -84,14 +90,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		return fmt.Errorf("setup network controller: %w", err)
 	}
 
-	if err := (&ServerGroupReconciler{
-		Client:       mgr.GetClient(),
-		Scheme:       mgr.GetScheme(),
-		Recorder:     mgr.GetEventRecorderFor("servergroup"),
-		Agents:       opts.Agents,
-		Clock:        opts.Clock,
-		Expectations: newExpectations(opts.Clock),
-	}).SetupWithManager(mgr); err != nil {
+	if err := newServerGroupReconciler(mgr, opts).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server group controller: %w", err)
 	}
 
@@ -110,18 +109,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		return fmt.Errorf("setup server controller: %w", err)
 	}
 
-	if err := (&ProxyGroupReconciler{
-		Client:        mgr.GetClient(),
-		Scheme:        mgr.GetScheme(),
-		Recorder:      mgr.GetEventRecorderFor("proxygroup"),
-		Agents:        opts.Agents,
-		Bootstrap:     opts.Bootstrapper,
-		AgentEndpoint: opts.AgentEndpoint,
-		Proxies:       opts.Proxies,
-		Clock:         opts.Clock,
-		Expectations:  newExpectations(opts.Clock),
-		Divergence:    newReadinessDivergence(opts.Clock),
-	}).SetupWithManager(mgr); err != nil {
+	if err := newProxyGroupReconciler(mgr, opts).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup proxy group controller: %w", err)
 	}
 
@@ -135,4 +123,51 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	}
 
 	return nil
+}
+
+// newServerGroupReconciler and newProxyGroupReconciler build the two
+// reconcilers that read Options.DrainTaintKeys.
+//
+// They are functions rather than composite literals inline in SetupAll for
+// one reason: the wiring is otherwise unassertable. Most of the other Options
+// fields reach reconcilers that tests already observe doing something with
+// them — Agents, Clock, StartupDeadline, Registrar, Bootstrapper,
+// AgentEndpoint and Proxies all have at least one test elsewhere in this
+// package whose outcome would change if the field were wired wrong or not at
+// all. Two do not: PlayerStatusInterval is only ever set to a fixed value in
+// fixtures, and no test exercises mirrorPlayerCount's throttle at a value
+// that would tell a wrong one apart; OrphanInterval is never set by a test at
+// all, and every orphan-sweep test calls the sweep directly rather than
+// through Start's ticker, so nothing there has ever depended on it either.
+// DrainTaintKeys is set nowhere outside SetupAll and the operator binary,
+// no fixture reconciler sets it, and deleting either assignment left the
+// whole suite green — so acceptance criterion 4, that a node carrying a
+// configured taint key is treated like a cordoned one, had no test that could
+// fail. SetupAll has no seam a test can reach through, and these do.
+func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconciler {
+	return &ServerGroupReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("servergroup"),
+		Agents:         opts.Agents,
+		Clock:          opts.Clock,
+		Expectations:   newExpectations(opts.Clock),
+		DrainTaintKeys: opts.DrainTaintKeys,
+	}
+}
+
+func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconciler {
+	return &ProxyGroupReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("proxygroup"),
+		Agents:         opts.Agents,
+		Bootstrap:      opts.Bootstrapper,
+		AgentEndpoint:  opts.AgentEndpoint,
+		Proxies:        opts.Proxies,
+		Clock:          opts.Clock,
+		Expectations:   newExpectations(opts.Clock),
+		Divergence:     newReadinessDivergence(opts.Clock),
+		DrainTaintKeys: opts.DrainTaintKeys,
+	}
 }

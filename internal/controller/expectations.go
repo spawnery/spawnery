@@ -137,9 +137,22 @@ func (e *expectations) observe(group string, views []ServerView) {
 				delete(m, name)
 			}
 		case expectationDelete:
-			// Gone, or on its way out: either way the cache has caught up with
-			// the removal, and the group may size itself on what it shows.
-			if !present || v.leaving() {
+			// Gone, or showing the phase that removal reaches: either way the
+			// cache has caught up with the removal this reservation was made
+			// for, and the group may size itself on what it shows.
+			//
+			// leavingByPhase(), not leaving(): a reservation is satisfied by
+			// evidence of the removal it reserved, and Condemned is not that
+			// evidence. It is an independent node-level signal that can turn
+			// true on a server this reconciler has already reserved an
+			// ordinary delete for, before the cache shows any consequence of
+			// that delete — and clearing the reservation on that signal alone
+			// would drop the guard that keeps condemned() from re-listing the
+			// same server the next pass. A condemned server that is really
+			// being removed still reaches Draining on its way out, so the
+			// phase test still satisfies this case for it; it just does not
+			// satisfy it early, on the signal alone.
+			if !present || v.leavingByPhase() {
 				delete(m, name)
 			}
 		case expectationRetire:

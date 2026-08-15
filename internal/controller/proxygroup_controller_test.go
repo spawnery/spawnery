@@ -27,6 +27,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,6 +39,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/render"
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -1233,6 +1235,151 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	}
 }
 
+// TestAProxyOnACordonedNodeIsReplaced is the proxy half of the milestone. It
+// asserts the order, not just the outcome: the replacement is ready before
+// anything is withdrawn, which is what keeps the group's ready capacity from
+// dipping while a player is connected.
+func TestAProxyOnACordonedNodeIsReplaced(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	going := f.ensureNode(t, "node-going-"+f.ns, false)
+	staying := f.ensureNode(t, "node-staying-"+f.ns, false)
+	f.bindPodToNode(t, &pods[0], going.Name)
+	f.bindPodToNode(t, &pods[1], staying.Name)
+	f.ensureNode(t, going.Name, true)
+
+	// The surge pod comes first, and nothing is marked while it is unready.
+	f.reconcileProxyGroup(r, "gateway")
+	after := f.proxyPods("gateway")
+	if len(after) != 3 {
+		t.Fatalf("proxy pods = %d after the cordon, want 3 — the replacement must exist before anything is marked", len(after))
+	}
+	for i := range after {
+		if _, dated := drainingSince(&after[i]); dated {
+			t.Fatalf("pod %s was marked while the replacement is still unready", after[i].Name)
+		}
+	}
+
+	// Once it is ready, the pod on the departing node is the one that goes.
+	for i := range after {
+		f.markProxyPodReady(t, &after[i])
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	var marked []string
+	for _, p := range f.proxyPods("gateway") {
+		if _, dated := drainingSince(&p); dated {
+			marked = append(marked, p.Name)
+		}
+	}
+	if len(marked) != 1 || marked[0] != pods[0].Name {
+		t.Fatalf("marked = %v, want exactly [%s]: the pod on the departing node and no other", marked, pods[0].Name)
+	}
+}
+
+// TestAnUncordonedNodeKeepsTheMarkAlreadyMade is spec §3.6's promise, driven
+// end to end: releasing a node mid-drain does not undo the drain already
+// begun.
+//
+// TestDecideRolloutCountsDrainingIndependentlyOfStale in rollout_test.go
+// pins the one clause of DecideRollout the one-at-a-time guard depends on,
+// but DecideRollout has no concept of a mark already made -- it only reads
+// this pass's Draining flag. What actually keeps the mark here is one layer
+// up: reconcileReplicas derives Stale fresh on every pass, so once the node
+// is uncordoned the marked pod reads Stale: false again, and it is the
+// surplus-marks budget documented above reconcileReplicas's staleMarks loop
+// -- the same mechanism TestARevertedSpecChangeKeepsTheMarkItAlreadyMade
+// exercises for a reverted spec.image -- that re-nominates the same pod
+// rather than releasing it. A node drain reverted mid-flight is the same
+// shape of state, and this test is what proves the shape holds for it too
+// rather than assuming the spec-image case generalizes.
+func TestAnUncordonedNodeKeepsTheMarkAlreadyMade(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	going := f.ensureNode(t, "node-going-"+f.ns, false)
+	staying := f.ensureNode(t, "node-staying-"+f.ns, false)
+	f.bindPodToNode(t, &pods[0], going.Name)
+	f.bindPodToNode(t, &pods[1], staying.Name)
+	f.ensureNode(t, going.Name, true)
+
+	f.reconcileProxyGroup(r, "gateway") // surges the replacement
+	after := f.proxyPods("gateway")
+	if len(after) != 3 {
+		t.Fatalf("proxy pods = %d after the cordon, want 3", len(after))
+	}
+	for i := range after {
+		f.markProxyPodReady(t, &after[i])
+	}
+	// A player on the departing pod, so occupancy holds it open across the
+	// assertions below rather than it being removed the instant it is marked.
+	f.reportProxyPlayers(t, pods[0], 1)
+
+	f.reconcileProxyGroup(r, "gateway") // marks the pod on the departing node
+
+	marked, ok := f.pod(pods[0].Name)
+	if !ok {
+		t.Fatalf("pod %s not found after being marked", pods[0].Name)
+	}
+	if _, dated := drainingSince(marked); !dated {
+		t.Fatalf("pod %s was not marked draining; nothing here would be released by the step below", pods[0].Name)
+	}
+
+	// Release the node mid-drain.
+	f.ensureNode(t, going.Name, false)
+	f.reconcileProxyGroup(r, "gateway")
+
+	stillMarked, ok := f.pod(pods[0].Name)
+	if !ok {
+		t.Fatal("the marked pod was removed after the node was released; " +
+			"the drain should have held rather than running to completion faster than it would have on the departing node")
+	}
+	if _, dated := drainingSince(stillMarked); !dated {
+		t.Error("the draining-since annotation was removed after the node was uncordoned; the mark must be kept, not released")
+	}
+	if got := f.proxies.lastReady(string(stillMarked.UID)); got == nil || *got {
+		t.Errorf("the marked pod was told ready=%v after the node was released, want false: "+
+			"releasing the node must not resume the withdrawal it was already mid-way through", got)
+	}
+
+	// The replacement still completes: once the marked pod is empty, it is
+	// removed like any other drain reaching zero players, and the group
+	// settles at its replica count with the mark gone from the object it was
+	// on -- not cancelled the instant the node was released, and not stuck
+	// forever either.
+	f.reportProxyPlayers(t, *stillMarked, 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	final := f.proxyPods("gateway")
+	if len(final) != 2 {
+		t.Fatalf("proxy pods = %d once the marked pod emptied, want 2", len(final))
+	}
+	if _, ok := f.pod(pods[0].Name); ok {
+		t.Error("the marked pod survived becoming empty; the drain the uncordon was supposed to only pause never completed")
+	}
+}
+
 // reportProxyPlayers puts a player count on a proxy pod the way that pod's own
 // agent would, and proves the registry took it.
 //
@@ -2367,5 +2514,724 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	}
 	if got := f.proxies.lastReady(string(after.UID)); got == nil || *got {
 		t.Errorf("the draining proxy was told ready=%v after the rollback, want false", got)
+	}
+}
+
+func TestProxyOccupied(t *testing.T) {
+	tests := []struct {
+		name string
+		snap agent.Snapshot
+		want bool
+	}{
+		{"known empty on a live stream", agent.Snapshot{Players: 0, Connected: true}, false},
+		{"players on a live stream", agent.Snapshot{Players: 3, Connected: true}, true},
+		{"a stale count counts as occupied", agent.Snapshot{Players: 0, PlayersStale: true, Connected: true}, true},
+		{"a dead stream counts as occupied", agent.Snapshot{Players: 0, Connected: false}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := proxyOccupied(tc.snap); got != tc.want {
+				t.Fatalf("proxyOccupied() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestABrokenNetworkDoesNotStopTheProxyBudget is the proxy half of the same
+// ruling, and the half that is a disconnect rather than a hang.
+//
+// syncOccupiedLabels, reconcileProxyPDB and reportNodeDraining all sat below
+// the Network and Expose early returns, so a ProxyGroup whose Network broke
+// stopped maintaining its budget entirely. The dangerous shape is the one
+// reproduced here: the proxy was empty at the last successful pass, so the
+// budget froze at minAvailable: 0 with no label on the pod, and every player
+// who joined afterwards was on a pod the eviction API could take with nothing
+// standing in the way.
+func TestABrokenNetworkDoesNotStopTheProxyBudget(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	// Empty at the last good pass: this is what freezes the budget at 0.
+	f.reportProxyPlayers(t, pods[0], 0)
+	f.reportProxyPlayers(t, pods[1], 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pdbKey := types.NamespacedName{Name: podspec.GroupPDBName("gateway", podspec.RoleProxy), Namespace: f.ns}
+	pdb := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, pdbKey, pdb); err != nil {
+		t.Fatalf("get proxy PDB: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 0 {
+		t.Fatalf("minAvailable = %v with both proxies empty, want 0: without that starting point "+
+			"the assertion below could hold on a budget nobody updated", pdb.Spec.MinAvailable)
+	}
+
+	// The Network goes, a node is cordoned under one proxy, and a player joins
+	// the other. All three things this group owes its players happen on a pass
+	// that can do nothing else.
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete network: %v", err)
+	}
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.bindPodToNode(t, &pods[1], node.Name)
+	f.ensureNode(t, node.Name, true)
+	f.reportProxyPlayers(t, pods[0], 5)
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	// The pass really took the missing-Network route, or nothing below is a
+	// statement about the gate.
+	group := f.proxyGroup("gateway")
+	accepted := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonNetworkNotFound {
+		t.Fatalf("Accepted = %v, want False/%s", accepted, spawneryv1alpha1.ReasonNetworkNotFound)
+	}
+
+	if err := f.c.Get(f.ctx, pdbKey, pdb); err != nil {
+		t.Fatalf("get proxy PDB after the Network went: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("minAvailable = %v, want 1: a player joined a proxy whose group's Network is broken, "+
+			"and a frozen budget leaves exactly that pod evictable", pdb.Spec.MinAvailable)
+	}
+	byName := map[string]corev1.Pod{}
+	for _, p := range f.proxyPods("gateway") {
+		byName[p.Name] = p
+	}
+	if _, ok := byName[pods[0].Name].Labels[podspec.LabelOccupied]; !ok {
+		t.Errorf("pod %s has players and carries no occupied label, so the budget's selector "+
+			"matches nothing it counted", pods[0].Name)
+	}
+	f.assertBudgetSelectsExactlyWhatItCounts(t, pdbKey.Name)
+
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("NodeDraining = %v, want True: a broken Network does not make the node stay", cond)
+	} else if !strings.Contains(cond.Message, node.Name) {
+		t.Errorf("message %q does not name the node", cond.Message)
+	}
+}
+
+// TestProxyOccupiedForBudget is the deadline-free consumers' rule, and the
+// whole of the difference from proxyOccupied above is the unknown-pod row.
+//
+// Registry.Lookup answers for a pod it has never seen with {Known: false,
+// Connected: false, PlayersStale: true}, which proxyOccupied reads as
+// occupied. The deletion wait can afford that because
+// spec.drain.timeoutSeconds ends it; a budget cannot, so a surge pod would
+// hold minAvailable above an achievable currentHealthy until its agent
+// reported, and a crash-looping proxy would hold it there for good.
+//
+// The two unknown rows are the pair that matters, and they differ only in how
+// long the registry itself has been up: Snapshot.StreamDownFor for an unknown
+// pod is the time since the operator started, which is what keeps a fleet
+// that is Ready and full of players from reading as empty in the seconds
+// after an operator restart.
+func TestProxyOccupiedForBudget(t *testing.T) {
+	tests := []struct {
+		name string
+		snap agent.Snapshot
+		want bool
+	}{
+		{"known empty on a live stream", agent.Snapshot{Known: true, Players: 0, Connected: true}, false},
+		{"players on a live stream", agent.Snapshot{Known: true, Players: 3, Connected: true}, true},
+		{
+			"a stale count counts as occupied",
+			agent.Snapshot{Known: true, Players: 0, PlayersStale: true, Connected: true},
+			true,
+		},
+		{
+			"an agent that connected and then died still counts as occupied",
+			agent.Snapshot{Known: true, Players: 0, Connected: false, StreamDownFor: time.Hour},
+			true,
+		},
+		{
+			"a pod the registry has never seen does not count, once the grace has passed",
+			agent.Snapshot{Players: 0, PlayersStale: true, StreamDownFor: phase.StreamDownGrace},
+			false,
+		},
+		{
+			"a pod the registry has never seen counts while the operator is still coming up",
+			agent.Snapshot{Players: 0, PlayersStale: true, StreamDownFor: phase.StreamDownGrace - time.Second},
+			true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := proxyOccupiedForBudget(tc.snap); got != tc.want {
+				t.Fatalf("proxyOccupiedForBudget() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget is the same rule
+// through the reconciler, on the state that made it a defect: a proxy pod
+// whose agent never connects at all. Before the qualifier it was labelled
+// occupied and counted into minAvailable from the moment it appeared, so a
+// group with one crash-looping proxy refused every eviction of the occupied
+// proxies beside it, with no deadline anywhere to end that.
+//
+// The clock has to move past phase.StreamDownGrace, and that is the point
+// rather than a fixture detail: newFixture starts the registry at the same
+// instant it starts the clock, so at the top of any test built on newFixture
+// every unknown pod is inside the post-restart grace and reads as occupied on
+// purpose.
+func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	// One proxy reports; the other's agent never connects.
+	f.reportProxyPlayers(t, pods[0], 4)
+
+	// Inside the grace both count, which is the operator-restart case and is
+	// asserted here so that the assertion after the advance is about the
+	// grace expiring rather than about anything else in the fixture.
+	f.reconcileProxyGroup(r, "gateway")
+	pdbKey := types.NamespacedName{Name: podspec.GroupPDBName("gateway", podspec.RoleProxy), Namespace: f.ns}
+	pdb := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, pdbKey, pdb); err != nil {
+		t.Fatalf("get proxy PDB: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 2 {
+		t.Fatalf("minAvailable = %v inside the post-restart grace, want 2: both the reporting proxy "+
+			"and the silent one count while the registry itself is younger than the grace",
+			pdb.Spec.MinAvailable)
+	}
+
+	// Past the grace the silent proxy stops being paid for. The reporting one
+	// has to be kept fresh, or it would go stale on the same advance and the
+	// count would stay at 2 for a reason that has nothing to do with this.
+	f.clock.Advance(phase.StreamDownGrace + time.Second)
+	f.reportProxyPlayers(t, pods[0], 4)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if err := f.c.Get(f.ctx, pdbKey, pdb); err != nil {
+		t.Fatalf("get proxy PDB after the grace: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("minAvailable = %v, want 1: a proxy whose agent has never appeared holds no players, "+
+			"and counting it pins minAvailable above a currentHealthy the group can reach",
+			pdb.Spec.MinAvailable)
+	}
+	byName := map[string]corev1.Pod{}
+	for _, p := range f.proxyPods("gateway") {
+		byName[p.Name] = p
+	}
+	if _, ok := byName[pods[1].Name].Labels[podspec.LabelOccupied]; ok {
+		t.Errorf("pod %s has never been heard from and still carries the occupied label; "+
+			"the label and the budget have to agree pod for pod", pods[1].Name)
+	}
+	f.assertBudgetSelectsExactlyWhatItCounts(t, pdbKey.Name)
+}
+
+// TestTheOccupiedLabelFollowsTheProxyPlayerCount is what makes the budget in
+// Task 7 mean anything: the selector matches occupied pods and stops matching
+// when they empty.
+func TestTheOccupiedLabelFollowsTheProxyPlayerCount(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	f.reportProxyPlayers(t, pods[0], 4)
+	f.reportProxyPlayers(t, pods[1], 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	byName := map[string]corev1.Pod{}
+	for _, p := range f.proxyPods("gateway") {
+		byName[p.Name] = p
+	}
+	if _, ok := byName[pods[0].Name].Labels[podspec.LabelOccupied]; !ok {
+		t.Errorf("pod %s has players and no occupied label; the budget would let it be evicted", pods[0].Name)
+	}
+	if _, ok := byName[pods[1].Name].Labels[podspec.LabelOccupied]; ok {
+		t.Errorf("pod %s is known empty and still labelled occupied; the budget would block a drain for nobody", pods[1].Name)
+	}
+}
+
+// TestTheProxyGroupBudgetSizesToOccupiedPods is the object the eviction API
+// consults. Every assertion here is a way the budget can be present and still
+// protect nobody.
+func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	f.reportProxyPlayers(t, pods[0], 4)
+	f.reportProxyPlayers(t, pods[1], 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pdb := &policyv1.PodDisruptionBudget{}
+	pdbKey := types.NamespacedName{Name: podspec.GroupPDBName("gateway", podspec.RoleProxy), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, pdbKey, pdb); err != nil {
+		t.Fatalf("get proxy PDB: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("minAvailable = %v, want 1 — exactly one proxy is occupied", pdb.Spec.MinAvailable)
+	}
+	// The number above is only protection if the selector matches the same
+	// pods it was counted from; the assertions here and there are separate
+	// questions. See the helper.
+	f.assertBudgetSelectsExactlyWhatItCounts(t, pdbKey.Name)
+	if pdb.Spec.MaxUnavailable != nil {
+		t.Error("maxUnavailable is set; Kubernetes rejects it for pods with no controller carrying a scale subresource")
+	}
+	if got := pdb.Spec.Selector.MatchLabels[podspec.LabelOccupied]; got != "true" {
+		t.Errorf("selector occupied = %q, want \"true\": a selector that matches empty pods blocks drains for nobody", got)
+	}
+	if len(pdb.OwnerReferences) == 0 {
+		t.Error("the PDB carries no owner reference; it would outlive the group and block evictions forever")
+	}
+
+	// Both proxies now report a fresh zero: minAvailable has to drop back to
+	// 0, or a drained group would still block its own node.
+	f.reportProxyPlayers(t, pods[0], 0)
+	f.reportProxyPlayers(t, pods[1], 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if err := f.c.Get(f.ctx, pdbKey, pdb); err != nil {
+		t.Fatalf("get proxy PDB after both proxies emptied: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 0 {
+		t.Errorf("minAvailable = %v after both proxies emptied, want 0", pdb.Spec.MinAvailable)
+	}
+}
+
+// TestServerAndProxyGroupsSharingANameGetDistinctBudgets pins the fix for
+// task 7's review Critical 1: a ServerGroup and a ProxyGroup are different
+// Kinds, so Kubernetes lets a namespace hold one of each under the same
+// name -- podspec.GroupConfigMapName's doc comment narrates the incident this
+// repository already had from naming a per-group object after the bare group
+// name alone. Before the fix, reconcileProxyPDB named its object group.Name,
+// exactly like reconcilePDB, so the second of the two controllers to
+// reconcile here would have its SetControllerReference call fail with
+// AlreadyOwnedError, and its Reconcile would return before setStatus. The
+// error itself would have named both the object and the owning controller —
+// confirmed by mutation-testing this exact scenario, which reproduced
+// "Object .../lobby is already owned by another ServerGroup controller
+// lobby" verbatim — but the losing group's own status would carry no sign of
+// it: no condition is written for this failure, so a stale Accepted=True (or
+// whatever was last there) stays, invisible to anyone reading the CR alone.
+func TestServerAndProxyGroupsSharingANameGetDistinctBudgets(t *testing.T) {
+	f := newFixture(t)
+	// f.group is already a ServerGroup named "lobby" (see newFixture);
+	// giving the ProxyGroup the same name is the whole point of this test.
+	f.createProxyGroup(f.group.Name)
+
+	sr := groupReconciler(f)
+	pr := proxyGroupReconciler(f)
+	f.reconcileGroup(t, sr)
+	f.reconcileProxyGroup(pr, f.group.Name)
+	// Reconcile the ServerGroup again: had the ProxyGroup pass above already
+	// stolen the object's controller reference, this call would either error
+	// outright or silently leave the ServerGroup without a budget of its own.
+	f.reconcileGroup(t, sr)
+
+	serverPDB := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{
+		Name: podspec.GroupPDBName(f.group.Name, podspec.RoleServer), Namespace: f.ns,
+	}, serverPDB); err != nil {
+		t.Fatalf("get ServerGroup PDB: %v", err)
+	}
+	proxyPDB := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{
+		Name: podspec.GroupPDBName(f.group.Name, podspec.RoleProxy), Namespace: f.ns,
+	}, proxyPDB); err != nil {
+		t.Fatalf("get ProxyGroup PDB: %v", err)
+	}
+
+	if serverPDB.Name == proxyPDB.Name {
+		t.Fatalf("both budgets are named %q; a same-named ServerGroup and ProxyGroup collide", serverPDB.Name)
+	}
+	if len(serverPDB.OwnerReferences) == 0 || serverPDB.OwnerReferences[0].Kind != "ServerGroup" {
+		t.Errorf("ServerGroup PDB owner references = %+v, want it controlled by the ServerGroup", serverPDB.OwnerReferences)
+	}
+	if len(proxyPDB.OwnerReferences) == 0 || proxyPDB.OwnerReferences[0].Kind != "ProxyGroup" {
+		t.Errorf("ProxyGroup PDB owner references = %+v, want it controlled by the ProxyGroup", proxyPDB.OwnerReferences)
+	}
+}
+
+// TestABudgetSelectsExactlyThePodsItCounts is the pairing the milestone's
+// final review found unasserted for both group kinds, in the configuration
+// that made it a disconnect: a ServerGroup and a ProxyGroup sharing one name
+// in one namespace, each holding occupied pods.
+//
+// Every earlier budget assertion checked minAvailable against a number, or
+// the occupied label against the pods carrying it, and never the two against
+// each other. The ServerGroup's selector was {managed-by, group, occupied}
+// with no role term, which was harmless while only server pods carried
+// spawnery.cloud/occupied; this milestone put that label on proxy pods too.
+// From that point the server budget matched the proxies of the same-named
+// ProxyGroup while counting only its own servers, disruptionsAllowed went
+// positive, and kubectl drain could evict an occupied server pod.
+//
+// Both budgets are checked, through one helper, because the property belongs
+// to neither kind in particular: whichever selector loses a term next, the
+// same assertion is the one that catches it.
+func TestABudgetSelectsExactlyThePodsItCounts(t *testing.T) {
+	f := newFixture(t)
+	sr := groupReconciler(f)
+	pr := proxyGroupReconciler(f)
+	// f.group is a ServerGroup named "lobby" (see newFixture). A ProxyGroup of
+	// the same name in the same namespace is the configuration under test, and
+	// Kubernetes permits it -- see podspec.GroupPDBName.
+	f.createProxyGroup(f.group.Name)
+
+	// One occupied server. f.reconcile runs the Server controller, which is
+	// what writes the occupied label onto the server pod.
+	f.reconcileGroup(t, sr)
+	srv := f.listServers(t)[0]
+	uid := bringUpNamed(t, f, srv.Name)
+	if err := f.agents.ReportPlayers(uid, 4, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile(srv.Name)
+
+	// Two occupied proxies under the same name.
+	f.reconcileProxyGroup(pr, f.group.Name)
+	proxies := f.proxyPods(f.group.Name)
+	if len(proxies) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(proxies))
+	}
+	for i := range proxies {
+		f.markProxyPodReady(t, &proxies[i])
+	}
+	f.reportProxyPlayers(t, proxies[0], 2)
+	f.reportProxyPlayers(t, proxies[1], 3)
+	f.reconcileProxyGroup(pr, f.group.Name)
+	f.reconcileGroup(t, sr)
+
+	// The configuration has to exist before the assertions mean anything. A
+	// run where no proxy ended up labelled occupied would satisfy the helper
+	// below for the one reason that says nothing.
+	occupiedServers, occupiedProxies := 0, 0
+	pods := &corev1.PodList{}
+	if err := f.c.List(f.ctx, pods, client.InNamespace(f.ns), client.MatchingLabels{
+		podspec.LabelGroup:    f.group.Name,
+		podspec.LabelOccupied: "true",
+	}); err != nil {
+		t.Fatalf("list occupied pods: %v", err)
+	}
+	for i := range pods.Items {
+		switch pods.Items[i].Labels[podspec.LabelRole] {
+		case podspec.RoleServer:
+			occupiedServers++
+		case podspec.RoleProxy:
+			occupiedProxies++
+		}
+	}
+	if occupiedServers == 0 || occupiedProxies == 0 {
+		t.Fatalf("occupied server pods = %d, occupied proxy pods = %d, want both non-zero: "+
+			"without one of each under the same group name this test cannot tell a role-blind "+
+			"selector from a correct one", occupiedServers, occupiedProxies)
+	}
+
+	f.assertBudgetSelectsExactlyWhatItCounts(t, podspec.GroupPDBName(f.group.Name, podspec.RoleServer))
+	f.assertBudgetSelectsExactlyWhatItCounts(t, podspec.GroupPDBName(f.group.Name, podspec.RoleProxy))
+}
+
+// stepAfterPriming is the clock TestTheProxyGroupBudgetReadsTheRegistryOnce
+// uses to reproduce task 7 review's Critical 2 deterministically, with no
+// goroutines and no real concurrency.
+//
+// ProxyGroupReconciler.Agents is a concrete *agent.Registry, not an
+// interface, so there is no seam to intercept Lookup itself or tell one call
+// site's reads from another's. The one hook agent.New exposes is the clock
+// function -- its own doc comment says "the clock is injectable so the
+// staleness rules are testable" -- and that is enough: Registry.Lookup calls
+// it fresh on every invocation and derives PlayersStale from the delta, so a
+// clock that changes its answer partway through a single Reconcile pass
+// changes what Lookup says without anything running concurrently at all.
+//
+// While priming, Now always returns the fixed instant fresh -- this is for
+// setup (Connect, ReportPlayers), which must not be counted against the
+// pass under test. Once priming stops, Now counts its own calls: the first
+// freshCalls of them still return fresh, and every one after that returns
+// fresh stepped forward by step. Choosing freshCalls precisely -- see the
+// test for the count and why -- places the step exactly between
+// syncOccupiedLabels's read and whatever runs after it.
+type stepAfterPriming struct {
+	fresh      time.Time
+	step       time.Duration
+	priming    bool
+	freshCalls int
+	calls      int
+}
+
+func (c *stepAfterPriming) Now() time.Time {
+	if c.priming {
+		return c.fresh
+	}
+	c.calls++
+	if c.calls > c.freshCalls {
+		return c.fresh.Add(c.step)
+	}
+	return c.fresh
+}
+
+// TestTheProxyGroupBudgetReadsTheRegistryOnce is the regression test for
+// task 7 review's Critical 2: reconcileProxyPDB used to call r.Agents.Lookup
+// a second time for the same pod, independently of syncOccupiedLabels's own
+// call, and the registry's answer can change between two calls a few lines
+// apart with no concurrency at all -- Lookup re-derives PlayersStale from
+// the clock on every call.
+//
+// One Reconcile pass, in the shape both before and after the fix, makes
+// exactly two registry reads before whatever runs immediately after
+// syncOccupiedLabels: reconcileReplicas builds its rollout view (one Lookup
+// per pod; this fixture uses one pod so this is one call), and
+// syncOccupiedLabels itself makes the other. freshCalls: 2 lets both see a
+// fresh count; the clock steps forward by twice the report interval starting
+// on the call after that. Before the fix, that next call is
+// reconcileProxyPDB's own second read of the same pod, and it lands on the
+// stepped, now-stale side -- producing minAvailable=1 while the pod carries
+// no occupied label at all, confirmed by mutation-testing this exact
+// scenario against the pre-fix shape in a throwaway worktree. After the fix,
+// that next call is setStatus's unrelated read of Players (which does not
+// care about staleness), and minAvailable is sized from the one evaluation
+// syncOccupiedLabels already made -- 0, agreeing with the unlabelled pod.
+func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+
+	const reportInterval = 5 * time.Second
+	clk := &stepAfterPriming{
+		fresh:      f.clock.Now(),
+		step:       2 * reportInterval,
+		priming:    true,
+		freshCalls: 2,
+	}
+	customAgents := agent.New(clk.Now, reportInterval, f.clock.Now())
+	r.Agents = customAgents
+
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 1
+	})
+	// Creates the one pod. The clock is still priming, so this pass cannot
+	// affect the step count the pass under test relies on.
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 1 {
+		t.Fatalf("proxy pods = %d, want 1 -- the step count below assumes exactly one", len(pods))
+	}
+	uid := string(pods[0].UID)
+	customAgents.Connect(uid, agent.RoleProxy)
+	if err := customAgents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+
+	// The pass under test: the clock steps from fresh to stale partway
+	// through it.
+	clk.priming = false
+	f.reconcileProxyGroup(r, "gateway")
+
+	got := f.proxyPods("gateway")[0]
+	if _, labelled := got.Labels[podspec.LabelOccupied]; labelled {
+		t.Errorf("pod carries the occupied label, but the count read at the same fresh moment was not stale")
+	}
+
+	pdb := &policyv1.PodDisruptionBudget{}
+	key := types.NamespacedName{Name: podspec.GroupPDBName("gateway", podspec.RoleProxy), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, key, pdb); err != nil {
+		t.Fatalf("get proxy PDB: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 0 {
+		t.Errorf("minAvailable = %v, want 0: the pod carries no occupied label, and the budget must be sized "+
+			"from the same evaluation the label came from, not a second, later read of the registry",
+			pdb.Spec.MinAvailable)
+	}
+}
+
+// TestNodeDrainingConditionNamesTheNodeOnAProxyGroup is the proxy half of
+// TestNodeDrainingConditionNamesTheNode: the same condition, built from the
+// same fact -- a live pod on a departing node -- reported the same way
+// regardless of which group kind noticed it.
+func TestNodeDrainingConditionNamesTheNodeOnAProxyGroup(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.bindPodToNode(t, &pods[0], node.Name)
+	f.ensureNode(t, node.Name, true)
+	f.reconcileProxyGroup(r, "gateway")
+
+	cond := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("NodeDraining = %v, want True", cond)
+	}
+	if !strings.Contains(cond.Message, node.Name) {
+		t.Errorf("message %q does not name the node", cond.Message)
+	}
+
+	// Release it. The condition reports where pods are, not what has been
+	// decided about them, so it drops to False on the fact alone -- nothing
+	// here waits for the mark this pass never got around to making.
+	f.ensureNode(t, node.Name, false)
+	f.reconcileProxyGroup(r, "gateway")
+	cond = meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("NodeDraining after uncordon = %v, want False", cond)
+	}
+}
+
+// TestANodeDrainMarkFiresANodeDrainingEvent is the event half of §3.7 for the
+// ProxyGroup: Task 5 marked a proxy for its departing node without telling
+// the operator why. It has to reach the actual mark, not just the surge, so
+// this mirrors TestAProxyOnACordonedNodeIsReplaced's two-reconcile shape
+// rather than stopping at the first pass, where nothing is marked yet and the
+// event assertion below would pass for no reason.
+func TestANodeDrainMarkFiresANodeDrainingEvent(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := r.Recorder.(*record.FakeRecorder)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	going := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.bindPodToNode(t, &pods[0], going.Name)
+	f.ensureNode(t, going.Name, true)
+
+	f.reconcileProxyGroup(r, "gateway") // surges the replacement; nothing marked yet
+	if containsEvent(drainEvents(rec), spawneryv1alpha1.ReasonNodeDraining) {
+		t.Fatal("NodeDraining event fired before any proxy was actually marked")
+	}
+
+	after := f.proxyPods("gateway")
+	for i := range after {
+		f.markProxyPodReady(t, &after[i])
+	}
+	f.reconcileProxyGroup(r, "gateway") // marks the pod on the departing node
+
+	marked := 0
+	for _, p := range f.proxyPods("gateway") {
+		if _, dated := drainingSince(&p); dated {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Fatalf("marked = %d, want 1; nothing below tests the event without a mark to attach it to", marked)
+	}
+
+	events := drainEvents(rec)
+	count := 0
+	for _, e := range events {
+		if strings.Contains(e, spawneryv1alpha1.ReasonNodeDraining) {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("NodeDraining events = %d, want exactly 1: %v", count, events)
+	}
+
+	// A resync with the mark and the departing node both unchanged must not
+	// re-fire: the event is for the moment of decision, not a status the
+	// group repeats every pass. Without the guard against re-stamping an
+	// existing mark, this would announce the same drain once per resync for
+	// as long as the pod takes to empty.
+	f.clock.Advance(resyncInterval)
+	f.reconcileProxyGroup(r, "gateway")
+	if containsEvent(drainEvents(rec), spawneryv1alpha1.ReasonNodeDraining) {
+		t.Error("NodeDraining event fired again on a resync that changed nothing about the mark")
+	}
+}
+
+// TestAHashMismatchMarkDoesNotFireANodeDrainingEvent is the negative half of
+// the same gate: a rolling update marks a proxy too, and §3.7 reserves
+// NodeDraining for the occasion a departing node causes, not the occasion a
+// spec change does -- that one is already a rolling update, not a drain.
+func TestAHashMismatchMarkDoesNotFireANodeDrainingEvent(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := r.Recorder.(*record.FakeRecorder)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	drainEvents(rec) // discard anything from setup
+
+	g := f.proxyGroup("gateway")
+	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway") // surges the replacement; nothing marked yet
+
+	after := f.proxyPods("gateway")
+	if len(after) != 3 {
+		t.Fatalf("proxy pods = %d after the spec change, want 3", len(after))
+	}
+	for i := range after {
+		f.markProxyPodReady(t, &after[i])
+	}
+	f.reconcileProxyGroup(r, "gateway") // marks exactly one pod, for the hash mismatch
+
+	marked := 0
+	for _, p := range f.proxyPods("gateway") {
+		if _, dated := drainingSince(&p); dated {
+			marked++
+		}
+	}
+	if marked != 1 {
+		t.Fatalf("marked = %d, want 1; nothing below tests the gate without a mark to test it against", marked)
+	}
+
+	if containsEvent(drainEvents(rec), spawneryv1alpha1.ReasonNodeDraining) {
+		t.Error("NodeDraining event fired for a mark caused by a hash mismatch, not a departing node")
 	}
 }

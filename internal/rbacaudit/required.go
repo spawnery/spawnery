@@ -53,12 +53,14 @@ var RequiredCluster = []Permission{
 	{Group: "", Resource: "pods", Verb: "delete", Why: "the terminating decision, the orphan sweep, and ProxyGroupReconciler scaling down"},
 	{Group: "", Resource: "pods", Verb: "patch", Why: "syncOccupiedLabel patches the occupied label"},
 
-	// PodDisruptionBudgets — one per group, kept in step with the occupied count.
-	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "get", Why: "CreateOrUpdate in reconcilePDB"},
-	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "list", Why: "ServerGroupReconciler Owns(&policyv1.PodDisruptionBudget{})"},
-	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "watch", Why: "ServerGroupReconciler Owns(&policyv1.PodDisruptionBudget{})"},
-	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "create", Why: "CreateOrUpdate in reconcilePDB"},
-	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "update", Why: "CreateOrUpdate in reconcilePDB"},
+	// PodDisruptionBudgets — one per group (ServerGroup and ProxyGroup each own
+	// one, distinguished by podspec.GroupPDBName's role suffix), kept in step
+	// with the occupied count.
+	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "get", Why: "CreateOrUpdate in reconcilePDB and reconcileProxyPDB"},
+	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "list", Why: "ServerGroupReconciler and ProxyGroupReconciler both Owns(&policyv1.PodDisruptionBudget{})"},
+	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "watch", Why: "ServerGroupReconciler and ProxyGroupReconciler both Owns(&policyv1.PodDisruptionBudget{})"},
+	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "create", Why: "CreateOrUpdate in reconcilePDB and reconcileProxyPDB"},
+	{Group: "policy", Resource: "poddisruptionbudgets", Verb: "update", Why: "CreateOrUpdate in reconcilePDB and reconcileProxyPDB"},
 
 	// Namespace bootstrap — Bootstrapper.Ensure keeps the CA ConfigMap and
 	// the server and proxy ServiceAccounts current in every namespace that
@@ -122,7 +124,14 @@ var RequiredCluster = []Permission{
 	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "list", Why: "NetworkReconciler counts proxy groups"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "watch", Why: "ProxyGroupReconciler For(&ProxyGroup{})"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "status", Verb: "update", Why: "ProxyGroupReconciler writes replicas, address and conditions"},
-	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod and Service owner references"},
+	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod, Service and PodDisruptionBudget owner references"},
+
+	// Nodes — nodeDeparting resolves a pod's node to ask IsDeparting whether it
+	// is cordoned or tainted to repel, so a group can empty a pod off a node
+	// leaving service before somebody else moves it the hard way.
+	{Group: "", Resource: "nodes", Verb: "get", Why: "nodeDeparting resolves a pod's node name"},
+	{Group: "", Resource: "nodes", Verb: "list", Why: "the restricted cache over Nodes"},
+	{Group: "", Resource: "nodes", Verb: "watch", Why: "the restricted cache over Nodes"},
 }
 
 // RequiredNamespaced is what the operator does in its own namespace only, and

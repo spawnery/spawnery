@@ -33,7 +33,15 @@ const (
 	LabelRole = "spawnery.cloud/role"
 	// LabelOccupied is set to "true" while players are online. The group's
 	// PodDisruptionBudget selects on it, which is what stops the eviction API
-	// from removing an occupied pod. Maintained by the Server controller.
+	// from removing an occupied pod. Maintained by the Server controller on
+	// server pods and by the ProxyGroup controller on proxy pods, each from
+	// its own occupancy rule — see isOccupied (candidates.go) and
+	// proxyOccupiedForBudget (proxygroup_controller.go).
+	//
+	// Two writers over two populations, so a budget selecting on this key has
+	// to pin LabelRole as well or it matches the other one's pods: see
+	// ServerGroupReconciler.reconcilePDB, which shipped without that term and
+	// let the eviction API take an occupied server pod.
 	LabelOccupied = "spawnery.cloud/occupied"
 	// LabelPodHash is a digest of the pod this operator would render for its
 	// group right now, with the pod's own name and this label excluded. A pod
@@ -96,8 +104,12 @@ func ProxyLabels(network, group string) map[string]string {
 // namespace; a name that was only the group's own name collided the moment
 // that happened — the second controller's SetControllerReference returned
 // AlreadyOwnedError inside its mutate function, so that group's reconcile
-// failed early and it never got its Service or its pods, in an error loop
-// naming neither the group nor the cause. The role suffix also keeps a
+// failed early and it never got its Service or its pods. AlreadyOwnedError's
+// own message names both the object and the owning controller, so that part
+// is not silent; what actually goes unnoticed is the group's own status: no
+// condition is written for this failure, so whatever was last there (often a
+// stale Accepted=True) stays, and `kubectl get` on the group alone shows
+// nothing wrong. The role suffix also keeps a
 // user's own ConfigMap named after their group — their configOverlay
 // ConfigMap being the likeliest way to do that — from ever coinciding with
 // the one the operator owns and deletes when the group goes: without it, the
@@ -110,6 +122,24 @@ func ProxyLabels(network, group string) map[string]string {
 // function.
 func GroupConfigMapName(group, role string) string {
 	return group + "-" + role + "-config"
+}
+
+// GroupPDBName is the PodDisruptionBudget a group's controller keeps sized to
+// its occupied pods, following GroupConfigMapName's scheme for the same
+// reason that function's own doc comment narrates: a ServerGroup and a
+// ProxyGroup are different Kinds and Kubernetes lets them share a name in one
+// namespace, so a PodDisruptionBudget named only after the group collides the
+// moment a user does that — the losing controller's SetControllerReference
+// returns AlreadyOwnedError from inside CreateOrUpdate's mutate function on
+// every pass, and that group's Reconcile fails before it ever reaches
+// setStatus. As with the ConfigMap collision GroupConfigMapName documents,
+// AlreadyOwnedError's own message names both the object and the owning
+// controller; what stays silent is the group's own status, which carries no
+// condition for this failure and so goes on showing whatever it last did.
+//
+// role must be RoleServer or RoleProxy, matching GroupConfigMapName.
+func GroupPDBName(group, role string) string {
+	return group + "-" + role + "-pdb"
 }
 
 // ManagedSelector matches every pod Spawnery manages for one network.

@@ -91,3 +91,23 @@ func TestLeaderReadyCheckDoesNotBlock(t *testing.T) {
 		t.Fatal("the ready check blocked; every probe of a standby would time out")
 	}
 }
+
+// An empty -drain-taint would match nothing, which is silent everywhere it
+// matters: nodeDeparting would just never see it in the list, so a mistyped
+// flag would fail open rather than error at startup.
+func TestTaintKeysSetRejectsEmpty(t *testing.T) {
+	var keys taintKeys
+	if err := keys.Set(""); err == nil {
+		t.Error("Set(\"\") returned no error; an empty taint key would match nothing")
+	}
+	if len(keys) != 0 {
+		t.Errorf("Set(\"\") appended anyway: %v", keys)
+	}
+
+	if err := keys.Set("node.kubernetes.io/unreachable"); err != nil {
+		t.Fatalf("Set of a real key failed: %v", err)
+	}
+	if got, want := keys.String(), "node.kubernetes.io/unreachable"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}

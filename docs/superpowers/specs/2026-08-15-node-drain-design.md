@@ -109,10 +109,25 @@ It takes the key list rather than reading configuration, so it is table-tested
 without a cluster and without a manager — the shape `DecideSize` and
 `DecideRollout` already have.
 
-Both cluster-autoscaler and Karpenter cordon a node in addition to tainting it,
-so the default empty list still sees autoscaler-driven scale-in; the flag exists
-to see it a moment earlier, and to cover a taint vocabulary this project does not
-have to know in advance.
+**The empty default sees cordoned nodes and nothing else, and that is a real
+limit rather than a formality.** An earlier draft of this section claimed both
+cluster-autoscaler and Karpenter cordon a node in addition to tainting it, so
+that an empty list would still see autoscaler-driven scale-in a moment later.
+That is wrong for cluster-autoscaler, which taints
+`ToBeDeletedByClusterAutoscaler:NoSchedule` and deletes the node without setting
+`spec.unschedulable` unless `--cordon-node-before-terminating` is turned on, and
+it defaults to off. An operator running cluster-autoscaler therefore has to pass
+`-drain-taint ToBeDeletedByClusterAutoscaler` to get anything out of this
+milestone on a scale-in.
+
+The default stays empty regardless. A default that reacts to another project's
+taint key would couple this operator to a vocabulary that project is free to
+change, which is the coupling a configurable list was chosen to avoid — and a
+justification resting on a third party's flag defaults rots whatever is written
+here today. So the code says only what stays true: `spec.unschedulable` is
+always honoured, an autoscaler may taint without cordoning, and that is what the
+list is for. Which key to set for which autoscaler belongs in
+`docs/known-issues.md`, where it can be corrected without a code change.
 
 ### 3.2 How the operator learns it
 
@@ -276,11 +291,20 @@ counting players, not reasons — and holding both sides to one answer is worth
 more than the pod a reversal would save. An accidental `cordon` costs one proxy
 rotation and no player.
 
-This is expected to fall out of the existing release path rather than needing a
-clause: once marked, the pod is draining and not Ready, `pick` sorts it first,
-and the surplus branch keeps the mark on what `pick` returns
-(`rollout.go:209ff`). **Expected, not established** — the implementation proves
-it with a table case rather than asserting it.
+This falls out of the existing release path rather than needing a clause, and
+the path is one layer above where this section first looked for it. Not
+`DecideRollout`: with nothing stale any more, its `draining > 0` guard returns
+before `pick` is ever reached, so that function decides nothing here. The mark
+survives in `reconcileReplicas`, which reconstructs the surplus marks each pass
+— the uncordoned pod is draining but no longer stale, so it lands in
+`surplusMarks`, the budget keeps one, and `pick` is called over that set and
+returns it.
+
+**Established, and by an envtest rather than a table case.** The distinction is
+not bookkeeping: a table case over `DecideRollout` cannot reach the mechanism at
+all, and the first attempt at one passed for that reason while carrying this
+constraint's name. `TestAnUncordonedNodeKeepsTheMarkAlreadyMade` drives the real
+reconciler and fails when the mark is released.
 
 ### 3.7 Reporting
 

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -111,14 +112,65 @@ func (f *fixture) setMinReplicas(t *testing.T, n int32) {
 	}
 }
 
-// groupPDB re-reads the group's PodDisruptionBudget.
+// groupPDB re-reads the fixture's ServerGroup's PodDisruptionBudget.
 func (f *fixture) groupPDB(t *testing.T) *policyv1.PodDisruptionBudget {
 	t.Helper()
 	pdb := &policyv1.PodDisruptionBudget{}
-	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, pdb); err != nil {
+	key := types.NamespacedName{Name: podspec.GroupPDBName(f.group.Name, podspec.RoleServer), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, key, pdb); err != nil {
 		t.Fatalf("get PDB: %v", err)
 	}
 	return pdb
+}
+
+// assertBudgetSelectsExactlyWhatItCounts is the pairing neither group kind
+// asserted before: that the pods a PodDisruptionBudget's selector actually
+// matches are the pods its minAvailable was counted from.
+//
+// Both halves were already covered separately -- minAvailable against a
+// number the test computed, and the occupied label against the pods carrying
+// it -- and neither catches a selector that matches the wrong population.
+// That is exactly the shape of the milestone's own Critical: the ServerGroup
+// budget selected on {managed-by, group, occupied} with no role term, so in a
+// namespace holding a same-named ProxyGroup it matched occupied proxies while
+// counting only occupied servers, and each occupied proxy it picked up bought
+// the eviction API another disruption to spend on a server pod full of players.
+//
+// It reads the selector off the object rather than rebuilding it, so it is a
+// statement about what Kubernetes will match and not about what the test
+// thinks the controller wrote.
+func (f *fixture) assertBudgetSelectsExactlyWhatItCounts(t *testing.T, name string) {
+	t.Helper()
+	pdb := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, pdb); err != nil {
+		t.Fatalf("get PDB %s: %v", name, err)
+	}
+	if pdb.Spec.MinAvailable == nil {
+		t.Fatalf("PDB %s has no minAvailable; there is nothing to compare a selector against", name)
+	}
+	selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+	if err != nil {
+		t.Fatalf("PDB %s has an unusable selector %+v: %v", name, pdb.Spec.Selector, err)
+	}
+
+	pods := &corev1.PodList{}
+	if err := f.c.List(f.ctx, pods, ctrlclientInNamespace(f.ns),
+		client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		t.Fatalf("list the pods PDB %s selects: %v", name, err)
+	}
+	matched := make([]string, 0, len(pods.Items))
+	for i := range pods.Items {
+		matched = append(matched, pods.Items[i].Name)
+	}
+	sort.Strings(matched)
+
+	if want := pdb.Spec.MinAvailable.IntValue(); len(matched) != want {
+		t.Errorf("PDB %s selects %d pod(s) %v but its minAvailable is %d.\n"+
+			"selector: %v\n"+
+			"More selected than counted hands the eviction API a disruption to spend on an occupied pod; "+
+			"fewer pins minAvailable above a number the group can reach and wedges kubectl drain on nobody.",
+			name, len(matched), matched, want, selector)
+	}
 }
 
 // publishPDBStatus computes and writes the PodDisruptionBudget status that
@@ -588,7 +640,8 @@ func TestGroupMaintainsAPodDisruptionBudget(t *testing.T) {
 	f.reconcileGroup(t, r)
 
 	pdb := &policyv1.PodDisruptionBudget{}
-	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, pdb); err != nil {
+	key := types.NamespacedName{Name: podspec.GroupPDBName("lobby", podspec.RoleServer), Namespace: f.ns}
+	if err := f.c.Get(f.ctx, key, pdb); err != nil {
 		t.Fatalf("get PDB: %v", err)
 	}
 	if pdb.Spec.MaxUnavailable != nil {
@@ -606,6 +659,14 @@ func TestGroupMaintainsAPodDisruptionBudget(t *testing.T) {
 	if pdb.Spec.Selector.MatchLabels[podspec.LabelGroup] != "lobby" {
 		t.Errorf("selector = %v, want it scoped to the group", pdb.Spec.Selector.MatchLabels)
 	}
+	if pdb.Spec.Selector.MatchLabels[podspec.LabelRole] != podspec.RoleServer {
+		t.Errorf("selector = %v, want it scoped to server pods: without the role term it also "+
+			"matches the occupied proxies of a same-named ProxyGroup, which its minAvailable "+
+			"never counted", pdb.Spec.Selector.MatchLabels)
+	}
+	// The number and the selector are separate questions, and a budget is only
+	// protection when they answer the same one. See the helper.
+	f.assertBudgetSelectsExactlyWhatItCounts(t, key.Name)
 }
 
 // TestPodDisruptionBudgetTracksThePlayerCount pins that the budget follows
@@ -3018,5 +3079,290 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	if got := len(f.serversOfGeneration(t, generation)); got > bound {
 		t.Errorf("group built %d servers of the new generation across %d passes, want at most %d: "+
 			"the backoff must bound the loop", got, passes, bound)
+	}
+}
+
+// TestACordonedNodeCondemnsTheServersOnIt is the server half of the milestone:
+// a node on its way out empties itself of servers, and the group rebuilds them
+// somewhere else without anybody being kicked.
+func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := r.Recorder.(*record.FakeRecorder)
+
+	// Two servers, both Ready, one occupied so the test also proves that
+	// having players does not exempt a server from a node that is leaving.
+	f.setMinReplicas(t, 2)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 2 {
+		t.Fatalf("servers = %d, want 2", len(servers))
+	}
+	f.markReadyWithPlayers(t, servers[0].Name, 3)
+	f.markReady(t, servers[1].Name)
+
+	// Place them on two nodes, then cordon the first.
+	going := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.ensureNode(t, "node-staying-"+f.ns, false)
+	for i, srv := range f.listServers(t) {
+		reloaded := f.server(srv.Name)
+		pod, ok := f.pod(reloaded.Status.PodName)
+		if !ok {
+			t.Fatalf("pod of %s not found", srv.Name)
+		}
+		if i == 0 {
+			f.bindPodToNode(t, pod, going.Name)
+		} else {
+			f.bindPodToNode(t, pod, "node-staying-"+f.ns)
+		}
+	}
+	f.ensureNode(t, going.Name, true)
+
+	f.reconcileGroup(t, r)
+
+	// The server on the cordoned node is going.
+	condemned := f.server(servers[0].Name)
+	if condemned.DeletionTimestamp.IsZero() {
+		t.Error("the server on the cordoned node was not deleted; its players will be evicted instead of moved")
+	}
+	// The one beside it is not.
+	if !f.server(servers[1].Name).DeletionTimestamp.IsZero() {
+		t.Error("the server on the healthy node was deleted; only the departing node's servers may go")
+	}
+	// And the operator is told why. scalingEvents drains the recorder, so the
+	// resync assertion below starts from an empty channel.
+	if n := scalingEvents(rec, "NodeDraining"); n != 1 {
+		t.Errorf("NodeDraining events = %d, want exactly 1", n)
+	}
+
+	// A resync that changes nothing must not announce the same drain again:
+	// the event is the moment of decision, not a status repeated every five
+	// seconds for as long as the server takes to drain. The proxy side learned
+	// this mid-milestone (TestANodeDrainMarkFiresANodeDrainingEvent's third
+	// pass); this is the same assertion for deleteServer's own guard.
+	//
+	// The clock jumps past expectationTTL rather than one resync, and that is
+	// what makes this test the guard's rather than the reservation's. The
+	// delete reserved above keeps condemned() from naming this server again
+	// for as long as it stands, so a pass taken before it expires would emit
+	// nothing whatever deleteServer did. Past the TTL the server is nominated
+	// a second time, deleteServer is actually reached, and its
+	// DeletionTimestamp check is the only thing between it and a second
+	// event. Verified by removing that check: this then reports 1.
+	f.clock.Advance(expectationTTL + time.Second)
+	f.reconcileGroup(t, r)
+	if n := scalingEvents(rec, "NodeDraining"); n != 0 {
+		t.Errorf("NodeDraining events on an unchanged resync = %d, want 0: the drain is announced "+
+			"once, not once per pass for its whole duration", n)
+	}
+}
+
+// TestAFailedServerOnACordonedNodeGoesAwayOnce is the cost of the same
+// omission, seen from outside: a Failed server on a departing node used to be
+// both condemned by size() and collected by pruneFailed, which run over the
+// same in-memory map in one pass. r.Delete stamps no deletion timestamp back
+// onto the local object, so deleteServer's guard against repeating itself
+// never sees the first removal, and one server going away once was deleted
+// twice and announced twice under two different reasons.
+//
+// Both failures sit on the cordoned node, which is what makes the
+// FailedServerPruned count below discriminating: with both condemned there is
+// nothing left for the retention cap to prune, so any such event is the
+// duplicate.
+func TestAFailedServerOnACordonedNodeGoesAwayOnce(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := r.Recorder.(*record.FakeRecorder)
+
+	f.setMinReplicas(t, 2)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 2 {
+		t.Fatalf("servers = %d, want 2", len(servers))
+	}
+	// Two failures, one more than maxRetainedFailures, so the retention cap
+	// really would nominate one of them if it were still looking at them.
+	for _, s := range servers {
+		f.failServer(t, s.Name)
+	}
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	for _, s := range servers {
+		pod, ok := f.pod(f.server(s.Name).Status.PodName)
+		if !ok {
+			t.Fatalf("pod of %s not found", s.Name)
+		}
+		f.bindPodToNode(t, pod, node.Name)
+	}
+	f.ensureNode(t, node.Name, true)
+	drainEvents(rec) // discard anything the setup recorded
+
+	f.reconcileGroup(t, r)
+
+	// Counted from one read of the channel: each event is delivered once, so
+	// asking twice would empty it before the second question.
+	events := drainEvents(rec)
+	count := func(reason string) int {
+		n := 0
+		for _, e := range events {
+			if fields := strings.SplitN(e, " ", 3); len(fields) >= 2 && fields[1] == reason {
+				n++
+			}
+		}
+		return n
+	}
+
+	if got := count("NodeDraining"); got != 2 {
+		t.Fatalf("NodeDraining events = %d, want 2: without both failures actually being condemned "+
+			"the assertion below holds for a reason that has nothing to do with pruning: %v", got, events)
+	}
+	if got := count("FailedServerPruned"); got != 0 {
+		t.Errorf("FailedServerPruned events = %d, want 0: both failures are already going as "+
+			"condemned servers, and a second removal of the same server announces one departure "+
+			"twice under two reasons: %v", got, events)
+	}
+}
+
+// TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying pins the ruling that
+// moved condemnation below the Network gate. Design §3.3 calls condemnation
+// "unconditional. The node is leaving with or without our consent", and size()
+// used to be called only when the Network was usable -- so a group whose
+// Network had been deleted, or which had lost the one-per-namespace contest,
+// published NodeDraining: True naming the node, condemned nothing, and left
+// kubectl drain hanging on an occupied pod indefinitely. That is the failure
+// §1 of the design opens by describing, reached through the operator that
+// exists to prevent it.
+//
+// The server here is occupied, so the assertion is not merely about a
+// bookkeeping deletion: this is the pod the eviction API would otherwise be
+// left to take.
+func TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("servers = %d, want 1", len(servers))
+	}
+	f.markReadyWithPlayers(t, servers[0].Name, 3)
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	pod, ok := f.pod(f.server(servers[0].Name).Status.PodName)
+	if !ok {
+		t.Fatal("pod not found")
+	}
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+
+	// The Network goes after the group is already running, which is the state
+	// an operator actually reaches: a deleted Network, or one that lost the
+	// contest, leaves the groups that referenced it exactly here.
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete network: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	// The pass really took the broken-Network route. Without this the
+	// assertions below would hold just as well on a pass that found its
+	// Network and sized normally, and would say nothing about the gate.
+	group := f.reloadGroup(t)
+	accepted := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonNetworkNotFound {
+		t.Fatalf("Accepted = %v, want False/%s: this pass did not take the missing-Network route, "+
+			"so nothing below is a statement about the gate",
+			accepted, spawneryv1alpha1.ReasonNetworkNotFound)
+	}
+
+	if f.server(servers[0].Name).DeletionTimestamp.IsZero() {
+		t.Error("the server on the cordoned node was not condemned because its group's Network is " +
+			"broken; its players stay on a node that is leaving, and kubectl drain hangs on them")
+	}
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("NodeDraining = %v, want True: the condition and the condemnation are computed from "+
+			"the same views and must not be able to disagree", cond)
+	}
+}
+
+// TestCondemnedServersAreReplaced states the property that makes the drain
+// finite: the pass that condemns is the pass that orders the replacement, so
+// the group is never left short while it waits for a second reconcile.
+func TestCondemnedServersAreReplaced(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	f.markReady(t, servers[0].Name)
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	pod, ok := f.pod(f.server(servers[0].Name).Status.PodName)
+	if !ok {
+		t.Fatal("pod not found")
+	}
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+
+	f.reconcileGroup(t, r)
+
+	// The condemnation has to be checked before the replacement, or this test
+	// says nothing. Counting live servers alone passes just as well against a
+	// build that never condemns anything -- the original is still there and
+	// still counts as one -- which is exactly how a test outlives the code it
+	// was written for. Asserting the original is going is what makes the
+	// count below a statement about a replacement.
+	if f.server(servers[0].Name).DeletionTimestamp.IsZero() {
+		t.Fatal("the server on the cordoned node was not condemned; nothing below tests a replacement")
+	}
+	live := 0
+	for _, s := range f.listServers(t) {
+		if s.Name != servers[0].Name && s.DeletionTimestamp.IsZero() {
+			live++
+		}
+	}
+	if live < 1 {
+		t.Fatal("no replacement was ordered in the pass that condemned; the group would sit empty until the next one")
+	}
+}
+
+// TestNodeDrainingConditionNamesTheNode is what an operator sees in
+// kubectl describe. A bare True would tell them something is happening
+// without telling them where.
+func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	f.markReady(t, servers[0].Name)
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	pod, ok := f.pod(f.server(servers[0].Name).Status.PodName)
+	if !ok {
+		t.Fatal("pod not found")
+	}
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+	f.reconcileGroup(t, r)
+
+	cond := meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions,
+		spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("NodeDraining = %v, want True", cond)
+	}
+	if !strings.Contains(cond.Message, node.Name) {
+		t.Errorf("message %q does not name the node", cond.Message)
+	}
+
+	// Release it: with no pods left on a departing node the condition goes
+	// False rather than staying True until something else clears it.
+	f.ensureNode(t, node.Name, false)
+	f.reconcileGroup(t, r)
+	cond = meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions,
+		spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("NodeDraining after uncordon = %v, want False", cond)
 	}
 }

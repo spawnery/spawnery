@@ -1254,3 +1254,184 @@ func TestProvisionalCapacityStillCreditsAStartingServer(t *testing.T) {
 		t.Errorf("provisionalCapacity = %d, want the full 100 for a starting server", got)
 	}
 }
+
+func TestDecideSizeCondemns(t *testing.T) {
+	t.Run("a condemned server is named even with no surplus", func(t *testing.T) {
+		in := ScalingInputs{
+			Views: []ServerView{
+				{Name: "a", Phase: phase.Ready, Slots: 10, Players: 3},
+				{Name: "b", Phase: phase.Ready, Slots: 10, Players: 3, Condemned: true},
+			},
+			MinReplicas: 2, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		if len(got.Condemn) != 1 || got.Condemn[0] != "b" {
+			t.Fatalf("Condemn = %v, want [b]", got.Condemn)
+		}
+		if got.Surplus != 0 {
+			t.Fatalf("Surplus = %d, want 0: a node drain is not a scale-down", got.Surplus)
+		}
+	})
+
+	t.Run("minReplicas does not hold a condemned server back", func(t *testing.T) {
+		in := ScalingInputs{
+			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true}},
+			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		if len(got.Condemn) != 1 || got.Condemn[0] != "a" {
+			t.Fatalf("Condemn = %v, want [a]", got.Condemn)
+		}
+	})
+
+	t.Run("the replacement is asked for in the same pass", func(t *testing.T) {
+		// The only server is condemned, so it stops holding the floor and
+		// stops contributing capacity: the same pass that condemns it must
+		// order its replacement.
+		in := ScalingInputs{
+			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true}},
+			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		if got.Create < 1 {
+			t.Fatalf("Create = %d, want at least 1", got.Create)
+		}
+	})
+
+	t.Run("all condemned servers go in one pass", func(t *testing.T) {
+		in := ScalingInputs{
+			Views: []ServerView{
+				{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true},
+				{Name: "b", Phase: phase.Ready, Slots: 10, Condemned: true},
+				{Name: "c", Phase: phase.Ready, Slots: 10},
+			},
+			MinReplicas: 3, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		if len(got.Condemn) != 2 {
+			t.Fatalf("Condemn = %v, want two names", got.Condemn)
+		}
+	})
+
+	t.Run("Delete and Condemn never name the same server", func(t *testing.T) {
+		// A group over its ceiling with a condemned server in it: the surplus
+		// rule must not nominate the pod the node drain is already taking.
+		in := ScalingInputs{
+			Views: []ServerView{
+				{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true},
+				{Name: "b", Phase: phase.Ready, Slots: 10},
+				{Name: "c", Phase: phase.Ready, Slots: 10},
+			},
+			MinReplicas: 1, MaxReplicas: 2, MaxPlayers: 10, SpareSlots: 1,
+		}
+		got := DecideSize(in)
+		for _, d := range got.Delete {
+			for _, c := range got.Condemn {
+				if d == c {
+					t.Fatalf("%q is in both Delete and Condemn", d)
+				}
+			}
+		}
+	})
+
+	t.Run("no condemned servers leaves Condemn nil", func(t *testing.T) {
+		in := ScalingInputs{
+			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10}},
+			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+		}
+		if got := DecideSize(in); got.Condemn != nil {
+			t.Fatalf("Condemn = %v, want nil", got.Condemn)
+		}
+	})
+
+	t.Run("a condemned stale server is not also nominated for retirement", func(t *testing.T) {
+		// The two removals must not both claim the same server. Condemn
+		// reserves a delete for it; a retirement patched in the same pass
+		// would overwrite that reservation in the name-keyed expectations map,
+		// and spec.retire would then hold a maxUnavailable slot for the whole
+		// of a drain the node was going to force regardless.
+		//
+		// The stale server is Ready and of an older generation with a Ready
+		// current-generation replacement beside it, which is exactly the state
+		// selectRetirement nominates from — so without the Condemned clause
+		// this case retires "old".
+		in := ScalingInputs{
+			Views: []ServerView{
+				func() ServerView {
+					v := staleReady("old", 60, 100, 3)
+					v.Condemned = true
+					return v
+				}(),
+				ready("new", 0, 100),
+			},
+			Generation: 0, MaxUnavailable: 1,
+			MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		}
+		got := DecideSize(in)
+		if len(got.Retire) != 0 {
+			t.Errorf("Retire = %v, want none: %q is condemned and may not also be retired", got.Retire, "old")
+		}
+		if len(got.Condemn) != 1 || got.Condemn[0] != "old" {
+			t.Errorf("Condemn = %v, want [old]: the node drain still takes it", got.Condemn)
+		}
+	})
+
+	t.Run("a condemned current-generation server is not the replacement a retirement waits for", func(t *testing.T) {
+		// The mirror of the case above, on the other branch of the same loop:
+		// here the stale server is healthy and the current-generation server
+		// beside it is the one on the departing node. Counting that one as the
+		// replacement would retire "old" against capacity that is itself being
+		// drained away, and a retirement cannot be taken back. Declining is the
+		// deliberate choice — the changeover waits for a replacement that is
+		// staying, which costs it time and costs no player a connection.
+		//
+		// "warming" is load-bearing and not scenery. Without a current-
+		// generation server that counts toward the group's size, the cold-start
+		// branch fires and decideSize returns a Create long before the
+		// retirement branch is reached, so the assertion below would hold for a
+		// reason that has nothing to do with the clause under test. Starting
+		// rather than Ready is what makes it suppress the cold start without
+		// also satisfying readyCurrent by itself. Verified by removing the
+		// clause: this case then reports Retire = [old], while the simpler
+		// two-server version still reports none.
+		in := ScalingInputs{
+			Views: []ServerView{
+				staleReady("old", 60, 100, 3),
+				{Name: "warming", Phase: phase.Starting, Generation: 0},
+				func() ServerView {
+					v := ready("new", 0, 100)
+					v.Condemned = true
+					return v
+				}(),
+			},
+			Generation: 0, MaxUnavailable: 1,
+			MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		}
+		got := DecideSize(in)
+		if got.Create != 0 {
+			t.Fatalf("Create = %d, want 0: a create means decideSize returned before the "+
+				"retirement branch and this case tests nothing", got.Create)
+		}
+		if len(got.Retire) != 0 {
+			t.Errorf("Retire = %v, want none: the only Ready current-generation server is "+
+				"condemned, so it is not a replacement to retire against", got.Retire)
+		}
+		if len(got.Condemn) != 1 || got.Condemn[0] != "new" {
+			t.Errorf("Condemn = %v, want [new]: the node drain still takes it", got.Condemn)
+		}
+	})
+
+	t.Run("a condemned server already reserved for delete is not named again", func(t *testing.T) {
+		// The guard condemned() relies on: a server this reconciler already
+		// reserved an ordinary delete for must not be re-listed just because
+		// its node also reads Condemned.
+		in := ScalingInputs{
+			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true}},
+			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
+			PendingDeletes: map[string]bool{"a": true},
+		}
+		if got := DecideSize(in); len(got.Condemn) != 0 {
+			t.Fatalf("Condemn = %v, want none: %q already has a reserved delete", got.Condemn, "a")
+		}
+	})
+}

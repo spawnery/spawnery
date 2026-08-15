@@ -25,6 +25,42 @@ func at(min int) time.Time {
 	return time.Date(2026, 8, 14, 12, min, 0, 0, time.UTC)
 }
 
+// TestDecideRolloutCountsDrainingIndependentlyOfStale isolates one clause of
+// the one-at-a-time guard: draining is counted from ProxyView.Draining alone,
+// not from Draining together with Stale. Every other table case below that
+// reaches the guard pairs the two on the same pod -- "one already draining"
+// has its draining pod also Stale: true -- so none of them tells the guard's
+// own reading of Draining apart from stale entailing draining in practice.
+// This pod is draining and explicitly not stale: the state a proxy is in the
+// moment after whatever made it stale stops being true, which for a node
+// drain is exactly what releasing the node produces. The guard still holds,
+// which is what this case adds over the others.
+//
+// It does not by itself establish spec §3.6's promise that releasing a node
+// mid-drain does not undo the drain already begun. DecideRollout has no
+// concept of a mark already made -- it only sees this pass's Draining flag,
+// which reconcileReplicas derives from the annotation, not from Stale -- so
+// nothing here says the mark survives a real reconcile that recomputes Stale
+// fresh and feeds it back through the surplus-marks budget.
+// TestAnUncordonedNodeKeepsTheMarkAlreadyMade in proxygroup_controller_test.go
+// drives that whole path end to end and is what actually establishes §3.6;
+// this case only pins the one clause of DecideRollout the guard depends on
+// while doing so.
+func TestDecideRolloutCountsDrainingIndependentlyOfStale(t *testing.T) {
+	pods := []ProxyView{
+		{Name: "old", Stale: false, Ready: false, Draining: true, Players: 2},
+		{Name: "new", Stale: false, Ready: true},
+		{Name: "other", Stale: false, Ready: true},
+	}
+	got := DecideRollout(pods, 2)
+	if got.Create != 0 {
+		t.Fatalf("Create = %d, want 0", got.Create)
+	}
+	if len(got.Drain) != 0 {
+		t.Fatalf("Drain = %v, want none: the draining guard holds even though nothing here is Stale", got.Drain)
+	}
+}
+
 func TestDecideRollout(t *testing.T) {
 	tests := []struct {
 		name     string

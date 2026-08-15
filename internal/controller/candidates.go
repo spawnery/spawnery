@@ -58,6 +58,18 @@ type ServerView struct {
 	// survives the escalation to Draining that maxStaleSeconds can force —
 	// which is what tells that drain apart from one a scale-down started.
 	Retire bool
+	// Condemned is true when this server's pod sits on a node that is on its
+	// way out of service. Set by collectViews from pod.spec.nodeName and the
+	// operator's departing-node test; the view carries the conclusion so the
+	// sizing rules stay free of node vocabulary, the same way Stale carries a
+	// conclusion about the player count.
+	Condemned bool
+	// NodeName is pod.spec.nodeName, carried alongside Condemned so the
+	// NodeDraining condition can name the node a condemned server is on
+	// without asking nodeDeparting about the same pod a second time. Empty
+	// when the pod could not be resolved, in which case Condemned is false
+	// too and nothing reads this field.
+	NodeName string
 	// CreatedAt is the creation timestamp of the Server object.
 	CreatedAt time.Time
 	// FailedAt is status.failedAt: when this server entered phase Failed.
@@ -71,15 +83,37 @@ type ServerView struct {
 	ReadySince time.Time
 }
 
-// isOccupied is the single occupancy rule of the system. Both sides of the
-// PodDisruptionBudget are computed from it: the Server controller labels pods
-// with it (syncOccupiedLabel) and the ServerGroup controller sizes the budget's
-// minAvailable from it (ServerView.Occupied). The two have to agree pod for
-// pod. Counting fewer pods than carry the label hands the eviction API a
-// disruption to spend on a pod that still has players; counting a pod the label
-// has released pins minAvailable above a budget that can never be met, and
-// kubectl drain then wedges on a pod nobody is on. They used to be two
-// implementations kept in step by a comment, and they drifted.
+// isOccupied is the occupancy rule for a server pod. The proxy side has its
+// own, proxyOccupied (proxygroup_controller.go), which answers the same
+// question under a different signature: a proxy has no wasRegistered
+// qualifier, because it sits behind the Service and players reach it
+// directly, so there is no state in which a stale count is safe to read as
+// empty. That side then splits once more — proxyOccupiedForBudget is
+// proxyOccupied plus a term its unbounded consumers need — where this side
+// does not, because status.wasRegistered is persisted and so survives an
+// operator restart, which is the case that split is about. Both sides of the
+// ServerGroup's
+// PodDisruptionBudget are computed from this one: the Server controller
+// labels pods with it (syncOccupiedLabel) and the ServerGroup controller
+// sizes the budget's minAvailable from it (ServerView.Occupied). The two have
+// to agree pod for pod. Counting fewer pods than carry the label hands the
+// eviction API a disruption to spend on a pod that still has players;
+// counting a pod the label has released pins minAvailable above a budget
+// that can never be met, and kubectl drain then wedges on a pod nobody is
+// on. They used to be two implementations kept in step by a comment, and
+// they drifted.
+//
+// podspec.LabelOccupied is not this rule's private property, and that is why
+// the agreement above needs a third participant to hold. The ProxyGroup
+// controller writes the same label key on proxy pods from proxyOccupied — a
+// different rule over a different population — so "the two have to agree pod
+// for pod" is a statement about the pods this rule owns and about no others.
+// What confines the budget to those is the podspec.LabelRole term in
+// reconcilePDB's selector. Drop that term and the agreement is between two
+// different sets of pods rather than between two answers about one; see
+// reconcilePDB's own comment for what the eviction API then does with the
+// difference. A further writer of this label would have to be answered the
+// same way.
 //
 // players > 0 is the plain case. A count we cannot trust hides players only
 // where players could be, and that takes the server having been registered with
@@ -162,6 +196,25 @@ func (v ServerView) mayHavePlayers() bool {
 	return v.Players > 0 || (v.Stale && v.WasRegistered)
 }
 
+// leavingByPhase is the part of leaving() that is evidence of a removal
+// already under way: these three phases are reached only after something has
+// asked this particular server to go. Kept apart from Condemned because one
+// caller needs exactly this narrower question and not the wider one: see
+// expectations.go's expectationDelete case, which reads them as evidence that
+// the deletion its reservation was made for is happening.
+//
+// "Something", and deliberately not "this reconciler". The claim used to be
+// that these phases are reached only as a consequence of a removal this
+// reconciler itself issued, and that is false — a hand-run `kubectl delete
+// server/foo` drives exactly the same phases and is nobody's reservation.
+// (The orphan sweep is not the counterexample: it only touches Servers whose
+// group is gone, which this reconciler never sees.) The caller does not need
+// the stronger version anyway: a reservation is satisfied by evidence that
+// the server it named is going, whoever asked.
+func (v ServerView) leavingByPhase() bool {
+	return v.Phase == phase.Draining || v.Phase == phase.Terminating || v.Phase == phase.Retiring
+}
+
 // leaving reports whether the server is already on its way out, so the group
 // must not count it as a candidate again.
 //
@@ -169,8 +222,13 @@ func (v ServerView) mayHavePlayers() bool {
 // the group's size is exactly what makes the spare-slot rule order a
 // replacement for a server a rolling update has retired. The generation never
 // enters the capacity arithmetic; this does the work instead.
+//
+// Condemned is in here for the same reason Retiring is. Dropping out of the
+// group's size is what makes the spare-slot rule order the replacement, in
+// the same pass, and it is also what stops the deletion nomination from
+// naming a server that is already going by another route.
 func (v ServerView) leaving() bool {
-	return v.Phase == phase.Draining || v.Phase == phase.Terminating || v.Phase == phase.Retiring
+	return v.leavingByPhase() || v.Condemned
 }
 
 // countsTowardSize reports whether this server holds the group at its floor.
@@ -286,10 +344,25 @@ const maxRetainedFailures = 1
 // Servers already on their way out are left alone — they are being removed
 // anyway, and counting them would let a second failure through while the first
 // drains.
+//
+// leaving(), not the phase alone, and the difference is not cosmetic. While
+// "on the way out" meant only Draining, Terminating or Retiring, the phase
+// filter carried this clause on its own: those three are mutually exclusive
+// with Failed, so no server could be both and there was nothing for a second
+// test to exclude. leaving() is now leavingByPhase() || Condemned, and a
+// Failed server on a departing node is both. Without this test it is
+// collected here as well, and because size() and pruneFailed run over the
+// same in-memory map in one pass — r.Delete stamps no deletion timestamp back
+// onto the local object, so deleteServer's own guard does not see the first
+// removal — it gets deleted twice and announced twice, once as NodeDraining
+// and once as FailedServerPruned, for one server going away once. For a
+// Failed view the test reduces to !Condemned; it is written as leaving()
+// because the clause above is what it means, and the next term added there
+// should land here without anybody having to notice.
 func selectFailedForPruning(views []ServerView, keep int) []string {
 	failed := make([]ServerView, 0, len(views))
 	for _, v := range views {
-		if v.Phase == phase.Failed {
+		if v.Phase == phase.Failed && !v.leaving() {
 			failed = append(failed, v)
 		}
 	}

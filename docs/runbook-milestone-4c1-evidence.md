@@ -22,6 +22,25 @@ and the notes it adds to §6 and §8 were rewritten against the code as it stand
 now; §§9 and 10's own measurements were made under the older rule and are
 recorded, not re-predicted.
 
+**§12 was added 2026-08-15 for milestone 4c-3 (node drain) and has NOT been
+driven.** Every earlier section here was also written before it was first
+run — that is how this procedure has always been produced — but §§0–11 were
+driven the same day or the same night they were written, as part of the
+milestone that added them, and corrected in place from what that run found.
+§12 is different: `.superpowers/sdd/2026-08-15-node-drain/task-9-brief.md`
+asks for the procedure to be committed with the run deliberately deferred,
+to be driven by the human partner and the acting agent together once the
+branch review that follows this document's own commit has happened — so this
+is the first section of this document to reach the branch, and possibly a
+reader, before it has ever been run at all. Its "Expect" lines are therefore
+predictions grounded in the code and in the mechanisms §§1–11 already
+measured — 4c-1's readiness contract and 4c-2's rollout, both reused here
+unchanged — not measurements. The old §12, "Clean up", is renumbered §13 to
+make room for it; nothing else in this document numbers a section by cross
+reference, so nothing else needed to move. Whoever drives §12 first should
+correct it in place exactly as every prior run corrected this document, and
+rewrite this paragraph once it has been.
+
 Design `docs/superpowers/specs/2026-08-14-proxy-readiness-contract-design.md`
 §10 lists eight acceptance criteria. Five of them — criteria 3, 4, 5, 6 and 7
 — are met by `go test`, `make agent-test`, `make image-test`,
@@ -1160,7 +1179,274 @@ disconnected. A rollout that cannot build its replacement does not take the
 original out of service. The tell is a third pod that never turns `1/1` and a
 `draining-since` column that stays `-`.
 
-## 12. Clean up
+## 12. Node drain: `kubectl cordon` and `kubectl drain` on an occupied node
+
+**NOT YET DRIVEN** — see the note at the top of this document. Everything
+below is written from the code (`internal/controller/nodes.go`,
+`docs/superpowers/specs/2026-08-15-node-drain-design.md`) and from the
+mechanisms §§1–11 already measured on a real cluster, not from a run of its
+own. `kubectl cordon` sets exactly the field `IsDeparting` checks first,
+`spec.unschedulable`, so this section needs no `-drain-taint` flag on the
+operator at all — that flag exists for a taint-only departure such as
+cluster-autoscaler's, and is not this section's concern. An operator wanting
+to see the taint path instead of the cordon path can start the operator with
+`-drain-taint example.com/draining` and run `kubectl taint node <name>
+example.com/draining=true:NoSchedule` in place of the cordon steps below;
+`IsDeparting` treats the two as equivalent and nothing else in this section
+changes.
+
+Two things this section has to solve rather than discover, both named by the
+design (§6) and neither present in §§0–11.
+
+1. **A multi-node cluster.** Every earlier section in this document runs
+   against a single-node `kind` cluster (§2: "one node is not a limitation
+   here, it is a requirement"), because a single node is what makes the one
+   NodePort mapping reach whichever pod a client lands on — pinned to it, the
+   way only §8 (and, by reuse, §9 and §10) actually pin, or not, the way §7
+   and §11 both leave it. `kubectl cordon` and `kubectl drain` are meaningless
+   against a cluster with nowhere else for a replacement to go: the replacement would have to
+   land back on the only node there is, which the cordon itself forbids, and
+   the group would simply stall the way §3.4 of the design says a group with
+   nowhere to move to should. This section therefore builds its own cluster,
+   separate from any built by §§0–11, with one control-plane node (which
+   this section never touches) and **two** workers.
+2. **The NodePort mapping.** A `kind` `extraPortMappings` host port binds to
+   one specific node's container, not to the cluster as a whole — unlike a
+   real cloud load balancer, which fans a NodePort out across every node
+   that can serve it. §2's single-node cluster never had to notice this,
+   because there was only ever one node to bind to. With two workers and a
+   `Service` running `externalTrafficPolicy: Local` (established in §2:
+   "the `Service` the operator builds carries `externalTrafficPolicy:
+   Local`"), a client reaching a worker with no matching pod on it gets no
+   answer at all — so the worker that is about to be cordoned and the
+   worker the replacement lands on need two *different* host ports, one
+   mapped to each, or there is no way to reach a proxy that has moved.
+   Mapping one port on only one worker, the way §2 does, would leave the
+   replacement proxy unreachable from outside the cluster the moment it
+   comes up on the other one.
+
+### 12.1 Prerequisites
+
+Everything §0 and the top of this document ask for — a licensed Minecraft
+Java Edition client at 26.2/776, a person to drive it for the whole of this
+section, and network reach to two NodePorts this time rather than one.
+
+### 12.2 Create the multi-node kind cluster, two ports across two workers
+
+```bash
+cat >/tmp/spawnery-4c3-kind.yaml <<'EOF'
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+    extraPortMappings:
+      - containerPort: 30567
+        hostPort: 30567
+  - role: worker
+    extraPortMappings:
+      - containerPort: 30567
+        hostPort: 30568
+EOF
+
+systemd-run --scope --user --property=Delegate=yes \
+  env KIND_EXPERIMENTAL_PROVIDER=podman \
+  nix develop -c kind create cluster --name spawnery-4c3 \
+  --config /tmp/spawnery-4c3-kind.yaml
+```
+
+Both host ports forward to **the same container port, 30567** — the
+`ProxyGroup`'s own `nodePort`, unchanged from §5 — on two different worker
+containers. Whichever worker currently holds a ready proxy answers on its
+own port; the other answers nothing until a pod lands there. Expect three
+nodes: `spawnery-4c3-control-plane`, `spawnery-4c3-worker`,
+`spawnery-4c3-worker2` — `kubectl get nodes -o wide` names them, and the
+name is what §12.5 cordons.
+
+### 12.3 Load images, apply CRDs, run the operator
+
+Identical to §§1, 3 and 4, with `--name spawnery-4c3` in place of
+`spawnery-4c1` everywhere a `kind` command names a cluster, and the relay
+container named `spawnery-4c3-relay` to avoid colliding with a still-running
+§0–11 cluster. Nothing about the operator invocation changes — no
+`-drain-taint` is needed, per this section's opening paragraph.
+
+### 12.4 Apply the network: two servers, two proxies
+
+Reuses §5's manifest with one change: `lobby`'s `scaling.minReplicas` raised
+from 1 to 2, so an occupied server pod can be cordoned off without emptying
+the whole group the way `docs/known-issues.md`'s "a node holding a whole
+group empties it at once" describes — that entry is about a group with
+nowhere else to be, and this section is not testing that case. `gateway`
+needs no edit; §5 already sets `replicas: 2`.
+
+```bash
+sleep 90
+nix develop -c kubectl get network,servergroup,proxygroup,servers,pods -n minecraft -o wide
+```
+
+Expect one `Ready` `lobby` `ServerGroup` with two `Ready` `Server`s, one
+`Ready` `gateway` `ProxyGroup` with `READY 2`, and four pods `1/1 Running` —
+two `lobby-*`, two `gateway-*`. **Read the `NODE` column.** The scheduler
+gives no guarantee of spreading two pods of a group across two workers on an
+otherwise-empty cluster, and it is worth confirming before going further:
+if both `gateway-*` pods (or both `lobby-*` pods) landed on the same worker,
+either `kubectl delete pod` one of them and let the group rebuild it, or
+proceed anyway and expect the whole-group-empties entry above to apply to
+whichever group that happened to.
+
+### 12.5 The proxy: join, cordon the worker holding it, watch the replacement
+
+Point the client at whichever of `127.0.0.1:30567` or `:30568` reaches a
+proxy — both should, since both workers hold one — and log in. Identify
+which pod and which worker accepted the join with §7's log command and
+`kubectl get pods -o wide`, the same pairing §6 and §7 use together
+elsewhere in this document. Call the worker `$DOOMED_NODE`.
+
+```bash
+nix develop -c kubectl cordon "$DOOMED_NODE"
+```
+
+**Expect the surge-then-mark ordering §11 established for a rolling update,
+not §9's plain scale-down.** §9 lowers `spec.replicas` with no pod stale, so
+`DecideRollout` marks the surplus pod directly — no third pod, ever. Here the
+cordoned pod is stale for the identical reason a pod-hash mismatch is: `Stale`
+carries the `nodeGoing[i]` disjunct either way (§3.4 of the design), and
+`DecideRollout` cannot tell the two reasons apart. So `surge` opens to 1 the
+moment the cordon lands, and — per §11's expectation 1 — a third `gateway-*`
+pod appears on the *other* worker first, before anything is marked. Only once
+that surge pod is `Ready` does the occupied pod get marked, per §11's
+expectation 2. From there the individual marked pod's own sequence is what §9
+already established, because marking is the one 4c-1 mechanism both exercises
+reach: the `draining-since` annotation appears (§9's expectation 1); its
+`Ready` condition flips `False` some 10–15 seconds later with neither log
+saying anything (§9's fact 2 and expectation 2 — that window is the readiness
+probe's own `InitialDelaySeconds: 10` plus up to `FailureThreshold: 3` ×
+`PeriodSeconds: 5` of failing probes, `internal/podspec/proxy.go`); its
+`EndpointSlice` entry goes `ready=false serving=false` while its address is
+still listed (§9's expectation 3, criterion 2); and the person at the client
+reports an entirely uninterrupted session (§9's expectation 4, criterion 1) —
+now running through a `Service` whose `externalTrafficPolicy` is `Local`, the
+path §8's pin exists to substitute for and §11 already reached without it.
+
+**Only the `NodeDraining` *condition* is bounded by the operator's
+`resyncInterval` (5 seconds); its event and the annotation are not.**
+`reportNodeDraining` computes the `ProxyGroup`'s `NodeDraining` condition
+straight from the node fact, with no dependency on the surge pod or the mark
+— and `ProxyGroupReconciler`'s own `Watches(&corev1.Node{}, ...)` fires a
+reconcile the moment the cache sees `$DOOMED_NODE`'s `spec.unschedulable`
+flip, rather than waiting for the periodic resync at all. Expect `kubectl get
+proxygroup gateway -n minecraft -o jsonpath='{.status.conditions}'` to show
+`NodeDraining: True` naming `$DOOMED_NODE` within a couple of seconds of the
+`kubectl cordon` above returning. **The per-proxy `NodeDraining` event is a
+different thing, on the same unclocked wait as the annotation, not the
+condition it shares a reason string with**: `reconcileReplicas`'s own comment
+says so directly — "No event accompanies [the condition]: the per-proxy event
+fired below, at the point a proxy is actually marked, is the one §3.7 asks
+for" — and that event is gated on `going && !wasMarked && nodeGoing[i]` inside
+the same per-pod loop that calls `markDraining`, so it fires at mark time,
+exactly when the annotation is written. Both wait on the surge pod reaching
+`Ready`, which depends on scheduling, image pull and the Velocity agent's own
+start-up — the same unclocked wait §11's own expectation 1 already asks the
+driver to watch for rather than time.
+
+Now, in a third shell, the acceptance test this whole section exists for:
+
+```bash
+nix develop -c kubectl drain "$DOOMED_NODE" --ignore-daemonsets --delete-emptydir-data
+```
+
+**Expect this command to block, not fail, while the player is still
+connected** — `kubectl drain`'s own eviction call against the occupied proxy
+pod meets the `ProxyGroup`'s own `PodDisruptionBudget`
+(`reconcileProxyPDB`, introduced this milestone), refuses with "Cannot
+evict pod as it would violate the pod's disruption budget", and `kubectl
+drain` retries on its own schedule rather than giving up. That refusal is
+the point: nothing about running `kubectl drain` bypasses the readiness
+contract, and the pod is not kicked by it. Once the player leaves (or
+`spec.drain.timeoutSeconds` elapses — §5's manifest sets `gateway`'s to 900,
+not the CRD's own 300-second default; raise it first if you want longer to
+look around, per §9's fact 6) the operator
+deletes the now-empty pod itself, the `PodDisruptionBudget` no longer
+selects anything on that node, and `kubectl drain`'s next retry succeeds.
+**Expect the command to exit 0** and print `node/<name> drained`, completing
+rather than hanging — the whole claim of this milestone, on the door 4c-1
+and 4c-2 did not watch.
+
+### 12.6 The server: an occupied pod is moved, not kicked
+
+Uncordon `$DOOMED_NODE` first (`kubectl uncordon`), so both workers are
+schedulable again before this exercise starts — leaving one cordoned would
+turn `lobby`'s own two-worker spread from §12.4 back into the single-node
+case §12.4's `minReplicas: 2` exists to avoid. Confirm `lobby` is back to two
+`Ready` servers before continuing.
+
+Join with the client (or a second client, if the first is still needed
+elsewhere) and confirm which `lobby-*` pod accepted it — Paper's own log
+carries `joined the game` once the configuration phase completes, the same
+line `docs/handover-milestone-4.md`'s "The manual session" records for
+`paul_wtf`:
+
+```bash
+nix develop -c kubectl logs -n minecraft \
+  -l spawnery.cloud/role=server,spawnery.cloud/group=lobby \
+  --prefix=true --tail=-1 --timestamps | grep 'joined the game'
+```
+
+Take the most recent line by timestamp, per §7's rule for a repeat join.
+Identify that pod's worker with `kubectl get pods -o wide` and cordon it:
+
+```bash
+nix develop -c kubectl cordon "$OCCUPIED_SERVER_NODE"
+```
+
+**Expect the operator's own watch to condemn that `Server` within one
+reconcile of the cordon landing** — `ServerView.Condemned` true for it,
+`DecideSize` naming it in `Condemn`, and the `Server` deleted through the
+same path any other removal takes: `DeletionRequested`, phase `Ready` →
+`Draining`, event reason `NodeDraining` in place of the ordinary
+`ServerRemoved`. From there this is milestone 3's criterion 9 and
+milestone 4b's soft drain, reached through a new door: `DrainPlayers` moves
+the player to `lobby`'s other server if it has room, or to `gateway`'s
+`fallbackGroups` entry otherwise, and the player should notice nothing more
+than a scene change — no disconnect, the same standard §9 and §11 hold the
+proxy side to. **The players are moved, not kicked** is the whole claim
+here; confirm it the way milestone 3's manual session did, by asking the
+person driving what they saw, not only by reading the events.
+
+```bash
+nix develop -c kubectl drain "$OCCUPIED_SERVER_NODE" --ignore-daemonsets --delete-emptydir-data
+```
+
+Expect the same shape as §12.5's: blocked against the occupied server pod's
+`PodDisruptionBudget` (`reconcilePDB`, unchanged since milestone 4b) for as
+long as the player is on it, and exiting 0 once the operator's own drain —
+already under way from the cordon, not started by this command — has
+emptied and removed the pod. A replacement `lobby` server comes up on the
+surviving worker once the group's own arithmetic asks for it, the same way
+`docs/handover-milestone-4.md`'s manual session recorded `lobby` rebuilding
+itself after milestone 3's criterion 9 run.
+
+### 12.7 Clean up this section's cluster
+
+§13 below cleans up the operator process and a `kind` cluster named
+`spawnery-4c1`; run the equivalent against this section's own names before
+or instead of it, as appropriate to what is still running:
+
+```bash
+pkill -x spawnery-operat || true
+ps -eo pid,comm | grep spawnery || true
+podman rm -f spawnery-4c3-relay
+systemd-run --scope --user --property=Delegate=yes \
+  env KIND_EXPERIMENTAL_PROVIDER=podman \
+  nix develop -c kind delete cluster --name spawnery-4c3
+rm -f /tmp/spawnery-4c3-kind.yaml
+```
+
+§13's own long explanation of why `pkill -x spawnery-operat` is the right
+incantation and `pkill -f` is not applies unchanged here; it is not repeated.
+
+## 13. Clean up
 
 Stop the operator first and confirm it is stopped, before the cluster goes:
 until `kind delete cluster` finishes there is still an API server for a
@@ -1265,7 +1551,10 @@ belongs in
 `docs/handover-milestone-4.md`, beside the record of milestone 3's manual
 session, unless milestone 4c-1 gets a handover document of its own, in which
 case there. This file is the procedure; that one is the record of what running
-it produced.
+it produced. §12, once it is driven, is the same arrangement: its own record
+belongs in `docs/handover-milestone-4.md`'s "4c-3 has landed" section, and
+this file's own top-of-document note marking §12 as not yet driven is what
+gets rewritten in place, the way every earlier addition's own such note was.
 
 Three things are worth stating explicitly in whatever you write:
 
