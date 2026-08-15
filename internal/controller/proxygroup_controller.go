@@ -192,11 +192,17 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonNetworkNotFound,
 			fmt.Sprintf("Network %q does not exist", group.Spec.NetworkRef.Name))
 		// This group still exists, so nothing above forgets it -- but this
-		// return is before r.pods() and reconcileReplicas, so no observe call
-		// for it is coming on this pass either. See the comment on the
-		// readinessDivergence type for why forgetting, not a TTL, is the
-		// right response to a gap in observation.
+		// return is before reconcileReplicas, and reportReadinessDivergence is
+		// called from nowhere else, so no observe call for it is coming on
+		// this pass either. See the comment on the readinessDivergence type
+		// for why forgetting, not a TTL, is the right response to a gap in
+		// observation. protectPlayersOnly below does call r.pods(), which
+		// observes the *expectations* -- a different structure, with its own
+		// TTL, that is not affected by this.
 		r.Divergence.forget(group.Namespace + "/" + group.Name)
+		if err := r.protectPlayersOnly(ctx, group); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: networkRetryInterval}, r.writeStatus(ctx, group)
 	case err != nil:
 		return ctrl.Result{}, err
@@ -205,6 +211,9 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonNetworkNotAccepted,
 			networkNotAcceptedMessage(network))
 		r.Divergence.forget(group.Namespace + "/" + group.Name)
+		if err := r.protectPlayersOnly(ctx, group); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: networkRetryInterval}, r.writeStatus(ctx, group)
 	}
 
@@ -218,7 +227,18 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			fmt.Sprintf("expose.type %s arrives with milestone 6; only NodePort is implemented",
 				group.Spec.Expose.Type))
 		r.Divergence.forget(group.Namespace + "/" + group.Name)
-		return ctrl.Result{}, r.writeStatus(ctx, group)
+		if err := r.protectPlayersOnly(ctx, group); err != nil {
+			return ctrl.Result{}, err
+		}
+		// This path used to requeue never: a refusal only changes when the
+		// spec does, and a spec change reconciles on its own. It requeues
+		// now because protectPlayersOnly above has to be run again: whether a
+		// proxy is occupied is a fact about the agent registry, which nothing
+		// watches, so without a timer the budget written here would be the
+		// last one this group ever gets. A user who switched an already
+		// running group from NodePort to LoadBalancer has real pods with real
+		// players on them for as long as this refusal stands.
+		return ctrl.Result{RequeueAfter: networkRetryInterval}, r.writeStatus(ctx, group)
 	}
 	setProxyGroupAccepted(group, true, spawneryv1alpha1.ReasonAccepted, "")
 	// Persisted now, before any of the side effects below can fail: without
@@ -268,23 +288,78 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	// Before setStatus, and — from Task 7 — before reconcileProxyPDB: the
-	// budget's selector has to find the label already on the pods it is
-	// sizing minAvailable for, on the same pass.
-	//
-	// occupied is syncOccupiedLabels's own tally of proxyOccupied, taken while
-	// it is already looking at each pod to decide the label -- not a second
-	// count reconcileProxyPDB derives by asking the registry again. See the
-	// comment on syncOccupiedLabels for why a second call is not safe here.
-	occupied, err := r.syncOccupiedLabels(ctx, pods)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if err := r.reconcileProxyPDB(ctx, group, occupied); err != nil {
+	// Before setStatus: the budget's selector has to find the label already on
+	// the pods it is sizing minAvailable for, on the same pass.
+	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
 		return ctrl.Result{}, err
 	}
 	r.setStatus(group, pods)
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.writeStatus(ctx, group)
+}
+
+// protectOccupiedProxies is the pair that keeps the eviction API off a proxy
+// with players on it: the podspec.LabelOccupied label, and the
+// PodDisruptionBudget whose selector matches it.
+//
+// The two are one step and not two, and the order inside it is load-bearing:
+// the budget's selector has to find the label already on the pods it is
+// sizing minAvailable for, on the same pass. occupied is syncOccupiedLabels's
+// own tally, taken while it is already looking at each pod to decide the
+// label -- not a second count reconcileProxyPDB derives by asking the
+// registry again. See the comment on proxyOccupied for why a second call is
+// not safe here.
+func (r *ProxyGroupReconciler) protectOccupiedProxies(
+	ctx context.Context,
+	group *spawneryv1alpha1.ProxyGroup,
+	pods []corev1.Pod,
+) error {
+	occupied, err := r.syncOccupiedLabels(ctx, pods)
+	if err != nil {
+		return err
+	}
+	return r.reconcileProxyPDB(ctx, group, occupied)
+}
+
+// protectPlayersOnly is what this group still owes its players on the paths
+// that give up before reconcileReplicas: a missing Network, one that has not
+// been accepted, and an expose.type this milestone refuses.
+//
+// The rule is the one ServerGroupReconciler.Reconcile states at its own
+// Network gate. A step that keeps the eviction API off an occupied pod, or
+// that moves players off a node that is going away, does not depend on the
+// Network — the players on these pods are already connected, and a group the
+// operator has refused is still carrying them. Creating pods, sizing the
+// group and publishing where to connect all genuinely need a usable Network
+// and stay above these returns; the occupied label, the budget sized from it
+// and the NodeDraining condition do not, and this is where they run instead.
+//
+// Without this, a ProxyGroup whose Network broke stopped maintaining its
+// budget entirely. If its proxy was empty at the last successful pass the
+// budget froze at minAvailable: 0 with no label on the pod, and a player
+// joining afterwards was on a pod the eviction API could take with nothing
+// standing in the way. That is a disconnect, not a hung drain.
+//
+// nodeDeparting is asked once per pod here, which is the only time it is
+// asked on these paths -- reconcileReplicas, which computes the same fact for
+// the rollout and hands it to reportNodeDraining, does not run on any path
+// that reaches this function.
+//
+// The residual cost is timing, and it is worth stating: these paths requeue
+// at networkRetryInterval rather than resyncInterval, so a proxy that becomes
+// occupied while its group's Network is broken can wait up to that long to be
+// counted, against five seconds on a healthy group. A bounded lag replaces an
+// unbounded one.
+func (r *ProxyGroupReconciler) protectPlayersOnly(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
+	pods, err := r.pods(ctx, group)
+	if err != nil {
+		return err
+	}
+	nodeGoing := make([]bool, len(pods))
+	for i := range pods {
+		nodeGoing[i] = nodeDeparting(ctx, r.Client, pods[i].Spec.NodeName, r.DrainTaintKeys)
+	}
+	r.reportNodeDraining(group, pods, nodeGoing)
+	return r.protectOccupiedProxies(ctx, group, pods)
 }
 
 // pods lists the group's live proxy pods, oldest first, so scale-down is
@@ -375,15 +450,19 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 		} else {
 			delete(patched.Labels, podspec.LabelOccupied)
 		}
-		// NotFound tolerated for the same race markDraining's patch documents:
-		// this loop runs over a pods() read taken after reconcileReplicas has
-		// already deleted this pass's newly-empty pods. A pod that just went
-		// from occupied to empty and was deleted for it still carries the
-		// occupied label in that read — occupied recomputes false, labelled
-		// is still true, and the mismatch above builds a patch for a pod the
-		// API server no longer has. Failing the whole Reconcile over a label
-		// write for a pod that is already gone would abort setStatus and
-		// writeStatus for every other pod in the group.
+		// NotFound tolerated for the same race markDraining's patch documents.
+		// On the ordinary path this loop runs over a pods() read taken after
+		// reconcileReplicas has already deleted this pass's newly-empty pods:
+		// a pod that just went from occupied to empty and was deleted for it
+		// still carries the occupied label in that read — occupied recomputes
+		// false, labelled is still true, and the mismatch above builds a patch
+		// for a pod the API server no longer has. protectPlayersOnly reaches
+		// this loop without reconcileReplicas having run, so it cannot race
+		// this pass's own delete; it can still race one from any other source,
+		// which is the same tolerance and the same reason. Failing the whole
+		// Reconcile over a label write for a pod that is already gone would
+		// abort the rest of this pass for this group — its budget, its status
+		// write, and every other pod's label still to come in this loop.
 		if err := r.Patch(ctx, patched, client.MergeFrom(pod)); err != nil && !apierrors.IsNotFound(err) {
 			return 0, err
 		}
@@ -907,9 +986,14 @@ func (r *ProxyGroupReconciler) reportReadinessDivergence(
 
 // reportNodeDraining tells the group's NodeDraining condition which nodes,
 // among this pass's live pods, are on their way out of service. nodeGoing is
-// reconcileReplicas's own per-pod nodeDeparting verdict from the loop that
-// built views -- not asked a second time here -- indexed the same way as
-// pods.
+// its caller's own per-pod nodeDeparting verdict -- never asked a second time
+// here -- indexed the same way as pods.
+//
+// Two callers, one per pass and never both: reconcileReplicas hands over the
+// verdict from the loop that built views, and protectPlayersOnly computes it
+// itself on the paths where reconcileReplicas does not run at all. Both keep
+// the fact to one evaluation per pass, which is what the shared parameter is
+// for.
 //
 // No event goes with this: the one §3.7 asks for is fired in reconcileReplicas
 // at the point a proxy is actually marked, which is a per-proxy occasion this

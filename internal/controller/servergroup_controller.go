@@ -191,10 +191,17 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// Carries the node names collectViews already resolved (ServerView.NodeName)
 	// for every view it found condemned, rather than asking nodeDeparting about
-	// any pod again here. No event accompanies this: the condemn loop in size()
-	// below already emits one NodeDraining event per server it condemns, and a
-	// second event tied to this condition's own transition would report the
-	// same occasion twice.
+	// any pod again here. No event accompanies this: condemn(), reached from
+	// size() below, already emits one NodeDraining event per server it
+	// condemns, and a second event tied to this condition's own transition
+	// would report the same occasion twice.
+	//
+	// This condition and that condemnation are computed from the same
+	// Condemned flags on the same views, and size() is now called whether or
+	// not the group's Network is usable, so the two cannot disagree. They did
+	// before: a group with a broken Network published this condition naming
+	// the node and condemned nobody, which left kubectl drain hanging on the
+	// strength of a status that said the operator was on it.
 	drainingNodes := make([]string, 0, len(views))
 	for _, v := range views {
 		if v.Condemned {
@@ -245,26 +252,52 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Now:                 r.Clock(),
 	})
 
-	// Sizing is the only step that needs a usable Network: a Server created
-	// without one could never get a pod, would run into its startup deadline and
-	// would be replaced over and over. That holds whether the Network is
-	// missing entirely or merely not accepted (lost the one-per-namespace
-	// contest, or has not been reconciled yet). Everything below this point —
-	// the PodDisruptionBudget that keeps the eviction API off the occupied
-	// pods, and the published status — has nothing to do with the Network, so
-	// a group whose Network was deleted or rejected must keep doing both.
-	// Freezing them would leave exactly the pods that still carry players
-	// unprotected, and a rejected group holding players is still holding
-	// players.
-	var decision SizeDecision
-	sized := false
-	if networkUsable && group.IsEphemeral() {
-		var err error
-		if decision, err = r.size(ctx, group, views, servers, backoff); err != nil {
-			return ctrl.Result{}, err
-		}
-		sized = true
+	// The Network gate, and the rule for deciding which side of it a step
+	// belongs on. The next person adding a step here needs the rule, not just
+	// the list.
+	//
+	// Sizing needs a usable Network: a Server created without one could never
+	// get a pod, would run into its startup deadline and would be replaced
+	// over and over. That holds whether the Network is missing entirely or
+	// merely not accepted (lost the one-per-namespace contest, or has not been
+	// reconciled yet). The deletes and retirements are the other half of the
+	// same arithmetic and wait with it.
+	//
+	// The rule for everything else: a step that keeps the eviction API off an
+	// occupied pod, or that moves players off a node that is going away, does
+	// not depend on the Network. Both are about players who are already
+	// connected, and a rejected group holding players is still holding
+	// players. Two steps answer to that rule, and both run whatever the
+	// Network is doing: the PodDisruptionBudget below, and the condemnation of
+	// the servers on a departing node — which is why size() is now called on
+	// both sides of this flag rather than only when it is set. The published
+	// status is below the line too, but for the plainer reason that it reports
+	// what those two did. Design §3.3 calls condemnation "unconditional. The
+	// node is leaving with or without our consent", and a group that published
+	// NodeDraining: True, condemned nothing and hung kubectl drain forever
+	// would be the hang §1 of that design opens by describing.
+	//
+	// The counter-argument is real, and is answered rather than left implicit:
+	// a group whose Network is broken cannot build replacements, so condemning
+	// means running below capacity. That is accepted. The group was already in
+	// that state; its players are evicted off that node regardless of what the
+	// group thinks; and moving them to a fallback group beats holding them on
+	// a node that is going away. It is the same direction already settled for
+	// the create-backoff case, which docs/known-issues.md documents under "a
+	// group in create-backoff condemns without replacing".
+	//
+	// IsEphemeral rides along with networkUsable here rather than gating the
+	// call, so a persistent group's servers are condemned too. That is what
+	// known-issues already describes — a departing node takes a server
+	// regardless of what kind of server it is — and it costs nothing while
+	// milestone 5 is unwritten and nothing in this operator creates a server
+	// for a persistent group.
+	mayResize := networkUsable && group.IsEphemeral()
+	decision, err := r.size(ctx, group, views, servers, backoff, mayResize)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
+	sized := mayResize
 
 	if group.IsEphemeral() {
 		limited := metav1.Condition{
@@ -459,22 +492,41 @@ func ofGeneration(views []ServerView, generation int64) []ServerView {
 }
 
 // size brings the group to the size DecideSize asks for and reports that
-// decision, so Reconcile can publish the part of it that belongs on the status.
+// decision, so Reconcile can publish the part of it that belongs on the
+// status. It also condemns the servers a departing node has claimed, and that
+// half runs whether or not the group may resize.
+//
+// mayResize is false when the group's Network is unusable, or when it is not
+// an ephemeral group. Both stop the group deciding a size; neither stops a
+// node leaving. See the rule at the call site for why those are different
+// questions. A nil spec.scaling is a third way to have no size to decide, and
+// it lands in the same place for the same reason.
+//
+// The returned decision is the zero value whenever the group did not resize,
+// so a caller publishing ScalingLimited from it says "nothing was decided"
+// rather than a verdict nothing computed.
 func (r *ServerGroupReconciler) size(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	views []ServerView,
 	servers map[string]*spawneryv1alpha1.Server,
 	backoff BackoffDecision,
+	mayResize bool,
 ) (SizeDecision, error) {
 	logger := log.FromContext(ctx)
-	if group.Spec.Scaling == nil {
-		return SizeDecision{}, nil
-	}
 	key := group.Namespace + "/" + group.Name
 
+	// Above the early return below, not inside the resizing half: the
+	// reservations are what keep condemned() from naming the same server twice
+	// across two passes, so a group that only ever condemns still has to
+	// observe them and still has to read them.
 	r.Expectations.observe(key, views)
 	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
+
+	if !mayResize || group.Spec.Scaling == nil {
+		return SizeDecision{}, r.condemn(ctx, group, servers, key,
+			condemned(ScalingInputs{Views: views, PendingDeletes: pendingDeletes}))
+	}
 
 	decision := DecideSize(ScalingInputs{
 		Views:         views,
@@ -492,15 +544,16 @@ func (r *ServerGroupReconciler) size(
 		PendingRetires: pendingRetires,
 	})
 
-	// The gate is on execution, not on the decision. DecideSize keeps computing
-	// what the group needs, so Limited and ColdStartBlocked go on telling the
-	// truth about the shortfall while the backoff separately says the group is
-	// waiting — two facts an operator needs to see apart. It also means
-	// expectations never reserves a create that did not happen.
+	// The backoff gate is on execution, not on the decision. DecideSize keeps
+	// computing what the group needs, so Limited and ColdStartBlocked go on
+	// telling the truth about the shortfall while the backoff separately says
+	// the group is waiting — two facts an operator needs to see apart. It also
+	// means expectations never reserves a create that did not happen.
 	//
-	// Only creation is gated. The deletes, condemnations and retirements below
-	// run either way: they touch players, and must not wait on an unrelated
-	// failure.
+	// Creation is the only thing the backoff gates. The deletes, condemnations
+	// and retirements below run whatever it decided: they touch players, and
+	// must not wait on an unrelated failure. The Network gate above is a
+	// different question with a different answer, settled at the call site.
 	if backoff.MayCreate {
 		for i := int32(0); i < decision.Create; i++ {
 			name, err := r.createServer(ctx, group)
@@ -523,13 +576,10 @@ func (r *ServerGroupReconciler) size(
 	}
 	// Ungated by the backoff, like the deletes and retirements around it and
 	// for the same reason: this touches players and must not wait on an
-	// unrelated failure. Reserved after the delete, matching the loop above.
-	for _, name := range decision.Condemn {
-		if err := r.deleteServer(ctx, group, servers, name,
-			"NodeDraining", "draining server %s off a node that is going away"); err != nil {
-			return decision, err
-		}
-		r.Expectations.expectDeleted(key, name)
+	// unrelated failure. The same call runs on the early-return path above,
+	// which is how it also stays ungated by the Network.
+	if err := r.condemn(ctx, group, servers, key, decision.Condemn); err != nil {
+		return decision, err
 	}
 	for _, name := range decision.Retire {
 		if err := r.retireServer(ctx, group, servers, name); err != nil {
@@ -538,6 +588,30 @@ func (r *ServerGroupReconciler) size(
 		r.Expectations.expectRetired(key, name)
 	}
 	return decision, nil
+}
+
+// condemn removes the named servers and reserves each removal, one delete per
+// server on a node that is going away.
+//
+// It is a method of its own rather than a loop inside size() because it has
+// two callers on two sides of the Network gate, and they must not be allowed
+// to drift into two loops that emit different events for the same occasion.
+// Reserved after the delete, matching size()'s other removal loops.
+func (r *ServerGroupReconciler) condemn(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	servers map[string]*spawneryv1alpha1.Server,
+	key string,
+	names []string,
+) error {
+	for _, name := range names {
+		if err := r.deleteServer(ctx, group, servers, name,
+			"NodeDraining", "draining server %s off a node that is going away"); err != nil {
+			return err
+		}
+		r.Expectations.expectDeleted(key, name)
+	}
+	return nil
 }
 
 // derivePhase maps the totals and conditions onto the group phase.

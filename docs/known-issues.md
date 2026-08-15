@@ -1463,12 +1463,12 @@ group. `kubectl delete pdb <name> -n <namespace>` removes it; the group's
 protection continues uninterrupted through the new-named object, which
 `reconcilePDB` has been maintaining all along.
 
-**A group in create-backoff condemns without replacing.** `size()`
-(`internal/controller/servergroup_controller.go`) gates only the create loop
-behind `backoff.MayCreate` — the condemn loop that runs `decision.Condemn`
-through `deleteServer` with event reason `NodeDraining` is not gated, and
-runs on every pass regardless of the group's backoff state, the same as the
-ordinary delete and retire loops beside it. So a group whose creates are
+**A group in create-backoff, or one with a broken Network, condemns without
+replacing.** `size()` (`internal/controller/servergroup_controller.go`) gates
+only the create loop behind `backoff.MayCreate` — `condemn()`, which runs
+`decision.Condemn` through `deleteServer` with event reason `NodeDraining`,
+is not gated, and runs on every pass regardless of the group's backoff state,
+the same as the ordinary delete and retire loops beside it. So a group whose creates are
 failing for a reason that has nothing to do with node drain — a broken image,
 a quota limit, anything `CountFailures` is counting — still condemns every
 server on a departing node while it is in backoff, and does not replace them
@@ -1481,6 +1481,42 @@ The group runs below capacity for the length of whatever backoff window it
 was already in; nothing about node drain makes that window longer or
 shorter, and once it lifts the group rebuilds to its normal size the way it
 would after any other backoff.
+
+The same holds, for the same reason and by the same ruling, when a group's
+`Network` has been deleted or has lost the one-per-namespace contest.
+`Reconcile` calls `size()` on both sides of that gate: the sizing arithmetic
+and the creates, deletes and retirements it produces wait for a usable
+`Network`, and the condemnation does not. A group in that state condemns the
+servers on a departing node and cannot build replacements at all until the
+`Network` is fixed — a longer wait than a backoff window, and an unbounded
+one. It is still the better half of the trade: those players are evicted off
+that node whatever the group does, and the group was already unable to build
+anything before the node started leaving. What the earlier shape did instead
+was worse in a way that is easy to miss — the group published
+`NodeDraining: True` naming the node, condemned nothing, and left `kubectl
+drain` hanging on an occupied pod indefinitely, which is the exact failure
+this milestone exists to end.
+
+**A `ProxyGroup` whose `Network` is broken keeps its PodDisruptionBudget, but
+refreshes it six times more slowly.** `Reconcile`
+(`internal/controller/proxygroup_controller.go`) gives up before
+`reconcileReplicas` on three paths — a missing `Network`, one that is not
+`Accepted`, and an `expose.type` this milestone refuses — and each of them
+now calls `protectPlayersOnly`, which re-derives the `spawnery.cloud/occupied`
+labels, re-sizes the budget from them, and republishes the `NodeDraining`
+condition. What it cannot do is run at the ordinary five-second cadence:
+those paths requeue at `networkRetryInterval` (30 s), so a proxy that picks
+up its first player while its group is in that state waits up to 30 seconds
+to be counted into `minAvailable`, against 5 on a healthy group. Nothing
+watches the agent registry — occupancy is in-process state, not an API
+object — so no event corresponds to a player joining; the group's other
+watches fire on `Pod`, `Node`, `Service` and `ConfigMap` changes, and a
+reconcile any of those happens to trigger brings the budget forward as a side
+effect rather than because anybody asked it to. The
+window is bounded and the previous behaviour was not: before this, such a
+group stopped maintaining its budget entirely, and a proxy that was empty at
+the last good pass stayed at `minAvailable: 0` with no label on it however
+many players joined afterwards.
 
 **A node holding a whole group empties it at once**, so its players go to the
 fallback groups rather than to the group's own replacements, which are not
