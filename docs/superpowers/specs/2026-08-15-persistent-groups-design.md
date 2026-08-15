@@ -177,41 +177,69 @@ anything could reach it, and 5a is what makes it reachable.
 
 ### 3.5 The failure path: the group stalls, and says so
 
-**This section was wrong when it was written, on both of its claims, and the
-correction is the more interesting half of it.** It said: a claim that never
-binds makes the pod stay `Pending`, the startup deadline expires, the server
-goes `Failed`, *"the group reports `Degraded`, and 4d's per-group backoff stops
-it throwing the same ordinal at the same broken volume in a loop"*. Task 6's
-review established that neither half describes a persistent group.
+**This is the third version of this section. The first was wrong, the second
+was wrong about how the first was wrong, and the third is the one whose every
+link was verified in the code rather than argued from.** That history is worth
+keeping, because the failure it describes is the one this repository keeps
+producing: a sentence that reads plausibly and describes a mechanism the code
+does not have.
 
-Neither `ConditionBackingOff` nor `ConditionDegraded` was published outside
-`if group.IsEphemeral()`, so `derivePhase` could never return `Degraded` for
-one; the phase merely dropped to `Pending`, which is indistinguishable from
-"still starting". And there was no loop for the backoff to stop:
-`DecidePersistentSize` holds an ordinal while any server carries it, whatever
-phase that server is in, and `pruneFailed` runs only for ephemeral groups — so
-the failed ordinal keeps its number, no replacement is ever ordered, and
-`status.consecutiveFailures` climbs toward `GaveUp` with nothing to gate.
+The first version said: a claim that never binds makes the pod stay `Pending`,
+the startup deadline expires, the server goes `Failed`, *"the group reports
+`Degraded`, and 4d's per-group backoff stops it throwing the same ordinal at
+the same broken volume in a loop."* The second version declared both halves
+false. **Only the first half was.**
 
-**The stall is right. The silence was the defect.** A persistent world lives on
-one claim and nothing else can serve it, so ordering a replacement would only
-run a second server at the same broken volume. Holding the ordinal until a
-human repairs the storage is the correct behaviour, and it is what a
-`ReadWriteOnce` volume would force in any case. What this milestone owes an
-operator is that the group *says* it is stalled rather than sitting at
-`Pending` looking like a slow start.
+**What is actually true**, each link established in code by the Task 6
+re-review:
+
+- **The reporting half was false.** Neither `ConditionBackingOff` nor
+  `ConditionDegraded` was published outside `if group.IsEphemeral()`, so
+  `derivePhase` could never return `Degraded` for a persistent group; the phase
+  merely dropped to `Pending`, indistinguishable from a slow start.
+- **The backoff half was true.** `size()` runs the `CreateOrdinals` loop under
+  `backoff.MayCreate`, and `GaveUp` ends the attempts. The backoff does gate a
+  persistent group's rebuilds, exactly as the first version claimed.
+- **There is a retry loop, and it is not the group's.** A `Failed` server is
+  moved to `Terminating` by `phase.Decide` once `FailedRetentionElapsed`; the
+  **Server** controller then deletes the object; the ordinal is free; the group
+  creates it again next pass, and the deterministic name re-finds its claim
+  through `AlreadyExists`. So the period of the loop is
+  `spec.failedRetentionSeconds` — 3600 seconds at the CRD default — not the
+  backoff window, which is at most 160. At that default the backoff's *waiting*
+  half never delays an attempt; what it contributes is the **give-up**, after
+  six counted failures.
+- **After the give-up the group waits indefinitely**, with no `Server` object
+  for that ordinal at all. The claim and the world are untouched: nothing in
+  this operator deletes or updates a claim, and the ClusterRole grants neither
+  verb. A spec change resets the counter and brings the ordinal back.
+
+**The stall is right; the silence was the defect.** A persistent world lives on
+one claim and nothing else can serve it, so a rebuild meets the *same* broken
+volume — sequentially, never concurrently, since the corpse's pod goes first.
+`ReadWriteOnce` forces that serialization but not the waiting; the waiting is
+the give-up's doing, and it is correct: after six attempts at an hour apart,
+the thing that is broken is the storage, and only a human fixes that.
 
 So 5a lifts `BackingOff` and `Degraded` out of the ephemeral-only block; both
 describe failures either kind of group can have. `ScalingLimited` stays
-ephemeral-only, because it is about the slot ceiling and a fixed replica count
-has none.
+ephemeral-only — it reads fields only `DecideSize` fills, and a fixed replica
+count has no ceiling to be limited by. `pruneFailed` stays too: it caps
+retained corpses because an ephemeral group rebuilds every five seconds, while
+for a persistent group the corpse *is* what holds the ordinal, and pruning it
+would free ordinals early and accelerate the very thrash this section wants
+stalled.
 
 Master design §7 asks for "a condition instead of waiting silently" here. After
-that change the condition exists and this path reaches it — which is what this
-section originally claimed without it being true. That the group then waits
-indefinitely rather than retrying is deliberate and belongs in
-`docs/known-issues.md`, because an operator meeting a stalled ordinal needs to
-know the operator is waiting for them and not the other way round.
+the lift that condition exists and this path reaches it. **One honest limit
+remains, and it goes in `docs/known-issues.md`:** at the default retention the
+group is visibly backing off for only ten to a hundred and sixty seconds of
+each roughly hourly cycle. For the rest of it the backoff window is shut and
+the group publishes `BackingOff: False` — "no server has failed to start
+recently" — beside a `Failed` corpse. `Degraded` therefore first appears around
+six hours after the first failure. The condition is right and the wait is
+deliberate; the delay before either is visible is not something this milestone
+fixes.
 
 ## 4. Out of scope, deliberately
 
