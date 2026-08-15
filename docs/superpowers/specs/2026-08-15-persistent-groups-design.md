@@ -270,8 +270,11 @@ streak changes what `BackoffInputs` means for a group of either kind and
 deserves a design of its own rather than being bolted onto the end of a
 milestone whose scope is "persistent groups exist"; and the damage is a late or
 absent condition, not lost data or a disconnected player. What an operator has
-in the meantime is `status.consecutiveFailures` and `status.lastFailureAt`,
-which are written unconditionally and from the first counted failure. Note that
+in the meantime is `status.lastFailureAt`, which survives the reset and keeps
+advancing — `status.consecutiveFailures` does **not**, since the reset is
+precisely what zeroes it, so in the multi-ordinal case that field reads as
+though nothing were wrong. A `lastFailureAt` far in the past beside a low
+`consecutiveFailures` is the signature of this issue. Note that
 the one test exercising the give-up,
 `TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp`, runs a single ordinal —
 the one configuration in which this cannot show.

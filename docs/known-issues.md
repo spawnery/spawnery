@@ -1839,9 +1839,9 @@ unconditional in `Reconcile`, not behind `if group.IsEphemeral()` the way the
 two conditions used to be before this milestone's own review lifted them out.
 `kubectl get servergroup <name> -o jsonpath='{.status.consecutiveFailures}
 {.status.lastFailureAt}'` says something true from the first failure onward,
-hours before either condition would — at `replicas: 1`. At two or more, the
-same reset that delays `Degraded` clears those two fields as well, and the next
-entry says what to read instead.
+hours before either condition would — at `replicas: 1`. At two or more the two
+fields part company, and the next entry says which of them still tells the
+truth.
 
 **A healthy sibling resets a broken ordinal's failure streak, so with two or
 more ordinals `Degraded` may never arrive.** `CountFailures`
@@ -1869,9 +1869,19 @@ whose scope is "persistent groups exist", and what it costs is a late or absent
 condition rather than lost data or a disconnected player. 5b takes it, as
 either a per-ordinal streak or a reset restricted to the ordinal that failed.
 
-Until then `status.consecutiveFailures` and `status.lastFailureAt` do not help
-for a multi-ordinal group either — the same rule resets them. What does not lie
-is the `Server` objects:
+Until then the two status fields answer differently, and the difference is
+worth knowing before you read either. `status.consecutiveFailures` **is** what
+the sibling resets: `CountFailures` sets the count to zero when any view's
+`ReadySince` is newer than the last counted failure, so for a multi-ordinal
+group it can read 0 or 1 while an ordinal has been stalled for a day.
+`status.lastFailureAt` survives the reset and keeps advancing —
+`CountFailures` returns its watermark unchanged on that path, and the write is
+guarded against zeroing it, deliberately: the comment beside it says clearing
+it on a reset "would be the opposite of durable". So a `lastFailureAt` far in
+the past beside a low `consecutiveFailures` is itself the signature of this
+issue rather than a sign that nothing is wrong.
+
+What does not lie at all is the `Server` objects:
 
 ```bash
 kubectl get server -n <namespace> -l spawnery.cloud/group=<group> \
