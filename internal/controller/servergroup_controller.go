@@ -271,8 +271,9 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// connected, and a rejected group holding players is still holding
 	// players. Two steps answer to that rule, and both run whatever the
 	// Network is doing: the PodDisruptionBudget below, and the condemnation of
-	// the servers on a departing node — which is why size() is now called on
-	// both sides of this flag rather than only when it is set. The published
+	// the servers on a departing node — which is why size() now runs on every
+	// pass regardless of this flag, branching internally on the mayResize it
+	// is given rather than being skipped from the call site. The published
 	// status is below the line too, but for the plainer reason that it reports
 	// what those two did. Design §3.3 calls condemnation "unconditional. The
 	// node is leaving with or without our consent", and a group that published

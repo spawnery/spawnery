@@ -129,8 +129,16 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 // reconcilers that read Options.DrainTaintKeys.
 //
 // They are functions rather than composite literals inline in SetupAll for
-// one reason: the wiring is otherwise unassertable. The other Options fields
-// reach reconcilers that tests already observe doing something with them, but
+// one reason: the wiring is otherwise unassertable. Most of the other Options
+// fields reach reconcilers that tests already observe doing something with
+// them — Agents, Clock, StartupDeadline, Registrar, Bootstrapper,
+// AgentEndpoint and Proxies all have at least one test elsewhere in this
+// package whose outcome would change if the field were wired wrong or not at
+// all. Two do not: PlayerStatusInterval is only ever set to a fixed value in
+// fixtures, and no test exercises mirrorPlayerCount's throttle at a value
+// that would tell a wrong one apart; OrphanInterval is never set by a test at
+// all, and every orphan-sweep test calls the sweep directly rather than
+// through Start's ticker, so nothing there has ever depended on it either.
 // DrainTaintKeys is set nowhere outside SetupAll and the operator binary,
 // no fixture reconciler sets it, and deleting either assignment left the
 // whole suite green — so acceptance criterion 4, that a node carrying a

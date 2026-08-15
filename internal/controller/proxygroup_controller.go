@@ -89,9 +89,14 @@ func NewProxyName(group string) string { return NewServerName(group) }
 // contract exists for: reconcileReplicas removes a surplus pod once it is
 // empty, or once its deadline has passed, and not before.
 //
-// It emits Kubernetes events on two occasions, and the bar both clear is the
-// same one: something happened that no other signal on the object reports.
+// It emits Kubernetes events on three occasions, and the bar all three clear
+// is the same one: something happened that no other signal on the object
+// reports.
 //
+//   - A proxy marked for going off a departing node (NodeDraining, Normal,
+//     from the assertion loop in reconcileReplicas). Fired once, on the pass
+//     that actually marks it, and only when the node is the reason — a
+//     hash-mismatch-only surplus reduction says nothing here.
 //   - A drain that ran out of time (ProxyDrainTimeout, Warning, from the
 //     deletion loop in reconcileReplicas). It is the one thing in this
 //     milestone that disconnects a player, it is configured rather than
