@@ -18,6 +18,7 @@ package controller
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -120,6 +121,56 @@ func (f *fixture) groupPDB(t *testing.T) *policyv1.PodDisruptionBudget {
 		t.Fatalf("get PDB: %v", err)
 	}
 	return pdb
+}
+
+// assertBudgetSelectsExactlyWhatItCounts is the pairing neither group kind
+// asserted before: that the pods a PodDisruptionBudget's selector actually
+// matches are the pods its minAvailable was counted from.
+//
+// Both halves were already covered separately -- minAvailable against a
+// number the test computed, and the occupied label against the pods carrying
+// it -- and neither catches a selector that matches the wrong population.
+// That is exactly the shape of the milestone's own Critical: the ServerGroup
+// budget selected on {managed-by, group, occupied} with no role term, so in a
+// namespace holding a same-named ProxyGroup it matched occupied proxies while
+// counting only occupied servers, and each occupied proxy it picked up bought
+// the eviction API another disruption to spend on a server pod full of players.
+//
+// It reads the selector off the object rather than rebuilding it, so it is a
+// statement about what Kubernetes will match and not about what the test
+// thinks the controller wrote.
+func (f *fixture) assertBudgetSelectsExactlyWhatItCounts(t *testing.T, name string) {
+	t.Helper()
+	pdb := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, pdb); err != nil {
+		t.Fatalf("get PDB %s: %v", name, err)
+	}
+	if pdb.Spec.MinAvailable == nil {
+		t.Fatalf("PDB %s has no minAvailable; there is nothing to compare a selector against", name)
+	}
+	selector, err := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+	if err != nil {
+		t.Fatalf("PDB %s has an unusable selector %+v: %v", name, pdb.Spec.Selector, err)
+	}
+
+	pods := &corev1.PodList{}
+	if err := f.c.List(f.ctx, pods, ctrlclientInNamespace(f.ns),
+		client.MatchingLabelsSelector{Selector: selector}); err != nil {
+		t.Fatalf("list the pods PDB %s selects: %v", name, err)
+	}
+	matched := make([]string, 0, len(pods.Items))
+	for i := range pods.Items {
+		matched = append(matched, pods.Items[i].Name)
+	}
+	sort.Strings(matched)
+
+	if want := pdb.Spec.MinAvailable.IntValue(); len(matched) != want {
+		t.Errorf("PDB %s selects %d pod(s) %v but its minAvailable is %d.\n"+
+			"selector: %v\n"+
+			"More selected than counted hands the eviction API a disruption to spend on an occupied pod; "+
+			"fewer pins minAvailable above a number the group can reach and wedges kubectl drain on nobody.",
+			name, len(matched), matched, want, selector)
+	}
 }
 
 // publishPDBStatus computes and writes the PodDisruptionBudget status that
@@ -608,6 +659,14 @@ func TestGroupMaintainsAPodDisruptionBudget(t *testing.T) {
 	if pdb.Spec.Selector.MatchLabels[podspec.LabelGroup] != "lobby" {
 		t.Errorf("selector = %v, want it scoped to the group", pdb.Spec.Selector.MatchLabels)
 	}
+	if pdb.Spec.Selector.MatchLabels[podspec.LabelRole] != podspec.RoleServer {
+		t.Errorf("selector = %v, want it scoped to server pods: without the role term it also "+
+			"matches the occupied proxies of a same-named ProxyGroup, which its minAvailable "+
+			"never counted", pdb.Spec.Selector.MatchLabels)
+	}
+	// The number and the selector are separate questions, and a budget is only
+	// protection when they answer the same one. See the helper.
+	f.assertBudgetSelectsExactlyWhatItCounts(t, key.Name)
 }
 
 // TestPodDisruptionBudgetTracksThePlayerCount pins that the budget follows
@@ -3070,9 +3129,94 @@ func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 	if !f.server(servers[1].Name).DeletionTimestamp.IsZero() {
 		t.Error("the server on the healthy node was deleted; only the departing node's servers may go")
 	}
-	// And the operator is told why.
+	// And the operator is told why. scalingEvents drains the recorder, so the
+	// resync assertion below starts from an empty channel.
 	if n := scalingEvents(rec, "NodeDraining"); n != 1 {
 		t.Errorf("NodeDraining events = %d, want exactly 1", n)
+	}
+
+	// A resync that changes nothing must not announce the same drain again:
+	// the event is the moment of decision, not a status repeated every five
+	// seconds for as long as the server takes to drain. The proxy side learned
+	// this mid-milestone (TestANodeDrainMarkFiresANodeDrainingEvent's third
+	// pass); this is the same assertion for deleteServer's own guard.
+	//
+	// The clock jumps past expectationTTL rather than one resync, and that is
+	// what makes this test the guard's rather than the reservation's. The
+	// delete reserved above keeps condemned() from naming this server again
+	// for as long as it stands, so a pass taken before it expires would emit
+	// nothing whatever deleteServer did. Past the TTL the server is nominated
+	// a second time, deleteServer is actually reached, and its
+	// DeletionTimestamp check is the only thing between it and a second
+	// event. Verified by removing that check: this then reports 1.
+	f.clock.Advance(expectationTTL + time.Second)
+	f.reconcileGroup(t, r)
+	if n := scalingEvents(rec, "NodeDraining"); n != 0 {
+		t.Errorf("NodeDraining events on an unchanged resync = %d, want 0: the drain is announced "+
+			"once, not once per pass for its whole duration", n)
+	}
+}
+
+// TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying pins the ruling that
+// moved condemnation below the Network gate. Design §3.3 calls condemnation
+// "unconditional. The node is leaving with or without our consent", and size()
+// used to be called only when the Network was usable -- so a group whose
+// Network had been deleted, or which had lost the one-per-namespace contest,
+// published NodeDraining: True naming the node, condemned nothing, and left
+// kubectl drain hanging on an occupied pod indefinitely. That is the failure
+// §1 of the design opens by describing, reached through the operator that
+// exists to prevent it.
+//
+// The server here is occupied, so the assertion is not merely about a
+// bookkeeping deletion: this is the pod the eviction API would otherwise be
+// left to take.
+func TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("servers = %d, want 1", len(servers))
+	}
+	f.markReadyWithPlayers(t, servers[0].Name, 3)
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	pod, ok := f.pod(f.server(servers[0].Name).Status.PodName)
+	if !ok {
+		t.Fatal("pod not found")
+	}
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+
+	// The Network goes after the group is already running, which is the state
+	// an operator actually reaches: a deleted Network, or one that lost the
+	// contest, leaves the groups that referenced it exactly here.
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete network: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	// The pass really took the broken-Network route. Without this the
+	// assertions below would hold just as well on a pass that found its
+	// Network and sized normally, and would say nothing about the gate.
+	group := f.reloadGroup(t)
+	accepted := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonNetworkNotFound {
+		t.Fatalf("Accepted = %v, want False/%s: this pass did not take the missing-Network route, "+
+			"so nothing below is a statement about the gate",
+			accepted, spawneryv1alpha1.ReasonNetworkNotFound)
+	}
+
+	if f.server(servers[0].Name).DeletionTimestamp.IsZero() {
+		t.Error("the server on the cordoned node was not condemned because its group's Network is " +
+			"broken; its players stay on a node that is leaving, and kubectl drain hangs on them")
+	}
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionNodeDraining)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Errorf("NodeDraining = %v, want True: the condition and the condemnation are computed from "+
+			"the same views and must not be able to disagree", cond)
 	}
 }
 

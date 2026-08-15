@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,75 @@ func TestSetupAllRegistersEveryController(t *testing.T) {
 	// rejects duplicate names. That proves SetupAll really registered them.
 	if err := SetupAll(mgr, opts); err == nil {
 		t.Fatal("SetupAll succeeded twice, so it registered nothing the first time")
+	}
+}
+
+// TestSetupAllThreadsTheDrainTaintKeys covers the Options field nothing else
+// did: Options.DrainTaintKeys is what makes acceptance criterion 4
+// true — a node carrying a configured taint key is treated like a cordoned
+// one — and it was set nowhere outside SetupAll and cmd/spawnery-operator. No
+// fixture reconciler sets it, so IsDeparting's taint branch was exercised
+// only by nodes_test.go's table passing keys straight in, and deleting either
+// assignment in SetupAll left the whole suite green: a `-drain-taint` an
+// operator configured would have reached nothing, silently, which is the
+// failure mode known-issues already warns is indistinguishable from a quiet
+// node.
+//
+// It asserts through the two constructors SetupAll builds the reconcilers
+// with rather than through SetupAll itself, because a registered controller
+// is not reachable from outside the manager. That is the whole reason those
+// constructors exist; see their doc comment.
+func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: start}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:         testenv.Scheme(t),
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		LeaderElection: false,
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	keys := []string{"ToBeDeletedByClusterAutoscaler", "example.com/going-away"}
+	opts := Options{
+		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Clock:                clock.Now,
+		StartupDeadline:      5 * time.Minute,
+		PlayerStatusInterval: 30 * time.Second,
+		OrphanInterval:       time.Minute,
+		Registrar:            NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		AgentEndpoint:  "spawnery-operator.spawnery-system.svc:9443",
+		Proxies:        &recordingFleet{},
+		DrainTaintKeys: keys,
+	}
+
+	// Both reconcilers, because both read node state and either one left
+	// unwired is half a drain: the ServerGroup would condemn nothing on a
+	// tainted node while the ProxyGroup replaced its proxies, or the reverse.
+	if got := newServerGroupReconciler(mgr, opts).DrainTaintKeys; !slices.Equal(got, keys) {
+		t.Errorf("ServerGroupReconciler.DrainTaintKeys = %v, want %v: a configured -drain-taint "+
+			"would never reach IsDeparting, and a tainted node would condemn no server", got, keys)
+	}
+	if got := newProxyGroupReconciler(mgr, opts).DrainTaintKeys; !slices.Equal(got, keys) {
+		t.Errorf("ProxyGroupReconciler.DrainTaintKeys = %v, want %v: a configured -drain-taint "+
+			"would never reach IsDeparting, and a tainted node would replace no proxy", got, keys)
+	}
+
+	// The empty default has to travel too, and nil is the value that means
+	// "only cordoned nodes count" — a constructor that substituted something
+	// of its own would make the flag's documented default a lie.
+	opts.DrainTaintKeys = nil
+	if got := newServerGroupReconciler(mgr, opts).DrainTaintKeys; got != nil {
+		t.Errorf("ServerGroupReconciler.DrainTaintKeys = %v with none configured, want nil", got)
+	}
+	if got := newProxyGroupReconciler(mgr, opts).DrainTaintKeys; got != nil {
+		t.Errorf("ProxyGroupReconciler.DrainTaintKeys = %v with none configured, want nil", got)
 	}
 }
 

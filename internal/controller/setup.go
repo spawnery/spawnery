@@ -90,15 +90,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		return fmt.Errorf("setup network controller: %w", err)
 	}
 
-	if err := (&ServerGroupReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		Recorder:       mgr.GetEventRecorderFor("servergroup"),
-		Agents:         opts.Agents,
-		Clock:          opts.Clock,
-		Expectations:   newExpectations(opts.Clock),
-		DrainTaintKeys: opts.DrainTaintKeys,
-	}).SetupWithManager(mgr); err != nil {
+	if err := newServerGroupReconciler(mgr, opts).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server group controller: %w", err)
 	}
 
@@ -117,19 +109,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		return fmt.Errorf("setup server controller: %w", err)
 	}
 
-	if err := (&ProxyGroupReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		Recorder:       mgr.GetEventRecorderFor("proxygroup"),
-		Agents:         opts.Agents,
-		Bootstrap:      opts.Bootstrapper,
-		AgentEndpoint:  opts.AgentEndpoint,
-		Proxies:        opts.Proxies,
-		Clock:          opts.Clock,
-		Expectations:   newExpectations(opts.Clock),
-		Divergence:     newReadinessDivergence(opts.Clock),
-		DrainTaintKeys: opts.DrainTaintKeys,
-	}).SetupWithManager(mgr); err != nil {
+	if err := newProxyGroupReconciler(mgr, opts).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup proxy group controller: %w", err)
 	}
 
@@ -143,4 +123,43 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	}
 
 	return nil
+}
+
+// newServerGroupReconciler and newProxyGroupReconciler build the two
+// reconcilers that read Options.DrainTaintKeys.
+//
+// They are functions rather than composite literals inline in SetupAll for
+// one reason: the wiring is otherwise unassertable. The other Options fields
+// reach reconcilers that tests already observe doing something with them, but
+// DrainTaintKeys is set nowhere outside SetupAll and the operator binary,
+// no fixture reconciler sets it, and deleting either assignment left the
+// whole suite green — so acceptance criterion 4, that a node carrying a
+// configured taint key is treated like a cordoned one, had no test that could
+// fail. SetupAll has no seam a test can reach through, and these do.
+func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconciler {
+	return &ServerGroupReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("servergroup"),
+		Agents:         opts.Agents,
+		Clock:          opts.Clock,
+		Expectations:   newExpectations(opts.Clock),
+		DrainTaintKeys: opts.DrainTaintKeys,
+	}
+}
+
+func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconciler {
+	return &ProxyGroupReconciler{
+		Client:         mgr.GetClient(),
+		Scheme:         mgr.GetScheme(),
+		Recorder:       mgr.GetEventRecorderFor("proxygroup"),
+		Agents:         opts.Agents,
+		Bootstrap:      opts.Bootstrapper,
+		AgentEndpoint:  opts.AgentEndpoint,
+		Proxies:        opts.Proxies,
+		Clock:          opts.Clock,
+		Expectations:   newExpectations(opts.Clock),
+		Divergence:     newReadinessDivergence(opts.Clock),
+		DrainTaintKeys: opts.DrainTaintKeys,
+	}
 }
