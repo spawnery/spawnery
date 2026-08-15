@@ -3020,3 +3020,98 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 			"the backoff must bound the loop", got, passes, bound)
 	}
 }
+
+// TestACordonedNodeCondemnsTheServersOnIt is the server half of the milestone:
+// a node on its way out empties itself of servers, and the group rebuilds them
+// somewhere else without anybody being kicked.
+func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	rec := r.Recorder.(*record.FakeRecorder)
+
+	// Two servers, both Ready, one occupied so the test also proves that
+	// having players does not exempt a server from a node that is leaving.
+	f.setMinReplicas(t, 2)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 2 {
+		t.Fatalf("servers = %d, want 2", len(servers))
+	}
+	f.markReadyWithPlayers(t, servers[0].Name, 3)
+	f.markReady(t, servers[1].Name)
+
+	// Place them on two nodes, then cordon the first.
+	going := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.ensureNode(t, "node-staying-"+f.ns, false)
+	for i, srv := range f.listServers(t) {
+		reloaded := f.server(srv.Name)
+		pod, ok := f.pod(reloaded.Status.PodName)
+		if !ok {
+			t.Fatalf("pod of %s not found", srv.Name)
+		}
+		if i == 0 {
+			f.bindPodToNode(t, pod, going.Name)
+		} else {
+			f.bindPodToNode(t, pod, "node-staying-"+f.ns)
+		}
+	}
+	f.ensureNode(t, going.Name, true)
+
+	f.reconcileGroup(t, r)
+
+	// The server on the cordoned node is going.
+	condemned := f.server(servers[0].Name)
+	if condemned.DeletionTimestamp.IsZero() {
+		t.Error("the server on the cordoned node was not deleted; its players will be evicted instead of moved")
+	}
+	// The one beside it is not.
+	if !f.server(servers[1].Name).DeletionTimestamp.IsZero() {
+		t.Error("the server on the healthy node was deleted; only the departing node's servers may go")
+	}
+	// And the operator is told why.
+	if n := scalingEvents(rec, "NodeDraining"); n != 1 {
+		t.Errorf("NodeDraining events = %d, want exactly 1", n)
+	}
+}
+
+// TestCondemnedServersAreReplaced states the property that makes the drain
+// finite: the pass that condemns is the pass that orders the replacement, so
+// the group is never left short while it waits for a second reconcile.
+func TestCondemnedServersAreReplaced(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	f.markReady(t, servers[0].Name)
+
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	pod, ok := f.pod(f.server(servers[0].Name).Status.PodName)
+	if !ok {
+		t.Fatal("pod not found")
+	}
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+
+	f.reconcileGroup(t, r)
+
+	// The condemnation has to be checked before the replacement, or this test
+	// says nothing. Counting live servers alone passes just as well against a
+	// build that never condemns anything -- the original is still there and
+	// still counts as one -- which is exactly how a test outlives the code it
+	// was written for. Asserting the original is going is what makes the
+	// count below a statement about a replacement.
+	if f.server(servers[0].Name).DeletionTimestamp.IsZero() {
+		t.Fatal("the server on the cordoned node was not condemned; nothing below tests a replacement")
+	}
+	live := 0
+	for _, s := range f.listServers(t) {
+		if s.Name != servers[0].Name && s.DeletionTimestamp.IsZero() {
+			live++
+		}
+	}
+	if live < 1 {
+		t.Fatal("no replacement was ordered in the pass that condemned; the group would sit empty until the next one")
+	}
+}

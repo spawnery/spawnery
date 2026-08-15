@@ -32,6 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -370,4 +371,35 @@ func (f *fixture) setPodRunning(name string, ready bool) {
 	if err := f.c.Status().Update(f.ctx, pod); err != nil {
 		f.t.Fatalf("update pod status: %v", err)
 	}
+}
+
+// bindPodToNode does what a scheduler would. envtest runs none, and
+// pod.spec.nodeName cannot be set by Update -- the API server rejects it --
+// so the binding subresource is the only way a test can place a pod.
+func (f *fixture) bindPodToNode(t *testing.T, pod *corev1.Pod, nodeName string) {
+	t.Helper()
+	binding := &corev1.Binding{
+		ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
+		Target:     corev1.ObjectReference{Kind: "Node", Name: nodeName},
+	}
+	if err := f.c.SubResource("binding").Create(f.ctx, pod, binding); err != nil {
+		t.Fatalf("bind pod %s to node %s: %v", pod.Name, nodeName, err)
+	}
+}
+
+// ensureNode creates a Node, cordoned or not, and cleans it up. Nodes are
+// cluster-scoped, so unlike everything else these tests create they are not
+// isolated by the per-test namespace and must carry a unique name.
+func (f *fixture) ensureNode(t *testing.T, name string, unschedulable bool) *corev1.Node {
+	t.Helper()
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	_, err := controllerutil.CreateOrUpdate(f.ctx, f.c, node, func() error {
+		node.Spec.Unschedulable = unschedulable
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("ensure node %s: %v", name, err)
+	}
+	t.Cleanup(func() { _ = f.c.Delete(f.ctx, node) })
+	return node
 }

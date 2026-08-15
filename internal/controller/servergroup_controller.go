@@ -34,7 +34,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -504,6 +506,16 @@ func (r *ServerGroupReconciler) size(
 		}
 		r.Expectations.expectDeleted(key, name)
 	}
+	// Ungated by the backoff, like the deletes and retirements around it and
+	// for the same reason: this touches players and must not wait on an
+	// unrelated failure. Reserved after the delete, matching the loop above.
+	for _, name := range decision.Condemn {
+		if err := r.deleteServer(ctx, group, servers, name,
+			"NodeDraining", "draining server %s off a node that is going away"); err != nil {
+			return decision, err
+		}
+		r.Expectations.expectDeleted(key, name)
+	}
 	for _, name := range decision.Retire {
 		if err := r.retireServer(ctx, group, servers, name); err != nil {
 			return decision, err
@@ -570,6 +582,10 @@ func (r *ServerGroupReconciler) collectViews(
 			Generation:   srv.Spec.GroupGeneration,
 			Retire:       srv.Spec.Retire,
 			CreatedAt:    srv.CreationTimestamp.Time,
+			// podFound is required: a server with no pod is on no node, and one
+			// whose pod already carries a deletion timestamp is leaving under
+			// its own power. Neither is condemned by a node.
+			Condemned: podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
 		}
 		if srv.Status.FailedAt != nil {
 			v.FailedAt = srv.Status.FailedAt.Time
@@ -785,6 +801,47 @@ func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *s
 	return err
 }
 
+// groupsOnNode maps a Node event onto the ServerGroups with pods on that node.
+//
+// The five-second resync would find a cordoned node on its own; the watch is
+// what makes the answer immediate, and an eviction issued in the same second
+// as the cordon is exactly the race this milestone is about.
+//
+// It lists this operator's pods and filters by node rather than asking for a
+// spec.nodeName field index. An index would have to be registered once and
+// shared by two controllers -- registering it twice fails at manager start --
+// and the population it would serve is this operator's own pods, which is
+// small. A label-scoped list over a warm cache is cheaper than that
+// coordination is worth.
+func (r *ServerGroupReconciler) groupsOnNode(ctx context.Context, obj client.Object) []reconcile.Request {
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods, client.MatchingLabels{
+		podspec.LabelManagedBy: podspec.ManagedByValue,
+		podspec.LabelRole:      podspec.RoleServer,
+	}); err != nil {
+		return nil
+	}
+	seen := map[types.NamespacedName]bool{}
+	var out []reconcile.Request
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		if pod.Spec.NodeName != obj.GetName() {
+			continue
+		}
+		group := pod.Labels[podspec.LabelGroup]
+		if group == "" {
+			continue
+		}
+		key := types.NamespacedName{Name: group, Namespace: pod.Namespace}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, reconcile.Request{NamespacedName: key})
+	}
+	return out
+}
+
 // SetupWithManager registers the controller.
 func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// A construction site that forgets this would otherwise panic inside a
@@ -798,6 +855,7 @@ func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&spawneryv1alpha1.Server{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&corev1.ConfigMap{}).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
 		Named("servergroup").
 		Complete(r)
 }
