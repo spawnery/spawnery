@@ -80,6 +80,15 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	if opts.Proxies == nil {
 		return fmt.Errorf("no proxies: the proxy group controller cannot set readiness without one")
 	}
+	// The Network controller's SecretReader, refused for the same reason. It is
+	// not an Options field — the reconciler below takes it from the manager —
+	// so the check is on the manager rather than on opts. A nil reader is how a
+	// defect in this milestone was found: as a nil-interface panic inside
+	// Reconcile, where readForwardingSecret calls Get on it for every Network
+	// that owns its namespace.
+	if mgr.GetAPIReader() == nil {
+		return fmt.Errorf("no API reader: the network controller cannot read forwarding secrets without one")
+	}
 
 	if err := (&NetworkReconciler{
 		Client:   mgr.GetClient(),

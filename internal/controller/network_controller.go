@@ -143,10 +143,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	meta.SetStatusCondition(&network.Status.Conditions, resolvedCondition(read))
 
 	pods := &corev1.PodList{}
-	if err := r.List(ctx, pods, client.InNamespace(network.Namespace), client.MatchingLabels{
-		podspec.LabelManagedBy: podspec.ManagedByValue,
-		podspec.LabelNetwork:   network.Name,
-	}); err != nil {
+	if err := r.List(ctx, pods, client.InNamespace(network.Namespace),
+		client.MatchingLabels(podspec.ManagedSelector(network.Name))); err != nil {
 		return ctrl.Result{}, err
 	}
 	meta.SetStatusCondition(&network.Status.Conditions,

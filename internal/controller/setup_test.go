@@ -226,6 +226,53 @@ func TestSetupAllRefusesWithoutProxies(t *testing.T) {
 	}
 }
 
+// readerlessManager is a manager whose GetAPIReader returns nil. No manager
+// controller-runtime builds does that, which is why the guard needs this to be
+// reachable at all: what it refuses is a manager some later caller assembles,
+// and the cost of getting it wrong is a nil-interface panic on the first
+// Network the operator reconciles rather than an error at start.
+type readerlessManager struct{ ctrl.Manager }
+
+func (readerlessManager) GetAPIReader() client.Reader { return nil }
+
+func TestSetupAllRefusesWithoutAnAPIReader(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: start}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:         testenv.Scheme(t),
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		LeaderElection: false,
+		// So the only possible reason to fail is the missing reader and not a
+		// controller name this test binary already used.
+		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	err = SetupAll(readerlessManager{mgr}, Options{
+		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Clock:                clock.Now,
+		StartupDeadline:      5 * time.Minute,
+		PlayerStatusInterval: 30 * time.Second,
+		OrphanInterval:       time.Minute,
+		Registrar:            NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
+		Proxies:       &recordingFleet{},
+	})
+	if err == nil {
+		t.Fatal("SetupAll accepted a manager with no API reader")
+	}
+	if !strings.Contains(err.Error(), "API reader") {
+		t.Errorf("error = %q, want it to name the missing reader", err)
+	}
+}
+
 // TestManagerReconcilesEndToEnd is the one thing no earlier task has proven:
 // that a real, running manager — leader election on, exactly as the binary
 // starts it — turns a Network and a ServerGroup into Servers and pods without

@@ -1204,6 +1204,17 @@ spec:
                   value in place, because clearing it would leave every pod created during
                   the failure unstamped, and an unstamped pod is one the operator can say
                   nothing about afterwards.
+
+                  The pattern is where a malformed value is stopped, and it is why the
+                  builders copy this string into a pod label without checking it.
+                  Sixteen lowercase hex digits is what podspec.ForwardingHash emits, and
+                  it is a legal label value; a longer or otherwise illegal one fails every
+                  pod Create for this network with a 422, and those reconciles return
+                  before writing status, so nothing on the group says why. The empty
+                  branch is for another client: omitempty covers the operator's own
+                  writes, and an explicit "" clears the field rather than putting a bad
+                  value into a label.
+                pattern: ^([a-f0-9]{16})?$
                 type: string
               onlinePlayers:
                 description: OnlinePlayers is the sum of players across all server

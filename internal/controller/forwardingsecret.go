@@ -121,13 +121,20 @@ type forwardingStamp struct {
 }
 
 // forwardingStamps reduces a network's pods to what the rotation report needs.
-// Pods with a DeletionTimestamp are dropped: one on its way out must not hold
-// the report open after the replacement that fixes it already exists.
+// Two kinds of pod are dropped, neither of them running a process the stamp
+// describes. One with a DeletionTimestamp is on its way out and must not hold
+// the report open after the replacement that fixes it already exists. One
+// podTerminal calls finished is down, and its Server keeps it for
+// spec.failedRetentionSeconds — an hour by default — so counting it would hold
+// the report open for that hour after a rotation that is otherwise complete.
+// The crash-looping case reads worst of all: the container has restarted since
+// the rotation and read the projected secret again each time, so the stamp
+// names a value that pod stopped using.
 func forwardingStamps(pods []corev1.Pod) []forwardingStamp {
 	stamps := make([]forwardingStamp, 0, len(pods))
 	for i := range pods {
 		pod := &pods[i]
-		if !pod.DeletionTimestamp.IsZero() {
+		if !pod.DeletionTimestamp.IsZero() || podTerminal(pod) {
 			continue
 		}
 		stamps = append(stamps, forwardingStamp{

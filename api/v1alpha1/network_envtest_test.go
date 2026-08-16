@@ -103,3 +103,47 @@ func TestNetworkStatusCarriesTheForwardingSecretHash(t *testing.T) {
 			got.Status.ForwardingSecretHash, "0123456789abcdef")
 	}
 }
+
+// The recorded digest reaches a pod label unread (internal/podspec/server.go,
+// internal/podspec/proxy.go), and a label value the API server rejects fails
+// every pod Create for the network. The schema is where that is stopped, so
+// the check belongs against a real API server rather than against the Go type.
+func TestNetworkStatusRejectsAMalformedForwardingSecretHash(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	for _, tc := range []struct {
+		name       string
+		hash       string
+		wantReject bool
+	}{
+		{name: "too long", hash: "0123456789abcdef0", wantReject: true},
+		{name: "illegal in a label value", hash: "not a label value", wantReject: true},
+		{name: "uppercase is not what ForwardingHash emits", hash: "0123456789ABCDEF", wantReject: true},
+		{name: "a digest", hash: "0123456789abcdef"},
+		// The operator's own writes are covered by omitempty, but another
+		// client may send an explicit empty string, and clearing the field is
+		// not what the pattern is there to stop.
+		{name: "explicitly empty", hash: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			net := &spawneryv1alpha1.Network{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "fwd-hash-", Namespace: ns},
+				Spec:       spawneryv1alpha1.NetworkSpec{ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "fwd"}},
+			}
+			if err := c.Create(ctx, net); err != nil {
+				t.Fatalf("create network: %v", err)
+			}
+
+			net.Status.ForwardingSecretHash = tc.hash
+			err := c.Status().Update(ctx, net)
+			switch {
+			case tc.wantReject && err == nil:
+				t.Errorf("the API server accepted status.forwardingSecretHash = %q; it reaches a pod label "+
+					"unvalidated, so every pod Create for this network would fail 422", tc.hash)
+			case !tc.wantReject && err != nil:
+				t.Errorf("the API server rejected status.forwardingSecretHash = %q: %v", tc.hash, err)
+			}
+		})
+	}
+}

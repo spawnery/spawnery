@@ -162,6 +162,46 @@ func TestForwardingStampsSkipTerminatingPods(t *testing.T) {
 	}
 }
 
+// A failed Server keeps its pod for spec.failedRetentionSeconds — an hour by
+// default — and that pod carries no DeletionTimestamp. Counting it would hold
+// RotationPending at True for the whole retention window after a rotation that
+// is otherwise complete, and name its group as work still to do.
+func TestForwardingStampsSkipTerminalPods(t *testing.T) {
+	failed := stampPod("survival", podspec.RoleServer, "aaaa", false)
+	failed.Status.Phase = corev1.PodFailed
+
+	// The container the crash-loop check reads is podspec.ContainerName; a
+	// restart count below MaxContainerRestarts, or any other container name,
+	// does not trip it.
+	looping := stampPod("minigames", podspec.RoleServer, "aaaa", false)
+	looping.Status.Phase = corev1.PodRunning
+	looping.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{
+			Name:         "sidecar",
+			RestartCount: MaxContainerRestarts,
+			State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		},
+		{
+			Name:         podspec.ContainerName,
+			RestartCount: MaxContainerRestarts,
+			State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+		},
+	}
+	if !crashLooping(&looping) {
+		t.Fatalf("the crash-loop fixture does not trip crashLooping, so this test would pass for the wrong reason")
+	}
+
+	got := forwardingStamps([]corev1.Pod{
+		stampPod("lobby", podspec.RoleServer, "bbbb", false),
+		failed,
+		looping,
+	})
+
+	if len(got) != 1 || got[0].Group != "lobby" {
+		t.Errorf("stamps = %+v, want only the lobby pod; a pod whose process is down runs no forwarding secret", got)
+	}
+}
+
 func TestRotationConditionFollowsItsPrecedence(t *testing.T) {
 	resolved := forwardingRead{Hash: "aaaa", Status: metav1.ConditionTrue, Reason: spawneryv1alpha1.ReasonSecretResolved}
 	unresolved := forwardingRead{Status: metav1.ConditionUnknown, Reason: spawneryv1alpha1.ReasonSecretNotFound, Message: "no such secret"}
