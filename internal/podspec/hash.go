@@ -65,11 +65,15 @@ func DesiredProxyHash(
 	if err != nil {
 		return "", err
 	}
-	// Belt-and-braces: renderProxyPod never sets LabelPodHash, so this is
-	// never actually present. Kept so this function still digests the right
-	// thing if that ever stops being true, rather than silently feeding the
-	// label back into itself.
+	// Two labels come out before the digest, for two different reasons.
+	// LabelPodHash is belt-and-braces: renderProxyPod never sets it, and this
+	// keeps the digest right if that ever stops being true rather than feeding
+	// the label back into itself. LabelForwardingHash is not belt-and-braces —
+	// renderProxyPod does set it, and removing it here is what stops a rotated
+	// forwarding secret from making every proxy of the group stale at once.
+	// See LabelForwardingHash's own comment.
 	delete(subject.Labels, LabelPodHash)
+	delete(subject.Labels, LabelForwardingHash)
 
 	encoded, err := json.Marshal(struct {
 		Pod    *corev1.Pod `json:"pod"`
@@ -124,10 +128,13 @@ func DesiredServerHash(
 	if err != nil {
 		return "", err
 	}
-	// Belt-and-braces, for the reason DesiredProxyHash gives: BuildServerPod
-	// never sets LabelPodHash, and this keeps the digest right if that stops
-	// being true rather than feeding the label back into itself.
+	// Two labels come out, for the two reasons DesiredProxyHash gives:
+	// LabelPodHash is belt-and-braces because BuildServerPod never sets it,
+	// and LabelForwardingHash is not, because BuildServerPod does — removing
+	// it here is what stops a rotated forwarding secret from making every
+	// server of the group stale at once.
 	delete(subject.Labels, LabelPodHash)
+	delete(subject.Labels, LabelForwardingHash)
 
 	encoded, err := json.Marshal(struct {
 		Pod    *corev1.Pod `json:"pod"`

@@ -368,3 +368,105 @@ func TestForwardingHashSeparatesTheSaltFromTheValue(t *testing.T) {
 		t.Error("the UID and the value run together in the digest; the separator byte is missing")
 	}
 }
+
+// The whole of milestone 5c rests on this: if the forwarding stamp reached the
+// pod hash, rotating the secret would make every pod of the network stale at
+// once and the operator would recreate all of them, proxies and backends
+// interleaved. The master design defers that rollout deliberately; this test is
+// what keeps it deferred.
+func TestRotatingTheForwardingSecretDoesNotMoveTheServerPodHash(t *testing.T) {
+	net, group := serverHashFixtures(t)
+	values := []byte("maxPlayers: 20\n")
+
+	net.Status.ForwardingSecretHash = "aaaaaaaaaaaaaaaa"
+	before, err := DesiredServerHash(net, group, values)
+	if err != nil {
+		t.Fatalf("DesiredServerHash: %v", err)
+	}
+
+	net.Status.ForwardingSecretHash = "bbbbbbbbbbbbbbbb"
+	after, err := DesiredServerHash(net, group, values)
+	if err != nil {
+		t.Fatalf("DesiredServerHash after rotation: %v", err)
+	}
+
+	if before != after {
+		t.Errorf("the pod hash moved from %q to %q when only the forwarding secret changed; "+
+			"a rotation now restarts every server of the group", before, after)
+	}
+}
+
+func TestRotatingTheForwardingSecretDoesNotMoveTheProxyPodHash(t *testing.T) {
+	net, group := proxyHashFixtures(t)
+	group.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 20, Motd: "before"}
+	values := proxyValuesBytes(t, group)
+
+	net.Status.ForwardingSecretHash = "aaaaaaaaaaaaaaaa"
+	before, err := DesiredProxyHash(net, group, "operator:9443", values)
+	if err != nil {
+		t.Fatalf("DesiredProxyHash: %v", err)
+	}
+
+	net.Status.ForwardingSecretHash = "bbbbbbbbbbbbbbbb"
+	after, err := DesiredProxyHash(net, group, "operator:9443", values)
+	if err != nil {
+		t.Fatalf("DesiredProxyHash after rotation: %v", err)
+	}
+
+	if before != after {
+		t.Errorf("the proxy pod hash moved from %q to %q when only the forwarding secret changed; "+
+			"a rotation now rolls every proxy group", before, after)
+	}
+}
+
+// The stamp has to be on the pod for the Network controller to read it back,
+// and absent while the operator does not know the digest -- an absent label is
+// "unknown", and a wrong one would be a lie about what the process loaded.
+func TestServerPodCarriesTheForwardingStampOnlyWhenItIsKnown(t *testing.T) {
+	net, group := serverHashFixtures(t)
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "g-0", Namespace: "ns"},
+	}
+
+	unknown, err := BuildServerPod(net, group, srv, "operator:9443")
+	if err != nil {
+		t.Fatalf("BuildServerPod: %v", err)
+	}
+	if _, ok := unknown.Labels[LabelForwardingHash]; ok {
+		t.Errorf("labels = %v, want no %s while the network reports no digest",
+			unknown.Labels, LabelForwardingHash)
+	}
+
+	net.Status.ForwardingSecretHash = "0123456789abcdef"
+	known, err := BuildServerPod(net, group, srv, "operator:9443")
+	if err != nil {
+		t.Fatalf("BuildServerPod: %v", err)
+	}
+	if got := known.Labels[LabelForwardingHash]; got != "0123456789abcdef" {
+		t.Errorf("%s = %q, want %q", LabelForwardingHash, got, "0123456789abcdef")
+	}
+}
+
+func TestProxyPodCarriesTheForwardingStampOnlyWhenItIsKnown(t *testing.T) {
+	net, group := proxyHashFixtures(t)
+	group.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 20, Motd: "before"}
+	values := proxyValuesBytes(t, group)
+
+	unknown, err := BuildProxyPod(net, group, "g-0", "operator:9443", values)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+	if _, ok := unknown.Labels[LabelForwardingHash]; ok {
+		t.Errorf("labels = %v, want no %s while the network reports no digest",
+			unknown.Labels, LabelForwardingHash)
+	}
+
+	net.Status.ForwardingSecretHash = "0123456789abcdef"
+	known, err := BuildProxyPod(net, group, "g-0", "operator:9443", values)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+	if got := known.Labels[LabelForwardingHash]; got != "0123456789abcdef" {
+		t.Errorf("%s = %q, want %q", LabelForwardingHash, got, "0123456789abcdef")
+	}
+}

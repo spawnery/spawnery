@@ -292,5 +292,14 @@ func renderProxyPod(
 		pod.Spec.Affinity = scheduling.Affinity
 	}
 
+	// Stamped from the Network's status rather than computed here: one reader
+	// of the Secret is the whole point (design section 2.1), and the group
+	// controllers copy a string out of an object they already hold. Empty
+	// means the operator does not know the digest yet, and an absent label is
+	// "unknown" — see LabelForwardingHash.
+	if hash := net.Status.ForwardingSecretHash; hash != "" {
+		pod.Labels[LabelForwardingHash] = hash
+	}
+
 	return pod, nil
 }
