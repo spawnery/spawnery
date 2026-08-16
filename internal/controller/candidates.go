@@ -59,6 +59,15 @@ type ServerView struct {
 	SessionsGone bool
 	// Generation is the group generation this server was created from.
 	Generation int64
+	// PodHash is spec.podHash: the render digest this server was created under.
+	// Empty means the server predates the field and is to be adopted rather
+	// than replaced.
+	//
+	// Deliberately not called Stale, and deliberately not a bool. Stale is
+	// already taken on this type and means the player count cannot be trusted;
+	// spec staleness is a comparison the sizing rule makes, not a second flag
+	// somebody could confuse with the first.
+	PodHash string
 	// Retire is spec.retire: the group has asked this server to retire. It
 	// is the single signal for the update's maxUnavailable budget, and it
 	// survives the escalation to Draining that maxStaleSeconds can force —
@@ -87,6 +96,19 @@ type ServerView struct {
 	// Ready. Zero for one that never did — and the Server controller clears
 	// it on every exit from Ready, so a Failed server carries no ReadySince.
 	ReadySince time.Time
+	// ResizePending is status.storageResizePending: the claim carries the
+	// FileSystemResizePending condition and this server's pod has to be
+	// restarted before the filesystem follows the grown volume. Read from
+	// the status, never from the claim directly — the Server controller is
+	// the one that watches the claim; the group only reads its conclusion.
+	ResizePending bool
+	// ResizeError is status.storageResizeError: why this server's claim has
+	// not grown to spec.storage.size, or empty when it has (or there is
+	// nothing to grow). Read from the status for the same reason
+	// ResizePending is -- the Server controller is the one that watches the
+	// claim, growClaim and resizeConditionError are where the two ways a
+	// resize can fail are told apart, and the group only reads the verdict.
+	ResizeError string
 }
 
 // isOccupied is the occupancy rule for a server pod. The proxy side has its

@@ -216,82 +216,62 @@ it. The same goes for the node-drain limit on a node-pinned RWO volume: one
 node, so nothing to pin against. Both wait for a run against a real cloud
 storage class.
 
-## What 5b and 5c find in place
+## What 5c finds in place
 
-Master design §8, carried forward rather than re-derived:
+5b — ordered shutdown, `Recreate` updates, storage growth — has landed. What
+follows is master design §8, checked against the code as 5b leaves it rather
+than against the plan that preceded it — what 5c, secret rotation, actually
+finds when it starts:
 
-- **Ordinals, claims, and both directions of `spec.replicas`, with the claim
-  retained across every one of them.** A lowered `replicas`, a server deleted
-  by hand, a node drain condemning a persistent server — every path that
-  removes a `Server` leaves its claim exactly where it was, proven at the
-  object level by `TestDeletingAPersistentServerLeavesItsClaim` and its
-  neighbours.
-- **`DecidePersistentSize` is the single place a persistent group's size is
-  decided**, table-tested without a cluster
-  (`internal/controller/persistent_test.go`). 5b's `Recreate` updates are
-  meant to layer on top of this rule — a third rule, or a modification of
-  this one's output before it reaches execution — rather than being woven
-  into its three existing ones. Whoever builds that should read `size()`'s
-  own comment on why the two-rule split exists before adding a third
-  concern to either rule directly.
-- **The grace period is already on the pod.**
-  `TerminationGracePeriodSeconds` reaches `podspec.BuildServerPod` already,
-  from a milestone before this one; 5b orders the shutdown sequence, it does
-  not have to invent the time to save a world.
-- **`spec.drain.timeoutSeconds` already bounds the wait** for an ordinal held
-  by a leaving server, the same field and the same accessor
-  (`ServerGroup.DrainTimeout()`) 4c already built and 5a reused without
-  modification.
-- **A runbook that brings a persistent group up on a real cluster is drafted
-  *and driven*** — `docs/runbook-milestone-5a-evidence.md`, driven 2026-08-16 —
-  for 5b's own evidence run to start from rather than rebuild. Every command in
-  it ran as written and none needed changing; four *expectations* did, and two
-  commands were added rather than corrected. 5b's run inherits a document whose
-  §5 manifest, §4 relay and §8 event queries are known to work, which is most of
-  the cost of an evidence run.
-- **`fsGroup` is on every server pod now**, and 5b and 5c inherit it whether
-  or not they think about storage. `podspec.BuildServerPod` sets
-  `PodSecurityContext.FSGroup` to 10001 — the uid and gid `nix/oci-common.nix`
-  builds the image with — together with `FSGroupChangePolicy: OnRootMismatch`.
-  It closed a precondition `docs/known-issues.md` recorded two milestones ago
-  under "From milestone 2b", which said the missing `fsGroup` "has to land
-  before the first persistent server exists": without it a freshly provisioned
-  claim arrives root-owned, the container runs as 10001, and Paper cannot write
-  `/data` at all. 5a is what creates the first persistent server, so the
-  precondition came due here. Two decisions inside it are worth carrying rather
-  than rediscovering. It is set on **every** server pod rather than gated on
-  the group's type — one `PodSecurityContext` shape to reason about, and an
-  `emptyDir` is created fresh and empty so the chown costs nothing there. And
-  the policy is `OnRootMismatch` rather than the kubelet's `Always` default,
-  because `Always` recursively chowns a whole persistent world on every pod
-  start; the cost of that choice, stated in the code, is that files deep in the
-  tree with wrong ownership are not corrected. `BuildProxyPod` is untouched: a
-  proxy mounts no claim.
-- **The failure path is a stall, not a loop, and it is documented.** A claim
-  that never binds fails its server, which is deleted and recreated onto the
-  same claim roughly once an hour (`spec.failedRetentionSeconds`) until the
-  per-group backoff gives up at six counted failures — see
-  `docs/known-issues.md`'s "From milestone 5a" for the full mechanism, checked
-  link by link against the code. 5b's `Recreate` updates and 5c's secret
-  rotation both touch persistent servers and should read that entry before
-  assuming a `Failed` persistent server behaves the way an ephemeral one
-  does.
-- **The failure streak is per group, and for a persistent group it should not
-  be — that is 5b's, and it was ruled so deliberately.** `CountFailures`
-  (`internal/controller/backoff.go`) resets the streak to zero whenever any of
-  the group's servers carries a `ReadySince` newer than the last counted
-  failure. For interchangeable servers that is the right rule; for ordinals
-  that each own a world it is not, so a broken `survival-0` beside a
-  `survival-1` that blips readiness once can keep `Degraded` from ever
-  arriving. The durable fix is a **per-ordinal streak**, or more cheaply a
-  reset restricted to the ordinal whose failure it would clear; either changes
-  what `BackoffInputs` means for both kinds of group, which is why it is a
-  design of its own rather than an appendix to "persistent groups exist".
-  Whoever takes it should start from `CountFailures`' own doc comment, which
-  argues the current rule correctly for the case it was written for, and from
-  `TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp`, which runs a single
-  ordinal and therefore cannot show the problem — a second ordinal in that test
-  is the first thing to write.
+- **A working recreate mechanism for one ordinal at a time, which secret
+  rotation can drive rather than rebuild.** `DecidePersistentSize`
+  (`internal/controller/persistent.go`) nominates missing, surplus, stale-spec
+  and resize-pending ordinals in that priority order, taking at most one
+  ordinal of a persistent group down at a time
+  (`docs/superpowers/specs/2026-08-16-persistent-updates-design.md` §2). That
+  budget covers the takedowns this rule nominates and not every way an ordinal
+  can go down — a node drain's condemnation runs beside it, ungated, and
+  empties as many ordinals as the node held; `docs/known-issues.md`'s 5b
+  section carries the exception. 5c's rotation is another occasion to take an
+  ordinal down; §2's rule is where a fifth candidate class would go, and where
+  5c has to argue its place against the other four.
+- **A hash that already covers the forwarding secret's *name* but not its
+  *contents* — which is exactly 5c's problem.** `DesiredServerHash` digests
+  the whole pod `BuildServerPod` would render, which mounts the secret named
+  by `net.Spec.ForwardingSecretRef.Name` (`internal/podspec/server.go:285`).
+  Pointing the `Network` at a differently-named secret is therefore already a
+  spec change 5b acts on. Rotating the *value* inside the one secret already
+  named, in place, changes nothing the hash reads — the name is unchanged and
+  the rendered pod is byte-identical — so it is invisible to the hash by
+  construction. Closing that is 5c's whole problem.
+- **Write authority over claims, limited to `patch`, and an RBAC audit that
+  will turn red if 5c widens it without saying so.** The ClusterRole grants
+  `persistentvolumeclaims: create, get, list, patch, watch`
+  (`config/rbac/role.yaml`) — `patch` is 5b's own addition, for growing a
+  claim's `spec.resources.requests.storage`, and `delete`/`update` are still
+  absent — and `internal/rbacaudit/required.go` compares the generated role
+  against its hand-maintained table in both directions, so a `delete` or
+  `update` marker added anywhere later, which forcing a rotation onto a fresh
+  claim might be tempted to reach for, turns the suite red before it can ship.
+- **A streak that reaches `Degraded` for a persistent group, so that a stall
+  5c introduces will be visible rather than silent.** `CountFailures`
+  (`internal/controller/backoff.go`) now resets a persistent group's streak on
+  the *minimum* `ReadySince` over the group's required ordinals rather than
+  the maximum, pinned by the second ordinal
+  `TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp` gained this
+  milestone. A single ordinal stuck failing — a bad image, a stuck claim, or a
+  rotation 5c gets wrong — can no longer be bought out by a healthy sibling.
+
+**5b's own record is `docs/known-issues.md`'s "From milestone 5b" section**,
+checked against the code the same way "From milestone 5a" above it was —
+including what 5b leaves open (an ordinal that can never become `Ready` stalls
+the whole group's update, a spec edit made during the upgrade window can be
+missed on an ordinal that is merely adopted, and widening the proxy hash rolls
+every `ProxyGroup` once on upgrade) and what it fixed along the way that
+`docs/superpowers/specs/2026-08-16-persistent-updates-design.md` never
+anticipated: a persistent group's failure counter used to freeze on any spec
+edit, and a squatter used to be able to stall a whole group's takedowns rather
+than only its own ordinal.
 
 ## What 5a leaves open, briefly
 

@@ -20,6 +20,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/spawnery/spawnery/internal/phase"
 )
 
 // PersistentServerName is the name of the server holding one ordinal of a
@@ -78,10 +80,21 @@ type PersistentInputs struct {
 	PendingCreates map[string]bool
 	// PendingDeletes are the removals it has asked for and not yet seen.
 	PendingDeletes map[string]bool
+	// PodHash is podspec.DesiredServerHash for the group as it stands now. A
+	// view whose PodHash differs is stale; a view whose PodHash is empty is
+	// adopted rather than replaced, so an upgrade that introduces the field
+	// does not restart every world in the installation.
+	//
+	// Empty is also what a caller that has not yet computed the hash passes,
+	// and that case is handled the same way as a view's empty hash: adopted,
+	// not compared. See the empty check in DecidePersistentSize's stale loop.
+	PodHash string
 }
 
-// DecidePersistentSize decides which ordinals a persistent group is missing
-// and which it has too many of.
+// DecidePersistentSize decides which ordinals a persistent group is missing,
+// and, when it has too many, which one goes first: a surplus ordinal outranks
+// a stale spec, which outranks -- lowest, and gated the same two ways stale
+// is -- a claim still waiting on a filesystem resize.
 //
 // It stands beside DecideSize rather than inside it: the two share a decision
 // type and nothing else. The slot rule asks what capacity the players need;
@@ -126,17 +139,134 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 		}
 	}
 	sort.Slice(surplus, func(i, j int) bool { return surplus[i] > surplus[j] })
-	for _, ordinal := range surplus {
-		name := held[ordinal]
-		if in.PendingDeletes[name] {
+
+	// Gate A subsumes the PendingDeletes and leaving() checks the surplus
+	// loop used to make per-candidate: any outstanding delete or any server
+	// already on its way out means an ordinal is already down, and this rule
+	// nominates at most one at a time. So the check moves in front of both the
+	// surplus and the stale nomination below, rather than filtering each one's
+	// candidate list.
+	if takedownInFlight(in) {
+		return decision
+	}
+
+	if len(surplus) > 0 {
+		// surplus is already sorted highest-first.
+		decision.Delete = append(decision.Delete, held[surplus[0]])
+		decision.DeleteReason = "SurplusOrdinal"
+		return decision
+	}
+
+	// Gate B: a stale ordinal is nominated only once every ordinal the group
+	// is supposed to have is confirmed Ready. Surplus removal above never
+	// reaches here, and that is deliberate -- see groupRecovered's comment.
+	if !groupRecovered(in) {
+		return decision
+	}
+
+	stale := make([]int32, 0, len(held))
+	for ordinal, name := range held {
+		if ordinal >= in.Replicas {
 			continue
 		}
-		if viewByName(in.Views, name).leaving() {
+		v := viewByName(in.Views, name)
+		// An empty view hash is adopted rather than compared -- see
+		// ServerView.PodHash. An empty in.PodHash is the same adoption from
+		// the other side: see PersistentInputs.PodHash.
+		if in.PodHash == "" || v.PodHash == "" || v.PodHash == in.PodHash {
 			continue
 		}
-		decision.Delete = append(decision.Delete, name)
+		stale = append(stale, ordinal)
+	}
+	sort.Slice(stale, func(i, j int) bool { return stale[i] > stale[j] })
+	if len(stale) > 0 {
+		decision.Delete = append(decision.Delete, held[stale[0]])
+		decision.DeleteReason = "StaleSpec"
+		return decision
+	}
+
+	// The lowest-priority class: a claim the CSI driver has grown but whose
+	// filesystem needs the pod restarted to follow. Reached only when nothing
+	// missing, surplus or stale outranked it -- most drivers expand online and
+	// never ask for this at all.
+	resizing := make([]int32, 0, len(held))
+	for ordinal, name := range held {
+		if ordinal >= in.Replicas {
+			continue
+		}
+		if viewByName(in.Views, name).ResizePending {
+			resizing = append(resizing, ordinal)
+		}
+	}
+	sort.Slice(resizing, func(i, j int) bool { return resizing[i] > resizing[j] })
+	if len(resizing) > 0 {
+		decision.Delete = append(decision.Delete, held[resizing[0]])
+		decision.DeleteReason = "ResizePending"
 	}
 	return decision
+}
+
+// takedownInFlight is Gate A: does any ordinal-bearing view of the group
+// already count as leaving(), or have an outstanding PendingDeletes entry.
+// DecidePersistentSize nominates at most one name and returns, so a single
+// call was never the risk; this gate is what makes the *next* call wait while
+// an ordinal is on its way out.
+//
+// On its way out for any reason, not only this rule's own prior nomination:
+// leaving() is equally true of a server condemned off a draining node, one
+// escalated out of Retiring, and one an operator deleted by hand. This gate
+// holds for all of them, so the rule adds nothing to a takedown it did not
+// order. What it cannot do is bound one: condemn() names every server on a
+// departing node and removes them all in a single pass, ungated by anything
+// here, so a node holding two ordinals takes two down -- and an ordinal this
+// rule nominated on an earlier pass can still be draining while that happens.
+// Deliberate and unthrottled since 4c-3, see docs/known-issues.md's "A node
+// holding a whole group empties it at once". So the one-at-a-time budget is a
+// statement about what this rule nominates, not about every way an ordinal
+// can go down.
+//
+// A view with a nil Ordinal is skipped, the same as every other pass over
+// in.Views in this file: DecidePersistentSize's own doc comment says a
+// nil-ordinal view "fills no ordinal, and it is not deleted as surplus" --
+// this rule removes what it can name, and something it cannot name is not
+// its to remove. See docs/known-issues.md's "A squatter can stall an
+// ordinal silently": without this, the same kind of object would stall every
+// ordinal's takedown instead of just its own.
+func takedownInFlight(in PersistentInputs) bool {
+	for _, v := range in.Views {
+		if v.Ordinal == nil {
+			continue
+		}
+		if v.leaving() || in.PendingDeletes[v.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// groupRecovered is Gate B: does every ordinal the group is supposed to have
+// currently have a Ready server.
+//
+// It deliberately does not gate surplus removal. A surplus ordinal sits above
+// Replicas and is invisible to this test, so relying on it there would
+// release the next nomination while the previous one was still draining --
+// Gate A is what holds the invariant for surplus. Beyond the mechanics:
+// scaling down is an instruction an operator gave explicitly, often because
+// something is wrong, and withholding it until an unrelated ordinal recovers
+// withholds the remedy.
+func groupRecovered(in PersistentInputs) bool {
+	readyOrdinals := make(map[int32]bool, len(in.Views))
+	for _, v := range in.Views {
+		if v.Ordinal != nil && v.Phase == phase.Ready {
+			readyOrdinals[*v.Ordinal] = true
+		}
+	}
+	for ordinal := int32(0); ordinal < in.Replicas; ordinal++ {
+		if !readyOrdinals[ordinal] {
+			return false
+		}
+	}
+	return true
 }
 
 func viewByName(views []ServerView, name string) ServerView {

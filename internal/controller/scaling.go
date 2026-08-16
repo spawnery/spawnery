@@ -119,6 +119,9 @@ type SizeDecision struct {
 	// and Surplus is what the ceiling asked for, and a node drain is about
 	// neither.
 	Condemn []string
+	// DeleteReason is the event reason for Delete. The contract is one reason
+	// for the whole batch, not one per name.
+	DeleteReason string
 }
 
 // provisionalCapacity is one server's contribution to the figure the scale-up

@@ -43,7 +43,7 @@ func testProxyGroup() *spawneryv1alpha1.ProxyGroup {
 
 func buildProxy(t *testing.T) *corev1.Pod {
 	t.Helper()
-	pod, err := BuildProxyPod(testNetwork(), testProxyGroup(), "gateway-abcd", testEndpoint)
+	pod, err := BuildProxyPod(testNetwork(), testProxyGroup(), "gateway-abcd", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("BuildProxyPod: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestProxyPodCarriesAPlayerLimit(t *testing.T) {
 
 	group := testProxyGroup()
 	group.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 120}
-	configured, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint)
+	configured, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("BuildProxyPod: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestProxyPodInheritsTheNetworkDefaults(t *testing.T) {
 func TestProxyPodRefusesAGroupWithoutAnImage(t *testing.T) {
 	group := testProxyGroup()
 	group.Spec.Image = ""
-	if _, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint); err == nil {
+	if _, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil); err == nil {
 		t.Fatal("a ProxyGroup with no image was accepted")
 	}
 }
@@ -268,7 +268,7 @@ func TestProxyPodConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *test
 func TestProxyPodConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount(t *testing.T) {
 	group := testProxyGroup()
 	group.Spec.ConfigOverlay = &spawneryv1alpha1.ObjectRef{Name: "gateway-overlay"}
-	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint)
+	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("BuildProxyPod: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestProxyPodConfigOverlayVolumeIsAbsentWhenNoneIsDeclared(t *testing.T) {
 func TestProxyPodGracePeriodComesFromTheDrainWindow(t *testing.T) {
 	group := testProxyGroup()
 	group.Spec.Drain = &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 120}
-	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint)
+	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("BuildProxyPod: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestProxyPodCarriesTheFallbackGroups(t *testing.T) {
 	group := testProxyGroup()
 	group.Spec.Routing.FallbackGroups = []string{"lobby", "hub"}
 
-	pod, err := BuildProxyPod(net, group, "edge-0", "operator:9443")
+	pod, err := BuildProxyPod(net, group, "edge-0", "operator:9443", nil)
 	if err != nil {
 		t.Fatalf("BuildProxyPod: %v", err)
 	}

@@ -2151,6 +2151,156 @@ what produced the `PodAdopted` event the runbook's §8 now explains. They are
 noted here only so that a reader counting error lines in an operator log does
 not attribute all of them to the paragraph above.
 
+## From milestone 5b (ordered shutdown, `Recreate` updates, storage growth)
+
+5b closes the five gaps 5a's own handover named: an image change now moves a
+persistent server, a lowered `replicas` takes one ordinal down at a time
+rather than every surplus one at once, `spec.storage.size` growth reaches the
+claim, a broken ordinal's failure streak survives a healthy sibling, and a
+changed `motd` reaches a running proxy. What follows is what an operator finds
+still open, checked against the code as it stands.
+
+**The one-ordinal budget belongs to the nomination rule, not to the group: a
+node drain takes down as many ordinals as the node held.** §2's invariant is
+written "at most one ordinal of a persistent group is down at a time, whatever
+the reason", and the last three words claim more than the code does.
+`decision.Condemn` is attached for a persistent group like any other
+(`internal/controller/servergroup_controller.go:711`) and `condemn()` executes
+it ungated (`:779`), removing every server on a departing node in one pass — so
+a node holding two ordinals takes both down. Gate A is not bypassed here: a
+condemned view reads as `leaving()`, so the nomination rule declines to name
+anything on that pass. What it cannot do is throttle the drain, and an ordinal
+it nominated on an earlier pass can still be draining while the drain lands, so
+three ordinals of one group can be out at once.
+
+The behaviour is not the part to fix. "From milestone 4c-3" above records why
+condemnation is unthrottled — draining one server at a time makes `kubectl
+drain` wait out `drain.timeoutSeconds` once per occupied server rather than
+once for the node — and a node that is leaving takes its pods with it whether
+or not this operator moves their players first. The group's
+`PodDisruptionBudget` is a bound on a *different* thing and is worth not
+confusing with this one: sized to the occupied pods
+(`servergroup_controller.go:1226`), it refuses the eviction API an occupied
+pod, so somebody else's drain cannot disconnect players out from under the
+condemnation. It does not bound this operator's own deletes, which never go
+through eviction.
+
+**A permanently broken ordinal stalls the group's whole update.** §2's
+invariant — at most one ordinal taken down at a time — is held by waiting for
+every required ordinal to be `Ready` (Gate B) before a stale or resize-pending
+takedown proceeds. An ordinal that can never become `Ready` therefore holds
+the whole group at its current spec forever; nothing times this wait out.
+Inherited from `StatefulSet`'s shape knowingly, and tolerable only because the
+stall is reported: `ConditionDegraded` publishes for a persistent group since
+5a, and 5b's failure-streak fix (below) is what makes it actually arrive
+rather than being reset forever by a healthy sibling.
+
+**A spec edit made during the upgrade window can be missed on an ordinal that
+is adopted rather than replaced.** Every server that predates 5b carries an
+empty `Server.spec.podHash`, and `adoptServers`
+(`internal/controller/servergroup_controller.go:1136`) stamps the current hash
+onto such a server without ordering a takedown, rather than nominating it as
+stale — the alternative would restart every persistent world in the
+installation on the first reconcile after the upgrade. The cost is that a spec
+edit landing inside that same reconcile can be adopted along with the old pod
+rather than triggering a rebuild; it is bounded by the next edit, which will
+compute a hash that no longer matches.
+
+**Widening the proxy hash rolls every proxy group once on upgrade.**
+`DesiredProxyHash` (`internal/podspec/hash.go:57`) now digests the rendered
+config values as well as the pod, closing the `motd` gap 5a's handover
+recorded — but unlike the server-side adoption above, there is no
+adopt-on-empty escape here: the label `LabelPodHash` is present on every
+existing proxy pod already, merely computed under the narrower, pod-only hash,
+and nothing can tell "the hash widened" apart from "the image really changed"
+from the value alone. The first reconcile after upgrading therefore rolls
+every `ProxyGroup` once, through the ordinary surge-1, one-at-a-time path.
+Expected, not a defect — but worth knowing before it is read as one, and
+before it is read as evidence that the `motd` fix itself is broken.
+
+**`DesiredProxyHash` takes the agent endpoint and `DesiredServerHash` does
+not.** `DesiredServerHash`'s own doc comment (`internal/podspec/hash.go:104`)
+names the asymmetry directly: the endpoint comes from an operator flag, not
+from any spec, so `DesiredServerHash` renders with a fixed sentinel address
+regardless of the real flag value, while `DesiredProxyHash` still takes it as
+a parameter and folds the real value in (`internal/podspec/hash.go:57`). An
+operator restarted with a different `--operator-namespace` therefore rolls
+every proxy group in the installation, while a persistent server group is
+unaffected. This is a real asymmetry between the two sibling functions rather
+than an oversight in one of them — a
+rolled proxy loses no world, so the argument that forces the exclusion on the
+server side does not reach the proxy side — but it is worth knowing before
+someone reads the difference as a bug and "fixes" it into consistency.
+
+**The positive half of storage growth cannot be shown on `kind`'s default
+storage class.** `kind`'s `local-path` provisioner reports
+`allowVolumeExpansion: false`
+(`docs/runbook-milestone-5a-evidence.md` §2's own `kubectl get storageclass`
+output), so raising `storage.size` against the default cluster this
+repository's other runbooks use can only ever exercise the rejection path —
+`ConditionStorageResize` turning `False` with the class named. Confirming that
+a claim actually grows, and that a driver's `FileSystemResizePending`
+condition restarts exactly the ordinal that needs it, requires a driver that
+supports expansion (`csi-driver-host-path`), which is extra cluster setup
+`docs/runbook-milestone-5b-evidence.md` §4 keeps separate for exactly this
+reason.
+
+**The synchronous resize rejection cannot be diagnosed from the error.**
+`growClaim`'s patch (`internal/controller/server_controller.go:420-453`) can
+be refused by the API server for at least two different reasons carrying the
+identical shape: `allowVolumeExpansion: false` on the storage class, and a
+claim that is not dynamically provisioned at all (verified empirically:
+`reason="Forbidden" code=403
+message="only dynamically provisioned pvc can be resized and the storageclass
+that provisions the pvc must support resize" Causes:nil` — the same response
+for both). `status.storageResizeError` therefore names `allowVolumeExpansion`
+as the first thing an operator should check, not as the established cause,
+and the message says so explicitly.
+
+**The generation-change reset is now partly undone for a persistent group
+whose stale-generation corpse is still present.** The reset at
+`internal/controller/servergroup_controller.go:208-210` zeroes
+`status.consecutiveFailures` and `status.lastFailureAt` whenever
+`metadata.generation` moves, on the reasoning that a spec edit is the
+operator's answer to whatever broke. For a persistent group the very same pass
+now counts failures over the *unfiltered* view list (`ofGeneration` is
+ephemeral-only as of 5b — see below), so a stale-generation `Failed` corpse
+still holding its ordinal is counted right back in on the same reconcile: the
+count returns to the number of corpses the group is holding rather than to 0.
+`pruneFailed` does not run for a persistent group, and each corpse keeps its
+own ordinal until its failed retention elapses, so with `replicas > 1` that is
+one per ordinal that has one, bounded by `spec.replicas`
+(`internal/controller/servergroup_controller.go:251-258`). Defensible — a spec
+edit does not heal a broken ordinal, and an operator watching for a stall
+should not read a non-zero count as "nothing happened" — but it means the reset
+an ephemeral group gets in full, a persistent one gets only most of.
+
+**Fixed: a persistent group's failure counter used to freeze on any spec
+edit.** `CountFailures`'s call site (`internal/controller/servergroup_controller.go:231-238`)
+used to filter every group's views through `ofGeneration`, which keeps only
+servers whose `spec.groupGeneration` equals the group's current
+`metadata.generation`. `Server.spec.groupGeneration` is stamped once at
+creation and never updated, and `DecidePersistentSize` is generation-blind by
+design, so any spec edit on a persistent group bumped `metadata.generation`
+and the filter then discarded every one of that group's servers —
+`CountFailures` saw an empty slice, counted nothing, and
+`status.consecutiveFailures` froze wherever it stood. A pre-existing defect
+inherited from 5a, invisible until 5b gave persistent failures somewhere to
+accumulate toward. Fixed by reading `ofGeneration` for an ephemeral group only
+and passing the unfiltered views for a persistent one, and pinned by
+`TestAPersistentGroupCountsAFailureAfterItsGenerationMoves`.
+
+**Fixed: a squatter used to be able to stall a whole group's takedowns, not
+only its own ordinal.** Gate A (`takedownInFlight`,
+`internal/controller/persistent.go:222`) now skips any view whose `Ordinal` is
+nil, the same as every other pass over `in.Views` in `persistent.go`. Without
+that skip, an object squatting on a persistent ordinal's name without carrying
+`spec.ordinal` — already recorded above, under "From milestone 5a", as
+stalling *its own* ordinal — would also have held Gate A open forever, since
+`leaving()` on such an object never resolves. That would have blocked every
+takedown for the whole group, updates and scale-downs alike, indefinitely and
+silently, rather than only the one ordinal the squatter occupies.
+
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 
 **`spawnery-system` is hard-wired into the RBAC markers.** The

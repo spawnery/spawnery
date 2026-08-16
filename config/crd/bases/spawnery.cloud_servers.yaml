@@ -85,6 +85,19 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              podHash:
+                description: |-
+                  PodHash is podspec.DesiredServerHash at the moment this server was
+                  created: a digest of everything the operator would render for it. The
+                  group compares it against a freshly computed one to decide whether this
+                  ordinal is running the current spec.
+
+                  Empty means adopt, never stale. Every server that existed before this
+                  field did carries an empty value, and reading that as stale would restart
+                  every world in the installation on the first reconcile after an upgrade.
+                  The group stamps the current hash onto such a server and orders no
+                  takedown.
+                type: string
               retire:
                 description: |-
                   Retire asks this server to stop taking joins and empty out, without its
@@ -232,6 +245,24 @@ spec:
                   back to pod-creation time.
                 format: date-time
                 type: string
+              storageResizeError:
+                description: |-
+                  StorageResizeError names why this server's claim has not grown to
+                  spec.storage.size, or is empty when it has (or there is nothing to
+                  grow). It covers both shapes a resize can fail in: a patch the API
+                  server's own admission refuses synchronously, ordinarily because the
+                  claim's storage class sets allowVolumeExpansion: false, and a resize
+                  admission accepted that a driver later fails, reported only on the
+                  claim itself through its ControllerResizeError or NodeResizeError
+                  condition.
+                type: string
+              storageResizePending:
+                description: |-
+                  StorageResizePending is true while this server's claim carries the
+                  FileSystemResizePending condition: the CSI driver has grown the volume
+                  and needs the pod restarted before the filesystem follows. Most drivers
+                  expand online and never set it.
+                type: boolean
               wasRegistered:
                 description: |-
                   WasRegistered is true once this server has been registered with the

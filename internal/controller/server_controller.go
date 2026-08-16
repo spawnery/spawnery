@@ -104,7 +104,7 @@ type ServerReconciler struct {
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile collects the inputs, asks the state machine and executes the
@@ -225,6 +225,19 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	createPod := groupFound && networkFound && !nameConflict && !nameStillHeld &&
 		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero()
 
+	// Checked on every pass, not only the one that creates the pod: a
+	// persistent server's pod usually already exists, so createPod is false
+	// for the reconcile that actually has to notice spec.storage.size grew,
+	// or the claim's FileSystemResizePending condition.
+	if !group.IsEphemeral() {
+		if err := r.growClaim(ctx, group, srv); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.readResizePending(ctx, srv); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Say so on the object, and only where nothing above has already put a
 	// truer reason there: a Server whose group or network is missing carries
 	// one from the switch above, and one that has itself been deleted is not
@@ -290,7 +303,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// AlreadyExists is the ordinary case rather than an error: an ordinal
 		// recreated after its server was deleted is *supposed* to find the
 		// claim it had before, and that is the whole point of the milestone.
-		// Nothing updates the claim either — growing a world is 5b's.
+		// growClaim above is what grows it; this call only ever creates.
 		if !group.IsEphemeral() {
 			claim := podspec.BuildDataClaim(group, srv)
 			if err := r.Create(ctx, claim); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -352,6 +365,151 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{RequeueAfter: resyncInterval}, nil
+}
+
+// growClaim raises the claim's storage request to match spec.storage.size,
+// and never lowers it. It is the only write this operator makes to an
+// *existing* claim — the reconcile above creates one alongside the pod, and
+// nothing anywhere deletes one — and the RBAC it needs is patch, not update,
+// which would replace the whole object for one field, and never delete, which
+// is the verb that destroys a world.
+//
+// A claim already at or above the size asked for is left untouched, byte for
+// byte: that covers both the ordinary case (nothing to do) and the one a
+// controller has no business correcting — a claim someone grew by hand, which
+// the CRD's own shrink guard on spec.storage.size means this function will
+// never be asked to shrink anyway.
+//
+// A resize can fail two different ways, and this function is where the
+// choice was made to catch both rather than only the one Design §4 names.
+// allowVolumeExpansion: false is the ordinary way the patch below fails
+// synchronously, right here, with the API server's own admission error — but
+// IsInvalid/IsForbidden covers other causes of the same shape too: Task 7's
+// own report found "only dynamically provisioned pvc can be resized" from an
+// unbound, class-less claim, which has nothing to do with
+// allowVolumeExpansion. This function cannot tell those apart from the error
+// alone, so the message it records below says what happened and names
+// allowVolumeExpansion as the first thing to check, not as the established
+// cause. A driver that accepts the resize and fails it later says so only on
+// the claim itself, as a ControllerResizeError or NodeResizeError condition,
+// with nothing synchronous to catch at all; resizeConditionError is what
+// reads that, both below and on the pass where nothing needed to grow.
+// Reporting only the synchronous half would leave the asynchronous one
+// looking like a resize still in progress rather than one that failed. Both
+// land on status.storageResizeError, and ServerGroupReconciler folds either
+// into the group's StorageResize condition without needing to know which
+// kind it was.
+func (r *ServerReconciler) growClaim(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	srv *spawneryv1alpha1.Server,
+) error {
+	if group.Spec.Storage == nil {
+		return nil
+	}
+	claim := &corev1.PersistentVolumeClaim{}
+	key := types.NamespacedName{Name: podspec.DataClaimName(srv.Name), Namespace: srv.Namespace}
+	if err := r.Get(ctx, key, claim); err != nil {
+		if apierrors.IsNotFound(err) {
+			srv.Status.StorageResizeError = ""
+		}
+		return client.IgnoreNotFound(err)
+	}
+	want := group.Spec.Storage.Size
+	have := claim.Spec.Resources.Requests[corev1.ResourceStorage]
+	if want.Cmp(have) <= 0 {
+		srv.Status.StorageResizeError = resizeConditionError(claim)
+		return nil
+	}
+	patched := claim.DeepCopy()
+	patched.Spec.Resources.Requests[corev1.ResourceStorage] = want
+	if err := r.Patch(ctx, patched, client.MergeFrom(claim)); err != nil {
+		if !apierrors.IsInvalid(err) && !apierrors.IsForbidden(err) {
+			return err
+		}
+		// Refused synchronously by the API server's own resize admission,
+		// rather than returned as a reconcile error: returning it here would
+		// fail this whole pass before readResizePending below ever ran, and
+		// retrying an admission rejection every five seconds would not
+		// change its outcome. Recording it on the status is what lets
+		// ServerGroupReconciler say so on the group instead of this staying
+		// a line in the reconcile log.
+		//
+		// The message names what happened and what to check, not why: see
+		// this function's doc comment for why IsInvalid/IsForbidden alone
+		// cannot tell an unexpandable storage class apart from Task 7's
+		// unbound-claim rejection, or from any other cause the same two error
+		// kinds cover. err is carried verbatim because it is the only part of
+		// this that actually identifies the cause.
+		className := "(the cluster default)"
+		if claim.Spec.StorageClassName != nil {
+			className = *claim.Spec.StorageClassName
+		}
+		srv.Status.StorageResizeError = fmt.Sprintf(
+			"claim %s: the patch growing it to %s was refused by the API server: %v; "+
+				"check storage class %q first, in particular whether it sets allowVolumeExpansion: true",
+			claim.Name, want.String(), err, className)
+		return nil
+	}
+	srv.Status.StorageResizeError = resizeConditionError(claim)
+	return nil
+}
+
+// resizeConditionError names the reason a claim's resize did not go through,
+// read off the two conditions a CSI driver sets only after admission already
+// let a resize patch through: PersistentVolumeClaimControllerResizeError and
+// PersistentVolumeClaimNodeResizeError. This is the asynchronous half of what
+// growClaim's own doc comment describes; growClaim calls this both after a
+// patch it just made and on a pass where the claim already matched
+// spec.storage.size, since a driver can fail a resize well after the pass
+// that requested it.
+//
+// Returns "" when neither condition is set to True, which is the ordinary
+// case: most CSI drivers that accept a resize also complete it.
+func resizeConditionError(claim *corev1.PersistentVolumeClaim) string {
+	for _, c := range claim.Status.Conditions {
+		if c.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch c.Type {
+		case corev1.PersistentVolumeClaimControllerResizeError, corev1.PersistentVolumeClaimNodeResizeError:
+			return fmt.Sprintf("claim %s: %s: %s", claim.Name, c.Reason, c.Message)
+		}
+	}
+	return ""
+}
+
+// readResizePending mirrors the claim's FileSystemResizePending condition
+// onto status.storageResizePending, which is what DecidePersistentSize's
+// lowest-priority candidate class reads. Most CSI drivers expand a volume
+// online and the pod never has to restart for it; the ones that do not set
+// the condition until the resize actually needs a restart to take effect,
+// so this is false for the ordinary case.
+//
+// A claim that no longer exists clears the flag rather than leaving a stale
+// true behind -- there is nothing left asking for a restart.
+func (r *ServerReconciler) readResizePending(
+	ctx context.Context,
+	srv *spawneryv1alpha1.Server,
+) error {
+	claim := &corev1.PersistentVolumeClaim{}
+	key := types.NamespacedName{Name: podspec.DataClaimName(srv.Name), Namespace: srv.Namespace}
+	if err := r.Get(ctx, key, claim); err != nil {
+		if apierrors.IsNotFound(err) {
+			srv.Status.StorageResizePending = false
+			return nil
+		}
+		return err
+	}
+	pending := false
+	for _, c := range claim.Status.Conditions {
+		if c.Type == corev1.PersistentVolumeClaimFileSystemResizePending && c.Status == corev1.ConditionTrue {
+			pending = true
+			break
+		}
+	}
+	srv.Status.StorageResizePending = pending
+	return nil
 }
 
 // ensureFinalizer puts the drain finalizer on the object. It exists as a step

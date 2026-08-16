@@ -78,6 +78,7 @@ func BuildProxyPod(
 	group *spawneryv1alpha1.ProxyGroup,
 	name string,
 	agentEndpoint string,
+	configValues []byte,
 ) (*corev1.Pod, error) {
 	pod, err := renderProxyPod(net, group, name, agentEndpoint)
 	if err != nil {
@@ -89,8 +90,12 @@ func BuildProxyPod(
 	// rollout reads as stale on the very next pass. DesiredProxyHash renders
 	// its own pod with the name held empty rather than trying to redact this
 	// one after the fact — see its doc comment for why that is the safer
-	// shape.
-	hash, err := DesiredProxyHash(net, group, agentEndpoint)
+	// shape. configValues is threaded straight through to it rather than
+	// hashed here or accepted as an already-computed digest, so the label
+	// this stamps is always the same hash a caller computing wantHash from
+	// the identical inputs would arrive at -- accepting a precomputed digest
+	// instead would let a caller stamp a wrong one.
+	hash, err := DesiredProxyHash(net, group, agentEndpoint, configValues)
 	if err != nil {
 		return nil, err
 	}

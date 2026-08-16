@@ -228,8 +228,16 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if group.Status.LastFailureAt != nil {
 		lastFailure = group.Status.LastFailureAt.Time
 	}
-	failures, newestFailure := CountFailures(ofGeneration(views, group.Generation),
-		group.Status.ConsecutiveFailures, lastFailure)
+	// countViews and requiredOrdinals are chosen by type rather than read off
+	// group.DesiredReplicas(): that accessor returns spec.scaling.minReplicas
+	// for an ephemeral group, not the zero CountFailures needs to select its
+	// maximum-of-all-views rule.
+	countViews, requiredOrdinals := views, group.DesiredReplicas()
+	if group.IsEphemeral() {
+		countViews, requiredOrdinals = ofGeneration(views, group.Generation), 0
+	}
+	failures, newestFailure := CountFailures(countViews,
+		group.Status.ConsecutiveFailures, lastFailure, requiredOrdinals)
 	group.Status.ConsecutiveFailures = failures
 	// Only written when this pass actually counted something. CountFailures
 	// returns the timestamp it counted from unchanged when it counted nothing,
@@ -302,7 +310,46 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// what known-issues already describes: a departing node takes a server
 	// regardless of what kind of server it is.
 	mayResize := networkUsable
-	decision, err := r.size(ctx, group, views, servers, backoff, mayResize)
+
+	// Gated the same as sizing, on mayResize rather than a check of its own:
+	// BuildServerPod reads net.Spec.Defaults, and when the Network was never
+	// found net is the zero value, so a hash computed from it would not
+	// describe what the group renders once a real Network is usable. The
+	// found-but-not-accepted case does not strictly need this -- that net
+	// already carries the real spec -- but splitting it out would need its own
+	// branch on networkFound for a case sizing itself does not distinguish
+	// either, and reusing mayResize costs nothing: it self-heals the same way
+	// sizing does, on the next pass.
+	//
+	// Computed once per pass rather than once per server either way: a create
+	// loop that asked BuildServerPod once per server would render the same pod
+	// repeatedly for one identical answer. serverConfigValues is the one
+	// construction of the config document (see its own comment);
+	// DesiredServerHash is the digest of it plus the pod.
+	var podHash string
+	if mayResize {
+		configValues, err := serverConfigValues(group)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		podHash, err = podspec.DesiredServerHash(network, group, configValues)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Adoption runs before sizing, on a persistent group only: a server
+		// whose spec.podHash is still empty predates the field (ServerSpec.
+		// PodHash's doc comment is what says an empty value means adopt rather
+		// than stale), and this is the pass that gives it the current hash so
+		// a later comparison has one to compare against. It orders no takedown
+		// of its own -- nothing reads podHash to decide a removal yet, which
+		// is Task 4's rule -- so the stamp is the whole effect here.
+		if err := r.adoptServers(ctx, group, servers, podHash); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -352,6 +399,42 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				eventType = corev1.EventTypeWarning
 			}
 			r.Recorder.Event(group, eventType, limited.Reason, limited.Message)
+		}
+	}
+
+	// StorageResize is the persistent-only counterpart to ScalingLimited
+	// above: each condition belongs to the group type whose question it
+	// answers, and an ephemeral group has no claim for this one to be about
+	// -- group.Spec.Storage is a persistent group's field, and growClaim in
+	// the Server controller is skipped outright for an ephemeral one, so
+	// every view's ResizeError here would read "" for an ephemeral group
+	// regardless.
+	//
+	// Nothing here talks to a claim directly: storageResizeCondition only
+	// reads ResizeError off the views collectViews already built, the same
+	// separation ResizePending's own comment describes. growClaim and its
+	// neighbour resizeConditionError, in the Server controller, are the ones
+	// that decided what each server's ResizeError says.
+	if !group.IsEphemeral() {
+		resize := storageResizeCondition(views)
+		// The event goes on the flank only, the rule ScalingLimited above
+		// and BackingOff/Degraded below both follow. What differs here is
+		// which value is the interesting one to flank on: True is the
+		// healthy default for this condition, the reverse of those three, so
+		// what is compared is refusal (Status == False) rather than health —
+		// a group publishing this condition for the first time while every
+		// claim already matches its spec stays quiet instead of announcing
+		// an all-clear nobody asked about.
+		wasRefused := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionStorageResize) != nil &&
+			!meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionStorageResize)
+		meta.SetStatusCondition(&group.Status.Conditions, resize)
+		isRefused := resize.Status == metav1.ConditionFalse
+		if isRefused != wasRefused {
+			eventType := corev1.EventTypeNormal
+			if isRefused {
+				eventType = corev1.EventTypeWarning
+			}
+			r.Recorder.Event(group, eventType, resize.Reason, resize.Message)
 		}
 	}
 
@@ -503,12 +586,19 @@ func networkNotAcceptedMessage(network *spawneryv1alpha1.Network) string {
 }
 
 // ofGeneration narrows the views to the servers the group's current spec
-// produced, which is the set the failure count is taken over.
+// produced. The call site below uses it for an ephemeral group's failure
+// count only: a persistent group's ordinals outlive a generation change by
+// design, so filtering here would empty every view CountFailures sees on the
+// very next spec edit and freeze status.consecutiveFailures wherever it
+// stood. requiredOrdinals is what keeps a persistent group's count
+// generation-blind instead, and it does so a different way — by ordinal, not
+// by spec — which is covered where that parameter is declared.
 //
-// A streak belongs to the spec that caused it. The previous generation's corpse
-// says nothing about the new image — selectFailedForPruning already keeps the
-// newest generation's failure for exactly that reason — and a previous
-// generation's server going Ready says nothing about it either.
+// A streak belongs to the spec that caused it, for the ephemeral group this
+// still governs. The previous generation's corpse says nothing about the new
+// image — selectFailedForPruning already keeps the newest generation's
+// failure for exactly that reason — and a previous generation's server going
+// Ready says nothing about it either.
 //
 // It is also what makes the clear above mean anything. Without it the reset
 // would be undone on the very pass that performs it: the counter goes to zero
@@ -563,6 +653,7 @@ func (r *ServerGroupReconciler) size(
 	servers map[string]*spawneryv1alpha1.Server,
 	backoff BackoffDecision,
 	mayResize bool,
+	podHash string,
 ) (SizeDecision, error) {
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
@@ -602,6 +693,7 @@ func (r *ServerGroupReconciler) size(
 		decision = DecidePersistentSize(PersistentInputs{
 			Group:          group.Name,
 			Replicas:       group.DesiredReplicas(),
+			PodHash:        podHash,
 			Views:          views,
 			PendingCreates: pendingCreates,
 			PendingDeletes: pendingDeletes,
@@ -648,14 +740,14 @@ func (r *ServerGroupReconciler) size(
 	// other's field -- and neither loop needs to know that.
 	if backoff.MayCreate {
 		for i := int32(0); i < decision.Create; i++ {
-			name, err := r.createServer(ctx, group)
+			name, err := r.createServer(ctx, group, podHash)
 			if err != nil {
 				return decision, err
 			}
 			r.Expectations.expectCreated(key, name)
 		}
 		for _, ordinal := range decision.CreateOrdinals {
-			name, err := r.createPersistentServer(ctx, group, ordinal)
+			name, err := r.createPersistentServer(ctx, group, ordinal, podHash)
 			if err != nil {
 				return decision, err
 			}
@@ -666,9 +758,16 @@ func (r *ServerGroupReconciler) size(
 		logger.Info("fewer free servers than the surplus, trying again later",
 			"group", group.Name, "surplus", decision.Surplus, "free", len(decision.Delete))
 	}
+	// DeleteReason distinguishes the persistent rule's occasions for the
+	// event trail; the ephemeral rule leaves it empty and falls back to the
+	// reason it always used.
+	deleteReason := decision.DeleteReason
+	if deleteReason == "" {
+		deleteReason = "ServerRemoved"
+	}
 	for _, name := range decision.Delete {
 		if err := r.deleteServer(ctx, group, servers, name,
-			"ServerRemoved", "removing server %s"); err != nil {
+			deleteReason, "removing server %s"); err != nil {
 			return decision, err
 		}
 		r.Expectations.expectDeleted(key, name)
@@ -712,6 +811,67 @@ func (r *ServerGroupReconciler) condemn(
 		r.Expectations.expectDeleted(key, name)
 	}
 	return nil
+}
+
+// storageResizeCondition reports whether every persistent server's claim
+// currently matches spec.storage.size. True is the ordinary case. False
+// carries the message the offending server's own status already worked out
+// -- growClaim's synchronous rejection, or resizeConditionError's read of
+// the claim's ControllerResizeError/NodeResizeError condition -- taken from
+// the lowest-ordinal view that has one, deterministically rather than by
+// which one collectViews happens to have listed first: collectViews makes no
+// ordering promise, so with two unhealthy claims "the first one found" could
+// alternate between reconciles and leave an operator watching the condition
+// flap between two messages instead of reading one steady signal. Lowest
+// ordinal is not a claim that ordinal's cause is any more urgent than the
+// other's -- it is only the tie-break that stays put.
+//
+// Deliberately not folded into Degraded. Design §4's point stands regardless
+// of which of the two failure shapes produced the message: a storage class
+// that refuses to grow and a group whose servers will not start are
+// different problems with different remedies, and derivePhase must not read
+// this condition as if it were.
+func storageResizeCondition(views []ServerView) metav1.Condition {
+	cond := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionStorageResize,
+		Status:  metav1.ConditionTrue,
+		Reason:  spawneryv1alpha1.ReasonStorageResized,
+		Message: "every claim matches spec.storage.size",
+	}
+	var worst *ServerView
+	for i := range views {
+		v := &views[i]
+		if v.ResizeError == "" {
+			continue
+		}
+		if worst == nil || ordinalBefore(v, worst) {
+			worst = v
+		}
+	}
+	if worst == nil {
+		return cond
+	}
+	cond.Status = metav1.ConditionFalse
+	cond.Reason = spawneryv1alpha1.ReasonStorageResizeRefused
+	cond.Message = worst.ResizeError
+	return cond
+}
+
+// ordinalBefore reports whether a's ordinal sorts before b's, for
+// storageResizeCondition's tie-break. A nil ordinal does occur among a
+// persistent group's views -- an adopted or hand-made object need not carry
+// spec.ordinal, which is what DecidePersistentSize's nil-ordinal rule and
+// known-issues' squatter entry are about -- and this has nothing to compare
+// it against, so it sorts last rather than panicking on the dereference.
+func ordinalBefore(a, b *ServerView) bool {
+	switch {
+	case a.Ordinal == nil:
+		return false
+	case b.Ordinal == nil:
+		return true
+	default:
+		return *a.Ordinal < *b.Ordinal
+	}
 }
 
 // derivePhase maps the totals and conditions onto the group phase.
@@ -770,6 +930,7 @@ func (r *ServerGroupReconciler) collectViews(
 			// exactly like one that reached a terminal state.
 			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),
 			Generation:   srv.Spec.GroupGeneration,
+			PodHash:      srv.Spec.PodHash,
 			Retire:       srv.Spec.Retire,
 			CreatedAt:    srv.CreationTimestamp.Time,
 			// podFound is required, and it is what makes pod safe to
@@ -796,7 +957,9 @@ func (r *ServerGroupReconciler) collectViews(
 			// reason it gives — a group must not be emptied on the strength of
 			// a cache miss — and it costs at most a delay, because the next
 			// pass asks again.
-			Condemned: podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
+			Condemned:     podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
+			ResizePending: srv.Status.StorageResizePending,
+			ResizeError:   srv.Status.StorageResizeError,
 		}
 		if podFound {
 			v.NodeName = pod.Spec.NodeName
@@ -840,6 +1003,7 @@ func (r *ServerGroupReconciler) podFor(ctx context.Context, srv *spawneryv1alpha
 func (r *ServerGroupReconciler) newServer(
 	group *spawneryv1alpha1.ServerGroup,
 	name string,
+	podHash string,
 ) (*spawneryv1alpha1.Server, error) {
 	srv := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{
@@ -854,6 +1018,7 @@ func (r *ServerGroupReconciler) newServer(
 		Spec: spawneryv1alpha1.ServerSpec{
 			GroupRef:        spawneryv1alpha1.ObjectRef{Name: group.Name},
 			GroupGeneration: group.Generation,
+			PodHash:         podHash,
 		},
 	}
 	if err := controllerutil.SetControllerReference(group, srv, r.Scheme); err != nil {
@@ -864,8 +1029,12 @@ func (r *ServerGroupReconciler) newServer(
 
 // createServer creates one interchangeable server of an ephemeral group, under
 // a name with a random suffix because it has no identity to preserve.
-func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) (string, error) {
-	srv, err := r.newServer(group, NewServerName(group.Name))
+func (r *ServerGroupReconciler) createServer(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	podHash string,
+) (string, error) {
+	srv, err := r.newServer(group, NewServerName(group.Name), podHash)
 	if err != nil {
 		return "", err
 	}
@@ -883,8 +1052,9 @@ func (r *ServerGroupReconciler) createPersistentServer(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	ordinal int32,
+	podHash string,
 ) (string, error) {
-	srv, err := r.newServer(group, PersistentServerName(group.Name, ordinal))
+	srv, err := r.newServer(group, PersistentServerName(group.Name, ordinal), podHash)
 	if err != nil {
 		return "", err
 	}
@@ -961,6 +1131,36 @@ func (r *ServerGroupReconciler) retireServer(
 	}
 	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerRetiring",
 		"retiring server %s for a rolling update", name)
+	return nil
+}
+
+// adoptServers stamps the freshly computed render hash onto every server of a
+// persistent group whose spec.podHash is still empty: one created before this
+// field existed. Adoption applies to persistent groups only; an ephemeral
+// group's servers are skipped outright.
+func (r *ServerGroupReconciler) adoptServers(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	servers map[string]*spawneryv1alpha1.Server,
+	podHash string,
+) error {
+	if group.IsEphemeral() {
+		return nil
+	}
+	for _, srv := range servers {
+		// Already adopted. Guards the same cache-lag window retireServer's own
+		// guard does, above: without it, a server this pass (or an earlier one)
+		// already patched, but not yet visible through the cache this List
+		// read, would be patched again.
+		if srv.Spec.PodHash != "" {
+			continue
+		}
+		patch := client.MergeFrom(srv.DeepCopy())
+		srv.Spec.PodHash = podHash
+		if err := r.Patch(ctx, srv, patch); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -1065,11 +1265,23 @@ func (r *ServerGroupReconciler) reconcilePDB(
 // Bootstrapper.ensureConfigMap both document: cmd/spawnery-operator narrows
 // the manager's cache for ConfigMaps to that label, so an unlabelled one this
 // reconciler just wrote would be invisible to it on the very next Get.
-func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ServerGroup) error {
+// serverConfigValues is the config document a server group renders, and the
+// single place it is built. reconcileConfigMap writes it to the ConfigMap and
+// DesiredServerHash digests it; two constructions of the same document would
+// drift, and the failure that drift produces is an update that never fires.
+func serverConfigValues(group *spawneryv1alpha1.ServerGroup) ([]byte, error) {
 	maxPlayers := group.Spec.MaxPlayers
 	data, err := yaml.Marshal(render.Values{MaxPlayers: &maxPlayers})
 	if err != nil {
-		return fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
+		return nil, fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
+	}
+	return data, nil
+}
+
+func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ServerGroup) error {
+	data, err := serverConfigValues(group)
+	if err != nil {
+		return err
 	}
 
 	cm := &corev1.ConfigMap{

@@ -25,12 +25,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
@@ -1606,6 +1608,8 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 			t.Fatalf("ReportPlayers: %v", err)
 		}
 	}
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
 	f.reconcileGroup(t, r)
 
 	var leaving int
@@ -1616,6 +1620,13 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	}
 	if leaving != 1 {
 		t.Fatalf("%d servers marked for deletion, want exactly one per pass", leaving)
+	}
+	// The ephemeral side of size()'s DeleteReason fallback. DecideSize leaves
+	// the field empty -- only the persistent classes fill it, and those are
+	// tabled in persistent_test.go -- so this removal must carry the reason
+	// the ephemeral rule has always used.
+	if got := scalingEvents(rec, "ServerRemoved"); got != 1 {
+		t.Errorf("ServerRemoved events = %d, want 1", got)
 	}
 }
 
@@ -3487,11 +3498,22 @@ func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
 		t.Fatalf("servers = %d, want 3", got)
 	}
 
+	// SizeDecision.DeleteReason says which class nominated an ordinal, and the
+	// event is where it reaches an operator -- nothing else reads the field.
+	// The values are tabled in persistent_test.go; what this asserts is that
+	// size() carries one through to deleteServer instead of falling back to
+	// the ephemeral rule's ServerRemoved.
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+
 	f.setPersistentReplicas(t, "survival", 2)
 	f.reconcilePersistentGroup(t, r, "survival")
 
 	if _, present := f.serverIfPresent("survival-2"); present {
 		t.Error("survival-2 is still here; the highest ordinal is the one that goes")
+	}
+	if got := scalingEvents(rec, "SurplusOrdinal"); got != 1 {
+		t.Errorf("SurplusOrdinal events = %d, want 1; the takedown must say which class named it", got)
 	}
 	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 2 ||
 		names[0] != "survival-0" || names[1] != "survival-1" {
@@ -3554,6 +3576,66 @@ func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 	if n := scalingEvents(r.Recorder.(*record.FakeRecorder), "ServerCreated"); n != 0 {
 		t.Errorf("ServerCreated events = %d, want none: the object was already there, "+
 			"and this collision repeats every pass for as long as it lasts", n)
+	}
+}
+
+// TestAPersistentServerIsCreatedCarryingItsRenderHash pins the stamp half of
+// this task: a persistent server is created carrying the hash of what the
+// operator would render for it, so a later pass can tell whether the spec has
+// moved.
+func TestAPersistentServerIsCreatedCarryingItsRenderHash(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	group := f.createPersistentGroup(t, "survival", 1)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	srv := f.server("survival-0")
+	if srv.Spec.PodHash == "" {
+		t.Fatal("server was created with no pod hash, so it can never be found stale")
+	}
+
+	values, err := serverConfigValues(group)
+	if err != nil {
+		t.Fatalf("serverConfigValues: %v", err)
+	}
+	want, err := podspec.DesiredServerHash(f.network, group, values)
+	if err != nil {
+		t.Fatalf("DesiredServerHash: %v", err)
+	}
+	if srv.Spec.PodHash != want {
+		t.Fatalf("stamped %q, the group would render %q", srv.Spec.PodHash, want)
+	}
+}
+
+// TestAServerWithNoHashIsAdoptedRatherThanReplaced is the upgrade case, and it
+// must assert both halves. Asserting only that the field gets filled would
+// pass while every world restarted.
+func TestAServerWithNoHashIsAdoptedRatherThanReplaced(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 1)
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	// Blanked to simulate a server that predates spec.podHash.
+	srv := f.server("survival-0")
+	uidBefore := srv.UID
+	srv.Spec.PodHash = ""
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("blank the hash: %v", err)
+	}
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	after := f.server("survival-0")
+	if after.UID != uidBefore {
+		t.Fatal("the ordinal was replaced; an empty hash must be adopted, not treated as stale")
+	}
+	if after.Spec.PodHash == "" {
+		t.Fatal("the hash was not stamped, so the server stays unadoptable forever")
+	}
+	if !after.DeletionTimestamp.IsZero() {
+		t.Fatal("a takedown was ordered for an adopted server")
 	}
 }
 
@@ -3685,15 +3767,21 @@ func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
 // group's side clears a persistent corpse for having failed, but the Server
 // controller's failed-retention path does, and the ordinal is then created
 // again -- which is why each round here ends by aging the corpse out. With
-// the one ordinal this group has, that loop is also the only way the count
-// can reach the threshold at all, since CountFailures counts a corpse once;
-// a group with six or more ordinals could reach it on six distinct first
-// failures and never retry anything, so that half of the argument is this
-// test's, not a general proof. The loop's period is
+// survival-0 the only ordinal that ever fails, that loop is also the only way
+// its count can reach the threshold at all, since CountFailures counts a
+// corpse once; a group failing on six or more ordinals could reach it on six
+// distinct first failures and never retry anything, so that half of the
+// argument is this test's, not a general proof. The loop's period is
 // spec.failedRetentionSeconds -- an hour at the CRD default, which is what
 // this group carries -- so at that default the backoff's own windows (160s at
 // the most) never delay an attempt; what the backoff does for this group is
 // end the attempts, which is the last assertion below.
+//
+// survival-1 is the second ordinal spec §5.3 requires this test to carry, a
+// healthy sibling standing the whole time survival-0 is not: with only one
+// ordinal the minimum-over-required-ordinals rule and the maximum-over-all-
+// views rule it replaced cannot disagree, so a group of one could reach
+// Degraded under either and prove nothing about which is running.
 //
 // The failure driven here is a startup deadline rather than an unbound claim.
 // envtest runs no provisioner and no scheduler, so a pod's volume never binds
@@ -3705,7 +3793,11 @@ func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
 func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	f.createPersistentGroup(t, "survival", 1)
+	f.createPersistentGroup(t, "survival", 2)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+	// Brought up once and never touched again -- see the function doc for why.
+	bringUpNamed(t, f, "survival-1")
 
 	for i := int32(0); i < backoffGiveUpAt; i++ {
 		f.reconcilePersistentGroup(t, r, "survival")
@@ -3764,6 +3856,60 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 	if _, present := f.serverIfPresent("survival-0"); present {
 		t.Error("the group rebuilt its ordinal after giving up; the backoff gates persistent creates too")
 	}
+	// The healthy sibling was never touched again after coming up, and the
+	// group reached Degraded anyway -- the assertions above would have
+	// stopped short of the threshold under the old maximum-over-all-views
+	// rule if survival-1 had so much as re-readied once per round.
+	if got := f.server("survival-1").Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase of survival-1 = %q, want Ready: it was never failed", got)
+	}
+}
+
+// TestAPersistentGroupCountsAFailureAfterItsGenerationMoves pins a defect
+// found while verifying this milestone rather than one it set out to fix:
+// ofGeneration -- built for the ephemeral count, where a generation change
+// really does replace the population -- was the only filter CountFailures'
+// call site applied, for a group of either type. spec.groupGeneration is
+// stamped on a Server once at creation and never updated afterwards, so any
+// edit to a persistent group's spec moves group.Generation out from under
+// every ordinal it already has. Filtered by that, CountFailures would see an
+// empty slice on every later pass and status.consecutiveFailures would freeze
+// wherever it stood -- never reaching backoffGiveUpAt, so Degraded would
+// never arrive, regardless of anything this milestone's own change does.
+//
+// The edit below touches spec.drain.timeoutSeconds, which reaches neither the
+// pod hash (so the ordinal is not rebuilt into carrying the new generation
+// itself) nor spec.replicas -- an edit an operator could make for a reason
+// that has nothing to do with the ordinal's own health.
+func TestAPersistentGroupCountsAFailureAfterItsGenerationMoves(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "outpost", 1)
+	f.reconcilePersistentGroup(t, r, "outpost")
+	if _, present := f.serverIfPresent("outpost-0"); !present {
+		t.Fatalf("the group did not create its ordinal")
+	}
+
+	group := f.persistentGroup(t, "outpost")
+	group.Spec.Drain.TimeoutSeconds++
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	// Observes the new generation with no failure yet on either side of it,
+	// so the deliberate reset at a generation change (ConsecutiveFailures to
+	// 0 -- a real feature, not what this test is about) has already happened
+	// before the round below, and cannot be mistaken for what it is
+	// checking.
+	f.reconcilePersistentGroup(t, r, "outpost")
+
+	f.failServerNeverReady(t, "outpost-0")
+	f.reconcilePersistentGroup(t, r, "outpost")
+
+	g := f.persistentGroup(t, "outpost")
+	if got := g.Status.ConsecutiveFailures; got != 1 {
+		t.Fatalf("consecutiveFailures = %d, want 1: outpost-0 predates the group's current generation "+
+			"and its failure must still be counted", got)
+	}
 }
 
 // persistentGroup re-reads a ServerGroup named here, rather than the fixture's
@@ -3775,4 +3921,227 @@ func (f *fixture) persistentGroup(t *testing.T, name string) *spawneryv1alpha1.S
 		t.Fatalf("get group %s: %v", name, err)
 	}
 	return group
+}
+
+// TestAPersistentGroupUpdatesOneOrdinalAtATime is the invariant, at the only
+// layer that can show it: two ordinals, a spec change, and never two down at
+// once across the whole sequence.
+//
+// The worst==0 assertion at the end is not decoration. Without it the test
+// would pass just as well if the spec change never moved anything at all —
+// exactly what a hash bug produces, and exactly the shape of non-discriminating
+// assertion that this milestone's review found seven of.
+func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 2)
+	f.reconcilePersistentGroup(t, r, "survival")
+	f.markReady(t, "survival-0")
+	f.markReady(t, "survival-1")
+
+	group := f.persistentGroup(t, "survival")
+	group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("change the group's image: %v", err)
+	}
+
+	// reconcileGroupOnce runs the group reconciler, whose decision may create
+	// a replacement ordinal or nominate a stale one for deletion, and then
+	// reconciles every server that currently exists once -- the Server
+	// reconciler is what actually creates a fresh ordinal's pod and what
+	// carries a draining one's finalizer removal forward one step.
+	reconcileGroupOnce := func() {
+		f.reconcilePersistentGroup(t, r, "survival")
+		for _, name := range f.serverNamesOfGroup(t, "survival") {
+			f.reconcile(name)
+		}
+	}
+	// driveNewPodsReady plays the kubelet and the in-game agent for every
+	// server that is not on its way out: it never touches a server carrying a
+	// deletion timestamp, because a draining server's pod is meant to go away,
+	// not to be marked ready.
+	driveNewPodsReady := func() {
+		for _, name := range f.serverNamesOfGroup(t, "survival") {
+			srv, ok := f.serverIfPresent(name)
+			if !ok || !srv.DeletionTimestamp.IsZero() {
+				continue // gone, or draining and not this helper's to touch
+			}
+			pod, ok := f.pod(name)
+			if !ok {
+				continue // no pod yet; the next reconcile creates one
+			}
+			f.setPodRunning(name, true)
+			uid := string(pod.UID)
+			f.agents.Connect(uid, agentRoleServer())
+			f.agents.MarkReady(uid)
+			if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+				t.Fatalf("ReportPlayers: %v", err)
+			}
+		}
+	}
+
+	worst := 0
+	for pass := 0; pass < 40; pass++ {
+		reconcileGroupOnce()
+		driveNewPodsReady()
+
+		down := 0
+		for _, ordinal := range []int32{0, 1} {
+			srv, ok := f.serverIfPresent(PersistentServerName("survival", ordinal))
+			if !ok || srv.Status.Phase != string(phase.Ready) {
+				down++
+			}
+		}
+		if down > worst {
+			worst = down
+		}
+	}
+	if worst > 1 {
+		t.Fatalf("%d ordinals were down at once; the invariant allows one", worst)
+	}
+	if worst == 0 {
+		t.Fatal("no ordinal ever went down, so this test proves nothing about the update")
+	}
+}
+
+// TestTheStorageResizeMessageComesFromTheLowestOrdinal pins the tie-break
+// storageResizeCondition argues for at length and nothing exercised: with two
+// unhealthy claims, the message must come from the lower ordinal every time,
+// so that an operator reads one steady signal rather than watching two
+// messages alternate between reconciles. Reversing ordinalBefore to pick the
+// highest is a live mutation only against a case where the two views carry
+// *different* messages -- one where they agreed would pass either way.
+//
+// The views are built here rather than driven through a cluster because
+// storageResizeCondition is a pure function of them, and the two distinct
+// messages are the whole fixture.
+func TestTheStorageResizeMessageComesFromTheLowestOrdinal(t *testing.T) {
+	views := []ServerView{
+		{Name: "survival-1", Ordinal: ptr.To(int32(1)), ResizeError: "ordinal 1's message"},
+		{Name: "survival-0", Ordinal: ptr.To(int32(0)), ResizeError: "ordinal 0's message"},
+	}
+	// Listed highest-first above, so "the first one found" would answer with
+	// ordinal 1; collectViews makes no ordering promise, which is the whole
+	// reason the tie-break exists.
+	got := storageResizeCondition(views)
+	if got.Status != metav1.ConditionFalse {
+		t.Fatalf("Status = %v, want False; two claims carry an error", got.Status)
+	}
+	if got.Message != "ordinal 0's message" {
+		t.Errorf("Message = %q, want ordinal 0's; the lowest ordinal is the tie-break that stays put",
+			got.Message)
+	}
+
+	// A nil ordinal sorts last, so it loses to any numbered view and wins only
+	// when it is the sole candidate.
+	nameless := ServerView{Name: "survival-a7kd", ResizeError: "a squatter's message"}
+	if got := storageResizeCondition([]ServerView{nameless, views[1]}); got.Message != "ordinal 0's message" {
+		t.Errorf("Message = %q, want ordinal 0's; a nil ordinal sorts after a numbered one", got.Message)
+	}
+	if got := storageResizeCondition([]ServerView{nameless}); got.Message != "a squatter's message" {
+		t.Errorf("Message = %q, want the squatter's; it is the only candidate there is", got.Message)
+	}
+}
+
+// TestAGroupSaysWhenItsStorageClassCannotGrow exercises growClaim's
+// synchronous rejection through envtest's real admission -- the same
+// mechanism TestGrowingStorageSizePatchesTheClaim (server_controller_test.go)
+// confirmed by hand: envtest runs no CSI driver and no external-resizer, so
+// a StorageClass with allowVolumeExpansion: false is real (creating one
+// needs no controller behind it), and the API server's own resize admission
+// refuses the grow patch against it exactly as a real cluster would. The
+// claim's Bound status is faked the same way that test fakes it, for the
+// same reason: nothing in envtest ever binds a claim to a volume, and an
+// unbound claim is refused resize for an unrelated reason of its own.
+//
+// What this does not prove is the asynchronous shape of the same failure --
+// a driver that accepts a resize and fails it only later, reported through
+// the claim's own ControllerResizeError or NodeResizeError condition.
+// resizeConditionError (server_controller.go) is what reads that, but
+// nothing here hand-writes either condition onto a claim to exercise it.
+func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	class := &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "unexpandable-" + f.ns},
+		Provisioner: "kubernetes.io/no-provisioner",
+	}
+	class.AllowVolumeExpansion = ptr.To(false)
+	if err := f.c.Create(f.ctx, class); err != nil {
+		t.Fatalf("create StorageClass: %v", err)
+	}
+
+	// storage.storageClassName is immutable once set (CEL rule on
+	// ServerGroupSpec), so it has to be there at creation -- built by hand
+	// rather than through createPersistentGroup for that one reason, the same
+	// as TestGrowingStorageSizePatchesTheClaim.
+	replicas := int32(1)
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: f.network.Name},
+			Type:                          spawneryv1alpha1.ServerGroupPersistent,
+			Image:                         "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers:                    100,
+			Replicas:                      &replicas,
+			TerminationGracePeriodSeconds: 60,
+			FailedRetentionSeconds:        3600,
+			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
+			Storage: &spawneryv1alpha1.StorageSpec{
+				Size:             resource.MustParse("10Gi"),
+				StorageClassName: &class.Name,
+			},
+		},
+	}
+	if err := f.c.Create(f.ctx, group); err != nil {
+		t.Fatalf("create persistent ServerGroup: %v", err)
+	}
+
+	f.reconcilePersistentGroup(t, r, "g")
+	f.reconcile("g-0")
+
+	claim := f.claim("g-0-data")
+	if claim == nil {
+		t.Fatal("no claim to grow")
+	}
+	claim.Status.Phase = corev1.ClaimBound
+	claim.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}
+	if err := f.c.Status().Update(f.ctx, claim); err != nil {
+		t.Fatalf("fake-bind the claim: %v", err)
+	}
+
+	g := f.persistentGroup(t, "g")
+	g.Spec.Storage.Size = resource.MustParse("20Gi")
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("grow the group: %v", err)
+	}
+
+	// The Server reconciler is the one that runs growClaim and meets the
+	// refusal; the group reconciler that follows is the one that reads
+	// status.storageResizeError back into the condition under test.
+	f.reconcile("g-0")
+	f.reconcilePersistentGroup(t, r, "g")
+
+	got := f.persistentGroup(t, "g")
+	cond := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionStorageResize)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("expected StorageResize=False, got %+v", cond)
+	}
+	// growClaim cannot tell this rejection apart from Task 7's unbound-claim
+	// one by the API error alone (see growClaim's own doc comment), so the
+	// message does not claim allowVolumeExpansion caused it -- this only
+	// checks that an operator reading it is pointed at the field to check
+	// first, alongside the API's own error, which is what actually does.
+	if !strings.Contains(cond.Message, "allowVolumeExpansion") {
+		t.Fatalf("the message does not point at the field to check: %q", cond.Message)
+	}
+
+	// The assertion that matters: it pins the separation the condition
+	// exists for. Without it, folding the refusal into Degraded as well
+	// would satisfy the assertion above just as easily.
+	degraded := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if degraded != nil && degraded.Status == metav1.ConditionTrue {
+		t.Fatal("a storage class that cannot expand is not a degraded group")
+	}
 }

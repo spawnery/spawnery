@@ -47,11 +47,52 @@ const (
 // indefinitely. A Failed server carries no ReadySince (the Server controller
 // clears it on the way out of Ready), so a corpse can never look like the
 // success that ends its own streak.
-func CountFailures(views []ServerView, prev int32, since time.Time) (int32, time.Time) {
+//
+// requiredOrdinals selects which group that last rule is stated for. Zero
+// means ephemeral, where servers are interchangeable and any success ends the
+// streak. Above zero it is spec.replicas of a persistent group, where each
+// ordinal owns a world of its own: the streak breaks only when every required
+// ordinal has a ready server, so a healthy sibling can no longer stand in for
+// a broken one and clear its count.
+func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdinals int32) (int32, time.Time) {
 	var lastSuccess time.Time
-	for _, v := range views {
-		if v.ReadySince.After(lastSuccess) {
-			lastSuccess = v.ReadySince
+	if requiredOrdinals == 0 {
+		for _, v := range views {
+			if v.ReadySince.After(lastSuccess) {
+				lastSuccess = v.ReadySince
+			}
+		}
+	} else {
+		// Which ordinals have a ready server, and each one's newest ReadySince.
+		// Presence is what the gate below reads; the timestamps are what it
+		// takes the maximum of.
+		ready := make(map[int32]time.Time, len(views))
+		for _, v := range views {
+			if v.Ordinal == nil || v.Phase != phase.Ready {
+				continue
+			}
+			if cur, ok := ready[*v.Ordinal]; !ok || v.ReadySince.After(cur) {
+				ready[*v.Ordinal] = v.ReadySince
+			}
+		}
+		// Two questions with different answers. *Whether* the group recovered:
+		// every required ordinal has a ready server, which is what stops a
+		// healthy sibling standing in for a broken one. *When* it recovered:
+		// the latest of their ReadySince values, because that is when the last
+		// of them came back. The earliest would be wrong -- an ordinal that
+		// stays ready through the whole episode never advances its ReadySince,
+		// so it would pin this to a time before the failure and no recovery
+		// could ever break the streak.
+		for ordinal := int32(0); ordinal < requiredOrdinals; ordinal++ {
+			at, ok := ready[ordinal]
+			if !ok {
+				// Broken, being rebuilt, or not created yet: not recovered.
+				lastSuccess = time.Time{}
+				break
+			}
+			if at.After(lastSuccess) {
+				lastSuccess = at
+			}
 		}
 	}
 

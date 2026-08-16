@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/spawnery/spawnery/internal/phase"
+	"k8s.io/utils/ptr"
 )
 
 // failedAt builds a Failed server that failed at t.
@@ -21,7 +22,7 @@ func TestCountFailuresCountsANewCorpseOnce(t *testing.T) {
 	base := time.Now()
 	views := []ServerView{failedAt("a", base)}
 
-	got, newest := CountFailures(views, 0, time.Time{})
+	got, newest := CountFailures(views, 0, time.Time{}, 0)
 	if got != 1 {
 		t.Errorf("count = %d, want 1", got)
 	}
@@ -32,7 +33,7 @@ func TestCountFailuresCountsANewCorpseOnce(t *testing.T) {
 	// The same corpse on the next pass. Without the FailedAt > since test this
 	// would climb by one every five-second resync forever, which is the whole
 	// reason a counter can survive at all.
-	got, _ = CountFailures(views, got, newest)
+	got, _ = CountFailures(views, got, newest, 0)
 	if got != 1 {
 		t.Errorf("count = %d after re-observing the same corpse, want 1", got)
 	}
@@ -42,7 +43,7 @@ func TestCountFailuresCountsTwoInOnePass(t *testing.T) {
 	base := time.Now()
 	views := []ServerView{failedAt("a", base), failedAt("b", base.Add(time.Second))}
 
-	got, newest := CountFailures(views, 0, time.Time{})
+	got, newest := CountFailures(views, 0, time.Time{}, 0)
 	if got != 2 {
 		t.Errorf("count = %d, want 2", got)
 	}
@@ -56,7 +57,7 @@ func TestCountFailuresResetsOnASuccessAfterTheLastFailure(t *testing.T) {
 	// Three failures already counted, then a server came up.
 	views := []ServerView{readyAt("b", base.Add(time.Minute))}
 
-	got, _ := CountFailures(views, 3, base)
+	got, _ := CountFailures(views, 3, base, 0)
 	if got != 0 {
 		t.Errorf("count = %d, want 0: a success since the last failure breaks the streak", got)
 	}
@@ -74,7 +75,7 @@ func TestCountFailuresIgnoresASuccessOlderThanTheLastFailure(t *testing.T) {
 		failedAt("broken", base.Add(time.Second)),
 	}
 
-	got, _ := CountFailures(views, 3, base)
+	got, _ := CountFailures(views, 3, base, 0)
 	if got != 4 {
 		t.Errorf("count = %d, want 4: the healthy server predates the streak and does not break it", got)
 	}
@@ -89,7 +90,7 @@ func TestCountFailuresStartsAFreshStreakAfterASuccess(t *testing.T) {
 		failedAt("next", base.Add(2*time.Minute)),
 	}
 
-	got, newest := CountFailures(views, 3, base)
+	got, newest := CountFailures(views, 3, base, 0)
 	if got != 1 {
 		t.Errorf("count = %d, want 1: the success ended the old streak and the later failure begins a new one", got)
 	}
@@ -132,7 +133,7 @@ func TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe(t *testing.T) {
 		ReadySince: base.Add(time.Second),
 	}
 
-	got, _ := CountFailures([]ServerView{corpse}, 3, base)
+	got, _ := CountFailures([]ServerView{corpse}, 3, base, 0)
 	if got != 1 {
 		t.Errorf("count = %d, want 1: CountFailures reads readySince off every view whatever its "+
 			"phase, so a corpse carrying one ends its own streak and the new failure starts a fresh one", got)
@@ -142,8 +143,133 @@ func TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe(t *testing.T) {
 	// cleared on the way into Failed — continues the streak, which is what the
 	// group's six-failure budget depends on.
 	corpse.ReadySince = time.Time{}
-	if got, _ := CountFailures([]ServerView{corpse}, 3, base); got != 4 {
+	if got, _ := CountFailures([]ServerView{corpse}, 3, base, 0); got != 4 {
 		t.Errorf("count = %d, want 4: with readySince cleared the corpse is a failure and nothing else", got)
+	}
+}
+
+// A broken ordinal must reach the give-up threshold however often a healthy
+// sibling flaps. The old rule took the maximum ReadySince across all views, so
+// a neighbour that regained readiness faster than failures arrived reset the
+// count more often than it incremented and six was never reached.
+//
+// One ordinal cannot show this, which is why the existing
+// TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp could not.
+func TestAFlappingSiblingDoesNotClearABrokenOrdinalsStreak(t *testing.T) {
+	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+
+	count := int32(0)
+	since := time.Time{}
+	for i := 0; i < 6; i++ {
+		failedAt := base.Add(time.Duration(i) * time.Hour)
+		// g-1 blips ready halfway through every interval -- more often than
+		// g-0 fails, which is the rate comparison that broke the old rule.
+		siblingReady := failedAt.Add(30 * time.Minute)
+
+		views := []ServerView{
+			{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Failed, FailedAt: failedAt},
+			{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Ready, ReadySince: siblingReady},
+		}
+		count, since = CountFailures(views, count, since, 2)
+	}
+
+	if count < 6 {
+		t.Fatalf("counted %d failures; a flapping sibling is still clearing the streak", count)
+	}
+}
+
+// The ephemeral rule must not move: interchangeable servers are exactly the
+// case the maximum is right for.
+func TestAnEphemeralGroupKeepsTheMaximumRule(t *testing.T) {
+	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	views := []ServerView{
+		{Name: "a", Phase: phase.Failed, FailedAt: base},
+		{Name: "b", Phase: phase.Ready, ReadySince: base.Add(time.Minute)},
+	}
+	count, _ := CountFailures(views, 3, time.Time{}, 0)
+	if count != 0 {
+		t.Fatalf("count = %d; a ready sibling must still break an ephemeral streak", count)
+	}
+}
+
+// The group is not recovered while an ordinal is missing entirely, so the
+// streak must not reset then either.
+func TestAMissingOrdinalDoesNotCountAsRecovered(t *testing.T) {
+	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	views := []ServerView{
+		{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Ready, ReadySince: base.Add(time.Hour)},
+	}
+	count, _ := CountFailures(views, 4, base, 2)
+	if count != 4 {
+		t.Fatalf("count = %d; ordinal 0 has no ready server, so the group has not recovered", count)
+	}
+}
+
+// TestTheGroupRecoveredWhenItsLastRequiredOrdinalDid pins which of the two
+// timestamps is taken, as opposed to the missing-ordinal shortcut above it.
+// Both required ordinals are Ready here, so there is no missing entry to fall
+// back on: the choice between the earlier ReadySince and the later one is the
+// whole content of "the maximum over the required ordinals", and this is the
+// only case in this file where that choice is actually made.
+//
+// g-0 is the sibling that never restarted -- its ReadySince predates the last
+// counted failure and will not advance. g-1 came back after that failure. The
+// group is recovered, so the streak resets; taking g-0's answer over g-1's
+// would hold the count at 4 for as long as g-0 stayed up.
+func TestTheGroupRecoveredWhenItsLastRequiredOrdinalDid(t *testing.T) {
+	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	since := base.Add(time.Hour)
+	views := []ServerView{
+		{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Ready, ReadySince: base.Add(30 * time.Minute)},
+		{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Ready, ReadySince: base.Add(90 * time.Minute)},
+	}
+
+	count, _ := CountFailures(views, 4, since, 2)
+	if count != 0 {
+		t.Fatalf("count = %d, want 0: every required ordinal has a ready server and the last of them "+
+			"became ready after the last counted failure, so the group has recovered", count)
+	}
+}
+
+// TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling is the steady-state
+// counterpart to the flapping-sibling test above, and the case the first
+// version of this rule got wrong: it had no reset path at all for replicas >=
+// 2, so six isolated failures -- each one fully recovered long before the next
+// arrived -- still gave the group up, and only a spec edit cleared it.
+//
+// g-0 comes up once and stays up, which is the whole mechanism: its
+// ReadySince never advances past the group's first start, so the earliest
+// ReadySince over the required ordinals is always older than the last counted
+// failure. The latest is not, and that is what breaks each streak.
+func TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling(t *testing.T) {
+	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	stable := base // g-0 started here and never restarted.
+
+	count := int32(0)
+	since := time.Time{}
+	for i := 0; i < 6; i++ {
+		failedAt := base.Add(time.Duration(i+1) * time.Hour)
+
+		// The pass that sees the corpse. g-1 holds its ordinal while Failed,
+		// so no replacement exists yet and the group is not recovered.
+		count, since = CountFailures([]ServerView{
+			{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Ready, ReadySince: stable},
+			{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Failed, FailedAt: failedAt},
+		}, count, since, 2)
+		if count != 1 {
+			t.Fatalf("failure %d: count = %d, want 1; each of these is a streak of its own", i+1, count)
+		}
+
+		// The pass after the replacement is ready, well before the next
+		// failure arrives.
+		count, since = CountFailures([]ServerView{
+			{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Ready, ReadySince: stable},
+			{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Ready, ReadySince: failedAt.Add(10 * time.Minute)},
+		}, count, since, 2)
+		if count != 0 {
+			t.Fatalf("failure %d: count = %d, want 0; both required ordinals are ready and g-1 came "+
+				"back after the failure, so the group has recovered", i+1, count)
+		}
 	}
 }
 
