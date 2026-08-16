@@ -105,12 +105,24 @@ fail() {
 user="$("$CONTAINER" image inspect --format '{{.Config.User}}' "$IMAGE")"
 [ "$user" = "10001:10001" ] || fail "image user = '$user', want 10001:10001"
 
+# The working directory is the root, not a game server's /data.
+workdir="$("$CONTAINER" image inspect --format '{{.Config.WorkingDir}}' "$IMAGE")"
+[ "$workdir" = "/" ] || fail "image workingDir = '$workdir', want /"
+
 # /data belongs to a game server. An operator that acquired one would be
 # carrying state nothing reads, and oci-common.layeredImage -- which creates it
 # -- is deliberately not used here.
-if "$CONTAINER" run --rm --entrypoint /bin/sh "$IMAGE" -c 'test -d /data' 2>/dev/null; then
+#
+# Checked by exporting the filesystem rather than by running `test -d` inside
+# the image: this image has no shell at all, so an in-container check would
+# fail to start and its non-zero exit would read as "no /data" whether the
+# directory was there or not. That assertion could never have failed.
+cid="$("$CONTAINER" create "$IMAGE")"
+if "$CONTAINER" export "$cid" | tar -t | grep -qE '^\./?data/?$'; then
+	"$CONTAINER" rm "$cid" >/dev/null
 	fail "the image has a /data directory; it should carry no writable directory of its own"
 fi
+"$CONTAINER" rm "$cid" >/dev/null
 
 # The binary runs, statically, as uid 10001, with nothing writable and no
 # network. Go's flag package prints usage and exits 2 for -h, which is the
