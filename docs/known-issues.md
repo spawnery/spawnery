@@ -2439,7 +2439,16 @@ for as long as it lives. The ordinary runbook roll sweeps it up, because it
 happens after the digest is recorded — but a pod created that way *after* its
 own group was already rolled, by a scale-up or a replacement, stays falsely
 stale until something rolls it again. `RotationPending` then keeps naming a
-group whose work is done.
+group whose work is done. A third way needs no window and no failed read at
+all: the premise the stamp rests on — the process reads the file once
+(`internal/podspec/labels.go:56-60`) — holds for the pod and not for the
+container, because `RestartPolicy` is `Always`
+(`internal/podspec/server.go:387`, `internal/podspec/proxy.go:277`) and the
+forwarding secret is projected without a `subPath`
+(`internal/podspec/server.go:166-191`, `:291`), so a container that restarts
+after a rotation starts on whatever the kubelet has since refreshed onto that
+file, and a pod that crash-looped and then recovered — leaving `podTerminal`,
+and counted again — is reported stale while its process runs the new secret.
 
 **A pod `List` failure blocks the `Accepted=True` status write.**
 `internal/controller/network_controller.go:146-149` returns the error before

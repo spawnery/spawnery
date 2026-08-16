@@ -142,7 +142,7 @@ So the grant is **namespace-scoped, one namespace at a time**:
   shipped in `config/deploy/` would land in the operator's own namespace, and
   that probe would stay denied without noticing. The probe survives because
   §7's own envtest applies the reader Role into `readerProbeNamespace`, which
-  is deliberately not `foreignNamespace` (`:222-226`) — otherwise the suite
+  is deliberately not `foreignNamespace` (`:224-228`) — otherwise the suite
   would pass or fail by test order.
 - **The operator never creates it.** Granting an operator the right to write
   RBAC makes every other restriction on it advisory; the same test denies
@@ -297,13 +297,15 @@ The name §6.5 gives it. Negative polarity, matching `BackingOff`,
 
 Precedence runs down the table: a known problem outranks an unknown one.
 
-"Every pod" is every pod of the network that is running a process the stamp
-describes. `forwardingStamps` drops two kinds before comparing: one carrying a
-`DeletionTimestamp`, which must not hold the report open once its replacement
-exists, and one `podTerminal` calls finished, which a failed Server keeps for
-`spec.failedRetentionSeconds` — an hour by default — and which would otherwise
-name its group as work still to do for that whole hour after the rotation was
-completed.
+"Every pod" is every pod the `List` returns, less two kinds `forwardingStamps`
+drops before comparing: one carrying a `DeletionTimestamp`, which must not hold
+the report open once its replacement exists, and one `podTerminal` calls
+finished, which a failed Server keeps for `spec.failedRetentionSeconds` — an
+hour by default — and which would otherwise name its group as work still to do
+for that whole hour after the rotation was completed. Nothing else is dropped:
+a pod still in `ContainerCreating` runs no process either, and it is counted,
+because it is on its way up rather than down and its stamp is what it will load.
+What its stamp is worth before it starts is in `docs/known-issues.md`.
 
 The `True` message names the groups and counts, split by role and **listed
 backends first**, so that the message reads in the order the runbook is to be

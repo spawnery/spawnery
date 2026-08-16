@@ -127,9 +127,9 @@ type forwardingStamp struct {
 // podTerminal calls finished is down, and its Server keeps it for
 // spec.failedRetentionSeconds — an hour by default — so counting it would hold
 // the report open for that hour after a rotation that is otherwise complete.
-// The crash-looping case reads worst of all: the container has restarted since
-// the rotation and read the projected secret again each time, so the stamp
-// names a value that pod stopped using.
+// The crash-looping case reads worst of all: the container may have restarted
+// since the rotation and read the projected secret again, in which case the
+// stamp does not name what that pod last loaded.
 func forwardingStamps(pods []corev1.Pod) []forwardingStamp {
 	stamps := make([]forwardingStamp, 0, len(pods))
 	for i := range pods {
