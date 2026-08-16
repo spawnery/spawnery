@@ -58,6 +58,25 @@ const (
 	// refuses expansion and a group whose servers will not start are different
 	// problems with different remedies, and one field cannot carry both.
 	ConditionStorageResize = "StorageResize"
+	// ConditionForwardingSecretResolved reports whether this network's
+	// forwarding secret can be read and carries a usable value. It is
+	// deliberately not folded into Accepted: servergroup_controller.go derives
+	// networkUsable from Accepted, proxygroup_controller.go gates on it, and
+	// since 5b mayResize equals networkUsable — so reporting an unreadable
+	// secret there would stop all sizing for the network, turning a
+	// five-second API hiccup into a self-inflicted outage. Accepted keeps its
+	// meaning: this Network owns its namespace.
+	ConditionForwardingSecretResolved = "ForwardingSecretResolved"
+	// ConditionForwardingSecretRotationPending is true while pods of this
+	// network run on a forwarding secret that is no longer the current one.
+	// The operator reports; it recreates nothing. Neither Velocity nor Paper
+	// accepts two forwarding secrets at once, so any rollout has a window in
+	// which joins fail, and the master design (section 6.5) leaves the order
+	// to a runbook: all server groups first, then all proxy groups.
+	//
+	// Unknown is a real answer here rather than an omission — see
+	// ReasonPodsPredateTracking.
+	ConditionForwardingSecretRotationPending = "ForwardingSecretRotationPending"
 )
 
 // Condition reasons.
@@ -81,6 +100,41 @@ const (
 	ReasonNoNodesDraining      = "NoNodesDraining"
 	ReasonStorageResized       = "StorageResized"
 	ReasonStorageResizeRefused = "StorageResizeRefused"
+
+	// The five ForwardingSecretResolved reasons. Three failures rather than
+	// one because each has a different remedy: a name the user can fix, an
+	// install step that was skipped, and neither of those.
+	ReasonSecretResolved      = "SecretResolved"
+	ReasonSecretNotFound      = "SecretNotFound"
+	ReasonSecretKeyMissing    = "SecretKeyMissing"
+	ReasonSecretReadForbidden = "SecretReadForbidden"
+	ReasonSecretReadFailed    = "SecretReadFailed"
+
+	// The four ForwardingSecretRotationPending reasons.
+	// ReasonPodsPredateTracking is the Unknown that keeps an operator upgrade
+	// from reading as a rotation: after an upgrade no running pod carries a
+	// stamp, and calling that True would instruct every user to perform a
+	// runbook they do not need.
+	ReasonRotationPending        = "RotationPending"
+	ReasonForwardingSecretInSync = "ForwardingSecretInSync"
+	ReasonPodsPredateTracking    = "PodsPredateTracking"
+	ReasonSecretUnresolved       = "SecretUnresolved"
+)
+
+// Event reasons. Separate from the condition reasons above because these name
+// a transition rather than a state: both are emitted on entering a condition,
+// never once per resync.
+const (
+	// EventForwardingSecretRotated fires when status.forwardingSecretHash
+	// moves from a non-empty value to a different one. Empty to a value is
+	// adoption, not rotation, and emits nothing.
+	EventForwardingSecretRotated = "ForwardingSecretRotated"
+	// EventForwardingSecretNotFound fires on entering SecretNotFound. It is
+	// the loud channel for a misconfiguration that is otherwise reported under
+	// the wrong name: the pods hang in ContainerCreating and the only
+	// operator-side account arrives after --startup-deadline as a counted
+	// startup failure, which is what a bad image looks like too.
+	EventForwardingSecretNotFound = "ForwardingSecretNotFound"
 )
 
 // ObjectRef names another object in the same namespace.

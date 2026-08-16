@@ -73,3 +73,33 @@ func TestNetworkRequiresForwardingSecretRef(t *testing.T) {
 		t.Fatal("create without forwardingSecretRef succeeded, want rejection")
 	}
 }
+
+// The status field has to survive a round trip through a real API server, not
+// only through the Go type: a field missing from the generated CRD schema is
+// pruned on write and the operator would re-detect the same rotation forever.
+func TestNetworkStatusCarriesTheForwardingSecretHash(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	net := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "fwd-hash", Namespace: ns},
+		Spec:       spawneryv1alpha1.NetworkSpec{ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "fwd"}},
+	}
+	if err := c.Create(ctx, net); err != nil {
+		t.Fatalf("create network: %v", err)
+	}
+
+	net.Status.ForwardingSecretHash = "0123456789abcdef"
+	if err := c.Status().Update(ctx, net); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+
+	got := &spawneryv1alpha1.Network{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "fwd-hash", Namespace: ns}, got); err != nil {
+		t.Fatalf("get network: %v", err)
+	}
+	if got.Status.ForwardingSecretHash != "0123456789abcdef" {
+		t.Errorf("status.forwardingSecretHash = %q, want %q — the field is missing from the generated CRD schema",
+			got.Status.ForwardingSecretHash, "0123456789abcdef")
+	}
+}

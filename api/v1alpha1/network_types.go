@@ -49,6 +49,19 @@ type NetworkStatus struct {
 	// OnlinePlayers is the sum of players across all server groups.
 	// +optional
 	OnlinePlayers int32 `json:"onlinePlayers"`
+
+	// ForwardingSecretHash is podspec.ForwardingHash over this network's
+	// forwarding secret as the operator last read it. The pod builders stamp
+	// it onto every pod they create (podspec.LabelForwardingHash), which is
+	// how a rotation becomes visible: a pod whose stamp differs is running on
+	// the previous secret.
+	//
+	// Written only after a successful read. A read failure leaves the previous
+	// value in place, because clearing it would leave every pod created during
+	// the failure unstamped, and an unstamped pod is one the operator can say
+	// nothing about afterwards.
+	// +optional
+	ForwardingSecretHash string `json:"forwardingSecretHash,omitempty"`
 }
 
 // +kubebuilder:object:root=true
