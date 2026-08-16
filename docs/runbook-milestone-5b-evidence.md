@@ -398,9 +398,12 @@ for ord in 0 1; do
 done
 ```
 
-**Expect both claim UIDs unchanged from §6.** Rejoin and confirm from §7's
-log grep which pod accepted the join, then visit both sets of coordinates
-recorded in §7. **This is the whole of the test: are both blocks still
+**Expect both claim UIDs unchanged from §6.** Rejoin — which ordinal the join
+lands on does not matter here, since both are freshly recreated and tied on
+player count again — and confirm from §7's log grep which pod actually
+accepted it. Visit that ordinal's coordinates from §7 first, then use
+`/server` the same way §7 did to reach the other one and visit its
+coordinates too. **This is the whole of the test: are both blocks still
 there?** Record the answer in the driver's own words, the way every manual
 session in this repository's runbooks does — there is no `kubectl` output
 that substitutes for a person looking at both locations.
@@ -433,8 +436,9 @@ deleting a `Server` never deletes its claim, holding here through a route
 `DecidePersistentSize`'s surplus class, rather than a direct
 `kubectl delete server`.
 
-Bring the ordinal back before the next section, since §11 wants two ordinals
-again:
+Restore `survival` to the shape §5 applied, so a driver returning to this
+document later — or moving on to §10 — starts from a known state rather than
+one left short by this test:
 
 ```bash
 nix develop -c kubectl patch servergroup survival -n minecraft --type=merge \
@@ -481,17 +485,12 @@ storage class that cannot grow and a group whose servers will not start are
 different problems with different remedies, and this test is what confirms
 the design decision holds in practice, not only in the code that states it.
 
-Put the size back so §11 starts from the value §5 applied:
-
-```bash
-nix develop -c kubectl patch servergroup survival -n minecraft --type=merge \
-  -p '{"spec":{"storage":{"size":"1Gi"}}}'
-```
-
-`spec.storage.size` cannot shrink (the CEL rule at
-`api/v1alpha1/servergroup_types.go`), so if this patch is rejected, that CEL
-rule is doing exactly its job — leave the size at `2Gi` and adjust §11's own
-target size upward instead of fighting it.
+**There is no step here to put the size back.** `spec.storage.size` cannot
+shrink (the CEL rule at `api/v1alpha1/servergroup_types.go`), so `survival`
+stays at `2Gi` for the rest of this document. Nothing later reads
+`survival`'s own `spec.storage.size` — §11 below creates its own,
+separately-sized `ServerGroup` — so this is a fact to know rather than a
+state to restore.
 
 ## 11. Acceptance test 4 — growth, positive path (a section a driver may skip)
 
