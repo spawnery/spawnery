@@ -2064,6 +2064,93 @@ servers. In practice no such group can already be running: nothing in this
 repository could create a persistent server before this milestone, so there is
 nothing for the new rule to reject that was not already useless.
 
+## From the milestone 5a evidence run (2026-08-16)
+
+`docs/runbook-milestone-5a-evidence.md` was driven against a single-node `kind`
+cluster on master at `f3c6fc1`, and its acceptance test passed: blocks placed
+at -74 / -10, the pod deleted, the client rejoined, the blocks still there.
+Every claim the milestone makes held. What follows is the one thing the run
+found that the runbook could not have predicted from reading the code, because
+it is about what the code *prints* rather than what it does. It is corrected in
+no document but this one; the runbook points here.
+
+**The recreate path logs `level=error` with a full stacktrace every time it
+runs, on the happy path.** Deleting a persistent server's pod produces, in the
+operator's own log, exactly one line of the shape:
+
+```
+{"level":"error","controller":"server","Server":{"name":"survival-0",...},
+ "error":"servers.spawnery.cloud \"survival-0\" not found","stacktrace":"..."}
+```
+
+It is benign, and that is the problem. The mechanism, as far as the evidence
+actually reaches:
+
+- The recreate path deletes the `Server` object at
+  `internal/controller/server_controller.go:348` and releases its finalizer at
+  `:340`, after which the object is genuinely gone.
+- A reconcile that fetched the object before that point — the reconciler reads
+  through the manager's informer cache, which can hand back an object the API
+  server has already removed — then writes to it and gets `NotFound` back.
+- Whichever write it was, the error escapes unwrapped and `Reconcile` returns
+  it. controller-runtime logs it at `error` with a stacktrace and requeues; the
+  requeued pass fetches the `Server` at `:116`, where
+  `client.IgnoreNotFound(err)` treats the absence as ordinary, and returns
+  cleanly. Nothing retries into a loop and no object ends up wrong — the
+  2026-08-16 run's `Server` was recreated within a second of the delete and
+  reached `Ready` 22 seconds later, with the error line in between.
+
+**Which write produced it is not determined by the log, and this entry does not
+guess.** Three writes on this path can land on a vanished object, and **none of
+the three tolerates `NotFound`**: the `Status().Update` after pod creation
+(`:319`), the `Update` that releases the finalizer (`:340`), and
+`applyDecision`'s closing `Status().Update` (`:685`, returned through `:333`).
+The last is the likeliest, being the write most reconciles of a live server
+reach — `:319` returns early on the pass that creates a pod, so it is not on
+this path at all unless a pod was just created — but the log carries no line
+number and nothing here distinguishes them. Anyone fixing this should reproduce it with a line-level log or a
+breakpoint first rather than trusting this paragraph's ordering.
+
+**The asymmetry worth noticing is between the deletes and the writes.** Both
+`Delete` calls on this path carry an explicit `&& !apierrors.IsNotFound(err)`
+— the pod delete at `:671` and the `Server` delete at `:348` — and none of the
+three writes carries the equivalent. That reads as an oversight rather than a
+decision; nothing in the surrounding comments argues for the difference.
+
+**Why this is worth an entry rather than a shrug.**
+`docs/runbook-milestone-5a-evidence.md` §4 tells the person driving it to leave
+the operator log visible, because "a reconcile that is erroring — against the
+CRDs, the claim, the Service — says so there and nowhere else." That
+instruction is correct and this line defeats it: the single most important
+transition in milestone 5a announces itself as an error, so an operator who has
+learned to read past it will read past a real failure on the same path. The
+cost is not a broken cluster, it is a log an operator stops trusting.
+
+The narrow fix is to tolerate `NotFound` on the write that produces it, the way
+`:671` and `:348` already do, since a write to an object that is deliberately
+gone is not a failure. It belongs to 5b rather than to a documentation pass,
+for two reasons beyond the identification above being unfinished.
+`applyDecision`'s return is also the path a *genuine* lost status write takes —
+`:319`'s own recovery, the one that produces `PodAdopted`, depends on such a
+write failing loudly — so swallowing `NotFound` there narrows a real signal and
+deserves a code review rather than a line slipped in beside a runbook edit. And
+the test obligation is the interesting half: an envtest that deletes the
+`Server` and asserts the reconcile returns no error would pass today against a
+fixture whose cache is not stale, since it is the cache-staleness window that
+produces the error at all. Reproducing it deterministically is the work, and
+this milestone's own review already recorded what a test that cannot reach its
+branch is worth.
+
+**Twelve optimistic-concurrency conflicts are separate, expected, and not part
+of this.** The same run logged twelve `the object has been modified; please
+apply your changes to the latest version` errors across all three controllers,
+one at essentially every state transition — the apply, first readiness, the
+join, the leave, the delete, the replacement's readiness, the rejoin. These are
+controller-runtime's ordinary retry path and they self-heal; one of them is
+what produced the `PodAdopted` event the runbook's §8 now explains. They are
+noted here only so that a reader counting error lines in an operator log does
+not attribute all of them to the paragraph above.
+
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 
 **`spawnery-system` is hard-wired into the RBAC markers.** The

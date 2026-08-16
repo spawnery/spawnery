@@ -1,12 +1,38 @@
 # Runbook: a persistent server's world survives its pod
 
-**Status: NOT YET DRIVEN.** Written 2026-08-15, at the end of milestone 5a's
-Task 7, against branch `milestone-5a-persistent-groups`, checked line by line
-against the code as it stands rather than against the design. It is driven by
-the human partner and the acting agent together, after the branch review, the
-way `docs/runbook-milestone-4c1-evidence.md` §12 was. When it is driven, this
-top-of-document note is rewritten in place with what the run found and
-corrected, the way every earlier addition to that document's own note was.
+**Status: DRIVEN 2026-08-16, and the acceptance test passed.** Written
+2026-08-15 at the end of milestone 5a's Task 7 against branch
+`milestone-5a-persistent-groups`; driven the next day against master at
+`f3c6fc1` by the human partner and the acting agent together, the way
+`docs/runbook-milestone-4c1-evidence.md` §12 was. Blocks were placed at
+**-74 / -10**, the pod was deleted, the client rejoined — and in the driver's
+own words: *"ja die blöcke sind noch da."* Every step from §1 through §10 ran
+as written; what the run corrected is corrected in place, and what it found
+beyond the runbook is in `docs/known-issues.md` under "From the milestone 5a
+evidence run" and in `docs/handover-milestone-5.md`.
+
+**Four things this run corrected in place, all in what to *expect* rather than
+what to do. No existing command below changed. Two were added: a query in §8
+and a `sleep 5` in §10, each for a reason its own section gives.** §6's label
+list was missing a fourth label the operator really sets. §8's promise that the
+deleted `Server` is
+observable — a deletion timestamp, then a `NotFound` — is wrong at any
+polling rate a person can drive: the whole delete-and-recreate closed inside
+a two-second sampling gap, and the UID is what shows it happened. §8 also did
+not predict two artifacts of the event trail that look like defects and are
+not (`PodAdopted`, and a `count: 2` on the new object's *first*
+`ReadyGatePassed`). §9's instruction to disambiguate the rejoin by taking the
+most recent line by timestamp is unnecessary here, for a reason better than
+the rule it replaces.
+
+**One finding this run produced that is not a runbook correction at all:** the
+recreate path — the one this whole milestone rests on — logs a
+`level=error` line with a full stacktrace every single time it runs, on the
+happy path, in the very log §4 tells the driver to watch for real trouble.
+`docs/known-issues.md` carries the trace, and is careful to say which part of
+it the run established and which part it could not: three writes could have
+produced that line, the log names none of them, and the entry declines to
+guess.
 
 This is a new document rather than a section of `docs/runbook-milestone-4c1-evidence.md`
 or `docs/runbook-milestone-3-evidence.md`. Both of those measure the proxy
@@ -387,8 +413,14 @@ nix develop -c kubectl get pvc survival-0-data -n minecraft -o jsonpath='{.metad
 
 **Expect `0`** — the ordinal is on the object, not just implied by the name.
 
-**Expect the labels to include `spawnery.cloud/managed-by: spawnery-operator`,
-`spawnery.cloud/server: survival-0`, `spawnery.cloud/group: survival`.** This
+**Expect four labels: `spawnery.cloud/managed-by: spawnery-operator`,
+`spawnery.cloud/server: survival-0`, `spawnery.cloud/group: survival`, and
+`spawnery.cloud/network: evidence`.** The fourth was missing from this list
+until the 2026-08-16 run printed it; `podspec.BuildDataClaim` sets it, and the
+list was written from the three that carry meaning for the checks below.
+Nothing depends on the network label here — it is named only so that reading
+the real output against this line does not raise a question it cannot answer.
+The first three are what matter: this
 is what lets `kubectl get pvc -l spawnery.cloud/managed-by=spawnery-operator` find
 every claim this operator has ever created, and what `docs/known-issues.md`'s
 "From milestone 5a" section names as how to tell a live claim from an orphan.
@@ -483,16 +515,43 @@ identity, and the name is deterministic from it. That new object's own
 reconcile creates its claim before its pod, gets `AlreadyExists` on the claim
 (`survival-0-data` is still sitting there, exactly as it was), and mounts it.
 
-**Expect, in order, over roughly the next half-minute:** the `Server` object
-briefly shows a deletion timestamp (`kubectl get server survival-0 -n
-minecraft -o jsonpath='{.metadata.deletionTimestamp}'` prints something, then
-the object is gone entirely — `kubectl get server survival-0` returns `Error
-from server (NotFound)`); a new `Server` named `survival-0` reappears; its pod
-comes up and reaches `Ready` within the operator's `--startup-deadline` (five
-minutes by default — Paper on a reused world should be well under a minute,
-not close to that bound); and `kubectl get pvc survival-0-data -n minecraft`
-never once shows anything but the one claim created in §5 — no second claim,
-no gap where it is missing, `STATUS: Bound` throughout once it first bound.
+**Do not expect to catch the `Server` object mid-flight. The 2026-08-16 run
+tried, at two-second sampling, and the entire cycle closed inside one gap.**
+An earlier version of this section promised the deletion timestamp would show
+briefly (`kubectl get server survival-0 -n minecraft -o
+jsonpath='{.metadata.deletionTimestamp}'` printing something) and then a
+`NotFound`. Neither was observable: at 11:23:00 the object carried UID
+`582933f7…` and phase `Ready`; at 11:23:02 it carried UID `c7880082…` and
+phase `Pending`. `PodLost`, the `Server` delete, the finalizer release, the
+object's actual disappearance and the group's recreation of it all landed
+between two samples two seconds apart. Chasing the gap with a tighter poll is
+the wrong instinct — a five-second reconcile interval does not mean five
+seconds of latency per step, and this path is watch-driven throughout.
+
+**What is observable, and is the better evidence anyway, is the UID.** Record
+`kubectl get server survival-0 -n minecraft -o jsonpath='{.metadata.uid}'`
+before §8's delete and again after. A changed UID under an unchanged name is
+precisely the milestone's claim — the ordinal is the identity, the object is
+not — and unlike a timestamp glimpsed in a race, it is still true an hour
+later. Do the same for the pod, and for the claim, where the point is the
+opposite: **the claim's UID must not change.** The 2026-08-16 run measured
+`Server` `582933f7…` → `c7880082…`, pod `788ef8f6…` → `fb8812de…`, and claim
+`2b0f11b8…` → `2b0f11b8…`, created `11:20:22Z` before and after.
+
+**Expect, over roughly the next half-minute:** a new `Server` named
+`survival-0` in place of the old one; its pod up and `Ready` well within the
+operator's `--startup-deadline` (five minutes by default — the 2026-08-16 run
+took **22 seconds** from pod creation to `ReadyGatePassed`, with Paper's own
+`Done (3.411s)`, nowhere near that bound); and `kubectl get pvc
+survival-0-data -n minecraft` never once showing anything but the one claim
+created in §5 — no second claim, no gap where it is missing, `STATUS: Bound`
+throughout once it first bound.
+
+**Paper's own boot line is worth reading here, though it settles nothing.**
+The 2026-08-16 run's replacement logged `Done preparing level "world"
+(0.162s)` — a world read, not generated. Treat it as a hint that §9 is about
+to go well, never as a substitute for §9: a log line saying the level loaded
+fast is not a person looking at a block.
 
 ```bash
 nix develop -c kubectl get server survival-0 -n minecraft
@@ -521,13 +580,71 @@ its message rather than as its `involvedObject`. Together the two show what
 different objects that carried that name, and `ServerCreated` on the group
 in between them, naming the server it just (re)built.
 
+**Two things in that trail look like defects and are not. Both surfaced on the
+2026-08-16 run; neither was predicted here.**
+
+**`count: 2` on the *new* object's first `ReadyGatePassed`.** The replacement
+`Server` had gone ready exactly once, and its `ReadyGatePassed` event arrived
+reading `COUNT 2`. Client-go's event aggregator keys on namespace, kind,
+**name**, reason and type — not on UID — so the counter carried over from the
+old object that had held the same name, while the event itself was written
+against the new object's UID. Read as-is, the trail appears to say one server
+went ready twice. Add `involvedObject.uid` to settle it, which is worth doing
+for the whole trail rather than only this row:
+
+```bash
+nix develop -c kubectl get events -n minecraft \
+  --field-selector involvedObject.kind=Server,involvedObject.name=survival-0 \
+  -o custom-columns=REASON:.reason,COUNT:.count,OBJUID:.involvedObject.uid,LAST:.lastTimestamp \
+  --sort-by=.lastTimestamp
+```
+
+Expect every row before the delete to carry the old UID and every row after it
+the new one, splitting cleanly at `PodLost`. `ServerCreated` on the group is
+the one place `count` means what it looks like — `COUNT 2` there really is two
+creations of `survival-0`, because the group is genuinely one object across
+both.
+
+**`PodAdopted — adopted existing pod survival-0 after a lost status write`, on
+the very first boot.** This is not part of the delete path at all; it fires
+during §5, before anything is deleted. The Server controller created the pod
+and its `Status().Update` lost an optimistic-concurrency race, so the next
+reconcile found a pod it had no `status.podName` for and adopted it — the
+recovery `server_controller.go`'s own comment above that branch describes,
+working as designed.
+
+Conflicts of this shape are not a startup phenomenon, which is worth knowing
+before reading them as a symptom of something. The 2026-08-16 run logged
+twelve `the object has been modified` errors across all three controllers, and
+their timestamps cluster on **every state transition of the run**, not on its
+first minute: three at the apply, two at first readiness, then one each at the
+join, the leave, the pod delete, the replacement's readiness, and two more at
+the rejoin. Every one self-healed on requeue and none changed an outcome
+anywhere in this document. They are logged at `level=error` with a full
+stacktrace all the same — see §4's note about leaving the operator log
+visible, and the entry this run added to `docs/known-issues.md` about what
+that costs a person actually watching it.
+
 ## 9. Rejoin, and confirm the block is where it was left
 
-Point the client back at `127.0.0.1:30567` and log in again. Confirm from
-§7's log command, taking the most recent line by timestamp — the rule every
-runbook in this repository uses for a repeat join, since `kubectl logs -l`
-prints one pod's matches and then the next's rather than interleaving by
-time — that the join landed on the new `survival-0` pod.
+Point the client back at `127.0.0.1:30567` and log in again, then confirm from
+§7's log command that the join landed on the new `survival-0` pod.
+
+**There is nothing to disambiguate here, and the reason is better evidence
+than the rule it replaces.** Other runbooks in this repository take the most
+recent line by timestamp, because `kubectl logs -l` prints one pod's matches
+and then the next's rather than interleaving by time. That rule is sound and
+unnecessary on this path: the old pod was deleted in §8, so its log went with
+it. The server-side grep returns **exactly one** `joined the game` line — the
+rejoin — and the first join is simply not there to be confused with it. Read
+it for what it is rather than as a formality: the pod that just accepted the
+player has never seen that player before. It has the world and not the
+session, which is the whole distinction this milestone exists to make. The
+2026-08-16 run measured the first join at 11:21:08 against pod `788ef8f6…`
+and the rejoin at 11:24:23 against pod `fb8812de…`, with only the latter
+present in any surviving log. The proxy's own log, by contrast, spans both —
+`gateway-ndh5` was never restarted — so it is where both connections appear
+side by side.
 
 **Go to the coordinates §7 recorded. This is the whole of the milestone's
 claim, and only the person at the keyboard can settle it: is the block still
@@ -544,6 +661,7 @@ settled here at the one layer none of those can reach.
 
 ```bash
 pkill -x spawnery-operat
+sleep 5                           # controller-runtime shuts down gracefully
 ps -eo pid,comm | grep spawnery   # expect no output
 podman rm -f spawnery-5a-relay
 systemd-run --scope --user --property=Delegate=yes \
@@ -558,6 +676,15 @@ rm -f /tmp/spawnery-5a-kind.yaml
 by full command line risks matching the very shell driving this document, and
 signalling `go run`'s own wrapper does not reach the compiled child it starts.
 That reasoning is not repeated here; it applies unchanged.
+
+**The `sleep 5` was added by the 2026-08-16 run, which briefly mistook a
+correct `pkill` for a failed one.** The process was still in the table when
+`ps` ran immediately after, because controller-runtime handles SIGTERM by
+stopping its controllers, draining its work queues and shutting down the
+metrics and health servers before exiting — the log's last line is `Wait
+completed, proceeding to shutdown the manager`, several seconds after the
+signal. If `ps` still shows it after five seconds, that is a real hang worth
+looking at; before then it means nothing.
 
 **Deleting the cluster deletes the claim along with it.** There is no
 `kubectl delete pvc` step above and none is needed: `kind delete cluster`

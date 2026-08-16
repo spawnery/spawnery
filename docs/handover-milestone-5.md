@@ -1,11 +1,14 @@
 # Handover to milestone 5
 
-Status: end of milestone 5a, persistent groups exist (2026-08-15). First
-written before the whole-branch review that closes this milestone (Task 8 of
-`.superpowers/sdd/2026-08-15-persistent-groups/`), and revised in place after
-it, the way milestone 4's own reviews were: that review's three Important
-findings and its triage of the parked minors are recorded where they belong
-below rather than appended as a postscript.
+Status: end of milestone 5a, persistent groups exist (2026-08-15), **and the
+evidence run has been driven (2026-08-16) — the acceptance test passed.**
+First written before the whole-branch review that closes this milestone
+(Task 8 of `.superpowers/sdd/2026-08-15-persistent-groups/`), revised in place
+after it, the way milestone 4's own reviews were — that review's three
+Important findings and its triage of the parked minors are recorded where they
+belong below rather than appended as a postscript — and revised once more after
+the evidence run, which has its own section below rather than a postscript for
+the same reason.
 
 This document is not a spec. It says where 5a stopped and what 5b — ordered
 shutdown, `Recreate` updates, `storage.size` growth — and 5c — secret rotation
@@ -39,8 +42,8 @@ the highest ordinal through the ordinary drain 4c-3 already proved. Raising it
 back brings that ordinal up again, and it finds its world where it left it —
 proven at the object level by envtest (`TestDeletingAPersistentServerLeavesItsClaim`
 and its neighbours in `internal/controller/server_controller_test.go`), and
-not yet proven with an actual block placed and rejoined to on a real cluster —
-see `docs/runbook-milestone-5a-evidence.md`, marked **NOT YET DRIVEN**.
+**proven with an actual block, on a real cluster, on 2026-08-16** — see
+`docs/runbook-milestone-5a-evidence.md`, and "The evidence run" below.
 
 ## 5a has landed
 
@@ -119,6 +122,100 @@ see `docs/runbook-milestone-5a-evidence.md`, marked **NOT YET DRIVEN**.
   cache over ConfigMaps and ServiceAccounts, so the informer this grants does
   not hold every claim in every watched namespace.
 
+## The evidence run (2026-08-16)
+
+`docs/runbook-milestone-5a-evidence.md` was driven against master at `f3c6fc1`
+on a single-node `kind` cluster with its own default storage class —
+`standard`, `rancher.io/local-path`, `WaitForFirstConsumer`, exactly as §2
+predicted. It is the first run in this repository's history to measure storage
+rather than the proxy layer.
+
+**The acceptance test passed.** Blocks were placed at **-74 / -10**, the client
+left, `kubectl delete pod survival-0` removed the pod, and the client rejoined.
+In the driver's own words: *"ja die blöcke sind noch da."* That sentence is the
+whole of what envtest could not reach, and it is why this milestone's central
+claim is now settled rather than argued.
+
+The measurements, for whoever writes 5b's run and wants numbers rather than
+margins:
+
+- `survival-0` passed its ready gate **24 seconds** after the apply
+  (`ReadyGatePassed` at 11:20:46, applied 11:20:22), against the 90 seconds §5
+  allows; the proxy was there at 12. Paper's first boot: `Done (4.626s)`.
+- The claim `survival-0-data` was `Bound` within 12 seconds — a
+  `WaitForFirstConsumer` class binding as soon as the pod that consumes it
+  exists, which is precisely the behaviour `BuildDataClaim` declines to wait
+  for.
+- `spec.ordinal` read `0` on the object. The claim carried **no owner
+  reference** — the milestone's single most load-bearing property, checked
+  before the client ever joined and again after the recreate.
+- Recreate: pod deleted at 11:23:02, replacement pod created at 11:23:02,
+  `ReadyGatePassed` at 11:23:24. **22 seconds**, against a five-minute
+  `--startup-deadline`. Paper's second boot logged `Done preparing level
+  "world" (0.162s)` — read, not generated.
+- Identities across the recreate: `Server` `582933f7…` → `c7880082…`, pod
+  `788ef8f6…` → `fb8812de…`, **claim `2b0f11b8…` → `2b0f11b8…`**, created
+  `11:20:22Z` both before and after. In `kubectl` output the whole milestone
+  reads as one line: after the recreate the claim's `AGE` was 3m46s and the
+  `Server` mounting it was 67s old — *the claim is older than the server that
+  uses it.*
+
+**Four expectations the runbook got wrong, all corrected in place; no command
+in it changed.** Three are small — a fourth label on the claim it did not
+list, and two event-trail artifacts it did not predict (`PodAdopted` on first
+boot, and a `count: 2` on the *new* object's first `ReadyGatePassed`, because
+client-go's aggregator keys on name and not UID). The fourth is worth carrying
+as a method note rather than a typo:
+
+**§8 promised the deleted `Server` would be observable — a deletion timestamp,
+then a `NotFound` — and at two-second sampling neither ever appeared.** At
+11:23:00 the object was UID `582933f7…`/`Ready`; at 11:23:02 it was UID
+`c7880082…`/`Pending`. `PodLost`, the delete, the finalizer release, the
+object's disappearance and the group's recreation all closed inside one
+two-second gap. This is the same lesson
+`docs/runbook-milestone-4c1-evidence.md`'s own header records from its §12 run
+— *trust timestamps over polling* — arriving from the other direction: there,
+polling was too coarse to time a transition; here, the transition does not
+have an observable intermediate state at any rate a person can drive. The
+durable form of the rule is that **a runbook should predict what will still be
+true afterwards, not what will be briefly visible during.** The UID is that:
+a changed `Server` UID under an unchanged name *is* the claim "the ordinal is
+the identity, the object is not," and it is as true an hour later as it is in
+the moment. §8 now asks for UIDs before and after instead.
+
+**One finding that is not a runbook correction, and is the run's real
+yield:** the recreate path logs `level=error` with a full stacktrace every
+single time it runs, on the happy path. A reconcile writes to the `Server`
+object after the recreate has already removed it — the reconciler reads through
+a cache that can hand back an object the API server no longer has — and
+`NotFound` escapes unwrapped. Three writes in
+`internal/controller/server_controller.go` can be the one, and **none of the
+three tolerates `NotFound`** (`:319`, `:340`, `:685`), while both `Delete`
+calls on the same path carry an explicit `IsNotFound` guard (`:671`, `:348`).
+Which write it is, the log does not say, and `docs/known-issues.md` declines to
+guess rather than naming the likeliest and moving on. Nothing breaks: the
+requeued pass fetches the `Server` at `:116`, where `client.IgnoreNotFound`
+treats the absence as ordinary, and returns cleanly. What breaks is the
+instruction
+in the runbook's own §4, which tells the driver to watch the operator log
+because a failing reconcile "says so there and nowhere else" — the most
+important transition in this milestone announces itself as an error, and an
+operator who learns to read past it will read past a real one.
+`docs/known-issues.md`'s "From the milestone 5a evidence run" carries the trace
+and argues why the fix belongs to 5b rather than to a documentation pass: a
+lost status write is *supposed* to fail loudly there (it is what `:319`'s
+recovery and the `PodAdopted` event depend on), and the obvious envtest for it
+would pass without reproducing anything, because the cache-staleness window is
+what produces the error in the first place.
+
+**What the run could not settle, and did not pretend to.** `kind`'s local-path
+provisioner runs `mkdir -m 0777`, so the `fsGroup: 10001` fix this milestone
+landed had nothing to do on this cluster — a clean run here is not evidence
+that fix works. §0 said so before the run and the run changed nothing about
+it. The same goes for the node-drain limit on a node-pinned RWO volume: one
+node, so nothing to pin against. Both wait for a run against a real cloud
+storage class.
+
 ## What 5b and 5c find in place
 
 Master design §8, carried forward rather than re-derived:
@@ -145,11 +242,13 @@ Master design §8, carried forward rather than re-derived:
   by a leaving server, the same field and the same accessor
   (`ServerGroup.DrainTimeout()`) 4c already built and 5a reused without
   modification.
-- **A runbook that brings a persistent group up on a real cluster is
-  drafted** — `docs/runbook-milestone-5a-evidence.md` — for 5b's own evidence
-  run to start from rather than rebuild. It is marked **NOT YET DRIVEN**; see
-  that document's own header for what driving it will need and what its
-  acceptance test is.
+- **A runbook that brings a persistent group up on a real cluster is drafted
+  *and driven*** — `docs/runbook-milestone-5a-evidence.md`, driven 2026-08-16 —
+  for 5b's own evidence run to start from rather than rebuild. Every command in
+  it ran as written and none needed changing; four *expectations* did, and two
+  commands were added rather than corrected. 5b's run inherits a document whose
+  §5 manifest, §4 relay and §8 event queries are known to work, which is most of
+  the cost of an evidence run.
 - **`fsGroup` is on every server pod now**, and 5b and 5c inherit it whether
   or not they think about storage. `podspec.BuildServerPod` sets
   `PodSecurityContext.FSGroup` to 10001 — the uid and gid `nix/oci-common.nix`
