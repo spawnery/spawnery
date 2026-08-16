@@ -205,6 +205,33 @@ func TestAMissingOrdinalDoesNotCountAsRecovered(t *testing.T) {
 	}
 }
 
+// TestAGroupHasNotRecoveredUntilItsSlowestRequiredOrdinalHas is what pins the
+// minimum itself, as opposed to the missing-ordinal shortcut that produces
+// the same zero-time answer above it. Both required ordinals are Ready here,
+// so there is no missing entry to fall back on: the choice between the
+// earlier ReadySince and the later one is the whole content of "minimum, not
+// maximum," and this is the only case in this file where that choice is
+// actually made.
+//
+// g-1 alone would end the streak under the old maximum rule (its ReadySince
+// is after the last counted failure); g-0 alone would not (its ReadySince is
+// before it). The minimum takes g-0's answer over g-1's, so the streak must
+// not reset.
+func TestAGroupHasNotRecoveredUntilItsSlowestRequiredOrdinalHas(t *testing.T) {
+	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	since := base.Add(time.Hour)
+	views := []ServerView{
+		{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Ready, ReadySince: base.Add(30 * time.Minute)},
+		{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Ready, ReadySince: base.Add(90 * time.Minute)},
+	}
+
+	count, _ := CountFailures(views, 4, since, 2)
+	if count != 4 {
+		t.Fatalf("count = %d, want 4: g-0's ReadySince predates the last counted failure, and the "+
+			"minimum over both required ordinals must be taken from it rather than from g-1's later one", count)
+	}
+}
+
 func TestDecideBackoffLetsTheFirstAttemptThrough(t *testing.T) {
 	got := DecideBackoff(BackoffInputs{ConsecutiveFailures: 0, Now: time.Now()})
 	if !got.MayCreate {
