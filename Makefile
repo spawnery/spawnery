@@ -144,3 +144,11 @@ image-repro:
 .PHONY: publish
 publish:
 	hack/publish.sh
+
+# The driven run from the milestone 6a design. Explicitly not part of `test` or
+# `all`: it builds a cluster and takes minutes, and the commit loop stays at
+# around 25 seconds. See hack/e2e.sh's header for the rootless-podman
+# invocation this machine needs.
+.PHONY: e2e
+e2e:
+	hack/e2e.sh

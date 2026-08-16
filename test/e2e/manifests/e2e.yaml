@@ -1,0 +1,53 @@
+# The manifest the driven run works on. Not config/samples/network.yaml -- that
+# one is a realistic starting point for a user and should stay one; this one is
+# bent to fit a test run, and says where.
+#
+# The images are deliberately unresolvable. Since milestone 6a publishes Paper
+# and Velocity to a public registry, naming a real tag here would make the
+# kubelet pull 724 MB into a fresh kind node on every run and start actual
+# servers -- which is milestone 6a's declared non-goal (spec §1.4, §7.4). Pods
+# staying in ErrImagePull is a decision, and this is where it is taken.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minecraft
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: velocity-forwarding-secret
+  namespace: minecraft
+stringData:
+  secret: e2e-forwarding-secret
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: Network
+metadata:
+  name: production
+  namespace: minecraft
+spec:
+  forwardingSecretRef:
+    name: velocity-forwarding-secret
+  defaults:
+    minecraftVersion: "26.2"
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: lobby
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  type: Ephemeral
+  image: ghcr.io/spawnery/paper:e2e-no-such-tag
+  maxPlayers: 100
+  # Short, so scenario 6 -- Failed, then the corpse cleared -- closes inside a
+  # single run rather than an hour.
+  failedRetentionSeconds: 30
+  drain:
+    timeoutSeconds: 30
+  scaling:
+    minReplicas: 2
+    maxReplicas: 4
+    spareSlots: 10
