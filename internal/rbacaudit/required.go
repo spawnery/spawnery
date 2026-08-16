@@ -56,26 +56,29 @@ var RequiredCluster = []Permission{
 	// PersistentVolumeClaims — one per persistent server, created before the
 	// pod that mounts it.
 	//
-	// Note what is absent, because the absence is the safety property and not
-	// an oversight: no delete and no update. The operator never removes a
-	// world — a claim carries no owner reference and outlives its server, its
-	// group, and the operator who deleted the wrong object, so the right to
-	// delete one is a right nothing here wants — and it never resizes one in
-	// 5a, which is what an update would be for. Reclaiming a world is a
-	// deliberate human act, done with kubectl against a documented runbook;
-	// growing one is a later milestone's, and adding `update` here is part of
-	// that milestone's work rather than something to grant in advance.
+	// Note what is still absent, because the absence is the safety property
+	// and not an oversight: no delete. The operator never removes a world — a
+	// claim carries no owner reference and outlives its server, its group, and
+	// the operator who deleted the wrong object, so the right to delete one is
+	// a right nothing here wants. Reclaiming a world is a deliberate human
+	// act, done with kubectl against a documented runbook.
+	//
+	// patch is 5b's one concession, and deliberately not update: growClaim
+	// raises spec.resources.requests.storage to match spec.storage.size and
+	// never lowers it, one field at a time, which is what patch is for.
+	// update would replace the whole claim for that one field.
 	//
 	// get, list and watch serve the restricted cache cmd/spawnery-operator
-	// declares over claims. No claim is read back today: the Create below is
-	// the only call, and BuildDataClaim renders the object from the group's
-	// spec.storage without consulting the API. They are the read half of a
-	// kind the manager caches, kept together so the first read is a code
+	// declares over claims, and also back growClaim's own read of the claim it
+	// patches. BuildDataClaim still renders the claim it creates from the
+	// group's spec.storage without consulting the API. They are the read half
+	// of a kind the manager caches, kept together so the first read is a code
 	// change and not also an RBAC one.
-	{Group: "", Resource: "persistentvolumeclaims", Verb: "get", Why: "the restricted cache over the world claims"},
+	{Group: "", Resource: "persistentvolumeclaims", Verb: "get", Why: "the restricted cache over the world claims, and growClaim's read before it patches"},
 	{Group: "", Resource: "persistentvolumeclaims", Verb: "list", Why: "the restricted cache over the world claims"},
 	{Group: "", Resource: "persistentvolumeclaims", Verb: "watch", Why: "the restricted cache over the world claims"},
 	{Group: "", Resource: "persistentvolumeclaims", Verb: "create", Why: "ServerReconciler creates a persistent server's claim before its pod"},
+	{Group: "", Resource: "persistentvolumeclaims", Verb: "patch", Why: "ServerReconciler grows a world's claim when spec.storage.size grows; never update, never delete"},
 
 	// PodDisruptionBudgets — one per group (ServerGroup and ProxyGroup each own
 	// one, distinguished by podspec.GroupPDBName's role suffix), kept in step

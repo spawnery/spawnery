@@ -25,6 +25,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -1993,6 +1994,141 @@ func TestAnExistingClaimIsLeftExactlyAsItIs(t *testing.T) {
 	}
 	if len(after.Spec.AccessModes) != 1 || after.Spec.AccessModes[0] != corev1.ReadWriteMany {
 		t.Errorf("accessModes = %v, want the modes the claim already had", after.Spec.AccessModes)
+	}
+}
+
+// TestGrowingStorageSizePatchesTheClaim pins 5b's one write to an object 5a
+// declared created-never-written: growing spec.storage.size reaches the
+// claim, and only that one field.
+//
+// The reconcile that has to notice the growth runs against a server whose
+// pod already exists, which is the ordinary case for a persistent server
+// that has been up for a while — createPod is false by then, so nothing in
+// the pod-creation path would ever see the new size. growClaim runs on every
+// pass for exactly that reason.
+//
+// envtest runs no CSI driver and no external-resizer, and its API server
+// enforces the same resize admission a real cluster does: a claim's
+// spec.resources.requests is only mutable once the claim is Bound, and only
+// against a StorageClass with allowVolumeExpansion. Both are faked here the
+// same way setPodRunning fakes the kubelet elsewhere in this file — the
+// StorageClass is real (creating one needs no controller behind it), but
+// nothing ever binds the claim to a volume, so its Bound status is written
+// by hand rather than earned. Confirmed by hand before this test was kept:
+// without the fake bind, r.Patch in growClaim fails with envtest's real
+// "only dynamically provisioned pvc can be resized" error, the same as it
+// would against a claim nobody's storage class ever bound.
+func TestGrowingStorageSizePatchesTheClaim(t *testing.T) {
+	f := newFixture(t)
+	class := &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "expandable-" + f.ns},
+		Provisioner: "kubernetes.io/no-provisioner",
+	}
+	class.AllowVolumeExpansion = ptr.To(true)
+	if err := f.c.Create(f.ctx, class); err != nil {
+		t.Fatalf("create StorageClass: %v", err)
+	}
+
+	// storage.storageClassName is immutable once set (CEL rule on
+	// ServerGroupSpec), so it has to be there at creation -- built by hand
+	// rather than through createPersistentGroup for that one reason.
+	replicas := int32(1)
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "survival", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: f.network.Name},
+			Type:                          spawneryv1alpha1.ServerGroupPersistent,
+			Image:                         "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers:                    100,
+			Replicas:                      &replicas,
+			TerminationGracePeriodSeconds: 60,
+			FailedRetentionSeconds:        3600,
+			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
+			Storage: &spawneryv1alpha1.StorageSpec{
+				Size:             resource.MustParse("10Gi"),
+				StorageClassName: &class.Name,
+			},
+		},
+	}
+	if err := f.c.Create(f.ctx, group); err != nil {
+		t.Fatalf("create persistent ServerGroup: %v", err)
+	}
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+
+	before := f.claim("survival-0-data")
+	if before == nil {
+		t.Fatal("no claim to grow")
+	} else if size := before.Spec.Resources.Requests[corev1.ResourceStorage]; size.Cmp(resource.MustParse("10Gi")) != 0 {
+		t.Fatalf("claim requests %s before growth, want the fixture's 10Gi", size.String())
+	}
+	before.Status.Phase = corev1.ClaimBound
+	before.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}
+	if err := f.c.Status().Update(f.ctx, before); err != nil {
+		t.Fatalf("fake-bind the claim: %v", err)
+	}
+
+	group.Spec.Storage.Size = resource.MustParse("20Gi")
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("grow the group: %v", err)
+	}
+	f.reconcile("survival-0")
+
+	claim := f.claim("survival-0-data")
+	if claim == nil {
+		t.Fatal("the claim is gone")
+	}
+	got := claim.Spec.Resources.Requests[corev1.ResourceStorage]
+	if got.Cmp(resource.MustParse("20Gi")) != 0 {
+		t.Fatalf("claim requests %s, group asks for 20Gi", got.String())
+	}
+}
+
+// TestAClaimLargerThanTheSpecIsLeftAlone is a regression guard, not a new
+// property: it already passed before growClaim existed, because 5a never
+// wrote to a claim at all, and it has to go on passing now that growClaim
+// does. A claim someone grew by hand is not the operator's to shrink —
+// want.Cmp(have) <= 0 in growClaim is what leaves it alone — and the CRD's
+// own shrink guard on spec.storage.size means the API would refuse the
+// correction anyway, even if growClaim tried.
+func TestAClaimLargerThanTheSpecIsLeftAlone(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1) // 10Gi, per the fixture.
+
+	hand := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podspec.DataClaimName("survival-0"),
+			Namespace: f.ns,
+			Labels:    map[string]string{podspec.LabelManagedBy: podspec.ManagedByValue},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("50Gi")},
+			},
+		},
+	}
+	if err := f.c.Create(f.ctx, hand); err != nil {
+		t.Fatalf("create the hand-grown claim: %v", err)
+	}
+	before := f.claim("survival-0-data")
+	if before == nil {
+		t.Fatal("no claim to begin with")
+	}
+
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+
+	after := f.claim("survival-0-data")
+	if after == nil {
+		t.Fatal("the claim is gone")
+	}
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("the claim was written to (resourceVersion %s -> %s); a hand-grown claim is not a divergence to heal",
+			before.ResourceVersion, after.ResourceVersion)
+	}
+	if got := after.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(resource.MustParse("50Gi")) != 0 {
+		t.Errorf("claim requests %s; want the 50Gi it already had", got.String())
 	}
 }
 

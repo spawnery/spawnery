@@ -39,9 +39,10 @@ import (
 // LabelManagedBy is not decoration: cmd/spawnery-operator.main restricts the
 // manager's cache to that label for several kinds, claims among them. It is
 // the only one of the four labels here that does -- the other three are for
-// whoever is reading claims with kubectl. Nothing in this operator reads a
-// claim back yet, so an unlabelled one would go unnoticed today, and be
-// invisible to the very first Get anybody adds.
+// whoever is reading claims with kubectl. server_controller.go's growClaim is
+// the first read this operator makes of a claim, and it reads through that
+// same restricted cache: a claim missing this label is invisible to it and
+// never grows.
 func BuildDataClaim(
 	group *spawneryv1alpha1.ServerGroup,
 	srv *spawneryv1alpha1.Server,

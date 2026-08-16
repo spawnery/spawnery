@@ -104,7 +104,7 @@ type ServerReconciler struct {
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // Reconcile collects the inputs, asks the state machine and executes the
@@ -225,6 +225,15 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	createPod := groupFound && networkFound && !nameConflict && !nameStillHeld &&
 		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero()
 
+	// Checked on every pass, not only the one that creates the pod: a
+	// persistent server's pod usually already exists, so createPod is false
+	// for the reconcile that actually has to notice spec.storage.size grew.
+	if !group.IsEphemeral() {
+		if err := r.growClaim(ctx, group, srv); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Say so on the object, and only where nothing above has already put a
 	// truer reason there: a Server whose group or network is missing carries
 	// one from the switch above, and one that has itself been deleted is not
@@ -290,7 +299,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// AlreadyExists is the ordinary case rather than an error: an ordinal
 		// recreated after its server was deleted is *supposed* to find the
 		// claim it had before, and that is the whole point of the milestone.
-		// Nothing updates the claim either — growing a world is 5b's.
+		// growClaim above is what grows it; this call only ever creates.
 		if !group.IsEphemeral() {
 			claim := podspec.BuildDataClaim(group, srv)
 			if err := r.Create(ctx, claim); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -352,6 +361,40 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{RequeueAfter: resyncInterval}, nil
+}
+
+// growClaim raises the claim's storage request to match spec.storage.size,
+// and never lowers it. It is the only write this operator makes to a claim,
+// and the RBAC it needs is patch — not update, which would replace the whole
+// object for one field, and never delete, which is the verb that destroys a
+// world.
+//
+// A claim already at or above the size asked for is left untouched, byte for
+// byte: that covers both the ordinary case (nothing to do) and the one a
+// controller has no business correcting — a claim someone grew by hand, which
+// the CRD's own shrink guard on spec.storage.size means this function will
+// never be asked to shrink anyway.
+func (r *ServerReconciler) growClaim(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	srv *spawneryv1alpha1.Server,
+) error {
+	if group.Spec.Storage == nil {
+		return nil
+	}
+	claim := &corev1.PersistentVolumeClaim{}
+	key := types.NamespacedName{Name: podspec.DataClaimName(srv.Name), Namespace: srv.Namespace}
+	if err := r.Get(ctx, key, claim); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	want := group.Spec.Storage.Size
+	have := claim.Spec.Resources.Requests[corev1.ResourceStorage]
+	if want.Cmp(have) <= 0 {
+		return nil
+	}
+	patched := claim.DeepCopy()
+	patched.Spec.Resources.Requests[corev1.ResourceStorage] = want
+	return r.Patch(ctx, patched, client.MergeFrom(claim))
 }
 
 // ensureFinalizer puts the drain finalizer on the object. It exists as a step
