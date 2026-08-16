@@ -212,6 +212,12 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 		views      []ServerView
 		wantCreate []int32
 		wantDelete []string
+		// wantReason is SizeDecision.DeleteReason: which class nominated the
+		// ordinal, carried into the event size() emits. Tabled here rather
+		// than tested on its own so that no case can nominate under one class
+		// and report another, and so that a case added later has to answer
+		// the question.
+		wantReason string
 	}{
 		{
 			name:       "missing ordinals are created all at once, not serialised",
@@ -228,6 +234,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 				ready(0, "h1"), ready(1, "h1"), ready(2, "h1"), ready(3, "h1"),
 			},
 			wantDelete: []string{"g-3"},
+			wantReason: "SurplusOrdinal",
 		},
 		{
 			name:     "Gate A holds the next surplus while one is draining",
@@ -269,6 +276,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 				{Name: "g-a7kd", Phase: phase.Draining},
 			},
 			wantDelete: []string{"g-1"},
+			wantReason: "SurplusOrdinal",
 		},
 		{
 			// Spec 2.1: a surplus ordinal sits above replicas, so Gate B cannot
@@ -282,6 +290,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 				ready(1, "h1"),
 			},
 			wantDelete: []string{"g-1"},
+			wantReason: "SurplusOrdinal",
 		},
 		{
 			name:     "stale takes the highest once no surplus remains",
@@ -291,6 +300,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 				ready(0, "h1"), ready(1, "h1"), ready(2, "h1"),
 			},
 			wantDelete: []string{"g-2"},
+			wantReason: "StaleSpec",
 		},
 		{
 			name:     "surplus outranks stale",
@@ -300,6 +310,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 				ready(0, "h1"), ready(1, "h1"), ready(2, "h1"),
 			},
 			wantDelete: []string{"g-2"},
+			wantReason: "SurplusOrdinal",
 		},
 		{
 			// Gate B: the replacement for g-2 is back but not Ready yet, so g-1
@@ -350,6 +361,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 				return []ServerView{g0, g1}
 			}(),
 			wantDelete: []string{"g-1"},
+			wantReason: "ResizePending",
 		},
 		{
 			name:     "a stale ordinal outranks a resize-pending one",
@@ -362,6 +374,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 				return []ServerView{g0, g1}
 			}(),
 			wantDelete: []string{"g-0"},
+			wantReason: "StaleSpec",
 		},
 		{
 			// Resize-pending is subject to Gate A exactly like stale is: a
@@ -394,6 +407,9 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got.Delete, tc.wantDelete) {
 				t.Errorf("Delete = %v, want %v", got.Delete, tc.wantDelete)
+			}
+			if got.DeleteReason != tc.wantReason {
+				t.Errorf("DeleteReason = %q, want %q", got.DeleteReason, tc.wantReason)
 			}
 		})
 	}

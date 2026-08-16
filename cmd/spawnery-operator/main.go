@@ -193,12 +193,14 @@ func main() {
 		&corev1.ConfigMap{}:      {Label: managed},
 		&corev1.ServiceAccount{}: {Label: managed},
 		// A persistent server's world claim carries the same label, and there
-		// is one per server. Nothing reads a claim back yet — the Server
-		// controller only creates them — but the restriction belongs beside
-		// the two above rather than with the first read: without it that read
-		// would start an informer holding every claim in every watched
-		// namespace, ours and everybody else's, for the sake of the one it
-		// asked for.
+		// is one per server. Since 5b the Server controller reads claims back
+		// as well as creating them — growClaim and readResizePending
+		// (internal/controller/server_controller.go) — and both go through
+		// this cache, so a claim missing the label is invisible to them: it
+		// never grows and never reports a pending filesystem resize. Without
+		// the restriction those reads would start an informer holding every
+		// claim in every watched namespace, ours and everybody else's, for the
+		// sake of the one they asked for.
 		&corev1.PersistentVolumeClaim{}: {Label: managed},
 		// The node cache exists for one bool per node — cordoned, or tainted to
 		// repel. status.images is tens of kilobytes per node and nothing here

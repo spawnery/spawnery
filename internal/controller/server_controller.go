@@ -368,10 +368,11 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 // growClaim raises the claim's storage request to match spec.storage.size,
-// and never lowers it. It is the only write this operator makes to a claim,
-// and the RBAC it needs is patch — not update, which would replace the whole
-// object for one field, and never delete, which is the verb that destroys a
-// world.
+// and never lowers it. It is the only write this operator makes to an
+// *existing* claim — the reconcile above creates one alongside the pod, and
+// nothing anywhere deletes one — and the RBAC it needs is patch, not update,
+// which would replace the whole object for one field, and never delete, which
+// is the verb that destroys a world.
 //
 // A claim already at or above the size asked for is left untouched, byte for
 // byte: that covers both the ordinary case (nothing to do) and the one a

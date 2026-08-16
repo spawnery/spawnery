@@ -2266,10 +2266,14 @@ operator's answer to whatever broke. For a persistent group the very same pass
 now counts failures over the *unfiltered* view list (`ofGeneration` is
 ephemeral-only as of 5b — see below), so a stale-generation `Failed` corpse
 still holding its ordinal is counted right back in on the same reconcile: the
-count returns to 1, the corpse itself, rather than to 0. Defensible — a spec
+count returns to the number of corpses the group is holding rather than to 0.
+`pruneFailed` does not run for a persistent group, and each corpse keeps its
+own ordinal until its failed retention elapses, so with `replicas > 1` that is
+one per ordinal that has one, bounded by `spec.replicas`
+(`internal/controller/servergroup_controller.go:251-258`). Defensible — a spec
 edit does not heal a broken ordinal, and an operator watching for a stall
-should not read a `1` as "nothing happened" — but it means the reset an
-ephemeral group gets in full, a persistent one gets only most of.
+should not read a non-zero count as "nothing happened" — but it means the reset
+an ephemeral group gets in full, a persistent one gets only most of.
 
 **Fixed: a persistent group's failure counter used to freeze on any spec
 edit.** `CountFailures`'s call site (`internal/controller/servergroup_controller.go:231-238`)

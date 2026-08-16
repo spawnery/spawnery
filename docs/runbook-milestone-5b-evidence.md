@@ -565,10 +565,9 @@ readings of §4, not just one:**
   larger volume already visible to Paper.
 
 Either way, confirm `status.consecutiveFailures` on `survival-expandable`
-stayed at `0` throughout — a resize-triggered restart is not a failure, and
-`DecidePersistentSize`'s resize-pending class is the lowest-priority one for
-exactly this reason: it should never compete with, or be mistaken for, the
-backoff path.
+stayed at `0` throughout. A resize-triggered restart is a takedown
+`DecidePersistentSize` ordered, not a failure: `CountFailures` counts servers
+in `Failed`, and a server this rule deletes leaves through `Draining`.
 
 Clean up the extra group before moving on:
 

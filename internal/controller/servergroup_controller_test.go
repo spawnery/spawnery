@@ -1608,6 +1608,8 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 			t.Fatalf("ReportPlayers: %v", err)
 		}
 	}
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
 	f.reconcileGroup(t, r)
 
 	var leaving int
@@ -1618,6 +1620,13 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	}
 	if leaving != 1 {
 		t.Fatalf("%d servers marked for deletion, want exactly one per pass", leaving)
+	}
+	// The ephemeral side of size()'s DeleteReason fallback. DecideSize leaves
+	// the field empty -- only the persistent classes fill it, and those are
+	// tabled in persistent_test.go -- so this removal must carry the reason
+	// the ephemeral rule has always used.
+	if got := scalingEvents(rec, "ServerRemoved"); got != 1 {
+		t.Errorf("ServerRemoved events = %d, want 1", got)
 	}
 }
 
@@ -3489,11 +3498,22 @@ func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
 		t.Fatalf("servers = %d, want 3", got)
 	}
 
+	// SizeDecision.DeleteReason says which class nominated an ordinal, and the
+	// event is where it reaches an operator -- nothing else reads the field.
+	// The values are tabled in persistent_test.go; what this asserts is that
+	// size() carries one through to deleteServer instead of falling back to
+	// the ephemeral rule's ServerRemoved.
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+
 	f.setPersistentReplicas(t, "survival", 2)
 	f.reconcilePersistentGroup(t, r, "survival")
 
 	if _, present := f.serverIfPresent("survival-2"); present {
 		t.Error("survival-2 is still here; the highest ordinal is the one that goes")
+	}
+	if got := scalingEvents(rec, "SurplusOrdinal"); got != 1 {
+		t.Errorf("SurplusOrdinal events = %d, want 1; the takedown must say which class named it", got)
 	}
 	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 2 ||
 		names[0] != "survival-0" || names[1] != "survival-1" {
@@ -3981,6 +4001,45 @@ func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
 	}
 	if worst == 0 {
 		t.Fatal("no ordinal ever went down, so this test proves nothing about the update")
+	}
+}
+
+// TestTheStorageResizeMessageComesFromTheLowestOrdinal pins the tie-break
+// storageResizeCondition argues for at length and nothing exercised: with two
+// unhealthy claims, the message must come from the lower ordinal every time,
+// so that an operator reads one steady signal rather than watching two
+// messages alternate between reconciles. Reversing ordinalBefore to pick the
+// highest is a live mutation only against a case where the two views carry
+// *different* messages -- one where they agreed would pass either way.
+//
+// The views are built here rather than driven through a cluster because
+// storageResizeCondition is a pure function of them, and the two distinct
+// messages are the whole fixture.
+func TestTheStorageResizeMessageComesFromTheLowestOrdinal(t *testing.T) {
+	views := []ServerView{
+		{Name: "survival-1", Ordinal: ptr.To(int32(1)), ResizeError: "ordinal 1's message"},
+		{Name: "survival-0", Ordinal: ptr.To(int32(0)), ResizeError: "ordinal 0's message"},
+	}
+	// Listed highest-first above, so "the first one found" would answer with
+	// ordinal 1; collectViews makes no ordering promise, which is the whole
+	// reason the tie-break exists.
+	got := storageResizeCondition(views)
+	if got.Status != metav1.ConditionFalse {
+		t.Fatalf("Status = %v, want False; two claims carry an error", got.Status)
+	}
+	if got.Message != "ordinal 0's message" {
+		t.Errorf("Message = %q, want ordinal 0's; the lowest ordinal is the tie-break that stays put",
+			got.Message)
+	}
+
+	// A nil ordinal sorts last, so it loses to any numbered view and wins only
+	// when it is the sole candidate.
+	nameless := ServerView{Name: "survival-a7kd", ResizeError: "a squatter's message"}
+	if got := storageResizeCondition([]ServerView{nameless, views[1]}); got.Message != "ordinal 0's message" {
+		t.Errorf("Message = %q, want ordinal 0's; a nil ordinal sorts after a numbered one", got.Message)
+	}
+	if got := storageResizeCondition([]ServerView{nameless}); got.Message != "a squatter's message" {
+		t.Errorf("Message = %q, want the squatter's; it is the only candidate there is", got.Message)
 	}
 }
 

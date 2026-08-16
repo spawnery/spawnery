@@ -2166,6 +2166,15 @@ func TestAClaimLargerThanTheSpecIsLeftAlone(t *testing.T) {
 	if got := after.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(resource.MustParse("50Gi")) != 0 {
 		t.Errorf("claim requests %s; want the 50Gi it already had", got.String())
 	}
+	// Left alone means no patch was attempted, not that one was attempted and
+	// refused. Narrowing growClaim's guard from want.Cmp(have) <= 0 to == 0
+	// makes it patch this claim downward; the API refuses that, the claim is
+	// unchanged, and both assertions above still hold -- so this is what tells
+	// the two apart.
+	if srv := f.server("survival-0"); srv.Status.StorageResizeError != "" {
+		t.Errorf("storageResizeError = %q, want empty; nothing should have been sent to this claim",
+			srv.Status.StorageResizeError)
+	}
 }
 
 // TestARecreatedOrdinalMountsTheClaimItLeft is the half of design §6's own

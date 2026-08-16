@@ -858,10 +858,11 @@ func storageResizeCondition(views []ServerView) metav1.Condition {
 }
 
 // ordinalBefore reports whether a's ordinal sorts before b's, for
-// storageResizeCondition's tie-break. A nil ordinal is not expected among a
-// persistent group's own views -- every one of them carries spec.ordinal --
-// but this has nothing to compare it against, so it sorts last rather than
-// panicking on the dereference.
+// storageResizeCondition's tie-break. A nil ordinal does occur among a
+// persistent group's views -- an adopted or hand-made object need not carry
+// spec.ordinal, which is what DecidePersistentSize's nil-ordinal rule and
+// known-issues' squatter entry are about -- and this has nothing to compare
+// it against, so it sorts last rather than panicking on the dereference.
 func ordinalBefore(a, b *ServerView) bool {
 	switch {
 	case a.Ordinal == nil:
