@@ -96,6 +96,12 @@ type ServerView struct {
 	// Ready. Zero for one that never did — and the Server controller clears
 	// it on every exit from Ready, so a Failed server carries no ReadySince.
 	ReadySince time.Time
+	// ResizePending is status.storageResizePending: the claim carries the
+	// FileSystemResizePending condition and this server's pod has to be
+	// restarted before the filesystem follows the grown volume. Read from
+	// the status, never from the claim directly — the Server controller is
+	// the one that watches the claim; the group only reads its conclusion.
+	ResizePending bool
 }
 
 // isOccupied is the occupancy rule for a server pod. The proxy side has its

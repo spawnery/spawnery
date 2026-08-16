@@ -180,6 +180,26 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	if len(stale) > 0 {
 		decision.Delete = append(decision.Delete, held[stale[0]])
 		decision.DeleteReason = "StaleSpec"
+		return decision
+	}
+
+	// The lowest-priority class: a claim the CSI driver has grown but whose
+	// filesystem needs the pod restarted to follow. Reached only when nothing
+	// missing, surplus or stale outranked it -- most drivers expand online and
+	// never ask for this at all.
+	resizing := make([]int32, 0, len(held))
+	for ordinal, name := range held {
+		if ordinal >= in.Replicas {
+			continue
+		}
+		if viewByName(in.Views, name).ResizePending {
+			resizing = append(resizing, ordinal)
+		}
+	}
+	sort.Slice(resizing, func(i, j int) bool { return resizing[i] > resizing[j] })
+	if len(resizing) > 0 {
+		decision.Delete = append(decision.Delete, held[resizing[0]])
+		decision.DeleteReason = "ResizePending"
 	}
 	return decision
 }

@@ -133,6 +133,13 @@ type ServerStatus struct {
 	// +optional
 	ReadinessLosses int32 `json:"readinessLosses"`
 
+	// StorageResizePending is true while this server's claim carries the
+	// FileSystemResizePending condition: the CSI driver has grown the volume
+	// and needs the pod restarted before the filesystem follows. Most drivers
+	// expand online and never set it.
+	// +optional
+	StorageResizePending bool `json:"storageResizePending,omitempty"`
+
 	// Conditions follow the standard Kubernetes condition contract.
 	// +optional
 	// +listType=map

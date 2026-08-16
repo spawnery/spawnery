@@ -722,7 +722,7 @@ func (r *ServerGroupReconciler) size(
 		logger.Info("fewer free servers than the surplus, trying again later",
 			"group", group.Name, "surplus", decision.Surplus, "free", len(decision.Delete))
 	}
-	// DeleteReason distinguishes the persistent rule's two occasions for the
+	// DeleteReason distinguishes the persistent rule's occasions for the
 	// event trail; the ephemeral rule leaves it empty and falls back to the
 	// reason it always used.
 	deleteReason := decision.DeleteReason
@@ -860,7 +860,8 @@ func (r *ServerGroupReconciler) collectViews(
 			// reason it gives — a group must not be emptied on the strength of
 			// a cache miss — and it costs at most a delay, because the next
 			// pass asks again.
-			Condemned: podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
+			Condemned:     podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
+			ResizePending: srv.Status.StorageResizePending,
 		}
 		if podFound {
 			v.NodeName = pod.Spec.NodeName

@@ -227,9 +227,13 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Checked on every pass, not only the one that creates the pod: a
 	// persistent server's pod usually already exists, so createPod is false
-	// for the reconcile that actually has to notice spec.storage.size grew.
+	// for the reconcile that actually has to notice spec.storage.size grew,
+	// or the claim's FileSystemResizePending condition.
 	if !group.IsEphemeral() {
 		if err := r.growClaim(ctx, group, srv); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.readResizePending(ctx, srv); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -395,6 +399,39 @@ func (r *ServerReconciler) growClaim(
 	patched := claim.DeepCopy()
 	patched.Spec.Resources.Requests[corev1.ResourceStorage] = want
 	return r.Patch(ctx, patched, client.MergeFrom(claim))
+}
+
+// readResizePending mirrors the claim's FileSystemResizePending condition
+// onto status.storageResizePending, which is what DecidePersistentSize's
+// lowest-priority candidate class reads. Most CSI drivers expand a volume
+// online and the pod never has to restart for it; the ones that do not set
+// the condition until the resize actually needs a restart to take effect,
+// so this is false for the ordinary case.
+//
+// A claim that no longer exists clears the flag rather than leaving a stale
+// true behind -- there is nothing left asking for a restart.
+func (r *ServerReconciler) readResizePending(
+	ctx context.Context,
+	srv *spawneryv1alpha1.Server,
+) error {
+	claim := &corev1.PersistentVolumeClaim{}
+	key := types.NamespacedName{Name: podspec.DataClaimName(srv.Name), Namespace: srv.Namespace}
+	if err := r.Get(ctx, key, claim); err != nil {
+		if apierrors.IsNotFound(err) {
+			srv.Status.StorageResizePending = false
+			return nil
+		}
+		return err
+	}
+	pending := false
+	for _, c := range claim.Status.Conditions {
+		if c.Type == corev1.PersistentVolumeClaimFileSystemResizePending && c.Status == corev1.ConditionTrue {
+			pending = true
+			break
+		}
+	}
+	srv.Status.StorageResizePending = pending
+	return nil
 }
 
 // ensureFinalizer puts the drain finalizer on the object. It exists as a step

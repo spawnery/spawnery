@@ -2084,6 +2084,42 @@ func TestGrowingStorageSizePatchesTheClaim(t *testing.T) {
 	}
 }
 
+// TestAResizePendingClaimMarksItsServer pins the reaction, not the trigger.
+//
+// envtest runs no CSI driver and no external-resizer, so nothing in this
+// suite can make FileSystemResizePending appear on its own — the condition
+// is written onto the claim's status by hand, the same way growClaim's test
+// fake-binds a claim envtest's real provisioners never would. That is the
+// honest way to test this: the operator's job is to read the condition and
+// mirror it, not to produce it. What this test does NOT prove is that a real
+// CSI driver ever sets the condition, or that restarting the pod actually
+// makes the filesystem follow — both are outside this operator's reach and
+// outside envtest's.
+func TestAResizePendingClaimMarksItsServer(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+
+	claim := f.claim("survival-0-data")
+	if claim == nil {
+		t.Fatal("no claim to mark")
+	}
+	claim.Status.Conditions = []corev1.PersistentVolumeClaimCondition{{
+		Type:   corev1.PersistentVolumeClaimFileSystemResizePending,
+		Status: corev1.ConditionTrue,
+	}}
+	if err := f.c.Status().Update(f.ctx, claim); err != nil {
+		t.Fatalf("set the condition: %v", err)
+	}
+
+	f.reconcile("survival-0")
+
+	if srv := f.server("survival-0"); !srv.Status.StorageResizePending {
+		t.Fatal("the claim asked for a restart and the server does not say so")
+	}
+}
+
 // TestAClaimLargerThanTheSpecIsLeftAlone is a regression guard, not a new
 // property: it already passed before growClaim existed, because 5a never
 // wrote to a claim at all, and it has to go on passing now that growClaim

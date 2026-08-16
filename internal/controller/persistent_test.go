@@ -336,6 +336,49 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			views:      []ServerView{ready(0, "h1"), ready(1, "h1")},
 			wantDelete: nil,
 		},
+		{
+			// The lowest-priority class: both ordinals are current spec and
+			// otherwise healthy, so resize-pending is the only thing that can
+			// nominate either, and it takes the highest the way surplus and
+			// stale do.
+			name:     "resize-pending is nominated, but only after stale",
+			replicas: 2,
+			podHash:  "h1",
+			views: func() []ServerView {
+				g0, g1 := ready(0, "h1"), ready(1, "h1")
+				g0.ResizePending, g1.ResizePending = true, true
+				return []ServerView{g0, g1}
+			}(),
+			wantDelete: []string{"g-1"},
+		},
+		{
+			name:     "a stale ordinal outranks a resize-pending one",
+			replicas: 2,
+			podHash:  "h2",
+			views: func() []ServerView {
+				g0 := ready(0, "h1") // stale: h1 != group's h2
+				g1 := ready(1, "h2")
+				g1.ResizePending = true
+				return []ServerView{g0, g1}
+			}(),
+			wantDelete: []string{"g-0"},
+		},
+		{
+			// Resize-pending is subject to Gate A exactly like stale is: a
+			// takedown already in flight for one ordinal holds back the
+			// nomination of another, whatever class that other ordinal would
+			// otherwise be nominated under.
+			name:     "Gate A holds a resize-pending ordinal while another is draining",
+			replicas: 2,
+			podHash:  "h1",
+			views: func() []ServerView {
+				g0 := ready(0, "h1")
+				g0.ResizePending = true
+				g1 := draining(1, "h1")
+				return []ServerView{g0, g1}
+			}(),
+			wantDelete: nil,
+		},
 	}
 
 	for _, tc := range cases {

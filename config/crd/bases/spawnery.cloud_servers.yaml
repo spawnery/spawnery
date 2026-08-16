@@ -245,6 +245,13 @@ spec:
                   back to pod-creation time.
                 format: date-time
                 type: string
+              storageResizePending:
+                description: |-
+                  StorageResizePending is true while this server's claim carries the
+                  FileSystemResizePending condition: the CSI driver has grown the volume
+                  and needs the pod restarted before the filesystem follows. Most drivers
+                  expand online and never set it.
+                type: boolean
               wasRegistered:
                 description: |-
                   WasRegistered is true once this server has been registered with the
