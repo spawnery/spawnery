@@ -182,22 +182,19 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	return decision
 }
 
-// takedownInFlight is Gate A: is a takedown of this group already under way.
-// It is what stops the next pass from nominating a second ordinal while a
-// takedown this rule started earlier -- surplus or stale -- is still going:
-// DecidePersistentSize nominates at most one name and returns, so within a
-// single call more than one delete was never possible; the gate is what
-// carries that limit across calls, while the earlier nomination is still
-// draining or terminating.
+// takedownInFlight is Gate A: does any ordinal-bearing view of the group
+// already count as leaving(), or have an outstanding PendingDeletes entry.
+// DecidePersistentSize nominates at most one name and returns, so a single
+// call was never the risk; this gate is what makes the *next* call wait
+// while an earlier nomination is still being carried out.
 //
-// A view with a nil Ordinal is skipped, the same as everywhere else in this
-// file: DecidePersistentSize's own doc comment says a nil-ordinal view "fills
-// no ordinal, and it is not deleted as surplus" -- this rule removes what it
-// can name, and something it cannot name is not its to remove. Gate A asks a
-// third question of the same views, and answering it from a server this rule
-// has no ordinal for would let a squatter or hand-made object block every
-// takedown of the group, indefinitely and silently, which is a wider version
-// of the single-ordinal stall docs/known-issues.md already records.
+// A view with a nil Ordinal is skipped, the same as every other pass over
+// in.Views in this file: DecidePersistentSize's own doc comment says a
+// nil-ordinal view "fills no ordinal, and it is not deleted as surplus" --
+// this rule removes what it can name, and something it cannot name is not
+// its to remove. See docs/known-issues.md's "A squatter can stall an
+// ordinal silently": without this, the same kind of object would stall every
+// ordinal's takedown instead of just its own.
 func takedownInFlight(in PersistentInputs) bool {
 	for _, v := range in.Views {
 		if v.Ordinal == nil {
