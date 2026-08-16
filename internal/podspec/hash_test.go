@@ -161,11 +161,21 @@ func TestDesiredServerHashDiscriminates(t *testing.T) {
 			changed: true,
 		},
 		{
+			// BuildServerPod never reads Replicas, so this row cannot fail
+			// today on that account. What it guards against is
+			// DesiredServerHash's own marshalled struct (hash.go) growing a
+			// Replicas field directly — the mutation this row exists to
+			// catch, not any path already reachable through the pod.
 			name:    "replicas does not change it",
 			mutate:  func(g *spawneryv1alpha1.ServerGroup) { g.Spec.Replicas = ptr.To(int32(5)) },
 			changed: false,
 		},
 		{
+			// Same guard as above, for Drain.TimeoutSeconds: BuildServerPod
+			// does not read it either, so this row watches for
+			// DesiredServerHash's marshalled struct being widened to
+			// include it directly, not for a path through the pod that
+			// exists today.
 			name: "drain.timeoutSeconds does not change it",
 			mutate: func(g *spawneryv1alpha1.ServerGroup) {
 				g.Spec.Drain = &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 999}
@@ -205,9 +215,21 @@ func TestDesiredServerHashDiscriminates(t *testing.T) {
 	}
 }
 
-// The per-ordinal identity must not reach the digest, or every ordinal would
-// read as stale against every other and the group would never settle.
-func TestDesiredServerHashIgnoresTheServerIdentity(t *testing.T) {
+// TestDesiredServerHashHasNoPerServerInput does not call DesiredServerHash
+// twice to compare outputs: its signature — DesiredServerHash(net, group,
+// configValues) — admits no *Server at all, so there is no per-server value
+// (name, ordinal, claim) that could reach the digest, and the compiler
+// enforces that, not this test.
+//
+// What this test actually guards is the fixture's premise: that two ordinals
+// of this group really would render two different pods if DesiredServerHash
+// were, hypothetically, called per-server. BuildServerPod is exercised
+// directly here for that reason — proving pod0.Spec != pod1.Spec is what
+// makes "the digest can't distinguish them" a meaningful property of the API
+// shape rather than a coincidence of a fixture where they'd have been
+// identical anyway. The non-empty digest check is a basic sanity check on
+// top, not a proof of the identity-independence claim.
+func TestDesiredServerHashHasNoPerServerInput(t *testing.T) {
 	net, group := serverHashFixtures(t)
 	values := []byte("maxPlayers: 20\n")
 
@@ -215,9 +237,6 @@ func TestDesiredServerHashIgnoresTheServerIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DesiredServerHash: %v", err)
 	}
-	// Two ordinals of the same group render two pods that differ in name, in
-	// SPAWNERY_SERVER and in the claim they mount. None of that may move the
-	// digest, so one call per group -- not per server -- is the whole API.
 	pod0, err := BuildServerPod(net, group, &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{Name: "g-0", Namespace: "ns"},
 		Spec:       spawneryv1alpha1.ServerSpec{Ordinal: ptr.To(int32(0))},

@@ -67,14 +67,17 @@ func DesiredProxyHash(
 }
 
 // DesiredServerHash digests everything this operator would render for one
-// server of the group right now: the pod, with the server's name held at a
-// fixed empty value so nothing derived from it can reach the digest, and the
-// config values the group's ConfigMap carries.
+// server of the group right now: the pod BuildServerPod would produce for it,
+// and the config values the group's ConfigMap carries. The signature takes no
+// *Server, so no per-server identity — name, ordinal, claim — has anything to
+// enter the digest through; the Server passed to BuildServerPod internally
+// carries only a zero-value name, which is defence-in-depth rather than the
+// reason identity stays out.
 //
 // It is the sibling of DesiredProxyHash and follows it deliberately -- same
-// empty-name technique, same encoding/json marshal so map keys sort and the
-// digest does not flap, same eight-byte digest. Read that function's comment
-// for the argument; it applies here unchanged.
+// encoding/json marshal so map keys sort and the digest does not flap, same
+// eight-byte digest. Read that function's comment for the argument; it
+// applies here unchanged.
 //
 // Two divergences from the sibling, both deliberate:
 //
@@ -96,6 +99,14 @@ func DesiredServerHash(
 	group *spawneryv1alpha1.ServerGroup,
 	configValues []byte,
 ) (string, error) {
+	// What actually keeps a server's identity out of the digest is the
+	// signature above: DesiredServerHash takes no *Server, so there is no
+	// per-server value that could reach the marshalled struct below. The
+	// Server passed to BuildServerPod here needs a Name only because
+	// BuildServerPod's caller contract expects one; leaving it at the zero
+	// value is defence-in-depth for the day this function grows an input
+	// that does carry identity, not the mechanism the guarantee rests on.
+	//
 	// The endpoint is a fixed sentinel rather than the real one, and rather
 	// than "": BuildServerPod refuses an empty endpoint outright
 	// (internal/podspec/server.go:231). A constant contributes a constant to
