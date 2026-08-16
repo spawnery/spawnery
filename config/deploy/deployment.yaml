@@ -35,10 +35,17 @@ spec:
       containers:
         - name: operator
           # Level B replaces this image with the locally built one.
-          image: ghcr.io/spawnery/spawnery-operator:dev
+          # A tag until hack/publish.sh has run once, then the digest it writes
+          # back. The master design's §8 asks for digests in shipped manifests
+          # because tags are mutable; ":dev" before milestone 6a was worse than
+          # either, being a tag nothing produced.
+          image: ghcr.io/spawnery/spawnery-operator:0.1.0
           args:
             - --leader-elect=true
-            - --startup-deadline=20s
+            # The production value. This manifest is installed, not test
+            # scaffolding: hack/e2e.sh appends a second --startup-deadline=20s
+            # for its own run, and the flag package takes the last occurrence.
+            - --startup-deadline=5m
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
           env:

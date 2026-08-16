@@ -21,8 +21,10 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -45,13 +47,17 @@ func TestMain(m *testing.M) {
 }
 
 // readManifest decodes a single-document YAML manifest from the repository.
+// Strictly: sigs.k8s.io/yaml's plain Unmarshal drops keys the target type does
+// not have, so `serviceAccountNam:` or `readOnlyRootFilesytem:` would decode
+// into a zero value and every assertion below would then be checking a field
+// nobody set.
 func readManifest[T any](t *testing.T, rel string, into *T) {
 	t.Helper()
 	raw, err := os.ReadFile(testenv.RepoPath(t, rel))
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
 	}
-	if err := yaml.Unmarshal(raw, into); err != nil {
+	if err := yaml.UnmarshalStrict(raw, into); err != nil {
 		t.Fatalf("decode %s: %v", rel, err)
 	}
 }
@@ -405,6 +411,104 @@ func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
 	}
 	if sc.Capabilities == nil || len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
 		t.Errorf("capabilities = %+v, want drop ALL", sc.Capabilities)
+	}
+}
+
+// TestTheOperatorDeploymentCarriesProductionFlags is the guard
+// docs/known-issues.md asked for under "The flags in the Deployment are
+// unchecked": sigs.k8s.io/yaml is not strict, so a mistyped key disappears
+// silently, and until now nothing looked at the container's arguments at all.
+//
+// The floor on --startup-deadline is the point. These manifests are what gets
+// installed, not test scaffolding: milestone 5a's evidence run measured 24
+// seconds from apply to ReadyGatePassed on an idle single-node kind cluster
+// with the image already present -- the favourable case in every dimension
+// that matters, since there was no image pull, no contention and no world to
+// read. A manifest carrying 20s would fail every server on a real cluster.
+// hack/e2e.sh gets its short deadline by appending a second occurrence of the
+// flag, which Go's flag package resolves to the last one.
+func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
+	var deploy appsv1.Deployment
+	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+
+	if len(deploy.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
+	}
+
+	args := map[string]string{}
+	for _, a := range deploy.Spec.Template.Spec.Containers[0].Args {
+		name, value, ok := strings.Cut(strings.TrimPrefix(a, "--"), "=")
+		if !ok {
+			t.Errorf("argument %q is not --flag=value, so this test cannot judge it", a)
+			continue
+		}
+		args[name] = value
+	}
+
+	want := []string{
+		"leader-elect",
+		"startup-deadline",
+		"metrics-bind-address",
+		"health-probe-bind-address",
+	}
+	for _, name := range want {
+		if _, ok := args[name]; !ok {
+			t.Errorf("the operator container does not pass --%s", name)
+		}
+	}
+	for name := range args {
+		if !slices.Contains(want, name) {
+			t.Errorf("the operator container passes --%s, which this test does not know "+
+				"about. The flag package rejects nothing it is not given and the YAML "+
+				"decoder accepts any string, so a mistyped flag reaches a real cluster "+
+				"silently. Add it here deliberately, or fix the typo", name)
+		}
+	}
+
+	deadline, err := time.ParseDuration(args["startup-deadline"])
+	if err != nil {
+		t.Fatalf("--startup-deadline=%q does not parse: %v", args["startup-deadline"], err)
+	}
+	if deadline < 5*time.Minute {
+		t.Errorf("--startup-deadline=%s, want at least 5m. Milestone 5a's evidence run "+
+			"measured 24 seconds from apply to ReadyGatePassed on an idle single-node "+
+			"kind cluster with the image already present; a shorter deadline in the "+
+			"manifest a person installs fails healthy servers. The E2E run patches its "+
+			"own copy down instead", deadline)
+	}
+}
+
+// TestTheOperatorImageIsNotAMutableTag guards what the manifest points at. It
+// named ghcr.io/spawnery/spawnery-operator:dev until milestone 6a -- a tag
+// nothing produced, so the manifest referenced nothing at all. The master
+// design's §8 asks for digest references in shipped manifests because tags are
+// mutable; hack/publish.sh writes one in after a push, and until it has run the
+// version tag is what resolves.
+func TestTheOperatorImageIsNotAMutableTag(t *testing.T) {
+	var deploy appsv1.Deployment
+	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+
+	if len(deploy.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
+	}
+	ref := deploy.Spec.Template.Spec.Containers[0].Image
+
+	const repo = "ghcr.io/spawnery/spawnery-operator"
+	if digest, ok := strings.CutPrefix(ref, repo+"@"); ok {
+		if !strings.HasPrefix(digest, "sha256:") {
+			t.Errorf("image = %q: the digest does not start with sha256:", ref)
+		}
+		return
+	}
+	tag, ok := strings.CutPrefix(ref, repo+":")
+	if !ok {
+		t.Fatalf("image = %q, want %s with either a tag or a digest", ref, repo)
+	}
+	switch tag {
+	case "", "dev", "latest":
+		t.Errorf("image = %q. %q is a tag nothing publishes or a tag that moves; the "+
+			"operator would either fail to pull or silently change version between "+
+			"restarts", ref, tag)
 	}
 }
 
