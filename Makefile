@@ -5,6 +5,7 @@ CONTAINER ?= docker
 # references it and pays nothing for it.
 IMAGE ?= $(shell nix eval --raw .#paper-image.imageName):$(shell nix eval --raw .#paper-image.imageTag)
 VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix eval --raw .#velocity-image.imageTag)
+OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix eval --raw .#operator-image.imageTag)
 STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
 
 .PHONY: all
@@ -70,11 +71,11 @@ agent-deps:
 
 .PHONY: image
 image:
-	nix build .#paper-image
+	nix build .#paper-image --out-link result-paper
 
 .PHONY: image-load
 image-load: image
-	$(CONTAINER) load < result
+	$(CONTAINER) load < result-paper
 
 .PHONY: image-test
 # Design §9's test-strategy table promises "both images, offline" under this
@@ -98,15 +99,29 @@ agent-test: image-load velocity-image-load
 
 .PHONY: velocity-image
 velocity-image:
-	nix build .#velocity-image
+	nix build .#velocity-image --out-link result-velocity
 
 .PHONY: velocity-image-load
 velocity-image-load: velocity-image
-	$(CONTAINER) load < result
+	$(CONTAINER) load < result-velocity
 
 .PHONY: velocity-image-test
 velocity-image-test: velocity-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(VELOCITY_IMAGE) hack/velocity-image-test.sh
+
+# Its own out-link, like the two above. Sharing ./result is what let a parallel
+# `make -j` load whichever image finished last; see docs/known-issues.md.
+.PHONY: operator-image
+operator-image:
+	nix build .#operator-image --out-link result-operator
+
+.PHONY: operator-image-load
+operator-image-load: operator-image
+	$(CONTAINER) load < result-operator
+
+.PHONY: operator-image-test
+operator-image-test: operator-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(OPERATOR_IMAGE) hack/operator-image-test.sh
 
 # Not part of `test` or `all`, for the same reason image-test is not: it needs
 # a container runtime's worth of build time and only works on x86_64-linux.
@@ -116,6 +131,7 @@ velocity-image-test: velocity-image-load
 image-repro:
 	nix build .#paper-image --rebuild
 	nix build .#velocity-image --rebuild
+	nix build .#operator-image --rebuild
 	# The agent jars, directly. Both images embed them, so a non-reproducible
 	# jar would eventually show up above -- but as a diff in an image layer,
 	# which says nothing about which of the two agents moved. Rebuilding the
