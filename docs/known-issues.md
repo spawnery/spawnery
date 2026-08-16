@@ -2301,6 +2301,69 @@ stalling *its own* ordinal — would also have held Gate A open forever, since
 takedown for the whole group, updates and scale-downs alike, indefinitely and
 silently, rather than only the one ordinal the squatter occupies.
 
+## From milestone 5c (detecting forwarding secret rotation)
+
+5c is detection and reporting only: the Network controller reads the forwarding
+secret each resync, records a salted digest of it in
+`status.forwardingSecretHash`, stamps every pod it creates with that digest in
+`spawnery.cloud/forwarding-hash`, and reports the comparison as two conditions
+and two events. It restarts nothing and takes no ordinal down — automatically
+orchestrated rotation stays deferred, unchanged and for the reason the master
+design's §6.5 gives, that it needs registration to become generation-aware. The
+restarts follow `docs/runbook-milestone-5c-secret-rotation.md`. What follows is
+what an operator finds still open, checked against the code as it stands.
+
+**The salted short hash does not defeat a targeted dictionary attack** on a
+weakly chosen forwarding secret. `podspec.ForwardingHash`
+(`internal/podspec/hash.go:168`) is eight bytes of
+`sha256(network.UID ‖ 0x00 ‖ value)`, and the result is a pod label, which is
+readable by anyone holding pod read access in the namespace — a far commoner
+grant than read access to the Secret itself. The salt does the one thing it was
+chosen for: it forces the work to be redone per network and makes precomputed
+tables worthless across installations. It does nothing against a guess aimed at
+one particular network, which is an offline test per candidate against a
+sixteen-character digest. A forwarding secret chosen the way a password is
+chosen is guessable this way; one generated at random is not.
+
+**The stamp says what a pod loaded at start**, not what it would load now. That
+is the point — the kubelet refreshes the projected file underneath a running
+pod and neither Velocity nor Paper reads it a second time, so the creation-time
+value is the only one that describes the running process
+(`internal/podspec/labels.go:56-74`). The cost is at the other end: a pod
+created while the Secret is missing is still stamped, because
+`status.forwardingSecretHash` keeps its last successful value on a failed read
+(`api/v1alpha1/network_types.go:64`, and the write is guarded at
+`internal/controller/network_controller.go:125-134`). Such a pod never starts —
+its projected volume cannot mount — so its label describes an intention rather
+than a fact. The stamp misreports a pending pod, never a running one.
+
+**Rotation detection is off until an install step is performed per namespace.**
+The operator's ClusterRole grants no access to Secrets outside its own
+namespace, by design: `config/rbac/forwarding-secret-reader.yaml` has to be
+applied into each namespace holding a Network, and it is deliberately not part
+of `config/deploy/` — which is what keeps
+`TestTheAuthorizerActuallyDenies` (`internal/rbacaudit/audit_envtest_test.go`)
+meaningful. Until it is applied, the `GET` is denied, the Network reports
+`ForwardingSecretResolved=Unknown/SecretReadForbidden` with a message naming
+the manifest and the `kubectl apply` line
+(`internal/controller/forwardingsecret.go:71-78`), and
+`ForwardingSecretRotationPending` reads `Unknown/SecretUnresolved` because
+there is no digest to compare against. So the gap announces itself rather than
+hiding — but it is a gap, and a namespace nobody opened has rotation detection
+that reports nothing about rotations. Closing it for good belongs to milestone
+6's Helm chart, which is where rendering this Role for each configured network
+namespace goes.
+
+**No per-group condition.** Which group is still stale is in the Network
+condition's message and nowhere else: `staleSummary`
+(`internal/controller/forwardingsecret.go:190`) renders the counts as
+`role/group=count`, server entries before proxy entries, into the
+`ForwardingSecretRotationPending` message, and nothing writes either forwarding
+condition onto a `ServerGroup` or a `ProxyGroup`. That is the information the
+runbook needs and it is in one place; the cost is that `kubectl get servergroup`
+says nothing about a rotation, and a per-group watch or alert has to parse a
+message string rather than read a condition.
+
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 
 **`spawnery-system` is hard-wired into the RBAC markers.** The
