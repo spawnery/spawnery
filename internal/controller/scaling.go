@@ -119,10 +119,8 @@ type SizeDecision struct {
 	// and Surplus is what the ceiling asked for, and a node drain is about
 	// neither.
 	Condemn []string
-	// DeleteReason is the event reason for Delete, set by the persistent rule
-	// to say which of its two occasions nominated the name: SurplusOrdinal or
-	// StaleSpec. Left empty by the ephemeral rule, whose caller falls back to
-	// ServerRemoved.
+	// DeleteReason is the event reason for Delete. The contract is one reason
+	// for the whole batch, not one per name.
 	DeleteReason string
 }
 
