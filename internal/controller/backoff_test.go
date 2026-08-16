@@ -205,19 +205,18 @@ func TestAMissingOrdinalDoesNotCountAsRecovered(t *testing.T) {
 	}
 }
 
-// TestAGroupHasNotRecoveredUntilItsSlowestRequiredOrdinalHas is what pins the
-// minimum itself, as opposed to the missing-ordinal shortcut that produces
-// the same zero-time answer above it. Both required ordinals are Ready here,
-// so there is no missing entry to fall back on: the choice between the
-// earlier ReadySince and the later one is the whole content of "minimum, not
-// maximum," and this is the only case in this file where that choice is
-// actually made.
+// TestTheGroupRecoveredWhenItsLastRequiredOrdinalDid pins which of the two
+// timestamps is taken, as opposed to the missing-ordinal shortcut above it.
+// Both required ordinals are Ready here, so there is no missing entry to fall
+// back on: the choice between the earlier ReadySince and the later one is the
+// whole content of "the maximum over the required ordinals", and this is the
+// only case in this file where that choice is actually made.
 //
-// g-1 alone would end the streak under the old maximum rule (its ReadySince
-// is after the last counted failure); g-0 alone would not (its ReadySince is
-// before it). The minimum takes g-0's answer over g-1's, so the streak must
-// not reset.
-func TestAGroupHasNotRecoveredUntilItsSlowestRequiredOrdinalHas(t *testing.T) {
+// g-0 is the sibling that never restarted -- its ReadySince predates the last
+// counted failure and will not advance. g-1 came back after that failure. The
+// group is recovered, so the streak resets; taking g-0's answer over g-1's
+// would hold the count at 4 for as long as g-0 stayed up.
+func TestTheGroupRecoveredWhenItsLastRequiredOrdinalDid(t *testing.T) {
 	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	since := base.Add(time.Hour)
 	views := []ServerView{
@@ -226,9 +225,51 @@ func TestAGroupHasNotRecoveredUntilItsSlowestRequiredOrdinalHas(t *testing.T) {
 	}
 
 	count, _ := CountFailures(views, 4, since, 2)
-	if count != 4 {
-		t.Fatalf("count = %d, want 4: g-0's ReadySince predates the last counted failure, and the "+
-			"minimum over both required ordinals must be taken from it rather than from g-1's later one", count)
+	if count != 0 {
+		t.Fatalf("count = %d, want 0: every required ordinal has a ready server and the last of them "+
+			"became ready after the last counted failure, so the group has recovered", count)
+	}
+}
+
+// TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling is the steady-state
+// counterpart to the flapping-sibling test above, and the case the first
+// version of this rule got wrong: it had no reset path at all for replicas >=
+// 2, so six isolated failures -- each one fully recovered long before the next
+// arrived -- still gave the group up, and only a spec edit cleared it.
+//
+// g-0 comes up once and stays up, which is the whole mechanism: its
+// ReadySince never advances past the group's first start, so the earliest
+// ReadySince over the required ordinals is always older than the last counted
+// failure. The latest is not, and that is what breaks each streak.
+func TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling(t *testing.T) {
+	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
+	stable := base // g-0 started here and never restarted.
+
+	count := int32(0)
+	since := time.Time{}
+	for i := 0; i < 6; i++ {
+		failedAt := base.Add(time.Duration(i+1) * time.Hour)
+
+		// The pass that sees the corpse. g-1 holds its ordinal while Failed,
+		// so no replacement exists yet and the group is not recovered.
+		count, since = CountFailures([]ServerView{
+			{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Ready, ReadySince: stable},
+			{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Failed, FailedAt: failedAt},
+		}, count, since, 2)
+		if count != 1 {
+			t.Fatalf("failure %d: count = %d, want 1; each of these is a streak of its own", i+1, count)
+		}
+
+		// The pass after the replacement is ready, well before the next
+		// failure arrives.
+		count, since = CountFailures([]ServerView{
+			{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Ready, ReadySince: stable},
+			{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Ready, ReadySince: failedAt.Add(10 * time.Minute)},
+		}, count, since, 2)
+		if count != 0 {
+			t.Fatalf("failure %d: count = %d, want 0; both required ordinals are ready and g-1 came "+
+				"back after the failure, so the group has recovered", i+1, count)
+		}
 	}
 }
 

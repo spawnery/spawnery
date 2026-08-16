@@ -63,8 +63,9 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 			}
 		}
 	} else {
-		// Each ordinal's own newest ReadySince, so a flapping sibling's older
-		// blips can't stand in for a more recent one.
+		// Which ordinals have a ready server, and each one's newest ReadySince.
+		// Presence is what the gate below reads; the timestamps are what it
+		// takes the maximum of.
 		ready := make(map[int32]time.Time, len(views))
 		for _, v := range views {
 			if v.Ordinal == nil || v.Phase != phase.Ready {
@@ -74,16 +75,22 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 				ready[*v.Ordinal] = v.ReadySince
 			}
 		}
-		// The group recovered only once every required ordinal has, so the
-		// earliest of them is what the streak breaks on -- an ordinal missing
-		// from the map pulls this to the zero time, same as one still broken.
+		// Two questions with different answers. *Whether* the group recovered:
+		// every required ordinal has a ready server, which is what stops a
+		// healthy sibling standing in for a broken one. *When* it recovered:
+		// the latest of their ReadySince values, because that is when the last
+		// of them came back. The earliest would be wrong -- an ordinal that
+		// stays ready through the whole episode never advances its ReadySince,
+		// so it would pin this to a time before the failure and no recovery
+		// could ever break the streak.
 		for ordinal := int32(0); ordinal < requiredOrdinals; ordinal++ {
 			at, ok := ready[ordinal]
 			if !ok {
+				// Broken, being rebuilt, or not created yet: not recovered.
 				lastSuccess = time.Time{}
 				break
 			}
-			if lastSuccess.IsZero() || at.Before(lastSuccess) {
+			if at.After(lastSuccess) {
 				lastSuccess = at
 			}
 		}

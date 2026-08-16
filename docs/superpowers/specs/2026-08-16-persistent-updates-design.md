@@ -358,29 +358,49 @@ than the failure does.
 
 ### 5.2 The fix
 
-**For a persistent group, `lastSuccess` becomes the minimum over the required
-ordinals rather than the maximum.**
+**For a persistent group the reset is gated on every required ordinal having a
+ready server, and `lastSuccess` becomes the maximum `ReadySince` over those
+ordinals.**
 
 The reset condition changes from *some server has been ready since the last
-counted failure* to *every ordinal below `replicas` has a ready server that
-became ready since the last counted failure*. An ordinal with no ready server —
-broken, being rebuilt, or not yet created — pulls the minimum to zero and the
-count keeps running. A permanently broken `survival-0` can no longer be bought
-out by a neighbour, however often that neighbour flaps.
+counted failure* to *every ordinal below `replicas` has a ready server, and the
+last of them became ready since the last counted failure*. An ordinal with no
+ready server — broken, being rebuilt, or not yet created — fails the gate
+outright and the count keeps running. A permanently broken `survival-0` can no
+longer be bought out by a neighbour, however often that neighbour flaps.
 
-Three consequences, all deliberate:
+**The gate is what defeats the flapping sibling; the maximum only says *when*
+the group recovered.** Separating the two is the correction this section
+needed. It first asked for the minimum, on the reasoning that "the group has
+not recovered until its slowest required ordinal has" — true about readiness,
+but the minimum does not yield the moment of recovery. `ReadySince` does not
+advance for an ordinal that never restarts, so the minimum is *when the
+longest-running ordinal started*, which precedes every later failure. The
+maximum is when the group finished recovering, and that is what the streak
+breaks on.
+
+Four consequences, all deliberate:
 
 - **No new status field.** `ServerView` already carries `Ordinal`, `ReadySince`
   and `FailedAt`. This is why the narrowed reset is preferable to the full
   per-ordinal streak: it produces the behaviour `Degraded` is supposed to
   report without changing what `status.consecutiveFailures` means for either
   kind of group.
-- **Ephemeral groups keep the maximum, unchanged.** Interchangeability is the
-  point there and the existing rule is right for it. The difference is
-  decided by the group's type, not by new configuration.
+- **Ephemeral groups keep the maximum over all views, unchanged.**
+  Interchangeability is the point there and the existing rule is right for it.
+  The difference is decided by the group's type, not by new configuration.
 - **A scale-up briefly delays the reset**, because the new ordinal has no ready
   server yet. That is the correct answer — the group is not recovered at that
   moment — but it is named here so that nobody later reads it as a defect.
+- **A group in steady state resets on every recovery, and it has to.** This is
+  the consequence the minimum got wrong rather than deliberately accepted, and
+  it is written down because the shape recurs: an ordinal that stays up is
+  invisible to a rule that reads timestamps, and reads as older than everything
+  else. Under the minimum a group of two or more where one ordinal never
+  restarts had no reset path at all — six isolated failures, each fully
+  recovered before the next arrived, still reached `backoffGiveUpAt`, and only
+  a spec edit cleared it. At `replicas: 1` the minimum worked by accident,
+  because the only required ordinal is the one that was recreated.
 
 ### 5.3 The test that could not have shown this
 
@@ -449,8 +469,10 @@ never down at once, and **removing Gate B** must fail a *different* one — that
 stale nomination waits for the previous replacement to be `Ready`, not merely
 for its object to be gone. A test that only pins the first would let Gate B be
 deleted outright. The other two are **reversing the surplus sort order**, which
-§2's budget makes observable for the first time, and **reversing minimum to
-maximum** in §5.
+§2's budget makes observable for the first time, and **reversing maximum to
+minimum** in §5 — which needs a case where every required ordinal is ready and
+the two timestamps disagree, since that is the only shape in which the choice
+is made at all.
 
 Gate B carries one more obligation, because §2.1's own argument creates it: a
 case must assert that a **surplus** nomination proceeds while an ordinal below
