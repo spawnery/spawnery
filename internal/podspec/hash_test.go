@@ -16,7 +16,17 @@ limitations under the License.
 
 package podspec
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/utils/ptr"
+
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+)
 
 func TestPodHashIsStableAcrossBuilds(t *testing.T) {
 	net, group := testNetwork(), testProxyGroup()
@@ -84,5 +94,148 @@ func TestPodHashMatchesWhatTheOperatorStamped(t *testing.T) {
 	}
 	if want != pod.Labels[LabelPodHash] {
 		t.Errorf("DesiredProxyHash = %q, want the stamped %q", want, pod.Labels[LabelPodHash])
+	}
+}
+
+func serverHashFixtures(t *testing.T) (*spawneryv1alpha1.Network, *spawneryv1alpha1.ServerGroup) {
+	t.Helper()
+	net := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "ns"},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "fwd"},
+		},
+	}
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: spawneryv1alpha1.ObjectRef{Name: "n"},
+			Type:       spawneryv1alpha1.ServerGroupPersistent,
+			Image:      "img:1",
+			MaxPlayers: 20,
+			Replicas:   ptr.To(int32(1)),
+			Storage:    &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("1Gi")},
+		},
+	}
+	return net, group
+}
+
+// The hash must not flap between passes: a PodSpec carries maps, and Go's map
+// iteration order is unspecified. An unstable digest would restart every world
+// on every operator restart, which is worse than the problem 5b solves.
+func TestDesiredServerHashIsStableAcrossRuns(t *testing.T) {
+	net, group := serverHashFixtures(t)
+	values := []byte("maxPlayers: 20\n")
+
+	first, err := DesiredServerHash(net, group, values)
+	if err != nil {
+		t.Fatalf("DesiredServerHash: %v", err)
+	}
+	for i := 0; i < 50; i++ {
+		again, err := DesiredServerHash(net, group, values)
+		if err != nil {
+			t.Fatalf("DesiredServerHash run %d: %v", i, err)
+		}
+		if again != first {
+			t.Fatalf("run %d gave %q, first run gave %q", i, again, first)
+		}
+	}
+}
+
+// The discrimination table is the whole point of the hash: it says, as a list a
+// person can read, which edits restart a world and which do not.
+func TestDesiredServerHashDiscriminates(t *testing.T) {
+	cases := []struct {
+		name    string
+		mutate  func(*spawneryv1alpha1.ServerGroup)
+		values  []byte
+		changed bool
+	}{
+		{
+			name:    "image changes it",
+			mutate:  func(g *spawneryv1alpha1.ServerGroup) { g.Spec.Image = "img:2" },
+			changed: true,
+		},
+		{
+			name:    "maxPlayers changes it, through the config values",
+			values:  []byte("maxPlayers: 40\n"),
+			changed: true,
+		},
+		{
+			name:    "replicas does not change it",
+			mutate:  func(g *spawneryv1alpha1.ServerGroup) { g.Spec.Replicas = ptr.To(int32(5)) },
+			changed: false,
+		},
+		{
+			name: "drain.timeoutSeconds does not change it",
+			mutate: func(g *spawneryv1alpha1.ServerGroup) {
+				g.Spec.Drain = &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 999}
+			},
+			changed: false,
+		},
+	}
+
+	base := []byte("maxPlayers: 20\n")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			net, group := serverHashFixtures(t)
+			before, err := DesiredServerHash(net, group, base)
+			if err != nil {
+				t.Fatalf("baseline: %v", err)
+			}
+
+			if tc.mutate != nil {
+				tc.mutate(group)
+			}
+			values := base
+			if tc.values != nil {
+				values = tc.values
+			}
+			after, err := DesiredServerHash(net, group, values)
+			if err != nil {
+				t.Fatalf("mutated: %v", err)
+			}
+
+			if tc.changed && before == after {
+				t.Fatalf("expected the hash to change, both are %q", before)
+			}
+			if !tc.changed && before != after {
+				t.Fatalf("expected the hash to hold, got %q then %q", before, after)
+			}
+		})
+	}
+}
+
+// The per-ordinal identity must not reach the digest, or every ordinal would
+// read as stale against every other and the group would never settle.
+func TestDesiredServerHashIgnoresTheServerIdentity(t *testing.T) {
+	net, group := serverHashFixtures(t)
+	values := []byte("maxPlayers: 20\n")
+
+	got, err := DesiredServerHash(net, group, values)
+	if err != nil {
+		t.Fatalf("DesiredServerHash: %v", err)
+	}
+	// Two ordinals of the same group render two pods that differ in name, in
+	// SPAWNERY_SERVER and in the claim they mount. None of that may move the
+	// digest, so one call per group -- not per server -- is the whole API.
+	pod0, err := BuildServerPod(net, group, &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "g-0", Namespace: "ns"},
+		Spec:       spawneryv1alpha1.ServerSpec{Ordinal: ptr.To(int32(0))},
+	}, "agent:9443")
+	if err != nil {
+		t.Fatalf("BuildServerPod g-0: %v", err)
+	}
+	pod1, err := BuildServerPod(net, group, &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "g-1", Namespace: "ns"},
+		Spec:       spawneryv1alpha1.ServerSpec{Ordinal: ptr.To(int32(1))},
+	}, "agent:9443")
+	if err != nil {
+		t.Fatalf("BuildServerPod g-1: %v", err)
+	}
+	if reflect.DeepEqual(pod0.Spec, pod1.Spec) {
+		t.Fatal("fixture is not exercising the property: two ordinals rendered identical pods")
+	}
+	if got == "" {
+		t.Fatal("empty hash")
 	}
 }

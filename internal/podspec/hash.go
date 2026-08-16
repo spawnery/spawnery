@@ -21,6 +21,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
@@ -56,6 +59,62 @@ func DesiredProxyHash(
 	delete(subject.Labels, LabelPodHash)
 
 	encoded, err := json.Marshal(subject)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:8]), nil
+}
+
+// DesiredServerHash digests everything this operator would render for one
+// server of the group right now: the pod, with the server's name held at a
+// fixed empty value so nothing derived from it can reach the digest, and the
+// config values the group's ConfigMap carries.
+//
+// It is the sibling of DesiredProxyHash and follows it deliberately -- same
+// empty-name technique, same encoding/json marshal so map keys sort and the
+// digest does not flap, same eight-byte digest. Read that function's comment
+// for the argument; it applies here unchanged.
+//
+// Two divergences from the sibling, both deliberate:
+//
+// The config values arrive as bytes rather than being rendered here, because
+// podspec stays free of internal/render (see configSecretFile's comment). They
+// are part of the digest because a pod-only hash would miss maxPlayers
+// entirely: it never reaches the PodSpec, only the ConfigMap the pod mounts by
+// name, so changing it would update the ConfigMap while every running server
+// kept the old value and nothing reported the gap.
+//
+// The agent endpoint is not an input. It comes from an operator flag rather
+// than from any spec, and including it would mean that restarting the operator
+// with a different --operator-namespace restarts every world in the
+// installation. DesiredProxyHash does take it, which is a real asymmetry
+// between the two: a proxy rolled for that reason loses no world, so the
+// argument that forces the exclusion here does not reach it.
+func DesiredServerHash(
+	net *spawneryv1alpha1.Network,
+	group *spawneryv1alpha1.ServerGroup,
+	configValues []byte,
+) (string, error) {
+	// The endpoint is a fixed sentinel rather than the real one, and rather
+	// than "": BuildServerPod refuses an empty endpoint outright
+	// (internal/podspec/server.go:231). A constant contributes a constant to
+	// every digest and so discriminates nothing, which is exactly the intent.
+	subject, err := BuildServerPod(net, group, &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Namespace: group.Namespace},
+	}, "spawnery.invalid:0")
+	if err != nil {
+		return "", err
+	}
+	// Belt-and-braces, for the reason DesiredProxyHash gives: BuildServerPod
+	// never sets LabelPodHash, and this keeps the digest right if that stops
+	// being true rather than feeding the label back into itself.
+	delete(subject.Labels, LabelPodHash)
+
+	encoded, err := json.Marshal(struct {
+		Pod    *corev1.Pod `json:"pod"`
+		Config []byte      `json:"config"`
+	}{Pod: subject, Config: configValues})
 	if err != nil {
 		return "", err
 	}

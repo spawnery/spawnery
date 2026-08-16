@@ -1065,11 +1065,23 @@ func (r *ServerGroupReconciler) reconcilePDB(
 // Bootstrapper.ensureConfigMap both document: cmd/spawnery-operator narrows
 // the manager's cache for ConfigMaps to that label, so an unlabelled one this
 // reconciler just wrote would be invisible to it on the very next Get.
-func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ServerGroup) error {
+// serverConfigValues is the config document a server group renders, and the
+// single place it is built. reconcileConfigMap writes it to the ConfigMap and
+// DesiredServerHash digests it; two constructions of the same document would
+// drift, and the failure that drift produces is an update that never fires.
+func serverConfigValues(group *spawneryv1alpha1.ServerGroup) ([]byte, error) {
 	maxPlayers := group.Spec.MaxPlayers
 	data, err := yaml.Marshal(render.Values{MaxPlayers: &maxPlayers})
 	if err != nil {
-		return fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
+		return nil, fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
+	}
+	return data, nil
+}
+
+func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ServerGroup) error {
+	data, err := serverConfigValues(group)
+	if err != nil {
+		return err
 	}
 
 	cm := &corev1.ConfigMap{
