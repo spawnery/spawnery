@@ -86,17 +86,54 @@ not restrict `list` or `watch` in Kubernetes RBAC — it applies to requests tha
 name a single object. A real watch therefore requires `list` and `watch` over
 every Secret in the operator's scope.
 
-Between the two, this design keeps the narrower grant and gives up the watch:
+Between the two, this design keeps the narrower grant and gives up the watch.
+The cost is one `GET` per network per resync — twelve requests per minute for a
+single-network cluster — and a detection latency of at most one resync.
 
-- **New permission: `secrets: get` in the ClusterRole**, via a marker in the
-  Network controller with no `namespace=` term — the namespaced grant
-  `internal/certs/store.go:57` carries stays exactly as it is, for the operator's
-  own TLS bundle.
-- **No `list`, no `watch`.** `internal/rbacaudit/required.go:171` states that
-  those verbs are deliberately absent and `TestTheAuthorizerActuallyDenies`
-  insists on it. That statement remains true after 5c.
-- The cost is one `GET` per network per resync — twelve requests per minute for
-  a single-network cluster — and a detection latency of at most one resync.
+### 2.2.1 Where the permission lives, and why not in the ClusterRole
+
+The obvious move is `secrets: get` in the ClusterRole. It is one line, and it is
+rejected here, because it would make the operator's ServiceAccount a reader of
+**every Secret in the cluster**. The mitigation that suggests itself — `get`
+without `list` means an attacker must know a name — carries less than it sounds
+like: Secret names are not secret, and they are visible in the very pod specs
+this operator is already allowed to list.
+
+It would also break a test that is right to break. `TestTheAuthorizerActuallyDenies`
+(`internal/rbacaudit/audit_envtest_test.go:180`) probes `secrets: get` in a
+foreign namespace and requires a denial, on the grounds that "secrets are
+granted by the namespaced Role, and only in spawnery-system". Deleting that
+probe to make room for the grant would be the wrong instinct exactly.
+
+So the grant is **namespace-scoped, one namespace at a time**:
+
+- **The ClusterRole gains nothing.** `RequiredClusterScoped` is unchanged, and
+  the denial probe above stays as it is and stays true.
+- **`config/rbac/forwarding-secret-reader.yaml`** ships a `Role` granting
+  `secrets: get` and a `RoleBinding` to the operator's ServiceAccount. Neither
+  object carries a `metadata.namespace`, so the namespace comes from the apply:
+
+  ```
+  kubectl apply -n <network-namespace> -f config/rbac/forwarding-secret-reader.yaml
+  ```
+
+  It is deliberately not part of `config/deploy/`, which is what keeps the
+  denial probe meaningful: a cluster where nobody applied it grants the operator
+  no cross-namespace secret access at all.
+- **The operator never creates it.** Granting an operator the right to write
+  RBAC makes every other restriction on it advisory; the same test denies
+  `clusterroles: create` for that reason.
+- **No `list`, no `watch`, anywhere.** `internal/rbacaudit/required.go:171`
+  states that those verbs are deliberately absent. That statement stays true.
+
+**The failure mode is deliberate and visible.** A Network in a namespace where
+nobody applied the Role produces a `Forbidden` on the `GET`, which surfaces as
+`ForwardingSecretResolved=Unknown / SecretReadForbidden` with a message naming
+the manifest to apply (§4.1). An install step that was skipped reports itself
+instead of silently disabling rotation detection.
+
+Milestone 6 owns the Helm chart, which is where rendering this Role for each
+configured network namespace belongs.
 
 An alternative was considered and rejected: a label-restricted informer over
 Secrets, matching the pattern `main.go:192` already uses for ConfigMaps,
@@ -196,10 +233,13 @@ New, positive polarity, and the reason `Accepted` is left alone (§4.3).
 | `True` | `SecretResolved` | the Secret exists and its `secret` key is present and non-empty |
 | `False` | `SecretNotFound` | the `GET` returned NotFound — the typo in `forwardingSecretRef` |
 | `False` | `SecretKeyMissing` | it exists, but has no `secret` key, or an empty one |
-| `Unknown` | `SecretReadFailed` | any other error — RBAC, API server unreachable |
+| `Unknown` | `SecretReadForbidden` | the `GET` was denied — the reader Role of §2.2.1 was never applied to this namespace |
+| `Unknown` | `SecretReadFailed` | any other error — the API server is unreachable |
 
-`SecretReadFailed` is deliberately distinct from `SecretNotFound`: one of them
-the user caused and can fix by editing a name, the other one they cannot.
+Three distinctions worth keeping apart, because each has a different remedy:
+`SecretNotFound` is a name the user can fix, `SecretReadForbidden` is an install
+step that was skipped and whose message names the manifest to apply, and
+`SecretReadFailed` is neither — nobody's typo, and nothing to edit.
 
 ### 4.2 `ForwardingSecretRotationPending`
 
@@ -291,12 +331,14 @@ kubectl get pods -n <ns> -l spawnery.cloud/network=<net> \
   -L spawnery.cloud/role -L spawnery.cloud/group -L spawnery.cloud/forwarding-hash
 ```
 
-The steps, in order: write down the current secret value; rotate it; confirm the
-operator saw it (the condition and the event); roll each server group; verify no
-pod of that group carries the old hash; roll each proxy group; confirm the
-condition reads `False / ForwardingSecretInSync`. The rollback is to write the
-old value back and roll whatever has already been rolled, which is why step one
-is writing it down.
+The steps, in order: confirm the namespace has the reader Role of §2.2.1, since
+without it the operator reports `SecretReadForbidden` and detects nothing; write
+down the current secret value; rotate it; confirm the operator saw it (the
+condition and the event); roll each server group; verify no pod of that group
+carries the old hash; roll each proxy group; confirm the condition reads
+`False / ForwardingSecretInSync`. The rollback is to write the old value back
+and roll whatever has already been rolled, which is why the value is written
+down before anything changes.
 
 Two warnings the document has to carry:
 
@@ -344,9 +386,14 @@ The load-bearing one first.
    `Accepted` stays `True` throughout — so sizing keeps running (§4.3).
 6. **The hash is salt-sensitive**: the same secret value in two Networks yields
    two different hashes.
-7. **`rbacaudit` knows `secrets: get` cluster-wide** in both directions, and
-   `list`/`watch` stay out.
-8. **Terminating pods are skipped**: a stale pod with a `DeletionTimestamp` does
+7. **The reader Role grants exactly `secrets: get` and nothing else**, checked
+   against `config/rbac/forwarding-secret-reader.yaml` in both directions the
+   way `required.go` already checks the other two roles — and applied into a
+   foreign namespace in envtest, it allows `get` there while `list`, `watch`,
+   `create`, `update` and `delete` stay denied.
+8. **`TestTheAuthorizerActuallyDenies` is untouched** and still passes: without
+   the reader Role applied, `secrets: get` in a foreign namespace is denied.
+9. **Terminating pods are skipped**: a stale pod with a `DeletionTimestamp` does
    not hold `RotationPending` at `True`.
 
 ## 8. What 5c leaves open
@@ -364,6 +411,12 @@ Recorded in `docs/known-issues.md` when the milestone lands:
   because its secret is missing — describes an intention rather than a fact
   (§6).
 - **No per-group condition** (§4.5).
+- **Rotation detection is off until an install step is performed per
+  namespace.** `config/rbac/forwarding-secret-reader.yaml` has to be applied
+  into every namespace holding a Network (§2.2.1). Until it is, the Network
+  reports `SecretReadForbidden` and names the manifest — so the gap announces
+  itself rather than hiding — but it is a gap, and closing it for good belongs
+  to milestone 6's Helm chart.
 
 ## 9. Evidence run
 
