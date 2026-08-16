@@ -1,7 +1,13 @@
 # Handover to milestone 5
 
-Status: end of milestone 5a, persistent groups exist (2026-08-15), **and the
-evidence run has been driven (2026-08-16) — the acceptance test passed.**
+Status: **end of milestone 5b (2026-08-16). Both milestones' evidence runs have
+been driven and both passed.** 5a's proved a world survives its pod; 5b's proved
+two worlds survive an update that recreates both of them, one ordinal at a time
+— see `docs/runbook-milestone-5b-evidence.md`, marked DRIVEN, and the section
+"The 5b evidence run" below.
+
+Before that: end of milestone 5a, persistent groups exist (2026-08-15),
+**and its evidence run was driven (2026-08-16) — the acceptance test passed.**
 First written before the whole-branch review that closes this milestone
 (Task 8 of `.superpowers/sdd/2026-08-15-persistent-groups/`), revised in place
 after it, the way milestone 4's own reviews were — that review's three
@@ -215,6 +221,65 @@ that fix works. §0 said so before the run and the run changed nothing about
 it. The same goes for the node-drain limit on a node-pinned RWO volume: one
 node, so nothing to pin against. Both wait for a run against a real cloud
 storage class.
+
+## The 5b evidence run (2026-08-16)
+
+Driven against `master` at `e66aeae` on a single-node `kind` cluster, the same
+shape 5a's run used, immediately after the merge. Four of the five acceptance
+tests were driven and all four passed; the fifth was skipped deliberately and
+the reasoning is in the runbook's own header.
+
+**The acceptance test that settles §2's invariant.** Blocks were placed on both
+ordinals — `survival-0` at -160/131, `survival-1` at -32/60 — and
+`spec.maxPlayers` was changed, an edit that reaches the hash through its config
+half rather than through the rendered pod. The order held: `survival-1` carried
+a new UID while `survival-0` still sat unchanged at its original one, and
+`survival-0`'s UID moved only in the same four-second sample that first showed
+`survival-1` `Ready`. Both ordinals were current again 48 seconds after the
+patch. In the driver's own words: *"auf beiden servern ist noch die selbe welt
+mit den selben blöcken."*
+
+**The event trail is the better record of the two**, because it does not depend
+on when anyone looked: `StaleSpec` on `survival-1` at 17:00:01, `StaleSpec` on
+`survival-0` at 17:00:23 — twenty-two seconds apart, the second landing exactly
+when `survival-1` reached `Ready`. That is Gate B, visible on the objects. The
+reason reads `StaleSpec` rather than the generic `ServerRemoved`, so the trail
+says which occasion took each ordinal down.
+
+**Three further results worth carrying:**
+
+- **A claim outlived its server through a `spec.replicas` edit** — the surplus
+  class rather than a hand-run `kubectl delete server`, a route 5a's own
+  evidence run never drove. `survival-1` was gone eight seconds after the
+  patch, `survival-0` untouched, and the restored `survival-1` (created
+  17:04:57Z) mounted a claim created 16:55:59Z.
+- **The refusal path reported itself as designed.** `StorageResize=False
+  StorageResizeRefused`, carrying the API server's own rejection verbatim and
+  naming `allowVolumeExpansion` as what to *check first* rather than as the
+  cause — the distinction the branch review later confirmed by instrumentation,
+  since an unexpandable class and an unbound claim return the identical
+  `Forbidden`. `Degraded` stayed `False`, so the separation the condition exists
+  for holds in practice and not only in the code that states it.
+- **A config-only edit rolled a proxy, and the new `motd` reached the client's
+  server list.** Before this milestone the ConfigMap updated, no proxy went
+  stale, `DecideRollout` ordered nothing, and the text reached nobody until an
+  unrelated restart.
+
+**Every command in the runbook ran as written and none needed correcting**,
+where 5a's own run a few hours earlier corrected four expectations and added
+two commands. The reason is not luck: 5a's run had already established that a
+runbook should predict what stays true rather than what is briefly visible, and
+5b's runbook was written to that rule before being driven rather than corrected
+into it afterwards.
+
+That sentence is worth one more line, because writing it produced this
+milestone's eighth instance of its own signature defect. The first draft
+claimed this was *the first run in this repository's history* to need no
+correction. `docs/runbook-milestone-3-evidence.md`'s own note says the same of
+its run. A claim of the form "the first X" is a claim about every prior X, and
+it is checked by enumerating them — which is exactly the rule the previous
+seven instances taught, applied here to the paragraph congratulating the run
+for having applied it.
 
 ## What 5c finds in place
 

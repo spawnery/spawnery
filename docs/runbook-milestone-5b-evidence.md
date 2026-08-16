@@ -1,10 +1,42 @@
 # Runbook: ordered shutdown, `Recreate` updates and storage growth, on a real cluster
 
-**Status: NOT YET DRIVEN.** Written 2026-08-16 at the end of milestone 5b's
-Task 10, against branch `milestone-5b-persistent-updates`, following
-`docs/runbook-milestone-5a-evidence.md`'s shape. It is driven by the human
-partner and the acting agent together, after the branch review, the way that
-document's own run was.
+**Status: DRIVEN 2026-08-16, and every acceptance test it ran passed.** Written
+the same day at the end of milestone 5b's Task 10 and driven immediately after
+the merge, against `master` at `e66aeae`, by the human partner and the acting
+agent together — the way `docs/runbook-milestone-5a-evidence.md`'s own run was.
+
+**Four of the five acceptance tests were driven; §11 was deliberately skipped,
+and the reasoning is worth more than the result would have been.** §8's update
+took `survival-1` down first and did not touch `survival-0` until `survival-1`
+read `Ready` again, and both blocks survived — in the driver's own words: *"auf
+beiden servern ist noch die selbe welt mit den selben blöcken."* §9's scale-down
+removed only the top ordinal and left its claim standing. §10's refusal
+appeared as `StorageResize=False StorageResizeRefused` with `Degraded` staying
+`False`. §12's `motd` reached the client's server list, which it could not have
+done before this milestone.
+
+**Every command below ran as written and none needed correcting** — unlike
+`docs/runbook-milestone-5a-evidence.md`'s own run, which corrected four
+expectations and added two commands. (It is not the first such run here:
+`docs/runbook-milestone-3-evidence.md`'s note records the same of its own.)
+The reason is that 5a's lesson was applied *before* this run rather than
+learned during it: **no test here tries to catch a transition mid-flight.**
+§8's whole observation is a UID that changed against one that had not yet, and
+that was readable at a four-second poll with room to spare.
+
+**Why §11 was skipped, recorded so nobody re-derives it.** The positive growth
+path would have proven mostly what is already proven: that `growClaim` patches
+a claim upward is pinned by Task 7's envtest against a *real* `StorageClass`
+with `allowVolumeExpansion: true`, with a mutation confirming the test dies
+when `growClaim` does nothing. The one link never exercised end to end is
+narrower — **does a real driver set `FileSystemResizePending`, and does the
+ordinal then restart exactly once and come back larger?** — and
+`csi-driver-host-path` is unlikely to show it, because it expands online and
+so may never set that condition at all. §11 would have cost real setup to
+re-prove the proven while leaving the unproven untouched, and a half-proof that
+reads like a whole one is worse than an open note. **That link belongs on a
+real cloud storage class that expands offline**; until someone drives it there,
+it is envtest-only, with the condition hand-written.
 
 **Read `docs/runbook-milestone-5a-evidence.md`'s own top-of-document note
 before starting.** Its most recent run corrected a prediction that the
@@ -389,6 +421,35 @@ UID must have changed and its phase must read `Ready` *before*
 `survival-1` is still short of `Ready`, that is the invariant broken, not a
 detail to note in passing.
 
+**The 2026-08-16 run, at a four-second poll**, with UIDs truncated to eight
+characters:
+
+```
+17:00:11  survival-0=befd008b/Ready     survival-1=64e8970f/Starting
+17:00:19  survival-0=befd008b/Ready     survival-1=64e8970f/Starting
+17:00:23  survival-0=e814963d/Pending   survival-1=64e8970f/Ready
+17:00:49  survival-0=e814963d/Ready     survival-1=64e8970f/Ready
+```
+
+`survival-1` carried a new UID and was still `Starting` while `survival-0`
+sat unchanged at its original one; `survival-0`'s UID moved only in the same
+sample that first showed `survival-1` `Ready`. Both ordinals were current
+again 48 seconds after the patch.
+
+**The event trail says the same thing independently of the poll**, which is
+the better record of the two because it does not depend on when anyone
+looked:
+
+```
+17:00:01  StaleSpec  ServerGroup/survival  removing server survival-1
+17:00:23  StaleSpec  ServerGroup/survival  removing server survival-0
+```
+
+Twenty-two seconds apart, and the second lands exactly when `survival-1`
+reached `Ready`. That is Gate B, visible on the objects. Note the reason
+reads `StaleSpec` rather than the generic `ServerRemoved`, so the trail says
+*which* occasion took each ordinal down.
+
 Once both UIDs have changed, confirm the claims did not move:
 
 ```bash
@@ -452,6 +513,17 @@ nix develop -c kubectl get server survival-1 -n minecraft
 the same "the claim is older than the server that uses it" reading 5a's own
 run recorded.
 
+The 2026-08-16 run: `survival-1` was gone eight seconds after the patch,
+`survival-0`'s UID never moved (`e814963d…` before and after), and
+`survival-1-data` stayed `Bound` on the same volume. After restoring
+`replicas: 2`, the new `survival-1` was created at `17:04:57Z` and mounted a
+claim created at `16:55:59Z` — nine minutes older than the server using it.
+
+Worth naming because 5a's own evidence run could not: this is the *first*
+time a claim has been shown to outlive its server through a `spec.replicas`
+edit rather than a direct `kubectl delete server`. Same property, a route
+nobody had driven.
+
 ## 10. Acceptance test 3 — growth, negative path, on the default cluster
 
 `kind`'s `standard` storage class reports `allowVolumeExpansion: false` (§2),
@@ -474,6 +546,30 @@ rejection text verbatim, because an unexpandable class and an unbound,
 class-less claim return the identical `Forbidden` shape and the function
 cannot tell them apart from the error alone.
 
+The 2026-08-16 run got exactly that, and the message is quoted here in full
+because its shape is the point:
+
+```
+False StorageResizeRefused
+claim survival-0-data: the patch growing it to 2Gi was refused by the API
+server: persistentvolumeclaims "survival-0-data" is forbidden: only
+dynamically provisioned pvc can be resized and the storageclass that
+provisions the pvc must support resize; check storage class "standard"
+first, in particular whether it sets allowVolumeExpansion: true
+```
+
+Three things in it are deliberate. The API server's own sentence is carried
+**verbatim**, because it is the part that actually identifies the cause.
+`allowVolumeExpansion` is named as what to **check first**, not as what went
+wrong. And the message names `survival-0-data` rather than `survival-1-data`:
+both claims were refused, and the lowest ordinal wins the tie so that an
+operator watching this condition sees one stable message rather than two
+alternating between reconciles.
+
+Both claims stayed at `1Gi` throughout, which is the other half of the
+result — the group's spec says `2Gi` and the claims do not, and that
+divergence is now *reported* rather than silent.
+
 ```bash
 nix develop -c kubectl get servergroup survival -n minecraft \
   -o jsonpath='{.status.conditions[?(@.type=="Degraded")].status}{"\n"}'
@@ -493,6 +589,18 @@ separately-sized `ServerGroup` — so this is a fact to know rather than a
 state to restore.
 
 ## 11. Acceptance test 4 — growth, positive path (a section a driver may skip)
+
+**NOT DRIVEN on 2026-08-16, deliberately.** The top-of-document note gives the
+full reasoning; the short form is that this section would have re-proven what
+Task 7's envtest already pins against a real expandable `StorageClass`, while
+the one link that is genuinely untested end to end — a driver setting
+`FileSystemResizePending`, and the ordinal restarting once and returning
+larger — is the link `csi-driver-host-path` is least likely to exercise,
+because it expands online. **A future driver reaching this section should
+weigh the same question rather than running it out of completeness**: if the
+available driver expands online, this section proves the claim grew, which is
+already known, and says nothing about the restart. The restart belongs on a
+storage class that expands offline.
 
 **This section needs `csi-driver-host-path`, a CSI driver that supports
 online volume expansion, deployed into the same cluster.** `kind`'s own
@@ -625,6 +733,13 @@ under the server's name.
 name** — not the old one, and not empty. This step is the one that matters
 more than the label check above it: a changed `pod-hash` label proves the pod
 rolled, not that a player would ever see the new text.
+
+The 2026-08-16 run: the proxy pod went from `gateway-t6tz` /
+`b9ad1129925688d7` to `gateway-28h2` / `5dc256312b144cab` within 35 seconds
+of the patch, and the driver confirmed the new motd in the client's server
+list. A config-only edit rolled a proxy, which before this milestone it never
+did — the ConfigMap updated, no proxy went stale, `DecideRollout` ordered
+nothing, and the text reached nobody until an unrelated restart.
 
 ## 13. Clean up
 
