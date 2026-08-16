@@ -140,6 +140,17 @@ type ServerStatus struct {
 	// +optional
 	StorageResizePending bool `json:"storageResizePending,omitempty"`
 
+	// StorageResizeError names why this server's claim has not grown to
+	// spec.storage.size, or is empty when it has (or there is nothing to
+	// grow). It covers both shapes a resize can fail in: a patch the API
+	// server's own admission refuses synchronously, ordinarily because the
+	// claim's storage class sets allowVolumeExpansion: false, and a resize
+	// admission accepted that a driver later fails, reported only on the
+	// claim itself through its ControllerResizeError or NodeResizeError
+	// condition.
+	// +optional
+	StorageResizeError string `json:"storageResizeError,omitempty"`
+
 	// Conditions follow the standard Kubernetes condition contract.
 	// +optional
 	// +listType=map

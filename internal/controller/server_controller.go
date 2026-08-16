@@ -378,6 +378,20 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // controller has no business correcting — a claim someone grew by hand, which
 // the CRD's own shrink guard on spec.storage.size means this function will
 // never be asked to shrink anyway.
+//
+// A resize can fail two different ways, and this function is where the
+// choice was made to catch both rather than only the one Design §4 names.
+// allowVolumeExpansion: false makes the patch below fail synchronously,
+// right here, with the API server's own admission error — that is the branch
+// below. A driver that accepts the resize and fails it later says so only on
+// the claim itself, as a ControllerResizeError or NodeResizeError condition,
+// with nothing synchronous to catch at all; resizeConditionError is what
+// reads that, both below and on the pass where nothing needed to grow.
+// Reporting only the synchronous half would leave the asynchronous one
+// looking like a resize still in progress rather than one that failed. Both
+// land on status.storageResizeError, and ServerGroupReconciler folds either
+// into the group's StorageResize condition without needing to know which
+// kind it was.
 func (r *ServerReconciler) growClaim(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -389,16 +403,65 @@ func (r *ServerReconciler) growClaim(
 	claim := &corev1.PersistentVolumeClaim{}
 	key := types.NamespacedName{Name: podspec.DataClaimName(srv.Name), Namespace: srv.Namespace}
 	if err := r.Get(ctx, key, claim); err != nil {
+		if apierrors.IsNotFound(err) {
+			srv.Status.StorageResizeError = ""
+		}
 		return client.IgnoreNotFound(err)
 	}
 	want := group.Spec.Storage.Size
 	have := claim.Spec.Resources.Requests[corev1.ResourceStorage]
 	if want.Cmp(have) <= 0 {
+		srv.Status.StorageResizeError = resizeConditionError(claim)
 		return nil
 	}
 	patched := claim.DeepCopy()
 	patched.Spec.Resources.Requests[corev1.ResourceStorage] = want
-	return r.Patch(ctx, patched, client.MergeFrom(claim))
+	if err := r.Patch(ctx, patched, client.MergeFrom(claim)); err != nil {
+		if !apierrors.IsInvalid(err) && !apierrors.IsForbidden(err) {
+			return err
+		}
+		// Refused synchronously by the API server's own resize admission,
+		// rather than returned as a reconcile error: returning it here would
+		// fail this whole pass before readResizePending below ever ran, and
+		// retrying an admission rejection every five seconds would not
+		// change its outcome. Recording it on the status is what lets
+		// ServerGroupReconciler say so on the group instead of this staying
+		// a line in the reconcile log.
+		className := "(the cluster default)"
+		if claim.Spec.StorageClassName != nil {
+			className = *claim.Spec.StorageClassName
+		}
+		srv.Status.StorageResizeError = fmt.Sprintf(
+			"claim %s cannot grow to %s: storage class %q does not allow expansion (allowVolumeExpansion); patch refused: %v",
+			claim.Name, want.String(), className, err)
+		return nil
+	}
+	srv.Status.StorageResizeError = resizeConditionError(claim)
+	return nil
+}
+
+// resizeConditionError names the reason a claim's resize did not go through,
+// read off the two conditions a CSI driver sets only after admission already
+// let a resize patch through: PersistentVolumeClaimControllerResizeError and
+// PersistentVolumeClaimNodeResizeError. This is the asynchronous half of what
+// growClaim's own doc comment describes; growClaim calls this both after a
+// patch it just made and on a pass where the claim already matched
+// spec.storage.size, since a driver can fail a resize well after the pass
+// that requested it.
+//
+// Returns "" when neither condition is set to True, which is the ordinary
+// case: most CSI drivers that accept a resize also complete it.
+func resizeConditionError(claim *corev1.PersistentVolumeClaim) string {
+	for _, c := range claim.Status.Conditions {
+		if c.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch c.Type {
+		case corev1.PersistentVolumeClaimControllerResizeError, corev1.PersistentVolumeClaimNodeResizeError:
+			return fmt.Sprintf("claim %s: %s: %s", claim.Name, c.Reason, c.Message)
+		}
+	}
+	return ""
 }
 
 // readResizePending mirrors the claim's FileSystemResizePending condition

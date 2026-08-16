@@ -25,12 +25,14 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
@@ -3979,5 +3981,103 @@ func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
 	}
 	if worst == 0 {
 		t.Fatal("no ordinal ever went down, so this test proves nothing about the update")
+	}
+}
+
+// TestAGroupSaysWhenItsStorageClassCannotGrow exercises growClaim's
+// synchronous rejection through envtest's real admission -- the same
+// mechanism TestGrowingStorageSizePatchesTheClaim (server_controller_test.go)
+// confirmed by hand: envtest runs no CSI driver and no external-resizer, so
+// a StorageClass with allowVolumeExpansion: false is real (creating one
+// needs no controller behind it), and the API server's own resize admission
+// refuses the grow patch against it exactly as a real cluster would. The
+// claim's Bound status is faked the same way that test fakes it, for the
+// same reason: nothing in envtest ever binds a claim to a volume, and an
+// unbound claim is refused resize for an unrelated reason of its own.
+//
+// What this does not prove is the asynchronous shape of the same failure --
+// a driver that accepts a resize and fails it only later, reported through
+// the claim's own ControllerResizeError or NodeResizeError condition.
+// resizeConditionError (server_controller.go) is what reads that, but
+// nothing here hand-writes either condition onto a claim to exercise it.
+func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	class := &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "unexpandable-" + f.ns},
+		Provisioner: "kubernetes.io/no-provisioner",
+	}
+	class.AllowVolumeExpansion = ptr.To(false)
+	if err := f.c.Create(f.ctx, class); err != nil {
+		t.Fatalf("create StorageClass: %v", err)
+	}
+
+	// storage.storageClassName is immutable once set (CEL rule on
+	// ServerGroupSpec), so it has to be there at creation -- built by hand
+	// rather than through createPersistentGroup for that one reason, the same
+	// as TestGrowingStorageSizePatchesTheClaim.
+	replicas := int32(1)
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:                    spawneryv1alpha1.ObjectRef{Name: f.network.Name},
+			Type:                          spawneryv1alpha1.ServerGroupPersistent,
+			Image:                         "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers:                    100,
+			Replicas:                      &replicas,
+			TerminationGracePeriodSeconds: 60,
+			FailedRetentionSeconds:        3600,
+			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
+			Storage: &spawneryv1alpha1.StorageSpec{
+				Size:             resource.MustParse("10Gi"),
+				StorageClassName: &class.Name,
+			},
+		},
+	}
+	if err := f.c.Create(f.ctx, group); err != nil {
+		t.Fatalf("create persistent ServerGroup: %v", err)
+	}
+
+	f.reconcilePersistentGroup(t, r, "g")
+	f.reconcile("g-0")
+
+	claim := f.claim("g-0-data")
+	if claim == nil {
+		t.Fatal("no claim to grow")
+	}
+	claim.Status.Phase = corev1.ClaimBound
+	claim.Status.Capacity = corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("10Gi")}
+	if err := f.c.Status().Update(f.ctx, claim); err != nil {
+		t.Fatalf("fake-bind the claim: %v", err)
+	}
+
+	g := f.persistentGroup(t, "g")
+	g.Spec.Storage.Size = resource.MustParse("20Gi")
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("grow the group: %v", err)
+	}
+
+	// The Server reconciler is the one that runs growClaim and meets the
+	// refusal; the group reconciler that follows is the one that reads
+	// status.storageResizeError back into the condition under test.
+	f.reconcile("g-0")
+	f.reconcilePersistentGroup(t, r, "g")
+
+	got := f.persistentGroup(t, "g")
+	cond := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionStorageResize)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Fatalf("expected StorageResize=False, got %+v", cond)
+	}
+	if !strings.Contains(cond.Message, "allowVolumeExpansion") {
+		t.Fatalf("the message does not name the cause: %q", cond.Message)
+	}
+
+	// The assertion that matters: it pins the separation the condition
+	// exists for. Without it, folding the refusal into Degraded as well
+	// would satisfy the assertion above just as easily.
+	degraded := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if degraded != nil && degraded.Status == metav1.ConditionTrue {
+		t.Fatal("a storage class that cannot expand is not a degraded group")
 	}
 }

@@ -402,6 +402,42 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
+	// StorageResize is the persistent-only counterpart to ScalingLimited
+	// above: each condition belongs to the group type whose question it
+	// answers, and an ephemeral group has no claim for this one to be about
+	// -- group.Spec.Storage is a persistent group's field, and growClaim in
+	// the Server controller is skipped outright for an ephemeral one, so
+	// every view's ResizeError here would read "" for an ephemeral group
+	// regardless.
+	//
+	// Nothing here talks to a claim directly: storageResizeCondition only
+	// reads ResizeError off the views collectViews already built, the same
+	// separation ResizePending's own comment describes. growClaim and its
+	// neighbour resizeConditionError, in the Server controller, are the ones
+	// that decided what each server's ResizeError says.
+	if !group.IsEphemeral() {
+		resize := storageResizeCondition(views)
+		// The event goes on the flank only, the rule ScalingLimited above
+		// and BackingOff/Degraded below both follow. What differs here is
+		// which value is the interesting one to flank on: True is the
+		// healthy default for this condition, the reverse of those three, so
+		// what is compared is refusal (Status == False) rather than health —
+		// a group publishing this condition for the first time while every
+		// claim already matches its spec stays quiet instead of announcing
+		// an all-clear nobody asked about.
+		wasRefused := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionStorageResize) != nil &&
+			!meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionStorageResize)
+		meta.SetStatusCondition(&group.Status.Conditions, resize)
+		isRefused := resize.Status == metav1.ConditionFalse
+		if isRefused != wasRefused {
+			eventType := corev1.EventTypeNormal
+			if isRefused {
+				eventType = corev1.EventTypeWarning
+			}
+			r.Recorder.Event(group, eventType, resize.Reason, resize.Message)
+		}
+	}
+
 	// BackingOff and Degraded belong to a group of either type, and the line
 	// between them and ScalingLimited above is what kind of question each
 	// answers. ScalingLimited is about capacity the players need: free slots
@@ -777,6 +813,38 @@ func (r *ServerGroupReconciler) condemn(
 	return nil
 }
 
+// storageResizeCondition reports whether every persistent server's claim
+// currently matches spec.storage.size. True is the ordinary case. False
+// carries the message the offending server's own status already worked out
+// -- growClaim's synchronous rejection, or resizeConditionError's read of
+// the claim's ControllerResizeError/NodeResizeError condition -- taken from
+// the first view that has one: a storage class an operator has to fix is
+// not made any more actionable by naming it once per ordinal.
+//
+// Deliberately not folded into Degraded. Design §4's point stands regardless
+// of which of the two failure shapes produced the message: a storage class
+// that refuses to grow and a group whose servers will not start are
+// different problems with different remedies, and derivePhase must not read
+// this condition as if it were.
+func storageResizeCondition(views []ServerView) metav1.Condition {
+	cond := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionStorageResize,
+		Status:  metav1.ConditionTrue,
+		Reason:  spawneryv1alpha1.ReasonStorageResized,
+		Message: "every claim matches spec.storage.size",
+	}
+	for _, v := range views {
+		if v.ResizeError == "" {
+			continue
+		}
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = spawneryv1alpha1.ReasonStorageResizeRefused
+		cond.Message = v.ResizeError
+		return cond
+	}
+	return cond
+}
+
 // derivePhase maps the totals and conditions onto the group phase.
 func derivePhase(group *spawneryv1alpha1.ServerGroup, totals GroupTotals) string {
 	if meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
@@ -862,6 +930,7 @@ func (r *ServerGroupReconciler) collectViews(
 			// pass asks again.
 			Condemned:     podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
 			ResizePending: srv.Status.StorageResizePending,
+			ResizeError:   srv.Status.StorageResizeError,
 		}
 		if podFound {
 			v.NodeName = pod.Spec.NodeName

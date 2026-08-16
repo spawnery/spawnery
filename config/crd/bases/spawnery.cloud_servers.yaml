@@ -245,6 +245,17 @@ spec:
                   back to pod-creation time.
                 format: date-time
                 type: string
+              storageResizeError:
+                description: |-
+                  StorageResizeError names why this server's claim has not grown to
+                  spec.storage.size, or is empty when it has (or there is nothing to
+                  grow). It covers both shapes a resize can fail in: a patch the API
+                  server's own admission refuses synchronously, ordinarily because the
+                  claim's storage class sets allowVolumeExpansion: false, and a resize
+                  admission accepted that a driver later fails, reported only on the
+                  claim itself through its ControllerResizeError or NodeResizeError
+                  condition.
+                type: string
               storageResizePending:
                 description: |-
                   StorageResizePending is true while this server's claim carries the
