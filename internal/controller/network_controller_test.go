@@ -466,4 +466,12 @@ func TestAMissingSecretLeavesAcceptedAlone(t *testing.T) {
 	if n := countEvents(drainEvents(events), spawneryv1alpha1.EventForwardingSecretNotFound); n != 1 {
 		t.Errorf("the missing secret emitted %d events, want exactly 1", n)
 	}
+
+	// The next reconcile is still in SecretNotFound, not entering it — the
+	// hasConditionReason guard must suppress this one, or an unremedied
+	// missing secret announces itself roughly seven hundred times an hour.
+	f.reconcileNetwork(t, r, "production")
+	if n := countEvents(drainEvents(events), spawneryv1alpha1.EventForwardingSecretNotFound); n != 0 {
+		t.Errorf("the next reconcile emitted %d more events, want 0", n)
+	}
 }
