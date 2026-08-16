@@ -625,10 +625,10 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
 ) error {
-	// These two calls are the only places in this function where a single
-	// failure stops the pass outright: without configValues there is nothing
-	// to hash, and without the digest no pod's staleness can be judged, so
-	// continuing past either would either roll nothing or roll everything.
+	// The two places whose failure leaves nothing hashed or judged: without
+	// configValues there is nothing to hash, and without the digest no pod's
+	// staleness can be judged, so continuing past either would either roll
+	// nothing or roll everything.
 	configValues, err := yaml.Marshal(proxyConfigValues(group))
 	if err != nil {
 		return err
