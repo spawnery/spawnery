@@ -17,13 +17,21 @@ limitations under the License.
 package rbacaudit_test
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"io"
+	"os"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
 	authzv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
+	"sigs.k8s.io/yaml"
 
 	"github.com/spawnery/spawnery/internal/rbacaudit"
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -215,4 +223,149 @@ func TestTheAuthorizerActuallyDenies(t *testing.T) {
 			}
 		})
 	}
+}
+
+// readerProbeNamespace is deliberately not foreignNamespace. The Role applied
+// below grants secrets/get, which is exactly what TestTheAuthorizerActuallyDenies
+// requires to stay denied in foreignNamespace — applying it there would make
+// this suite pass or fail by test order.
+const readerProbeNamespace = "spawnery-reader-probe"
+
+// The reader Role is hand-written rather than generated from a marker, because
+// the namespace is not known until an administrator applies it. Both directions
+// of the audit therefore matter more here, not less: nothing else compares this
+// file against anything.
+func TestTheForwardingSecretReaderGrantsNothingExtra(t *testing.T) {
+	role, _ := readForwardingSecretReader(t)
+	assertNothingExtra(t, "forwarding-secret-reader role", role.Rules, rbacaudit.RequiredNetworkNamespace)
+}
+
+func TestTheForwardingSecretReaderGrantsEverythingRequired(t *testing.T) {
+	role, _ := readForwardingSecretReader(t)
+	granted, err := rbacaudit.ExpandRules(role.Rules)
+	if err != nil {
+		t.Fatalf("expand rules: %v", err)
+	}
+	if diff := rbacaudit.Compare(rbacaudit.RequiredNetworkNamespace, granted); len(diff.Missing) > 0 {
+		t.Errorf("the reader role is missing %v — the operator cannot read a forwarding secret "+
+			"even where an administrator applied it", diff.Missing)
+	}
+}
+
+// The file has to work when applied, not only when parsed: a RoleBinding whose
+// subject names the wrong ServiceAccount parses perfectly and grants nothing.
+func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
+	subject := applyDeploymentAndDeriveSubject(t)
+	applyForwardingSecretReader(t, readerProbeNamespace)
+
+	if ok, reason := allowed(t, subject, authzv1.ResourceAttributes{
+		Namespace: readerProbeNamespace, Resource: "secrets", Verb: "get",
+	}); !ok {
+		t.Errorf("secrets/get is denied in %s after applying the reader role — reason: %q",
+			readerProbeNamespace, reason)
+	}
+
+	for _, verb := range []string{"list", "watch", "create", "update", "delete"} {
+		t.Run(verb, func(t *testing.T) {
+			if ok, _ := allowed(t, subject, authzv1.ResourceAttributes{
+				Namespace: readerProbeNamespace, Resource: "secrets", Verb: verb,
+			}); ok {
+				t.Errorf("the reader role allows secrets/%s in %s; it exists to grant get and "+
+					"nothing else", verb, readerProbeNamespace)
+			}
+		})
+	}
+}
+
+// forwardingSecretReaderManifest is the repository-relative path of the
+// hand-written Role and RoleBinding an administrator applies per namespace.
+// Unlike generatedRoles, controller-gen never touches this file — nothing
+// else in the build checks it against anything, which is why both directions
+// of the audit run against it here.
+const forwardingSecretReaderManifest = "config/rbac/forwarding-secret-reader.yaml"
+
+// readForwardingSecretReader decodes both objects in
+// forwardingSecretReaderManifest. It is modeled on readGeneratedRoles: same
+// repository-root lookup, same multi-document split, same refusal to silently
+// drop a second object of a kind it already saw — except this file holds a
+// Role and a RoleBinding rather than a ClusterRole and a Role.
+func readForwardingSecretReader(t *testing.T) (*rbacv1.Role, *rbacv1.RoleBinding) {
+	t.Helper()
+
+	f, err := os.Open(testenv.RepoPath(t, forwardingSecretReaderManifest))
+	if err != nil {
+		t.Fatalf("read %s: %v", forwardingSecretReaderManifest, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	var role *rbacv1.Role
+	var binding *rbacv1.RoleBinding
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(f))
+	for {
+		doc, err := docs.Read()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", forwardingSecretReaderManifest, err)
+		}
+		if strings.TrimSpace(string(doc)) == "" {
+			continue
+		}
+		var meta metav1.TypeMeta
+		if err := yaml.Unmarshal(doc, &meta); err != nil {
+			t.Fatalf("decode %s: %v", forwardingSecretReaderManifest, err)
+		}
+		switch meta.Kind {
+		case "Role":
+			decoded := &rbacv1.Role{}
+			if err := yaml.Unmarshal(doc, decoded); err != nil {
+				t.Fatalf("decode the Role in %s: %v", forwardingSecretReaderManifest, err)
+			}
+			if role != nil {
+				t.Fatalf("%s contains more than one Role (%q and %q). This audit compares "+
+					"exactly one against rbacaudit.RequiredNetworkNamespace; taking the last "+
+					"would leave the other unchecked in both directions without saying so",
+					forwardingSecretReaderManifest, role.Name, decoded.Name)
+			}
+			role = decoded
+		case "RoleBinding":
+			decoded := &rbacv1.RoleBinding{}
+			if err := yaml.Unmarshal(doc, decoded); err != nil {
+				t.Fatalf("decode the RoleBinding in %s: %v", forwardingSecretReaderManifest, err)
+			}
+			if binding != nil {
+				t.Fatalf("%s contains more than one RoleBinding (%q and %q)",
+					forwardingSecretReaderManifest, binding.Name, decoded.Name)
+			}
+			binding = decoded
+		default:
+			t.Fatalf("%s contains an unexpected %s; this audit only models a Role and a RoleBinding",
+				forwardingSecretReaderManifest, meta.Kind)
+		}
+	}
+	if role == nil {
+		t.Fatalf("%s contains no Role", forwardingSecretReaderManifest)
+	}
+	if binding == nil {
+		t.Fatalf("%s contains no RoleBinding", forwardingSecretReaderManifest)
+	}
+	return role, binding
+}
+
+// applyForwardingSecretReader models what an administrator's
+// `kubectl apply -n <namespace>` does: it creates namespace if it does not
+// already exist, then creates the decoded Role and RoleBinding with
+// metadata.namespace set to it. Neither object in the file carries a
+// namespace of its own — kubectl -n supplies it — so proving the file works
+// applied, and not only parsed, means setting it here the same way.
+func applyForwardingSecretReader(t *testing.T, namespace string) {
+	t.Helper()
+
+	role, binding := readForwardingSecretReader(t)
+	role.Namespace = namespace
+	binding.Namespace = namespace
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+	apply(t, ns, role, binding)
 }

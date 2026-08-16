@@ -182,3 +182,23 @@ var RequiredNamespaced = []Permission{
 	{Group: "coordination.k8s.io", Resource: "leases", Verb: "get", Why: "leader election renews the lock"},
 	{Group: "coordination.k8s.io", Resource: "leases", Verb: "update", Why: "leader election renews the lock"},
 }
+
+// RequiredNetworkNamespace is what the operator needs in every namespace that
+// holds a Network. It is granted by config/rbac/forwarding-secret-reader.yaml
+// rather than by the ClusterRole, and an administrator applies it per
+// namespace.
+//
+// Not one line in RequiredCluster, which is what it would have been: a
+// cluster-wide secrets/get makes the operator's ServiceAccount a reader of
+// every Secret in the cluster. "get without list means you must know the name"
+// carries less than it sounds like — Secret names are visible in the pod specs
+// this operator already lists. TestTheAuthorizerActuallyDenies probes
+// secrets/get in a foreign namespace and requires a denial; that probe is right
+// and stays.
+//
+// Unlike the other two tables this one is compared against a hand-written
+// manifest rather than a generated one, so both directions of the comparison
+// are the only thing checking that file at all.
+var RequiredNetworkNamespace = []Permission{
+	{Group: "", Resource: "secrets", Verb: "get", Why: "readForwardingSecret digests the forwarding secret to detect a rotation"},
+}
