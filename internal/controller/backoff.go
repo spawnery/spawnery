@@ -47,11 +47,45 @@ const (
 // indefinitely. A Failed server carries no ReadySince (the Server controller
 // clears it on the way out of Ready), so a corpse can never look like the
 // success that ends its own streak.
-func CountFailures(views []ServerView, prev int32, since time.Time) (int32, time.Time) {
+//
+// requiredOrdinals selects which group that last rule is stated for. Zero
+// means ephemeral, where servers are interchangeable and any success ends the
+// streak. Above zero it is spec.replicas of a persistent group, where each
+// ordinal owns a world of its own: the streak breaks only when every required
+// ordinal has a ready server, so a healthy sibling can no longer stand in for
+// a broken one and clear its count.
+func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdinals int32) (int32, time.Time) {
 	var lastSuccess time.Time
-	for _, v := range views {
-		if v.ReadySince.After(lastSuccess) {
-			lastSuccess = v.ReadySince
+	if requiredOrdinals == 0 {
+		for _, v := range views {
+			if v.ReadySince.After(lastSuccess) {
+				lastSuccess = v.ReadySince
+			}
+		}
+	} else {
+		// Each ordinal's own newest ReadySince, so a flapping sibling's older
+		// blips can't stand in for a more recent one.
+		ready := make(map[int32]time.Time, len(views))
+		for _, v := range views {
+			if v.Ordinal == nil || v.Phase != phase.Ready {
+				continue
+			}
+			if cur, ok := ready[*v.Ordinal]; !ok || v.ReadySince.After(cur) {
+				ready[*v.Ordinal] = v.ReadySince
+			}
+		}
+		// The group recovered only once every required ordinal has, so the
+		// earliest of them is what the streak breaks on -- an ordinal missing
+		// from the map pulls this to the zero time, same as one still broken.
+		for ordinal := int32(0); ordinal < requiredOrdinals; ordinal++ {
+			at, ok := ready[ordinal]
+			if !ok {
+				lastSuccess = time.Time{}
+				break
+			}
+			if lastSuccess.IsZero() || at.Before(lastSuccess) {
+				lastSuccess = at
+			}
 		}
 	}
 

@@ -3745,15 +3745,21 @@ func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
 // group's side clears a persistent corpse for having failed, but the Server
 // controller's failed-retention path does, and the ordinal is then created
 // again -- which is why each round here ends by aging the corpse out. With
-// the one ordinal this group has, that loop is also the only way the count
-// can reach the threshold at all, since CountFailures counts a corpse once;
-// a group with six or more ordinals could reach it on six distinct first
-// failures and never retry anything, so that half of the argument is this
-// test's, not a general proof. The loop's period is
+// survival-0 the only ordinal that ever fails, that loop is also the only way
+// its count can reach the threshold at all, since CountFailures counts a
+// corpse once; a group failing on six or more ordinals could reach it on six
+// distinct first failures and never retry anything, so that half of the
+// argument is this test's, not a general proof. The loop's period is
 // spec.failedRetentionSeconds -- an hour at the CRD default, which is what
 // this group carries -- so at that default the backoff's own windows (160s at
 // the most) never delay an attempt; what the backoff does for this group is
 // end the attempts, which is the last assertion below.
+//
+// survival-1 is the second ordinal spec §5.3 requires this test to carry, a
+// healthy sibling standing the whole time survival-0 is not: with only one
+// ordinal the minimum-over-required-ordinals rule and the maximum-over-all-
+// views rule it replaced cannot disagree, so a group of one could reach
+// Degraded under either and prove nothing about which is running.
 //
 // The failure driven here is a startup deadline rather than an unbound claim.
 // envtest runs no provisioner and no scheduler, so a pod's volume never binds
@@ -3765,7 +3771,11 @@ func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
 func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	f.createPersistentGroup(t, "survival", 1)
+	f.createPersistentGroup(t, "survival", 2)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+	// Brought up once and never touched again -- see the function doc for why.
+	bringUpNamed(t, f, "survival-1")
 
 	for i := int32(0); i < backoffGiveUpAt; i++ {
 		f.reconcilePersistentGroup(t, r, "survival")
@@ -3823,6 +3833,60 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 	// behaviour the condition exists to explain rather than to change.
 	if _, present := f.serverIfPresent("survival-0"); present {
 		t.Error("the group rebuilt its ordinal after giving up; the backoff gates persistent creates too")
+	}
+	// The healthy sibling was never touched again after coming up, and the
+	// group reached Degraded anyway -- the assertions above would have
+	// stopped short of the threshold under the old maximum-over-all-views
+	// rule if survival-1 had so much as re-readied once per round.
+	if got := f.server("survival-1").Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase of survival-1 = %q, want Ready: it was never failed", got)
+	}
+}
+
+// TestAPersistentGroupCountsAFailureAfterItsGenerationMoves pins a defect
+// found while verifying this milestone rather than one it set out to fix:
+// ofGeneration -- built for the ephemeral count, where a generation change
+// really does replace the population -- was the only filter CountFailures'
+// call site applied, for a group of either type. spec.groupGeneration is
+// stamped on a Server once at creation and never updated afterwards, so any
+// edit to a persistent group's spec moves group.Generation out from under
+// every ordinal it already has. Filtered by that, CountFailures would see an
+// empty slice on every later pass and status.consecutiveFailures would freeze
+// wherever it stood -- never reaching backoffGiveUpAt, so Degraded would
+// never arrive, regardless of anything this milestone's own change does.
+//
+// The edit below touches spec.drain.timeoutSeconds, which reaches neither the
+// pod hash (so the ordinal is not rebuilt into carrying the new generation
+// itself) nor spec.replicas -- an edit an operator could make for a reason
+// that has nothing to do with the ordinal's own health.
+func TestAPersistentGroupCountsAFailureAfterItsGenerationMoves(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "outpost", 1)
+	f.reconcilePersistentGroup(t, r, "outpost")
+	if _, present := f.serverIfPresent("outpost-0"); !present {
+		t.Fatalf("the group did not create its ordinal")
+	}
+
+	group := f.persistentGroup(t, "outpost")
+	group.Spec.Drain.TimeoutSeconds++
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+	// Observes the new generation with no failure yet on either side of it,
+	// so the deliberate reset at a generation change (ConsecutiveFailures to
+	// 0 -- a real feature, not what this test is about) has already happened
+	// before the round below, and cannot be mistaken for what it is
+	// checking.
+	f.reconcilePersistentGroup(t, r, "outpost")
+
+	f.failServerNeverReady(t, "outpost-0")
+	f.reconcilePersistentGroup(t, r, "outpost")
+
+	g := f.persistentGroup(t, "outpost")
+	if got := g.Status.ConsecutiveFailures; got != 1 {
+		t.Fatalf("consecutiveFailures = %d, want 1: outpost-0 predates the group's current generation "+
+			"and its failure must still be counted", got)
 	}
 }
 

@@ -228,8 +228,16 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	if group.Status.LastFailureAt != nil {
 		lastFailure = group.Status.LastFailureAt.Time
 	}
-	failures, newestFailure := CountFailures(ofGeneration(views, group.Generation),
-		group.Status.ConsecutiveFailures, lastFailure)
+	// countViews and requiredOrdinals are chosen by type rather than read off
+	// group.DesiredReplicas(): that accessor returns spec.scaling.minReplicas
+	// for an ephemeral group, not the zero CountFailures needs to select its
+	// maximum-of-all-views rule.
+	countViews, requiredOrdinals := views, group.DesiredReplicas()
+	if group.IsEphemeral() {
+		countViews, requiredOrdinals = ofGeneration(views, group.Generation), 0
+	}
+	failures, newestFailure := CountFailures(countViews,
+		group.Status.ConsecutiveFailures, lastFailure, requiredOrdinals)
 	group.Status.ConsecutiveFailures = failures
 	// Only written when this pass actually counted something. CountFailures
 	// returns the timestamp it counted from unchanged when it counted nothing,
@@ -542,12 +550,19 @@ func networkNotAcceptedMessage(network *spawneryv1alpha1.Network) string {
 }
 
 // ofGeneration narrows the views to the servers the group's current spec
-// produced, which is the set the failure count is taken over.
+// produced. The call site below uses it for an ephemeral group's failure
+// count only: a persistent group's ordinals outlive a generation change by
+// design, so filtering here would empty every view CountFailures sees on the
+// very next spec edit and freeze status.consecutiveFailures wherever it
+// stood. requiredOrdinals is what keeps a persistent group's count
+// generation-blind instead, and it does so a different way — by ordinal, not
+// by spec — which is covered where that parameter is declared.
 //
-// A streak belongs to the spec that caused it. The previous generation's corpse
-// says nothing about the new image — selectFailedForPruning already keeps the
-// newest generation's failure for exactly that reason — and a previous
-// generation's server going Ready says nothing about it either.
+// A streak belongs to the spec that caused it, for the ephemeral group this
+// still governs. The previous generation's corpse says nothing about the new
+// image — selectFailedForPruning already keeps the newest generation's
+// failure for exactly that reason — and a previous generation's server going
+// Ready says nothing about it either.
 //
 // It is also what makes the clear above mean anything. Without it the reset
 // would be undone on the very pass that performs it: the counter goes to zero
