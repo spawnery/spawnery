@@ -91,8 +91,10 @@ type PersistentInputs struct {
 	PodHash string
 }
 
-// DecidePersistentSize decides which ordinals a persistent group is missing
-// and which it has too many of.
+// DecidePersistentSize decides which ordinals a persistent group is missing,
+// and, when it has too many, which one goes first: a surplus ordinal outranks
+// a stale spec, which outranks -- lowest, and gated the same two ways stale
+// is -- a claim still waiting on a filesystem resize.
 //
 // It stands beside DecideSize rather than inside it: the two share a decision
 // type and nothing else. The slot rule asks what capacity the players need;
