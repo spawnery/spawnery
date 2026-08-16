@@ -17,10 +17,12 @@ limitations under the License.
 package podspec
 
 import (
+	"encoding/hex"
 	"reflect"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -326,5 +328,43 @@ func TestDesiredServerHashHasNoPerServerInput(t *testing.T) {
 	}
 	if got == "" {
 		t.Fatal("empty hash")
+	}
+}
+
+// ForwardingHash is what tells a rotation from a steady state, and it becomes
+// a pod label, so five separate properties have to hold at once. They are one
+// test because each is a single comparison and splitting them would repeat the
+// fixture five times.
+func TestForwardingHashIsStableSaltedAndUntrimmed(t *testing.T) {
+	const uidA = types.UID("11111111-2222-3333-4444-555555555555")
+	const uidB = types.UID("99999999-8888-7777-6666-555555555555")
+	value := []byte("s3cret")
+
+	got := ForwardingHash(uidA, value)
+
+	if again := ForwardingHash(uidA, value); again != got {
+		t.Errorf("ForwardingHash is not stable: %q then %q", got, again)
+	}
+	if len(got) != 16 {
+		t.Errorf("ForwardingHash = %q, want 16 hex characters so it fits a label value", got)
+	}
+	if _, err := hex.DecodeString(got); err != nil {
+		t.Errorf("ForwardingHash returned %q, which is not hex: %v", got, err)
+	}
+	if other := ForwardingHash(uidB, value); other == got {
+		t.Errorf("the same secret in two networks hashed alike (%q); the UID salt is not reaching the digest", got)
+	}
+	if trailing := ForwardingHash(uidA, []byte("s3cret\n")); trailing == got {
+		t.Error("a trailing newline hashed alike; the value is being trimmed somewhere it must not be")
+	}
+}
+
+// Without a separator between the salt and the value, ("ab", "c") and
+// ("a", "bc") are the same byte sequence and hash alike. Real UIDs are all the
+// same length so this could never bite in production -- which is exactly why it
+// needs a test rather than a reader noticing it.
+func TestForwardingHashSeparatesTheSaltFromTheValue(t *testing.T) {
+	if ForwardingHash("ab", []byte("c")) == ForwardingHash("a", []byte("bc")) {
+		t.Error("the UID and the value run together in the digest; the separator byte is missing")
 	}
 }

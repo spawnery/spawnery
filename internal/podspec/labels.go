@@ -53,6 +53,25 @@ const (
 	// rendering code moves the digest for every group, so an operator upgrade
 	// that touches podspec rolls the fleet.
 	LabelPodHash = "spawnery.cloud/pod-hash"
+	// LabelForwardingHash is podspec.ForwardingHash over the Network's
+	// forwarding secret as it stood when this pod was created. It says which
+	// secret this process read at startup, which is the only thing that
+	// matters: the kubelet refreshes the projected file underneath a running
+	// pod, and neither Velocity nor Paper reads it a second time.
+	//
+	// A pod without it is unknown, not stale. The pod builders omit it while
+	// Network.status.forwardingSecretHash is empty, and the Network
+	// controller reports that case as Unknown rather than raising a rotation
+	// nobody can confirm.
+	//
+	// Deliberately not part of LabelPodHash: DesiredServerHash and
+	// DesiredProxyHash delete it before digesting. Were it included, rotating
+	// the secret would make every pod of the network stale at once and the
+	// operator would recreate all of them, proxies and backends interleaved --
+	// the uncoordinated version of the rollout the master design (section 6.5)
+	// defers. Rotation is detected and reported; the restarts follow
+	// docs/runbook-milestone-5c-secret-rotation.md.
+	LabelForwardingHash = "spawnery.cloud/forwarding-hash"
 )
 
 // Label values.

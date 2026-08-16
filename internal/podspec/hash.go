@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
@@ -137,4 +138,30 @@ func DesiredServerHash(
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:8]), nil
+}
+
+// ForwardingHash digests a Network's forwarding secret for LabelForwardingHash:
+// the network's UID, a zero byte, then the secret's bytes, truncated to eight
+// bytes of SHA-256 like the two pod digests above.
+//
+// The UID is a salt. This value becomes a pod label, and read access to pods is
+// granted far more freely than read access to Secrets, so an unsalted truncated
+// digest of a weakly chosen secret would turn "no access to the Secret" into an
+// off-the-shelf dictionary attack with the precomputation shared across every
+// installation of this operator. Salting per network forces that work to be
+// redone for each one. It does not defeat a targeted attack on a weak secret;
+// docs/known-issues.md records that rather than dressing it up.
+//
+// The zero byte keeps the two inputs from running together: without it,
+// ("ab", "c") and ("a", "bc") are one byte sequence.
+//
+// The value is not trimmed. A trailing newline is a different digest and is
+// reported as a rotation, because the digest covers exactly the bytes the pod
+// mounts; what Velocity and Paper make of them is theirs to decide.
+func ForwardingHash(networkUID types.UID, value []byte) string {
+	sum := sha256.New()
+	sum.Write([]byte(networkUID))
+	sum.Write([]byte{0})
+	sum.Write(value)
+	return hex.EncodeToString(sum.Sum(nil)[:8])
 }
