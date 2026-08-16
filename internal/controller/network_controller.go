@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -29,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 // NetworkReconciler enforces one network per namespace and publishes the
@@ -40,11 +42,19 @@ type NetworkReconciler struct {
 
 	// Clock is injectable so the time rules are testable.
 	Clock func() time.Time
+
+	// SecretReader reads the Network's forwarding secret. It must be an
+	// uncached reader — mgr.GetAPIReader(), which setup.go supplies: a cached
+	// Secret would need an informer over every Secret in scope, and this
+	// operator deliberately holds no list or watch on them
+	// (internal/rbacaudit/required.go).
+	SecretReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks/status,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=list
 
 // Reconcile decides whether this network is the one that owns its namespace
 // and, if so, sums up its groups.
@@ -107,6 +117,40 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	network.Status.ServerGroups = serverGroupCount
 	network.Status.ProxyGroups = proxyGroupCount
 	network.Status.OnlinePlayers = players
+
+	// The forwarding secret. This sits after the Accepted branch above returns,
+	// so a Network that does not own its namespace never reads a secret it does
+	// not manage.
+	read := readForwardingSecret(ctx, r.SecretReader, network)
+	if read.Hash != "" {
+		if previous := network.Status.ForwardingSecretHash; previous != "" && previous != read.Hash {
+			r.Recorder.Eventf(network, corev1.EventTypeWarning,
+				spawneryv1alpha1.EventForwardingSecretRotated,
+				"the forwarding secret changed; roll the server groups first, then the proxy groups — see %s",
+				rotationRunbook)
+		}
+		// Only on a successful read: see NetworkStatus.ForwardingSecretHash.
+		network.Status.ForwardingSecretHash = read.Hash
+	}
+	// Both events fire on entering a state, so the condition as it stands
+	// before SetStatusCondition below is what says whether this is an entry.
+	if read.Reason == spawneryv1alpha1.ReasonSecretNotFound &&
+		!hasConditionReason(network.Status.Conditions,
+			spawneryv1alpha1.ConditionForwardingSecretResolved, read.Reason) {
+		r.Recorder.Eventf(network, corev1.EventTypeWarning,
+			spawneryv1alpha1.EventForwardingSecretNotFound, "%s", read.Message)
+	}
+	meta.SetStatusCondition(&network.Status.Conditions, resolvedCondition(read))
+
+	pods := &corev1.PodList{}
+	if err := r.List(ctx, pods, client.InNamespace(network.Namespace), client.MatchingLabels{
+		podspec.LabelManagedBy: podspec.ManagedByValue,
+		podspec.LabelNetwork:   network.Name,
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	meta.SetStatusCondition(&network.Status.Conditions,
+		rotationCondition(read, forwardingStamps(pods.Items)))
 
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.Status().Update(ctx, network)
 }

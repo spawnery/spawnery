@@ -86,6 +86,9 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorderFor("network"),
 		Clock:    opts.Clock,
+		// Uncached, for the reason SecretReader's own comment gives. The
+		// Bootstrapper takes the same reader for the same reason.
+		SecretReader: mgr.GetAPIReader(),
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup network controller: %w", err)
 	}

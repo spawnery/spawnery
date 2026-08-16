@@ -17,25 +17,40 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 func networkReconciler(f *fixture) *NetworkReconciler {
+	r, _ := networkReconcilerWithEvents(f)
+	return r
+}
+
+// networkReconcilerWithEvents hands back the recorder too, which the forwarding
+// secret tests need: the events are emitted on entering a state, so proving
+// "exactly once" means reading the channel rather than the object.
+func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *record.FakeRecorder) {
+	events := record.NewFakeRecorder(100)
 	return &NetworkReconciler{
-		Client:   f.c,
-		Scheme:   f.reconc.Scheme,
-		Recorder: record.NewFakeRecorder(100),
-		Clock:    f.clock.Now,
-	}
+		Client:       f.c,
+		Scheme:       f.reconc.Scheme,
+		Recorder:     events,
+		Clock:        f.clock.Now,
+		SecretReader: f.c,
+	}, events
 }
 
 func (f *fixture) reconcileNetwork(t *testing.T, r *NetworkReconciler, name string) {
@@ -300,5 +315,155 @@ func TestNetworkCountsItsGroups(t *testing.T) {
 	}
 	if got.Status.OnlinePlayers != 9 {
 		t.Errorf("onlinePlayers = %d, want 9", got.Status.OnlinePlayers)
+	}
+}
+
+func putForwardingSecret(t *testing.T, f *fixture, value string) {
+	t.Helper()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "velocity-forwarding-secret", Namespace: f.ns},
+		Data:       map[string][]byte{podspec.ForwardingSecretKey: []byte(value)},
+	}
+	if err := f.c.Create(f.ctx, secret); err != nil {
+		if !apierrors.IsAlreadyExists(err) {
+			t.Fatalf("create secret: %v", err)
+		}
+		existing := &corev1.Secret{}
+		if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(secret), existing); err != nil {
+			t.Fatalf("get secret: %v", err)
+		}
+		existing.Data = secret.Data
+		if err := f.c.Update(f.ctx, existing); err != nil {
+			t.Fatalf("update secret: %v", err)
+		}
+	}
+}
+
+func countEvents(events []string, reason string) int {
+	n := 0
+	for _, e := range events {
+		if strings.Contains(e, reason) {
+			n++
+		}
+	}
+	return n
+}
+
+// The first sight of a secret is adoption, not rotation. Emitting an event
+// there would mean every operator start announces a rotation that never
+// happened, on every network at once.
+func TestFirstSightOfTheForwardingSecretIsAdoption(t *testing.T) {
+	f := newFixture(t)
+	r, events := networkReconcilerWithEvents(f)
+	putForwardingSecret(t, f, "first")
+
+	f.reconcileNetwork(t, r, "production")
+
+	got := f.getNetwork(t, "production")
+	if got.Status.ForwardingSecretHash == "" {
+		t.Error("status.forwardingSecretHash is empty after a successful read")
+	}
+	for _, e := range drainEvents(events) {
+		if strings.Contains(e, spawneryv1alpha1.EventForwardingSecretRotated) {
+			t.Errorf("the first read emitted %q; an empty recorded hash is adoption", e)
+		}
+	}
+}
+
+// The event fires on the transition and not once per resync: at a five-second
+// requeue, an event per pass would be seven hundred an hour for one unremedied
+// rotation.
+func TestARotationIsAnnouncedExactlyOnce(t *testing.T) {
+	f := newFixture(t)
+	r, events := networkReconcilerWithEvents(f)
+	putForwardingSecret(t, f, "first")
+	f.reconcileNetwork(t, r, "production")
+	drainEvents(events)
+
+	putForwardingSecret(t, f, "second")
+	f.reconcileNetwork(t, r, "production")
+	first := drainEvents(events)
+	f.reconcileNetwork(t, r, "production")
+	second := drainEvents(events)
+
+	if n := countEvents(first, spawneryv1alpha1.EventForwardingSecretRotated); n != 1 {
+		t.Errorf("the rotation emitted %d events, want exactly 1: %v", n, first)
+	}
+	if n := countEvents(second, spawneryv1alpha1.EventForwardingSecretRotated); n != 0 {
+		t.Errorf("the next reconcile emitted %d more events, want 0: %v", n, second)
+	}
+}
+
+// A stale pod is the whole signal. It is created by hand here rather than by a
+// group controller, because what is under test is the comparison and not how
+// pods come to exist.
+func TestAStalePodRaisesRotationPending(t *testing.T) {
+	f := newFixture(t)
+	r, _ := networkReconcilerWithEvents(f)
+	putForwardingSecret(t, f, "first")
+	f.reconcileNetwork(t, r, "production")
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "lobby-0",
+			Namespace: f.ns,
+			Labels: map[string]string{
+				podspec.LabelManagedBy:      podspec.ManagedByValue,
+				podspec.LabelNetwork:        "production",
+				podspec.LabelGroup:          "lobby",
+				podspec.LabelRole:           podspec.RoleServer,
+				podspec.LabelForwardingHash: "0000000000000000",
+			},
+		},
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "paper", Image: "img:1"}}},
+	}
+	if err := f.c.Create(f.ctx, pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+
+	f.reconcileNetwork(t, r, "production")
+
+	got := f.getNetwork(t, "production")
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionForwardingSecretRotationPending,
+		metav1.ConditionTrue, spawneryv1alpha1.ReasonRotationPending) {
+		t.Errorf("conditions = %+v, want RotationPending=True/RotationPending", got.Status.Conditions)
+	}
+}
+
+// Accepted is what servergroup_controller.go derives networkUsable from, and
+// since 5b mayResize equals networkUsable. A missing secret must not reach it,
+// or a typo in one field stops the network from sizing at all.
+func TestAMissingSecretLeavesAcceptedAlone(t *testing.T) {
+	f := newFixture(t)
+	r, events := networkReconcilerWithEvents(f)
+
+	// newFixture's own bootstrap reconcile already read this (nonexistent)
+	// secret once, to its own throwaway recorder, so
+	// ForwardingSecretResolved already carries SecretNotFound by this point.
+	// Clear it so the reconcile below is a genuine entry into that state —
+	// which is what "exactly one event" below is actually testing.
+	net := f.getNetwork(t, "production")
+	meta.RemoveStatusCondition(&net.Status.Conditions, spawneryv1alpha1.ConditionForwardingSecretResolved)
+	if err := f.c.Status().Update(f.ctx, net); err != nil {
+		t.Fatalf("reset forwarding secret condition: %v", err)
+	}
+
+	f.reconcileNetwork(t, r, "production")
+
+	got := f.getNetwork(t, "production")
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionTrue, spawneryv1alpha1.ReasonAccepted) {
+		t.Errorf("conditions = %+v, want Accepted=True despite the missing secret", got.Status.Conditions)
+	}
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionForwardingSecretResolved,
+		metav1.ConditionFalse, spawneryv1alpha1.ReasonSecretNotFound) {
+		t.Errorf("conditions = %+v, want ForwardingSecretResolved=False/SecretNotFound", got.Status.Conditions)
+	}
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionForwardingSecretRotationPending,
+		metav1.ConditionUnknown, spawneryv1alpha1.ReasonSecretUnresolved) {
+		t.Errorf("conditions = %+v, want RotationPending=Unknown/SecretUnresolved", got.Status.Conditions)
+	}
+	if n := countEvents(drainEvents(events), spawneryv1alpha1.EventForwardingSecretNotFound); n != 1 {
+		t.Errorf("the missing secret emitted %d events, want exactly 1", n)
 	}
 }

@@ -24,6 +24,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -204,4 +205,13 @@ func staleSummary(stale map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s=%d", k, stale[k]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+// hasConditionReason reports whether the object already carries this condition
+// with this reason — which is how the events tell entering a state from staying
+// in it. At a five-second requeue the difference is one event against seven
+// hundred an hour.
+func hasConditionReason(conditions []metav1.Condition, condType, reason string) bool {
+	cond := meta.FindStatusCondition(conditions, condType)
+	return cond != nil && cond.Reason == reason
 }

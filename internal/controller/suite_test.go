@@ -240,10 +240,11 @@ func newFixture(t *testing.T) *fixture {
 	// controller itself. Tests that specifically exercise rejection or
 	// recovery construct their own NetworkReconciler and reconcile again.
 	netReconciler := &NetworkReconciler{
-		Client:   c,
-		Scheme:   testenv.Scheme(t),
-		Recorder: record.NewFakeRecorder(100),
-		Clock:    clock.Now,
+		Client:       c,
+		Scheme:       testenv.Scheme(t),
+		Recorder:     record.NewFakeRecorder(100),
+		Clock:        clock.Now,
+		SecretReader: c,
 	}
 	if _, err := netReconciler.Reconcile(ctx, ctrlreconcile.Request{
 		NamespacedName: types.NamespacedName{Name: f.network.Name, Namespace: ns},
