@@ -142,10 +142,10 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 
 	// Gate A subsumes the PendingDeletes and leaving() checks the surplus
 	// loop used to make per-candidate: any outstanding delete or any server
-	// already on its way out means a takedown is already in flight, and at
-	// most one ordinal may be down at a time regardless of why. So the check
-	// moves in front of both the surplus and the stale nomination below,
-	// rather than filtering each one's candidate list.
+	// already on its way out means an ordinal is already down, and this rule
+	// nominates at most one at a time. So the check moves in front of both the
+	// surplus and the stale nomination below, rather than filtering each one's
+	// candidate list.
 	if takedownInFlight(in) {
 		return decision
 	}
@@ -209,8 +209,21 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 // takedownInFlight is Gate A: does any ordinal-bearing view of the group
 // already count as leaving(), or have an outstanding PendingDeletes entry.
 // DecidePersistentSize nominates at most one name and returns, so a single
-// call was never the risk; this gate is what makes the *next* call wait
-// while an earlier nomination is still being carried out.
+// call was never the risk; this gate is what makes the *next* call wait while
+// an ordinal is on its way out.
+//
+// On its way out for any reason, not only this rule's own prior nomination:
+// leaving() is equally true of a server condemned off a draining node, one
+// escalated out of Retiring, and one an operator deleted by hand. This gate
+// holds for all of them, so the rule adds nothing to a takedown it did not
+// order. What it cannot do is bound one: condemn() names every server on a
+// departing node and removes them all in a single pass, ungated by anything
+// here, so a node holding two ordinals takes two down -- and an ordinal this
+// rule nominated on an earlier pass can still be draining while that happens.
+// Deliberate and unthrottled since 4c-3, see docs/known-issues.md's "A node
+// holding a whole group empties it at once". So the one-at-a-time budget is a
+// statement about what this rule nominates, not about every way an ordinal
+// can go down.
 //
 // A view with a nil Ordinal is skipped, the same as every other pass over
 // in.Views in this file: DecidePersistentSize's own doc comment says a

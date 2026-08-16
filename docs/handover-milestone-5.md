@@ -226,12 +226,15 @@ finds when it starts:
 - **A working recreate mechanism for one ordinal at a time, which secret
   rotation can drive rather than rebuild.** `DecidePersistentSize`
   (`internal/controller/persistent.go`) nominates missing, surplus, stale-spec
-  and resize-pending ordinals in that priority order, holding the invariant
-  that at most one ordinal of a persistent group is down at a time
-  (`docs/superpowers/specs/2026-08-16-persistent-updates-design.md` §2). 5c's
-  rotation is another occasion to take an ordinal down; §2's rule is where a
-  fifth candidate class would go, and where 5c has to argue its place against
-  the other four.
+  and resize-pending ordinals in that priority order, taking at most one
+  ordinal of a persistent group down at a time
+  (`docs/superpowers/specs/2026-08-16-persistent-updates-design.md` §2). That
+  budget covers the takedowns this rule nominates and not every way an ordinal
+  can go down — a node drain's condemnation runs beside it, ungated, and
+  empties as many ordinals as the node held; `docs/known-issues.md`'s 5b
+  section carries the exception. 5c's rotation is another occasion to take an
+  ordinal down; §2's rule is where a fifth candidate class would go, and where
+  5c has to argue its place against the other four.
 - **A hash that already covers the forwarding secret's *name* but not its
   *contents* — which is exactly 5c's problem.** `DesiredServerHash` digests
   the whole pod `BuildServerPod` would render, which mounts the secret named

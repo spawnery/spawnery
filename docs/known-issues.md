@@ -2160,9 +2160,34 @@ claim, a broken ordinal's failure streak survives a healthy sibling, and a
 changed `motd` reaches a running proxy. What follows is what an operator finds
 still open, checked against the code as it stands.
 
+**The one-ordinal budget belongs to the nomination rule, not to the group: a
+node drain takes down as many ordinals as the node held.** §2's invariant is
+written "at most one ordinal of a persistent group is down at a time, whatever
+the reason", and the last three words claim more than the code does.
+`decision.Condemn` is attached for a persistent group like any other
+(`internal/controller/servergroup_controller.go:711`) and `condemn()` executes
+it ungated (`:779`), removing every server on a departing node in one pass — so
+a node holding two ordinals takes both down. Gate A is not bypassed here: a
+condemned view reads as `leaving()`, so the nomination rule declines to name
+anything on that pass. What it cannot do is throttle the drain, and an ordinal
+it nominated on an earlier pass can still be draining while the drain lands, so
+three ordinals of one group can be out at once.
+
+The behaviour is not the part to fix. "From milestone 4c-3" above records why
+condemnation is unthrottled — draining one server at a time makes `kubectl
+drain` wait out `drain.timeoutSeconds` once per occupied server rather than
+once for the node — and a node that is leaving takes its pods with it whether
+or not this operator moves their players first. The group's
+`PodDisruptionBudget` is a bound on a *different* thing and is worth not
+confusing with this one: sized to the occupied pods
+(`servergroup_controller.go:1226`), it refuses the eviction API an occupied
+pod, so somebody else's drain cannot disconnect players out from under the
+condemnation. It does not bound this operator's own deletes, which never go
+through eviction.
+
 **A permanently broken ordinal stalls the group's whole update.** §2's
-invariant — at most one ordinal down at a time — is held by waiting for every
-required ordinal to be `Ready` (Gate B) before a stale or resize-pending
+invariant — at most one ordinal taken down at a time — is held by waiting for
+every required ordinal to be `Ready` (Gate B) before a stale or resize-pending
 takedown proceeds. An ordinal that can never become `Ready` therefore holds
 the whole group at its current spec forever; nothing times this wait out.
 Inherited from `StatefulSet`'s shape knowingly, and tolerable only because the

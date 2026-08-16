@@ -73,6 +73,14 @@ test pins and an operator can be told:
 > **At most one ordinal of a persistent group is down at a time, whatever the
 > reason.**
 
+That is a claim about the takedowns the rule below nominates, and it is not a
+claim about the group. `Condemn` runs beside the rule and takes every server on
+a departing node down at once — deliberately and unthrottled since 4c-3, whose
+own known-issues entry gives the reason — so a node holding two ordinals empties
+both. `docs/known-issues.md`'s 5b section carries that exception; §2 does not
+try to close it, because a node that is leaving is not this rule's to negotiate
+with.
+
 `DecidePersistentSize` grows from *which ordinals are missing and which are
 surplus* into *which are missing, and which single ordinal comes down next, and
 why*. Three candidate classes, in strict priority order:
