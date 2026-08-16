@@ -62,6 +62,11 @@
               kubernetes-helm
               kind
               k3d
+              # hack/publish.sh copies each image archive straight from the Nix
+              # store to the registry. A local container store in between would
+              # publish whatever a stale `podman load` left behind rather than
+              # what the flake describes.
+              skopeo
               # Both of these are pinned a second time, by version, in
               # agent/common/build.gradle.kts -- and only this half moves when
               # nixpkgs does. `protobuf` here is protoc, whose X.Y the

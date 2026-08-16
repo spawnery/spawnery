@@ -138,3 +138,9 @@ image-repro:
 	# derivation that produces both is what turns that into a message naming
 	# the jar.
 	nix build .#agents --rebuild
+
+# Not part of `all`: it contacts a registry and needs a token. DRY_RUN=1 prints
+# what it would copy and contacts nothing.
+.PHONY: publish
+publish:
+	hack/publish.sh
