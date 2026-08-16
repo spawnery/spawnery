@@ -99,14 +99,6 @@ func DesiredServerHash(
 	group *spawneryv1alpha1.ServerGroup,
 	configValues []byte,
 ) (string, error) {
-	// What actually keeps a server's identity out of the digest is the
-	// signature above: DesiredServerHash takes no *Server, so there is no
-	// per-server value that could reach the marshalled struct below. The
-	// Server passed to BuildServerPod here needs a Name only because
-	// BuildServerPod's caller contract expects one; leaving it at the zero
-	// value is defence-in-depth for the day this function grows an input
-	// that does carry identity, not the mechanism the guarantee rests on.
-	//
 	// The endpoint is a fixed sentinel rather than the real one, and rather
 	// than "": BuildServerPod refuses an empty endpoint outright
 	// (internal/podspec/server.go:231). A constant contributes a constant to
