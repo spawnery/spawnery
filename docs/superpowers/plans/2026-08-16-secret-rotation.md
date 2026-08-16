@@ -1223,6 +1223,7 @@ git commit -m "One namespace at a time: the reader role, and both directions of 
 
 **Files:**
 - Modify: `internal/controller/network_controller.go:36-42` (the struct), `:44-46` (the markers), `:76-110` (the accepted branch of `Reconcile`)
+- Modify: `internal/controller/forwardingsecret.go` (created by Task 4 — append `hasConditionReason` at the bottom, per Step 4)
 - Modify: `internal/controller/setup.go:84-89` (the `NetworkReconciler` construction)
 - Test: `internal/controller/network_controller_test.go` (modify `networkReconciler` at line 32, and append tests)
 
