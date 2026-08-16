@@ -44,7 +44,15 @@ all today, and one reports nothing when it should:
   `ReadySince` across *all* of the group's servers. 5a's handover assigned the
   fix here.
 
-5b closes all four. It adds no new controller and no new reconcile loop: the
+A fifth was found while planning this milestone rather than while writing it,
+and it is not about persistent groups at all:
+
+- **A changed `motd` never reaches a running proxy.** `DesiredProxyHash` hashes
+  the rendered pod, and `motd` reaches only the ConfigMap. Shipped since 4c-2;
+  traced link by link in §3.7. It is in scope because the fix is the same
+  change to the sibling of the function 5b is writing anyway.
+
+5b closes all five. It adds no new controller and no new reconcile loop: the
 mechanism for taking an ordinal down already exists and is proven — **deleting
 the `Server` object is the drain sequence** — and this milestone gives that
 mechanism two new occasions and one budget.
@@ -143,7 +151,7 @@ drain is bounded by `spec.drain.timeoutSeconds` exactly as it is today.
 
 ## 3. Staleness: hash what the operator renders
 
-### 3.1 Why not a field list
+### 3.1 This function already exists for proxies
 
 The obvious implementation is a hand-maintained list of the pod-affecting
 fields, hashed. It carries a defect this repository has now seen in several
@@ -151,11 +159,25 @@ shapes: the list drifts from `podspec.BuildServerPod` silently. Someone adds a
 field, the pod changes, the hash does not, and the result is an update that
 never fires and never says why.
 
+**Milestone 4c-2 already rejected that approach and built the alternative.**
+`podspec.DesiredProxyHash` (`internal/podspec/hash.go:43`) renders the pod with
+its name held at a fixed empty value, marshals it with `encoding/json` — whose
+sorted map keys are what keeps the digest from flapping between passes — and
+returns `hex.EncodeToString(sum[:8])`. Its doc comment makes the same argument
+this section reached independently: holding the name empty is *stronger than
+excluding the fields a name reaches today*, because a field derived from the
+name added later needs no change to the hash function.
+
+So 5b does not invent a mechanism. It writes **`DesiredServerHash`, the sibling
+of an existing and shipped function**, with the same shape, the same digest
+width and the same reasoning, and the plan should treat any divergence between
+the two as something to justify rather than as freedom.
+
 ### 3.2 What is hashed
 
-`podspec.ServerRenderHash(net, group)` renders and hashes. It calls
-`BuildServerPod` with a **constant dummy `Server`** and hashes the resulting
-`PodSpec` together with the rendered config values.
+`podspec.DesiredServerHash(net, group)` renders and hashes. It calls
+`BuildServerPod` with a **constant dummy `Server`** and hashes the result
+together with the rendered config values.
 
 The dummy neutralises exactly the inputs that are per-ordinal and are supposed
 to be: `srv.Name` (used at `internal/podspec/server.go:335`, `:369`, `:371`,
@@ -202,6 +224,73 @@ A new field `Server.spec.podHash`, beside the existing `spec.groupGeneration`,
 which is left untouched for the ephemeral path. The `ServerGroup` controller
 writes it when it creates a server and compares it when it nominates one. The
 `Server` controller takes no part: it builds the pod exactly as it does today.
+
+**`ServerView.Stale` is already taken and means something else.** It reports
+that the *player count* cannot be trusted (`internal/controller/candidates.go:49`),
+and a rule reading it asks `Players == 0 && !Stale`. Nothing in 5b may overload
+that name. The view carries `PodHash string`, and staleness of the spec is
+computed in the rule from a comparison, never stored as a second boolean called
+something confusable.
+
+### 3.6 The upgrade must not restart every world
+
+Introducing the field creates a migration hazard severe enough to be a design
+decision rather than an implementation note: **every server that already exists
+carries an empty `spec.podHash`.** Compared naively against a freshly computed
+hash, every ordinal in every persistent group is stale the moment the new
+operator starts, and the first reconcile after an upgrade walks the whole
+installation, restarting every world one ordinal at a time. Nobody asked for
+that, and it would arrive as a surprise during a routine operator bump.
+
+**An empty `spec.podHash` therefore means *adopt*, not *stale*.** The group
+stamps the current hash onto such a server and orders no takedown. The server
+is then current by definition, and the first genuine spec change after the
+upgrade is what moves it. The cost is that one spec edit made *during* the
+upgrade window can be missed on an already-running ordinal, which is a far
+smaller surprise than a full restart and is bounded by the next edit.
+
+The same reasoning applies wherever a hash is *widened* rather than
+introduced — see §3.7, where extending the proxy hash changes its value for
+every existing proxy.
+
+### 3.7 The same gap on the proxy side: `motd`
+
+Writing §3.2 turned up a defect in shipped code, and 5b fixes it because the
+fix is the same change to the sibling function.
+
+`DesiredProxyHash` hashes the rendered proxy pod only. Of the two fields in
+`ProxyGroupSpec.Config` (`api/v1alpha1/proxygroup_types.go:106,110`),
+**`playerLimit` is safe** — `renderProxyPod` puts it in the pod as the
+`SPAWNERY_PLAYER_LIMIT` env var (`internal/podspec/proxy.go:223`), so the hash
+sees it and a change rolls the group. **`motd` is not.** It appears nowhere in
+`internal/podspec/proxy.go`; it reaches only the ConfigMap
+(`internal/controller/proxygroup_controller.go:1301`). The consequence, checked
+link by link:
+
+- Changing `spec.config.motd` updates the ConfigMap.
+- `ProxyGroup` reconciles — it does `Owns(&corev1.ConfigMap{})`
+  (`internal/controller/proxygroup_controller.go:1482`) — but the requeue
+  changes nothing, because staleness is `pods[i].Labels[LabelPodHash] !=
+  wantHash` (`:655`) and `wantHash` never saw the motd.
+- No proxy is stale, so `DecideRollout` orders nothing.
+- There is no config-reload path: `proto/` and `internal/agentserver/` carry no
+  reload message.
+
+**So a changed `motd` never reaches a running proxy.** It takes an unrelated
+restart, and nothing reports the gap. Shipped since 4c-2.
+
+The fix is to include the rendered config values in `DesiredProxyHash`, which
+is exactly what `DesiredServerHash` does for the server side, so the two stay
+siblings rather than diverging on the very point that motivated the change.
+
+**The price, stated plainly: widening the hash changes its value for every
+existing proxy, so the first reconcile after this upgrade rolls every proxy
+group once.** Unlike §3.6's case there is no adopt-on-empty escape, because the
+label is present and merely different — telling "widened hash" apart from "the
+image really changed" is not possible from the value alone. The rollout is at
+least controlled: it goes through 4c-2's own surge-1, one-at-a-time path, which
+exists for exactly this. It belongs in the release notes, and in the evidence
+run's expectations so nobody reads it as a fault.
 
 ## 4. Storage growth: one field, upward only
 
@@ -316,6 +405,18 @@ changes it; `maxPlayers` changes it, through the config half; **`replicas` does
 not**; **`drain.timeoutSeconds` does not**. Plus the determinism assertion from
 §3.4, across repeated runs rather than within one.
 
+**The proxy side gets the mirror of that table**, and one row of it is the
+whole of §3.7: a changed `motd` must change `DesiredProxyHash`. That test fails
+today, before any code is written, which is the cleanest possible statement of
+the defect. `playerLimit` must change it too — it already does, and the row is
+there so that a later refactor moving the env var out of the pod cannot break
+it silently.
+
+**And §3.6's migration needs its own case, because it is the one an upgrade
+gets wrong once and irreversibly:** a server with an empty `spec.podHash` is
+adopted and stamped, and **no takedown is ordered**. Asserting only that the
+field gets filled would pass while every world restarted.
+
 **envtest, with 5a's traps carried forward.** There is no scheduler, no
 kubelet, no provisioner and no garbage collector, and a deleted
 `PersistentVolumeClaim` keeps answering `Get` indefinitely because
@@ -359,7 +460,9 @@ issued to relieve a broken group silently stops working.
 
 ## 7. CRD changes
 
-Two field additions and one condition, and nothing else:
+Two field additions and one condition, and nothing else. **§3.7's `motd` fix
+needs no CRD change at all** — the field already exists and is already
+validated; only what the hash reads changes:
 
 - `Server.spec.podHash` (§3.5)
 - `Server.status.storageResizePending` (§4)
