@@ -381,9 +381,15 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 //
 // A resize can fail two different ways, and this function is where the
 // choice was made to catch both rather than only the one Design §4 names.
-// allowVolumeExpansion: false makes the patch below fail synchronously,
-// right here, with the API server's own admission error — that is the branch
-// below. A driver that accepts the resize and fails it later says so only on
+// allowVolumeExpansion: false is the ordinary way the patch below fails
+// synchronously, right here, with the API server's own admission error — but
+// IsInvalid/IsForbidden covers other causes of the same shape too: Task 7's
+// own report found "only dynamically provisioned pvc can be resized" from an
+// unbound, class-less claim, which has nothing to do with
+// allowVolumeExpansion. This function cannot tell those apart from the error
+// alone, so the message it records below says what happened and names
+// allowVolumeExpansion as the first thing to check, not as the established
+// cause. A driver that accepts the resize and fails it later says so only on
 // the claim itself, as a ControllerResizeError or NodeResizeError condition,
 // with nothing synchronous to catch at all; resizeConditionError is what
 // reads that, both below and on the pass where nothing needed to grow.
@@ -427,13 +433,21 @@ func (r *ServerReconciler) growClaim(
 		// change its outcome. Recording it on the status is what lets
 		// ServerGroupReconciler say so on the group instead of this staying
 		// a line in the reconcile log.
+		//
+		// The message names what happened and what to check, not why: see
+		// this function's doc comment for why IsInvalid/IsForbidden alone
+		// cannot tell an unexpandable storage class apart from Task 7's
+		// unbound-claim rejection, or from any other cause the same two error
+		// kinds cover. err is carried verbatim because it is the only part of
+		// this that actually identifies the cause.
 		className := "(the cluster default)"
 		if claim.Spec.StorageClassName != nil {
 			className = *claim.Spec.StorageClassName
 		}
 		srv.Status.StorageResizeError = fmt.Sprintf(
-			"claim %s cannot grow to %s: storage class %q does not allow expansion (allowVolumeExpansion); patch refused: %v",
-			claim.Name, want.String(), className, err)
+			"claim %s: the patch growing it to %s was refused by the API server: %v; "+
+				"check storage class %q first, in particular whether it sets allowVolumeExpansion: true",
+			claim.Name, want.String(), err, className)
 		return nil
 	}
 	srv.Status.StorageResizeError = resizeConditionError(claim)

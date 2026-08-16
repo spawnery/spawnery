@@ -818,8 +818,13 @@ func (r *ServerGroupReconciler) condemn(
 // carries the message the offending server's own status already worked out
 // -- growClaim's synchronous rejection, or resizeConditionError's read of
 // the claim's ControllerResizeError/NodeResizeError condition -- taken from
-// the first view that has one: a storage class an operator has to fix is
-// not made any more actionable by naming it once per ordinal.
+// the lowest-ordinal view that has one, deterministically rather than by
+// which one collectViews happens to have listed first: collectViews makes no
+// ordering promise, so with two unhealthy claims "the first one found" could
+// alternate between reconciles and leave an operator watching the condition
+// flap between two messages instead of reading one steady signal. Lowest
+// ordinal is not a claim that ordinal's cause is any more urgent than the
+// other's -- it is only the tie-break that stays put.
 //
 // Deliberately not folded into Degraded. Design §4's point stands regardless
 // of which of the two failure shapes produced the message: a storage class
@@ -833,16 +838,39 @@ func storageResizeCondition(views []ServerView) metav1.Condition {
 		Reason:  spawneryv1alpha1.ReasonStorageResized,
 		Message: "every claim matches spec.storage.size",
 	}
-	for _, v := range views {
+	var worst *ServerView
+	for i := range views {
+		v := &views[i]
 		if v.ResizeError == "" {
 			continue
 		}
-		cond.Status = metav1.ConditionFalse
-		cond.Reason = spawneryv1alpha1.ReasonStorageResizeRefused
-		cond.Message = v.ResizeError
+		if worst == nil || ordinalBefore(v, worst) {
+			worst = v
+		}
+	}
+	if worst == nil {
 		return cond
 	}
+	cond.Status = metav1.ConditionFalse
+	cond.Reason = spawneryv1alpha1.ReasonStorageResizeRefused
+	cond.Message = worst.ResizeError
 	return cond
+}
+
+// ordinalBefore reports whether a's ordinal sorts before b's, for
+// storageResizeCondition's tie-break. A nil ordinal is not expected among a
+// persistent group's own views -- every one of them carries spec.ordinal --
+// but this has nothing to compare it against, so it sorts last rather than
+// panicking on the dereference.
+func ordinalBefore(a, b *ServerView) bool {
+	switch {
+	case a.Ordinal == nil:
+		return false
+	case b.Ordinal == nil:
+		return true
+	default:
+		return *a.Ordinal < *b.Ordinal
+	}
 }
 
 // derivePhase maps the totals and conditions onto the group phase.

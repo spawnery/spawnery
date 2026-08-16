@@ -4069,8 +4069,13 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Fatalf("expected StorageResize=False, got %+v", cond)
 	}
+	// growClaim cannot tell this rejection apart from Task 7's unbound-claim
+	// one by the API error alone (see growClaim's own doc comment), so the
+	// message does not claim allowVolumeExpansion caused it -- this only
+	// checks that an operator reading it is pointed at the field to check
+	// first, alongside the API's own error, which is what actually does.
 	if !strings.Contains(cond.Message, "allowVolumeExpansion") {
-		t.Fatalf("the message does not name the cause: %q", cond.Message)
+		t.Fatalf("the message does not point at the field to check: %q", cond.Message)
 	}
 
 	// The assertion that matters: it pins the separation the condition
