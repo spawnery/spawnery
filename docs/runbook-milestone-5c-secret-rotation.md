@@ -60,7 +60,7 @@ as the whole rotation.
 
 The condition's own message is written in this order — the stale server groups
 before the stale proxy groups (`staleSummary`,
-`internal/controller/forwardingsecret.go:190`) — so the message reads in the
+`internal/controller/forwardingsecret.go:197`) — so the message reads in the
 order the work is done.
 
 ---
@@ -154,7 +154,7 @@ newline is a different secret and is reported as a rotation of its own.
 
 The Network controller re-reads the Secret on every reconcile and requeues
 itself at `resyncInterval`, five seconds
-(`internal/controller/network_controller.go:155`, the constant at
+(`internal/controller/network_controller.go:153`, the constant at
 `internal/controller/server_controller.go:75`), so this answers within about
 that.
 
@@ -393,8 +393,8 @@ Positive polarity: `True` is healthy.
 | `True` | `SecretResolved` | the Secret exists and its `secret` key holds a non-empty value | nothing |
 | `False` | `SecretNotFound` | the `GET` returned NotFound: `spec.forwardingSecretRef` names a Secret that does not exist in this namespace | fix the name, or create the Secret. Pods of this network hang in `ContainerCreating` until it exists, because the projected volume cannot mount |
 | `False` | `SecretKeyMissing` | the Secret exists but has no `secret` key, or an empty one | put the forwarding secret under the key `secret` |
-| `Unknown` | `SecretReadForbidden` | the `GET` was denied: the reader Role of §3 was never applied to this namespace. The Secret itself is unaffected, so pods still start — see the note below before rotating in this state | `kubectl apply -n <ns> -f config/rbac/forwarding-secret-reader.yaml` |
-| `Unknown` | `SecretReadFailed` | any other error — the API server was unreachable, for instance. Nobody's typo and nothing to edit. Same caveat as the row above | look at the message and at the operator's logs; it clears when the read succeeds |
+| `Unknown` | `SecretReadForbidden` | the `GET` was denied: the reader Role of §3 was never applied to this namespace. Forbidden arrives before the operator can learn whether the Secret exists, so it may be present and pods may still start, or it may be missing and they hang in `ContainerCreating` — see the note below before rotating in this state | `kubectl apply -n <ns> -f config/rbac/forwarding-secret-reader.yaml` |
+| `Unknown` | `SecretReadFailed` | any other error — the API server was unreachable, for instance. Nobody's typo and nothing to edit. Same caveat as the row above, and the kubelet projects the Secret through that same API server, so an unreachable one stops pods starting for its own reason | look at the message and at the operator's logs; it clears when the read succeeds |
 
 `SecretNotFound` is also the one reported as an event,
 `ForwardingSecretNotFound`, on entry into that state:
@@ -426,6 +426,9 @@ not check, and the two failure families differ:
   digest. When the read recovers, the operator reports that pod stale although
   it is current, and `RotationPending` stays `True` until it is rolled.
 
-Rolling the pod resolves it either way, because a pod created against a
-readable secret is stamped with the digest of the bytes it is about to mount.
-Recorded in `docs/known-issues.md`.
+Rolling the pod resolves it either way, but only once the read succeeds again:
+a pod rolled while the read is still failing is stamped from the same retained
+digest and is mis-stamped a second time. Fix the read first — the remedy
+column above says how for each reason — and then roll, because a pod created
+against a readable secret is stamped with the digest of the bytes it is about
+to mount. Recorded in `docs/known-issues.md`.

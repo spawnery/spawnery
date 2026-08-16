@@ -94,7 +94,10 @@ not restrict `list` or `watch` in Kubernetes RBAC — it applies to requests tha
 name a single object. A real watch therefore requires `list` and `watch` over
 every Secret in the operator's scope.
 
-Between the two, this design keeps the narrower grant and gives up the watch.
+Between the two, this design gives up the watch. What it keeps is a narrowing by
+namespace, not by object: `get` only, in exactly the namespaces an administrator
+opens. The `resourceNames` clause §8 asks for is a separate question, and the
+manifest does not carry one — §2.2.1 records that as a deviation and why.
 The cost is one `GET` per network per resync — twelve requests per minute for a
 single-network cluster — and a detection latency of at most one resync.
 
@@ -108,10 +111,12 @@ like: Secret names are not secret, and they are visible in the very pod specs
 this operator is already allowed to list.
 
 It would also break a test that is right to break. `TestTheAuthorizerActuallyDenies`
-(`internal/rbacaudit/audit_envtest_test.go:182`) probes `secrets: get` in a
-foreign namespace and requires a denial, on the grounds that "secrets are
-granted by the namespaced Role, and only in spawnery-system". Deleting that
-probe to make room for the grant would be the wrong instinct exactly.
+(`internal/rbacaudit/audit_envtest_test.go:176`) probes `secrets: get` in a
+foreign namespace and requires a denial (`:183-188`), on the grounds that
+secrets are granted by namespaced Roles only — the operator's own in
+`spawnery-system`, and the reader Role in the namespaces an administrator
+applied it to. Deleting that probe to make room for the grant would be the wrong
+instinct exactly.
 
 So the grant is **namespace-scoped, one namespace at a time**:
 
@@ -133,7 +138,7 @@ So the grant is **namespace-scoped, one namespace at a time**:
   confusing with this one.** `TestTheAuthorizerActuallyDenies` derives its
   subject by applying `config/deploy/` into `spawnery-system`
   (`internal/rbacaudit/audit_envtest_test.go:50-70`) and probes `secrets: get`
-  in `foreignNamespace = "minecraft"` (`:43`, `:183-186`). A namespaced Role
+  in `foreignNamespace = "minecraft"` (`:43`, `:183-188`). A namespaced Role
   shipped in `config/deploy/` would land in the operator's own namespace, and
   that probe would stay denied without noticing. The probe survives because
   §7's own envtest applies the reader Role into `readerProbeNamespace`, which
@@ -144,6 +149,23 @@ So the grant is **namespace-scoped, one namespace at a time**:
   `clusterroles: create` for that reason.
 - **No `list`, no `watch`, anywhere.** `internal/rbacaudit/required.go:171`
   states that those verbs are deliberately absent. That statement stays true.
+- **No `resourceNames`, and that is a deviation from §8.** §2.2 rejects
+  `resourceNames` for a watch, correctly — it does not restrict `list` or
+  `watch`. It does restrict `get`, which is the only verb this Role grants, so
+  the master design's narrowing is available here and is not taken. Three
+  reasons. The manifest applies unedited today
+  (`kubectl apply -n <ns> -f config/rbac/forwarding-secret-reader.yaml`);
+  `resourceNames` makes every administrator hand-edit it per namespace and
+  re-edit it whenever a Network's secret is renamed. The operator holds
+  `pods: create` cluster-wide (`internal/rbacaudit/required.go:52`), and a pod
+  it creates can mount any Secret in the namespace, so naming objects here is
+  defence in depth rather than a boundary. And milestone 6 owns the Helm chart,
+  where a per-namespace value renders the list cheaply — that is where it
+  belongs. The audit cannot express the difference either way:
+  `rbacaudit.Permission` has no `ResourceNames` field
+  (`internal/rbacaudit/permissions.go:35-48`), so both directions of the
+  comparison against `RequiredNetworkNamespace` pass whether the rule names
+  objects or not. Recorded in `docs/known-issues.md`.
 
 **The failure mode is deliberate and visible.** A Network in a namespace where
 nobody applied the Role produces a `Forbidden` on the `GET`, which surfaces as
@@ -274,6 +296,14 @@ The name §6.5 gives it. Negative polarity, matching `BackingOff`,
 | `Unknown` | `SecretUnresolved` | the secret could not be read, so no judgement is possible |
 
 Precedence runs down the table: a known problem outranks an unknown one.
+
+"Every pod" is every pod of the network that is running a process the stamp
+describes. `forwardingStamps` drops two kinds before comparing: one carrying a
+`DeletionTimestamp`, which must not hold the report open once its replacement
+exists, and one `podTerminal` calls finished, which a failed Server keeps for
+`spec.failedRetentionSeconds` — an hour by default — and which would otherwise
+name its group as work still to do for that whole hour after the rotation was
+completed.
 
 The `True` message names the groups and counts, split by role and **listed
 backends first**, so that the message reads in the order the runbook is to be
@@ -419,13 +449,16 @@ The load-bearing one first.
    two different hashes.
 7. **The reader Role grants exactly `secrets: get` and nothing else**, checked
    against `config/rbac/forwarding-secret-reader.yaml` in both directions the
-   way `required.go` already checks the other two roles — and applied into a
-   foreign namespace in envtest, it allows `get` there while `list`, `watch`,
+   way `required.go` already checks the other two roles — and applied into
+   `readerProbeNamespace` in envtest, it allows `get` there while `list`, `watch`,
    `create`, `update` and `delete` stay denied.
 8. **`TestTheAuthorizerActuallyDenies` is untouched** and still passes: without
    the reader Role applied, `secrets: get` in a foreign namespace is denied.
 9. **Terminating pods are skipped**: a stale pod with a `DeletionTimestamp` does
    not hold `RotationPending` at `True`.
+10. **Terminal pods are skipped too**: a retained failed pod and a crash-looping
+    one, neither carrying a `DeletionTimestamp`, do not hold it at `True`
+    either (§4.2).
 
 ## 8. What 5c leaves open
 

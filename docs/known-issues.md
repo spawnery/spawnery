@@ -2332,7 +2332,7 @@ value is the only one that describes the running process
 (`internal/podspec/labels.go:56-74`). The cost is at the other end: **the stamp
 is the last digest the operator read, not necessarily the bytes the pod
 mounted.** `status.forwardingSecretHash` keeps its previous value on *any*
-failed read (`api/v1alpha1/network_types.go:64`, guarded at
+failed read (`api/v1alpha1/network_types.go:75`, guarded at
 `internal/controller/network_controller.go:125-134`), and both builders stamp
 it whenever it is non-empty (`internal/podspec/server.go:441-443`,
 `internal/podspec/proxy.go:300-302`). The kubelet meanwhile projects whatever
@@ -2375,13 +2375,86 @@ namespace goes.
 
 **No per-group condition.** Which group is still stale is in the Network
 condition's message and nowhere else: `staleSummary`
-(`internal/controller/forwardingsecret.go:190`) renders the counts as
+(`internal/controller/forwardingsecret.go:197`) renders the counts as
 `role/group=count`, server entries before proxy entries, into the
 `ForwardingSecretRotationPending` message, and nothing writes either forwarding
 condition onto a `ServerGroup` or a `ProxyGroup`. That is the information the
 runbook needs and it is in one place; the cost is that `kubectl get servergroup`
 says nothing about a rotation, and a per-group watch or alert has to parse a
 message string rather than read a condition.
+
+**The reader Role does not carry `resourceNames`, and the master design asks
+that it should.** §8 of
+`docs/superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md:776-779`
+says the secrets grant is to be "restricted through `resourceNames` to the
+secrets referenced in networks". The rotation design's §2.2 rejects
+`resourceNames` for a *watch*, correctly — the clause does not restrict `list`
+or `watch` — but the grant that was kept is `get`-only
+(`config/rbac/forwarding-secret-reader.yaml`), and `resourceNames` restricts
+`get`. So the narrowing is available and is not taken. Deliberately: the
+manifest applies with no editing at all today, and `resourceNames` would make
+every administrator hand-edit it per namespace and edit it again whenever a
+Network's secret is renamed; and the operator holds `pods: create` cluster-wide
+(`internal/rbacaudit/required.go:52`), so it can mount any Secret in those
+namespaces into a pod it creates, which makes a name-scoped `get` defence in
+depth rather than a boundary. Milestone 6's Helm chart, where a per-namespace
+value renders the list, is where it becomes cheap. **The audit that guards this
+manifest cannot see the difference**: `rbacaudit.Permission` has no
+`ResourceNames` field (`internal/rbacaudit/permissions.go:35-48`), so both
+directions of the comparison against `rbacaudit.RequiredNetworkNamespace` pass
+whether the rule names objects or not — adding `resourceNames` later will not
+be caught by a failing test, and neither would removing it again.
+
+**"Exactly one event per transition" holds only if the status write lands.**
+Both events are emitted before the status update that records the state they
+announce: the rotation event at
+`internal/controller/network_controller.go:126-131`, the not-found event at
+`:137-142`, and `Status().Update` at `:153`. Between them sits a pod `List`
+that returns on error (`:146-149`), and the update itself can conflict or fail.
+Any of those makes the reconcile retry with the old status still in etcd, and
+the retry finds the same transition and emits the event again. So a rotation
+can be announced twice, or more, under a persistently failing update. The
+property is stated unconditionally in three places — the runbook's §5 step 3
+(`docs/runbook-milestone-5c-secret-rotation.md:184`), the event-reason comments
+(`api/v1alpha1/common_types.go:124-138`) and design §4.4. The structural fix is
+to emit only after a successful update, which means holding the decision across
+the write and reshaping the tail of `Reconcile`; it is deliberately not in this
+milestone. In practice a duplicate `Warning` event on a Network is noise in a
+place an operator is already reading, not a wrong report.
+
+**The mis-stamp window is not confined to failed reads.** The two entries above
+document what a *failed* read does to the stamp; the successful path has a
+narrower version of the same gap, and nothing in the code or the runbook says
+so. Between the Secret changing and the Network controller persisting the new
+digest, a pod created by a group controller mounts the new value and is stamped
+with the old one. That interval is up to one `resyncInterval`
+(`internal/controller/network_controller.go:153`,
+`internal/controller/server_controller.go:75` — five seconds) for the Network
+controller to notice, plus informer lag before the group controllers see the
+new `status.forwardingSecretHash`: both builders copy it out of the Network
+object their reconciler holds from the cache
+(`internal/podspec/server.go:441-443`, `internal/podspec/proxy.go:300-302`).
+The stamp is written at creation and never revised, so that pod reads as stale
+for as long as it lives. The ordinary runbook roll sweeps it up, because it
+happens after the digest is recorded — but a pod created that way *after* its
+own group was already rolled, by a scale-up or a replacement, stays falsely
+stale until something rolls it again. `RotationPending` then keeps naming a
+group whose work is done.
+
+**A pod `List` failure blocks the `Accepted=True` status write.**
+`internal/controller/network_controller.go:146-149` returns the error before
+`Status().Update` at `:153`, so nothing written earlier in the reconcile is
+persisted — including the `Accepted` condition set at `:86-91`, which design
+§4.3 keeps deliberately clear of secret problems because
+`internal/controller/servergroup_controller.go:132` and
+`internal/controller/proxygroup_controller.go:203` derive `networkUsable` from
+it. A secret-detection concern therefore now sits on the path that publishes
+`Accepted`. The List is served from the manager's cache and effectively cannot
+fail, which is why this is recorded rather than fixed. Decoupling it — log the
+error, carry on with an empty stamp set — was considered and rejected: an empty
+set makes `rotationCondition` report `ForwardingSecretInSync` with no pod
+examined (`internal/controller/forwardingsecret.go:186-189`), trading a rare
+blocked status update for a confident wrong report.
 
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 

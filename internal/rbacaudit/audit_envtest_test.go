@@ -181,7 +181,9 @@ func TestTheAuthorizerActuallyDenies(t *testing.T) {
 		attrs authzv1.ResourceAttributes
 	}{
 		{
-			why:   "secrets are granted by the namespaced Role, and only in " + operatorNamespace,
+			why: "secrets are granted by namespaced Roles only — the operator's own in " + operatorNamespace +
+				", and the forwarding-secret reader in whichever namespaces an administrator applied it to, " +
+				"which this one is not",
 			attrs: authzv1.ResourceAttributes{Resource: "secrets", Verb: "get", Namespace: foreignNamespace},
 		},
 		{
