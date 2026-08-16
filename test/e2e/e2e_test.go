@@ -132,6 +132,28 @@ func theOperatorIsUp(t *testing.T) {
 // the bare word. Spawnery has a condition reason called SecretReadForbidden
 // (milestone 5c), and matching "forbidden" alone would turn a correctly
 // reported missing secret into a false accusation about RBAC.
+//
+// A pass here, on its own, is weak evidence. This package's driver
+// (TestSpawneryUnderItsOwnServiceAccount) applies no Network, ServerGroup,
+// Server or ProxyGroup -- that is Task 5's job -- so between the rollout
+// succeeding and this check reading the log there is almost no traffic for
+// any permission to be exercised against, let alone denied. Task 4's own
+// verification of this file mutated the ClusterRole and the namespaced Role
+// four separate ways (task-4-report.md, "Fix round 1"): denying a
+// cache-backed List (pods, then networks) revoked the permission for real
+// but never produced a live, observable call within this check's window --
+// the informer never visibly attempted it, at least not inside the window a
+// kept-alive cluster was inspected for. Denying a direct, uncached call that
+// gates the operator's own readiness (the TLS secret's create, the leader
+// election lease's update) produced a real, quoted `is forbidden:` line
+// every time, but also kept the pod from ever reaching Available, so
+// hack/e2e.sh's rollout wait timed out before this test ever ran. Neither
+// path proves this check can catch a denial while the operator stays up.
+// It becomes meaningful once Tasks 5 through 8 put a Network and its groups
+// through the operator and give every permission in
+// internal/rbacaudit/required.go something to actually be exercised by --
+// and, if a marker is ever wrong, denied by. Do not read a green run here as
+// proof by itself, and do not add a sleep to manufacture traffic instead.
 func theOperatorWasNeverDenied(t *testing.T) {
 	var offenders []string
 	for _, line := range strings.Split(operatorLog(t), "\n") {
