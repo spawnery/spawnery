@@ -125,9 +125,20 @@ So the grant is **namespace-scoped, one namespace at a time**:
   kubectl apply -n <network-namespace> -f config/rbac/forwarding-secret-reader.yaml
   ```
 
-  It is deliberately not part of `config/deploy/`, which is what keeps the
-  denial probe meaningful: a cluster where nobody applied it grants the operator
-  no cross-namespace secret access at all.
+  It is deliberately not part of `config/deploy/`: an administrator opens
+  exactly the namespaces that hold a Network, so a cluster where nobody applied
+  it grants the operator no cross-namespace secret access at all.
+
+  **What keeps the denial probe meaningful is a different thing, and worth not
+  confusing with this one.** `TestTheAuthorizerActuallyDenies` derives its
+  subject by applying `config/deploy/` into `spawnery-system`
+  (`internal/rbacaudit/audit_envtest_test.go:50-70`) and probes `secrets: get`
+  in `foreignNamespace = "minecraft"` (`:43`, `:183-186`). A namespaced Role
+  shipped in `config/deploy/` would land in the operator's own namespace, and
+  that probe would stay denied without noticing. The probe survives because
+  §7's own envtest applies the reader Role into `readerProbeNamespace`, which
+  is deliberately not `foreignNamespace` (`:222-226`) — otherwise the suite
+  would pass or fail by test order.
 - **The operator never creates it.** Granting an operator the right to write
   RBAC makes every other restriction on it advisory; the same test denies
   `clusterroles: create` for that reason.
@@ -366,7 +377,19 @@ Two warnings the document has to carry:
   `RotationPending=Unknown/SecretUnresolved`, and the status hash keeps its last
   value (§2.4). Newly created pods are therefore stamped with a hash they never
   loaded — but they never start either, because the projected volume cannot
-  mount. The label misreports a pending pod, never a running one. §8 records it.
+  mount. For this reason and for `SecretKeyMissing`, the label misreports a
+  pending pod and never a running one. §8 records it.
+- **A rotation performed while the read itself is failing is the case where
+  that last sentence stops holding.** The hash is retained on *any* failed read
+  and the builders stamp it whenever it is non-empty, but under
+  `SecretReadForbidden` and `SecretReadFailed` the Secret may be perfectly
+  present — the kubelet projects what the Secret holds regardless of the
+  operator's own RBAC. So a pod created in that window starts normally, loads
+  the new value, carries the previous digest, and is reported stale once the
+  read recovers although it is current. The recovery stops further pods being
+  mis-stamped; it does not correct the ones already created, which stay wrong
+  until they are rolled. §8 records this alongside the pending-pod case rather
+  than folded into it.
 - **A re-applied identical value** produces the same hash: no event, no
   condition, nothing. Correct.
 - **A lost status field is recomputed harmlessly.** A content hash over a stable
@@ -415,9 +438,13 @@ Recorded in `docs/known-issues.md` when the milestone lands:
   a weakly chosen forwarding secret. Anyone with pod read access in the
   namespace can test guesses offline against the label.
 - **The label says what a pod loaded at start**, not what it would load now.
-  That is the point (§3), but it means the label of a pod that never started —
-  because its secret is missing — describes an intention rather than a fact
-  (§6).
+  That is the point (§3), but more precisely it says the last digest the
+  *operator* read, which is the same thing only while the read succeeds. Under
+  `SecretNotFound` and `SecretKeyMissing` the label of a pod that never started
+  describes an intention rather than a fact; under `SecretReadForbidden` and
+  `SecretReadFailed` a pod that started normally can carry a digest that is not
+  the value it loaded, and is then reported stale while current until it is
+  rolled (§6).
 - **No per-group condition** (§4.5).
 - **Rotation detection is off until an install step is performed per
   namespace.** `config/rbac/forwarding-secret-reader.yaml` has to be applied

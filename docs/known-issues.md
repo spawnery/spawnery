@@ -2329,21 +2329,40 @@ chosen is guessable this way; one generated at random is not.
 is the point — the kubelet refreshes the projected file underneath a running
 pod and neither Velocity nor Paper reads it a second time, so the creation-time
 value is the only one that describes the running process
-(`internal/podspec/labels.go:56-74`). The cost is at the other end: a pod
-created while the Secret is missing is still stamped, because
-`status.forwardingSecretHash` keeps its last successful value on a failed read
-(`api/v1alpha1/network_types.go:64`, and the write is guarded at
-`internal/controller/network_controller.go:125-134`). Such a pod never starts —
-its projected volume cannot mount — so its label describes an intention rather
-than a fact. The stamp misreports a pending pod, never a running one.
+(`internal/podspec/labels.go:56-74`). The cost is at the other end: **the stamp
+is the last digest the operator read, not necessarily the bytes the pod
+mounted.** `status.forwardingSecretHash` keeps its previous value on *any*
+failed read (`api/v1alpha1/network_types.go:64`, guarded at
+`internal/controller/network_controller.go:125-134`), and both builders stamp
+it whenever it is non-empty (`internal/podspec/server.go:441-443`,
+`internal/podspec/proxy.go:300-302`). The kubelet meanwhile projects whatever
+the Secret currently holds, which is independent of whether the operator may
+read it. The five resolved reasons therefore split two ways:
+
+- Under `SecretNotFound` and `SecretKeyMissing` there is nothing to project, so
+  a pod created in that state never starts — it sits in `ContainerCreating`,
+  and its label describes an intention rather than a fact. Here the stamp
+  misreports a pod that is not running.
+- Under `SecretReadForbidden` and `SecretReadFailed` the Secret may be
+  perfectly present, so such a pod **starts normally**. If the value is rotated
+  inside that window — the reader Role removed, or a transient API failure —
+  the pod loads the new bytes and carries the old digest, and once the read
+  recovers the operator reports it stale while it is in fact current. The read
+  recovering stops *further* pods being mis-stamped; it does not correct the
+  ones already created, whose labels stay wrong until they are rolled. So "the
+  stamp misreports only a pending pod" is not true of these two reasons, and a
+  rotation performed while the operator cannot read the secret produces a
+  network the condition describes incorrectly for as long as those pods live.
 
 **Rotation detection is off until an install step is performed per namespace.**
 The operator's ClusterRole grants no access to Secrets outside its own
 namespace, by design: `config/rbac/forwarding-secret-reader.yaml` has to be
 applied into each namespace holding a Network, and it is deliberately not part
-of `config/deploy/` — which is what keeps
-`TestTheAuthorizerActuallyDenies` (`internal/rbacaudit/audit_envtest_test.go`)
-meaningful. Until it is applied, the `GET` is denied, the Network reports
+of `config/deploy/`, for the reasons the manifest itself gives
+(`config/rbac/forwarding-secret-reader.yaml:5-14`) — an administrator opens
+exactly the namespaces that hold a Network, and the operator never creates
+these itself, because one that may write RBAC makes every other restriction on
+it advisory. Until it is applied, the `GET` is denied, the Network reports
 `ForwardingSecretResolved=Unknown/SecretReadForbidden` with a message naming
 the manifest and the `kubectl apply` line
 (`internal/controller/forwardingsecret.go:71-78`), and

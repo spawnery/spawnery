@@ -174,6 +174,13 @@ kubectl get network <net> -n <ns> -o jsonpath='{range .status.conditions[?(@.typ
 Expected: `True SecretResolved ...` and `True RotationPending ...`, the second
 naming each stale group as `role/group=count` with the server groups first.
 
+`True RotationPending` needs at least one *stamped* pod to compare. On a
+network whose pods all predate this operator version, the second command reads
+`Unknown PodsPredateTracking` instead while the rotation is genuinely pending —
+that is not a sign the rotation did not land, and the first command plus the
+digest above are what confirm it did. Roll everything anyway; the empty column
+of the §4 command is what tells you which pods are still to go.
+
 The event, emitted once on the transition rather than once per resync:
 
 ```
@@ -223,7 +230,7 @@ it:
 
 ```
 kubectl get pods -n <ns> \
-  -l spawnery.cloud/network=<net>,spawnery.cloud/group=<group>,spawnery.cloud/forwarding-hash=<old-hash> \
+  -l spawnery.cloud/network=<net>,spawnery.cloud/role=server,spawnery.cloud/group=<group>,spawnery.cloud/forwarding-hash=<old-hash> \
   -o name
 ```
 
@@ -231,11 +238,20 @@ And positively, that the replacements are up and carry the new one:
 
 ```
 kubectl get pods -n <ns> \
-  -l spawnery.cloud/network=<net>,spawnery.cloud/group=<group> \
+  -l spawnery.cloud/network=<net>,spawnery.cloud/role=server,spawnery.cloud/group=<group> \
   -L spawnery.cloud/forwarding-hash
 ```
 
-Repeat steps 4 and 5 until no server group has a pod on `<old-hash>`.
+**Both selectors pin `role=server`, and that is not redundant.** A `ServerGroup`
+and a `ProxyGroup` are different Kinds, so Kubernetes lets them share a name in
+one namespace — a collision this repository designs around by name rather than
+forbids (`podspec.GroupConfigMapName` and `podspec.GroupPDBName`,
+`internal/podspec/labels.go:117-162`). Without the role term, a same-named
+proxy group's pods answer this query too, and the step 4/5 loop never comes
+back empty until the proxies are rolled — which this runbook says to do last.
+
+Repeat steps 4 and 5 until no server group has a pod on `<old-hash>`, and until
+no server pod carries an empty forwarding-hash column.
 
 ### Step 6 — roll the proxy groups
 
@@ -267,8 +283,26 @@ kubectl get network <net> -n <ns> -o jsonpath='{range .status.conditions[?(@.typ
 Expected: `False ForwardingSecretInSync every pod of this network runs on the
 current forwarding secret`.
 
-If it reads `Unknown PodsPredateTracking` instead, some pod of the network
-carries no stamp at all — see §8.
+**If it reads `Unknown PodsPredateTracking` instead, the rotation is not
+finished — do not stop here.** Outside a rotation that reading is benign and
+clears on its own (§8). During one it means the opposite: a pod carrying no
+stamp is a pod that was never rolled, it predates this operator's tracking, and
+it is quite possibly still running the previous secret. Step 5 cannot see it
+either — that check selects on `forwarding-hash=<old-hash>`, and a pod with no
+such label matches no value of it.
+
+Find them by the empty column, and roll them the same way, server pods before
+proxy pods:
+
+```
+kubectl get pods -n <ns> -l spawnery.cloud/network=<net> \
+  -L spawnery.cloud/role -L spawnery.cloud/group -L spawnery.cloud/forwarding-hash
+```
+
+With a digest recorded — which step 3 confirmed — every pod the operator
+creates is stamped (`internal/podspec/server.go:441-443`,
+`internal/podspec/proxy.go:300-302`), so the condition reaches `False
+ForwardingSecretInSync` once the last unstamped pod has been replaced.
 
 ---
 
@@ -337,7 +371,7 @@ unstamped one.
 |---|---|---|---|
 | `True` | `RotationPending` | at least one pod runs on a digest other than the current one; the message names each as `role/group=count` | run this runbook: server groups first (§5 step 4), then proxy groups (§5 step 6) |
 | `False` | `ForwardingSecretInSync` | every pod carries the current digest and none is unstamped. A network with no pods at all reads this too, vacuously | nothing |
-| `Unknown` | `PodsPredateTracking` | no pod is stale, but at least one carries no stamp — see below | nothing; it clears on its own |
+| `Unknown` | `PodsPredateTracking` | no pod is stale, but at least one carries no stamp — see below | **outside a rotation:** nothing, it clears as pods turn over. **During one (§5 step 7):** the unstamped pods have not been rolled — find them by the empty column of the §4 command and roll them |
 | `Unknown` | `SecretUnresolved` | the secret could not be read, so no comparison is possible; the message carries the `ForwardingSecretResolved` message inside it | fix the read first — the table below |
 
 **`PodsPredateTracking` needs its own paragraph, because it looks like a
@@ -359,8 +393,8 @@ Positive polarity: `True` is healthy.
 | `True` | `SecretResolved` | the Secret exists and its `secret` key holds a non-empty value | nothing |
 | `False` | `SecretNotFound` | the `GET` returned NotFound: `spec.forwardingSecretRef` names a Secret that does not exist in this namespace | fix the name, or create the Secret. Pods of this network hang in `ContainerCreating` until it exists, because the projected volume cannot mount |
 | `False` | `SecretKeyMissing` | the Secret exists but has no `secret` key, or an empty one | put the forwarding secret under the key `secret` |
-| `Unknown` | `SecretReadForbidden` | the `GET` was denied: the reader Role of §3 was never applied to this namespace | `kubectl apply -n <ns> -f config/rbac/forwarding-secret-reader.yaml` |
-| `Unknown` | `SecretReadFailed` | any other error — the API server was unreachable, for instance. Nobody's typo and nothing to edit | look at the message and at the operator's logs; it clears when the read succeeds |
+| `Unknown` | `SecretReadForbidden` | the `GET` was denied: the reader Role of §3 was never applied to this namespace. The Secret itself is unaffected, so pods still start — see the note below before rotating in this state | `kubectl apply -n <ns> -f config/rbac/forwarding-secret-reader.yaml` |
+| `Unknown` | `SecretReadFailed` | any other error — the API server was unreachable, for instance. Nobody's typo and nothing to edit. Same caveat as the row above | look at the message and at the operator's logs; it clears when the read succeeds |
 
 `SecretNotFound` is also the one reported as an event,
 `ForwardingSecretNotFound`, on entry into that state:
@@ -372,9 +406,26 @@ kubectl get events -n <ns> \
 
 ### One thing the stamp does not say
 
-A pod created while the Secret is missing is stamped from
-`status.forwardingSecretHash`, which keeps its last successful value
-(`api/v1alpha1/network_types.go:64`). Such a pod never starts — its projected
-volume cannot mount — so its label describes an intention rather than a fact.
-The stamp misreports a pending pod, never a running one. Recorded in
-`docs/known-issues.md`.
+**The stamp is the last digest the operator read, not necessarily the bytes the
+pod mounted.** On any failed read the recorded digest keeps its previous value
+(`internal/controller/network_controller.go:125-134`) and the pod builders
+stamp it whenever it is non-empty (`internal/podspec/server.go:441-443`,
+`internal/podspec/proxy.go:300-302`). The kubelet, meanwhile, projects whatever
+the Secret holds, which has nothing to do with whether the *operator* may read
+it. So a pod created while a read is failing carries a claim the operator could
+not check, and the two failure families differ:
+
+- **`SecretNotFound` and `SecretKeyMissing`.** There is nothing to project, so
+  such a pod never starts — it sits in `ContainerCreating`. Its label describes
+  an intention rather than a fact, and the stamp misreports a pod that is not
+  running.
+- **`SecretReadForbidden` and `SecretReadFailed`.** The Secret itself may be
+  perfectly present, so such a pod **starts normally**. If the secret was
+  rotated inside that window — the reader Role removed, or the API server
+  briefly unreachable — the pod loads the new value and is stamped with the old
+  digest. When the read recovers, the operator reports that pod stale although
+  it is current, and `RotationPending` stays `True` until it is rolled.
+
+Rolling the pod resolves it either way, because a pod created against a
+readable secret is stamped with the digest of the bytes it is about to mount.
+Recorded in `docs/known-issues.md`.
