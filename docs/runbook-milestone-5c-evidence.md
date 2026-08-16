@@ -1,5 +1,57 @@
 # Runbook: detecting a forwarding secret rotation, on a real cluster
 
+**DRIVEN 2026-08-16.** Both acceptance tests passed. Results are recorded
+against each section's expectation below; the summary is here.
+
+| § | Expected | Observed |
+|---|---|---|
+| 3 | the CRD carries `pattern` | `"pattern":"^([a-f0-9]{16})?$"` |
+| 4 | the reader Role applies with `-n` supplying the namespace | Role and RoleBinding created in `minecraft`; neither names a namespace in the file |
+| 5 | one `Ready` server, two pods, one `Bound` claim | `survival-0` Ready and registered, `gateway-gyfd` Running, `survival-0-data` Bound |
+| 6 | recomputed = published = both labels | all three `d4c4ffe9483d0af4` |
+| 6 | `True/SecretResolved`, `False/ForwardingSecretInSync` | both, as written |
+| 7 | the join lands on `survival-0` | it did; players 1 on group, proxy and network |
+| 8 | one `Warning` event, `True/RotationPending`, server named before proxy | `COUNT 1`; `server/survival=1, proxy/gateway=1` |
+| 8 | `COUNT` still 1 after ~20 more reconciles | still 1, `firstTimestamp == lastTimestamp` |
+| 9 | stamps diverge; message names only the proxy | server `114dbffced4d9d27`, proxy `d4c4ffe9483d0af4`; `proxy/gateway=1` |
+| 9 | **the join fails with "Unable to verify player details"** | **it did — verbatim from both layers, below** |
+| 10 | both stamps new, `False/ForwardingSecretInSync` | both `114dbffced4d9d27`; "every pod of this network runs on the current forwarding secret" |
+| 10 | **the join succeeds** | **it did, on `survival-0`** |
+| 11 | `spec.podHash` unchanged | `0dd5900930601f18` before and after |
+| 11 | pod UID changed exactly once | `23e30d8f…` → `f4b115da…` |
+| 12 | `False/SecretNotFound`, one event, `Accepted` still `True` | all three; the network kept serving its connected player throughout |
+| 12 | restoring the secret reports no second rotation | `True/SecretResolved`, `False/ForwardingSecretInSync`, rotation events still 1 |
+
+**§9's verbatim record**, which is the run's most valuable observation. The
+backend rejects and the proxy relays the rejection — the direction matters,
+because it is the proxy that signed with the stale secret:
+
+```
+survival-0 (Paper):
+  [20:43:52 INFO]: Disconnecting paul_wtf (/10.244.0.5:36428): Unable to verify player details
+  [20:43:52 INFO]: paul_wtf (/10.244.0.5:36428) lost connection: Unable to verify player details
+
+gateway-gyfd (Velocity):
+  [20:43:52 ERROR]: [connected player] paul_wtf (/10.244.0.1:55188): disconnected while
+    connecting to survival-0: Unable to verify player details
+  [20:43:52 INFO]: [connected player] paul_wtf (/10.244.0.1:55188) has disconnected:
+    Unable to connect to survival-0: Unable to verify player details
+```
+
+**One correction this run made to itself:** §11 as first written expected
+`PodCreated` events "only at §5, §9 and §10". `PodCreated` is the Server
+controller's event and covers server pods only — the ProxyGroup controller emits
+none, so §10's proxy recreation appears as kubelet `Scheduled`/`Created`/`Started`
+events instead. §11 below says so now.
+
+**One thing the run confirmed that it was not looking for:** the §9 roll
+produced a `PodLost` event, not a `Failed` one. That is what the standing
+runbook relies on when it says a rotation roll cannot trip the group's failure
+backoff and strand the network half-rotated — derived from the code during the
+branch review, and visible in the event log here.
+
+---
+
 This is the evidence run for milestone 5c. Unlike the runs for 5a and 5b, it
 does not describe the operations it performs: **it drives
 `docs/runbook-milestone-5c-secret-rotation.md`**, the standing procedure the
@@ -465,10 +517,29 @@ operator knew about the rotation and had not been told to do anything:
 ```bash
 nix develop -c kubectl get events -n minecraft \
   --field-selector reason=PodCreated \
-  -o custom-columns=COUNT:.count,MESSAGE:.message,TIME:.lastTimestamp
+  -o custom-columns=COUNT:.count,MESSAGE:.message,FIRST:.firstTimestamp
 ```
 
-**Expect creations only at §5, §9 and §10** — none in between.
+**Expect exactly two `created pod survival-0` events: one at §5 and one at §9,
+with nothing between the rotation's timestamp and §9's `kubectl delete`.**
+
+`PodCreated` is the Server controller's own event, so it covers server pods and
+not proxy pods — the ProxyGroup controller emits none, and §10's proxy
+recreation shows up as the kubelet's `Scheduled`/`Created`/`Started` instead.
+That is fine for what this check is for: the ordinal is the thing whose
+unrequested recreation would mean the digest had reached the pod hash. Read the
+full event list if you want the proxy's side of it:
+
+```bash
+nix develop -c kubectl get events -n minecraft \
+  -o custom-columns=REASON:.reason,COUNT:.count,OBJ:.involvedObject.name \
+  --sort-by=.metadata.creationTimestamp
+```
+
+Worth noticing there: §9's roll produces `PodLost`, not `Failed`. That is what
+the standing runbook depends on when it says a rotation roll cannot trip the
+group's failure backoff — a `kubectl delete` drives `PodLost → Terminating`, and
+`CountFailures` counts only `phase.Failed`.
 
 ## 12. The diagnostic gap 5c closes
 
