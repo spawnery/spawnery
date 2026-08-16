@@ -3557,6 +3557,66 @@ func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 	}
 }
 
+// TestAPersistentServerIsCreatedCarryingItsRenderHash pins the stamp half of
+// this task: a persistent server is created carrying the hash of what the
+// operator would render for it, so a later pass can tell whether the spec has
+// moved.
+func TestAPersistentServerIsCreatedCarryingItsRenderHash(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	group := f.createPersistentGroup(t, "survival", 1)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	srv := f.server("survival-0")
+	if srv.Spec.PodHash == "" {
+		t.Fatal("server was created with no pod hash, so it can never be found stale")
+	}
+
+	values, err := serverConfigValues(group)
+	if err != nil {
+		t.Fatalf("serverConfigValues: %v", err)
+	}
+	want, err := podspec.DesiredServerHash(f.network, group, values)
+	if err != nil {
+		t.Fatalf("DesiredServerHash: %v", err)
+	}
+	if srv.Spec.PodHash != want {
+		t.Fatalf("stamped %q, the group would render %q", srv.Spec.PodHash, want)
+	}
+}
+
+// TestAServerWithNoHashIsAdoptedRatherThanReplaced is the upgrade case, and it
+// must assert both halves. Asserting only that the field gets filled would
+// pass while every world restarted.
+func TestAServerWithNoHashIsAdoptedRatherThanReplaced(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 1)
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	// Blanked to simulate a server that predates spec.podHash.
+	srv := f.server("survival-0")
+	uidBefore := srv.UID
+	srv.Spec.PodHash = ""
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("blank the hash: %v", err)
+	}
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	after := f.server("survival-0")
+	if after.UID != uidBefore {
+		t.Fatal("the ordinal was replaced; an empty hash must be adopted, not treated as stale")
+	}
+	if after.Spec.PodHash == "" {
+		t.Fatal("the hash was not stamped, so the server stays unadoptable forever")
+	}
+	if !after.DeletionTimestamp.IsZero() {
+		t.Fatal("a takedown was ordered for an adopted server")
+	}
+}
+
 // TestAPersistentServerOnACordonedNodeIsCondemned pins acceptance criterion 5.
 // Nothing in the production code is specific to persistent groups here -- that
 // is the claim, and this is what holds it.

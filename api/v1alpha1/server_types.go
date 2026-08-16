@@ -35,6 +35,19 @@ type ServerSpec struct {
 	// +optional
 	GroupGeneration int64 `json:"groupGeneration,omitempty"`
 
+	// PodHash is podspec.DesiredServerHash at the moment this server was
+	// created: a digest of everything the operator would render for it. The
+	// group compares it against a freshly computed one to decide whether this
+	// ordinal is running the current spec.
+	//
+	// Empty means adopt, never stale. Every server that existed before this
+	// field did carries an empty value, and reading that as stale would restart
+	// every world in the installation on the first reconcile after an upgrade.
+	// The group stamps the current hash onto such a server and orders no
+	// takedown.
+	// +optional
+	PodHash string `json:"podHash,omitempty"`
+
 	// Retire asks this server to stop taking joins and empty out, without its
 	// players being moved. The ServerGroup controller sets it during a
 	// rolling update; a user never does. It is also the single signal for

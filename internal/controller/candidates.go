@@ -59,6 +59,15 @@ type ServerView struct {
 	SessionsGone bool
 	// Generation is the group generation this server was created from.
 	Generation int64
+	// PodHash is spec.podHash: the render digest this server was created under.
+	// Empty means the server predates the field and is to be adopted rather
+	// than replaced.
+	//
+	// Deliberately not called Stale, and deliberately not a bool. Stale is
+	// already taken on this type and means the player count cannot be trusted;
+	// spec staleness is a comparison the sizing rule makes, not a second flag
+	// somebody could confuse with the first.
+	PodHash string
 	// Retire is spec.retire: the group has asked this server to retire. It
 	// is the single signal for the update's maxUnavailable budget, and it
 	// survives the escalation to Draining that maxStaleSeconds can force —

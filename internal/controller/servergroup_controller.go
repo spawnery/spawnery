@@ -302,7 +302,46 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// what known-issues already describes: a departing node takes a server
 	// regardless of what kind of server it is.
 	mayResize := networkUsable
-	decision, err := r.size(ctx, group, views, servers, backoff, mayResize)
+
+	// Gated the same as sizing, on mayResize rather than a check of its own:
+	// BuildServerPod reads net.Spec.Defaults, and when the Network was never
+	// found net is the zero value, so a hash computed from it would not
+	// describe what the group renders once a real Network is usable. The
+	// found-but-not-accepted case does not strictly need this -- that net
+	// already carries the real spec -- but splitting it out would need its own
+	// branch on networkFound for a case sizing itself does not distinguish
+	// either, and reusing mayResize costs nothing: it self-heals the same way
+	// sizing does, on the next pass.
+	//
+	// Computed once per pass rather than once per server either way: a create
+	// loop that asked BuildServerPod once per server would render the same pod
+	// repeatedly for one identical answer. serverConfigValues is the one
+	// construction of the config document (see its own comment);
+	// DesiredServerHash is the digest of it plus the pod.
+	var podHash string
+	if mayResize {
+		configValues, err := serverConfigValues(group)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		podHash, err = podspec.DesiredServerHash(network, group, configValues)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+
+		// Adoption runs before sizing, on a persistent group only: a server
+		// whose spec.podHash is still empty predates the field (ServerSpec.
+		// PodHash's doc comment is what says an empty value means adopt rather
+		// than stale), and this is the pass that gives it the current hash so
+		// a later comparison has one to compare against. It orders no takedown
+		// of its own -- nothing reads podHash to decide a removal yet, which
+		// is Task 4's rule -- so the stamp is the whole effect here.
+		if err := r.adoptServers(ctx, group, servers, podHash); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
+	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -563,6 +602,7 @@ func (r *ServerGroupReconciler) size(
 	servers map[string]*spawneryv1alpha1.Server,
 	backoff BackoffDecision,
 	mayResize bool,
+	podHash string,
 ) (SizeDecision, error) {
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
@@ -648,14 +688,14 @@ func (r *ServerGroupReconciler) size(
 	// other's field -- and neither loop needs to know that.
 	if backoff.MayCreate {
 		for i := int32(0); i < decision.Create; i++ {
-			name, err := r.createServer(ctx, group)
+			name, err := r.createServer(ctx, group, podHash)
 			if err != nil {
 				return decision, err
 			}
 			r.Expectations.expectCreated(key, name)
 		}
 		for _, ordinal := range decision.CreateOrdinals {
-			name, err := r.createPersistentServer(ctx, group, ordinal)
+			name, err := r.createPersistentServer(ctx, group, ordinal, podHash)
 			if err != nil {
 				return decision, err
 			}
@@ -770,6 +810,7 @@ func (r *ServerGroupReconciler) collectViews(
 			// exactly like one that reached a terminal state.
 			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),
 			Generation:   srv.Spec.GroupGeneration,
+			PodHash:      srv.Spec.PodHash,
 			Retire:       srv.Spec.Retire,
 			CreatedAt:    srv.CreationTimestamp.Time,
 			// podFound is required, and it is what makes pod safe to
@@ -840,6 +881,7 @@ func (r *ServerGroupReconciler) podFor(ctx context.Context, srv *spawneryv1alpha
 func (r *ServerGroupReconciler) newServer(
 	group *spawneryv1alpha1.ServerGroup,
 	name string,
+	podHash string,
 ) (*spawneryv1alpha1.Server, error) {
 	srv := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{
@@ -854,6 +896,7 @@ func (r *ServerGroupReconciler) newServer(
 		Spec: spawneryv1alpha1.ServerSpec{
 			GroupRef:        spawneryv1alpha1.ObjectRef{Name: group.Name},
 			GroupGeneration: group.Generation,
+			PodHash:         podHash,
 		},
 	}
 	if err := controllerutil.SetControllerReference(group, srv, r.Scheme); err != nil {
@@ -864,8 +907,12 @@ func (r *ServerGroupReconciler) newServer(
 
 // createServer creates one interchangeable server of an ephemeral group, under
 // a name with a random suffix because it has no identity to preserve.
-func (r *ServerGroupReconciler) createServer(ctx context.Context, group *spawneryv1alpha1.ServerGroup) (string, error) {
-	srv, err := r.newServer(group, NewServerName(group.Name))
+func (r *ServerGroupReconciler) createServer(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	podHash string,
+) (string, error) {
+	srv, err := r.newServer(group, NewServerName(group.Name), podHash)
 	if err != nil {
 		return "", err
 	}
@@ -883,8 +930,9 @@ func (r *ServerGroupReconciler) createPersistentServer(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	ordinal int32,
+	podHash string,
 ) (string, error) {
-	srv, err := r.newServer(group, PersistentServerName(group.Name, ordinal))
+	srv, err := r.newServer(group, PersistentServerName(group.Name, ordinal), podHash)
 	if err != nil {
 		return "", err
 	}
@@ -961,6 +1009,36 @@ func (r *ServerGroupReconciler) retireServer(
 	}
 	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerRetiring",
 		"retiring server %s for a rolling update", name)
+	return nil
+}
+
+// adoptServers stamps the freshly computed render hash onto every server of a
+// persistent group whose spec.podHash is still empty: one created before this
+// field existed. Adoption applies to persistent groups only; an ephemeral
+// group's servers are skipped outright.
+func (r *ServerGroupReconciler) adoptServers(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	servers map[string]*spawneryv1alpha1.Server,
+	podHash string,
+) error {
+	if group.IsEphemeral() {
+		return nil
+	}
+	for _, srv := range servers {
+		// Already adopted. Guards the same cache-lag window retireServer's own
+		// guard does, above: without it, a server this pass (or an earlier one)
+		// already patched, but not yet visible through the cache this List
+		// read, would be patched again.
+		if srv.Spec.PodHash != "" {
+			continue
+		}
+		patch := client.MergeFrom(srv.DeepCopy())
+		srv.Spec.PodHash = podHash
+		if err := r.Patch(ctx, srv, patch); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
