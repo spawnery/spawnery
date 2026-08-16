@@ -2111,7 +2111,11 @@ func TestTheRolloutFinishesWithEveryProxyOnTheNewShape(t *testing.T) {
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
 		t.Fatalf("get Network: %v", err)
 	}
-	want, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint)
+	configValues, err := yaml.Marshal(proxyConfigValues(f.proxyGroup("gateway")))
+	if err != nil {
+		t.Fatalf("marshal config values: %v", err)
+	}
+	want, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint, configValues)
 	if err != nil {
 		t.Fatalf("desired hash: %v", err)
 	}
@@ -2193,7 +2197,11 @@ func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
 		t.Fatalf("get Network: %v", err)
 	}
-	current, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint)
+	configValues, err := yaml.Marshal(proxyConfigValues(f.proxyGroup("gateway")))
+	if err != nil {
+		t.Fatalf("marshal config values: %v", err)
+	}
+	current, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint, configValues)
 	if err != nil {
 		t.Fatalf("desired hash: %v", err)
 	}
@@ -2491,7 +2499,11 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
 		t.Fatalf("get Network: %v", err)
 	}
-	current, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint)
+	configValues, err := yaml.Marshal(proxyConfigValues(f.proxyGroup("gateway")))
+	if err != nil {
+		t.Fatalf("marshal config values: %v", err)
+	}
+	current, err := podspec.DesiredProxyHash(network, f.proxyGroup("gateway"), r.AgentEndpoint, configValues)
 	if err != nil {
 		t.Fatalf("desired hash: %v", err)
 	}

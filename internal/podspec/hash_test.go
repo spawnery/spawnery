@@ -21,20 +21,22 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/yaml"
 
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/render"
 )
 
 func TestPodHashIsStableAcrossBuilds(t *testing.T) {
 	net, group := testNetwork(), testProxyGroup()
-	a, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
+	a, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	b, err := BuildProxyPod(net, group, "gateway-bbbb", testEndpoint)
+	b, err := BuildProxyPod(net, group, "gateway-bbbb", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -46,12 +48,12 @@ func TestPodHashIsStableAcrossBuilds(t *testing.T) {
 
 func TestPodHashMovesWithTheImage(t *testing.T) {
 	net, group := testNetwork(), testProxyGroup()
-	before, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
+	before, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	group.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
-	after, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
+	after, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -63,12 +65,12 @@ func TestPodHashMovesWithTheImage(t *testing.T) {
 func TestPodHashIgnoresReplicas(t *testing.T) {
 	net, group := testNetwork(), testProxyGroup()
 	group.Spec.Replicas = 2
-	before, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
+	before, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	group.Spec.Replicas = 5
-	after, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
+	after, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -84,17 +86,85 @@ func TestPodHashIgnoresReplicas(t *testing.T) {
 // stale against itself.
 func TestPodHashMatchesWhatTheOperatorStamped(t *testing.T) {
 	net, group := testNetwork(), testProxyGroup()
-	pod, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint)
+	pod, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	want, err := DesiredProxyHash(net, group, testEndpoint)
+	want, err := DesiredProxyHash(net, group, testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("hash: %v", err)
 	}
 	if want != pod.Labels[LabelPodHash] {
 		t.Errorf("DesiredProxyHash = %q, want the stamped %q", want, pod.Labels[LabelPodHash])
 	}
+}
+
+// motd reaches only the ConfigMap, never the rendered pod, so a pod-only digest
+// left it invisible: the ConfigMap updated, no proxy went stale, DecideRollout
+// ordered nothing, and there is no reload path. Shipped since 4c-2.
+//
+// playerLimit is here beside it precisely because it is *not* broken -- it
+// rides in the pod as SPAWNERY_PLAYER_LIMIT -- so that a later refactor moving
+// that env var out of the pod cannot break it in silence.
+func TestDesiredProxyHashSeesTheConfigValues(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*spawneryv1alpha1.ProxyGroup)
+	}{
+		{
+			name: "motd",
+			mutate: func(g *spawneryv1alpha1.ProxyGroup) {
+				g.Spec.Config.Motd = "a different motd"
+			},
+		},
+		{
+			name: "playerLimit",
+			mutate: func(g *spawneryv1alpha1.ProxyGroup) {
+				g.Spec.Config.PlayerLimit = 999
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			net, group := proxyHashFixtures(t)
+			group.Spec.Config = &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 20, Motd: "before"}
+
+			before, err := DesiredProxyHash(net, group, testEndpoint, proxyValuesBytes(t, group))
+			if err != nil {
+				t.Fatalf("baseline: %v", err)
+			}
+
+			tc.mutate(group)
+			after, err := DesiredProxyHash(net, group, testEndpoint, proxyValuesBytes(t, group))
+			if err != nil {
+				t.Fatalf("mutated: %v", err)
+			}
+
+			if before == after {
+				t.Fatalf("changing %s left the hash at %q, so no proxy would ever go stale for it", tc.name, before)
+			}
+		})
+	}
+}
+
+func proxyHashFixtures(t *testing.T) (*spawneryv1alpha1.Network, *spawneryv1alpha1.ProxyGroup) {
+	t.Helper()
+	return testNetwork(), testProxyGroup()
+}
+
+func proxyValuesBytes(t *testing.T, group *spawneryv1alpha1.ProxyGroup) []byte {
+	t.Helper()
+	// The production path marshals controller.proxyConfigValues(group); this
+	// mirrors only the two fields under test, which is enough to prove the
+	// bytes reach the digest.
+	limit := group.Spec.Config.PlayerLimit
+	motd := group.Spec.Config.Motd
+	data, err := yaml.Marshal(render.Values{PlayerLimit: &limit, Motd: &motd})
+	if err != nil {
+		t.Fatalf("marshal values: %v", err)
+	}
+	return data
 }
 
 func serverHashFixtures(t *testing.T) (*spawneryv1alpha1.Network, *spawneryv1alpha1.ServerGroup) {

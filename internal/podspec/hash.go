@@ -43,10 +43,22 @@ import (
 //
 // encoding/json sorts map keys, so labels, annotations and node selectors
 // serialise in a fixed order and the digest does not flap between passes.
+//
+// The config values are part of the digest because the rendered pod is not
+// everything this operator writes for a proxy. playerLimit rides in the pod as
+// SPAWNERY_PLAYER_LIMIT, but motd reaches only the ConfigMap -- so until this
+// milestone a changed motd made no proxy stale, ordered no rollout, and never
+// reached a running proxy at all. Widening the digest changes its value for
+// every existing proxy, so the first reconcile after this ships rolls every
+// proxy group once, through the ordinary surge-1 path. They arrive as
+// marshalled bytes rather than being rendered here for the same reason
+// DesiredServerHash's do: podspec stays free of internal/render (see
+// configSecretFile's comment).
 func DesiredProxyHash(
 	net *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ProxyGroup,
 	agentEndpoint string,
+	configValues []byte,
 ) (string, error) {
 	subject, err := renderProxyPod(net, group, "", agentEndpoint)
 	if err != nil {
@@ -58,7 +70,10 @@ func DesiredProxyHash(
 	// label back into itself.
 	delete(subject.Labels, LabelPodHash)
 
-	encoded, err := json.Marshal(subject)
+	encoded, err := json.Marshal(struct {
+		Pod    *corev1.Pod `json:"pod"`
+		Config []byte      `json:"config"`
+	}{Pod: subject, Config: configValues})
 	if err != nil {
 		return "", err
 	}
@@ -76,24 +91,23 @@ func DesiredProxyHash(
 //
 // It is the sibling of DesiredProxyHash and follows it deliberately -- same
 // encoding/json marshal so map keys sort and the digest does not flap, same
-// eight-byte digest. Read that function's comment for the argument; it
-// applies here unchanged.
+// eight-byte digest, same configValues []byte argument arriving unrendered
+// because podspec stays free of internal/render (see configSecretFile's
+// comment). Read that function's comment for the argument; it applies here
+// unchanged.
 //
-// Two divergences from the sibling, both deliberate:
+// The config values are part of the digest because a pod-only hash would miss
+// maxPlayers entirely: it never reaches the PodSpec, only the ConfigMap the
+// pod mounts by name, so changing it would update the ConfigMap while every
+// running server kept the old value and nothing reported the gap.
 //
-// The config values arrive as bytes rather than being rendered here, because
-// podspec stays free of internal/render (see configSecretFile's comment). They
-// are part of the digest because a pod-only hash would miss maxPlayers
-// entirely: it never reaches the PodSpec, only the ConfigMap the pod mounts by
-// name, so changing it would update the ConfigMap while every running server
-// kept the old value and nothing reported the gap.
-//
-// The agent endpoint is not an input. It comes from an operator flag rather
-// than from any spec, and including it would mean that restarting the operator
-// with a different --operator-namespace restarts every world in the
-// installation. DesiredProxyHash does take it, which is a real asymmetry
-// between the two: a proxy rolled for that reason loses no world, so the
-// argument that forces the exclusion here does not reach it.
+// One divergence from the sibling, deliberate: the agent endpoint is not an
+// input. It comes from an operator flag rather than from any spec, and
+// including it would mean that restarting the operator with a different
+// --operator-namespace restarts every world in the installation.
+// DesiredProxyHash does take it, which is a real asymmetry between the two: a
+// proxy rolled for that reason loses no world, so the argument that forces
+// the exclusion here does not reach it.
 func DesiredServerHash(
 	net *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ServerGroup,

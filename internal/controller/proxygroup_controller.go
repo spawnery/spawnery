@@ -625,11 +625,16 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
 ) error {
-	wantHash, err := podspec.DesiredProxyHash(network, group, r.AgentEndpoint)
+	// These two calls are the only places in this function where a single
+	// failure stops the pass outright: without configValues there is nothing
+	// to hash, and without the digest no pod's staleness can be judged, so
+	// continuing past either would either roll nothing or roll everything.
+	configValues, err := yaml.Marshal(proxyConfigValues(group))
 	if err != nil {
-		// The one place in this function where a single failure stops the
-		// pass: without the current digest no pod's staleness can be judged,
-		// so continuing would either roll nothing or roll everything.
+		return err
+	}
+	wantHash, err := podspec.DesiredProxyHash(network, group, r.AgentEndpoint, configValues)
+	if err != nil {
 		return err
 	}
 
@@ -713,7 +718,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// call once the cache shows it, or on the TTL if that call is somehow
 	// never reached.
 	for i := int32(0); i < create; i++ {
-		pod, err := podspec.BuildProxyPod(network, group, NewProxyName(group.Name), r.AgentEndpoint)
+		pod, err := podspec.BuildProxyPod(network, group, NewProxyName(group.Name), r.AgentEndpoint, configValues)
 		if err != nil {
 			return err
 		}
