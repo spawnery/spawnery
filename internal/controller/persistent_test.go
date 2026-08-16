@@ -239,6 +239,38 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			wantDelete: nil,
 		},
 		{
+			// This is the case above's stronger sibling. There the draining
+			// ordinal (3) was also the top surplus, so a rule that merely
+			// declines to re-nominate an already-leaving ordinal -- what the
+			// old surplus loop did before Gate A existed -- would pass it too.
+			// Here ordinal 1 is draining and ordinal 2 is the top surplus, Ready
+			// and otherwise perfectly nominable: only Gate A, which looks at
+			// the whole group rather than the one candidate, holds it back.
+			name:     "Gate A holds a surplus that is not itself the draining ordinal",
+			replicas: 1,
+			podHash:  "h1",
+			views: []ServerView{
+				ready(0, "h1"), draining(1, "h1"), ready(2, "h1"),
+			},
+			wantDelete: nil,
+		},
+		{
+			// A squatter or hand-made object carries no ordinal, so
+			// DecidePersistentSize's own doc comment says it "fills no
+			// ordinal, and it is not deleted as surplus". Gate A must honour
+			// that too: it asks the views a question about takedowns in
+			// flight, but a server this rule cannot name is not evidence of
+			// one, and must not block the nomination of g-1 below.
+			name:     "a nil-ordinal squatter does not block Gate A",
+			replicas: 1,
+			podHash:  "h1",
+			views: []ServerView{
+				ready(0, "h1"), ready(1, "h1"),
+				{Name: "g-a7kd", Phase: phase.Draining},
+			},
+			wantDelete: []string{"g-1"},
+		},
+		{
 			// Spec 2.1: a surplus ordinal sits above replicas, so Gate B cannot
 			// see it. Gate A is what holds the invariant here, and this case is
 			// what proves it does.
