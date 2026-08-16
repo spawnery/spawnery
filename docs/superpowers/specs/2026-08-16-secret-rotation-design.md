@@ -44,9 +44,13 @@ version of it, and it produces exactly the outage §6.5 exists to avoid.
 
 Hence: `DesiredServerHash` and `DesiredProxyHash` delete the new label before
 digesting, alongside the `LabelPodHash` deletion each already performs
-(`internal/podspec/hash.go:71` and `:129`), and with the same belt-and-braces
-justification the existing comment gives. §7's first test is the one that
-enforces it.
+(`internal/podspec/hash.go:71` and `:129`) — **but not for the same reason, and
+the existing comments' wording must not be copied onto it.** Those two call
+themselves belt-and-braces because neither builder sets `LabelPodHash`, so the
+deletion never actually removes anything. The forwarding label is the opposite:
+the builders do set it, the digest input does contain it, and the deletion is
+the only thing standing between a rotation and a fleet-wide recreate. §7's first
+test is what proves the line is load-bearing rather than decorative.
 
 ### 1.2 What 5c does not touch
 
@@ -67,15 +71,19 @@ requeues at `resyncInterval` (5 seconds,
 `internal/controller/server_controller.go:75`), so detection latency is bounded
 by a loop that exists.
 
-It reads through the **uncached `directClient` that `cmd/spawnery-operator/main.go:229`
-already constructs**. The comment three lines above it already carries the
-justification, written for the TLS bundle and true again here:
+It reads through an **uncached reader**, for the reason
+`cmd/spawnery-operator/main.go:226` already states about the TLS bundle:
 
 > The TLS bundle is read and written directly, never through the cache: a cached
 > Secret would mean an informer over every Secret in the cluster, and the
 > operator's role deliberately grants no list or watch on them.
 
-5c adds a second user to that client rather than a second mechanism.
+Concretely that reader is `mgr.GetAPIReader()`, which
+`internal/controller/setup.go` already hands to the `Bootstrapper` for the same
+purpose. Nothing new is constructed and nothing is threaded through
+`controller.Options`: `SetupAll` sets the field where it already sets
+`Client: mgr.GetClient()`, and `cmd/spawnery-operator/main.go` is not touched at
+all.
 
 ### 2.2 Why a poll and not a watch
 
@@ -100,15 +108,15 @@ like: Secret names are not secret, and they are visible in the very pod specs
 this operator is already allowed to list.
 
 It would also break a test that is right to break. `TestTheAuthorizerActuallyDenies`
-(`internal/rbacaudit/audit_envtest_test.go:180`) probes `secrets: get` in a
+(`internal/rbacaudit/audit_envtest_test.go:182`) probes `secrets: get` in a
 foreign namespace and requires a denial, on the grounds that "secrets are
 granted by the namespaced Role, and only in spawnery-system". Deleting that
 probe to make room for the grant would be the wrong instinct exactly.
 
 So the grant is **namespace-scoped, one namespace at a time**:
 
-- **The ClusterRole gains nothing.** `RequiredClusterScoped` is unchanged, and
-  the denial probe above stays as it is and stays true.
+- **The ClusterRole gains nothing.** `rbacaudit.RequiredCluster` is unchanged,
+  and the denial probe above stays as it is and stays true.
 - **`config/rbac/forwarding-secret-reader.yaml`** ships a `Role` granting
   `secrets: get` and a `RoleBinding` to the operator's ServiceAccount. Neither
   object carries a `metadata.namespace`, so the namespace comes from the apply:
