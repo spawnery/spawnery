@@ -151,6 +151,7 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	if len(surplus) > 0 {
 		// surplus is already sorted highest-first.
 		decision.Delete = append(decision.Delete, held[surplus[0]])
+		decision.DeleteReason = "SurplusOrdinal"
 		return decision
 	}
 
@@ -178,6 +179,7 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	sort.Slice(stale, func(i, j int) bool { return stale[i] > stale[j] })
 	if len(stale) > 0 {
 		decision.Delete = append(decision.Delete, held[stale[0]])
+		decision.DeleteReason = "StaleSpec"
 	}
 	return decision
 }

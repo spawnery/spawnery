@@ -642,6 +642,7 @@ func (r *ServerGroupReconciler) size(
 		decision = DecidePersistentSize(PersistentInputs{
 			Group:          group.Name,
 			Replicas:       group.DesiredReplicas(),
+			PodHash:        podHash,
 			Views:          views,
 			PendingCreates: pendingCreates,
 			PendingDeletes: pendingDeletes,
@@ -706,9 +707,16 @@ func (r *ServerGroupReconciler) size(
 		logger.Info("fewer free servers than the surplus, trying again later",
 			"group", group.Name, "surplus", decision.Surplus, "free", len(decision.Delete))
 	}
+	// DeleteReason distinguishes the persistent rule's two occasions for the
+	// event trail; the ephemeral rule leaves it empty and falls back to the
+	// reason it always used.
+	deleteReason := decision.DeleteReason
+	if deleteReason == "" {
+		deleteReason = "ServerRemoved"
+	}
 	for _, name := range decision.Delete {
 		if err := r.deleteServer(ctx, group, servers, name,
-			"ServerRemoved", "removing server %s"); err != nil {
+			deleteReason, "removing server %s"); err != nil {
 			return decision, err
 		}
 		r.Expectations.expectDeleted(key, name)

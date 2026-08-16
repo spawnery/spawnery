@@ -3836,3 +3836,84 @@ func (f *fixture) persistentGroup(t *testing.T, name string) *spawneryv1alpha1.S
 	}
 	return group
 }
+
+// TestAPersistentGroupUpdatesOneOrdinalAtATime is the invariant, at the only
+// layer that can show it: two ordinals, a spec change, and never two down at
+// once across the whole sequence.
+//
+// The worst==0 assertion at the end is not decoration. Without it the test
+// would pass just as well if the spec change never moved anything at all —
+// exactly what a hash bug produces, and exactly the shape of non-discriminating
+// assertion that this milestone's review found seven of.
+func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 2)
+	f.reconcilePersistentGroup(t, r, "survival")
+	f.markReady(t, "survival-0")
+	f.markReady(t, "survival-1")
+
+	group := f.persistentGroup(t, "survival")
+	group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("change the group's image: %v", err)
+	}
+
+	// reconcileGroupOnce runs the group reconciler, whose decision may create
+	// a replacement ordinal or nominate a stale one for deletion, and then
+	// reconciles every server that currently exists once -- the Server
+	// reconciler is what actually creates a fresh ordinal's pod and what
+	// carries a draining one's finalizer removal forward one step.
+	reconcileGroupOnce := func() {
+		f.reconcilePersistentGroup(t, r, "survival")
+		for _, name := range f.serverNamesOfGroup(t, "survival") {
+			f.reconcile(name)
+		}
+	}
+	// driveNewPodsReady plays the kubelet and the in-game agent for every
+	// server that is not on its way out: it never touches a server carrying a
+	// deletion timestamp, because a draining server's pod is meant to go away,
+	// not to be marked ready.
+	driveNewPodsReady := func() {
+		for _, name := range f.serverNamesOfGroup(t, "survival") {
+			srv, ok := f.serverIfPresent(name)
+			if !ok || !srv.DeletionTimestamp.IsZero() {
+				continue // gone, or draining and not this helper's to touch
+			}
+			pod, ok := f.pod(name)
+			if !ok {
+				continue // no pod yet; the next reconcile creates one
+			}
+			f.setPodRunning(name, true)
+			uid := string(pod.UID)
+			f.agents.Connect(uid, agentRoleServer())
+			f.agents.MarkReady(uid)
+			if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+				t.Fatalf("ReportPlayers: %v", err)
+			}
+		}
+	}
+
+	worst := 0
+	for pass := 0; pass < 40; pass++ {
+		reconcileGroupOnce()
+		driveNewPodsReady()
+
+		down := 0
+		for _, ordinal := range []int32{0, 1} {
+			srv, ok := f.serverIfPresent(PersistentServerName("survival", ordinal))
+			if !ok || srv.Status.Phase != string(phase.Ready) {
+				down++
+			}
+		}
+		if down > worst {
+			worst = down
+		}
+	}
+	if worst > 1 {
+		t.Fatalf("%d ordinals were down at once; the invariant allows one", worst)
+	}
+	if worst == 0 {
+		t.Fatal("no ordinal ever went down, so this test proves nothing about the update")
+	}
+}
