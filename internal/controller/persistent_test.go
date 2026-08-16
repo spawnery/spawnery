@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/spawnery/spawnery/internal/phase"
@@ -62,7 +63,11 @@ func TestDecidePersistentSize(t *testing.T) {
 		}
 	})
 
-	t.Run("the surplus is taken from the top", func(t *testing.T) {
+	t.Run("the surplus is taken from the top, one ordinal at a time", func(t *testing.T) {
+		// Two ordinals are surplus here, but TestDecidePersistentSizeTakesOneOrdinalDownAtATime
+		// is what the invariant itself belongs to: this case only checks that
+		// the single ordinal this pass does nominate is the highest one, not
+		// the lowest.
 		got := DecidePersistentSize(PersistentInputs{
 			Group: "survival", Replicas: 1,
 			Views: []ServerView{
@@ -71,9 +76,9 @@ func TestDecidePersistentSize(t *testing.T) {
 				ordinalView("survival-2", 2, phase.Ready),
 			},
 		})
-		want := []string{"survival-2", "survival-1"}
-		if len(got.Delete) != 2 || got.Delete[0] != want[0] || got.Delete[1] != want[1] {
-			t.Fatalf("Delete = %v, want %v: highest ordinal first", got.Delete, want)
+		want := []string{"survival-2"}
+		if len(got.Delete) != 1 || got.Delete[0] != want[0] {
+			t.Fatalf("Delete = %v, want %v: highest ordinal first, one at a time", got.Delete, want)
 		}
 	})
 
@@ -186,6 +191,146 @@ func TestDecidePersistentSize(t *testing.T) {
 			t.Errorf("Delete = %v, want [survival-7]", got.Delete)
 		}
 	})
+}
+
+func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
+	ready := func(ordinal int32, hash string) ServerView {
+		v := ordinalView(PersistentServerName("g", ordinal), ordinal, phase.Ready)
+		v.PodHash = hash
+		return v
+	}
+	draining := func(ordinal int32, hash string) ServerView {
+		v := ready(ordinal, hash)
+		v.Phase = phase.Draining
+		return v
+	}
+
+	cases := []struct {
+		name       string
+		replicas   int32
+		podHash    string
+		views      []ServerView
+		wantCreate []int32
+		wantDelete []string
+	}{
+		{
+			name:       "missing ordinals are created all at once, not serialised",
+			replicas:   4,
+			podHash:    "h1",
+			views:      []ServerView{ready(0, "h1")},
+			wantCreate: []int32{1, 2, 3},
+		},
+		{
+			name:     "surplus takes the highest, one only",
+			replicas: 1,
+			podHash:  "h1",
+			views: []ServerView{
+				ready(0, "h1"), ready(1, "h1"), ready(2, "h1"), ready(3, "h1"),
+			},
+			wantDelete: []string{"g-3"},
+		},
+		{
+			name:     "Gate A holds the next surplus while one is draining",
+			replicas: 1,
+			podHash:  "h1",
+			views: []ServerView{
+				ready(0, "h1"), ready(1, "h1"), ready(2, "h1"), draining(3, "h1"),
+			},
+			wantDelete: nil,
+		},
+		{
+			// Spec 2.1: a surplus ordinal sits above replicas, so Gate B cannot
+			// see it. Gate A is what holds the invariant here, and this case is
+			// what proves it does.
+			name:     "Gate B does not apply to surplus: a sick ordinal 0 does not block a scale-down",
+			replicas: 1,
+			podHash:  "h1",
+			views: []ServerView{
+				ordinalViewWithHash("g-0", 0, phase.Failed, "h1"),
+				ready(1, "h1"),
+			},
+			wantDelete: []string{"g-1"},
+		},
+		{
+			name:     "stale takes the highest once no surplus remains",
+			replicas: 3,
+			podHash:  "h2",
+			views: []ServerView{
+				ready(0, "h1"), ready(1, "h1"), ready(2, "h1"),
+			},
+			wantDelete: []string{"g-2"},
+		},
+		{
+			name:     "surplus outranks stale",
+			replicas: 2,
+			podHash:  "h2",
+			views: []ServerView{
+				ready(0, "h1"), ready(1, "h1"), ready(2, "h1"),
+			},
+			wantDelete: []string{"g-2"},
+		},
+		{
+			// Gate B: the replacement for g-2 is back but not Ready yet, so g-1
+			// waits. Deleting the previous object is not the same as the world
+			// being back.
+			name:     "Gate B holds the next stale while the replacement is still starting",
+			replicas: 3,
+			podHash:  "h2",
+			views: []ServerView{
+				ready(0, "h1"), ready(1, "h1"),
+				ordinalViewWithHash("g-2", 2, phase.Starting, "h2"),
+			},
+			wantDelete: nil,
+		},
+		{
+			name:       "an empty hash is adopted, never nominated",
+			replicas:   2,
+			podHash:    "h2",
+			views:      []ServerView{ready(0, ""), ready(1, "")},
+			wantDelete: nil,
+		},
+		{
+			// Task 5, not this one, fills PersistentInputs.PodHash from the
+			// group; until then a real caller passes the zero value here while
+			// views already carry real hashes. Without this guard every ordinal
+			// of every persistent group would compare unequal to "", read as
+			// stale, and be nominated for takedown. It is also correct on its
+			// own terms: a rule that cannot know what current looks like must
+			// not declare anything stale, the same way an empty view hash is
+			// adopted rather than compared.
+			name:       "an empty group PodHash skips the stale class entirely",
+			replicas:   2,
+			podHash:    "",
+			views:      []ServerView{ready(0, "h1"), ready(1, "h1")},
+			wantDelete: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecidePersistentSize(PersistentInputs{
+				Group:    "g",
+				Replicas: tc.replicas,
+				PodHash:  tc.podHash,
+				Views:    tc.views,
+			})
+			if !reflect.DeepEqual(got.CreateOrdinals, tc.wantCreate) {
+				t.Errorf("CreateOrdinals = %v, want %v", got.CreateOrdinals, tc.wantCreate)
+			}
+			if !reflect.DeepEqual(got.Delete, tc.wantDelete) {
+				t.Errorf("Delete = %v, want %v", got.Delete, tc.wantDelete)
+			}
+		})
+	}
+}
+
+// ordinalViewWithHash is ordinalView plus a PodHash, for the table cases in
+// TestDecidePersistentSizeTakesOneOrdinalDownAtATime that need a phase other
+// than Ready or Draining together with an explicit hash.
+func ordinalViewWithHash(name string, ordinal int32, p phase.Phase, hash string) ServerView {
+	v := ordinalView(name, ordinal, p)
+	v.PodHash = hash
+	return v
 }
 
 func equalOrdinals(got, want []int32) bool {
