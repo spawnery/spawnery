@@ -17,12 +17,7 @@ limitations under the License.
 package rbacaudit_test
 
 import (
-	"bufio"
-	"errors"
 	"fmt"
-	"io"
-	"os"
-	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -30,7 +25,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/yaml"
 
 	"github.com/spawnery/spawnery/internal/rbacaudit"
@@ -285,38 +279,18 @@ func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
 const forwardingSecretReaderManifest = "config/rbac/forwarding-secret-reader.yaml"
 
 // readForwardingSecretReader decodes both objects in
-// forwardingSecretReaderManifest. It is modeled on readGeneratedRoles: same
-// repository-root lookup, same multi-document split, same refusal to silently
-// drop a second object of a kind it already saw — except this file holds a
-// Role and a RoleBinding rather than a ClusterRole and a Role.
+// forwardingSecretReaderManifest, using the same multi-document split
+// readGeneratedRoles uses (readMultiDocManifest, in deploy_envtest_test.go).
+// Like readGeneratedRoles it refuses to silently drop a second object of a
+// kind it already saw — except this file holds a Role and a RoleBinding
+// rather than a ClusterRole and a Role.
 func readForwardingSecretReader(t *testing.T) (*rbacv1.Role, *rbacv1.RoleBinding) {
 	t.Helper()
 
-	f, err := os.Open(testenv.RepoPath(t, forwardingSecretReaderManifest))
-	if err != nil {
-		t.Fatalf("read %s: %v", forwardingSecretReaderManifest, err)
-	}
-	defer func() { _ = f.Close() }()
-
 	var role *rbacv1.Role
 	var binding *rbacv1.RoleBinding
-	docs := utilyaml.NewYAMLReader(bufio.NewReader(f))
-	for {
-		doc, err := docs.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("read %s: %v", forwardingSecretReaderManifest, err)
-		}
-		if strings.TrimSpace(string(doc)) == "" {
-			continue
-		}
-		var meta metav1.TypeMeta
-		if err := yaml.Unmarshal(doc, &meta); err != nil {
-			t.Fatalf("decode %s: %v", forwardingSecretReaderManifest, err)
-		}
-		switch meta.Kind {
+	readMultiDocManifest(t, forwardingSecretReaderManifest, func(kind string, doc []byte) {
+		switch kind {
 		case "Role":
 			decoded := &rbacv1.Role{}
 			if err := yaml.Unmarshal(doc, decoded); err != nil {
@@ -341,9 +315,9 @@ func readForwardingSecretReader(t *testing.T) (*rbacv1.Role, *rbacv1.RoleBinding
 			binding = decoded
 		default:
 			t.Fatalf("%s contains an unexpected %s; this audit only models a Role and a RoleBinding",
-				forwardingSecretReaderManifest, meta.Kind)
+				forwardingSecretReaderManifest, kind)
 		}
-	}
+	})
 	if role == nil {
 		t.Fatalf("%s contains no Role", forwardingSecretReaderManifest)
 	}

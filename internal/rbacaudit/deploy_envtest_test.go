@@ -63,6 +63,43 @@ func readManifest[T any](t *testing.T, rel string, into *T) {
 // decodes a single document — cannot be used on it.
 const generatedRoles = "config/rbac/role.yaml"
 
+// readMultiDocManifest splits a multi-document YAML manifest at rel and hands
+// each document's Kind and raw bytes to decode. readManifest cannot be reused
+// here because it decodes exactly one document; this is the loop both
+// readGeneratedRoles and readForwardingSecretReader (audit_envtest_test.go)
+// need, factored out so neither restates it. decode owns everything
+// kind-specific — including its own "second one of this kind" refusal and its
+// own diagnostics — this helper only owns finding the file, splitting it, and
+// skipping blank documents.
+func readMultiDocManifest(t *testing.T, rel string, decode func(kind string, doc []byte)) {
+	t.Helper()
+
+	f, err := os.Open(testenv.RepoPath(t, rel))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(f))
+	for {
+		doc, err := docs.Read()
+		if errors.Is(err, io.EOF) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if strings.TrimSpace(string(doc)) == "" {
+			continue
+		}
+		var meta metav1.TypeMeta
+		if err := yaml.Unmarshal(doc, &meta); err != nil {
+			t.Fatalf("decode %s: %v", rel, err)
+		}
+		decode(meta.Kind, doc)
+	}
+}
+
 // readGeneratedRoles decodes both halves of the generated RBAC manifest. It
 // insists on finding exactly one of each.
 //
@@ -76,31 +113,10 @@ const generatedRoles = "config/rbac/role.yaml"
 func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 	t.Helper()
 
-	f, err := os.Open(testenv.RepoPath(t, generatedRoles))
-	if err != nil {
-		t.Fatalf("read %s: %v", generatedRoles, err)
-	}
-	defer func() { _ = f.Close() }()
-
 	var cluster *rbacv1.ClusterRole
 	var namespaced *rbacv1.Role
-	docs := utilyaml.NewYAMLReader(bufio.NewReader(f))
-	for {
-		doc, err := docs.Read()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("read %s: %v", generatedRoles, err)
-		}
-		if strings.TrimSpace(string(doc)) == "" {
-			continue
-		}
-		var meta metav1.TypeMeta
-		if err := yaml.Unmarshal(doc, &meta); err != nil {
-			t.Fatalf("decode %s: %v", generatedRoles, err)
-		}
-		switch meta.Kind {
+	readMultiDocManifest(t, generatedRoles, func(kind string, doc []byte) {
+		switch kind {
 		case "ClusterRole":
 			decoded := &rbacv1.ClusterRole{}
 			if err := yaml.Unmarshal(doc, decoded); err != nil {
@@ -130,9 +146,9 @@ func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 			}
 			namespaced = decoded
 		default:
-			t.Fatalf("%s contains an unexpected %s; this audit only models roles", generatedRoles, meta.Kind)
+			t.Fatalf("%s contains an unexpected %s; this audit only models roles", generatedRoles, kind)
 		}
-	}
+	})
 	if cluster == nil {
 		t.Fatalf("%s contains no ClusterRole", generatedRoles)
 	}
