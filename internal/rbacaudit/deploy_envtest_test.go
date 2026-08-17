@@ -606,12 +606,18 @@ func contains(haystack []string, needle string) bool {
 // TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods checks the one
 // shipped NetworkPolicy, and every hop of it lives in a different file.
 //
-// Two mistakes it exists to catch. A podSelector copied from a managed pod's
+// The mistakes it exists to catch. A podSelector copied from a managed pod's
 // labels selects nothing here — the operator pod deliberately does not carry
 // spawnery.cloud/managed-by — and a policy that selects nothing fails open,
-// which looks exactly like one that works. And a peer without an empty
+// which looks exactly like one that works. A peer without an empty
 // namespaceSelector would admit only pods in spawnery-system, while every
-// managed pod in the cluster dials in from its own game namespace.
+// managed pod in the cluster dials in from its own game namespace. A
+// policyTypes line that declares Egress on a policy with no egress rules
+// default-denies the operator's own outbound traffic. And these two labels
+// exist in three places — this manifest, the Deployment, and
+// podspec.OperatorPodLabels() — of which the third builds the per-Network
+// policy's egress peer, so a drift between any two of them breaks a policy
+// nothing else would notice.
 func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	var policy networkingv1.NetworkPolicy
 	var deploy appsv1.Deployment
@@ -634,6 +640,53 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	}
 	if len(policy.Spec.PodSelector.MatchLabels) == 0 {
 		t.Error("an empty podSelector selects every pod in the namespace")
+	}
+
+	// podspec.OperatorPodLabels() is the third copy of these two labels, and
+	// until now nothing tied it to either of the other two. The per-Network
+	// policy's egress peer is built from it, so renaming the operator's pod
+	// labels in the Deployment would leave that peer selecting nothing —
+	// backends unable to reach the operator on an enforcing CNI — with every
+	// test in the repository green.
+	//
+	// Subset rather than equality against the Deployment's template labels: a
+	// pod may legitimately gain labels neither selector names, and a rename is
+	// caught either way. Equality against the policy's own selector, though,
+	// including the length: the loop above validates only the keys the policy
+	// declares, so a selector narrowed to one of the two labels passed it, and
+	// a narrowed selector is a widened policy.
+	wantOperator := podspec.OperatorPodLabels()
+	for k, v := range wantOperator {
+		if podLabels[k] != v {
+			t.Errorf("podspec.OperatorPodLabels() has %s=%q but the Deployment's "+
+				"pod carries %s=%q — the per-Network policy's egress peer is built "+
+				"from the former and would select nothing", k, v, k, podLabels[k])
+		}
+	}
+	if len(policy.Spec.PodSelector.MatchLabels) != len(wantOperator) {
+		t.Errorf("the policy's podSelector = %v, want exactly %v — a selector "+
+			"narrowed to a subset selects more pods, not fewer",
+			policy.Spec.PodSelector.MatchLabels, wantOperator)
+	}
+	for k, v := range wantOperator {
+		if policy.Spec.PodSelector.MatchLabels[k] != v {
+			t.Errorf("the policy's podSelector[%q] = %q, want %q",
+				k, policy.Spec.PodSelector.MatchLabels[k], v)
+		}
+	}
+
+	// policyTypes is not decoration and the mistake here is the mirror of the
+	// one internal/podspec's TestBuildNetworkPolicyDeclaresBothPolicyTypes
+	// guards. This policy carries ingress rules only; adding Egress with no
+	// egress rules makes the operator pod default-deny for egress, and it
+	// cannot reach the API server at all — every controller stops, at once,
+	// from a one-word manifest edit.
+	if len(policy.Spec.PolicyTypes) != 1 ||
+		policy.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
+		t.Errorf("policyTypes = %v, want [Ingress] alone — this policy has no "+
+			"egress rules, so declaring Egress default-denies the operator's own "+
+			"outbound traffic and it cannot reach the API server",
+			policy.Spec.PolicyTypes)
 	}
 
 	var agentRule, probeRule *networkingv1.NetworkPolicyIngressRule
