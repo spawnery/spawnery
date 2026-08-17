@@ -39,14 +39,8 @@ func theTestManifestIsAccepted(t *testing.T) {
 		return len(servers) == 2, fmt.Sprintf("%d non-Failed Servers", len(servers))
 	})
 
-	eventually(t, 2*time.Minute, "a pod per Server", func() (bool, string) {
-		var pods corev1.PodList
-		if err := k8s.List(ctx, &pods,
-			client.InNamespace(testNamespace),
-			client.MatchingLabels{podspec.LabelGroup: "lobby"}); err != nil {
-			return false, err.Error()
-		}
-		return len(pods.Items) == 2, fmt.Sprintf("%d pods", len(pods.Items))
+	eventually(t, 2*time.Minute, "a pod for each live Server", func() (bool, string) {
+		return podsCoverLiveServers(t, "lobby")
 	})
 
 	// The pods stay in ErrImagePull, and that is the expected end state:
@@ -172,6 +166,46 @@ func nonFailedServersInGroup(t *testing.T, group string) []spawneryv1alpha1.Serv
 		}
 	}
 	return live
+}
+
+// podsCoverLiveServers reports whether every non-Failed Server of a group has
+// a pod, checked by name against the live set rather than by counting pod
+// objects.
+//
+// A Server's pod is not deleted the moment the Server reaches Failed: it
+// persists, owned by the corpse, for the whole of failedRetentionSeconds, and
+// a replacement Server and pod appear almost as soon as the failed one drops
+// out of nonFailedServersInGroup's count. A bare `len(pods) == N` comparison
+// therefore oscillates between the group's live count and one more than it
+// for as long as churn continues -- exactly the class of flake
+// nonFailedServersInGroup exists to keep Server counts out of, just one label
+// selector downstream of it. Checking coverage by name instead means a
+// lingering corpse's pod, which nothing here is waiting on, cannot stall the
+// wait, and a genuinely missing pod -- what this check exists to catch --
+// cannot hide behind one.
+func podsCoverLiveServers(t *testing.T, group string) (bool, string) {
+	t.Helper()
+	servers := nonFailedServersInGroup(t, group)
+
+	var pods corev1.PodList
+	if err := k8s.List(ctx, &pods,
+		client.InNamespace(testNamespace),
+		client.MatchingLabels{podspec.LabelGroup: group}); err != nil {
+		return false, err.Error()
+	}
+	havePod := make(map[string]bool, len(pods.Items))
+	for _, p := range pods.Items {
+		havePod[p.Labels[podspec.LabelServer]] = true
+	}
+
+	missing := 0
+	for _, s := range servers {
+		if !havePod[s.Name] {
+			missing++
+		}
+	}
+	return missing == 0, fmt.Sprintf("%d of %d live Servers missing a pod (%d pods total in group)",
+		missing, len(servers), len(pods.Items))
 }
 
 // patchScaling edits one group's scaling block through a single atomic patch.
