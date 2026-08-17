@@ -1,15 +1,33 @@
 #!/usr/bin/env bash
-# Publish the three Spawnery images to ghcr.io.
+# Publish Spawnery images to ghcr.io.
 #
 # Every image is built by Nix and copied from its archive straight to the
 # registry: no local container store in between, so what lands there is what
 # the flake describes and not what a previous `podman load` left behind.
 #
+# Usage:
+#   hack/publish.sh                     publish all three images
+#   hack/publish.sh operator-image      publish only the operator's
+#
+# The argument list exists because the versions move independently. flake.nix
+# keeps `imageVersion` (the agent's, and so Paper's and Velocity's) apart from
+# `operatorVersion` on purpose, so the ordinary case after a reconciler fix is
+# that exactly one of the three tags is new. Publishing all three then refuses
+# at the first image whose tag is already there -- correctly -- and never
+# reaches the one that changed. FORCE=1 would get past it only by re-pushing
+# ~1.4 GB over tags that are already correct, which is the very overwrite the
+# refusal exists to prevent. Naming the image instead keeps the refusal
+# absolute and makes a partial publish a deliberate act rather than an
+# accident: a run either publishes what it was asked for or stops.
+#
 # Environment:
-#   DRY_RUN=1       print what would be copied where; contact nothing.
+#   DRY_RUN=1       build the images and print what would be copied where.
+#                   Nothing is sent to the registry and no credential is
+#                   needed -- but the Nix builds still run, which on a machine
+#                   without them cached is the expensive part.
 #   FORCE=1         overwrite a tag that already exists.
 #   WRITE_DIGEST=1  rewrite config/deploy/deployment.yaml's operator image to
-#                   the digest the registry returned.
+#                   the digest this run pushed.
 set -euo pipefail
 
 DRY_RUN="${DRY_RUN:-0}"
@@ -22,11 +40,43 @@ cd "$repo_root"
 # attr:out-link, in the order they are published. The operator is last so that
 # a WRITE_DIGEST run does not rewrite the manifest before the two large images
 # have succeeded.
-images=(
+all_images=(
 	"paper-image:result-paper"
 	"velocity-image:result-velocity"
 	"operator-image:result-operator"
 )
+
+# Select the requested images, keeping the order above rather than the order
+# they were named on the command line: WRITE_DIGEST's reason for publishing the
+# operator last does not stop applying because somebody typed it first.
+images=()
+if [ "$#" -eq 0 ]; then
+	images=("${all_images[@]}")
+else
+	for want in "$@"; do
+		found=""
+		for entry in "${all_images[@]}"; do
+			if [ "${entry%%:*}" = "$want" ]; then
+				found="$entry"
+			fi
+		done
+		if [ -z "$found" ]; then
+			echo "unknown image '${want}'. Known images:" >&2
+			for entry in "${all_images[@]}"; do
+				echo "  ${entry%%:*}" >&2
+			done
+			exit 2
+		fi
+	done
+	for entry in "${all_images[@]}"; do
+		for want in "$@"; do
+			if [ "${entry%%:*}" = "$want" ]; then
+				images+=("$entry")
+				break
+			fi
+		done
+	done
+fi
 
 operator_digest=""
 
@@ -62,7 +112,8 @@ for entry in "${images[@]}"; do
 
 		if [ "$inspect_status" -eq 0 ]; then
 			echo "refusing to overwrite ${name}:${tag}, which already exists. Bump the" >&2
-			echo "version in flake.nix, or re-run with FORCE=1 if you mean it." >&2
+			echo "version in flake.nix, or publish only the image that changed (e.g." >&2
+			echo "\`hack/publish.sh operator-image\`), or re-run with FORCE=1 if you mean it." >&2
 			exit 1
 		elif ! grep -qi 'manifest unknown' <<<"$inspect_err"; then
 			echo "cannot tell whether ${name}:${tag} already exists -- skopeo inspect" >&2
@@ -76,8 +127,25 @@ for entry in "${images[@]}"; do
 		fi
 	fi
 
-	skopeo copy "docker-archive:${link}" "$ref"
-	digest="$(skopeo inspect --format '{{.Digest}}' "$ref")"
+	# --digestfile, and not a second `skopeo inspect` of the tag afterwards.
+	# The guard above exists precisely because a write:packages token may carry
+	# no read scope, and a read-back would need exactly the scope that guard
+	# offers FORCE=1 as a way to survive without: under `set -e` a push-only
+	# `FORCE=1 hack/publish.sh` would push paper, then die reading its digest,
+	# leaving one image published, no digest and no manifest rewrite. It is
+	# also a re-read of a mutable tag, so a push landing between the copy and
+	# the inspect would have this run record somebody else's digest as its own.
+	# --digestfile is written by the copy itself: no read scope, the digest of
+	# this push, and nothing in between to race.
+	digestfile="$(mktemp)"
+	skopeo copy --digestfile "$digestfile" "docker-archive:${link}" "$ref"
+	digest="$(cat "$digestfile")"
+	rm -f "$digestfile"
+	if [ -z "$digest" ]; then
+		echo "skopeo copy wrote no digest for ${name}:${tag}; refusing to carry on with" >&2
+		echo "an empty one." >&2
+		exit 1
+	fi
 	echo "published ${name}:${tag} @ ${digest}"
 
 	if [ "$attr" = "operator-image" ]; then
@@ -91,6 +159,20 @@ if [ "$WRITE_DIGEST" = "1" ] && [ -n "$operator_digest" ]; then
 	# The one line that names the operator image, replaced with a digest
 	# reference. The master design's §8 asks for this in shipped manifests
 	# because a tag can move under a running cluster.
-	sed -i -E "s|(^[[:space:]]*image:[[:space:]]*)${name}[:@].*$|\1${name}@${operator_digest}|" "$manifest"
+	#
+	# Matched with grep before it is substituted, because `sed -i` exits 0
+	# whether or not its pattern matched anything and would leave the run
+	# printing "wrote ... into ..." over a file it had not touched. This line
+	# runs once, by hand, on the run that closes acceptance criterion 7, and
+	# the person reading that sentence has no other signal.
+	pattern="(^[[:space:]]*image:[[:space:]]*)${name}[:@].*$"
+	if ! grep -qE "$pattern" "$manifest"; then
+		echo "no image line naming ${name} in ${manifest}; the manifest's shape has" >&2
+		echo "moved and this substitution would have reported success over an" >&2
+		echo "unchanged file. Fix the pattern here, or set the digest by hand:" >&2
+		echo "  ${name}@${operator_digest}" >&2
+		exit 1
+	fi
+	sed -i -E "s|${pattern}|\1${name}@${operator_digest}|" "$manifest"
 	echo "wrote ${name}@${operator_digest} into ${manifest}"
 fi
