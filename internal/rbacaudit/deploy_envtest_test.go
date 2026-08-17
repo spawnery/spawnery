@@ -681,13 +681,32 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	if len(deploy.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
 	}
+	// nonAgentDeclared is every container port except "agent": that one is
+	// already admitted, from a peer, by the rule above. Anything the peerless
+	// rule admits has to be one of these and nothing else.
+	nonAgentDeclared := map[int]bool{}
 	for _, p := range deploy.Spec.Template.Spec.Containers[0].Ports {
 		if p.Name == "agent" {
 			continue
 		}
+		nonAgentDeclared[int(p.ContainerPort)] = true
 		if !admitted[int(p.ContainerPort)] {
 			t.Errorf("the container declares port %q (%d) and the policy does "+
 				"not admit it", p.Name, p.ContainerPort)
+		}
+	}
+	// The reverse direction matters here in a way it does not for the agent
+	// rule: this rule has no `from`, so it admits from any source in any
+	// namespace, and a stray port line here is real attack surface rather
+	// than a typo the agent rule's peer would already contain. Every port it
+	// admits must be a container port that is not "agent" -- admitting that
+	// one here too would bypass the agent rule's peer restriction entirely.
+	for port := range admitted {
+		if !nonAgentDeclared[port] {
+			t.Errorf("the peerless rule admits port %d, which the container "+
+				"does not declare (or is the agent port, already admitted "+
+				"under a peer by the rule above) — this rule has no `from`, "+
+				"so anything it admits is reachable from anywhere", port)
 		}
 	}
 }
