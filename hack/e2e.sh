@@ -27,6 +27,16 @@ workdir="$(mktemp -d)"
 KUBECONFIG="$workdir/kubeconfig"
 export KUBECONFIG
 
+# Set just before `kind create cluster` runs, and read by cleanup. Without
+# it, any failure before that line -- a nix build that does not build, a
+# gunzip that does not gunzip -- still ran `kind delete cluster --name
+# spawnery-e2e` on the way out. That is destructive in exactly the situation a
+# person is most likely to be in: they kept a cluster with E2E_KEEP=1, re-ran,
+# hit an early error, and lost the cluster they were keeping to a run that
+# never created one. The dump is empty in that window too, because $KUBECONFIG
+# has not been written yet, so the run destroys the evidence and produces none.
+created_cluster=0
+
 dump() {
 	echo "================ operator log ================"
 	kubectl -n spawnery-system logs deployment/spawnery-operator --tail=-1 2>&1 || true
@@ -38,10 +48,17 @@ dump() {
 
 cleanup() {
 	local status=$?
-	if [ "$status" -ne 0 ]; then
+	# Dumped only when there is something to dump from. Before the cluster
+	# exists $KUBECONFIG has not been written, and every command in dump would
+	# print its own connection error over whatever the real failure said.
+	if [ "$status" -ne 0 ] && [ -s "$KUBECONFIG" ]; then
 		dump
 	fi
-	if [ "$E2E_KEEP" = "1" ]; then
+	if [ "$created_cluster" != "1" ]; then
+		# Nothing of ours to tear down, and nothing of anyone else's to take
+		# with us.
+		rm -rf "$workdir"
+	elif [ "$E2E_KEEP" = "1" ]; then
 		echo "E2E_KEEP=1: cluster '$CLUSTER' left standing; KUBECONFIG=$KUBECONFIG"
 	else
 		kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true
@@ -64,6 +81,9 @@ else
 	cp -L result-operator "$archive"
 fi
 
+# Set before the create, not after: a create that fails halfway leaves a
+# partial cluster of this run's own making, and that one is ours to remove.
+created_cluster=1
 kind create cluster --name "$CLUSTER" --wait 120s
 kind load image-archive "$archive" --name "$CLUSTER"
 
