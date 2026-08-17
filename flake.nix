@@ -62,6 +62,11 @@
               kubernetes-helm
               kind
               k3d
+              # hack/publish.sh copies each image archive straight from the Nix
+              # store to the registry. A local container store in between would
+              # publish whatever a stale `podman load` left behind rather than
+              # what the flake describes.
+              skopeo
               # Both of these are pinned a second time, by version, in
               # agent/common/build.gradle.kts -- and only this half moves when
               # nixpkgs does. `protobuf` here is protoc, whose X.Y the
@@ -119,6 +124,14 @@
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
           imageVersion = "0.2.0";
+
+          # The operator's own version, deliberately not imageVersion.
+          # imageVersion above is the *agent* version -- it reaches the
+          # plugin's paper-plugin.yml and is reported to the operator as
+          # Hello.version -- and hanging the operator's tag off it would mean a
+          # fix in the reconciler claiming a new agent version, and an agent
+          # release renaming an unchanged operator image.
+          operatorVersion = "0.1.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
@@ -179,6 +192,21 @@
           agents = pkgs.callPackage ./nix/agents.nix {
             inherit paper velocity imageVersion;
           };
+
+          # The operator itself, packaged so an image can be built from it.
+          # `make build` still exists for the local loop; this is the same
+          # binary produced reproducibly, which is what nix/operator-image.nix
+          # and hack/publish.sh need.
+          spawnery-operator = pkgs.buildGoModule {
+            pname = "spawnery-operator";
+            version = operatorVersion;
+            src = ./.;
+            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            subPackages = [ "cmd/spawnery-operator" ];
+            # Static, because the image carries no libc of its own for it.
+            env.CGO_ENABLED = 0;
+            ldflags = [ "-s" "-w" ];
+          };
         in
         {
           # Architecture-independent (it is jars), so this stays available on
@@ -192,7 +220,7 @@
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
@@ -212,6 +240,13 @@
           # itself now ships -- it is the thing that binds that port.
           velocity-image = pkgs.callPackage ./nix/velocity-image.nix {
             inherit velocity spawnery-config agents imageVersion oci-common;
+          };
+
+          # Restricted to x86_64-linux for the same reason the two game images
+          # are, and the reason is in their comment above: buildLayeredImage
+          # does not cross-compile but labels its output amd64 regardless.
+          operator-image = pkgs.callPackage ./nix/operator-image.nix {
+            inherit spawnery-operator operatorVersion oci-common;
           };
         });
     };

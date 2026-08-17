@@ -178,6 +178,21 @@ correct but nothing pushes it, so every consumer needs `kind load docker-image`
 (or `k3d image import`, where k3d works) or the equivalent. Publishing belongs
 with CI in milestone 6.
 
+*Half met by milestone 6a: the mechanism exists, the push has not happened.*
+`hack/publish.sh` (`make publish`) copies all three Nix image archives straight
+to `ghcr.io/spawnery/` with `skopeo`, refuses a tag that is already there unless
+`FORCE=1`, and can write the operator's returned digest back into
+`config/deploy/deployment.yaml` under `WRITE_DIGEST=1`. What has actually been
+run is `DRY_RUN=1`, which contacts no registry. **The first real push needs a
+GitHub token with `write:packages` that nobody in milestone 6a had, so it has
+not been driven by anyone**, and `ghcr.io/spawnery/paper` was confirmed not
+publicly pullable on 2026-08-17 — an anonymous
+`https://ghcr.io/token?scope=repository:spawnery/paper:pull` returns 403 while
+the same request for a known-public repository returns a token. So this entry's
+own consequence still stands as written: every consumer still needs
+`kind load docker-image`. The push belongs to the repository owner, in the
+manner of an evidence run; automating it is 6e's.
+
 **`/data/config` collides with Paper's own writable config directory.** The
 main design's own §4.3 `ServerGroup` example mounts a ConfigMap at
 `mountPath: /data/config` as the documented way to override configuration —
@@ -313,6 +328,17 @@ rejected by the API server in both `Endpoints` and `EndpointSlice`. The README
 documents the relay container that works. Milestone 6 wires this flow into CI and
 will meet the same wall, and the durable answer there is to run the operator
 inside the cluster from its own image, where the Service is a Service.
+
+*Closed by milestone 6a for the half that matters, and still true for the
+other.* Anything that runs the operator **in** the cluster now gets the Service
+from `config/deploy/service.yaml`, which carries an ordinary selector over
+`app.kubernetes.io/name=spawnery,app.kubernetes.io/component=operator` and needs
+no hand-written `Endpoints` and no relay; `hack/e2e.sh` installs exactly that and
+`make e2e` runs on it. The README's local `go run` flow is unchanged and still
+needs the whole workaround — the selector-less `Service`, the hand-written
+`Endpoints`, and under rootless Podman the relay container — because the process
+is still outside the cluster there and no selector can reach it. Read this entry
+as scoped to that flow from 6a onward.
 
 ## Preconditions for milestone 3 (proxy integration) — fully discharged
 
@@ -482,6 +508,14 @@ nothing creates" above) — workable for one person at a terminal, a wall for
 milestone 6's CI. An operator image is out of scope for all of milestone 3,
 but 3c is where its absence first has to be worked around a second time
 rather than once.
+
+*Decided by milestone 6a: it runs inside.* `nix/operator-image.nix` builds
+`.#operator-image`, `hack/e2e.sh` loads that archive into a `kind` cluster and
+installs `config/deploy/`, and the operator runs there as a Deployment under the
+`spawnery-operator` ServiceAccount in `spawnery-system` — which is what
+`make e2e` drives and what every claim in `test/e2e` is made against. The
+hand-built `Service`/`Endpoints` pair is gone from that path. It is still how
+the README's `go run` flow works, and that flow is unchanged.
 
 What follows is what 3b discovered while closing its own two preconditions,
 and what 3c inherits as a result.
@@ -2514,6 +2548,262 @@ NetworkPolicy allowing ingress on 9443 only from pods carrying
 quotes the promise from milestone 2a has to quote this point along with it — it
 holds for identity and confidentiality, not for availability.
 
+## From the milestone 6a Task 4 measurement round (2026-08-17)
+
+The "Completeness of the permission table" item above names
+`test/e2e` (`TestSpawneryUnderItsOwnServiceAccount`) as the only thing
+that can prove a permission missing from both the ClusterRole and
+`internal/rbacaudit/required.go` at once. This entry narrows what that
+proof actually covers, found while verifying the check itself rather
+than while using it.
+
+**A denied `list` on a watched-but-idle type (`pods`, and separately
+`networks`) is invisible to the check, not merely late.** The check
+reads the operator's log once, moments after rollout; the first
+hypothesis was that this was simply too early — `OrphanReconciler`'s
+periodic sweep, one of the two call sites `required.go` cites for
+`pods:list`, only ticks once a minute, and no custom resource exists
+yet in a Task-4-only run to drive the other reconcilers at all.
+That hypothesis was tested and rejected. `pods:list` was removed from
+every marker that grants it (`controller-gen` unions verbs per
+resource across markers, so a partial removal is not a real
+mutation), the revocation was confirmed at the API server
+(`kubectl auth can-i list pods --as=system:serviceaccount:spawnery-
+system:spawnery-operator` → `no`), and the operator was then watched
+continuously — log followed, not sampled; `rest_client_requests_total`
+scraped every 15 seconds, every sample kept; pod phase and restart
+count watched — for seven minutes and forty-five seconds, well past
+`Controller`'s default two-minute `CacheSyncTimeout`. Across the whole
+window: the log gained not one line past the initial
+`"Starting workers"` burst (32 lines at second 0, 32 lines at 7m45s);
+`rest_client_requests_total` recorded only codes `200`, `201`, `404`
+and `429`, never `403`, across 24 fifteen-second samples; the pod's
+restart count stayed `0`; `kubectl logs --previous` confirms there is
+no previous container to have hidden anything in (`"previous
+terminated container \"operator\" ... not found"`); and the
+Deployment's `Available` condition never moved off `True` from
+`04:05:46Z` onward. The two-minute boundary passed with no observable
+effect of any kind — the process did not exit, and nothing in the
+vendored source's own documented failure mode
+(`sigs.k8s.io/controller-runtime/pkg/internal/source/kind.go:58-59,82`,
+"`cache.GetInformer` will block ... and log ... `failed to get informer
+from cache`") was ever seen to fire, even though the same log line
+*does* appear, promptly, when a startup-critical uncached call is
+denied instead (see below).
+
+**The contrast is what makes this a coverage gap and not a
+measurement artifact.** Denying a direct, uncached call that gates a
+leader-bound `manager.Runnable` — `create` on the TLS secret
+(`internal/certs/store.go`), or `update` on the leader-election lease
+(`internal/controller/setup.go`) — produces a real, immediate, and
+repeated `is forbidden:` line every time
+(`"ensure the TLS bundle: create spawnery-agent-tls: secrets is
+forbidden: ..."`; `"Failed to update lease" err="...is forbidden: ...
+cannot update resource \"leases\"..."` on a ~3-4 second retry loop).
+Those two mutations sit at the opposite failure mode: the denial is
+loud, but the pod never reaches `Available`, so `hack/e2e.sh`'s
+rollout wait times out and `test/e2e` never runs at all. Between the
+two failure modes — cache-backed reads that are silent and safe,
+direct calls that are loud and fatal to readiness — no permission
+removal tried during Task 4 both fires a logged denial *and* leaves
+the operator healthy enough for the check to read it.
+
+**What this means for anyone relying on a green `test/e2e` run.** A
+pass proves the operator was not denied anything it actually asked
+the API server for while the check was watching. It does not prove
+every permission the ClusterRole grants is exercised, and — this
+entry's finding — it specifically does not prove a *watched* resource
+type (anything reached only through the manager's cache: `Owns()`,
+`For()`, the restricted caches in `cmd/spawnery-operator/main.go`) is
+correctly permissioned, because a missing permission there produces no
+signal this check — or, on this evidence, the pod's log at all —
+ever surfaces. Proving that class needs either a second signal this
+check does not currently read (the metrics endpoint;
+`kubectl logs --previous` after a restart, if the informer failure
+ever does become fatal on some other code path) or CR-driven traffic
+that forces a controller to actually call through to a live List
+rather than only register a watch for one. Milestone 6a's Tasks 5
+through 8, which apply `test/e2e/manifests/e2e.yaml` and drive
+reconciles, narrow this for the reconciler-triggered call sites but do
+not by themselves explain why the *informer's own* initial sync — which
+the vendored source's comment says should retry and log on its own,
+unconditionally, without any reconcile — produced nothing observable
+here. That mechanism was not chased further; full raw output for both
+the silent and the loud mutations is in
+`.superpowers/sdd/2026-08-16-operator-image-and-e2e/task-4-report.md`,
+"Fix round 2".
+
+## From milestone 6a (the operator in a cluster)
+
+6a gives the operator its own OCI image, one publish path for all three images,
+and `make e2e`: a `kind` cluster in which the operator runs as a Deployment
+under its own ServiceAccount while a Go test package drives it through twelve
+ordered subtests — design §7.1's nine scenarios, plus the operator's own
+health, plus §7.3's permission table against the real authorizer, plus §7.2's
+last one, which reads the operator's whole log for `is forbidden:`. The section
+above — Task 4's
+measurement round — belongs to this milestone too and is not repeated here; the
+first item below is what answered its open question.
+
+**The denial check fires on a write verb, and the shape of what it misses is
+narrower than "reads".** Removing `create` on `pods` from the markers produced
+a quoted `... is forbidden: ... cannot create resource "pods" ...` on the first
+attempt, with the operator still healthy and `theOperatorWasNeverDenied` still
+able to read it — the combination Task 4 tried four ways and could not produce.
+
+Be exact about the other side, because it is easy to over-read. What was
+revoked and watched is **two cache-backed `list` verbs**: `pods: list`, for
+seven and three-quarter minutes continuously, and `networks: list`. Neither
+produced anything. **No uncached read was ever revoked and watched**, so
+"the check misses read verbs" is not a measured statement — it is the
+conclusion of a hypothesis, and the hypothesis is the one the section above
+declines to assert: that such a read goes through the manager's cache, whose
+initial sync is a watch rather than a `list`, so a revoked verb never reaches a
+request the API server could deny, while a write goes to the API server
+directly and does. That hypothesis would also have to account for the anomaly
+the section above records and does not explain. What is established is the
+asymmetry between a revoked write and those two revoked lists, and no more.
+
+**And a denied read can escape this check for a reason that has nothing to do
+with the cache.** `readForwardingSecret`
+(`internal/controller/forwardingsecret.go`) deliberately uses the *uncached*
+reader, so a missing `secrets: get` in a `Network`'s namespace really is a 403
+from the API server — and the function folds it into a `forwardingRead` whose
+message reads "the operator may not read secret …", with no `is forbidden:`
+substring anywhere in it. The read sits after `network_controller.go`'s
+`Accepted` branch has already returned, so no scenario fails either, and that
+controller makes no logger call at all. The check would stay green through it.
+`hack/e2e.sh` claimed the opposite until this was checked; its comment now says
+so. The general lesson for anyone extending the check: it can only see what
+something logs, so an error the code handles well is invisible to it by the
+same mechanism that makes the handling good.
+
+**"The whole log" is only as whole as the container is old, and the check now
+says so itself.** Until the milestone's final fix wave, `operatorLog` passed an
+empty `PodLogOptions`, which returns the *current* container's log and nothing
+else, and the restart count was read once — by the first subtest, before any
+scenario had driven a single call. An operator OOM-killed mid-run on this
+3.9 GB host would have left the last subtest reading a log that began after the
+interesting part, and a replacement process making no denied call of its own
+would have reported PASS over a run it had covered a fraction of.
+`theOperatorWasNeverDenied` now re-reads the pod, prepends the previous
+container's log where the kubelet still has it, and fails on any restart at
+all. Kubernetes keeps exactly one container back, so from the second restart on
+there is a stretch nothing can read — which is why the check errors rather than
+patching over it.
+
+**Two permissions in the table that no driven scenario exercises,** measured on
+a held cluster at the end of Task 8 rather than guessed:
+
+- `persistentvolumeclaims: patch` — **measured.** `growClaim`
+  (`internal/controller/server_controller.go`) patches only when
+  `spec.storage.size` has grown past what the claim already requests. No
+  scenario changes a group's `storage.size` after its claim exists —
+  `test/e2e/manifests/e2e.yaml` fixes `survival` at `1Gi` and every patch the
+  harness makes goes to `replicas` or the scaling bounds — so the guard
+  short-circuits before the `Patch`. Confirmed at the end of the run: both
+  `survival-*-data` claims still request and hold their original `1Gi`.
+- `tokenreviews: create` — **reasoned, not measured.** No image in the run
+  resolves, so no agent process exists anywhere to open a stream, and
+  `grpcauth.Authenticator.Authenticate` is never called. This one could not be
+  confirmed the way the other was: this client-go build's
+  `rest_client_requests_total` carries only `method`, `code` and `host`, with
+  no `resource` or `verb` label, so a TokenReview `POST` is indistinguishable
+  in that counter from the run's ninety-odd other creates. Disaggregating it
+  would need API server audit logging, which this harness's cluster does not
+  enable.
+
+Both are absence-of-agent gaps in what the harness proves rather than defects:
+a deployment with a resolvable image exercises both. `pods: patch` is
+deliberately **not** on this list, and why is under "On the RBAC audit" below.
+
+**The digest reference in `config/deploy/deployment.yaml` is exercised by
+nothing.** `hack/e2e.sh` patches the Deployment's image to the archive it just
+built and sets `imagePullPolicy: Never`, precisely so the run tests those bits
+and not whatever a registry holds — so `make e2e` never resolves the reference
+the manifest ships. Nor has anything else: no `make publish` has been driven
+(see "No image is published" above), so no digest has ever been written back
+and the manifest still carries the version tag. The design's acceptance
+criterion 7 — "a digest reference that resolves" — is therefore **open**, and
+it is the repository owner's to close, in the same way an evidence run is.
+
+**The E2E cluster is a single node, so a whole class of behaviour is
+untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
+single-node topology. Nothing in the run can reach node drain and its taint
+handling (4c-3), a PodDisruptionBudget's effect on a real eviction, `HostPort`
+and its CNI dependency, a `LoadBalancer` address, or CIS `restricted` pod
+security. Those belong to the RKE2 rollout at the end of milestone 6 (design
+§12), and until it is driven they are unproven rather than merely untested.
+
+**No image in the run resolves, by decision, so no game or proxy process ever
+starts.** Every pod sits in `ErrImagePull`/`ImagePullBackOff` for the whole
+run. Out of reach in consequence: the second stage of the ready gate, which
+needs a connected agent; `ServerReconciler.syncOccupiedLabel` and the PDB
+upkeep, which need a server that has been `Ready` once; growing a claim; and a
+join. There is no cheap stand-in either — the server pod's readiness probe
+execs `/usr/local/bin/spawnery-slp` against `127.0.0.1:25565`, and both that
+binary and something answering a server-list ping exist only in the real Paper
+image.
+
+**A claim binds in this harness even though no container ever runs.** kind's
+default class is `rancher.io/local-path` with
+`volumeBindingMode: WaitForFirstConsumer`, which binds on the first pod
+*scheduled* to consume the claim, not the first pod that actually runs. The
+pods here are scheduled — a single control-plane node has nothing stopping
+that — and only then get stuck pulling. An earlier version of the manifest's
+own comment asserted `Pending` from the binding mode alone, without checking;
+the measured answer is `Bound`.
+
+**`config/rbac/role.yaml` cannot be applied before `spawnery-system` exists.**
+It carries a cluster-scoped ClusterRole *and* a namespaced Role for the
+operator's own Secret and Lease rights, and `kubectl apply -f config/deploy/`
+walks that directory in alphabetical file order — `clusterrolebinding`,
+`deployment`, `namespace` — so the Deployment reaches the API server before the
+namespace does. The Role half was reproduced on the first run of `hack/e2e.sh`
+as `namespaces "spawnery-system" not found`, not reasoned about; the Deployment
+half follows from the same ordering. The script now applies
+`config/deploy/namespace.yaml` on its own before either. The Helm chart in 6d inherits
+exactly this ordering problem and has to answer it with Helm's own ordering
+rather than by copying a script.
+
+**Any patch to a `ServerGroup`'s spec bumps `metadata.generation`,** and
+therefore starts a rolling update beside whatever the patch was for. Task 5's
+scaling scenario was written against `minReplicas`, passed, and passed for the
+wrong reason: what it observed was churn from the run's own 20-second startup
+deadline rather than a scaling decision, and the rewrite that fixed it walked
+into the same trap once more — a cold start refused by the ceiling instead of
+the plain over-ceiling branch. Anyone adding a scenario that patches a spec
+should assume a generation change rides along and say which branch the
+assertion is actually pinning. (`docs/known-issues.md`'s "From milestone 4b"
+section carries the same property as a product concern.)
+
+**A group's count of live servers briefly touched zero under sustained
+churn** before recovering — observed during Task 5, not investigated, and
+recorded here for whoever next looks at backoff and replacement timing.
+
+**The orphan sweep dispatches on `podspec.LabelRole`.** A fixture pod built
+without that label is never routed to `sweepServerPod`
+(`internal/controller/orphan.go`), so a scenario built on one tests nothing
+while looking like it does. Task 6's brief shipped with exactly that defect and
+it was caught by reading the switch rather than by the run.
+
+**Smaller things this milestone leaves, none of them shipping behaviour:**
+
+- `hack/publish.sh`'s `WRITE_DIGEST` `sed` exits 0 and reports success even
+  when it matches nothing. Inert today — the manifest has one matching line,
+  verified by count — and silent if that line's shape ever moves. A `grep -q`
+  guard before the `sed` closes it.
+- `hack/operator-image-test.sh` says Go's `flag` package "exits 2 for `-h`"; it
+  exits 0, and 2 is for parse errors. The script discards the status and
+  matches on output, so nothing depends on it — it only misleads the next
+  reader. The same sentence is in the milestone's plan text.
+- `test/e2e/rbac_test.go` prints each permission's `Why` twice, because
+  `Permission.String()` already appends it.
+- Swapping the namespace in `test/e2e/rbac_test.go`'s third loop to the
+  operator's own namespace would leave the scenario green, because
+  `secrets: get` is granted there too for `certs.Store.Ensure`. The loop is
+  correct as written; the mutation is simply not catchable by it.
+
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
 **The CA has no rotation procedure.** The bundle format of the CA ConfigMap is
@@ -2560,6 +2850,25 @@ intentional — the following points each concern only one of the two halves.
 - **The flags in the Deployment are unchecked.** `sigs.k8s.io/yaml` is not
   strict, so a mistyped key disappears silently. The spec requires
   `--startup-deadline=20s` for level B; no test guards that so far.
+
+  *Closed by milestone 6a, and the required value above was wrong by the time
+  it was.* `config/deploy/deployment.yaml` is now a manifest a person installs
+  rather than scaffolding, so the value it has to carry is the production one:
+  `--startup-deadline=5m`, `cmd/spawnery-operator/main.go`'s own default.
+  `hack/e2e.sh` appends a second `--startup-deadline=20s` for its own run and
+  Go's `flag` package takes the last occurrence, so level B gets its short
+  deadline without the installed manifest carrying a test value. The check is
+  `TestTheOperatorDeploymentCarriesProductionFlags`
+  (`internal/rbacaudit/deploy_envtest_test.go`), which parses the container's
+  args, rejects any flag it was not told about, and asserts a **floor** of at
+  least five minutes rather than an exact string — a longer deadline is a
+  legitimate operator choice and 20s is not. `readManifest` in that file
+  decodes with `yaml.UnmarshalStrict`, so a mistyped *key* is an error there
+  rather than a silent zero value; it turned no manifest red when it landed, so
+  it guards the next edit rather than fixing an existing fault, and the other
+  decode sites in the same file are still non-strict.
+  `TestTheOperatorImageIsNotAMutableTag` beside it guards what the manifest
+  points at.
 - **Nothing enforces that `Why` is filled in and `Required` is free of
   duplicates.** `Compare` collects duplicates, and the last one wins.
 - **The `configmaps` grant's `Why` no longer names everything that uses it.**
@@ -2570,6 +2879,26 @@ intentional — the following points each concern only one of the two halves.
   permission itself is correct — the group ConfigMaps and the CA ConfigMap
   really do share one verb set — only the documentation trailed behind the
   second consumer.
+- **The `pods: patch` grant's `Why` names the one call site this harness never
+  reaches.** Same shape as the entry above it, found by milestone 6a's Task 8
+  while measuring what the driven run does and does not exercise.
+  `internal/rbacaudit/required.go` documents `pods: patch` as
+  "syncOccupiedLabel patches the occupied label" — that is
+  `ServerReconciler.syncOccupiedLabel`, whose guard runs through `isOccupied`
+  and needs `wasRegistered` to be true, which needs an agent to have registered,
+  which never happens in a harness where no image resolves. The grant is
+  nevertheless exercised on every run, by a second call site the `Why` does not
+  name: `ProxyGroupReconciler.syncOccupiedLabels`
+  (`internal/controller/proxygroup_controller.go`), whose rule is
+  `proxyOccupiedForBudget` — a proxy pod the registry has never heard from
+  counts as occupied until `phase.StreamDownGrace` (15s) has passed, whatever
+  its readiness, so every proxy pod gets the label patched on and then off
+  again within its first fifteen seconds. Twenty denials naming
+  `cannot patch resource "pods" ... "controller":"proxygroup"` were observed in
+  the mutation run, which is what makes this measured rather than reasoned.
+  The permission itself is correct and belongs in the table; only its `Why` is
+  incomplete, and nobody should read "`pods: patch` was exercised" as evidence
+  that occupied-label sync for *Servers* has ever run here.
 
 ## Small things
 
@@ -2608,6 +2937,17 @@ intentional — the following points each concern only one of the two halves.
   the shared symlink, up to a half-written one mid-swap. `nix build
   --out-link` with two distinct names (e.g. `result-paper` and
   `result-velocity`) closes it; nothing does that today.
+
+  *Closed by milestone 6a, with the fix this entry named.* `image` builds to
+  `result-paper`, `velocity-image` to `result-velocity` and the new
+  `operator-image` to `result-operator`, each `*-load` target reading its own
+  link (`Makefile`). The race is closed: no two targets that a parallel `make
+  -jN` can run at the same time write the same symlink any more, so the
+  left-to-right ordering that made plain `make image-test` safe is no longer
+  what makes it correct, and a third image did not reopen it. `./result`
+  itself is not gone from the tree — `make agent` still runs `nix build
+  .#agents` with no `--out-link` — it is only no longer shared between two
+  builds one command can start together.
 - **`record.FakeRecorder`'s buffered channel blocks its writer once full.**
   Almost every fixture in `internal/controller` builds its recorder with
   `record.NewFakeRecorder(100)`, but the buffer is per call site and not a

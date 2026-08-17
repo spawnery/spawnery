@@ -1,9 +1,15 @@
-# What both Spawnery images need verbatim.
+# What both Spawnery *game* images need verbatim.
 #
 # Extracted while there was exactly one consumer, which is the only cheap time
 # to do it: two images that each grew their own copy of the numeric user or the
 # binary path would still start, and would differ in ways that only surface as
 # a pod that runs as the wrong uid or an exec probe that cannot find its tool.
+#
+# The operator image is a third consumer and takes only the identity from here
+# -- uid, gid, passwd, group -- because layeredImage below is a game server's
+# frame: it creates /data and /tmp and sets WorkingDir=/data. See
+# nix/operator-image.nix, which builds its own. That absence is deliberate and
+# not an oversight.
 { runCommand
 , runtimeShell
 , writeTextDir

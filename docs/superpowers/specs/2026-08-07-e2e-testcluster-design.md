@@ -1,5 +1,16 @@
 # Design: A reproducible E2E test cluster and proof of RBAC
 
+> **Status, 2026-08-16.** Level A (§5.1) is built and in service as
+> `internal/rbacaudit`. Level B was never built, and milestone 6a builds it
+> differently: see
+> [`2026-08-16-operator-image-and-e2e-design.md`](2026-08-16-operator-image-and-e2e-design.md).
+> **§2 (the NixOS VM), §3 (the three flake outputs) and §7 (`make e2e` calling
+> `nix build .#checks…`) are superseded** by that document; §4, §5.2, §5.3, §6
+> and §8 are carried forward there, amended. The text below is kept as written
+> rather than corrected in place, because §2's argument — that this machine has
+> no container runtime — was true when it was made and stopped being true at
+> milestone 2b.
+
 **Date:** 2026-08-07
 **Status:** Draft for approval
 **Scope:** Test infrastructure for Spawnery on two levels — a permission table
