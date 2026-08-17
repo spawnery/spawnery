@@ -7,7 +7,11 @@ drives it through twelve ordered scenarios and then reads its whole log for
 and they are open in the sense of "nobody has done it", not "it does not work":
 no real `make publish` has been driven, so the digest reference in
 `config/deploy/deployment.yaml` has never been resolved by anything. Both are
-the repository owner's, like an evidence run. §1 says why.
+the repository owner's, like an evidence run. A third — `make image-repro`
+rebuilding all three images bit-identically — is **partially open**: it is
+driven and clean for the operator image, but untested for the other two images
+and the agent jars, for a different reason than the first two — hardware, not
+a token. §1 says why.
 
 This document is not a spec. It says where 6a stopped and what 6b —
 NetworkPolicies — finds when it starts, checked against the code as 6a leaves
@@ -35,11 +39,11 @@ against a different spec.
   2026-08-17, `nix build .#spawnery-operator --rebuild` (57s) and `nix build
   .#operator-image --rebuild` both came back clean. `make image-repro` names
   the other two images and the agent jars in the same target, and **that part
-  has not been driven** since the operator's line was added — a rebuild of two
-  724 MB images and the agent jars on a 3.9 GB host with no swap was judged not
-  worth the risk in the fix wave that drove the operator's. Acceptance
-  criterion 2 is therefore met for the operator image and untested for the
-  other two.
+  has not been driven** since the operator's line was added — a rebuild of a
+  724 MB and a 735 MB image plus the agent jars on a 3.9 GB host with no swap
+  was judged not worth the risk in the fix wave that drove the operator's.
+  Acceptance criterion 2 is therefore met for the operator image and untested
+  for the other two.
 - `make image-repro` builds each image before rebuilding it, which it did not
   do until that same fix wave. `nix build --rebuild` compares against the
   output already in the store, and with nothing there it does not fail the
