@@ -48,18 +48,52 @@ func theTestManifestIsAccepted(t *testing.T) {
 	// assertion is what keeps that a decision -- if somebody points the manifest
 	// at a real tag, this fails and says why rather than quietly making every
 	// run pull 724 MB.
+	//
+	// It reads the pod's *spec*, not its container statuses, and that is the
+	// whole point. An earlier version looked for a container in state Running,
+	// which cannot fail for the failure it names: it runs one synchronous poll
+	// after the pods were created, and at that instant no container is Running
+	// under any image, resolvable or not -- task-8-report.md timed the whole
+	// subtest at 0.56s. Repointing the manifest at a published tag would have
+	// left it green while every run downloaded 724 MB and started real servers.
+	// The image a pod asks for is settled the moment the pod object exists, so
+	// comparing it is structural: no race, no window, and red on the first run
+	// after the manifest moves.
+	assertPodsUseTheUnresolvableImage(t, "lobby", unresolvableServerImage)
+}
+
+// unresolvableServerImage is what test/e2e/manifests/e2e.yaml names, restated
+// here rather than read back from the manifest or from the ServerGroup.
+// Reading it from either source would compare the manifest against itself and
+// pass whatever it was changed to, which is exactly the change this package
+// has to notice (spec §7.4).
+const unresolvableServerImage = "ghcr.io/spawnery/paper:e2e-no-such-tag"
+
+// assertPodsUseTheUnresolvableImage checks that every container of every pod of
+// one group asks for want, and that there was at least one pod to check -- a
+// loop over an empty list passes without asserting anything, and PASS would
+// look identical.
+func assertPodsUseTheUnresolvableImage(t *testing.T, group, want string) {
+	t.Helper()
+
 	var pods corev1.PodList
 	if err := k8s.List(ctx, &pods,
 		client.InNamespace(testNamespace),
-		client.MatchingLabels{podspec.LabelGroup: "lobby"}); err != nil {
-		t.Fatalf("list lobby pods: %v", err)
+		client.MatchingLabels{podspec.LabelGroup: group}); err != nil {
+		t.Fatalf("list %s pods: %v", group, err)
+	}
+	if len(pods.Items) == 0 {
+		t.Fatalf("no pods in group %s to check the image of", group)
 	}
 	for _, p := range pods.Items {
-		for _, c := range p.Status.ContainerStatuses {
-			if c.State.Running != nil {
-				t.Errorf("pod %s is running. Milestone 6a loads no game image and its "+
-					"manifest names an unresolvable one on purpose (spec §7.4); a running "+
-					"server here means the manifest was pointed at a real tag", p.Name)
+		for _, c := range p.Spec.Containers {
+			if c.Image != want {
+				t.Errorf("pod %s container %s asks for image %q, want %q. Milestone 6a "+
+					"loads no game image and test/e2e/manifests/e2e.yaml names an "+
+					"unresolvable one on purpose (spec §7.4); a resolvable reference here "+
+					"means the manifest was pointed at a real tag, and every run of this "+
+					"suite would download 724 MB and start real servers",
+					p.Name, c.Name, c.Image, want)
 			}
 		}
 	}
@@ -119,12 +153,58 @@ func theGroupScalesUp(t *testing.T) {
 // short of the 20s attrition floor -- so this assertion fails on its own if
 // the fast path ever breaks, rather than passing anyway, slowly, on a
 // mechanism this scenario does not mean to exercise.
+//
+// The deadline alone does not carry that argument, and the comment above used
+// to imply it did. A Server's twenty seconds are counted from
+// status.StartedAt, which server_controller.go:182-184 stamps when the
+// Server's *pod* is created -- back in scenario 2, not here. So the margin
+// between this deadline and the attrition floor is not 15s against 20s; it is
+// 15s against whatever is left of a clock that started two scenarios ago, and
+// under load there may be nothing left of it. Today's runs shed the surplus in
+// well under a second, so the gap is enormous, but the assertion must not
+// depend on that staying true.
+//
+// What the wait therefore checks is not a count but *how* the count fell.
+// Attrition and a scaling decision leave different traces: a Server that runs
+// out its startup deadline turns Failed and its object stays for
+// failedRetentionSeconds (30s here, longer than this whole window), while one
+// the ceiling sheds is deleted and, once its finalizer is released, is gone
+// from the API entirely. Requiring that one of the three Servers that were
+// live when this scenario began has *disappeared* -- not merely dropped out of
+// the non-Failed count -- makes attrition unable to satisfy this assertion at
+// any speed, which is what the paragraph above claims and what a bare count
+// could not deliver.
 func theCeilingShedsSurplus(t *testing.T) {
+	before := make(map[string]bool)
+	for _, s := range nonFailedServersInGroup(t, "lobby") {
+		before[s.Name] = true
+	}
+	if len(before) != 3 {
+		t.Fatalf("the lobby group has %d live Servers, want the 3 scenario 3 left; "+
+			"this scenario is about which one of them the ceiling sheds", len(before))
+	}
+
 	patchScalingBounds(t, "lobby", 2, 2)
 	eventuallyStable(t, 15*time.Second, 3*time.Second,
-		"the surplus Server to go, and stay gone", func() (bool, string) {
-			servers := nonFailedServersInGroup(t, "lobby")
-			return len(servers) == 2, fmt.Sprintf("%d non-Failed Servers", len(servers))
+		"the surplus Server to be deleted, and stay gone", func() (bool, string) {
+			all := serversInGroup(t, "lobby")
+			still := make(map[string]bool, len(all))
+			live := 0
+			for _, s := range all {
+				still[s.Name] = true
+				if s.Status.Phase != string(phase.Failed) {
+					live++
+				}
+			}
+			deleted := 0
+			for name := range before {
+				if !still[name] {
+					deleted++
+				}
+			}
+			return live == 2 && deleted >= 1,
+				fmt.Sprintf("%d non-Failed Servers, %d of the 3 originals deleted outright",
+					live, deleted)
 		})
 }
 

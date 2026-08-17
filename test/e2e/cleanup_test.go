@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -145,7 +146,7 @@ func theStartupDeadlineFailsAServerAndClearsIt(t *testing.T) {
 	eventually(t, 3*time.Minute, "a Server to reach phase Failed", func() (bool, string) {
 		var seen []string
 		for _, s := range serversInGroup(t, "lobby") {
-			if s.Status.Phase == "Failed" {
+			if s.Status.Phase == string(phase.Failed) {
 				return true, ""
 			}
 			seen = append(seen, fmt.Sprintf("%s=%s", s.Name, s.Status.Phase))
@@ -155,7 +156,7 @@ func theStartupDeadlineFailsAServerAndClearsIt(t *testing.T) {
 
 	eventually(t, 3*time.Minute, "the failed Server's corpse to be cleared", func() (bool, string) {
 		for _, s := range serversInGroup(t, "lobby") {
-			if s.Status.Phase == "Failed" {
+			if s.Status.Phase == string(phase.Failed) {
 				age := time.Since(s.Status.FailedAt.Time)
 				return false, fmt.Sprintf("%s still Failed, %s old", s.Name, age.Round(time.Second))
 			}
