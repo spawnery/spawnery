@@ -368,18 +368,70 @@ anything, and until someone pushes, every consumer still loads the images into
 their cluster by hand. The run is single-node, so node drain, `HostPort` and
 CIS pod security wait for the RKE2 rollout at the end of milestone 6.
 
-Milestone 6 continues with 6b, NetworkPolicies — the one piece with a security
-consequence, overdue since `online-mode=false` landed in 3b — then 6c, the
-`LoadBalancer` and `HostPort` expose strategies, 6d, the Helm chart, and 6e,
-CI. It ends with the whole system rolled out to a real RKE2 cluster and driven
-from a runbook.
+Milestone 6b is done: the traffic rules, and the agent channel's availability
+half. An accepted `Network` now writes a `NetworkPolicy` into its own
+namespace, owned by that `Network` so the garbage collector takes it away
+again, selecting the network's own server pods: ingress on 25565 from that same
+network's proxies in that same namespace, egress to cluster DNS and to the
+operator's agent port, and nothing else either way. `config/deploy/` gains a
+second policy, which selects the operator pod and admits 9443 only from pods
+carrying `spawnery.cloud/managed-by` in any namespace — cross-namespace by
+construction, because every managed pod in every game namespace dials the one
+operator. Behind it the agent channel finally got the bounds it never had
+(`MaxConcurrentStreams`, `ConnectionTimeout`, an idle reaper and a keepalive
+enforcement policy), a `TokenReview` cache that deliberately does not cache the
+pod lookup — so deleting a pod, the revocation an operator actually performs,
+still takes effect on the next connection attempt — and a per-peer token bucket
+consulted only when that cache misses.
 
-Anyone starting milestone 6b begins at
-[`docs/handover-milestone-6.md`](docs/handover-milestone-6.md): it says where
-6a stopped, what 6b finds in place, the one structural thing 6b has to decide
-about who writes a NetworkPolicy and where, and what 6c, 6d and the RKE2
-rollout inherit. It is written to be read by someone with no memory of how any
-of this was built.
+The one thing worth naming is the asymmetry: the policy selects backends and
+not proxies. A server's readiness probe is an `exec` inside its own container
+against `127.0.0.1`, which no NetworkPolicy governs; a proxy's is a dial from
+the kubelet, which one might, and whether kubelet traffic is subject to policy
+at all depends on the CNI. The invariant at stake is entirely a backend's — a
+Paper server runs `online-mode=false`, authenticates nobody, and trusts
+whatever completes the modern-forwarding handshake with the right secret — so
+6b selects backends and puts no game pod's readiness at a CNI's mercy. The one
+place it could not avoid the question is the operator's own policy, which
+selects the operator pod and therefore has to admit the kubelet's probe from a
+source no selector can name; that rule has no `from` at all, which is the only
+formulation correct on every CNI. The price of leaving proxies alone is stated
+rather than hidden: nothing restricts who may open a connection to a proxy's
+25565 from inside the cluster, and the proxy is the front door that has to
+accept the world anyway.
+
+What it leaves open is why none of the above should be read as protection:
+**6b has not observed a single connection being refused, anywhere.** kindnet,
+the CNI `make e2e` runs on, was measured to enforce nothing: with the operator
+policy's kubelet-probe rule deleted, so that the object in force denied the
+probe outright, the run stayed green and the rollout succeeded on its usual
+timeline. Both alternative explanations were closed, because the readiness
+probe is an `httpGet` over the real network path that `kubectl rollout status`
+cannot succeed without, and `hack/e2e.sh` recreates the cluster every run with
+the apply log reading `created` rather than `unchanged`. What that measures is
+one ingress rule; that kindnet implements no NetworkPolicy controller at all,
+in either direction, is its documentation rather than anything observed here.
+So 6b ships objects, asserts them as objects, and says so in the tests' own
+comments. Whether they enforce anything is a property of a cluster's CNI that
+no run here has tested on any CNI — including the design's one portability
+trap, whether a pod-selector egress rule still matches after kube-proxy has
+DNATed a Service ClusterIP to a pod IP. The RKE2 rollout at the
+end of milestone 6 is the first thing that can turn these objects into a
+guarantee.
+
+Milestone 6 continues with 6c, the `LoadBalancer` and `HostPort` expose
+strategies, then 6d, the Helm chart, and 6e, CI. It ends with the whole system
+rolled out to a real RKE2 cluster and driven from a runbook.
+
+Anyone starting milestone 6c begins at
+[`docs/handover-milestone-6b.md`](docs/handover-milestone-6b.md): it says where
+6b stopped, what it proved and what it only wrote down, what 6c finds in place,
+and what the RKE2 rollout now owes — which has grown by everything 6b could not
+prove. It is written to be read by someone with no memory of how any of this
+was built.
+[`docs/handover-milestone-6.md`](docs/handover-milestone-6.md), written for 6b
+and kept because its §2 and §3 are the record of what 6b started from and had
+to decide,
 [`docs/handover-milestone-5.md`](docs/handover-milestone-5.md),
 [`docs/handover-milestone-4b.md`](docs/handover-milestone-4b.md),
 [`docs/handover-milestone-4.md`](docs/handover-milestone-4.md),

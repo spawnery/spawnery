@@ -10,6 +10,20 @@ no real `make publish` has been driven, so the digest reference in
 the repository owner's, like an evidence run. The other seven are met,
 including the bit-identical rebuild — see §1.
 
+**Superseded as the document to start from: milestone 6b has landed, and
+anyone starting 6c begins at
+[`handover-milestone-6b.md`](handover-milestone-6b.md).** This one is kept
+unedited as the record of what 6b started from — §2's survey of the tree and
+§3's open structural question are the evidence base for the decisions 6b then
+made, and the tense in both is the tense of 2026-08-17, before 6b existed.
+Three things it leaves in the present tense are now answered and must not be
+read as open: the operator writes the per-namespace policy itself (§3's first
+shape, chosen); 6b did close the agent channel's availability gap as well as
+its network half (§4's first bullet); and the CNI question §2 ends on was
+measured rather than left to whoever came next — kindnet enforces no
+NetworkPolicy, so nothing in this repository has observed a connection being
+refused. §2 of 6b's handover is that measurement.
+
 This document is not a spec. It says where 6a stopped and what 6b —
 NetworkPolicies — finds when it starts, checked against the code as 6a leaves
 it rather than against the plan that preceded it. The design decisions live in
