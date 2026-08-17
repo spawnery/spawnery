@@ -29,6 +29,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -600,4 +601,93 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods checks the one
+// shipped NetworkPolicy, and every hop of it lives in a different file.
+//
+// Two mistakes it exists to catch. A podSelector copied from a managed pod's
+// labels selects nothing here — the operator pod deliberately does not carry
+// spawnery.cloud/managed-by — and a policy that selects nothing fails open,
+// which looks exactly like one that works. And a peer without an empty
+// namespaceSelector would admit only pods in spawnery-system, while every
+// managed pod in the cluster dials in from its own game namespace.
+func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
+	var policy networkingv1.NetworkPolicy
+	var deploy appsv1.Deployment
+	readManifest(t, "config/deploy/networkpolicy.yaml", &policy)
+	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+
+	if policy.Namespace != deploy.Namespace {
+		t.Errorf("policy namespace = %q, deployment namespace = %q — a "+
+			"NetworkPolicy only governs pods in its own namespace",
+			policy.Namespace, deploy.Namespace)
+	}
+
+	podLabels := deploy.Spec.Template.Labels
+	for k, v := range policy.Spec.PodSelector.MatchLabels {
+		if podLabels[k] != v {
+			t.Errorf("the policy selects %s=%q but the operator pod carries "+
+				"%s=%q — the policy would select nothing, and a policy that "+
+				"selects nothing fails open", k, v, k, podLabels[k])
+		}
+	}
+	if len(policy.Spec.PodSelector.MatchLabels) == 0 {
+		t.Error("an empty podSelector selects every pod in the namespace")
+	}
+
+	var agentRule, probeRule *networkingv1.NetworkPolicyIngressRule
+	for i := range policy.Spec.Ingress {
+		rule := &policy.Spec.Ingress[i]
+		if len(rule.From) == 0 {
+			probeRule = rule
+			continue
+		}
+		agentRule = rule
+	}
+
+	if agentRule == nil {
+		t.Fatal("no ingress rule with a peer: nothing admits the agents")
+	}
+	if len(agentRule.From) != 1 {
+		t.Fatalf("the agent rule has %d peers, want exactly one", len(agentRule.From))
+	}
+	peer := agentRule.From[0]
+	if peer.NamespaceSelector == nil || len(peer.NamespaceSelector.MatchLabels) != 0 {
+		t.Errorf("the agent peer's namespaceSelector = %v, want an empty one — "+
+			"every managed pod dials in from its own game namespace, and the "+
+			"operator's chart cannot know those names", peer.NamespaceSelector)
+	}
+	if peer.PodSelector == nil ||
+		peer.PodSelector.MatchLabels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+		t.Errorf("the agent peer must select %s=%s; got %v",
+			podspec.LabelManagedBy, podspec.ManagedByValue, peer.PodSelector)
+	}
+	if len(agentRule.Ports) != 1 || agentRule.Ports[0].Port.IntValue() != int(podspec.AgentPort) {
+		t.Errorf("the agent rule admits %v, want only %d", agentRule.Ports, podspec.AgentPort)
+	}
+
+	// Selecting the pod at all makes it default-deny for ingress, which covers
+	// the kubelet's probes and any metrics scrape. Both have to be admitted
+	// explicitly or the operator goes NotReady the moment this policy lands.
+	if probeRule == nil {
+		t.Fatal("no peerless ingress rule: the kubelet's probe to the health " +
+			"port is denied, and the operator goes NotReady")
+	}
+	admitted := map[int]bool{}
+	for _, p := range probeRule.Ports {
+		admitted[p.Port.IntValue()] = true
+	}
+	if len(deploy.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
+	}
+	for _, p := range deploy.Spec.Template.Spec.Containers[0].Ports {
+		if p.Name == "agent" {
+			continue
+		}
+		if !admitted[int(p.ContainerPort)] {
+			t.Errorf("the container declares port %q (%d) and the policy does "+
+				"not admit it", p.Name, p.ContainerPort)
+		}
+	}
 }
