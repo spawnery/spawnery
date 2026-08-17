@@ -31,4 +31,21 @@ var AuthFailures = prometheus.NewCounterVec(
 	[]string{"role"},
 )
 
-func init() { metrics.Registry.MustRegister(AuthFailures) }
+// ReviewCacheHits and ReviewCacheMisses make the cache visible. Milestone 6a
+// established that a mechanism reporting nothing is indistinguishable from an
+// absent one, and a cache nobody can see cannot be shown to be working.
+var (
+	ReviewCacheHits = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "spawnery_agent_token_review_cache_hits_total",
+		Help: "Token checks answered without asking the API server.",
+	})
+	ReviewCacheMisses = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "spawnery_agent_token_review_cache_misses_total",
+		Help: "Token checks that required a TokenReview.",
+	})
+)
+
+func init() {
+	metrics.Registry.MustRegister(AuthFailures)
+	metrics.Registry.MustRegister(ReviewCacheHits, ReviewCacheMisses)
+}

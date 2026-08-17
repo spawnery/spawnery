@@ -119,6 +119,10 @@ type Authenticator struct {
 	Reviews  TokenReviewer
 	Pods     PodChecker
 	Audience string
+
+	// Cache remembers what the API server said about a token. Optional: a nil
+	// cache reviews every time, which is what the tests that predate it do.
+	Cache *ReviewCache
 }
 
 // unavailableErr marks an error as the Kubernetes API server itself failing
@@ -152,53 +156,81 @@ func serviceAccountFor(role agent.Role) string {
 // the way the Secret and the Lease are.
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 
+// reviewToken is everything a TokenReview establishes about a token by itself:
+// that the API server authenticated it for our audience, that the subject is a
+// ServiceAccount, and which pod it is bound to. It stops short of the role
+// check and the pod lookup, which is what makes its answer cacheable -- the
+// role varies per call, and the pod lookup is the half that must stay live.
+func (a *Authenticator) reviewToken(ctx context.Context, token string) (reviewResult, error) {
+	review, err := a.Reviews.Create(ctx, &authnv1.TokenReview{
+		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{a.Audience}},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		return reviewResult{}, wrapUnavailable(fmt.Errorf("token review unavailable: %w", err))
+	}
+	if !review.Status.Authenticated {
+		return reviewResult{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
+	}
+	if !containsString(review.Status.Audiences, a.Audience) {
+		return reviewResult{}, fmt.Errorf("token not authenticated for audience %q", a.Audience)
+	}
+	namespace, name, ok := splitServiceAccount(review.Status.User.Username)
+	if !ok {
+		return reviewResult{}, fmt.Errorf("not a service account: %q", review.Status.User.Username)
+	}
+	podName := firstExtra(review.Status.User.Extra, claimPodName)
+	podUID := firstExtra(review.Status.User.Extra, claimPodUID)
+	if podName == "" || podUID == "" {
+		return reviewResult{}, fmt.Errorf("token is not bound to a pod")
+	}
+	return reviewResult{
+		Namespace:      namespace,
+		ServiceAccount: name,
+		PodName:        podName,
+		PodUID:         podUID,
+	}, nil
+}
+
 // Authenticate returns the identity behind a token, or why it is refused.
 func (a *Authenticator) Authenticate(ctx context.Context, token string, want agent.Role) (Identity, error) {
 	if token == "" {
 		return Identity{}, fmt.Errorf("no token presented")
 	}
 
-	review, err := a.Reviews.Create(ctx, &authnv1.TokenReview{
-		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{a.Audience}},
-	}, metav1.CreateOptions{})
+	res, err, cached := a.Cache.lookup(token)
+	if cached {
+		ReviewCacheHits.Inc()
+	} else {
+		ReviewCacheMisses.Inc()
+		res, err = a.reviewToken(ctx, token)
+		a.Cache.store(token, res, err)
+	}
 	if err != nil {
-		return Identity{}, wrapUnavailable(fmt.Errorf("token review unavailable: %w", err))
-	}
-	if !review.Status.Authenticated {
-		return Identity{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
-	}
-	if !containsString(review.Status.Audiences, a.Audience) {
-		return Identity{}, fmt.Errorf("token not authenticated for audience %q", a.Audience)
+		return Identity{}, err
 	}
 
-	namespace, name, ok := splitServiceAccount(review.Status.User.Username)
-	if !ok {
-		return Identity{}, fmt.Errorf("not a service account: %q", review.Status.User.Username)
-	}
-	if wantSA := serviceAccountFor(want); name != wantSA {
+	// The role check is after the cache on purpose: it depends on which
+	// session the caller asked for, not on the token.
+	if wantSA := serviceAccountFor(want); res.ServiceAccount != wantSA {
 		return Identity{}, fmt.Errorf("service account %q may not open a %s session, %q may",
-			name, want, wantSA)
+			res.ServiceAccount, want, wantSA)
 	}
 
-	podName := firstExtra(review.Status.User.Extra, claimPodName)
-	podUID := firstExtra(review.Status.User.Extra, claimPodUID)
-	if podName == "" || podUID == "" {
-		return Identity{}, fmt.Errorf("token is not bound to a pod")
-	}
-
-	group, exists, err := a.Pods.LookupPod(ctx, namespace, podName, podUID, want)
+	// Never cached. This is the half that ties an identity to a live pod, and
+	// keeping it live is what makes deleting a pod an immediate revocation.
+	group, exists, err := a.Pods.LookupPod(ctx, res.Namespace, res.PodName, res.PodUID, want)
 	if err != nil {
-		return Identity{}, wrapUnavailable(fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err))
+		return Identity{}, wrapUnavailable(fmt.Errorf("look up pod %s/%s: %w", res.Namespace, res.PodName, err))
 	}
 	if !exists {
-		return Identity{}, fmt.Errorf("pod %s/%s is not a Spawnery pod", namespace, podName)
+		return Identity{}, fmt.Errorf("pod %s/%s is not a Spawnery pod", res.Namespace, res.PodName)
 	}
 
 	return Identity{
-		Namespace:      namespace,
-		PodName:        podName,
-		PodUID:         podUID,
-		ServiceAccount: name,
+		Namespace:      res.Namespace,
+		PodName:        res.PodName,
+		PodUID:         res.PodUID,
+		ServiceAccount: res.ServiceAccount,
 		Role:           want,
 		Group:          group,
 	}, nil

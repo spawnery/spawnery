@@ -273,6 +273,7 @@ func main() {
 			Reviews:  clientset.AuthenticationV1().TokenReviews(),
 			Pods:     &grpcauth.ClientPodChecker{Client: mgr.GetClient()},
 			Audience: podspec.AgentTokenAudience,
+			Cache:    grpcauth.NewReviewCache(time.Now),
 		},
 		Agents:         registry,
 		Proxies:        proxies,
