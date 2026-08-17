@@ -274,6 +274,7 @@ func main() {
 			Pods:     &grpcauth.ClientPodChecker{Client: mgr.GetClient()},
 			Audience: podspec.AgentTokenAudience,
 			Cache:    grpcauth.NewReviewCache(time.Now),
+			Limiter:  grpcauth.NewPeerLimiter(time.Now),
 		},
 		Agents:         registry,
 		Proxies:        proxies,

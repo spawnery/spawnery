@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"strings"
 
+	"google.golang.org/grpc/peer"
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -123,6 +124,11 @@ type Authenticator struct {
 	// Cache remembers what the API server said about a token. Optional: a nil
 	// cache reviews every time, which is what the tests that predate it do.
 	Cache *ReviewCache
+
+	// Limiter bounds how many token checks one peer can cause on a cache
+	// miss. Optional: a nil limiter never refuses, which is what the tests
+	// that predate it do.
+	Limiter *PeerLimiter
 }
 
 // unavailableErr marks an error as the Kubernetes API server itself failing
@@ -142,6 +148,32 @@ func wrapUnavailable(err error) error { return &unavailableErr{err} }
 func isUnavailable(err error) bool {
 	var u *unavailableErr
 	return errors.As(err, &u)
+}
+
+// exhaustedErr marks a refusal caused by the rate limit rather than by the
+// credentials. The interceptor maps it to codes.ResourceExhausted, which is
+// distinct from both Unauthenticated and Unavailable, so an agent's log says
+// which of the three happened.
+type exhaustedErr struct{ err error }
+
+func (e *exhaustedErr) Error() string { return e.err.Error() }
+func (e *exhaustedErr) Unwrap() error { return e.err }
+
+func wrapExhausted(err error) error { return &exhaustedErr{err} }
+
+func isExhausted(err error) bool {
+	var e *exhaustedErr
+	return errors.As(err, &e)
+}
+
+// peerAddr is who is asking, as far as the transport knows. It is the only
+// identity available before the TokenReview, which is exactly why the limit
+// keys on it.
+func peerAddr(ctx context.Context) string {
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		return p.Addr.String()
+	}
+	return "unknown"
 }
 
 // serviceAccountFor is which ServiceAccount may open a session in this role.
@@ -202,6 +234,11 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		ReviewCacheHits.Inc()
 	} else {
 		ReviewCacheMisses.Inc()
+		if !a.Limiter.allow(peerAddr(ctx)) {
+			RateLimited.Inc()
+			return Identity{}, wrapExhausted(
+				fmt.Errorf("too many token checks from %s", peerAddr(ctx)))
+		}
 		res, err = a.reviewToken(ctx, token)
 		a.Cache.store(token, res, err)
 	}

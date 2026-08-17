@@ -45,7 +45,15 @@ var (
 	})
 )
 
+// RateLimited counts token checks refused by the per-peer rate limit, so a
+// throttled peer is visible rather than just quietly slower.
+var RateLimited = prometheus.NewCounter(prometheus.CounterOpts{
+	Name: "spawnery_agent_rate_limited_total",
+	Help: "Token checks refused by the per-peer rate limit.",
+})
+
 func init() {
 	metrics.Registry.MustRegister(AuthFailures)
 	metrics.Registry.MustRegister(ReviewCacheHits, ReviewCacheMisses)
+	metrics.Registry.MustRegister(RateLimited)
 }

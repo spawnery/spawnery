@@ -80,8 +80,11 @@ func (a *Authenticator) StreamInterceptor() grpc.StreamServerInterceptor {
 			// token: Unavailable tells the agent to back off and retry
 			// rather than conclude its credentials are wrong.
 			code := codes.Unauthenticated
-			if isUnavailable(err) {
+			switch {
+			case isUnavailable(err):
 				code = codes.Unavailable
+			case isExhausted(err):
+				code = codes.ResourceExhausted
 			}
 			return status.Error(code, err.Error())
 		}
