@@ -7,11 +7,8 @@ drives it through twelve ordered scenarios and then reads its whole log for
 and they are open in the sense of "nobody has done it", not "it does not work":
 no real `make publish` has been driven, so the digest reference in
 `config/deploy/deployment.yaml` has never been resolved by anything. Both are
-the repository owner's, like an evidence run. A third — `make image-repro`
-rebuilding all three images bit-identically — is **partially open**: it is
-driven and clean for the operator image, but untested for the other two images
-and the agent jars, for a different reason than the first two — hardware, not
-a token. §1 says why.
+the repository owner's, like an evidence run. The other seven are met,
+including the bit-identical rebuild — see §1.
 
 This document is not a spec. It says where 6a stopped and what 6b —
 NetworkPolicies — finds when it starts, checked against the code as 6a leaves
@@ -35,15 +32,20 @@ against a different spec.
 
 - `nix build .#operator-image` (`nix/operator-image.nix`) produces a tarball for
   the operator itself, non-root, on `x86_64-linux` only, and
-  `make operator-image-test` runs it. It is rebuilt bit-identically: driven on
-  2026-08-17, `nix build .#spawnery-operator --rebuild` (57s) and `nix build
-  .#operator-image --rebuild` both came back clean. `make image-repro` names
-  the other two images and the agent jars in the same target, and **that part
-  has not been driven** since the operator's line was added — a rebuild of a
-  724 MB and a 735 MB image plus the agent jars on a 3.9 GB host with no swap
-  was judged not worth the risk in the fix wave that drove the operator's.
-  Acceptance criterion 2 is therefore met for the operator image and untested
-  for the other two.
+  `make operator-image-test` runs it. It is rebuilt bit-identically, and so is
+  everything else the target names: `make image-repro` was driven whole on
+  2026-08-17, after the milestone merged, and all four `--rebuild` comparisons
+  came back clean — `paper.tar.gz`, `velocity.tar.gz`,
+  `spawnery-operator.tar.gz` and `spawnery-agents-0.2.0`, exit 0. Acceptance
+  criterion 2 is met.
+
+  Worth carrying, because it is the reason this took two attempts: the fix wave
+  drove only the operator's third and recorded the rest as untested, on the
+  grounds that a 724 MB and a 735 MB image plus a Java build would not fit. That
+  reasoning rested on a measurement of this host taken on 2026-08-11, when it
+  had 3.9 GB and no swap. It has 8 GB now, and the full run finished without
+  incident. Re-measure a host constraint before deciding against a run on it;
+  a stale number reads exactly like a current one.
 - `make image-repro` builds each image before rebuilding it, which it did not
   do until that same fix wave. `nix build --rebuild` compares against the
   output already in the store, and with nothing there it does not fail the
@@ -441,9 +443,15 @@ systemd-run --scope --user --property=Delegate=yes -- \
   `XDG_RUNTIME_DIR=/run/user/$(id -u)` and
   `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u)/bus` is the fix. This
   is not a defect in `hack/e2e.sh`, which hard-codes neither.
-- The machine has **3.9 GB of RAM and no swap**. Run `make e2e` in the
-  foreground and one cluster at a time. Do not run `make agent` here — it
-  exhausts memory. `E2E_KEEP=1` leaves the cluster standing for inspection and
+- The machine has **8 GB of RAM and no swap** (measured 2026-08-17: 7 GB total,
+  6 available). Most of milestone 6a was worked under a 3.9 GB figure measured
+  on 2026-08-11, before the host was resized, and that stale number was carried
+  into every decision about what would fit. Run `free -g` rather than quoting
+  this line. Run `make e2e` in the foreground and one cluster at a time — that
+  advice survives the resize, because a second cluster buys nothing. Running
+  `make agent` beside a build still risks the Gradle daemons that milestone 3c
+  recorded exhausting this host, and that was also measured at 3.9 GB.
+  `E2E_KEEP=1` leaves the cluster standing for inspection and
   prints its `KUBECONFIG`; remember to `kind delete cluster --name spawnery-e2e`
   afterwards, because the next run will otherwise fight it for memory.
 - Nothing under `proto/` or `agent/` moved on the 6a branch

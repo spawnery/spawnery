@@ -2682,8 +2682,8 @@ same mechanism that makes the handling good.
 says so itself.** Until the milestone's final fix wave, `operatorLog` passed an
 empty `PodLogOptions`, which returns the *current* container's log and nothing
 else, and the restart count was read once — by the first subtest, before any
-scenario had driven a single call. An operator OOM-killed mid-run on this
-3.9 GB host would have left the last subtest reading a log that began after the
+scenario had driven a single call. An operator OOM-killed mid-run on a
+memory-tight host would have left the last subtest reading a log that began after the
 interesting part, and a replacement process making no denied call of its own
 would have reported PASS over a run it had covered a fraction of.
 `theOperatorWasNeverDenied` now re-reads the pod, prepends the previous

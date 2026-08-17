@@ -459,13 +459,10 @@ read-only root filesystem — rather than more comfortable ones, plus
 `--network none`, which is the script's own choice and not the Deployment's,
 and cheap here because the run only asks the binary to print its usage.
 Since milestone 6a the operator is a container like the other two, and
-`make image-repro` covers all three of them plus the agent jars. Only the
-operator's third of that has actually been driven: on 2026-08-17
-`nix build .#spawnery-operator --rebuild` and `nix build .#operator-image
---rebuild` both came back clean, the binary in 57s and the image archive on top
-of it. The other two images and the agent jars have not been rebuilt since the
-target gained its operator line, so read `make image-repro` as checked for the
-operator and standing-but-undriven for the rest.
+`make image-repro` covers all three of them plus the agent jars. The whole
+target was driven on 2026-08-17, after the milestone merged: all four
+`--rebuild` comparisons — `paper.tar.gz`, `velocity.tar.gz`,
+`spawnery-operator.tar.gz` and `spawnery-agents` — came back clean, exit 0.
 
 `make publish` (`hack/publish.sh`) copies all three images from their Nix
 archives straight to `ghcr.io/spawnery/` with `skopeo`, so what reaches the
