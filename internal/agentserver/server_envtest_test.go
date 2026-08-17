@@ -721,18 +721,28 @@ func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 	defer cancel()
 	extra, err := open(over, int(agentserver.MaxConcurrentStreams))
 	if err != nil {
-		switch status.Code(err) {
-		case codes.DeadlineExceeded, codes.Unavailable, codes.ResourceExhausted:
-			// Blocked on the stream quota until the deadline (the expected
-			// shape, and what the timings below confirm), or refused
-			// outright -- either satisfies the bound.
-			return
-		default:
-			t.Fatalf("stream %d failed to open with %v, want a bound-related "+
-				"code -- a different error means it failed for some other "+
-				"reason and this test proves nothing about the bound",
+		// DeadlineExceeded only, not a wider set: both of the obvious
+		// alternatives are codes this codebase genuinely produces for
+		// reasons that have nothing to do with the bound, and both can only
+		// reach open() after the ninth stream has already cleared the
+		// client-side quota gate -- i.e. only once MaxConcurrentStreams has
+		// already failed to hold. grpcauth's interceptor returns
+		// Unavailable specifically when a TokenReview call itself is
+		// unavailable (internal/grpcauth/interceptor.go), deliberately kept
+		// apart from Unauthenticated so an agent backs off instead of
+		// concluding its credentials are wrong -- an ordinary envtest-load
+		// flake here would look identical to a passing bound. And
+		// ResourceExhausted is grpc-go's own mapping for ENHANCE_YOUR_CALM
+		// and flow-control errors -- exactly the code this task's own new
+		// keepalive enforcement policy can produce. Accepting either would
+		// let the one failure this test exists to catch report PASS.
+		if status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("stream %d failed to open with %v, want the deadline "+
+				"-- a different code means it failed for some other reason "+
+				"and this test proves nothing about the bound",
 				agentserver.MaxConcurrentStreams+1, err)
 		}
+		return
 	}
 	if _, err := extra.Recv(); err == nil {
 		t.Errorf("stream %d was served; MaxConcurrentStreams is not in force",
