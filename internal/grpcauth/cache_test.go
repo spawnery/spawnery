@@ -17,8 +17,11 @@ limitations under the License.
 package grpcauth
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -88,34 +91,77 @@ func TestReviewCacheRefusesToStoreAnOutage(t *testing.T) {
 }
 
 // The operator must not hold bearer tokens in a map.
+//
+// "Not the raw token" is not enough to assert: a cacheKey returning
+// token + "!" satisfies it while still holding every byte of the credential.
+// So this pins the key to the SHA-256 digest, recomputed here from the
+// standard library rather than by calling cacheKey, which would move with the
+// code under test and prove nothing.
 func TestReviewCacheDoesNotKeepTheTokenItself(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	c := NewReviewCache(func() time.Time { return now })
 
-	c.store("super-secret-token", reviewResult{Namespace: "minecraft"}, nil)
+	const token = "super-secret-token"
+	c.store(token, reviewResult{Namespace: "minecraft"}, nil)
 
+	sum := sha256.Sum256([]byte(token))
+	want := hex.EncodeToString(sum[:])
+
+	if len(c.entries) != 1 {
+		t.Fatalf("one store left %d entries, want 1", len(c.entries))
+	}
 	for key := range c.entries {
-		if key == "super-secret-token" {
-			t.Fatal("the cache is keyed on the raw token")
+		if strings.Contains(key, token) {
+			t.Fatalf("the cache key %q contains the raw token", key)
+		}
+		if key != want {
+			t.Fatalf("cache key = %q, want the SHA-256 digest %q", key, want)
 		}
 	}
 }
 
-// Without eviction the map grows for as long as distinct tokens arrive. The
-// rate limit in the interceptor bounds how fast that can happen, and this
-// bounds how large it gets in between.
-func TestReviewCacheEvictsExpiredEntriesAsItGrows(t *testing.T) {
+// maxCacheEntries is a hard bound, and this is the assertion that can tell
+// that apart from the thing it used to be.
+//
+// The earlier version of this test stored maxCacheEntries+1 entries at one
+// frozen instant, then advanced the clock past PositiveTTL and stored one
+// more -- so its length check ran against a map that the expiry sweep had
+// just emptied. It was green for a cache that bounded nothing. Here the clock
+// never moves, so nothing ever expires, and the only way to stay under the
+// bound is to drop a live entry to make room.
+func TestReviewCacheHoldsItsBoundWithNothingExpired(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	c := NewReviewCache(func() time.Time { return now })
 
-	for i := 0; i < maxCacheEntries+1; i++ {
+	for i := 0; i < maxCacheEntries*2; i++ {
 		c.store(fmt.Sprintf("token-%d", i), reviewResult{}, nil)
+		if len(c.entries) > maxCacheEntries {
+			t.Fatalf("after %d stores at one instant the cache holds %d entries, "+
+				"past its bound of %d: nothing had expired, so sweeping expired "+
+				"entries freed nothing and the map grew unbounded",
+				i+1, len(c.entries), maxCacheEntries)
+		}
+	}
+}
+
+// The cheap sweep still has to happen, and to come first: dropping a live
+// entry when a dead one would do costs a TokenReview for nothing.
+func TestReviewCacheSweepsExpiredEntriesFirst(t *testing.T) {
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	c := NewReviewCache(func() time.Time { return now })
+
+	for i := 0; i < maxCacheEntries; i++ {
+		c.store(fmt.Sprintf("old-%d", i), reviewResult{}, nil)
 	}
 	now = now.Add(PositiveTTL + time.Second)
-	c.store("one-more", reviewResult{}, nil)
+	c.store("fresh", reviewResult{}, nil)
 
-	if len(c.entries) > maxCacheEntries {
-		t.Errorf("the cache holds %d entries past its bound of %d",
+	if len(c.entries) != 1 {
+		t.Errorf("the cache holds %d entries, want 1: every one of the %d earlier "+
+			"entries had expired and all of them should have gone at once",
 			len(c.entries), maxCacheEntries)
+	}
+	if _, _, ok := c.lookup("fresh"); !ok {
+		t.Error("the entry the sweep made room for is not in the cache")
 	}
 }

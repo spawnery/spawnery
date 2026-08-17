@@ -40,7 +40,9 @@ const (
 	// removes the load.
 	NegativeTTL = 10 * time.Second
 
-	// maxCacheEntries bounds the map between evictions.
+	// maxCacheEntries is a hard bound on the map, not a target. store never
+	// lets the map exceed it: expired entries go first, and if that frees
+	// nothing the entry closest to expiry is dropped to make room.
 	maxCacheEntries = 1024
 )
 
@@ -110,8 +112,16 @@ func (c *ReviewCache) store(token string, result reviewResult, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	// Two steps, and the second is what makes the bound a bound. Sweeping
+	// expired entries is free and usually enough, but with maxCacheEntries
+	// live entries it deletes nothing, and a map that only ever sweeps the
+	// dead grows without limit under a flood of distinct tokens -- exactly the
+	// case a bound is for.
 	if len(c.entries) >= maxCacheEntries {
 		c.evictExpiredLocked()
+	}
+	if len(c.entries) >= maxCacheEntries {
+		c.evictSoonestLocked()
 	}
 
 	entry := cacheEntry{result: result, expires: c.now().Add(PositiveTTL)}
@@ -127,5 +137,28 @@ func (c *ReviewCache) evictExpiredLocked() {
 		if !now.Before(entry.expires) {
 			delete(c.entries, key)
 		}
+	}
+}
+
+// evictSoonestLocked drops the one entry closest to expiring, which is what
+// makes room for the caller's. One is enough: store adds at most one entry per
+// call, so evicting one before each store holds the map at maxCacheEntries for
+// good.
+//
+// Closest to expiry rather than least recently used, because it needs no extra
+// bookkeeping and because it sheds in the right order. Every entry has one of
+// two lifetimes, so under a flood of distinct tokens the refusals -- the short
+// NegativeTTL, and the ones a flood is made of -- go before a legitimate
+// agent's accepted review.
+func (c *ReviewCache) evictSoonestLocked() {
+	var soonestKey string
+	var soonest time.Time
+	for key, entry := range c.entries {
+		if soonestKey == "" || entry.expires.Before(soonest) {
+			soonestKey, soonest = key, entry.expires
+		}
+	}
+	if soonestKey != "" {
+		delete(c.entries, soonestKey)
 	}
 }
