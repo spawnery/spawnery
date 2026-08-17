@@ -434,13 +434,23 @@ step of its own. All three need Docker or Podman and only work on
 velocity-image-test` are the same three steps scoped to only the Velocity
 image, for when a change is known to touch nothing on the Paper side.
 
-`make image-repro` rebuilds the image with `nix build .#paper-image --rebuild`
-and fails if the two builds do not produce the same bytes. Design §5.3 makes
-that reproducibility an acceptance criterion, not a one-off claim, so this is
-the standing check for it — worth running again after any change to
+`make image-repro` builds each image and then rebuilds it with `nix build
+--rebuild`, and fails if the two builds do not produce the same bytes. Design
+§5.3 makes that reproducibility an acceptance criterion, not a one-off claim, so
+this is the standing check for it — worth running again after any change to
 `nix/paper.nix` or `nix/paper-image.nix`. Like `image-test`, it is not part of
 `make test` or `make all`: it needs a build's worth of time and only runs on
 `x86_64-linux`.
+
+The plain build in front of each `--rebuild` is not redundant. `--rebuild`
+compares a fresh build against the output already in the store, and with
+nothing there it does not fail the check, it declines to run it — "some outputs
+… are not valid, so checking is not possible". All three image derivations take
+the working tree as their source: appending one line to a file in `docs/` was
+measured to change the derivation hash of `paper-image`, `velocity-image` and
+`operator-image` alike (`agents` was unaffected). So an edit almost anywhere
+empties the store of them, and until milestone 6a's final fix wave this target
+had nothing to check against on a tree anybody had touched.
 
 `make operator-image` builds the operator's own image, `make operator-image-load`
 hands it to the local container runtime, and `make operator-image-test` runs it
@@ -449,19 +459,38 @@ read-only root filesystem — rather than more comfortable ones, plus
 `--network none`, which is the script's own choice and not the Deployment's,
 and cheap here because the run only asks the binary to print its usage.
 Since milestone 6a the operator is a container like the other two, and
-`make image-repro` rebuilds all three of them plus the agent jars.
+`make image-repro` covers all three of them plus the agent jars. Only the
+operator's third of that has actually been driven: on 2026-08-17
+`nix build .#spawnery-operator --rebuild` and `nix build .#operator-image
+--rebuild` both came back clean, the binary in 57s and the image archive on top
+of it. The other two images and the agent jars have not been rebuilt since the
+target gained its operator line, so read `make image-repro` as checked for the
+operator and standing-but-undriven for the rest.
 
 `make publish` (`hack/publish.sh`) copies all three images from their Nix
 archives straight to `ghcr.io/spawnery/` with `skopeo`, so what reaches the
 registry is what the flake describes rather than what a previous
 `podman load` left in a local store. It is part of no other target, because it
 contacts a registry and needs a GitHub token with `write:packages`. `DRY_RUN=1`
-prints what it would copy where and contacts nothing; `FORCE=1` overwrites a tag
-that already exists, which it otherwise refuses to do; `WRITE_DIGEST=1` rewrites
-the operator's image reference in `config/deploy/deployment.yaml` to the digest
-the registry returned. **Nothing has been pushed yet** — the first real run
-needs that token, and until it happens every consumer still needs
-`kind load docker-image` or the equivalent.
+still builds every image it was asked for — on a machine without them cached
+that is the expensive part — and then prints what it would copy where instead
+of copying it, so nothing reaches the registry and no credential is needed;
+`FORCE=1` overwrites a tag that already exists, which it otherwise refuses to
+do; `WRITE_DIGEST=1` rewrites the operator's image reference in
+`config/deploy/deployment.yaml` to the digest `skopeo copy` reported for the
+push it just made.
+
+`make publish IMAGES=operator-image` publishes one image rather than all three,
+and that is the ordinary case rather than an escape hatch: `flake.nix` keeps
+`operatorVersion` apart from `imageVersion` on purpose, so after a reconciler
+fix exactly one of the three tags is new. Asking for all three then stops,
+correctly, at the first tag that is already published, and never reaches the
+one that changed — and `FORCE=1` would get past that only by re-pushing about
+1.4 GB over tags that were already right.
+
+**Nothing has been pushed yet** — the first real run needs that token, and
+until it happens every consumer still needs `kind load docker-image` or the
+equivalent.
 
 `make e2e` (`hack/e2e.sh`) is the driven end-to-end run: it builds the operator
 image, creates a `kind` cluster, loads the image into it, installs the CRDs and

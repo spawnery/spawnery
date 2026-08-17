@@ -2678,6 +2678,20 @@ so. The general lesson for anyone extending the check: it can only see what
 something logs, so an error the code handles well is invisible to it by the
 same mechanism that makes the handling good.
 
+**"The whole log" is only as whole as the container is old, and the check now
+says so itself.** Until the milestone's final fix wave, `operatorLog` passed an
+empty `PodLogOptions`, which returns the *current* container's log and nothing
+else, and the restart count was read once — by the first subtest, before any
+scenario had driven a single call. An operator OOM-killed mid-run on this
+3.9 GB host would have left the last subtest reading a log that began after the
+interesting part, and a replacement process making no denied call of its own
+would have reported PASS over a run it had covered a fraction of.
+`theOperatorWasNeverDenied` now re-reads the pod, prepends the previous
+container's log where the kubelet still has it, and fails on any restart at
+all. Kubernetes keeps exactly one container back, so from the second restart on
+there is a stretch nothing can read — which is why the check errors rather than
+patching over it.
+
 **Two permissions in the table that no driven scenario exercises,** measured on
 a held cluster at the end of Task 8 rather than guessed:
 
@@ -2927,9 +2941,13 @@ intentional — the following points each concern only one of the two halves.
   *Closed by milestone 6a, with the fix this entry named.* `image` builds to
   `result-paper`, `velocity-image` to `result-velocity` and the new
   `operator-image` to `result-operator`, each `*-load` target reading its own
-  link (`Makefile`). The shared `./result` is gone, so the ordering that made
-  plain `make image-test` safe is no longer what makes it correct, and a third
-  image did not reopen the race.
+  link (`Makefile`). The race is closed: no two targets that a parallel `make
+  -jN` can run at the same time write the same symlink any more, so the
+  left-to-right ordering that made plain `make image-test` safe is no longer
+  what makes it correct, and a third image did not reopen it. `./result`
+  itself is not gone from the tree — `make agent` still runs `nix build
+  .#agents` with no `--out-link` — it is only no longer shared between two
+  builds one command can start together.
 - **`record.FakeRecorder`'s buffered channel blocks its writer once full.**
   Almost every fixture in `internal/controller` builds its recorder with
   `record.NewFakeRecorder(100)`, but the buffer is per call site and not a

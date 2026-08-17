@@ -30,16 +30,39 @@ against a different spec.
 **Built and driven:**
 
 - `nix build .#operator-image` (`nix/operator-image.nix`) produces a tarball for
-  the operator itself, non-root, on `x86_64-linux` only, rebuilt bit-identically
-  by `make image-repro` alongside the other two images and the agent jars.
-  `make operator-image-test` runs it.
+  the operator itself, non-root, on `x86_64-linux` only, and
+  `make operator-image-test` runs it. It is rebuilt bit-identically: driven on
+  2026-08-17, `nix build .#spawnery-operator --rebuild` (57s) and `nix build
+  .#operator-image --rebuild` both came back clean. `make image-repro` names
+  the other two images and the agent jars in the same target, and **that part
+  has not been driven** since the operator's line was added — a rebuild of two
+  724 MB images and the agent jars on a 3.9 GB host with no swap was judged not
+  worth the risk in the fix wave that drove the operator's. Acceptance
+  criterion 2 is therefore met for the operator image and untested for the
+  other two.
+- `make image-repro` builds each image before rebuilding it, which it did not
+  do until that same fix wave. `nix build --rebuild` compares against the
+  output already in the store, and with nothing there it does not fail the
+  check — it refuses to run it, with "some outputs … are not valid, so checking
+  is not possible". All three image derivations take the working tree as their
+  source: appending one line to a file under `docs/` was measured to change the
+  derivation hash of `paper-image`, `velocity-image` and `operator-image` alike
+  (`agents` was unaffected, so its source is filtered). The target that exists
+  to prove reproducibility therefore had nothing to check against on a tree
+  anybody had touched, and that is how the claim above came to stand unbacked
+  for a whole milestone.
 - `hack/publish.sh` (`make publish`) copies all three images from their Nix
   archives straight to `ghcr.io/spawnery/` with `skopeo` — no local container
   store in between, so what lands in the registry is what the flake describes.
-  It refuses a tag that is already there unless `FORCE=1`, prints without
-  contacting anything under `DRY_RUN=1`, and can rewrite the operator's image
-  reference in `config/deploy/deployment.yaml` to the returned digest under
-  `WRITE_DIGEST=1`.
+  It refuses a tag that is already there unless `FORCE=1`; under `DRY_RUN=1` it
+  builds every image it was asked for — on this machine the expensive part —
+  and then prints what it would copy where instead of contacting the registry;
+  and under `WRITE_DIGEST=1` it rewrites the operator's image reference in
+  `config/deploy/deployment.yaml` to the digest `skopeo copy --digestfile`
+  reported for its own push. It takes an image list (`hack/publish.sh
+  operator-image`, or `make publish IMAGES=operator-image`) so that the usual
+  case — one of the three versions moved — does not have to choose between
+  stopping at the first already-published tag and re-pushing all three.
 - `make e2e` (`hack/e2e.sh`) builds the operator image, creates a `kind`
   cluster, loads the archive into it, installs the CRDs, `config/rbac/role.yaml`
   and `config/deploy/`, applies milestone 5c's per-namespace forwarding-secret

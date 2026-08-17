@@ -53,9 +53,10 @@ fi
 "$CONTAINER" rm "$cid" >/dev/null
 
 # The binary runs, statically, as uid 10001, with nothing writable and no
-# network. Go's flag package prints usage and exits 2 for -h, which is the
-# cheapest proof that the ELF loads and the flags are the ones the Deployment
-# passes.
+# network. Go's flag package prints usage and exits 0 for -h -- exit 2 is what
+# it uses for a parse error -- which is the cheapest proof that the ELF loads
+# and the flags are the ones the Deployment passes. The exit code is discarded
+# either way; what is matched is the output.
 out="$("$CONTAINER" run --rm --read-only --network none "$IMAGE" -h 2>&1 || true)"
 for flag in startup-deadline leader-elect metrics-bind-address health-probe-bind-address; do
 	case "$out" in
