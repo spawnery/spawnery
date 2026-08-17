@@ -76,16 +76,44 @@ func theOrphanSweepRemovesAStrayPod(t *testing.T) {
 // until the controller has taken the pod down and released it -- a stuck
 // finalizer is invisible from a diff and shows up only as an object that never
 // disappears.
+//
+// The pick-and-delete step is itself retried, not a single snapshot followed
+// by a Fatal. This harness's churn (created, failed at twenty seconds, corpse
+// held thirty, pruned, replaced) can empty the group's live list between one
+// poll and the next, or retire the very Server just listed before the Delete
+// call reaches it -- a NotFound there would read as a test bug rather than as
+// the churn this package exists to tolerate everywhere else in it (see
+// nonFailedServersInGroup and podsCoverLiveServers for the same discipline).
+// eventually keeps listing and attempting the delete until one succeeds, so a
+// momentarily empty list or a victim pruned mid-flight is absorbed instead of
+// failing the whole scenario on a single unlucky read.
+//
+// It picks from nonFailedServersInGroup rather than serversInGroup on
+// purpose. serversInGroup's Failed entries are corpses already mid-prune, on
+// their own countdown to disappearing on failedRetentionSeconds' clock rather
+// than on any action of this test's -- deleting one would not distinguish
+// "the finalizer-release branch did it" from "the retention pruner would have
+// removed it a few seconds later regardless." A live Server's disappearance
+// has exactly one explanation: the Delete this function issued, and the
+// finalizer-release branch in server_controller.go that has to run for it to
+// take effect.
 func theFinalizerIsReleased(t *testing.T) {
-	servers := serversInGroup(t, "lobby")
-	if len(servers) == 0 {
-		t.Fatal("no Servers in the lobby group to delete")
-	}
-	victim := servers[0]
-
-	if err := k8s.Delete(ctx, &victim); err != nil {
-		t.Fatalf("delete Server %s: %v", victim.Name, err)
-	}
+	var victim spawneryv1alpha1.Server
+	eventually(t, 2*time.Minute, "a live Server to pick and delete", func() (bool, string) {
+		servers := nonFailedServersInGroup(t, "lobby")
+		if len(servers) == 0 {
+			return false, "no non-Failed Servers in the lobby group"
+		}
+		v := servers[0]
+		if err := k8s.Delete(ctx, &v); err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, fmt.Sprintf("%s was already gone by delete time (churn)", v.Name)
+			}
+			return false, err.Error()
+		}
+		victim = v
+		return true, ""
+	})
 
 	eventually(t, 2*time.Minute, "Server "+victim.Name+" to disappear", func() (bool, string) {
 		var got spawneryv1alpha1.Server
