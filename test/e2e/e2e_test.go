@@ -102,6 +102,9 @@ func TestMain(m *testing.M) {
 // check is last because it judges everything the run did.
 func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("the operator is up and has not restarted", theOperatorIsUp)
+	t.Run("the test manifest is accepted", theTestManifestIsAccepted)
+	t.Run("the group scales up", theGroupScalesUp)
+	t.Run("the group sheds surplus at a lowered ceiling", theCeilingShedsSurplus)
 	t.Run("the operator was never denied", theOperatorWasNeverDenied)
 }
 
@@ -212,9 +215,11 @@ func operatorLog(t *testing.T) string {
 // eventually polls cond until it holds or the deadline passes, and reports the
 // last thing it saw when it gives up.
 //
-// It is the only waiting construct in this package. A run built on fixed sleeps
+// It is this package's default waiting construct. A run built on fixed sleeps
 // turns flaky under load, and a flaky E2E run is ignored within weeks -- which
-// is §4 of the 2026-08-07 E2E design, kept.
+// is §4 of the 2026-08-07 E2E design, kept. eventuallyStable is its sibling,
+// for the one assertion that needs a condition to hold rather than merely to
+// have occurred.
 func eventually(t *testing.T, deadline time.Duration, what string, cond func() (bool, string)) {
 	t.Helper()
 	stop := time.Now().Add(deadline)
@@ -228,6 +233,37 @@ func eventually(t *testing.T, deadline time.Duration, what string, cond func() (
 		time.Sleep(500 * time.Millisecond)
 	}
 	t.Fatalf("timed out after %s waiting for %s; last seen: %s", deadline, what, last)
+}
+
+// eventuallyStable is eventually's sibling for a condition that must hold,
+// not merely occur once. eventually returns on the first poll that satisfies
+// cond, which a transient state can also satisfy without the thing under test
+// having actually happened -- this package's own lifecycle scenarios churn
+// Servers continuously (see nonFailedServersInGroup), so a count can pass
+// through the right value on its way to a different one. eventuallyStable
+// instead requires cond to stay true for the whole of hold before it
+// succeeds, and resets its clock the moment cond goes false again.
+func eventuallyStable(t *testing.T, deadline, hold time.Duration, what string, cond func() (bool, string)) {
+	t.Helper()
+	stop := time.Now().Add(deadline)
+	last := "nothing observed yet"
+	var since time.Time
+	for time.Now().Before(stop) {
+		ok, detail := cond()
+		if ok {
+			if since.IsZero() {
+				since = time.Now()
+			}
+			if time.Since(since) >= hold {
+				return
+			}
+		} else {
+			since = time.Time{}
+			last = detail
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	t.Fatalf("timed out after %s waiting for %s to hold for %s; last seen: %s", deadline, what, hold, last)
 }
 
 // applyManifest creates every document of a multi-document manifest, tolerating
