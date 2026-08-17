@@ -2514,6 +2514,91 @@ NetworkPolicy allowing ingress on 9443 only from pods carrying
 quotes the promise from milestone 2a has to quote this point along with it — it
 holds for identity and confidentiality, not for availability.
 
+## From the milestone 6a Task 4 measurement round (2026-08-17)
+
+The "Completeness of the permission table" item above names
+`test/e2e` (`TestSpawneryUnderItsOwnServiceAccount`) as the only thing
+that can prove a permission missing from both the ClusterRole and
+`internal/rbacaudit/required.go` at once. This entry narrows what that
+proof actually covers, found while verifying the check itself rather
+than while using it.
+
+**A denied `list` on a watched-but-idle type (`pods`, and separately
+`networks`) is invisible to the check, not merely late.** The check
+reads the operator's log once, moments after rollout; the first
+hypothesis was that this was simply too early — `OrphanReconciler`'s
+periodic sweep, one of the two call sites `required.go` cites for
+`pods:list`, only ticks once a minute, and no custom resource exists
+yet in a Task-4-only run to drive the other reconcilers at all.
+That hypothesis was tested and rejected. `pods:list` was removed from
+every marker that grants it (`controller-gen` unions verbs per
+resource across markers, so a partial removal is not a real
+mutation), the revocation was confirmed at the API server
+(`kubectl auth can-i list pods --as=system:serviceaccount:spawnery-
+system:spawnery-operator` → `no`), and the operator was then watched
+continuously — log followed, not sampled; `rest_client_requests_total`
+scraped every 15 seconds, every sample kept; pod phase and restart
+count watched — for seven minutes and forty-five seconds, well past
+`Controller`'s default two-minute `CacheSyncTimeout`. Across the whole
+window: the log gained not one line past the initial
+`"Starting workers"` burst (32 lines at second 0, 32 lines at 7m45s);
+`rest_client_requests_total` recorded only codes `200`, `201`, `404`
+and `429`, never `403`, across 24 fifteen-second samples; the pod's
+restart count stayed `0`; `kubectl logs --previous` confirms there is
+no previous container to have hidden anything in (`"previous
+terminated container \"operator\" ... not found"`); and the
+Deployment's `Available` condition never moved off `True` from
+`04:05:46Z` onward. The two-minute boundary passed with no observable
+effect of any kind — the process did not exit, and nothing in the
+vendored source's own documented failure mode
+(`sigs.k8s.io/controller-runtime/pkg/internal/source/kind.go:58-59,82`,
+"`cache.GetInformer` will block ... and log ... `failed to get informer
+from cache`") was ever seen to fire, even though the same log line
+*does* appear, promptly, when a startup-critical uncached call is
+denied instead (see below).
+
+**The contrast is what makes this a coverage gap and not a
+measurement artifact.** Denying a direct, uncached call that gates a
+leader-bound `manager.Runnable` — `create` on the TLS secret
+(`internal/certs/store.go`), or `update` on the leader-election lease
+(`internal/controller/setup.go`) — produces a real, immediate, and
+repeated `is forbidden:` line every time
+(`"ensure the TLS bundle: create spawnery-agent-tls: secrets is
+forbidden: ..."`; `"Failed to update lease" err="...is forbidden: ...
+cannot update resource \"leases\"..."` on a ~3-4 second retry loop).
+Those two mutations sit at the opposite failure mode: the denial is
+loud, but the pod never reaches `Available`, so `hack/e2e.sh`'s
+rollout wait times out and `test/e2e` never runs at all. Between the
+two failure modes — cache-backed reads that are silent and safe,
+direct calls that are loud and fatal to readiness — no permission
+removal tried during Task 4 both fires a logged denial *and* leaves
+the operator healthy enough for the check to read it.
+
+**What this means for anyone relying on a green `test/e2e` run.** A
+pass proves the operator was not denied anything it actually asked
+the API server for while the check was watching. It does not prove
+every permission the ClusterRole grants is exercised, and — this
+entry's finding — it specifically does not prove a *watched* resource
+type (anything reached only through the manager's cache: `Owns()`,
+`For()`, the restricted caches in `cmd/spawnery-operator/main.go`) is
+correctly permissioned, because a missing permission there produces no
+signal this check — or, on this evidence, the pod's log at all —
+ever surfaces. Proving that class needs either a second signal this
+check does not currently read (the metrics endpoint;
+`kubectl logs --previous` after a restart, if the informer failure
+ever does become fatal on some other code path) or CR-driven traffic
+that forces a controller to actually call through to a live List
+rather than only register a watch for one. Milestone 6a's Tasks 5
+through 8, which apply `test/e2e/manifests/e2e.yaml` and drive
+reconciles, narrow this for the reconciler-triggered call sites but do
+not by themselves explain why the *informer's own* initial sync — which
+the vendored source's comment says should retry and log on its own,
+unconditionally, without any reconcile — produced nothing observable
+here. That mechanism was not chased further; full raw output for both
+the silent and the loud mutations is in
+`.superpowers/sdd/2026-08-16-operator-image-and-e2e/task-4-report.md`,
+"Fix round 2".
+
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
 **The CA has no rotation procedure.** The bundle format of the CA ConfigMap is
