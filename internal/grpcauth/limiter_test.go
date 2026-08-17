@@ -19,9 +19,11 @@ package grpcauth
 import (
 	"context"
 	"fmt"
+	"net"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc/peer"
 	authnv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -55,6 +57,11 @@ func TestPeerLimiterAllowsABurstThenRefills(t *testing.T) {
 // IP, so a fleet coming back after an operator restart spends one bucket each
 // rather than sharing one. A limiter keyed on anything the whole fleet has in
 // common would throttle exactly the case that must not be throttled.
+//
+// This exercises the limiter's own keying with bare IP strings, which is not
+// what the production path produces — peerAddr does, from a context.
+// TestTheRateLimitKeysOnThePodRatherThanTheConnection below is what ties the
+// two together.
 func TestPeerLimiterBucketsArePerPeer(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	l := NewPeerLimiter(func() time.Time { return now })
@@ -151,6 +158,98 @@ func TestDistinctTokensFromOnePeerAreRateLimited(t *testing.T) {
 		return // the limiter refused a genuinely new token; the test is satisfied
 	}
 	t.Fatalf("%d distinct tokens from one peer were all accepted; the limiter never engaged", PeerBurst+2)
+}
+
+// tcpPeerContext is what a real gRPC server hands the interceptor: a
+// peer.Peer whose Addr is a *net.TCPAddr, so Addr.String() is
+// IP:ephemeral-port. Constructing it by hand rather than standing up a server
+// keeps the test a unit test while still exercising the exact type the
+// transport installs.
+func tcpPeerContext(ip string, port int) context.Context {
+	return peer.NewContext(context.Background(), &peer.Peer{
+		Addr: &net.TCPAddr{IP: net.ParseIP(ip), Port: port},
+	})
+}
+
+// The limiter's key must name a POD, not a connection, and nothing else in
+// this package ever looks at the key the production path actually produces:
+// every other test calls Authenticate with context.Background(), where
+// peerAddr returns the constant "unknown", so replacing peerAddr's body with a
+// constant left both this package and internal/agentserver green.
+//
+// Both directions are here because each catches a different defect.
+//
+//   - Same IP, different ephemeral ports must share one bucket. A gRPC peer
+//     address is IP:port and the port is fresh on every TCP connection, so
+//     keying on the whole address gives a pod in a reconnect loop a fresh
+//     PeerBurst per connection — the attack docs/known-issues.md documents,
+//     bounded only by how fast it can complete handshakes.
+//   - Different IPs must not share one bucket. That is the mass-reconnect
+//     safety the design leans on, and it is also what catches a peerAddr that
+//     returns a constant: with one key for everybody, the second pod inherits
+//     the first pod's spent bucket.
+//
+// Every token below is distinct, so every call is a genuine cache miss and
+// therefore genuinely reaches the limiter; isExhausted pins the refusal to the
+// limiter rather than to the reviewer or the pod checker, both stubbed to
+// succeed.
+func TestTheRateLimitKeysOnThePodRatherThanTheConnection(t *testing.T) {
+	newAuth := func(now func() time.Time) *Authenticator {
+		return &Authenticator{
+			Reviews:  &countingReviewer{},
+			Pods:     alwaysFoundPods{},
+			Audience: "spawnery-operator",
+			Cache:    NewReviewCache(now),
+			Limiter:  NewPeerLimiter(now),
+		}
+	}
+
+	t.Run("one pod reconnecting from a new port shares its bucket", func(t *testing.T) {
+		now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+		a := newAuth(func() time.Time { return now })
+
+		first := tcpPeerContext("10.244.0.7", 42662)
+		for i := 0; i < PeerBurst; i++ {
+			token := fmt.Sprintf("first-connection-token-%d", i)
+			if _, err := a.Authenticate(first, token, agent.RoleServer); err != nil {
+				t.Fatalf("call %d of the permitted burst %d was refused: %v", i, PeerBurst, err)
+			}
+		}
+
+		// The same pod, a new TCP connection: a different ephemeral port and
+		// therefore a different peer.Addr.String(), but the same host.
+		second := tcpPeerContext("10.244.0.7", 42674)
+		_, err := a.Authenticate(second, "second-connection-token", agent.RoleServer)
+		if err == nil {
+			t.Fatalf("a %d+1st token check from 10.244.0.7 was allowed because it "+
+				"arrived on a new connection: the bucket is keyed on IP:port, so "+
+				"every reconnect starts a fresh burst and the limit bounds nothing",
+				PeerBurst)
+		}
+		if !isExhausted(err) {
+			t.Fatalf("refused for a reason other than the rate limit: %v", err)
+		}
+	})
+
+	t.Run("two pods do not share a bucket", func(t *testing.T) {
+		now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+		a := newAuth(func() time.Time { return now })
+
+		spender := tcpPeerContext("10.244.0.7", 42662)
+		for i := 0; i < PeerBurst; i++ {
+			token := fmt.Sprintf("busy-pod-token-%d", i)
+			if _, err := a.Authenticate(spender, token, agent.RoleServer); err != nil {
+				t.Fatalf("call %d of the permitted burst %d was refused: %v", i, PeerBurst, err)
+			}
+		}
+
+		other := tcpPeerContext("10.244.0.8", 51000)
+		if _, err := a.Authenticate(other, "quiet-pod-token", agent.RoleServer); err != nil {
+			t.Fatalf("a second pod was refused because the first had spent its burst: %v — "+
+				"the limiter is not keyed on the peer at all, and a fleet reconnecting "+
+				"after an operator restart would throttle itself", err)
+		}
+	})
 }
 
 // countingReviewer answers every review the same way and counts the asking.

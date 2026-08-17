@@ -25,6 +25,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"google.golang.org/grpc/peer"
@@ -169,11 +170,28 @@ func isExhausted(err error) bool {
 // peerAddr is who is asking, as far as the transport knows. It is the only
 // identity available before the TokenReview, which is exactly why the limit
 // keys on it.
+//
+// The host, not the address. peer.Addr is a *net.TCPAddr and its String() is
+// IP:ephemeral-port, so the full address names a CONNECTION rather than a
+// peer: it changes on every dial, and keying on it would hand a pod in a
+// reconnect loop a fresh PeerBurst per TCP connection — the very attack the
+// limit exists to bound, failing open. Splitting the host off makes the bucket
+// one per pod IP, which is what the design's mass-reconnect safety argument
+// already assumed it was.
+//
+// The fallback is for an address that carries no port at all — a non-TCP peer,
+// a unix socket — where the whole string already is the host.
 func peerAddr(ctx context.Context) string {
-	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
-		return p.Addr.String()
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.Addr == nil {
+		return "unknown"
 	}
-	return "unknown"
+	addr := p.Addr.String()
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
 }
 
 // serviceAccountFor is which ServiceAccount may open a session in this role.
@@ -234,10 +252,14 @@ func (a *Authenticator) Authenticate(ctx context.Context, token string, want age
 		ReviewCacheHits.Inc()
 	} else {
 		ReviewCacheMisses.Inc()
-		if !a.Limiter.allow(peerAddr(ctx)) {
+		// Recovered once and reused: the key and the message must name the
+		// same peer, and a second call is a second context lookup for a value
+		// that cannot have changed.
+		addr := peerAddr(ctx)
+		if !a.Limiter.allow(addr) {
 			RateLimited.Inc()
 			return Identity{}, wrapExhausted(
-				fmt.Errorf("too many token checks from %s", peerAddr(ctx)))
+				fmt.Errorf("too many token checks from %s", addr))
 		}
 		res, err = a.reviewToken(ctx, token)
 		a.Cache.store(token, res, err)
