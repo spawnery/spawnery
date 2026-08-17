@@ -105,6 +105,9 @@ func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("the test manifest is accepted", theTestManifestIsAccepted)
 	t.Run("the group scales up", theGroupScalesUp)
 	t.Run("the group sheds surplus at a lowered ceiling", theCeilingShedsSurplus)
+	t.Run("the orphan sweep removes a stray pod", theOrphanSweepRemovesAStrayPod)
+	t.Run("the finalizer is released", theFinalizerIsReleased)
+	t.Run("the startup deadline fails a server and clears it", theStartupDeadlineFailsAServerAndClearsIt)
 	t.Run("the operator was never denied", theOperatorWasNeverDenied)
 }
 
