@@ -297,9 +297,10 @@ func main() {
 			Reader: mgr.GetAPIReader(),
 			CA:     provider.CABundle,
 		},
-		AgentEndpoint:  agentEndpoint(operatorNamespace),
-		Proxies:        proxies,
-		DrainTaintKeys: drainTaints,
+		AgentEndpoint:     agentEndpoint(operatorNamespace),
+		OperatorNamespace: operatorNamespace,
+		Proxies:           proxies,
+		DrainTaintKeys:    drainTaints,
 	}); err != nil {
 		setupLog.Error(err, "unable to set up controllers")
 		os.Exit(1)

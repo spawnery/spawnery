@@ -22,6 +22,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -45,11 +46,14 @@ func networkReconciler(f *fixture) *NetworkReconciler {
 func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *record.FakeRecorder) {
 	events := record.NewFakeRecorder(100)
 	return &NetworkReconciler{
-		Client:       f.c,
-		Scheme:       f.reconc.Scheme,
-		Recorder:     events,
-		Clock:        f.clock.Now,
-		SecretReader: f.c,
+		Client:   f.c,
+		Scheme:   f.reconc.Scheme,
+		Recorder: events,
+		Clock:    f.clock.Now,
+		// Matches what config/deploy/ installs; the NetworkPolicy tests need
+		// this non-empty, and no other test cares what it is.
+		OperatorNamespace: "spawnery-system",
+		SecretReader:      f.c,
 	}, events
 }
 
@@ -473,5 +477,113 @@ func TestAMissingSecretLeavesAcceptedAlone(t *testing.T) {
 	f.reconcileNetwork(t, r, "production")
 	if n := countEvents(drainEvents(events), spawneryv1alpha1.EventForwardingSecretNotFound); n != 0 {
 		t.Errorf("the next reconcile emitted %d more events, want 0", n)
+	}
+}
+
+// policyKey is where a network's policy lives, so no test has to restate it.
+func policyKey(f *fixture, network string) types.NamespacedName {
+	return types.NamespacedName{
+		Namespace: f.ns,
+		Name:      podspec.NetworkPolicyName(network),
+	}
+}
+
+// TestAnAcceptedNetworkGetsItsPolicy is the milestone's central object claim.
+func TestAnAcceptedNetworkGetsItsPolicy(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+
+	f.reconcileNetwork(t, r, "production")
+
+	var policy networkingv1.NetworkPolicy
+	if err := f.c.Get(f.ctx, policyKey(f, "production"), &policy); err != nil {
+		t.Fatalf("get the network policy: %v", err)
+	}
+	if got := policy.Spec.PodSelector.MatchLabels[podspec.LabelRole]; got != podspec.RoleServer {
+		t.Errorf("policy selects role %q, want %q", got, podspec.RoleServer)
+	}
+	network := f.getNetwork(t, "production")
+	if len(policy.OwnerReferences) != 1 || policy.OwnerReferences[0].UID != network.UID {
+		t.Errorf("owner references = %v, want one naming the Network's UID %s",
+			policy.OwnerReferences, network.UID)
+	}
+}
+
+// TestARejectedNetworkWritesNoPolicy: pickNamespaceOwner already decides which
+// Network owns a namespace when several exist. If the loser wrote one too, two
+// Network objects would overwrite each other's policy on every pass, and which
+// object survived would depend on reconcile ordering.
+func TestARejectedNetworkWritesNoPolicy(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+
+	// The fixture's "production" already exists; a younger one loses, because
+	// age decides before the name does.
+	f.clock.Advance(time.Minute)
+	loser := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: f.ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "other-secret"},
+		},
+	}
+	if err := f.c.Create(f.ctx, loser); err != nil {
+		t.Fatalf("create the second network: %v", err)
+	}
+
+	f.reconcileNetwork(t, r, "staging")
+
+	var policy networkingv1.NetworkPolicy
+	err := f.c.Get(f.ctx, policyKey(f, "staging"), &policy)
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("a rejected Network wrote a policy (err = %v); two Networks in "+
+			"one namespace would then fight over the namespace's traffic rules", err)
+	}
+}
+
+// TestADeletedPolicyComesBack: the policy is a security control, so removing it
+// by hand must not be a durable way to switch it off.
+func TestADeletedPolicyComesBack(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+	f.reconcileNetwork(t, r, "production")
+
+	var policy networkingv1.NetworkPolicy
+	if err := f.c.Get(f.ctx, policyKey(f, "production"), &policy); err != nil {
+		t.Fatalf("get the network policy: %v", err)
+	}
+	if err := f.c.Delete(f.ctx, &policy); err != nil {
+		t.Fatalf("delete the network policy: %v", err)
+	}
+
+	f.reconcileNetwork(t, r, "production")
+
+	if err := f.c.Get(f.ctx, policyKey(f, "production"), &policy); err != nil {
+		t.Fatalf("the policy did not come back: %v", err)
+	}
+}
+
+// TestTheOperatorNamespaceReachesTheEgressRule guards the one value the policy
+// cannot derive from the Network it protects. The agent endpoint is assembled
+// from the operator's own namespace, which is a flag (--operator-namespace), so
+// a policy hard-coding "spawnery-system" would be correct only by coincidence
+// in any installation that moved it.
+func TestTheOperatorNamespaceReachesTheEgressRule(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+	r.OperatorNamespace = "spawnery-elsewhere"
+
+	f.reconcileNetwork(t, r, "production")
+
+	var policy networkingv1.NetworkPolicy
+	if err := f.c.Get(f.ctx, policyKey(f, "production"), &policy); err != nil {
+		t.Fatalf("get the network policy: %v", err)
+	}
+	last := policy.Spec.Egress[len(policy.Spec.Egress)-1]
+	if last.To[0].NamespaceSelector == nil {
+		t.Fatalf("the operator egress rule has no namespace selector: %+v", last.To[0])
+	}
+	got := last.To[0].NamespaceSelector.MatchLabels[podspec.NamespaceNameLabel]
+	if got != "spawnery-elsewhere" {
+		t.Errorf("egress names namespace %q, want spawnery-elsewhere", got)
 	}
 }

@@ -67,6 +67,16 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - networking.k8s.io
+  resources:
+  - networkpolicies
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
   - policy
   resources:
   - poddisruptionbudgets

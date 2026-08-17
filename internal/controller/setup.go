@@ -46,6 +46,11 @@ type Options struct {
 	// AgentEndpoint is the address the in-game agent dials to reach the
 	// operator's gRPC endpoint.
 	AgentEndpoint string
+	// OperatorNamespace is where the operator itself runs. The per-Network
+	// NetworkPolicy needs it for its egress rule, which has to name the
+	// namespace the agents dial into; AgentEndpoint above is built from the
+	// same flag, and the two must not be allowed to disagree.
+	OperatorNamespace string
 	// Proxies is how the ProxyGroup controller tells a surplus proxy to stop
 	// taking connections. Required: the production binary always supplies the
 	// real *proxyreg.Fleet, and SetupAll refuses a nil value for the same
@@ -91,10 +96,11 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	}
 
 	if err := (&NetworkReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("network"),
-		Clock:    opts.Clock,
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("network"),
+		Clock:             opts.Clock,
+		OperatorNamespace: opts.OperatorNamespace,
 		// Uncached, for the reason SecretReader's own comment gives. The
 		// Bootstrapper takes the same reader for the same reason.
 		SecretReader: mgr.GetAPIReader(),

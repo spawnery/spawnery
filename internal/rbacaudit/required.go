@@ -159,6 +159,21 @@ var RequiredCluster = []Permission{
 	{Group: "", Resource: "nodes", Verb: "get", Why: "nodeDeparting resolves a pod's node name"},
 	{Group: "", Resource: "nodes", Verb: "list", Why: "the restricted cache over Nodes"},
 	{Group: "", Resource: "nodes", Verb: "watch", Why: "the restricted cache over Nodes"},
+
+	// NetworkPolicies — one per accepted Network, written into that Network's
+	// own namespace, which is why this is cluster-wide: game namespaces are
+	// discovered at runtime and no install-time list of them exists.
+	//
+	// No delete and no patch, deliberately, and the omission is enforced
+	// rather than merely documented: the policy carries an owner reference to
+	// its Network, so the garbage collector removes it. A delete marker added
+	// later turns this suite red in both directions before it can ship, the
+	// same way the persistentvolumeclaims grant above works.
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "get", Why: "NetworkReconciler.reconcileNetworkPolicy reads before it writes"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "list", Why: "NetworkReconciler Owns(&networkingv1.NetworkPolicy{})"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "watch", Why: "NetworkReconciler Owns(&networkingv1.NetworkPolicy{})"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "create", Why: "NetworkReconciler.reconcileNetworkPolicy creates the per-network policy"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "update", Why: "NetworkReconciler.reconcileNetworkPolicy keeps it in step with the Network"},
 }
 
 // RequiredNamespaced is what the operator does in its own namespace only, and
