@@ -678,15 +678,15 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	// policyTypes is not decoration and the mistake here is the mirror of the
 	// one internal/podspec's TestBuildNetworkPolicyDeclaresBothPolicyTypes
 	// guards. This policy carries ingress rules only; adding Egress with no
-	// egress rules makes the operator pod default-deny for egress, and it
-	// cannot reach the API server at all — every controller stops, at once,
-	// from a one-word manifest edit.
+	// egress rules makes the operator pod default-deny for egress, so wherever
+	// a CNI enforces it cannot reach the API server — every controller stops,
+	// at once, from a one-word manifest edit.
 	if len(policy.Spec.PolicyTypes) != 1 ||
 		policy.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
 		t.Errorf("policyTypes = %v, want [Ingress] alone — this policy has no "+
 			"egress rules, so declaring Egress default-denies the operator's own "+
-			"outbound traffic and it cannot reach the API server",
-			policy.Spec.PolicyTypes)
+			"outbound traffic and, wherever a CNI enforces, it cannot reach the "+
+			"API server", policy.Spec.PolicyTypes)
 	}
 
 	var agentRule, probeRule *networkingv1.NetworkPolicyIngressRule

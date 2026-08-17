@@ -281,15 +281,17 @@ it could be proven here:
    would be every agent in every namespace failing to connect at once, with
    every object looking correct.
 4. **That the rate limit and the cache behave against real agents at scale.**
-   Both are unit-tested, and both were run under `-race` by hand during review
-   — the cache additionally hammered with 50 concurrent goroutines, clean.
-   Neither of those is a standing check: `make test` is a plain `go test ./...`
-   with no `-race` anywhere in the `Makefile`, and the concurrency test was a
-   throwaway that is **not** in the tree. `make agent-test` shows the keepalive
-   policy does not regress a real agent, but no run has ever had many real
-   agents reconnecting at once. The claim that a mass reconnect is unaffected
-   rests on the limiter's key being the peer address and every agent
-   reconnecting from a different pod IP — reasoning, not measurement.
+   Both are unit-tested. `make test` now passes `-race`, so the detector is a
+   standing check rather than something a reviewer remembered to run; the
+   50-goroutine hammering of the cache was a throwaway and is still **not** in
+   the tree. `make agent-test` shows the keepalive policy does not regress a
+   real agent, but no run has ever had many real agents reconnecting at once.
+   The claim that a mass reconnect is unaffected rests on the limiter's key
+   being one bucket per pod IP — reasoning, not measurement, and it was
+   reasoning about something that was **not true until the final fix wave**:
+   the key was `IP:ephemeral-port`, so it named a connection rather than a pod
+   and every reconnect started a fresh burst. `docs/known-issues.md` carries
+   the full entry. Take the reasoning in this bullet as reasoning.
 
 Carried forward from 6a because they are still owed and still unmet: the two
 table entries no driven scenario reaches (`persistentvolumeclaims: patch`,
@@ -306,7 +308,25 @@ full: the kindnet measurement, the unselected proxies, unlabelled pods in game
 namespaces, unrestricted proxy egress, the DNAT question, the peerless rule and
 the single unit test standing behind it, the reconcile-ordering consequence
 above, the six defects this milestone found in its own plan's test code, and a
-tail of smaller ones. Two entries elsewhere in that file were amended rather than
+tail of smaller ones.
+
+**A whole-branch review ran after the eight tasks and returned "do not merge
+as-is"; one fix wave followed and is the last commits on the branch.** What it
+found is in `docs/known-issues.md` under the same heading, and three of them
+change what a reader of this document should believe. The per-peer rate limit
+was per *connection* — `peer.Addr.String()` is `IP:ephemeral-port` — so the
+documented attack reset it on every reconnect, and nothing in the suite
+exercised the limiter's key at all. The `TokenReview` cache's bound was not a
+bound, and its test could not tell. And four places, including a test's own
+failure message, said the per-`Network` policy's `managed-by` label existed so
+a restricted cache could see the object; no such restriction is in
+`cmd/spawnery-operator`, and the claim was deleted rather than the restriction
+added, because `CreateOrUpdate` reads through that cache and a pre-existing
+unlabelled object would become invisible to it. The design was corrected in
+two places as well: §2.4's "needs no report" and §6's DNAT bullet, which named
+only the operator hop when the DNS rule has the same exposure.
+
+Two entries elsewhere in that file were amended rather than
 deleted, and the amendments are the point: the invariant carried since 3b (now
 "the policy is written, and nothing here has seen it refuse a connection") and
 milestone 2a's isolation promise, whose availability half 6b **narrows** rather

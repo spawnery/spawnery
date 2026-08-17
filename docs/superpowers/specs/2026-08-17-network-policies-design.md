@@ -123,6 +123,29 @@ accepts the `Network`. So 6b adds no condition, no reason constant and no
 status field. This is not an omission to revisit — it is what the chosen shape
 buys.
 
+**Corrected after the milestone's final review: the shape produces a report
+anyway, and the report is wrong.** `reconcileNetworkPolicy` runs after the
+`Accepted` condition is set on the in-memory object but before the only
+`Status().Update` (`internal/controller/network_controller.go`), so a
+`Forbidden` on the policy write returns before the condition is ever
+persisted. Both group controllers gate on `Accepted=True`, so a *fresh*
+`Network` in such a cluster stays permanently unaccepted and every group in
+that namespace refuses with `ReasonNetworkNotAccepted` and the message
+`network "..." has not been accepted yet` — true and misleading in the same
+breath, since the network was accepted and the acceptance could not be written
+down. An *existing* `Network` keeps its persisted condition and its groups keep
+running.
+
+The ordering is still right and was not changed: persisting `Accepted` first
+would let groups start servers in a namespace with no policy, which is the
+failure this milestone exists to prevent; the review weighed the alternatives
+and judged each of them worse than the behaviour above. What
+is corrected is this section's claim. "No new report" was never available —
+what was available was a choice between a report that names the cause and one
+that does not, and 6b shipped the one that does not. The review ruled the code
+right and this paragraph wrong; `docs/known-issues.md`'s milestone 6b section
+carries the operator-facing version.
+
 ## 3. The two policies
 
 ### 3.1 The operator-side policy, shipped in `config/deploy/`
@@ -379,6 +402,12 @@ absent one. A rate limiter with no counter cannot be shown to be working.
   overloaded to carry it, because §2.4's whole argument is that this shape needs
   no new report — and a condition that appears only on an RBAC misconfiguration
   is a report about the installation, not about the `Network`.
+
+  **See §2.4's correction.** The requeue is right and the ordering is right,
+  but "needs no new report" is not what happens: the `Accepted` condition never
+  reaches etcd on that path, so every group in the namespace reports
+  `ReasonNetworkNotAccepted` instead. There is a report; it names the wrong
+  thing.
 - **Egress to a Service ClusterIP is CNI-dependent, and this is the design's
   one portability trap.** The agent dials `spawnery-operator.<ns>.svc`, which
   resolves to a Service ClusterIP, and kube-proxy DNATs it to a pod IP. Whether
@@ -392,6 +421,18 @@ absent one. A rate limiter with no counter cannot be shown to be working.
   because it is correct on the CNIs this project targets and because a Service
   CIDR is not discoverable from inside the operator. §8 makes verifying it a
   named obligation of the RKE2 rollout rather than an assumption.
+
+  **Corrected after the milestone's final review: this bullet named only the
+  operator hop, and the DNS rule has the same exposure.** A backend resolves
+  through the cluster DNS `Service`, whose ClusterIP kube-proxy DNATs to a
+  CoreDNS pod exactly as it does the operator's, while the egress rule for it
+  names `kube-system` by namespace selector. A CNI evaluating pre-DNAT breaks
+  name resolution too, and the rollout's obligation is both rules rather than
+  one. Worth stating separately because the symptom is different and misleads:
+  the operator hop failing looks like agents that never register, while DNS
+  failing looks like nothing resolving at all — the operator's own name
+  included — so the agent failure is a downstream effect and the first thing
+  anybody checks is the wrong rule.
 - **The metrics and health ports of the operator.** §3.1 notes that selecting
   the operator pod makes it default-deny for ingress, which covers the kubelet's
   probes to 8081 and any scrape of 8080. Both are admitted explicitly. Whether

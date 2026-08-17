@@ -2964,9 +2964,12 @@ cannot name a destination by DNS name — only by pod, namespace or CIDR. An
 egress rule for it would have to be an `ipBlock` over addresses nobody can
 pin, so 6b writes none. A cluster that wants it needs a CNI with FQDN policies
 (Cilium, for one), which is not a portable assumption and therefore not
-something the operator can render. Backend egress *is* restricted by the
-per-`Network` policy — to cluster DNS and to the operator's agent port, and
-nothing else — which is safe because a backend needs Mojang for nothing: it is
+something the operator can render. Backend egress is *written* against by the
+per-`Network` policy, whose egress half **admits** cluster DNS and the
+operator's agent port and nothing else — admits being the honest verb in this
+section, since whether anything is thereby restricted is the CNI's business and
+no run here has watched one refuse. It is safe to write that narrowly because a
+backend needs Mojang for nothing: it is
 `online-mode=false` by construction, so the Yggdrasil key fetch this file's
 milestone 2b section records is already gone. The one outbound call that would
 stop working where a CNI enforces is Paper's own update check to
@@ -2993,6 +2996,19 @@ does not are the same green. If backends stop reaching the operator on a real
 CNI, this is the first thing to check, and the symptom would be every agent
 failing to connect at once while the objects all look correct.
 
+**The DNS rule has the same exposure, and its symptom looks nothing like the
+one above.** A backend resolves through the cluster DNS `Service`, whose
+ClusterIP kube-proxy DNATs to a CoreDNS pod exactly as it does the operator's,
+and the per-`Network` policy's first egress rule names `kube-system` by
+namespace selector — so a CNI evaluating policy pre-DNAT would drop the
+resolver query too. The RKE2 rollout's obligation is therefore both rules, not
+just the operator hop: check that a backend can resolve as well as that it can
+dial. The symptoms diverge, which is why this is worth naming separately — the
+operator hop failing looks like agents that never register, while DNS failing
+looks like nothing resolving at all, including the operator's own name, so the
+agent failure is a downstream effect and the first thing to check is the wrong
+one.
+
 **The peerless rule is the widest-open thing 6b writes, and one unit test is
 all that stands behind it.** `config/deploy/networkpolicy.yaml`'s second
 ingress rule has no `from` at all — it admits 8081 and 8080 from anywhere in
@@ -3011,10 +3027,12 @@ dangerous mutation of all, adding 9443 to the peerless rule, is caught.
 did not predict that.** `reconcileNetworkPolicy` is called after the `Accepted`
 condition is set on the in-memory object but before any `Status().Update`
 (`internal/controller/network_controller.go`), so an error there returns before
-the condition is ever persisted. The design's §2.4 argued the failure needs no
-new report because it is a fact about the installation rather than about the
-`Network` — which is right — but the observable behaviour is more than a log
-line: `ServerGroupReconciler` and `ProxyGroupReconciler` both gate on the
+the condition is ever persisted. The design's §2.4 argued the failure needs no new
+report because it is a fact about the installation rather than about the
+`Network`. The final review ruled that argument wrong and the code right, and
+§2.4 now carries the correction: **"no new report" was never on offer.** The
+shape produces one anyway, on every group in the namespace, and it names the
+wrong thing. `ServerGroupReconciler` and `ProxyGroupReconciler` both gate on the
 `Network`'s `Accepted=True`, so a *fresh* `Network` in a cluster where the
 operator cannot write NetworkPolicies never becomes usable, and every group in
 that namespace refuses with `ReasonNetworkNotAccepted` and the message
@@ -3026,6 +3044,11 @@ direction — an unprotected namespace does not quietly come up — but it is a
 consequence, not a decision, and nothing but the operator log names the cause.
 `test/e2e`'s `theOperatorWasNeverDenied` would catch it, since it is a denied
 *write* and 6a measured that those are the kind that get logged.
+
+The ordering was reviewed and left alone. Persisting `Accepted` before writing
+the policy would let groups start servers in a namespace with no policy at all,
+which is the one thing this milestone exists to prevent, so every alternative
+here is worse than the behaviour above.
 
 **Six defects in this milestone's own plan test code, each an assertion that
 could not fail or that would have failed for the wrong reason.** This is the
@@ -3093,6 +3116,45 @@ keepalive at all — `agent/common`'s `SessionLoop` says so in its own comment �
 so the enforcement policy has nothing legitimate to throttle. Nothing under
 `agent/` or `proto/` changed on the branch.
 
+**The per-peer rate limit was per *connection*, and the attack it was written
+against reset it on every reconnect.** Found by the whole-branch review, fixed
+in 6b's final fix wave, and recorded here because the shape is more useful than
+the fix. `peerAddr` returned `peer.FromContext(ctx).Addr.String()`, and that
+`Addr` is a `*net.TCPAddr` whose `String()` is `IP:ephemeral-port` — measured
+from a real gRPC server as `127.0.0.1:42662` on one connection and
+`127.0.0.1:42674` on the next. So the bucket key named a connection, every TCP
+connection started with a fresh `PeerBurst`, and the pod-in-a-connection-loop
+this file documents could spend five real `TokenReview` calls, close, reconnect
+and spend five more, bounded only by how fast it completes TLS handshakes. It
+failed **open**, which is why nothing broke and nothing said anything.
+`net.SplitHostPort` makes the bucket one per pod IP, which is what the design's
+mass-reconnect safety argument had assumed all along.
+
+The reason it survived is the part worth carrying, and it was measured
+rather than reasoned: **no test in the tree exercised the limiter's key.**
+Replacing `peerAddr`'s body with a constant left `go test ./...` entirely green
+before the fix, because no test carried a `peer.Peer` in its context — the unit
+tests pass `context.Background()` and the envtest fixture passes `testenv`'s
+context, so the key was the constant `"unknown"` in every one of them — while
+`TestPeerLimiterBucketsArePerPeer` exercised the limiter's own keying with bare
+IP strings the production path never produced.
+Two tests, each individually reasonable, and between them a seam nothing
+crossed. `TestTheRateLimitKeysOnThePodRatherThanTheConnection` now installs the
+`peer.Peer` a real server installs and closes both directions.
+
+**The `TokenReview` cache's bound was not a bound, and its test could not see
+that.** `evictExpiredLocked` deleted only expired entries, so with
+`maxCacheEntries` live entries it deleted nothing and the map grew for as long
+as distinct tokens arrived. The test stored 1025 entries at one frozen instant —
+already past the bound — then advanced the clock past `PositiveTTL` before its
+final store, so its length assertion ran against a map the expiry sweep had just
+emptied. Green for a cache that bounded nothing, under a comment claiming "this
+bounds how large it gets in between". 6b's final wave made the bound real rather
+than correcting the claim: `store` sweeps expired entries first and drops the
+entry closest to expiry only when that frees nothing. The replacement test's
+clock never moves, so nothing can expire and the bound can only hold by
+dropping a live entry.
+
 **Smaller ones, each worth a sentence:**
 
 - The per-`Network` policy's own `spawnery.cloud/network` metadata label is
@@ -3119,11 +3181,21 @@ so the enforcement policy has nothing legitimate to throttle. Nothing under
   cluster-level one only counts.
 - The manifest test's `podSelector` match loop validates only the keys the
   policy declares, so a selector narrowed to one of the two operator labels
-  would still pass.
+  would still pass. *Closed by 6b's final fix wave*, together with the entry
+  below: the same test now compares the policy's selector to
+  `podspec.OperatorPodLabels()` by length as well as by key.
 - Nothing ties `podspec.OperatorPodLabels()`'s literal value to
   `config/deploy/deployment.yaml`'s actual pod labels — the per-`Network`
   policy's egress peer uses the former and the manifest test compares against
-  the latter. Pre-existing, and now load-bearing in a second place.
+  the latter. Pre-existing, and now load-bearing in a second place. *Closed by
+  6b's final fix wave.* Renaming the Deployment's pod labels, narrowing the
+  manifest's selector and changing `OperatorPodLabels()` are each red now.
+- `config/deploy/networkpolicy.yaml`'s `policyTypes` was never asserted, in a
+  file where adding `Egress` with no egress rules default-denies the operator's
+  own outbound traffic, so wherever a CNI enforces it cannot reach the API
+  server. *Closed by
+  6b's final fix wave*, with the guard the per-`Network` policy has carried
+  since Task 1.
 - `intstr.IntOrString.IntValue()` discards its `Atoi` error and returns 0 for a
   named port, so a hypothetical `port: metrics` in the peerless rule records as
   0. It fails safe — 0 is never a declared port, so the reverse check rejects
@@ -3157,13 +3229,31 @@ so the enforcement policy has nothing legitimate to throttle. Nothing under
   at `internal/grpcauth/identity.go`'s cache-miss branch instead, and it has to
   be, because "consulted only when the cache misses" cannot be decided by a
   caller that has not yet looked in the cache. Worth knowing before reading the
-  design and expecting to find it a layer up.
+  design and expecting to find it a layer up. **It is also the proximate cause
+  of the milestone's one critical defect, and that is worth recording beside
+  the ruling that it is right.** Living inside `Authenticate` forced the peer
+  to be recovered from a `context.Context` — and no test in the package put a
+  peer in one, so the key was the constant `"unknown"` throughout and
+  the key was never exercised by anything and a key that named a connection
+  rather than a pod survived the whole milestone. The interceptor placement
+  would have made the peer an explicit parameter and the bug visible at the
+  call site. The placement stands, because the alternative is a limiter
+  consulted on every request; what it costs is that the seam has to be tested
+  deliberately, which
+  `TestTheRateLimitKeysOnThePodRatherThanTheConnection` now does.
 - **`make test` runs no `-race`**, and 6b is the milestone that added two
   mutex-guarded, concurrently-used types to the operator (`ReviewCache`,
   `PeerLimiter`). Both were run under `-race` by hand during review, and the
   cache was additionally hammered with 50 concurrent goroutines in a throwaway
   test that is not in the tree; neither is a standing check, and the `Makefile`
-  has no `-race` anywhere in it.
+  has no `-race` anywhere in it. *Closed by 6b's final fix wave:* `make test`
+  now passes `-race`, on the target everybody already runs rather than in a
+  second one beside it, since an unrun check is indistinguishable from an
+  absent one. Cost measured on this suite: 89.8s to 109.2s wall, because the
+  run is dominated by envtest control-plane startup rather than by anything the
+  detector instruments. It is not a substitute for reasoning about
+  concurrency — see the rate-limit key entry below, which `-race` would never
+  have found.
 - `newAuthFixture` (`internal/grpcauth/auth_envtest_test.go`) wires neither the
   cache nor the limiter, which is legal because both types' methods are
   nil-safe — and it means the package's existing envtest suite exercises the
