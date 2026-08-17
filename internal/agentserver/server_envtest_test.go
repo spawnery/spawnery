@@ -703,16 +703,36 @@ func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 		}
 	}
 
-	// One past the limit. HTTP/2 queues an over-limit stream rather than
-	// refusing it, so the observable is a bounded wait: with the bound in
-	// force the first Recv does not return, without it the server answers.
-	// ServerSession itself returns immediately either way, because grpc-go
-	// creates the stream lazily.
+	// One past the limit. grpc-go's http2Client.NewStream -- which the
+	// generated ServerSession(ctx) stub calls synchronously, before this
+	// function returns -- mirrors the server's advertised
+	// SETTINGS_MAX_CONCURRENT_STREAMS as a stream quota, and once that quota
+	// is exhausted it blocks right there, in a select on the caller's context
+	// or a quota-available channel, before NewStream ever returns (grpc-go
+	// v1.83.0, internal/transport/http2_client.go:756-916, quota check around
+	// :1297-1337). So with the bound in force it is open() itself that blocks
+	// until over's five-second deadline -- not Recv(), which never even gets
+	// called -- and the error this test needs to check comes back from open,
+	// not from a later Recv on a stream that opened fine. Without the bound,
+	// open() returns immediately with room to spare and Recv() is what would
+	// have to be checked instead; both branches below exist because either
+	// shape is possible depending on which one actually happens.
 	over, cancel := context.WithTimeout(f.ctx, 5*time.Second)
 	defer cancel()
 	extra, err := open(over, int(agentserver.MaxConcurrentStreams))
 	if err != nil {
-		return // refused outright, which also satisfies the bound
+		switch status.Code(err) {
+		case codes.DeadlineExceeded, codes.Unavailable, codes.ResourceExhausted:
+			// Blocked on the stream quota until the deadline (the expected
+			// shape, and what the timings below confirm), or refused
+			// outright -- either satisfies the bound.
+			return
+		default:
+			t.Fatalf("stream %d failed to open with %v, want a bound-related "+
+				"code -- a different error means it failed for some other "+
+				"reason and this test proves nothing about the bound",
+				agentserver.MaxConcurrentStreams+1, err)
+		}
 	}
 	if _, err := extra.Recv(); err == nil {
 		t.Errorf("stream %d was served; MaxConcurrentStreams is not in force",
