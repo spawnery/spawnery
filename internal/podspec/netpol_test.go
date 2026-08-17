@@ -155,6 +155,22 @@ func TestBuildNetworkPolicyEgressIsDNSAndTheOperatorOnly(t *testing.T) {
 	if got := op.To[0].NamespaceSelector.MatchLabels[podspec.NamespaceNameLabel]; got != "spawnery-system" {
 		t.Errorf("operator namespace = %q, want spawnery-system", got)
 	}
+	// The podSelector's content, not just its presence: OperatorPodLabels'
+	// own doc comment calls this a trap for anyone writing a peer selector by
+	// copying ManagedSelector, since the operator pod carries neither
+	// LabelManagedBy nor LabelNetwork. A selector with the wrong labels would
+	// admit nothing -- or the wrong thing -- while every other assertion here
+	// stayed green.
+	wantOperator := podspec.OperatorPodLabels()
+	gotOperator := op.To[0].PodSelector.MatchLabels
+	if len(gotOperator) != len(wantOperator) {
+		t.Errorf("operator podSelector = %v, want %v", gotOperator, wantOperator)
+	}
+	for k, v := range wantOperator {
+		if gotOperator[k] != v {
+			t.Errorf("operator podSelector[%q] = %q, want %q", k, gotOperator[k], v)
+		}
+	}
 	if len(op.Ports) != 1 || op.Ports[0].Port.IntValue() != int(podspec.AgentPort) {
 		t.Errorf("operator ports = %v, want only %d", op.Ports, podspec.AgentPort)
 	}
@@ -177,8 +193,21 @@ func TestBuildNetworkPolicyIsOwnedByItsNetwork(t *testing.T) {
 		t.Errorf("owner = %s/%s uid %s, want Network/%s uid %s",
 			ref.Kind, ref.Name, ref.UID, network.Name, network.UID)
 	}
+	// APIVersion matters as much as Kind: the garbage collector resolves the
+	// owner by GroupVersionKind, and a wrong or missing APIVersion means it
+	// never finds the Network, so the policy outlives it -- the exact failure
+	// this owner reference exists to prevent.
+	if ref.APIVersion != spawneryv1alpha1.GroupVersion.String() {
+		t.Errorf("owner apiVersion = %q, want %q", ref.APIVersion, spawneryv1alpha1.GroupVersion.String())
+	}
 	if ref.Controller == nil || !*ref.Controller {
 		t.Error("the owner reference must be a controller reference")
+	}
+	// BlockOwnerDeletion defaults to false, which permits a foreground-deletion
+	// race: the policy could be deleted out from under a Network still being
+	// foreground-deleted, instead of blocking until the policy is gone.
+	if ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
+		t.Error("the owner reference must block owner deletion")
 	}
 }
 
