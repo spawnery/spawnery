@@ -71,6 +71,10 @@ against a different spec.
   close this either: it patches the image to the locally built archive and sets
   `imagePullPolicy: Never` on purpose, so the run tests the bits just built and
   never resolves the reference the manifest ships.
+- **The RKE2 rollout at the end of milestone 6 has not been driven either**,
+  and nothing in 6a stands in for it. It is not 6a's to drive — §6 says what it
+  owes and why only it can — but it is stated here so that a reader of §6's
+  future tense does not have to infer it.
 
 Do not mark either criterion met from the existence of the script. The script
 is the mechanism; the run is the evidence, and this project's convention — five
@@ -152,9 +156,11 @@ without a table entry, and this is not a claim about intent.** `make test` runs
 `TestClusterRoleGrantsNothingExtra`
 (`internal/rbacaudit/audit_envtest_test.go`) reads that freshly generated role
 and reports, per expanded triple, `the clusterrole grants
-networking.k8s.io/networkpolicies/create, which no entry in the matching
-rbacaudit table claims`. The reverse direction fails the same way with `the
-rbacaudit table lists ..., which the clusterrole never mentions`. Adding the
+networking.k8s.io/networkpolicies:create, which no entry in the matching
+rbacaudit table claims` — `Permission.Key()` renders `group/resource:verb`,
+with a slash only before a subresource. The reverse direction fails the same
+way with `the rbacaudit table lists ..., which the clusterrole never
+mentions`. Adding the
 entry to `RequiredCluster` in `internal/rbacaudit/required.go` — with a `Why`
 that names the real call site, and see §6 on how easily that field goes stale —
 is the whole cost, and `test/e2e/rbac_test.go` then covers the new permission
@@ -169,8 +175,9 @@ everything the run did. `eventually`, `eventuallyStable`, `applyManifest`,
 `operatorPod` and `operatorLog` are there to reuse. Nothing in the package waits
 a fixed time and then asserts — that is design §6.4, kept, because a run built
 on sleeps turns flaky under load and a flaky E2E run is ignored within weeks —
-and a new scenario should not be the first to. The 500 ms inside `eventually`
-is a poll interval, not a wait.
+and a new scenario should not be the first to. The two 500 ms sleeps in the
+package — one in `eventually`, one in `eventuallyStable` — are poll intervals,
+not waits.
 
 The limit: **no image in that harness resolves**, by decision
 (`test/e2e/manifests/e2e.yaml` names `:e2e-no-such-tag` for both game images),
@@ -186,9 +193,11 @@ with no new code.
 And one more thing to settle before writing any test that asserts a connection
 was *refused*: **enforcement is a property of the CNI, not of the object.**
 `hack/e2e.sh` runs a bare `kind create cluster` with no `--config`, so the
-default kindnet, and `kind` is unpinned in `flake.nix`. If that CNI drops
+default kindnet. `kind` itself comes from the dev shell and `flake.lock` pins
+the nixpkgs it is built from, so the version is reproducible — what is not
+pinned anywhere is any statement about what kindnet enforces. If that CNI drops
 nothing, "the connection was blocked" and "the policy was never applied" are
-the same green. Either verify kindnet's enforcement in the version nixpkgs
+the same green. Either verify kindnet's enforcement in the version the lock
 supplies, or bring up the cluster with `disableDefaultCNI: true` and a CNI that
 enforces, or assert objects only and say so out loud in the test's own comment.
 
@@ -341,25 +350,33 @@ eviction, none of which a single-node `kind` cluster can touch — and a real
 join. It is a runbook, driven once, marked `DRIVEN`, in the manner of
 `docs/runbook-milestone-3-evidence.md` and its four successors.
 
-Two things the E2E has already established that this run should not re-derive,
-and one it should:
+One thing the E2E has established that this run need not re-derive, one it
+should widen, and one it should check:
 
-- The denial check `theOperatorWasNeverDenied` catches a missing **write**
-  permission and does not catch a missing **read** permission. The asymmetry is
-  measured; the explanation for it — that reads go through the manager's cache
-  and never reach the API server — is a hypothesis nothing here established, so
-  do not carry it forward as fact. Measured both ways: a revoked
-  `pods: create` produced a quoted denial immediately, a
-  revoked `pods: list` produced nothing at all across seven and three-quarter
-  minutes of continuous watching, with no 403 in the operator's own metrics and
-  no effect on `Available`. Both halves are in `docs/known-issues.md`.
-- Two table entries no driven scenario reaches:
+- **To widen.** The denial check `theOperatorWasNeverDenied` catches a missing
+  **write** permission: a revoked `pods: create` produced a quoted denial
+  immediately. It did not catch either of the two **cache-backed lists** that
+  were tried — `pods: list`, then `networks: list` — with the first watched
+  continuously for seven and three-quarter minutes and producing nothing at
+  all: no log line, no 403 in the operator's own metrics, no effect on
+  `Available`. That is the whole of what was measured. **Reads as a class were
+  not**, because no uncached read was ever revoked and watched, and the
+  explanation that would generalise it — that such reads go through the
+  manager's cache and never reach the API server — is a hypothesis nothing
+  established. Do not carry the wider version forward as fact; a rollout with
+  real traffic is a chance to measure it properly. Note also that at least one
+  uncached read would escape the check for an entirely different reason:
+  `readForwardingSecret` (`internal/controller/forwardingsecret.go`) folds a
+  403 into a condition message carrying no `is forbidden:`, and nothing on
+  that path logs. Both halves of the measurement are in
+  `docs/known-issues.md`.
+- **Not to re-derive.** Two table entries no driven scenario reaches:
   `persistentvolumeclaims: patch` (measured — nothing in the harness grows a
   claim) and `tokenreviews: create` (reasoned, not measured — no agent process
   ever runs, and the client metric has no per-resource label to prove it with).
   A real RKE2 rollout with resolvable images exercises both, and is the first
   thing that can.
-- **The one to re-derive:** `internal/rbacaudit/required.go`'s `Why` field for
+- **To check.** `internal/rbacaudit/required.go`'s `Why` field for
   `pods: patch` names `syncOccupiedLabel`, a call site nothing in the harness
   reaches, while `ProxyGroupReconciler.syncOccupiedLabels` exercises the grant
   on every run. That is the second entry of its shape in

@@ -117,17 +117,26 @@ and it has now been run once, against a real `kind` cluster (2026-08-12): an
 automated join through `cmd/spawnery-join` reached a backend, and Paper's own
 log and Velocity's own log confirmed it — the first time the forwarding chain
 built in 3b and 3c was observed working end to end rather than merely
-rendered correctly on disk. A manual join with a real Microsoft account still
-needs a licensed client and a person to drive it, and has not been done. The
-drain proof surfaced a real finding instead of a clean result: deleting a
-`Server` under a player held open by the evidence tool disconnected them
-rather than moving them, traced to the tool stopping short of the point Paper
-counts a player as online rather than to the drain logic itself — full
-diagnosis in [`docs/known-issues.md`](docs/known-issues.md), "From the
-milestone 3c evidence run". Neither the manual join nor a real drain is
-proven yet; both are what
-[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md) records as
-still open, along with what running the automated half found.
+rendered correctly on disk. That automated run's drain proof surfaced a real
+finding instead of a clean result: deleting a `Server` under a player held
+open by the evidence tool disconnected them rather than moving them, traced to
+the tool stopping short of the point Paper counts a player as online rather
+than to the drain logic itself — full diagnosis in
+[`docs/known-issues.md`](docs/known-issues.md), "From the milestone 3c
+evidence run", which is to be read as a finding about `cmd/spawnery-join` and
+not as an open criterion.
+
+The two things that run could not settle — a join with a real Microsoft
+account, and a drain moving a real player rather than the tool's stand-in —
+were both proven by hand the next day (2026-08-13), and
+[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md) carries the
+logs. A licensed Minecraft client joined through the proxy; the artifact is
+the UUID, because Mojang minted a version-4 one only after the client proved
+its session, where the automated probe could only ever produce the
+version-3 offline form. Deleting that player's `Server` while they were in the
+game moved them onto a fallback inside the same second, with the proxy's log
+and the destination's both timestamping it. So milestone 3's whole point is
+proven against a real client, not only against a tool.
 
 Carry-overs and preconditions for later milestones — CA rotation, the
 NetworkPolicy restricting backends to proxies-only that `online-mode=false`
@@ -216,7 +225,9 @@ and it says so out loud, with a `Warning` event naming how many people it just
 disconnected. What it leaves open matters on upgrade: a proxy image predating
 `SetReady` ignores the message, never lowers its readiness, and keeps taking
 *new* players for the whole drain window. Upgrade proxy images before the
-operator.
+operator. Its two cluster claims were driven twice against a real cluster with
+a licensed client on 2026-08-14
+([`docs/runbook-milestone-4c1-evidence.md`](docs/runbook-milestone-4c1-evidence.md)).
 
 Milestone 4c-2 is done: proxy rolling updates. A proxy pod is stale when its
 `spawnery.cloud/pod-hash` label differs from a digest of the pod the operator
@@ -229,7 +240,10 @@ roll every proxy in the cluster with nobody having edited anything — a new
 default in `internal/podspec`, an added environment variable, even a different
 `--operator-namespace`, all move the digest. The group's own status hides it,
 because the surge pod arrives before any withdrawal; two distinct `pod-hash`
-values in one group is the tell.
+values in one group is the tell. Its own cluster claims are §11 of the same
+runbook, added for this milestone and driven the same night against merged
+`master`, with a real client
+([`docs/runbook-milestone-4c1-evidence.md`](docs/runbook-milestone-4c1-evidence.md)).
 
 Milestone 4c-3 is done: node drain. `IsDeparting`
 (`internal/controller/nodes.go`) has two ways in — `spec.unschedulable`,
@@ -241,12 +255,17 @@ ceiling and demand rules, because a node drain answers to none of the three:
 the node is leaving with or without the group's consent. A proxy on a departing
 node is simply a second kind of staleness, so 4c-2's rollout drains it. Both
 kinds get a PodDisruptionBudget sized from the `spawnery.cloud/occupied` label.
-The one thing worth naming is what this milestone's own closing review found:
-the live budget selector carried no role term, so in a namespace where a
-`ProxyGroup` and a `ServerGroup` share a name, ready occupied *proxies*
-inflated `currentHealthy` against a `desiredHealthy` counted only from occupied
-*servers* — and the eviction API could have spent the difference disconnecting
-players. It leaves open that an operator running cluster-autoscaler must pass
+The one thing worth naming is what this milestone's own closing review found
+and fixed: the live budget selector carried no role term, so in a namespace
+where a `ProxyGroup` and a `ServerGroup` share a name, ready occupied
+*proxies* inflated `currentHealthy` against a `desiredHealthy` counted only
+from occupied *servers* — and the eviction API could have spent the difference
+disconnecting players. Adding the role term closed it in the reconciler, but
+one copy is out of reach: a `ServerGroup` last reconciled by pre-4c-3 code
+left a budget at its own bare name, which nothing renames or deletes, carrying
+a frozen `minAvailable` and a frozen copy of the broken selector. Delete it by
+hand — `docs/known-issues.md` has the `kubectl` to find it. It also leaves
+open that an operator running cluster-autoscaler must pass
 `-drain-taint ToBeDeletedByClusterAutoscaler` by hand: that autoscaler taints
 without cordoning, and an unset flag looks exactly like a quiet node.
 
@@ -300,9 +319,11 @@ is a decision for a person with a maintenance window, working through
 [`docs/runbook-milestone-5c-secret-rotation.md`](docs/runbook-milestone-5c-secret-rotation.md).
 The one thing worth naming is the negative that makes it safe: a rotation must
 move no pod hash, so both `DesiredServerHash` and `DesiredProxyHash` strip the
-forwarding label before digesting. Had that digest reached `spec.podHash`, 5b's
-takedown rule would have recreated every ordinal of every group on the rotated
-network by itself, with nobody having asked for a restart. It leaves open that the stamp records the
+forwarding label before digesting. Had that digest reached `spec.podHash`,
+rotating a secret would have restarted every pod on that network by itself,
+with nobody having asked for one: 5b's takedown rule would have walked every
+ordinal of every persistent group, and 4b's retirement rule every server of
+every ephemeral one. It leaves open that the stamp records the
 last digest the operator *read*, not the bytes the pod actually mounted — under
 a refused or failed read a pod can be running the new secret while being
 reported stale. Driven on 2026-08-16, against the standing procedure rather
@@ -327,16 +348,18 @@ The one thing worth naming is what that check turned out to cover, because it
 was measured rather than assumed and the answer is narrower than it looks.
 Removing a **write** verb makes it fire: taking `create` on `pods` out of the
 markers produced a quoted `is forbidden: ... cannot create resource "pods"` on
-the first attempt. Removing a **read** verb does not. With `list` on `pods`
-revoked and confirmed revoked at the API server, seven and three-quarter
+the first attempt. Removing a **cache-backed `list`** does not. With `list` on
+`pods` revoked and confirmed revoked at the API server, seven and three-quarter
 minutes of continuous watching produced no denial in the log, no `403` in the
-operator's own client metrics, no restart and no drop in `Available`. The
-hypothesis that accounts for both measurements — and it is a hypothesis, not
-something this milestone established — is that a pod read here goes through the
-manager's cache, whose initial sync is a watch rather than a list, so the
-revoked verb never reaches a request anyone could deny.
-`docs/known-issues.md` carries both halves of the measurement, and the one
-anomaly the hypothesis does not explain.
+operator's own client metrics, no restart and no drop in `Available`; `list` on
+`networks` behaved the same way. Those two lists are what was measured, and
+reads as a class are not: no uncached read was ever revoked and watched. The
+hypothesis that would license the wider claim — that such a read goes through
+the manager's cache, whose initial sync is a watch rather than a list, so the
+revoked verb never reaches a request anyone could deny — is a hypothesis, not
+something this milestone established. `docs/known-issues.md` carries both
+halves of the measurement, the anomaly the hypothesis does not explain, and a
+second and unrelated way a denied read escapes the check.
 
 What 6a leaves open is recorded as open. No real `make publish` has been
 driven — it needs a token nobody in that milestone had — so the digest
@@ -421,8 +444,10 @@ the standing check for it — worth running again after any change to
 
 `make operator-image` builds the operator's own image, `make operator-image-load`
 hands it to the local container runtime, and `make operator-image-test` runs it
-under the same constraints `config/deploy/deployment.yaml` imposes — non-root,
-read-only root filesystem, no network — rather than more comfortable ones.
+under the constraints `config/deploy/deployment.yaml` imposes — non-root and a
+read-only root filesystem — rather than more comfortable ones, plus
+`--network none`, which is the script's own choice and not the Deployment's,
+and cheap here because the run only asks the binary to print its usage.
 Since milestone 6a the operator is a container like the other two, and
 `make image-repro` rebuilds all three of them plus the agent jars.
 

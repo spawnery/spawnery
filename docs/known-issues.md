@@ -2645,19 +2645,38 @@ above — Task 4's
 measurement round — belongs to this milestone too and is not repeated here; the
 first item below is what answered its open question.
 
-**The denial check fires on a write verb, and that is the shape of its
-coverage.** Removing `create` on `pods` from the markers produced a quoted
-`... is forbidden: ... cannot create resource "pods" ...` on the first attempt,
-with the operator still healthy and `theOperatorWasNeverDenied` still able to
-read it — the combination Task 4 tried four ways and could not produce. The
-hypothesis that accounts for both results — stated as a hypothesis, because
-nothing here established it, and the section above records an anomaly it does
-not cover: a pod read in this operator goes through the manager's cache, whose
-initial sync is a watch rather than a `list`, so a revoked read verb never
-reaches a request the API server could deny, while a write goes to the API
-server directly and does. What is measured, either way, is the asymmetry
-itself. Read a green run as evidence about write paths, and read the section
-above for what it does not establish about read paths.
+**The denial check fires on a write verb, and the shape of what it misses is
+narrower than "reads".** Removing `create` on `pods` from the markers produced
+a quoted `... is forbidden: ... cannot create resource "pods" ...` on the first
+attempt, with the operator still healthy and `theOperatorWasNeverDenied` still
+able to read it — the combination Task 4 tried four ways and could not produce.
+
+Be exact about the other side, because it is easy to over-read. What was
+revoked and watched is **two cache-backed `list` verbs**: `pods: list`, for
+seven and three-quarter minutes continuously, and `networks: list`. Neither
+produced anything. **No uncached read was ever revoked and watched**, so
+"the check misses read verbs" is not a measured statement — it is the
+conclusion of a hypothesis, and the hypothesis is the one the section above
+declines to assert: that such a read goes through the manager's cache, whose
+initial sync is a watch rather than a `list`, so a revoked verb never reaches a
+request the API server could deny, while a write goes to the API server
+directly and does. That hypothesis would also have to account for the anomaly
+the section above records and does not explain. What is established is the
+asymmetry between a revoked write and those two revoked lists, and no more.
+
+**And a denied read can escape this check for a reason that has nothing to do
+with the cache.** `readForwardingSecret`
+(`internal/controller/forwardingsecret.go`) deliberately uses the *uncached*
+reader, so a missing `secrets: get` in a `Network`'s namespace really is a 403
+from the API server — and the function folds it into a `forwardingRead` whose
+message reads "the operator may not read secret …", with no `is forbidden:`
+substring anywhere in it. The read sits after `network_controller.go`'s
+`Accepted` branch has already returned, so no scenario fails either, and that
+controller makes no logger call at all. The check would stay green through it.
+`hack/e2e.sh` claimed the opposite until this was checked; its comment now says
+so. The general lesson for anyone extending the check: it can only see what
+something logs, so an error the code handles well is invisible to it by the
+same mechanism that makes the handling good.
 
 **Two permissions in the table that no driven scenario exercises,** measured on
 a held cluster at the end of Task 8 rather than guessed:

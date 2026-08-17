@@ -86,9 +86,20 @@ kubectl apply -f config/deploy/
 # namespace, so an administrator opens exactly the namespaces holding a
 # Network -- and this run is the first thing in the repository that has to
 # actually be that administrator. Without it the operator's read of the
-# forwarding secret is refused, the Network reports
-# Unknown/SecretReadForbidden, and test/e2e's denial check fires on a denial
-# that is nobody's bug but this script's.
+# forwarding secret is refused and the Network reports
+# Unknown/SecretReadForbidden for the whole run -- milestone 5c's own path,
+# left permanently unresolved, on a denial that would be nobody's bug but this
+# script's.
+#
+# Note what does NOT happen without it, because an earlier version of this
+# comment claimed it did: test/e2e's denial check does not fire.
+# readForwardingSecret (internal/controller/forwardingsecret.go) folds the 403
+# into a condition whose message says "the operator may not read secret ..."
+# and carries no `is forbidden:` substring, the read sits after the Accepted
+# branch has already returned so no scenario fails either, and
+# network_controller.go makes no logger call at all. That is a second and
+# quite different way a denied read escapes the check -- not the cache, just
+# an error the code handles instead of surfacing.
 #
 # The namespace is created here rather than by the test manifest so the grant
 # can exist before the operator ever looks; applyManifest tolerates the

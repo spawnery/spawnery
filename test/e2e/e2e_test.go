@@ -156,18 +156,30 @@ func theOperatorIsUp(t *testing.T) {
 // reaching Available, so hack/e2e.sh's rollout wait timed out before this
 // test ever ran.
 //
-// Task 5 settled it, once the scenarios below started applying a Network and
-// its groups: removing `create` on pods -- a WRITE verb -- produced a quoted
+// Task 5 broke that deadlock, once the scenarios below started applying a
+// Network and its groups: removing `create` on pods -- a WRITE verb --
+// produced a quoted
 // `is forbidden: ... cannot create resource "pods"` on the first attempt,
 // with the operator still healthy and this check still able to read it. So
-// the asymmetry is measured: write verbs fire this check, read verbs do not.
-// The explanation offered for it -- that a pod read goes through the manager's
-// cache, whose initial sync is a watch rather than a list, so a revoked read
-// verb never reaches a request the API server could deny -- is a hypothesis
-// nothing has established; do not restate it as fact. Read a green run
-// as evidence about write paths, and see docs/known-issues.md's "From the
-// milestone 6a Task 4 measurement round" section for what it does not
-// establish about read paths. Do not add a sleep to manufacture traffic.
+// what is measured is narrow: a revoked write fires this check, and the two
+// cache-backed lists that were tried did not. Reads as a class were not
+// measured -- no uncached read was ever revoked and watched here. The
+// explanation that would generalise it -- that such a read goes through the
+// manager's cache, whose initial sync is a watch rather than a list, so a
+// revoked read verb never reaches a request the API server could deny -- is a
+// hypothesis nothing has established; do not restate it as fact.
+//
+// There is also at least one uncached read this check would miss for an
+// entirely unrelated reason, and it is the very one the paragraph at the top
+// of this comment is about: readForwardingSecret
+// (internal/controller/forwardingsecret.go) folds a real 403 into a condition
+// message that carries no `is forbidden:` substring, and nothing on that path
+// logs. This check can only see what something logs, so an error the code
+// handles well is invisible to it.
+//
+// Read a green run as evidence about write paths, and see
+// docs/known-issues.md's two milestone 6a sections for what it does not
+// establish beyond them. Do not add a sleep to manufacture traffic.
 func theOperatorWasNeverDenied(t *testing.T) {
 	var offenders []string
 	for _, line := range strings.Split(operatorLog(t), "\n") {
