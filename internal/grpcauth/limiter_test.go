@@ -18,6 +18,7 @@ package grpcauth
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -87,6 +88,13 @@ func TestPeerLimiterDoesNotAccumulatePastItsBurst(t *testing.T) {
 
 // The limit sits behind the cache, and that ordering is the design rather than
 // an implementation detail: a pod replaying one token must never reach it.
+//
+// This proves only the hit side: every replay after the first is served from
+// the cache and so never enters the branch that consults the limiter at all,
+// which means this assertion (reviews.calls == 1) would hold even if the
+// limiter check were deleted from Authenticate entirely, with no limiter left
+// to reach. TestDistinctTokensFromOnePeerAreRateLimited below is what proves
+// the limiter is wired in and reached on the miss side.
 func TestARepeatedTokenNeverReachesTheLimiter(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
@@ -108,6 +116,41 @@ func TestARepeatedTokenNeverReachesTheLimiter(t *testing.T) {
 	if reviews.calls != 1 {
 		t.Errorf("the API server was asked %d times for one token, want 1", reviews.calls)
 	}
+}
+
+// The replay test above cannot tell "the limiter is wired in and never
+// reached on a hit" apart from "there is no limiter at all" -- both leave it
+// green. This closes that gap with tokens the cache has never seen: every
+// call below is a genuine cache miss, so each one reaches a.Limiter, and a
+// peer presenting more than PeerBurst of them must eventually be refused by
+// the limiter itself. isExhausted pins the refusal to the limiter, not to
+// the reviewer or the pod checker, both of which are stubbed to always
+// succeed.
+func TestDistinctTokensFromOnePeerAreRateLimited(t *testing.T) {
+	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+
+	reviews := &countingReviewer{}
+	a := &Authenticator{
+		Reviews:  reviews,
+		Pods:     alwaysFoundPods{},
+		Audience: "spawnery-operator",
+		Cache:    NewReviewCache(clock),
+		Limiter:  NewPeerLimiter(clock),
+	}
+
+	for i := 0; i < PeerBurst+2; i++ {
+		token := fmt.Sprintf("distinct-token-%d", i)
+		_, err := a.Authenticate(context.Background(), token, agent.RoleServer)
+		if err == nil {
+			continue
+		}
+		if !isExhausted(err) {
+			t.Fatalf("distinct token %d was refused for a reason other than the rate limit: %v", i, err)
+		}
+		return // the limiter refused a genuinely new token; the test is satisfied
+	}
+	t.Fatalf("%d distinct tokens from one peer were all accepted; the limiter never engaged", PeerBurst+2)
 }
 
 // countingReviewer answers every review the same way and counts the asking.
