@@ -51,3 +51,54 @@ spec:
     minReplicas: 2
     maxReplicas: 4
     spareSlots: 10
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: survival
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  type: Persistent
+  image: ghcr.io/spawnery/paper:e2e-no-such-tag
+  maxPlayers: 20
+  replicas: 2
+  drain:
+    timeoutSeconds: 30
+  storage:
+    # kind's default class is rancher.io/local-path with
+    # volumeBindingMode: WaitForFirstConsumer, which binds on the first pod
+    # *scheduled* to consume the claim, not the first pod that actually
+    # *runs*. These pods are scheduled -- kind's single control-plane node has
+    # nothing stopping that -- and only then get stuck in ImagePullBackOff, so
+    # the claims measurably reach Bound during this run, not Pending. (An
+    # earlier version of this comment claimed Pending on the WaitForFirstConsumer
+    # reasoning alone, without having checked what the pods actually do;
+    # task-7-report.md's fix-round-1 section has the kubectl output that
+    # caught it.) Either way is fine for this scenario: it is about the
+    # claim's existence, its missing owner reference and its survival, none of
+    # which needs a particular binding state. BuildDataClaim itself declines
+    # to wait for Bound, for the same reason.
+    size: 1Gi
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  replicas: 1
+  image: ghcr.io/spawnery/velocity:e2e-no-such-tag
+  expose:
+    type: NodePort
+    nodePort:
+      port: 30765
+  routing:
+    fallbackGroups:
+      - lobby
+  config:
+    playerLimit: 100
+    motd: "spawnery e2e"
