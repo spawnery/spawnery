@@ -143,27 +143,31 @@ func theOperatorIsUp(t *testing.T) {
 // (milestone 5c), and matching "forbidden" alone would turn a correctly
 // reported missing secret into a false accusation about RBAC.
 //
-// A pass here, on its own, is weak evidence. This package's driver
-// (TestSpawneryUnderItsOwnServiceAccount) applies no Network, ServerGroup,
-// Server or ProxyGroup -- that is Task 5's job -- so between the rollout
-// succeeding and this check reading the log there is almost no traffic for
-// any permission to be exercised against, let alone denied. Task 4's own
-// verification of this file mutated the ClusterRole and the namespaced Role
-// four separate ways (task-4-report.md, "Fix round 1"): denying a
-// cache-backed List (pods, then networks) revoked the permission for real
-// but never produced a live, observable call within this check's window --
-// the informer never visibly attempted it, at least not inside the window a
-// kept-alive cluster was inspected for. Denying a direct, uncached call that
-// gates the operator's own readiness (the TLS secret's create, the leader
-// election lease's update) produced a real, quoted `is forbidden:` line
-// every time, but also kept the pod from ever reaching Available, so
-// hack/e2e.sh's rollout wait timed out before this test ever ran. Neither
-// path proves this check can catch a denial while the operator stays up.
-// It becomes meaningful once Tasks 5 through 8 put a Network and its groups
-// through the operator and give every permission in
-// internal/rbacaudit/required.go something to actually be exercised by --
-// and, if a marker is ever wrong, denied by. Do not read a green run here as
-// proof by itself, and do not add a sleep to manufacture traffic instead.
+// What a pass here does and does not establish was measured both ways, and
+// the answer is narrower than "this check works". Task 4's verification
+// mutated the ClusterRole and the namespaced Role four separate ways
+// (task-4-report.md, "Fix round 1"): denying a cache-backed List (pods, then
+// networks) revoked the permission for real but produced no observable call
+// at all -- no log line, no 403 in the operator's own client metrics --
+// across seven and three-quarter minutes of continuous watching. Denying a
+// direct, uncached call that gates the operator's own readiness (the TLS
+// secret's create, the leader election lease's update) produced a real,
+// quoted `is forbidden:` line every time, but also kept the pod from ever
+// reaching Available, so hack/e2e.sh's rollout wait timed out before this
+// test ever ran.
+//
+// Task 5 settled it, once the scenarios below started applying a Network and
+// its groups: removing `create` on pods -- a WRITE verb -- produced a quoted
+// `is forbidden: ... cannot create resource "pods"` on the first attempt,
+// with the operator still healthy and this check still able to read it. So
+// the asymmetry is measured: write verbs fire this check, read verbs do not.
+// The explanation offered for it -- that a pod read goes through the manager's
+// cache, whose initial sync is a watch rather than a list, so a revoked read
+// verb never reaches a request the API server could deny -- is a hypothesis
+// nothing has established; do not restate it as fact. Read a green run
+// as evidence about write paths, and see docs/known-issues.md's "From the
+// milestone 6a Task 4 measurement round" section for what it does not
+// establish about read paths. Do not add a sleep to manufacture traffic.
 func theOperatorWasNeverDenied(t *testing.T) {
 	var offenders []string
 	for _, line := range strings.Split(operatorLog(t), "\n") {

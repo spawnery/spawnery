@@ -105,7 +105,8 @@ read back. Both are now checked. `docs/known-issues.md`'s "From milestone
 3c" section has the rest of what this milestone leaves open, in particular
 that a NetworkPolicy restricting backends to proxies-only is now overdue
 rather than deferred, and that proxy drain needs a readiness
-`internal/agent/registry.go` cannot yet lower.
+`internal/agent/registry.go` cannot yet lower — milestone 4c-1 below is what
+gave it one, and the NetworkPolicy is still owed, by milestone 6b.
 
 `make agent-test` runs both plugins, in the real images, against a real
 operator-shaped gRPC server — including, for the proxy, that its ready port
@@ -161,20 +162,205 @@ number, and the envtest that carries this milestone is the one that keeps
 reconciling for ten more passes and asserts the count has not moved — a single
 decision cannot show that failure.
 
-Milestone 4 continues with 4b, rolling updates of ephemeral groups, and 4c,
-proxy and node drain, which owns the readiness
-`internal/agent/registry.go` still cannot lower.
+Milestone 4b is done: rolling updates of ephemeral groups. A spec edit bumps a
+`ServerGroup`'s `metadata.generation`, which makes every server created before
+it stale, and 4b is what carries out the changeover instead of a person
+deleting pods. `selectRetirement` (`internal/controller/scaling.go`) nominates
+one stale server per pass — empty ones first, then the oldest — the group
+patches `spec.retire: true` onto it, and `phase.Decide` moves it into the new
+phase `Retiring`: deregistered, so it takes no new joins, while the players it
+already has finish in their own time. Nobody is kicked.
+`spec.update.maxUnavailable` bounds how many may be out at once, and
+`spec.update.maxStaleSeconds` is what escalates a server that never empties
+into a real drain.
 
-Anyone starting milestone 4b begins at
-[`docs/handover-milestone-4b.md`](docs/handover-milestone-4b.md): it says what
-4b is, what 4a leaves in place for it, the one state the `Server` machine
-cannot express that soft drain needs, and the three numbers in `scaling.go`
-that must not be collapsed into one. It is written to be read by someone with
-no memory of how any of this was built.
-[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md) is where 4c
-begins instead: it says where 3c stopped, carries milestone 3's evidence, and
-names the one milestone 2a contract change proxy drain needs in
-`internal/agent/registry.go`. [`docs/handover-milestone-3.md`](docs/handover-milestone-3.md),
+The one thing worth naming is the deadlock this had to break twice. A group
+already at `maxReplicas` has no room to build the first server of the new
+generation, so the changeover cannot start; the rule that resolves it sheds an
+idle stale server first, and when there is nothing to shed the group says which
+kind of stuck it is — `ScalingLimited` names the blocked cold start rather than
+an ordinary capacity shortfall. What 4b leaves open is that *any* spec change
+starts a changeover: retuning `spareSlots` replaces a whole group of
+functionally identical servers.
+
+Milestone 4d is done: per-group backoff and the `Degraded` condition. It
+appears here, out of alphabetical order, because it shipped here: it was cut
+out of 4b during that milestone's design, on the measurement that it shares no
+code with the rolling update, and 4c was already named. A group whose servers
+cannot start no longer rebuilds them as fast as it can notice them dying.
+`CountFailures` and `DecideBackoff`
+(`internal/controller/backoff.go`) turn a running failure streak — kept on the
+CR as `status.consecutiveFailures` and `status.lastFailureAt` — into permission
+to create, waiting ten seconds and doubling to a five-minute cap, and giving up
+after six. Waiting publishes `BackingOff`; giving up publishes `Degraded` with
+reason `CrashLoopBackoff`, and the phase follows. The one thing worth naming is
+what breaks the streak: a success *since the last counted failure*, not any
+server being `Ready`. The weaker rule reads well and is wrong — a group with
+one healthy server and one that crash-loops would hold its count at zero
+forever and hammer indefinitely. It leaves open that the threshold counts
+failed servers rather than failed rounds, so a group with `minReplicas` of six
+or more can give up on its very first pass, and giving up is terminal until
+somebody edits the spec.
+
+Milestone 4c-1 is done: the proxy readiness contract, and the first drain that
+uses it. Before a proxy pod is removed, the operator tells its agent to stop
+being ready — a `SetReady` message on the proxy channel, which the Velocity
+plugin's `ReadyGate` answers by closing the port the kubelet's readiness probe
+completes against — so the endpoint disappears and no new player is routed
+there. It then waits for the pod to empty, bounded by
+`spec.drain.timeoutSeconds`. The one thing worth naming is that the wait is for
+*empty*, not for `NotReady`, and that nobody is moved: a proxy drain has no
+elsewhere to put a connection that terminates at the proxy being removed. The
+deadline is therefore the only path in the milestone that disconnects anyone,
+and it says so out loud, with a `Warning` event naming how many people it just
+disconnected. What it leaves open matters on upgrade: a proxy image predating
+`SetReady` ignores the message, never lowers its readiness, and keeps taking
+*new* players for the whole drain window. Upgrade proxy images before the
+operator.
+
+Milestone 4c-2 is done: proxy rolling updates. A proxy pod is stale when its
+`spawnery.cloud/pod-hash` label differs from a digest of the pod the operator
+would render for that group right now; `DecideRollout`
+(`internal/controller/rollout.go`) surges by one, takes one pod at a time, and
+hands each marked pod to 4c-1's drain unchanged rather than inventing a second
+deadline. The one thing worth naming is what hashing the whole rendered pod
+costs, rather than a chosen list of spec fields: upgrading the operator can
+roll every proxy in the cluster with nobody having edited anything — a new
+default in `internal/podspec`, an added environment variable, even a different
+`--operator-namespace`, all move the digest. The group's own status hides it,
+because the surge pod arrives before any withdrawal; two distinct `pod-hash`
+values in one group is the tell.
+
+Milestone 4c-3 is done: node drain. `IsDeparting`
+(`internal/controller/nodes.go`) has two ways in — `spec.unschedulable`,
+hardwired, and any taint whose key was passed to the repeatable `-drain-taint`
+flag and whose effect is `NoSchedule` or `NoExecute` — and from there the two
+group kinds answer differently on purpose. A
+condemned server attaches to `DecideSize`'s decision *outside* the capacity,
+ceiling and demand rules, because a node drain answers to none of the three:
+the node is leaving with or without the group's consent. A proxy on a departing
+node is simply a second kind of staleness, so 4c-2's rollout drains it. Both
+kinds get a PodDisruptionBudget sized from the `spawnery.cloud/occupied` label.
+The one thing worth naming is what this milestone's own closing review found:
+the live budget selector carried no role term, so in a namespace where a
+`ProxyGroup` and a `ServerGroup` share a name, ready occupied *proxies*
+inflated `currentHealthy` against a `desiredHealthy` counted only from occupied
+*servers* — and the eviction API could have spent the difference disconnecting
+players. It leaves open that an operator running cluster-autoscaler must pass
+`-drain-taint ToBeDeletedByClusterAutoscaler` by hand: that autoscaler taints
+without cordoning, and an unset flag looks exactly like a quiet node.
+
+Milestone 5a is done: persistent groups exist. A `ServerGroup` of type
+`Persistent` used to accept `spec.replicas` and `spec.storage` and build
+nothing. Now `DecidePersistentSize` (`internal/controller/persistent.go`) sizes
+it by ordinal — `<group>-0`, `<group>-1`, created lowest-first and removed
+highest-first — `BuildDataClaim` (`internal/podspec/claim.go`) renders one
+`PersistentVolumeClaim` per ordinal from `spec.storage`, and the Server
+controller creates the claim before the pod that mounts it. The same ordinal
+always addresses the same claim, so an ordinal that comes back finds its world
+where it left it. The one thing worth naming is what the claim deliberately
+lacks: no owner reference, so a world outlives its server, its group, and an
+operator who deletes the wrong object — and the ClusterRole grants neither
+`delete` nor `update` on claims, with the omission enforced by
+`internal/rbacaudit`'s table rather than merely written down, so a `delete`
+marker added anywhere later turns `make test` red before it can ship. The
+consequence is the open item: claims accumulate, and reclaiming a world is a
+deliberate human act with `kubectl`. The acceptance test was driven against a
+real `kind` cluster on 2026-08-16 — blocks placed, the pod deleted, the client
+rejoined, the blocks still there
+([`docs/runbook-milestone-5a-evidence.md`](docs/runbook-milestone-5a-evidence.md)).
+
+Milestone 5b is done: ordered shutdown, `Recreate` updates and storage growth.
+An image change now moves a persistent server, a lowered `replicas` takes one
+ordinal down at a time, and `spec.storage.size` growth reaches the claim
+(`growClaim`, with `patch` and deliberately not `update`, so one field moves
+rather than the whole object). It all lands in the same
+`DecidePersistentSize`, which nominates missing, surplus, stale-spec and
+resize-pending ordinals in that priority order behind two gates: at most one
+takedown in flight, and no stale ordinal touched until every required ordinal
+is `Ready`. The one thing worth naming is not the feature but the 5a defect it
+uncovered: a persistent group's failure counter froze on any spec edit, because
+the counting call site filtered every view through a generation stamped once at
+creation while `DecidePersistentSize` is generation-blind by design — invisible
+until 5b gave persistent failures somewhere to accumulate toward. It leaves
+open that a permanently broken ordinal stalls the whole group's update, with
+nothing timing that wait out. Driven on 2026-08-16: two worlds survived an
+update that recreated both, one ordinal at a time
+([`docs/runbook-milestone-5b-evidence.md`](docs/runbook-milestone-5b-evidence.md)).
+The positive half of storage growth was deliberately not driven there — `kind`'s
+local-path storage class cannot expand a volume at all.
+
+Milestone 5c is done: detecting forwarding secret rotation. The `Network`
+controller reads the forwarding secret on each resync, records a salted
+eight-byte digest of it in `status.forwardingSecretHash`, stamps every pod it
+creates with that digest in `spawnery.cloud/forwarding-hash`, and reports the
+comparison as two conditions and two events. It is detection and reporting
+only: it restarts nothing and takes no ordinal down, because the restart order
+is a decision for a person with a maintenance window, working through
+[`docs/runbook-milestone-5c-secret-rotation.md`](docs/runbook-milestone-5c-secret-rotation.md).
+The one thing worth naming is the negative that makes it safe: a rotation must
+move no pod hash, so both `DesiredServerHash` and `DesiredProxyHash` strip the
+forwarding label before digesting. Had that digest reached `spec.podHash`, 5b's
+takedown rule would have recreated every ordinal of every group on the rotated
+network by itself, with nobody having asked for a restart. It leaves open that the stamp records the
+last digest the operator *read*, not the bytes the pod actually mounted — under
+a refused or failed read a pod can be running the new secret while being
+reported stale. Driven on 2026-08-16, against the standing procedure rather
+than around it
+([`docs/runbook-milestone-5c-evidence.md`](docs/runbook-milestone-5c-evidence.md)).
+
+Milestone 6a is done: the operator runs inside a cluster. `nix build
+.#operator-image` produces a reproducible image for the operator itself,
+`hack/publish.sh` (`make publish`) is one path that copies all three images
+from their Nix archives to `ghcr.io/spawnery/`, and `make e2e` builds a `kind`
+cluster, installs `config/deploy/`, and drives the operator through twelve
+ordered scenarios under its own ServiceAccount — scaling, the ceiling, the
+orphan sweep, the finalizer, the startup deadline, a world outliving its
+server, the proxy's Service, the permission table against the real authorizer —
+before reading the operator's whole log and failing on `is forbidden:`. That
+last check is the point of the exercise: `internal/rbacaudit` compares the
+generated ClusterRole against a hand-maintained table in both directions, so it
+catches drift, but a permission missing from *both* leaves `make test` green
+while the operator walks into a denial the first time it runs for real.
+
+The one thing worth naming is what that check turned out to cover, because it
+was measured rather than assumed and the answer is narrower than it looks.
+Removing a **write** verb makes it fire: taking `create` on `pods` out of the
+markers produced a quoted `is forbidden: ... cannot create resource "pods"` on
+the first attempt. Removing a **read** verb does not. With `list` on `pods`
+revoked and confirmed revoked at the API server, seven and three-quarter
+minutes of continuous watching produced no denial in the log, no `403` in the
+operator's own client metrics, no restart and no drop in `Available`. The
+hypothesis that accounts for both measurements — and it is a hypothesis, not
+something this milestone established — is that a pod read here goes through the
+manager's cache, whose initial sync is a watch rather than a list, so the
+revoked verb never reaches a request anyone could deny.
+`docs/known-issues.md` carries both halves of the measurement, and the one
+anomaly the hypothesis does not explain.
+
+What 6a leaves open is recorded as open. No real `make publish` has been
+driven — it needs a token nobody in that milestone had — so the digest
+reference in `config/deploy/deployment.yaml` has never been resolved by
+anything, and until someone pushes, every consumer still loads the images into
+their cluster by hand. The run is single-node, so node drain, `HostPort` and
+CIS pod security wait for the RKE2 rollout at the end of milestone 6.
+
+Milestone 6 continues with 6b, NetworkPolicies — the one piece with a security
+consequence, overdue since `online-mode=false` landed in 3b — then 6c, the
+`LoadBalancer` and `HostPort` expose strategies, 6d, the Helm chart, and 6e,
+CI. It ends with the whole system rolled out to a real RKE2 cluster and driven
+from a runbook.
+
+Anyone starting milestone 6b begins at
+[`docs/handover-milestone-6.md`](docs/handover-milestone-6.md): it says where
+6a stopped, what 6b finds in place, the one structural thing 6b has to decide
+about who writes a NetworkPolicy and where, and what 6c, 6d and the RKE2
+rollout inherit. It is written to be read by someone with no memory of how any
+of this was built.
+[`docs/handover-milestone-5.md`](docs/handover-milestone-5.md),
+[`docs/handover-milestone-4b.md`](docs/handover-milestone-4b.md),
+[`docs/handover-milestone-4.md`](docs/handover-milestone-4.md),
+[`docs/handover-milestone-3.md`](docs/handover-milestone-3.md),
 [`docs/handover-milestone-2c.md`](docs/handover-milestone-2c.md) and
 [`docs/handover-milestone-2b.md`](docs/handover-milestone-2b.md) are its
 predecessors, kept as the record of what those milestones started from.
@@ -187,6 +373,7 @@ nix develop            # Go, controller-gen, envtest assets, kubectl, kind, k3d,
 make test              # unit and envtest tests
 make build             # bin/spawnery-operator
 make agent             # both agent plugins (Paper and Velocity) and their JUnit suites
+make e2e               # the driven run: the operator in a real kind cluster
 ```
 
 `make proto` regenerates the Go code under `internal/agentpb` from
@@ -232,11 +419,59 @@ the standing check for it — worth running again after any change to
 `make test` or `make all`: it needs a build's worth of time and only runs on
 `x86_64-linux`.
 
+`make operator-image` builds the operator's own image, `make operator-image-load`
+hands it to the local container runtime, and `make operator-image-test` runs it
+under the same constraints `config/deploy/deployment.yaml` imposes — non-root,
+read-only root filesystem, no network — rather than more comfortable ones.
+Since milestone 6a the operator is a container like the other two, and
+`make image-repro` rebuilds all three of them plus the agent jars.
+
+`make publish` (`hack/publish.sh`) copies all three images from their Nix
+archives straight to `ghcr.io/spawnery/` with `skopeo`, so what reaches the
+registry is what the flake describes rather than what a previous
+`podman load` left in a local store. It is part of no other target, because it
+contacts a registry and needs a GitHub token with `write:packages`. `DRY_RUN=1`
+prints what it would copy where and contacts nothing; `FORCE=1` overwrites a tag
+that already exists, which it otherwise refuses to do; `WRITE_DIGEST=1` rewrites
+the operator's image reference in `config/deploy/deployment.yaml` to the digest
+the registry returned. **Nothing has been pushed yet** — the first real run
+needs that token, and until it happens every consumer still needs
+`kind load docker-image` or the equivalent.
+
+`make e2e` (`hack/e2e.sh`) is the driven end-to-end run: it builds the operator
+image, creates a `kind` cluster, loads the image into it, installs the CRDs and
+`config/deploy/`, and then runs a Go test package that drives the operator
+through twelve ordered scenarios under its own ServiceAccount before reading its
+whole log and failing on `is forbidden:`. The operator runs *in* the cluster
+here, from its own image, so nothing hand-builds a `Service` — which is the
+difference between this and the local flow below. It is part of neither
+`make test` nor `make all`: it builds a cluster and takes minutes, and the
+commit loop stays where it is. Like the image targets it needs a container
+runtime and only works on `x86_64-linux`. On a machine where `kind` runs under
+rootless Podman, the invocation is:
+
+```bash
+systemd-run --scope --user --property=Delegate=yes -- \
+  nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e
+```
+
+`E2E_KEEP=1` leaves the cluster standing afterwards and prints its
+`KUBECONFIG`; a failed run dumps the operator log, the objects and the events
+before tearing down.
+
 Running this image accepts
 [Mojang's EULA](https://www.minecraft.net/eula) on your behalf: the entrypoint
 writes `eula=true`, because Paper does not start otherwise.
 
 ### Trying it locally against kind
+
+This section is the hand-driven flow, and it runs the operator **outside** the
+cluster through `go run`. If what you want is the operator running inside a
+cluster, `make e2e` above does the whole thing automatically and needs none of
+the workarounds below — the `Service` there has a selector, because there is a
+pod for it to select. What this flow still gives you that `make e2e` does not
+is a real Paper image, a server that reaches `Ready`, and an agent that reports
+players.
 
 These steps need a container runtime — Docker or Podman — for a local
 Kubernetes cluster. On the machine this was last run on, `docker` is a Podman
