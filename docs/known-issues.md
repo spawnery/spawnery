@@ -3047,8 +3047,9 @@ consequence, not a decision, and nothing but the operator log names the cause.
 
 The ordering was reviewed and left alone. Persisting `Accepted` before writing
 the policy would let groups start servers in a namespace with no policy at all,
-which is the one thing this milestone exists to prevent, so every alternative
-here is worse than the behaviour above.
+which is the one thing this milestone exists to prevent — the review weighed
+the alternatives and judged each of them worse than the behaviour above. A
+report naming the cause was available and was not shipped.
 
 **Six defects in this milestone's own plan test code, each an assertion that
 could not fail or that would have failed for the wrong reason.** This is the
@@ -3233,11 +3234,11 @@ dropping a live entry.
   of the milestone's one critical defect, and that is worth recording beside
   the ruling that it is right.** Living inside `Authenticate` forced the peer
   to be recovered from a `context.Context` — and no test in the package put a
-  peer in one, so the key was the constant `"unknown"` throughout and
-  the key was never exercised by anything and a key that named a connection
-  rather than a pod survived the whole milestone. The interceptor placement
-  would have made the peer an explicit parameter and the bug visible at the
-  call site. The placement stands, because the alternative is a limiter
+  peer in one: the tests passed `context.Background()`, so the key was always
+  `"unknown"`; nothing exercised the real key; and a key naming a connection
+  rather than a pod therefore survived the whole milestone. The interceptor
+  placement would have made the peer an explicit parameter and the bug visible
+  at the call site. The placement stands, because the alternative is a limiter
   consulted on every request; what it costs is that the seam has to be tested
   deliberately, which
   `TestTheRateLimitKeysOnThePodRatherThanTheConnection` now does.
@@ -3252,7 +3253,7 @@ dropping a live entry.
   absent one. Cost measured on this suite: 89.8s to 109.2s wall, because the
   run is dominated by envtest control-plane startup rather than by anything the
   detector instruments. It is not a substitute for reasoning about
-  concurrency — see the rate-limit key entry below, which `-race` would never
+  concurrency — see the rate-limit key entry above, which `-race` would never
   have found.
 - `newAuthFixture` (`internal/grpcauth/auth_envtest_test.go`) wires neither the
   cache nor the limiter, which is legal because both types' methods are

@@ -145,11 +145,16 @@ func (c *ReviewCache) evictExpiredLocked() {
 // call, so evicting one before each store holds the map at maxCacheEntries for
 // good.
 //
-// Closest to expiry rather than least recently used, because it needs no extra
-// bookkeeping and because it sheds in the right order. Every entry has one of
-// two lifetimes, so under a flood of distinct tokens the refusals -- the short
-// NegativeTTL, and the ones a flood is made of -- go before a legitimate
-// agent's accepted review.
+// Closest to expiry rather than least recently used, because it needs no
+// extra bookkeeping. Every entry has one of two lifetimes: the short
+// NegativeTTL for a refusal, the longer PositiveTTL for an accepted review.
+// Under a flood of distinct tokens, a freshly stored refusal expires before a
+// freshly stored positive, so it is usually the refusal that goes first --
+// but only for roughly the first fifty seconds of a positive entry's life.
+// Past that point a positive has less time left than a freshly stored
+// refusal and gets evicted first instead. Either order is fine: evicting a
+// live positive costs one extra TokenReview and admits nobody who would not
+// otherwise be admitted.
 func (c *ReviewCache) evictSoonestLocked() {
 	var soonestKey string
 	var soonest time.Time
