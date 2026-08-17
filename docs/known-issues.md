@@ -3097,8 +3097,19 @@ so the enforcement policy has nothing legitimate to throttle. Nothing under
 
 - The per-`Network` policy's own `spawnery.cloud/network` metadata label is
   unasserted. It is there for a human reading `kubectl` output rather than for
-  a mechanism, unlike `managed-by`, which the operator's restricted cache
-  depends on.
+  a mechanism — and so, it turns out, is `managed-by` beside it. Four places in
+  6b said that label existed so the operator's restricted cache could see the
+  object: `internal/podspec/netpol.go`, a *failure message* in
+  `netpol_test.go`, the design's §3.2, and this file. There is no such
+  restriction. `cmd/spawnery-operator`'s `Cache.ByObject` has no
+  `NetworkPolicy` entry, so `Owns(&NetworkPolicy{})` starts an unrestricted
+  informer, and all four have been corrected to say what the label is. The
+  claim was deleted rather than the restriction added: NetworkPolicies are a
+  handful per cluster, unlike the ConfigMaps and claims those entries exist to
+  bound, and adding the restriction would be a regression — `CreateOrUpdate`
+  reads through that cache, so a pre-existing *unlabelled* object at
+  `<network>-backends` would be invisible to its `Get` and every pass would
+  `Create` and take `AlreadyExists`, forever.
 - `TestADeletedPolicyComesBack` does not compare a UID before and after; it
   relies on envtest's synchronous delete plus the recorded mutation to
   distinguish "recreated" from "never removed". The mutation discharges it, the

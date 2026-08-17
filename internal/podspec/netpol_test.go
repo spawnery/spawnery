@@ -62,9 +62,16 @@ func TestBuildNetworkPolicySelectsServersOfOneNetwork(t *testing.T) {
 	if p.Namespace != "minecraft" {
 		t.Errorf("namespace = %q, want minecraft", p.Namespace)
 	}
+	// The label is metadata, not a mechanism: nothing selects on it, and the
+	// manager's cache holds NetworkPolicies unrestricted. This message used to
+	// say the operator's restricted cache could not otherwise see the object
+	// it wrote, which described a restriction that does not exist in
+	// cmd/spawnery-operator's ByObject map — the worst kind of wrong, since a
+	// failure message is read only by somebody already confused.
 	if p.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
-		t.Errorf("the policy itself must carry %s=%s, or the operator's own "+
-			"restricted cache cannot see the object it wrote",
+		t.Errorf("the policy does not carry %s=%s; it is how a human reading "+
+			"kubectl output in a namespace Spawnery does not own tells this "+
+			"object apart from one somebody else wrote",
 			podspec.LabelManagedBy, podspec.ManagedByValue)
 	}
 }

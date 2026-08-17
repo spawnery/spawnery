@@ -103,6 +103,19 @@ func BuildNetworkPolicy(
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      NetworkPolicyName(network.Name),
 			Namespace: network.Namespace,
+			// Both labels are metadata for a human reading kubectl output,
+			// and neither is load-bearing. In particular LabelManagedBy is
+			// NOT what any restricted cache selects on: cmd/spawnery-operator
+			// restricts the cache for ConfigMaps, ServiceAccounts and
+			// PersistentVolumeClaims, which are high-cardinality kinds that
+			// would otherwise pull every object in the cluster, and does not
+			// restrict NetworkPolicies, of which there are a handful.
+			//
+			// Restricting them would also be a regression rather than a
+			// tightening: reconcileNetworkPolicy's CreateOrUpdate reads
+			// through that cache, so a pre-existing UNLABELLED object at this
+			// name would be invisible to the Get, and every pass would Create
+			// and take AlreadyExists, forever.
 			Labels: map[string]string{
 				LabelManagedBy: ManagedByValue,
 				LabelNetwork:   network.Name,

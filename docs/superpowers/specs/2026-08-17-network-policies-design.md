@@ -166,8 +166,23 @@ criterion 6) while the other is designed away.
 ### 3.2 The per-`Network` policy
 
 One object per accepted `Network`, in that `Network`'s namespace, named after
-it, carrying `spawnery.cloud/managed-by` so the manager's own restricted cache
-can see it, and an owner reference to the `Network`.
+it, carrying `spawnery.cloud/managed-by` and `spawnery.cloud/network`, and an
+owner reference to the `Network`.
+
+**Corrected after the milestone's final review.** This paragraph said the
+`managed-by` label was there "so the manager's own restricted cache can see
+it". No such restriction was ever added: `cmd/spawnery-operator`'s
+`Cache.ByObject` has no `NetworkPolicy` entry, and `Owns(&NetworkPolicy{})`
+starts an unrestricted informer. Both labels are metadata for a human reading
+`kubectl` output in a namespace Spawnery does not own — nothing selects on
+either. The claim was deleted rather than the restriction added, for two
+reasons. NetworkPolicies are low-cardinality, a handful per cluster, unlike the
+ConfigMaps and claims the existing entries exist to bound, so an unrestricted
+informer over them costs almost nothing. And restricting them would be a
+regression: `reconcileNetworkPolicy`'s `CreateOrUpdate` reads through that
+cache, so a pre-existing *unlabelled* object at `<network>-backends` would be
+invisible to the `Get`, and every pass would `Create` and take `AlreadyExists`,
+forever.
 
 **Ingress**, `podSelector` = `ManagedSelector(network)` plus
 `spawnery.cloud/role=server`:
