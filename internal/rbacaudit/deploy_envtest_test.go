@@ -21,6 +21,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -510,6 +511,48 @@ func TestTheOperatorImageIsNotAMutableTag(t *testing.T) {
 			"operator would either fail to pull or silently change version between "+
 			"restarts", ref, tag)
 	}
+
+	// And the tag has to be one that gets published. nix/operator-image.nix
+	// takes the image's tag straight from flake.nix's operatorVersion, so
+	// bumping that version and forgetting this line leaves the manifest
+	// pointing at a tag hack/publish.sh will never push again. Nothing else in
+	// the tree would notice: `make e2e` patches the image away before the
+	// cluster ever pulls it, and the whole point of milestone 6a's §3.3 is
+	// that operatorVersion moves on its own schedule, so this will happen
+	// while imageVersion sits still. Once acceptance criterion 7 closes and a
+	// real digest lands here the CutPrefix above returns first, and this stops
+	// applying -- until then it is the only thing keeping the tag honest.
+	if want := operatorVersionFromFlake(t); tag != want {
+		t.Errorf("image = %q, but flake.nix's operatorVersion is %q. "+
+			"nix/operator-image.nix tags the image with operatorVersion, so this "+
+			"manifest names a tag nothing builds or publishes", ref, want)
+	}
+}
+
+// operatorVersionFromFlake reads the one line of flake.nix that sets
+// operatorVersion.
+//
+// Text and a regexp, and not `nix eval`: shelling out to nix from `make test`
+// would put a several-second evaluation, a network-capable tool and a
+// dependency on nix being installed at all into the commit loop, for one
+// string. The cost of reading it as text is that the regexp is coupled to the
+// line's shape -- so it fails loudly when the shape moves rather than
+// returning an empty string and passing. That is the failure mode that matters
+// here: this whole assertion exists because a value can go stale unnoticed.
+func operatorVersionFromFlake(t *testing.T) string {
+	t.Helper()
+	raw, err := os.ReadFile(testenv.RepoPath(t, "flake.nix"))
+	if err != nil {
+		t.Fatalf("read flake.nix: %v", err)
+	}
+	re := regexp.MustCompile(`(?m)^\s*operatorVersion\s*=\s*"([^"]+)"\s*;`)
+	m := re.FindSubmatch(raw)
+	if m == nil {
+		t.Fatalf("no `operatorVersion = \"...\";` line in flake.nix. Either it was " +
+			"renamed or its shape moved; this test reads it as text (see the comment " +
+			"above) and cannot check the manifest's tag against something it cannot find")
+	}
+	return string(m[1])
 }
 
 // TestLeaderElectionPermissionIsGranted is the regression test for a real gap:
