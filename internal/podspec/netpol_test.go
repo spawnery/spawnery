@@ -94,11 +94,26 @@ func TestBuildNetworkPolicyAdmitsOnlyItsOwnProxies(t *testing.T) {
 	if peer.PodSelector == nil {
 		t.Fatal("the ingress peer has no podSelector, so it admits every pod")
 	}
-	if got := peer.PodSelector.MatchLabels[podspec.LabelRole]; got != podspec.RoleProxy {
-		t.Errorf("ingress peer role = %q, want %q", got, podspec.RoleProxy)
+	// Exactly these three, compared by length as well as by key -- the same
+	// check the pod selector above carries, and for the same reason. Checking
+	// only the keys the peer happens to declare is a trap in both directions:
+	// dropping LabelManagedBy admits any pod in the namespace wearing the
+	// network and role labels, and adding one bogus label makes the peer match
+	// nothing, so no proxy reaches any backend. Both mutations were green
+	// before this.
+	wantPeer := map[string]string{
+		podspec.LabelManagedBy: podspec.ManagedByValue,
+		podspec.LabelNetwork:   "production",
+		podspec.LabelRole:      podspec.RoleProxy,
 	}
-	if got := peer.PodSelector.MatchLabels[podspec.LabelNetwork]; got != "production" {
-		t.Errorf("ingress peer network = %q, want production", got)
+	gotPeer := peer.PodSelector.MatchLabels
+	if len(gotPeer) != len(wantPeer) {
+		t.Errorf("ingress peer podSelector = %v, want %v", gotPeer, wantPeer)
+	}
+	for k, v := range wantPeer {
+		if gotPeer[k] != v {
+			t.Errorf("ingress peer podSelector[%q] = %q, want %q", k, gotPeer[k], v)
+		}
 	}
 	if len(rule.Ports) != 1 || rule.Ports[0].Port.IntValue() != int(podspec.MinecraftPort) {
 		t.Errorf("ingress ports = %v, want only %d", rule.Ports, podspec.MinecraftPort)
