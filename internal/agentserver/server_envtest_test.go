@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -645,5 +646,80 @@ func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 	}
 	if code := status.Code(err); code != codes.Unauthenticated {
 		t.Errorf("code = %s, want Unauthenticated", code)
+	}
+}
+
+// TestTheServerBoundsStreamsPerConnection is the one new bound that can be
+// observed from outside. An agent opens exactly one stream -- the proto has two
+// RPCs and a session uses one of them -- so the limit is generous by design;
+// what it stops is a single connection multiplexing an unbounded number.
+//
+// Be precise about what this does NOT bound, because the convenient reading is
+// that it closes the availability gap and it does not: MaxConcurrentStreams is
+// per connection, so a pod that opens many connections is untouched by it.
+// That is what grpcauth's per-peer rate limit is for.
+func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
+	f := newServerFixture(t)
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(f.ca) {
+		t.Fatal("CA bundle unusable")
+	}
+	creds := credentials.NewTLS(&tls.Config{
+		RootCAs:    pool,
+		ServerName: "spawnery-operator.spawnery-system.svc",
+		MinVersion: tls.VersionTLS13,
+	})
+	// One connection, many streams: that is the shape the bound governs.
+	conn, err := grpc.NewClient(f.addr, grpc.WithTransportCredentials(creds))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	client := agentpb.NewAgentServiceClient(conn)
+
+	open := func(ctx context.Context, i int) (
+		grpc.BidiStreamingClient[agentpb.ServerMessage, agentpb.OperatorToServer], error) {
+		pod := f.pod(fmt.Sprintf("lobby-stream-%d", i))
+		token := f.token(podspec.ServerServiceAccountName,
+			[]string{podspec.AgentTokenAudience}, pod)
+		streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+		return client.ServerSession(streamCtx)
+	}
+
+	for i := 0; i < int(agentserver.MaxConcurrentStreams); i++ {
+		stream, err := open(f.ctx, i)
+		if err != nil {
+			t.Fatalf("stream %d of the permitted %d was refused: %v",
+				i, agentserver.MaxConcurrentStreams, err)
+		}
+		// Hold it open: a stream is only concurrent while it lives.
+		if err := stream.Send(&agentpb.ServerMessage{
+			Message: &agentpb.ServerMessage_Hello{
+				Hello: &agentpb.Hello{Version: "0.1.0", Ready: false},
+			},
+		}); err != nil {
+			t.Fatalf("send Hello on stream %d: %v", i, err)
+		}
+	}
+
+	// One past the limit. HTTP/2 queues an over-limit stream rather than
+	// refusing it, so the observable is a bounded wait: with the bound in
+	// force the first Recv does not return, without it the server answers.
+	// ServerSession itself returns immediately either way, because grpc-go
+	// creates the stream lazily.
+	over, cancel := context.WithTimeout(f.ctx, 5*time.Second)
+	defer cancel()
+	extra, err := open(over, int(agentserver.MaxConcurrentStreams))
+	if err != nil {
+		return // refused outright, which also satisfies the bound
+	}
+	if _, err := extra.Recv(); err == nil {
+		t.Errorf("stream %d was served; MaxConcurrentStreams is not in force",
+			agentserver.MaxConcurrentStreams+1)
+	} else if status.Code(err) != codes.DeadlineExceeded {
+		t.Errorf("stream %d failed with %v, want the deadline — a different "+
+			"error means it was refused for some other reason and this test "+
+			"proves nothing about the bound", agentserver.MaxConcurrentStreams+1, err)
 	}
 }
