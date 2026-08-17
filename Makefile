@@ -45,8 +45,23 @@ vet:
 	go vet ./...
 
 .PHONY: test
+# -race unconditionally, rather than behind a second target. Milestone 6b added
+# two mutex-guarded types (grpcauth.ReviewCache, grpcauth.PeerLimiter) that a
+# gRPC interceptor reaches from one goroutine per stream, and until now nothing
+# in the Makefile turned the detector on anywhere -- so the only race checks
+# this project has ever had were run by hand during a review, which is the same
+# as not having one. A separate `make test-race` would have the same problem:
+# an unrun check is indistinguishable from an absent one.
+#
+# The cost was measured on this suite rather than assumed from the detector's
+# usual 2-10x: 89.8s to 109.2s wall, because the run is dominated by envtest
+# control-plane startup rather than by anything the detector instruments.
+# internal/controller, the longest package, goes 83.9s to 99.6s.
+#
+# It is not a substitute for reasoning about concurrency. The peer rate limit's
+# key was wrong for a whole milestone and -race would never have said so.
 test: manifests generate fmt vet
-	go test ./... -coverprofile cover.out
+	go test -race ./... -coverprofile cover.out
 
 .PHONY: build
 build:
