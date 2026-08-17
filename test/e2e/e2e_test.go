@@ -111,6 +111,7 @@ func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("a persistent group's claim outlives its server", aPersistentGroupsClaimOutlivesItsServer)
 	t.Run("the proxy group gets its Service", theProxyGroupGetsItsService)
 	t.Run("the operator holds its secret and its lease", theOperatorHoldsItsSecretAndItsLease)
+	t.Run("the table holds against the real authorizer", theTableHoldsAgainstTheRealAuthorizer)
 	t.Run("the operator was never denied", theOperatorWasNeverDenied)
 }
 
