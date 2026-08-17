@@ -126,8 +126,10 @@ func theOperatorIsUp(t *testing.T) {
 			ready = true
 		}
 		if c.RestartCount > 0 {
-			t.Errorf("the operator container has restarted %d time(s); the log below is "+
-				"the current process only, so an earlier denial may not appear in it",
+			t.Errorf("the operator container has restarted %d time(s) before the run even "+
+				"began. Kubernetes keeps one container back, so from the second restart "+
+				"on there is a stretch of this operator's life nothing can read, and "+
+				"theOperatorWasNeverDenied's silence stops meaning anything about it",
 				c.RestartCount)
 		}
 	}
@@ -180,9 +182,26 @@ func theOperatorIsUp(t *testing.T) {
 // Read a green run as evidence about write paths, and see
 // docs/known-issues.md's two milestone 6a sections for what it does not
 // establish beyond them. Do not add a sleep to manufacture traffic.
+//
+// The restart re-check below is not redundant with theOperatorIsUp. That
+// subtest runs first, before any scenario has driven a single call; this one
+// runs a minute and a half later and judges everything in between. A container
+// that was OOM-killed somewhere in the middle -- not hypothetical on a 3.9 GB
+// host with no swap -- would leave this check reading a log that begins after
+// the interesting part, and a replacement making no denied call of its own
+// would report PASS over a run it had covered a fraction of.
 func theOperatorWasNeverDenied(t *testing.T) {
+	log, restarts := operatorLog(t)
+	if restarts > 0 {
+		t.Errorf("the operator container has restarted %d time(s) during the run. The "+
+			"log below covers the current process and, where the API server still "+
+			"holds it, the one before it -- but with %d restart(s) this check can no "+
+			"longer account for the whole run, so a denial in a process it cannot read "+
+			"would look identical to no denial at all", restarts, restarts)
+	}
+
 	var offenders []string
-	for _, line := range strings.Split(operatorLog(t), "\n") {
+	for _, line := range strings.Split(log, "\n") {
 		if strings.Contains(line, "is forbidden:") {
 			offenders = append(offenders, line)
 		}
@@ -215,24 +234,70 @@ func operatorPod(t *testing.T) *corev1.Pod {
 	return &pods.Items[0]
 }
 
-// operatorLog reads the operator's whole log through the API.
-func operatorLog(t *testing.T) string {
+// operatorLog reads the operator's log through the API, and reports how many
+// times its container has restarted.
+//
+// An empty PodLogOptions returns the *current* container's log and nothing
+// else, so on a restarted pod it silently begins wherever the last process
+// did. Where the kubelet still holds the previous container's log --
+// terminationMessage aside, one back is all Kubernetes keeps -- this prepends
+// it, so "the operator's whole log", which the README and the handover both
+// claim, is true for the common single-restart case. The restart count comes
+// back with it because beyond one restart it is not true, and the caller has
+// to say so rather than quietly assert over a hole.
+func operatorLog(t *testing.T) (string, int32) {
 	t.Helper()
 	pod := operatorPod(t)
-	stream, err := clientset.CoreV1().
-		Pods(operatorNamespace).
-		GetLogs(pod.Name, &corev1.PodLogOptions{}).
-		Stream(ctx)
+
+	var restarts int32
+	for _, c := range pod.Status.ContainerStatuses {
+		restarts += c.RestartCount
+	}
+
+	var b strings.Builder
+	if restarts > 0 {
+		// Best effort: the previous container's log is gone if the kubelet has
+		// already rotated it away, and a Fatal here would turn a diagnostic
+		// into the failure.
+		if prev, err := readPodLog(pod.Name, &corev1.PodLogOptions{Previous: true}); err == nil {
+			b.WriteString(prev)
+			b.WriteString("\n")
+		} else {
+			t.Logf("the previous container's log is not available (%v); this check can "+
+				"only read the current process", err)
+		}
+	}
+
+	body, err := readPodLog(pod.Name, &corev1.PodLogOptions{})
+	switch {
+	case err == nil:
+		b.WriteString(body)
+	case restarts > 0:
+		// A container that has restarted may be between attempts right now,
+		// and GetLogs refuses a container that has not started. Failing here
+		// would replace the caller's report of the restart -- the thing that
+		// actually went wrong -- with a message about a log read.
+		t.Logf("the current container's log is not available (%v); this check has only "+
+			"the previous container's", err)
+	default:
+		t.Fatalf("read logs of %s: %v", pod.Name, err)
+	}
+	return b.String(), restarts
+}
+
+// readPodLog streams one container log of a pod in the operator's namespace.
+func readPodLog(name string, opts *corev1.PodLogOptions) (string, error) {
+	stream, err := clientset.CoreV1().Pods(operatorNamespace).GetLogs(name, opts).Stream(ctx)
 	if err != nil {
-		t.Fatalf("stream logs of %s: %v", pod.Name, err)
+		return "", err
 	}
 	defer func() { _ = stream.Close() }()
 
 	body, err := io.ReadAll(stream)
 	if err != nil {
-		t.Fatalf("read logs of %s: %v", pod.Name, err)
+		return "", err
 	}
-	return string(body)
+	return string(body), nil
 }
 
 // eventually polls cond until it holds or the deadline passes, and reports the
