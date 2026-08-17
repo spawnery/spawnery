@@ -24,6 +24,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -36,6 +37,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -143,6 +145,82 @@ func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
 	}
 	if got := newProxyGroupReconciler(mgr, opts).DrainTaintKeys; got != nil {
 		t.Errorf("ProxyGroupReconciler.DrainTaintKeys = %v with none configured, want nil", got)
+	}
+}
+
+// TestSetupAllThreadsTheOperatorNamespace covers the Options field 6b added
+// and nothing observed: Options.OperatorNamespace is the one value the
+// per-Network policy cannot derive from the Network it protects, and deleting
+// the assignment in SetupAll left this whole package green.
+//
+// The failure it guards is silent in both halves. The egress peer would render
+// `kubernetes.io/metadata.name: ""`, which is a legal selector that matches no
+// namespace, so under an enforcing CNI every agent in every game namespace
+// stops reaching the operator at once — while the Network, the policy and
+// every condition still read as correct. There is nothing to look at.
+//
+// It asserts through the constructor SetupAll builds the reconciler with,
+// exactly as TestSetupAllThreadsTheDrainTaintKeys does and for the same
+// reason: a registered controller is not reachable from outside the manager.
+func TestSetupAllThreadsTheOperatorNamespace(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: start}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:         testenv.Scheme(t),
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		LeaderElection: false,
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	const ns = "spawnery-operators-own-namespace"
+	opts := Options{
+		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Clock:                clock.Now,
+		StartupDeadline:      5 * time.Minute,
+		PlayerStatusInterval: 30 * time.Second,
+		OrphanInterval:       time.Minute,
+		Registrar:            NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		AgentEndpoint:     "spawnery-operator." + ns + ".svc:9443",
+		Proxies:           &recordingFleet{},
+		OperatorNamespace: ns,
+	}
+
+	if got := newNetworkReconciler(mgr, opts).OperatorNamespace; got != ns {
+		t.Fatalf("NetworkReconciler.OperatorNamespace = %q, want %q: the "+
+			"per-Network policy's egress peer would name no namespace at all", got, ns)
+	}
+
+	// The value has to survive as far as the rendered object, or the field is
+	// threaded to a reconciler that does nothing with it. This is the selector
+	// the agents' traffic is matched against.
+	policy := podspec.BuildNetworkPolicy(
+		&spawneryv1alpha1.Network{
+			ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "minecraft"},
+		},
+		newNetworkReconciler(mgr, opts).OperatorNamespace,
+	)
+	var operatorPeer *networkingv1.NetworkPolicyPeer
+	for i := range policy.Spec.Egress {
+		for j := range policy.Spec.Egress[i].To {
+			if policy.Spec.Egress[i].To[j].PodSelector != nil {
+				operatorPeer = &policy.Spec.Egress[i].To[j]
+			}
+		}
+	}
+	if operatorPeer == nil {
+		t.Fatal("no egress peer carries a podSelector, so none names the operator")
+	}
+	if got := operatorPeer.NamespaceSelector.MatchLabels[podspec.NamespaceNameLabel]; got != ns {
+		t.Errorf("the operator egress peer selects namespace %q, want %q — an empty "+
+			"value here is a legal selector that matches nothing, and every agent "+
+			"in every namespace stops dialling at once", got, ns)
 	}
 }
 
