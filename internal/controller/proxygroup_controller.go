@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -159,7 +161,7 @@ type ProxyGroupReconciler struct {
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups/status,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 
 // Reconcile brings one ProxyGroup in line with its spec.
 func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -251,7 +253,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.reconcileConfigMap(ctx, group); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.reconcileService(ctx, group); err != nil {
+	svc, err := r.reconcileService(ctx, group)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -279,7 +282,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
 		return ctrl.Result{}, err
 	}
-	r.setStatus(group, pods)
+	r.setStatus(group, pods, svc)
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.writeStatus(ctx, group)
 }
 
@@ -1196,8 +1199,21 @@ func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod
 	return nil
 }
 
-// reconcileService keeps the NodePort Service in step with the group.
-func (r *ProxyGroupReconciler) reconcileService(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
+// reconcileService keeps the group's Service in step with its expose
+// strategy, and returns the Service it settled on so the caller can read
+// status.loadBalancer off it without a second Get.
+//
+// HostPort gets no Service and returns nil: nothing inside the cluster dials
+// a proxy. Players arrive from outside, agents dial the operator, and
+// Velocity dials backends.
+func (r *ProxyGroupReconciler) reconcileService(
+	ctx context.Context,
+	group *spawneryv1alpha1.ProxyGroup,
+) (*corev1.Service, error) {
+	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort {
+		return nil, r.deleteServiceIfOurs(ctx, group)
+	}
+
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: group.Name, Namespace: group.Namespace},
 	}
@@ -1206,31 +1222,91 @@ func (r *ProxyGroupReconciler) reconcileService(ctx context.Context, group *spaw
 			svc.Labels = map[string]string{}
 		}
 		svc.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
-		svc.Spec.Type = corev1.ServiceTypeNodePort
-		// Local, not the Cluster default, for the same reason
-		// LoadBalancerSpec.ExternalTrafficPolicy defaults to Local: the default
-		// SNATs, so Velocity would never see a player's real IP, and bans and
-		// rate limits depend on it. The consequence is the trade-off this makes:
-		// a client that reaches a node running no proxy pod for this group gets
-		// no answer at all, rather than being routed to one that does. That is
-		// consistent with proxyAddress below only ever publishing the hostIP of
-		// a node that demonstrably runs a ready proxy — a client dialing the
-		// published address never hits the empty case.
-		svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+
 		// The selector must pin the role as well as the group: without it the
 		// Service would also select any server pod that happened to share the
 		// group name, and players would land on a backend directly.
 		svc.Spec.Selector = podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
-		svc.Spec.Ports = []corev1.ServicePort{{
+
+		port := corev1.ServicePort{
 			Name:       podspec.MinecraftPortName,
 			Port:       podspec.MinecraftPort,
 			TargetPort: intstr.FromString(podspec.MinecraftPortName),
-			NodePort:   group.Spec.Expose.NodePort.Port,
 			Protocol:   corev1.ProtocolTCP,
-		}}
+		}
+		switch group.Spec.Expose.Type {
+		case spawneryv1alpha1.ExposeLoadBalancer:
+			svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+			svc.Spec.ExternalTrafficPolicy = loadBalancerTrafficPolicy(group)
+			// No node port is named. A LoadBalancer Service gets one anyway,
+			// allocated by the API server, and naming one here would add a
+			// second way for two groups in different namespaces to collide
+			// over a number no player ever dials.
+		default:
+			svc.Spec.Type = corev1.ServiceTypeNodePort
+			// Local, not the Cluster default, for the same reason
+			// LoadBalancerSpec.ExternalTrafficPolicy defaults to Local: the
+			// default SNATs, so Velocity would never see a player's real IP,
+			// and bans and rate limits depend on it. The consequence is the
+			// trade-off this makes: a client that reaches a node running no
+			// proxy pod for this group gets no answer at all, rather than
+			// being routed to one that does. That is consistent with
+			// proxyAddress only ever publishing the address of a node that
+			// demonstrably runs a ready proxy -- a client dialing the
+			// published address never hits the empty case.
+			svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+			port.NodePort = group.Spec.Expose.NodePort.Port
+		}
+		svc.Spec.Ports = []corev1.ServicePort{port}
+
 		return controllerutil.SetControllerReference(group, svc, r.Scheme)
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// loadBalancerTrafficPolicy is the CRD's Local default, restated in code.
+// A ProxyGroup built in a unit test never passes through the API server's
+// defaulting, and an empty policy on a Service is not a valid value -- the
+// same hazard podspec.DefaultDrainTimeoutSeconds exists for.
+func loadBalancerTrafficPolicy(group *spawneryv1alpha1.ProxyGroup) corev1.ServiceExternalTrafficPolicy {
+	if lb := group.Spec.Expose.LoadBalancer; lb != nil && lb.ExternalTrafficPolicy != "" {
+		return lb.ExternalTrafficPolicy
+	}
+	return corev1.ServiceExternalTrafficPolicyLocal
+}
+
+// deleteServiceIfOurs removes the Service a group had before it switched to
+// HostPort, and only that one.
+//
+// The ownership check is the whole of the function's care: a Service
+// somebody else put at the group's name is not this operator's to remove,
+// and a delete is the one action here that cannot be undone. The
+// preconditions pin the object the decision was made about -- between the
+// Get and the Delete the name could have come to hold a different object
+// entirely.
+func (r *ProxyGroupReconciler) deleteServiceIfOurs(
+	ctx context.Context,
+	group *spawneryv1alpha1.ProxyGroup,
+) error {
+	svc := &corev1.Service{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: group.Namespace, Name: group.Name}, svc)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if owner := metav1.GetControllerOf(svc); owner == nil || owner.UID != group.UID {
+		return nil
+	}
+	uid := svc.UID
+	rv := svc.ResourceVersion
+	return client.IgnoreNotFound(r.Delete(ctx, svc, &client.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv},
+	}))
 }
 
 // reconcileConfigMap keeps the group's rendered ConfigMap — design section
@@ -1317,7 +1393,7 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 // calls Ready. connectedPlayers is about people, so it counts every pod in the
 // group, ready or not — the CRD calls it "the sum of players across all
 // proxies" and it is a printed column.
-func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod) {
+func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *corev1.Service) {
 	var ready int32
 	var players int32
 	for i := range pods {
@@ -1348,7 +1424,7 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 
 	group.Status.ReadyReplicas = ready
 	group.Status.ConnectedPlayers = players
-	group.Status.Address = proxyAddress(pods, group.Spec.Expose.NodePort.Port)
+	group.Status.Address = proxyAddress(group, pods, svc)
 	group.Status.ObservedGeneration = group.Generation
 
 	switch {
@@ -1363,23 +1439,67 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 
 // proxyAddress is where players connect.
 //
-// With NodePort that is a node's address plus the node port, and the operator
-// has no right to read Node objects — nor does it need one: hostIP on a ready
-// proxy pod is the address of a node that demonstrably has a proxy on it, and
-// the pod is already watched. Granting a cluster-wide node read for a status
-// string would be the same trade the bootstrapper refused when it declined the
-// update verb on ServiceAccounts to restore a cosmetic label.
+// Every branch publishes an address only while a proxy is demonstrably
+// serving, and that is the property the whole function is built around.
+// Empty is the truthful answer otherwise: there is nowhere to connect yet,
+// and printing an address for a proxy that is not serving would send players
+// at a closed port.
 //
-// Empty while nothing is ready, which is the truthful answer: there is nowhere
-// to connect yet, and printing a node address for a proxy that is not serving
-// would send players at a closed port.
-func proxyAddress(pods []corev1.Pod, nodePort int32) string {
+// For NodePort and HostPort the address is a node's, and the operator has no
+// right to read Node objects -- nor does it need one: hostIP on a ready
+// proxy pod is the address of a node that demonstrably has a proxy on it,
+// and the pod is already watched. Granting a cluster-wide node read for a
+// status string would be the same trade the bootstrapper refused when it
+// declined the update verb on ServiceAccounts to restore a cosmetic label.
+//
+// For LoadBalancer the address comes from the Service instead, and the
+// readiness gate has to be stated rather than inherited -- the Service knows
+// nothing about whether anything is serving, so without the gate this would
+// publish an address the moment a load balancer answered, including for a
+// group whose every pod is in ImagePullBackOff.
+//
+// net.JoinHostPort rather than a format string: a node with an IPv6 hostIP
+// needs brackets, and the old formatting produced an address no client could
+// use. For an IPv4 address the two are identical.
+func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *corev1.Service) string {
+	hostIP := ""
 	for i := range pods {
 		if isPodReady(&pods[i]) && pods[i].Status.HostIP != "" {
-			return fmt.Sprintf("%s:%d", pods[i].Status.HostIP, nodePort)
+			hostIP = pods[i].Status.HostIP
+			break
 		}
 	}
-	return ""
+	if hostIP == "" {
+		return ""
+	}
+
+	port := func(p int32) string { return strconv.Itoa(int(p)) }
+
+	switch group.Spec.Expose.Type {
+	case spawneryv1alpha1.ExposeLoadBalancer:
+		if svc == nil {
+			return ""
+		}
+		for _, ing := range svc.Status.LoadBalancer.Ingress {
+			if ing.IP != "" {
+				return net.JoinHostPort(ing.IP, port(podspec.MinecraftPort))
+			}
+			if ing.Hostname != "" {
+				return net.JoinHostPort(ing.Hostname, port(podspec.MinecraftPort))
+			}
+		}
+		return ""
+	case spawneryv1alpha1.ExposeHostPort:
+		if group.Spec.Expose.HostPort == nil {
+			return ""
+		}
+		return net.JoinHostPort(hostIP, port(group.Spec.Expose.HostPort.Port))
+	default:
+		if group.Spec.Expose.NodePort == nil {
+			return ""
+		}
+		return net.JoinHostPort(hostIP, port(group.Spec.Expose.NodePort.Port))
+	}
 }
 
 // isPodReady reports what the kubelet says about the pod's readiness probe.
