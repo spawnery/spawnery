@@ -392,3 +392,109 @@ func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
 		t.Error("the bookkeeping key survived with nothing left to account for")
 	}
 }
+
+// The API server's enum makes the false branch unreachable for any object
+// that exists. The guard is here for the day a fourth value is added to the
+// enum without a branch in reconcileService: a refusal on the object is a
+// message a user can read, and a nil dereference is a crash loop.
+//
+// A pure function rather than an inline default arm because the enum is
+// closed: no ProxyGroup carrying an unknown type can be created through
+// envtest, so the branch is reachable from a test only here.
+func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
+	for _, known := range []spawneryv1alpha1.ExposeType{
+		spawneryv1alpha1.ExposeNodePort,
+		spawneryv1alpha1.ExposeLoadBalancer,
+		spawneryv1alpha1.ExposeHostPort,
+	} {
+		if !exposeImplemented(known) {
+			t.Errorf("%s is in the CRD's enum, so a user can create a group asking for "+
+				"it, and this operator refuses it", known)
+		}
+	}
+	for _, unknown := range []spawneryv1alpha1.ExposeType{"", "Anycast", "nodeport"} {
+		if exposeImplemented(unknown) {
+			t.Errorf("%q is accepted as implemented; reconcileService has no branch for "+
+				"it and would dereference a nil sub-block", unknown)
+		}
+	}
+}
+
+// The three strategies end to end, through Reconcile rather than through the
+// pieces, because the refusal that stood in front of two of them is what this
+// task removes.
+func TestReconcileAcceptsEveryStrategy(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		expose       spawneryv1alpha1.ExposeSpec
+		wantSvc      bool
+		wantType     corev1.ServiceType
+		wantHostPort int32
+	}{
+		{
+			name: "NodePort",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:     spawneryv1alpha1.ExposeNodePort,
+				NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30001},
+			},
+			wantSvc: true, wantType: corev1.ServiceTypeNodePort,
+		},
+		{
+			name: "LoadBalancer",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:         spawneryv1alpha1.ExposeLoadBalancer,
+				LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{},
+			},
+			wantSvc: true, wantType: corev1.ServiceTypeLoadBalancer,
+		},
+		{
+			name: "HostPort",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:     spawneryv1alpha1.ExposeHostPort,
+				HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+			},
+			wantSvc: false, wantHostPort: 25565,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			r := proxyGroupReconciler(f)
+			f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+				g.Spec.Expose = tc.expose
+			})
+
+			f.reconcileProxyGroup(r, "gateway")
+
+			group := f.proxyGroup("gateway")
+			if !hasCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+				metav1.ConditionTrue, spawneryv1alpha1.ReasonAccepted) {
+				t.Fatalf("conditions = %+v, want Accepted=True", group.Status.Conditions)
+			}
+
+			pods := f.proxyPods("gateway")
+			if len(pods) == 0 {
+				t.Fatal("an accepted group created no proxy pods")
+			}
+			var hostPort int32
+			for _, p := range pods[0].Spec.Containers[0].Ports {
+				if p.Name == podspec.MinecraftPortName {
+					hostPort = p.HostPort
+				}
+			}
+			if hostPort != tc.wantHostPort {
+				t.Errorf("the pod's minecraft hostPort = %d, want %d", hostPort, tc.wantHostPort)
+			}
+
+			var svc corev1.Service
+			err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc)
+			switch {
+			case tc.wantSvc && err != nil:
+				t.Fatalf("no Service for a %s group: %v", tc.name, err)
+			case tc.wantSvc && svc.Spec.Type != tc.wantType:
+				t.Errorf("Service type = %q, want %q", svc.Spec.Type, tc.wantType)
+			case !tc.wantSvc && !apierrors.IsNotFound(err):
+				t.Errorf("a HostPort group got a Service (err = %v)", err)
+			}
+		})
+	}
+}

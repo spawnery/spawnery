@@ -284,29 +284,6 @@ func TestProxyGroupCreatesItsPodsAndService(t *testing.T) {
 	}
 }
 
-// Milestone 6 owns the other two strategies. Until then the refusal has to be
-// visible on the object rather than buried in a log line — a ProxyGroup that
-// silently does nothing is indistinguishable from an operator that is down.
-func TestProxyGroupRefusesLoadBalancer(t *testing.T) {
-	f := newFixture(t)
-	r := proxyGroupReconciler(f)
-	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
-		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeLoadBalancer}
-	})
-
-	f.reconcileProxyGroup(r, "gateway")
-
-	group := f.proxyGroup("gateway")
-	if !hasCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
-		metav1.ConditionFalse, spawneryv1alpha1.ReasonExposeNotImplemented) {
-		t.Errorf("conditions = %+v, want Accepted=False/%s",
-			group.Status.Conditions, spawneryv1alpha1.ReasonExposeNotImplemented)
-	}
-	if n := len(f.proxyPods("gateway")); n != 0 {
-		t.Errorf("proxy pods = %d, want none for a strategy that is not implemented", n)
-	}
-}
-
 // With NodePort the address a player needs is a node's, and the operator has
 // no right to read Node objects. hostIP on a running proxy pod is the address
 // of a node that demonstrably has a proxy on it.

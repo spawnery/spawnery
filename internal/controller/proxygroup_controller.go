@@ -208,24 +208,22 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.refuse(ctx, group)
 	}
 
-	// Milestone 6 owns the other two strategies. Refusing is the honest
-	// version: a LoadBalancer branch written now would reach milestone 6 having
-	// never run, because the local flow cannot produce a cluster that would
-	// exercise it. A refusal on the object is also the only form a user can
-	// see — a group that silently does nothing looks like a dead operator.
-	if group.Spec.Expose.Type != spawneryv1alpha1.ExposeNodePort {
+	// The strategies differ in reconcileService and proxyAddress and nowhere
+	// else. This guard is not about any of them: the CRD's enum is closed, so
+	// no object carrying an unrecognised type can be created, and the branch
+	// below is reachable only if a fourth value is added to the enum without
+	// a branch to serve it. A refusal on the object is a message a user can
+	// read; the alternative is a nil dereference on a sub-block that was
+	// never validated.
+	if !exposeImplemented(group.Spec.Expose.Type) {
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonExposeNotImplemented,
-			fmt.Sprintf("expose.type %s arrives with milestone 6; only NodePort is implemented",
+			fmt.Sprintf("expose.type %s is not implemented by this operator",
 				group.Spec.Expose.Type))
-		// This path used to requeue never: a refusal only changes when the
-		// spec does, and a spec change reconciles on its own. refuse requeues
-		// it like the other two, because the player-safety pass it runs has to
-		// happen again -- whether a proxy is occupied is a fact about the agent
-		// registry, which nothing watches, so without a timer the budget
-		// written here would be the last one this group ever gets. A user who
-		// switched an already running group from NodePort to LoadBalancer has
-		// real pods with real players on them for as long as this refusal
-		// stands.
+		// refuse rather than a bare return, for the reason it documents: the
+		// player-safety pass has to run again, and whether a proxy is
+		// occupied is a fact about the agent registry that nothing watches.
+		// A user whose group is stuck here has real pods with real players on
+		// them for as long as the refusal stands.
 		return r.refuse(ctx, group)
 	}
 	setProxyGroupAccepted(group, true, spawneryv1alpha1.ReasonAccepted, "")
@@ -288,7 +286,10 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // refuse is the shared tail of the three paths that give up before
 // reconcileReplicas: a missing Network, one that is not Accepted, and an
-// expose.type this milestone does not implement. The caller has already put
+// expose.type this operator has no branch for. The third is unreachable
+// while the CRD's enum and exposeImplemented agree — the API server rejects
+// any object this operator could not classify — but the branch, and this
+// tail, stay in place for the day they disagree. The caller has already put
 // the reason on the group's Accepted condition; this does everything that is
 // the same for all three.
 //
@@ -1551,6 +1552,21 @@ func isPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// exposeImplemented reports whether this operator has a branch for the
+// strategy. See the call site in Reconcile for why it exists at all, and
+// TestExposeImplementedCoversTheEnumAndNothingElse for why it is a function
+// rather than an inline default arm.
+func exposeImplemented(t spawneryv1alpha1.ExposeType) bool {
+	switch t {
+	case spawneryv1alpha1.ExposeNodePort,
+		spawneryv1alpha1.ExposeLoadBalancer,
+		spawneryv1alpha1.ExposeHostPort:
+		return true
+	default:
+		return false
+	}
 }
 
 // setProxyGroupAccepted records whether the operator manages this group.

@@ -40,13 +40,17 @@ import (
 // An entry measures how long a pod has been diverging *while something was
 // watching*. Observation is what starts and sustains that clock, and
 // Reconcile does not call observe on every pass for a group that still
-// exists. Three of its steady-state early returns handle that themselves --
-// NetworkNotFound, NetworkNotAccepted and ExposeNotImplemented all return
-// before reconcileReplicas runs, the group is not gone in any of them so the
-// earlier forget calls (which fire only when the ProxyGroup itself is gone or
-// being deleted) do not catch them, and each calls forget explicitly instead.
+// exists. Two of its steady-state early returns handle that themselves --
+// NetworkNotFound and NetworkNotAccepted both return before reconcileReplicas
+// runs, the group is not gone in either of them so the earlier forget calls
+// (which fire only when the ProxyGroup itself is gone or being deleted) do
+// not catch them, and each calls forget explicitly instead. ExposeNotImplemented
+// shares the same path and the same forget call, but the CRD's enum is closed
+// and exposeImplemented agrees with it, so no object reaching this reconciler
+// can take that branch; it is named here for the reader who greps for the
+// reason, not as a case this steady state actually sees.
 //
-// Read that as three cases handled, not as the whole of the gap. Every error
+// Read that as two cases handled, not as the whole of the gap. Every error
 // return above reconcileReplicas has the identical shape and does not forget
 // -- a failed read, the status write, Bootstrap.Ensure, the ConfigMap, the
 // Service, the first pods() call -- and the next early return added here will
