@@ -21,6 +21,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -383,6 +384,37 @@ func TestIdentityCarriesTheGroupLabel(t *testing.T) {
 	}
 	if id.Role != agent.RoleProxy {
 		t.Errorf("Role = %q, want %q", id.Role, agent.RoleProxy)
+	}
+}
+
+// The ReviewCache caches the token review, never the pod lookup. This is the
+// property the whole split in Authenticate exists to preserve: if the pod
+// lookup were ever folded into what the cache remembers, deleting a pod would
+// stop being an immediate revocation for as long as the cached entry lived.
+// Only a real API server can show this, because a fake PodChecker cannot
+// distinguish "queried and found gone" from "never queried."
+func TestDeletingAPodRevokesImmediatelyDespiteTheCache(t *testing.T) {
+	f := newAuthFixture(t)
+	f.auth.Cache = grpcauth.NewReviewCache(time.Now)
+
+	pod := f.pod("lobby-revoke")
+	token := f.token(podspec.ServerServiceAccountName,
+		[]string{podspec.AgentTokenAudience}, pod)
+
+	if _, err := f.auth.Authenticate(f.ctx, token, agent.RoleServer); err != nil {
+		t.Fatalf("first Authenticate: %v", err)
+	}
+
+	if err := f.c.Delete(f.ctx, pod); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+
+	// The token review itself is now served from the cache -- PositiveTTL is
+	// 60s, comfortably longer than this test takes to run -- so this proves
+	// the pod lookup ran live even on a cache hit.
+	if _, err := f.auth.Authenticate(f.ctx, token, agent.RoleServer); err == nil {
+		t.Fatal("Authenticate accepted a token for a deleted pod; " +
+			"the cache must never cover the pod lookup")
 	}
 }
 

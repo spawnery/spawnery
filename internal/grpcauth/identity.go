@@ -25,8 +25,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
+	"google.golang.org/grpc/peer"
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -119,6 +121,15 @@ type Authenticator struct {
 	Reviews  TokenReviewer
 	Pods     PodChecker
 	Audience string
+
+	// Cache remembers what the API server said about a token. Optional: a nil
+	// cache reviews every time, which is what the tests that predate it do.
+	Cache *ReviewCache
+
+	// Limiter bounds how many token checks one peer can cause on a cache
+	// miss. Optional: a nil limiter never refuses, which is what the tests
+	// that predate it do.
+	Limiter *PeerLimiter
 }
 
 // unavailableErr marks an error as the Kubernetes API server itself failing
@@ -140,6 +151,49 @@ func isUnavailable(err error) bool {
 	return errors.As(err, &u)
 }
 
+// exhaustedErr marks a refusal caused by the rate limit rather than by the
+// credentials. The interceptor maps it to codes.ResourceExhausted, which is
+// distinct from both Unauthenticated and Unavailable, so an agent's log says
+// which of the three happened.
+type exhaustedErr struct{ err error }
+
+func (e *exhaustedErr) Error() string { return e.err.Error() }
+func (e *exhaustedErr) Unwrap() error { return e.err }
+
+func wrapExhausted(err error) error { return &exhaustedErr{err} }
+
+func isExhausted(err error) bool {
+	var e *exhaustedErr
+	return errors.As(err, &e)
+}
+
+// peerAddr is who is asking, as far as the transport knows. It is the only
+// identity available before the TokenReview, which is exactly why the limit
+// keys on it.
+//
+// The host, not the address. peer.Addr is a *net.TCPAddr and its String() is
+// IP:ephemeral-port, so the full address names a CONNECTION rather than a
+// peer: it changes on every dial, and keying on it would hand a pod in a
+// reconnect loop a fresh PeerBurst per TCP connection — the very attack the
+// limit exists to bound, failing open. Splitting the host off makes the bucket
+// one per pod IP, which is what the design's mass-reconnect safety argument
+// already assumed it was.
+//
+// The fallback is for an address that carries no port at all — a non-TCP peer,
+// a unix socket — where the whole string already is the host.
+func peerAddr(ctx context.Context) string {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.Addr == nil {
+		return "unknown"
+	}
+	addr := p.Addr.String()
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return host
+}
+
 // serviceAccountFor is which ServiceAccount may open a session in this role.
 func serviceAccountFor(role agent.Role) string {
 	if role == agent.RoleProxy {
@@ -152,53 +206,90 @@ func serviceAccountFor(role agent.Role) string {
 // the way the Secret and the Lease are.
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 
+// reviewToken is everything a TokenReview establishes about a token by itself:
+// that the API server authenticated it for our audience, that the subject is a
+// ServiceAccount, and which pod it is bound to. It stops short of the role
+// check and the pod lookup, which is what makes its answer cacheable -- the
+// role varies per call, and the pod lookup is the half that must stay live.
+func (a *Authenticator) reviewToken(ctx context.Context, token string) (reviewResult, error) {
+	review, err := a.Reviews.Create(ctx, &authnv1.TokenReview{
+		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{a.Audience}},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		return reviewResult{}, wrapUnavailable(fmt.Errorf("token review unavailable: %w", err))
+	}
+	if !review.Status.Authenticated {
+		return reviewResult{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
+	}
+	if !containsString(review.Status.Audiences, a.Audience) {
+		return reviewResult{}, fmt.Errorf("token not authenticated for audience %q", a.Audience)
+	}
+	namespace, name, ok := splitServiceAccount(review.Status.User.Username)
+	if !ok {
+		return reviewResult{}, fmt.Errorf("not a service account: %q", review.Status.User.Username)
+	}
+	podName := firstExtra(review.Status.User.Extra, claimPodName)
+	podUID := firstExtra(review.Status.User.Extra, claimPodUID)
+	if podName == "" || podUID == "" {
+		return reviewResult{}, fmt.Errorf("token is not bound to a pod")
+	}
+	return reviewResult{
+		Namespace:      namespace,
+		ServiceAccount: name,
+		PodName:        podName,
+		PodUID:         podUID,
+	}, nil
+}
+
 // Authenticate returns the identity behind a token, or why it is refused.
 func (a *Authenticator) Authenticate(ctx context.Context, token string, want agent.Role) (Identity, error) {
 	if token == "" {
 		return Identity{}, fmt.Errorf("no token presented")
 	}
 
-	review, err := a.Reviews.Create(ctx, &authnv1.TokenReview{
-		Spec: authnv1.TokenReviewSpec{Token: token, Audiences: []string{a.Audience}},
-	}, metav1.CreateOptions{})
+	res, err, cached := a.Cache.lookup(token)
+	if cached {
+		ReviewCacheHits.Inc()
+	} else {
+		ReviewCacheMisses.Inc()
+		// Recovered once and reused: the key and the message must name the
+		// same peer, and a second call is a second context lookup for a value
+		// that cannot have changed.
+		addr := peerAddr(ctx)
+		if !a.Limiter.allow(addr) {
+			RateLimited.Inc()
+			return Identity{}, wrapExhausted(
+				fmt.Errorf("too many token checks from %s", addr))
+		}
+		res, err = a.reviewToken(ctx, token)
+		a.Cache.store(token, res, err)
+	}
 	if err != nil {
-		return Identity{}, wrapUnavailable(fmt.Errorf("token review unavailable: %w", err))
-	}
-	if !review.Status.Authenticated {
-		return Identity{}, fmt.Errorf("token not authenticated: %s", review.Status.Error)
-	}
-	if !containsString(review.Status.Audiences, a.Audience) {
-		return Identity{}, fmt.Errorf("token not authenticated for audience %q", a.Audience)
+		return Identity{}, err
 	}
 
-	namespace, name, ok := splitServiceAccount(review.Status.User.Username)
-	if !ok {
-		return Identity{}, fmt.Errorf("not a service account: %q", review.Status.User.Username)
-	}
-	if wantSA := serviceAccountFor(want); name != wantSA {
+	// The role check is after the cache on purpose: it depends on which
+	// session the caller asked for, not on the token.
+	if wantSA := serviceAccountFor(want); res.ServiceAccount != wantSA {
 		return Identity{}, fmt.Errorf("service account %q may not open a %s session, %q may",
-			name, want, wantSA)
+			res.ServiceAccount, want, wantSA)
 	}
 
-	podName := firstExtra(review.Status.User.Extra, claimPodName)
-	podUID := firstExtra(review.Status.User.Extra, claimPodUID)
-	if podName == "" || podUID == "" {
-		return Identity{}, fmt.Errorf("token is not bound to a pod")
-	}
-
-	group, exists, err := a.Pods.LookupPod(ctx, namespace, podName, podUID, want)
+	// Never cached. This is the half that ties an identity to a live pod, and
+	// keeping it live is what makes deleting a pod an immediate revocation.
+	group, exists, err := a.Pods.LookupPod(ctx, res.Namespace, res.PodName, res.PodUID, want)
 	if err != nil {
-		return Identity{}, wrapUnavailable(fmt.Errorf("look up pod %s/%s: %w", namespace, podName, err))
+		return Identity{}, wrapUnavailable(fmt.Errorf("look up pod %s/%s: %w", res.Namespace, res.PodName, err))
 	}
 	if !exists {
-		return Identity{}, fmt.Errorf("pod %s/%s is not a Spawnery pod", namespace, podName)
+		return Identity{}, fmt.Errorf("pod %s/%s is not a Spawnery pod", res.Namespace, res.PodName)
 	}
 
 	return Identity{
-		Namespace:      namespace,
-		PodName:        podName,
-		PodUID:         podUID,
-		ServiceAccount: name,
+		Namespace:      res.Namespace,
+		PodName:        res.PodName,
+		PodUID:         res.PodUID,
+		ServiceAccount: res.ServiceAccount,
 		Role:           want,
 		Group:          group,
 	}, nil

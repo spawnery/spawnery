@@ -1,0 +1,50 @@
+# The agent endpoint's ingress rule, and the network-independent half of
+# milestone 6b. The per-Network policy that protects the backends is written by
+# the operator itself, into each game namespace, because those namespaces are
+# discovered at runtime and no install-time list of them exists.
+#
+# Selecting the operator pod at all makes it default-deny for ingress. That is
+# the point for 9443, and it is why the second rule below exists: the kubelet's
+# probes and any metrics scrape would otherwise be denied along with everything
+# else, and the operator would go NotReady the moment this lands.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: spawnery-operator-agent
+  namespace: spawnery-system
+  labels:
+    app.kubernetes.io/name: spawnery
+    app.kubernetes.io/component: operator
+spec:
+  # The operator pod does NOT carry spawnery.cloud/managed-by. The two ends of
+  # the agent channel need different rules, so this selects the operator by its
+  # own two labels -- the same pair config/deploy/service.yaml selects on.
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: spawnery
+      app.kubernetes.io/component: operator
+  policyTypes:
+    - Ingress
+  ingress:
+    # The agents. An empty namespaceSelector means every namespace, which is
+    # required rather than lax: agentEndpoint builds the dial name from the
+    # operator's own namespace, so every managed pod in every game namespace
+    # dials into this one, and the chart cannot know those names.
+    - from:
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              spawnery.cloud/managed-by: spawnery-operator
+      ports:
+        - protocol: TCP
+          port: 9443
+    # The kubelet's liveness and readiness probes, and a metrics scrape. No
+    # `from`: the kubelet's source is the node rather than a pod, so there is
+    # no selector that would name it, and whether kubelet traffic is subject to
+    # policy at all is CNI-dependent. Admitting these two ports from anywhere
+    # is the only formulation that is correct on every CNI.
+    - ports:
+        - protocol: TCP
+          port: 8081
+        - protocol: TCP
+          port: 8080

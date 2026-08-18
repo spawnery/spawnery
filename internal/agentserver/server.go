@@ -37,6 +37,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -53,6 +54,29 @@ const (
 	// themselves before it cuts them. Every RPC here is a long-lived stream,
 	// so an unbounded GracefulStop would wait for the agents' own deadlines.
 	shutdownGrace = 5 * time.Second
+
+	// MaxConcurrentStreams bounds streams on ONE connection. An agent opens
+	// exactly one -- proto/spawnery/agent/v1alpha1 has two RPCs and a session
+	// uses one of them -- so this is generous by an order of magnitude. What it
+	// does not bound is how many connections a pod may open, which is the
+	// documented attack and is grpcauth's rate limit's job.
+	MaxConcurrentStreams uint32 = 8
+
+	// ConnectionTimeout bounds how long a half-finished handshake holds
+	// resources. grpc-go's default is two minutes.
+	ConnectionTimeout = 30 * time.Second
+
+	// MaxConnectionIdle reaps a connection carrying no stream. An agent's
+	// session stream is long-lived, so a connection that has been idle this
+	// long has lost its agent.
+	MaxConnectionIdle = 5 * time.Minute
+
+	// MinKeepaliveInterval is how often a client may ping. The agents send no
+	// keepalive at all -- agent/common's SessionLoop says so in its own
+	// comment: "the channel underneath has no keepalive, no idle timeout" --
+	// so this cannot throttle a legitimate agent. It bounds a client that
+	// decides to ping in a loop.
+	MinKeepaliveInterval = 30 * time.Second
 )
 
 // ProxyFleet is the one thing ProxySession needs from the proxy fan-out.
@@ -166,6 +190,17 @@ func (s *Server) Start(ctx context.Context) error {
 	grpcServer := grpc.NewServer(
 		grpc.Creds(creds),
 		grpc.StreamInterceptor(s.opts.Auth.StreamInterceptor()),
+		grpc.MaxConcurrentStreams(MaxConcurrentStreams),
+		grpc.ConnectionTimeout(ConnectionTimeout),
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle: MaxConnectionIdle,
+		}),
+		// PermitWithoutStream is false: a client with no active stream has no
+		// reason to ping, and the agents never do.
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             MinKeepaliveInterval,
+			PermitWithoutStream: false,
+		}),
 	)
 	agentpb.RegisterAgentServiceServer(grpcServer, s)
 

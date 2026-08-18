@@ -273,6 +273,8 @@ func main() {
 			Reviews:  clientset.AuthenticationV1().TokenReviews(),
 			Pods:     &grpcauth.ClientPodChecker{Client: mgr.GetClient()},
 			Audience: podspec.AgentTokenAudience,
+			Cache:    grpcauth.NewReviewCache(time.Now),
+			Limiter:  grpcauth.NewPeerLimiter(time.Now),
 		},
 		Agents:         registry,
 		Proxies:        proxies,
@@ -297,9 +299,10 @@ func main() {
 			Reader: mgr.GetAPIReader(),
 			CA:     provider.CABundle,
 		},
-		AgentEndpoint:  agentEndpoint(operatorNamespace),
-		Proxies:        proxies,
-		DrainTaintKeys: drainTaints,
+		AgentEndpoint:     agentEndpoint(operatorNamespace),
+		OperatorNamespace: operatorNamespace,
+		Proxies:           proxies,
+		DrainTaintKeys:    drainTaints,
 	}); err != nil {
 		setupLog.Error(err, "unable to set up controllers")
 		os.Exit(1)

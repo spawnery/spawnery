@@ -22,12 +22,14 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
@@ -49,12 +51,17 @@ type NetworkReconciler struct {
 	// operator deliberately holds no list or watch on them
 	// (internal/rbacaudit/required.go).
 	SecretReader client.Reader
+
+	// OperatorNamespace is where this operator runs, and it is the one value
+	// the policy cannot derive from the Network it protects.
+	OperatorNamespace string
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks/status,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update
 
 // Reconcile decides whether this network is the one that owns its namespace
 // and, if so, sums up its groups.
@@ -89,6 +96,17 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		Reason:  spawneryv1alpha1.ReasonAccepted,
 		Message: "this network owns its namespace",
 	})
+
+	// The policy, before anything else this reconcile does. A Forbidden here
+	// is a security control failing to land, and it must not pass silently:
+	// returning the error logs it and requeues. It deliberately does not
+	// become a condition on the Network — the design's §2.4 argues that this
+	// shape needs no report, and an error that appears only under an RBAC
+	// misconfiguration is a fact about the installation rather than about
+	// this object.
+	if err := r.reconcileNetworkPolicy(ctx, network); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconcile the network policy: %w", err)
+	}
 
 	serverGroups := &spawneryv1alpha1.ServerGroupList{}
 	if err := r.List(ctx, serverGroups, client.InNamespace(network.Namespace)); err != nil {
@@ -153,6 +171,30 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.Status().Update(ctx, network)
 }
 
+// reconcileNetworkPolicy keeps the policy that admits only this network's own
+// proxies to its own backends. It carries no delete: the owner reference on
+// the object means the garbage collector removes it when the Network goes,
+// which is why internal/rbacaudit's table has none either.
+func (r *NetworkReconciler) reconcileNetworkPolicy(
+	ctx context.Context,
+	network *spawneryv1alpha1.Network,
+) error {
+	desired := podspec.BuildNetworkPolicy(network, r.OperatorNamespace)
+	policy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      desired.Name,
+			Namespace: desired.Namespace,
+		},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, policy, func() error {
+		policy.Labels = desired.Labels
+		policy.OwnerReferences = desired.OwnerReferences
+		policy.Spec = desired.Spec
+		return nil
+	})
+	return err
+}
+
 // namespaceOwner picks the network that owns the namespace out of everything
 // that currently lives in it.
 func (r *NetworkReconciler) namespaceOwner(ctx context.Context, namespace string) (string, error) {
@@ -203,9 +245,14 @@ func pickNamespaceOwner(networks []spawneryv1alpha1.Network) string {
 // from a ServerGroup (or ProxyGroup) change to its Network's request, which is
 // for Task 12's manager wiring to add if the poll interval turns out to be
 // too coarse.
+//
+// Owns(&networkingv1.NetworkPolicy{}) is different: the policy does carry an
+// owner reference, so a hand-deleted one comes back on the next watch event
+// instead of waiting out resyncInterval.
 func (r *NetworkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.Network{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Named("network").
 		Complete(r)
 }

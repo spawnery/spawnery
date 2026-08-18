@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -645,5 +646,110 @@ func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 	}
 	if code := status.Code(err); code != codes.Unauthenticated {
 		t.Errorf("code = %s, want Unauthenticated", code)
+	}
+}
+
+// TestTheServerBoundsStreamsPerConnection is the one new bound that can be
+// observed from outside. An agent opens exactly one stream -- the proto has two
+// RPCs and a session uses one of them -- so the limit is generous by design;
+// what it stops is a single connection multiplexing an unbounded number.
+//
+// Be precise about what this does NOT bound, because the convenient reading is
+// that it closes the availability gap and it does not: MaxConcurrentStreams is
+// per connection, so a pod that opens many connections is untouched by it.
+// That is what grpcauth's per-peer rate limit is for.
+func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
+	f := newServerFixture(t)
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(f.ca) {
+		t.Fatal("CA bundle unusable")
+	}
+	creds := credentials.NewTLS(&tls.Config{
+		RootCAs:    pool,
+		ServerName: "spawnery-operator.spawnery-system.svc",
+		MinVersion: tls.VersionTLS13,
+	})
+	// One connection, many streams: that is the shape the bound governs.
+	conn, err := grpc.NewClient(f.addr, grpc.WithTransportCredentials(creds))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer func() { _ = conn.Close() }()
+	client := agentpb.NewAgentServiceClient(conn)
+
+	open := func(ctx context.Context, i int) (
+		grpc.BidiStreamingClient[agentpb.ServerMessage, agentpb.OperatorToServer], error) {
+		pod := f.pod(fmt.Sprintf("lobby-stream-%d", i))
+		token := f.token(podspec.ServerServiceAccountName,
+			[]string{podspec.AgentTokenAudience}, pod)
+		streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+		return client.ServerSession(streamCtx)
+	}
+
+	for i := 0; i < int(agentserver.MaxConcurrentStreams); i++ {
+		stream, err := open(f.ctx, i)
+		if err != nil {
+			t.Fatalf("stream %d of the permitted %d was refused: %v",
+				i, agentserver.MaxConcurrentStreams, err)
+		}
+		// Hold it open: a stream is only concurrent while it lives.
+		if err := stream.Send(&agentpb.ServerMessage{
+			Message: &agentpb.ServerMessage_Hello{
+				Hello: &agentpb.Hello{Version: "0.1.0", Ready: false},
+			},
+		}); err != nil {
+			t.Fatalf("send Hello on stream %d: %v", i, err)
+		}
+	}
+
+	// One past the limit. grpc-go's http2Client.NewStream -- which the
+	// generated ServerSession(ctx) stub calls synchronously, before this
+	// function returns -- mirrors the server's advertised
+	// SETTINGS_MAX_CONCURRENT_STREAMS as a stream quota, and once that quota
+	// is exhausted it blocks right there, in a select on the caller's context
+	// or a quota-available channel, before NewStream ever returns (grpc-go
+	// v1.83.0, internal/transport/http2_client.go:756-916, quota check around
+	// :1297-1337). So with the bound in force it is open() itself that blocks
+	// until over's five-second deadline -- not Recv(), which never even gets
+	// called -- and the error this test needs to check comes back from open,
+	// not from a later Recv on a stream that opened fine. Without the bound,
+	// open() returns immediately with room to spare and Recv() is what would
+	// have to be checked instead; both branches below exist because either
+	// shape is possible depending on which one actually happens.
+	over, cancel := context.WithTimeout(f.ctx, 5*time.Second)
+	defer cancel()
+	extra, err := open(over, int(agentserver.MaxConcurrentStreams))
+	if err != nil {
+		// DeadlineExceeded only, not a wider set: both of the obvious
+		// alternatives are codes this codebase genuinely produces for
+		// reasons that have nothing to do with the bound, and both can only
+		// reach open() after the ninth stream has already cleared the
+		// client-side quota gate -- i.e. only once MaxConcurrentStreams has
+		// already failed to hold. grpcauth's interceptor returns
+		// Unavailable specifically when a TokenReview call itself is
+		// unavailable (internal/grpcauth/interceptor.go), deliberately kept
+		// apart from Unauthenticated so an agent backs off instead of
+		// concluding its credentials are wrong -- an ordinary envtest-load
+		// flake here would look identical to a passing bound. And
+		// ResourceExhausted is grpc-go's own mapping for ENHANCE_YOUR_CALM
+		// and flow-control errors -- exactly the code this task's own new
+		// keepalive enforcement policy can produce. Accepting either would
+		// let the one failure this test exists to catch report PASS.
+		if status.Code(err) != codes.DeadlineExceeded {
+			t.Fatalf("stream %d failed to open with %v, want the deadline "+
+				"-- a different code means it failed for some other reason "+
+				"and this test proves nothing about the bound",
+				agentserver.MaxConcurrentStreams+1, err)
+		}
+		return
+	}
+	if _, err := extra.Recv(); err == nil {
+		t.Errorf("stream %d was served; MaxConcurrentStreams is not in force",
+			agentserver.MaxConcurrentStreams+1)
+	} else if status.Code(err) != codes.DeadlineExceeded {
+		t.Errorf("stream %d failed with %v, want the deadline — a different "+
+			"error means it was refused for some other reason and this test "+
+			"proves nothing about the bound", agentserver.MaxConcurrentStreams+1, err)
 	}
 }

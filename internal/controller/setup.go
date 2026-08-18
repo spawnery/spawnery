@@ -46,6 +46,11 @@ type Options struct {
 	// AgentEndpoint is the address the in-game agent dials to reach the
 	// operator's gRPC endpoint.
 	AgentEndpoint string
+	// OperatorNamespace is where the operator itself runs. The per-Network
+	// NetworkPolicy needs it for its egress rule, which has to name the
+	// namespace the agents dial into; AgentEndpoint above is built from the
+	// same flag, and the two must not be allowed to disagree.
+	OperatorNamespace string
 	// Proxies is how the ProxyGroup controller tells a surplus proxy to stop
 	// taking connections. Required: the production binary always supplies the
 	// real *proxyreg.Fleet, and SetupAll refuses a nil value for the same
@@ -90,15 +95,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		return fmt.Errorf("no API reader: the network controller cannot read forwarding secrets without one")
 	}
 
-	if err := (&NetworkReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("network"),
-		Clock:    opts.Clock,
-		// Uncached, for the reason SecretReader's own comment gives. The
-		// Bootstrapper takes the same reader for the same reason.
-		SecretReader: mgr.GetAPIReader(),
-	}).SetupWithManager(mgr); err != nil {
+	if err := newNetworkReconciler(mgr, opts).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup network controller: %w", err)
 	}
 
@@ -135,6 +132,28 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	}
 
 	return nil
+}
+
+// newNetworkReconciler builds the reconciler that reads
+// Options.OperatorNamespace, and it is a function for the same reason the two
+// below are: SetupAll offers no seam a test can reach through, so an
+// assignment made only there is an assignment nothing can observe. Deleting
+// `OperatorNamespace: opts.OperatorNamespace` left internal/controller green,
+// while the rendered egress peer would have carried
+// `kubernetes.io/metadata.name: ""` — a namespace selector matching nothing.
+// Under an enforcing CNI every agent in every namespace stops dialling at
+// once, and every object still reads as correct.
+func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
+	return &NetworkReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		Recorder:          mgr.GetEventRecorderFor("network"),
+		Clock:             opts.Clock,
+		OperatorNamespace: opts.OperatorNamespace,
+		// Uncached, for the reason SecretReader's own comment gives. The
+		// Bootstrapper takes the same reader for the same reason.
+		SecretReader: mgr.GetAPIReader(),
+	}
 }
 
 // newServerGroupReconciler and newProxyGroupReconciler build the two

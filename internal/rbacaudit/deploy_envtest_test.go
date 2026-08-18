@@ -29,6 +29,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -600,4 +601,165 @@ func contains(haystack []string, needle string) bool {
 		}
 	}
 	return false
+}
+
+// TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods checks the one
+// shipped NetworkPolicy, and every hop of it lives in a different file.
+//
+// The mistakes it exists to catch. A podSelector copied from a managed pod's
+// labels selects nothing here — the operator pod deliberately does not carry
+// spawnery.cloud/managed-by — and a policy that selects nothing fails open,
+// which looks exactly like one that works. A peer without an empty
+// namespaceSelector would admit only pods in spawnery-system, while every
+// managed pod in the cluster dials in from its own game namespace. A
+// policyTypes line that declares Egress on a policy with no egress rules
+// default-denies the operator's own outbound traffic. And these two labels
+// exist in three places — this manifest, the Deployment, and
+// podspec.OperatorPodLabels() — of which the third builds the per-Network
+// policy's egress peer, so a drift between any two of them breaks a policy
+// nothing else would notice.
+func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
+	var policy networkingv1.NetworkPolicy
+	var deploy appsv1.Deployment
+	readManifest(t, "config/deploy/networkpolicy.yaml", &policy)
+	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+
+	if policy.Namespace != deploy.Namespace {
+		t.Errorf("policy namespace = %q, deployment namespace = %q — a "+
+			"NetworkPolicy only governs pods in its own namespace",
+			policy.Namespace, deploy.Namespace)
+	}
+
+	podLabels := deploy.Spec.Template.Labels
+	for k, v := range policy.Spec.PodSelector.MatchLabels {
+		if podLabels[k] != v {
+			t.Errorf("the policy selects %s=%q but the operator pod carries "+
+				"%s=%q — the policy would select nothing, and a policy that "+
+				"selects nothing fails open", k, v, k, podLabels[k])
+		}
+	}
+	if len(policy.Spec.PodSelector.MatchLabels) == 0 {
+		t.Error("an empty podSelector selects every pod in the namespace")
+	}
+
+	// podspec.OperatorPodLabels() is the third copy of these two labels, and
+	// until now nothing tied it to either of the other two. The per-Network
+	// policy's egress peer is built from it, so renaming the operator's pod
+	// labels in the Deployment would leave that peer selecting nothing —
+	// backends unable to reach the operator on an enforcing CNI — with every
+	// test in the repository green.
+	//
+	// Subset rather than equality against the Deployment's template labels: a
+	// pod may legitimately gain labels neither selector names, and a rename is
+	// caught either way. Equality against the policy's own selector, though,
+	// including the length: the loop above validates only the keys the policy
+	// declares, so a selector narrowed to one of the two labels passed it, and
+	// a narrowed selector is a widened policy.
+	wantOperator := podspec.OperatorPodLabels()
+	for k, v := range wantOperator {
+		if podLabels[k] != v {
+			t.Errorf("podspec.OperatorPodLabels() has %s=%q but the Deployment's "+
+				"pod carries %s=%q — the per-Network policy's egress peer is built "+
+				"from the former and would select nothing", k, v, k, podLabels[k])
+		}
+	}
+	if len(policy.Spec.PodSelector.MatchLabels) != len(wantOperator) {
+		t.Errorf("the policy's podSelector = %v, want exactly %v — a selector "+
+			"narrowed to a subset selects more pods, not fewer",
+			policy.Spec.PodSelector.MatchLabels, wantOperator)
+	}
+	for k, v := range wantOperator {
+		if policy.Spec.PodSelector.MatchLabels[k] != v {
+			t.Errorf("the policy's podSelector[%q] = %q, want %q",
+				k, policy.Spec.PodSelector.MatchLabels[k], v)
+		}
+	}
+
+	// policyTypes is not decoration and the mistake here is the mirror of the
+	// one internal/podspec's TestBuildNetworkPolicyDeclaresBothPolicyTypes
+	// guards. This policy carries ingress rules only; adding Egress with no
+	// egress rules makes the operator pod default-deny for egress, so wherever
+	// a CNI enforces it cannot reach the API server — every controller stops,
+	// at once, from a one-word manifest edit.
+	if len(policy.Spec.PolicyTypes) != 1 ||
+		policy.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
+		t.Errorf("policyTypes = %v, want [Ingress] alone — this policy has no "+
+			"egress rules, so declaring Egress default-denies the operator's own "+
+			"outbound traffic and, wherever a CNI enforces, it cannot reach the "+
+			"API server", policy.Spec.PolicyTypes)
+	}
+
+	var agentRule, probeRule *networkingv1.NetworkPolicyIngressRule
+	for i := range policy.Spec.Ingress {
+		rule := &policy.Spec.Ingress[i]
+		if len(rule.From) == 0 {
+			probeRule = rule
+			continue
+		}
+		agentRule = rule
+	}
+
+	if agentRule == nil {
+		t.Fatal("no ingress rule with a peer: nothing admits the agents")
+	}
+	if len(agentRule.From) != 1 {
+		t.Fatalf("the agent rule has %d peers, want exactly one", len(agentRule.From))
+	}
+	peer := agentRule.From[0]
+	if peer.NamespaceSelector == nil || len(peer.NamespaceSelector.MatchLabels) != 0 {
+		t.Errorf("the agent peer's namespaceSelector = %v, want an empty one — "+
+			"every managed pod dials in from its own game namespace, and the "+
+			"operator's chart cannot know those names", peer.NamespaceSelector)
+	}
+	if peer.PodSelector == nil ||
+		peer.PodSelector.MatchLabels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+		t.Errorf("the agent peer must select %s=%s; got %v",
+			podspec.LabelManagedBy, podspec.ManagedByValue, peer.PodSelector)
+	}
+	if len(agentRule.Ports) != 1 || agentRule.Ports[0].Port.IntValue() != int(podspec.AgentPort) {
+		t.Errorf("the agent rule admits %v, want only %d", agentRule.Ports, podspec.AgentPort)
+	}
+
+	// Selecting the pod at all makes it default-deny for ingress, which covers
+	// the kubelet's probes and any metrics scrape. Both have to be admitted
+	// explicitly or the operator goes NotReady the moment this policy lands.
+	if probeRule == nil {
+		t.Fatal("no peerless ingress rule: the kubelet's probe to the health " +
+			"port is denied, and the operator goes NotReady")
+	}
+	admitted := map[int]bool{}
+	for _, p := range probeRule.Ports {
+		admitted[p.Port.IntValue()] = true
+	}
+	if len(deploy.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
+	}
+	// nonAgentDeclared is every container port except "agent": that one is
+	// already admitted, from a peer, by the rule above. Anything the peerless
+	// rule admits has to be one of these and nothing else.
+	nonAgentDeclared := map[int]bool{}
+	for _, p := range deploy.Spec.Template.Spec.Containers[0].Ports {
+		if p.Name == "agent" {
+			continue
+		}
+		nonAgentDeclared[int(p.ContainerPort)] = true
+		if !admitted[int(p.ContainerPort)] {
+			t.Errorf("the container declares port %q (%d) and the policy does "+
+				"not admit it", p.Name, p.ContainerPort)
+		}
+	}
+	// The reverse direction matters here in a way it does not for the agent
+	// rule: this rule has no `from`, so it admits from any source in any
+	// namespace, and a stray port line here is real attack surface rather
+	// than a typo the agent rule's peer would already contain. Every port it
+	// admits must be a container port that is not "agent" -- admitting that
+	// one here too would bypass the agent rule's peer restriction entirely.
+	for port := range admitted {
+		if !nonAgentDeclared[port] {
+			t.Errorf("the peerless rule admits port %d, which the container "+
+				"does not declare (or is the agent port, already admitted "+
+				"under a peer by the rule above) — this rule has no `from`, "+
+				"so anything it admits is reachable from anywhere", port)
+		}
+	}
 }
