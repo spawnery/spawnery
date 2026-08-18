@@ -91,7 +91,7 @@ func NewProxyName(group string) string { return NewServerName(group) }
 // contract exists for: reconcileReplicas removes a surplus pod once it is
 // empty, or once its deadline has passed, and not before.
 //
-// It emits Kubernetes events on three occasions, and the bar all three clear
+// It emits Kubernetes events on four occasions, and the bar all four clear
 // is the same one: something happened that no other signal on the object
 // reports.
 //
@@ -112,6 +112,17 @@ func NewProxyName(group string) string { return NewServerName(group) }
 //     since cleared. An agent that heard a withdrawal and went on taking
 //     connections looks healthy from every angle the kubelet reports, so
 //     nothing outside this pair reports it.
+//   - A proxy pod that cannot come into existence, on the flank in either
+//     direction (ProxyPodBlocked as a Warning, from either the create path in
+//     Reconcile when the API server refuses a pod or the scheduler-reading
+//     branch of reportBlockedProxies when one cannot be placed; and the
+//     recovery back to every proxy pod existing, ProxyPodsAdmitted as a
+//     Normal, from reportBlockedProxies). Same shape as the readiness pair
+//     above: the Degraded condition already carries which of the two is
+//     true, so what the event adds is that a transition happened and when —
+//     a group that recovers between two resyncs would otherwise show a
+//     clean Degraded=False with nothing on its timeline saying it was ever
+//     anything else.
 //
 // Pod creation and ordinary deletion stay silent: they are recorded on the
 // objects themselves and an event would say nothing the group's status does
@@ -1483,6 +1494,15 @@ func setProxyPodsBlocked(group *spawneryv1alpha1.ProxyGroup, reason, message str
 // the scheduler's view of node selectors, taints and foreign hostPort
 // holders in order to guess ahead of it, and being wrong the moment a node
 // joins. Both halves of this condition report what the cluster said.
+//
+// The all-clear tail below fires an event too, on the same flank-only terms
+// as setProxyPodsBlocked and matching ServerGroupReconciler's own
+// BackingOff/Degraded pair: read the condition before writing it, write, and
+// fire only when the write actually changed the verdict. Without this a
+// group that recovers from a rejected or unschedulable proxy pod back to
+// fully admitted did so silently — the Degraded condition would read False
+// again, but nothing on the object's event timeline would say the recovery
+// ever happened, unlike every other condition pair this reconciler reports.
 func (r *ProxyGroupReconciler) reportBlockedProxies(
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
@@ -1500,12 +1520,17 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 			return
 		}
 	}
+	wasBlocked := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
 	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionDegraded,
 		Status:  metav1.ConditionFalse,
 		Reason:  spawneryv1alpha1.ReasonProxyPodsAdmitted,
 		Message: "every proxy pod this group asked for exists",
 	})
+	if wasBlocked {
+		r.Recorder.Eventf(group, corev1.EventTypeNormal, "ProxyPodsAdmitted",
+			"every proxy pod this group asked for exists")
+	}
 }
 
 // setStatus writes what is observably true of the group's pods.

@@ -25,6 +25,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -623,6 +624,87 @@ func TestAGroupWithItsPodsIsNotDegraded(t *testing.T) {
 	}
 	if cond.Reason != spawneryv1alpha1.ReasonProxyPodsAdmitted {
 		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonProxyPodsAdmitted)
+	}
+}
+
+// TestARecoveredProxyGroupFiresAnEventOnlyOnTheFlank pins the review's
+// finding on Task 5: reportBlockedProxies's all-clear write must follow the
+// same read-before/write/compare-after shape as ServerGroupReconciler's
+// BackingOff/Degraded pair and this file's own reportReadinessDivergence, or
+// a group recovering from a blocked proxy pod does so silently -- and a
+// group that stays recovered must not repeat the event on every five-second
+// resync the way a bare unconditional Eventf would.
+func TestARecoveredProxyGroupFiresAnEventOnlyOnTheFlank(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := record.NewFakeRecorder(100)
+	r.Recorder = rec
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeHostPort,
+			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+		}
+	})
+	f.reconcileProxyGroup(r, "gateway")
+	// Whatever fired getting the group to its first steady state is not what
+	// this test is about.
+	drainEvents(rec)
+
+	pods := f.proxyPods("gateway")
+	if len(pods) == 0 {
+		t.Fatal("no proxy pods to make unschedulable")
+	}
+	pods[0].Status.Conditions = []corev1.PodCondition{{
+		Type:   corev1.PodScheduled,
+		Status: corev1.ConditionFalse,
+		Reason: "Unschedulable",
+		Message: "0/1 nodes are available: 1 node(s) didn't have free ports " +
+			"for the requested pod ports.",
+	}}
+	if err := f.c.Status().Update(f.ctx, &pods[0]); err != nil {
+		t.Fatalf("mark the pod unschedulable: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	blocked := drainEvents(rec)
+	if !containsEvent(blocked, "ProxyPodBlocked") {
+		t.Fatalf("events = %v, want a ProxyPodBlocked", blocked)
+	}
+	if cond := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("Degraded = %+v, want True before the recovery this test is about", cond)
+	}
+
+	// What actually clears this in a cluster is the scheduler placing the
+	// pod (or, on the rejected-create path, the namespace's policy
+	// changing); here the pod's own condition is cleared directly, the same
+	// honest-about-envtest shape TestAnUnschedulableProxyPodIsReportedOnTheGroup
+	// already uses to get into the blocked state in the first place.
+	pods[0].Status.Conditions = nil
+	if err := f.c.Status().Update(f.ctx, &pods[0]); err != nil {
+		t.Fatalf("clear the pod's PodScheduled condition: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	recovered := drainEvents(rec)
+	if !containsEvent(recovered, "ProxyPodsAdmitted") {
+		t.Fatalf("events = %v, want a ProxyPodsAdmitted on the recovery flank", recovered)
+	}
+	if !containsEventType(recovered, "Normal") {
+		t.Errorf("events = %v, want the recovery recorded as Normal", recovered)
+	}
+	cond := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded)
+	if cond == nil || cond.Status != metav1.ConditionFalse || cond.Reason != spawneryv1alpha1.ReasonProxyPodsAdmitted {
+		t.Fatalf("Degraded = %+v, want False/ProxyPodsAdmitted after the recovery", cond)
+	}
+
+	// Steady state: nothing transitions on this pass, so nothing should
+	// fire -- the whole reason every condition pair in this file is written
+	// on the flank rather than on every resync.
+	f.reconcileProxyGroup(r, "gateway")
+	if steady := drainEvents(rec); containsEvent(steady, "ProxyPodsAdmitted") {
+		t.Errorf("events = %v, want no ProxyPodsAdmitted on a pass where nothing changed", steady)
 	}
 }
 
