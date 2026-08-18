@@ -266,6 +266,29 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileReplicas(ctx, network, group, pods); err != nil {
+		// A create the API server refused is the group's business and not
+		// only the log's. IsForbidden covers both ways it happens: a Pod
+		// Security profile that forbids the pod's shape -- which is how every
+		// HostPort group in a baseline or restricted namespace ends -- and an
+		// RBAC grant the operator does not have. IsInvalid covers a pod the
+		// API server rejects outright, a quota or a webhook among them.
+		//
+		// The status write is on the error path deliberately: without it the
+		// reconcile returns having recorded nothing, and the group sits at
+		// Pending with no conditions, indistinguishable from one no reconcile
+		// has ever touched. A failure to write the status is reported by
+		// returning the original error regardless -- the create failure is
+		// the cause and the one worth backing off on.
+		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
+			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodRejected, err.Error()) {
+				r.Recorder.Eventf(group, corev1.EventTypeWarning, "ProxyPodBlocked",
+					"the API server refused a proxy pod: %s", err.Error())
+			}
+			group.Status.Phase = "Degraded"
+			if werr := r.writeStatus(ctx, group); werr != nil {
+				log.FromContext(ctx).Error(werr, "recording a refused proxy pod on the group")
+			}
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -275,6 +298,10 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// Before setStatus: setStatus reads the Degraded condition to derive the
+	// phase, so whether a pod this group asked for failed to come into
+	// existence has to be known before that read.
+	r.reportBlockedProxies(group, pods)
 	// Before setStatus: the budget's selector has to find the label already on
 	// the pods it is sizing minAvailable for, on the same pass.
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
@@ -1422,6 +1449,63 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 		values.Motd = &motd
 	}
 	return values
+}
+
+// setProxyPodsBlocked records why a proxy pod this group asked for does not
+// exist. It reports whether the condition transitioned to True on this call,
+// so the caller can put an event on the flank rather than on every resync.
+//
+// This is the first writer of Degraded on a ProxyGroup. setStatus has always
+// read it and routed it to phase Degraded; until now only ServerGroup ever
+// set one.
+func setProxyPodsBlocked(group *spawneryv1alpha1.ProxyGroup, reason, message string) bool {
+	was := meta.IsStatusConditionTrue(group.Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded)
+	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionDegraded,
+		Status:  metav1.ConditionTrue,
+		Reason:  reason,
+		Message: message,
+	})
+	return !was
+}
+
+// reportBlockedProxies is the second of the two ways a proxy pod fails to
+// exist: the scheduler has nowhere to put it. With hostPort at most one pod
+// of a group fits per node, so replicas is silently capped by the node count
+// -- the likeliest HostPort mistake there is, and one that produces a pod
+// that exists, never runs, and explains itself only on its own object.
+//
+// The pod's name is in the message because a group has several, and a
+// condition that says only "a pod cannot be placed" cannot be acted on.
+//
+// It does not count nodes and predict. Doing that would mean reimplementing
+// the scheduler's view of node selectors, taints and foreign hostPort
+// holders in order to guess ahead of it, and being wrong the moment a node
+// joins. Both halves of this condition report what the cluster said.
+func (r *ProxyGroupReconciler) reportBlockedProxies(
+	group *spawneryv1alpha1.ProxyGroup,
+	pods []corev1.Pod,
+) {
+	for i := range pods {
+		for _, c := range pods[i].Status.Conditions {
+			if c.Type != corev1.PodScheduled || c.Status != corev1.ConditionFalse {
+				continue
+			}
+			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodUnschedulable,
+				fmt.Sprintf("%s cannot be scheduled: %s", pods[i].Name, c.Message)) {
+				r.Recorder.Eventf(group, corev1.EventTypeWarning, "ProxyPodBlocked",
+					"proxy pod %s cannot be scheduled: %s", pods[i].Name, c.Message)
+			}
+			return
+		}
+	}
+	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionDegraded,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonProxyPodsAdmitted,
+		Message: "every proxy pod this group asked for exists",
+	})
 }
 
 // setStatus writes what is observably true of the group's pods.

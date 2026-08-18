@@ -17,12 +17,16 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
@@ -496,5 +500,146 @@ func TestReconcileAcceptsEveryStrategy(t *testing.T) {
 				t.Errorf("a HostPort group got a Service (err = %v)", err)
 			}
 		})
+	}
+}
+
+// A HostPort group in a namespace enforcing Pod Security baseline never gets
+// a pod: the API server refuses the create outright. Before this, the error
+// went to the log and the group reported Pending with no reason at all --
+// for as long as the namespace's policy stood, which is forever.
+//
+// envtest runs the PodSecurity admission plugin, so the label below is
+// enforced here exactly as it is in a cluster.
+func TestARejectedProxyPodIsReportedOnTheGroup(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.enforcePodSecurity(t, "baseline")
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeHostPort,
+			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+		}
+	})
+
+	// The reconcile returns the API server's error, so reconcileProxyGroup --
+	// which fails the test on any error -- is the wrong helper here.
+	_, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
+	})
+	if err == nil {
+		t.Fatal("the reconcile succeeded in a namespace that forbids host ports")
+	}
+
+	group := f.proxyGroup("gateway")
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("Degraded = %+v, want True. Without it the group reports Pending and "+
+			"only the operator's log says why", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonProxyPodRejected {
+		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonProxyPodRejected)
+	}
+	if !strings.Contains(cond.Message, "PodSecurity") {
+		t.Errorf("message = %q; it must carry the API server's own words, because the "+
+			"remedy is in them and nothing else knows it", cond.Message)
+	}
+	if group.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded", group.Status.Phase)
+	}
+}
+
+// With hostPort the kube-scheduler places at most one pod of a group per
+// node, so replicas is capped by the node count -- the likeliest HostPort
+// mistake there is. The surplus pod exists and stays Pending, and the
+// scheduler's own message on it is the only thing that explains why.
+//
+// envtest runs no scheduler, so the condition is written here the way one
+// would write it. That is the honest shape of this test: it asserts the
+// operator's reading of PodScheduled=False, not the scheduler's decision to
+// set it.
+func TestAnUnschedulableProxyPodIsReportedOnTheGroup(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeHostPort,
+			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+		}
+	})
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) == 0 {
+		t.Fatal("no proxy pods to make unschedulable")
+	}
+	const schedulerSays = "0/1 nodes are available: 1 node(s) didn't have free ports " +
+		"for the requested pod ports."
+	pods[0].Status.Conditions = []corev1.PodCondition{{
+		Type:    corev1.PodScheduled,
+		Status:  corev1.ConditionFalse,
+		Reason:  "Unschedulable",
+		Message: schedulerSays,
+	}}
+	if err := f.c.Status().Update(f.ctx, &pods[0]); err != nil {
+		t.Fatalf("mark the pod unschedulable: %v", err)
+	}
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	group := f.proxyGroup("gateway")
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("Degraded = %+v, want True", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonProxyPodUnschedulable {
+		t.Errorf("reason = %q, want %q", cond.Reason,
+			spawneryv1alpha1.ReasonProxyPodUnschedulable)
+	}
+	if !strings.Contains(cond.Message, "free ports") {
+		t.Errorf("message = %q, want the scheduler's own text", cond.Message)
+	}
+	if !strings.Contains(cond.Message, pods[0].Name) {
+		t.Errorf("message = %q, want the name of the pod that cannot be placed -- with "+
+			"several pods the group's condition is otherwise unattributable",
+			cond.Message)
+	}
+}
+
+// A group whose pods all exist says so, or the condition would latch True
+// after any transient refusal and never come back.
+func TestAGroupWithItsPodsIsNotDegraded(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	group := f.proxyGroup("gateway")
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if cond == nil {
+		t.Fatal("no Degraded condition at all; False is a verdict and absent is not")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("Degraded = %+v, want False", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonProxyPodsAdmitted {
+		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonProxyPodsAdmitted)
+	}
+}
+
+// enforcePodSecurity labels the fixture's namespace so the API server's
+// PodSecurity admission plugin enforces a profile on it. envtest runs that
+// plugin, so this is the real control, not a stand-in for one.
+func (f *fixture) enforcePodSecurity(t *testing.T, profile string) {
+	t.Helper()
+	var ns corev1.Namespace
+	if err := f.c.Get(f.ctx, client.ObjectKey{Name: f.ns}, &ns); err != nil {
+		t.Fatalf("get namespace %s: %v", f.ns, err)
+	}
+	if ns.Labels == nil {
+		ns.Labels = map[string]string{}
+	}
+	ns.Labels["pod-security.kubernetes.io/enforce"] = profile
+	if err := f.c.Update(f.ctx, &ns); err != nil {
+		t.Fatalf("label namespace %s: %v", f.ns, err)
 	}
 }
