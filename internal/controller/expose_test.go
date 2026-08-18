@@ -289,3 +289,106 @@ func TestProxyAddressPerStrategy(t *testing.T) {
 		})
 	}
 }
+
+// spec.expose.loadBalancer.annotations is the only place a user writes into
+// an object a third-party controller also writes into -- MetalLB and kube-vip
+// both annotate the Service they act on. So the operator cannot treat the
+// spec's map as the whole truth and delete whatever is not in it, and it
+// cannot simply never delete either: a user who removes a pool annotation
+// would see nothing happen, permanently, with no message anywhere. It
+// records the keys it set and removes only those.
+func TestLoadBalancerAnnotationsAreOwnedAndReleased(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type: spawneryv1alpha1.ExposeLoadBalancer,
+			LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{
+				Annotations: map[string]string{
+					"metallb.universe.tf/address-pool":    "minecraft",
+					"metallb.universe.tf/allow-shared-ip": "spawnery",
+				},
+			},
+		}
+	})
+
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("reconcileService: %v", err)
+	}
+
+	// A third party annotates the Service the way a real load balancer
+	// controller does. Nothing the operator does afterwards may remove it.
+	var svc corev1.Service
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
+		t.Fatalf("get the Service: %v", err)
+	}
+	if svc.Annotations["metallb.universe.tf/address-pool"] != "minecraft" {
+		t.Fatalf("the spec's annotation did not reach the Service: %+v", svc.Annotations)
+	}
+	svc.Annotations["metallb.universe.tf/ip-allocated-from-pool"] = "minecraft"
+	if err := f.c.Update(f.ctx, &svc); err != nil {
+		t.Fatalf("annotate the Service as a third party would: %v", err)
+	}
+
+	// The user drops one of the two keys they had set.
+	group.Spec.Expose.LoadBalancer.Annotations = map[string]string{
+		"metallb.universe.tf/address-pool": "minecraft",
+	}
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("reconcileService after the spec changed: %v", err)
+	}
+
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
+		t.Fatalf("get the Service: %v", err)
+	}
+	if _, still := svc.Annotations["metallb.universe.tf/allow-shared-ip"]; still {
+		t.Error("an annotation removed from the spec survived on the Service; a user " +
+			"who removes one sees nothing happen, permanently")
+	}
+	if svc.Annotations["metallb.universe.tf/address-pool"] != "minecraft" {
+		t.Error("the annotation still in the spec was removed too")
+	}
+	if svc.Annotations["metallb.universe.tf/ip-allocated-from-pool"] != "minecraft" {
+		t.Error("the operator removed an annotation it never set. That key belongs to " +
+			"the load balancer controller, and taking it away is how a working " +
+			"allocation gets torn down")
+	}
+}
+
+// A group that leaves LoadBalancer behind takes its annotations with it, and
+// the bookkeeping key goes too -- otherwise the Service carries a record of
+// keys nobody owns, and the next LoadBalancer group at that name inherits it.
+func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type: spawneryv1alpha1.ExposeLoadBalancer,
+			LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{
+				Annotations: map[string]string{"metallb.universe.tf/address-pool": "minecraft"},
+			},
+		}
+	})
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("reconcileService: %v", err)
+	}
+
+	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+		Type:     spawneryv1alpha1.ExposeNodePort,
+		NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30001},
+	}
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("reconcileService as NodePort: %v", err)
+	}
+
+	var svc corev1.Service
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
+		t.Fatalf("get the Service: %v", err)
+	}
+	if _, still := svc.Annotations["metallb.universe.tf/address-pool"]; still {
+		t.Error("a LoadBalancer annotation survived the switch to NodePort")
+	}
+	if _, still := svc.Annotations[podspec.AnnotationExposeAnnotations]; still {
+		t.Error("the bookkeeping key survived with nothing left to account for")
+	}
+}

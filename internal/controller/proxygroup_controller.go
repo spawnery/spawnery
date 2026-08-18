@@ -1223,6 +1223,16 @@ func (r *ProxyGroupReconciler) reconcileService(
 		}
 		svc.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
 
+		// Unconditional rather than inside the LoadBalancer arm: a group that
+		// leaves LoadBalancer has to release the keys it set, and nil is how
+		// that is said.
+		var lbAnnotations map[string]string
+		if group.Spec.Expose.Type == spawneryv1alpha1.ExposeLoadBalancer &&
+			group.Spec.Expose.LoadBalancer != nil {
+			lbAnnotations = group.Spec.Expose.LoadBalancer.Annotations
+		}
+		applyExposeAnnotations(svc, lbAnnotations)
+
 		// The selector must pin the role as well as the group: without it the
 		// Service would also select any server pod that happened to share the
 		// group name, and players would land on a backend directly.
@@ -1265,6 +1275,33 @@ func (r *ProxyGroupReconciler) reconcileService(
 		return nil, err
 	}
 	return svc, nil
+}
+
+// applyExposeAnnotations reconciles the annotations the operator owns on a
+// Service, leaving every other key untouched. See
+// podspec.AnnotationExposeAnnotations for why the record is necessary.
+func applyExposeAnnotations(svc *corev1.Service, want map[string]string) {
+	if svc.Annotations == nil {
+		svc.Annotations = map[string]string{}
+	}
+	if owned := svc.Annotations[podspec.AnnotationExposeAnnotations]; owned != "" {
+		for _, k := range strings.Split(owned, ",") {
+			if _, still := want[k]; !still {
+				delete(svc.Annotations, k)
+			}
+		}
+	}
+	keys := make([]string, 0, len(want))
+	for k, v := range want {
+		svc.Annotations[k] = v
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		delete(svc.Annotations, podspec.AnnotationExposeAnnotations)
+		return
+	}
+	sort.Strings(keys)
+	svc.Annotations[podspec.AnnotationExposeAnnotations] = strings.Join(keys, ",")
 }
 
 // loadBalancerTrafficPolicy is the CRD's Local default, restated in code.
