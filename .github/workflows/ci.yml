@@ -61,25 +61,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
       # Unlike test and lint, this job builds a derivation that is not on
       # any binary cache -- gradle.fetchDeps's updateScript is unique to
       # this flake -- so it is the one job that actually invokes Nix's
       # build sandbox rather than only substituting. That sandbox uses
       # bwrap, which needs unprivileged user namespaces; Ubuntu's hosted
       # runners restrict those by default via AppArmor, and bwrap fails
-      # with "setting up uid map: Permission denied". Setting `sandbox =
-      # false` in extra_nix_config did not avoid this -- the multi-user
-      # daemon (install-nix-action's default here) still invoked bwrap, so
-      # the setting was not taking effect for daemon-driven builds. Lifting
-      # the kernel-level restriction directly is what actually works.
-      - name: Allow unprivileged user namespaces (bwrap needs this)
-        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # with "setting up uid map: Permission denied". `sandbox = false`
+      # alone did not avoid this: install-nix-action's default multi-user
+      # daemon still invoked bwrap regardless of the client-supplied
+      # setting. Installing single-user instead removes the daemon from
+      # the picture entirely, so the same `sandbox = false` is honored for
+      # the one build (the mitmCache updateScript) this job needs to
+      # perform from scratch -- no privilege change to the runner itself.
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          install_options: "--no-daemon"
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            sandbox = false
 
       # The drift guard docs/known-issues.md has been parking since milestone
       # 2c. make agent-deps regenerates agent/deps.json by resolving against
