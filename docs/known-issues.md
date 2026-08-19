@@ -1488,10 +1488,11 @@ call — the guard at `internal/controller/proxygroup_controller.go:229`,
 `if !exposeImplemented(group.Spec.Expose.Type)` — but since milestone 6c it is
 unreachable rather than merely unlikely: all three strategies the CRD's enum
 has always named (`NodePort`, `LoadBalancer`, `HostPort`) are implemented, and
-the CRD's own CEL rules keep any object carrying a fourth, unrecognised value
-from ever reaching the API server, so the branch is a guard for the day a
-fourth `expose.type` is added without a branch to serve it, not a path a live
-`ProxyGroup` takes today. Every error
+the `+kubebuilder:validation:Enum=LoadBalancer;NodePort;HostPort` marker on
+`ExposeType` itself (`api/v1alpha1/proxygroup_types.go:27`) keeps any object
+carrying a fourth, unrecognised value from ever reaching the API server, so
+the branch is a guard for the day a fourth `expose.type` is added without a
+branch to serve it, not a path a live `ProxyGroup` takes today. Every error
 return above `reconcileReplicas` leaves the identical shape and does not
 forget: a `ProxyGroup` read that failed for any reason other than the object
 being gone, a failed `Network` read, the status write, `Bootstrap.Ensure`, the

@@ -219,10 +219,18 @@ point for whoever writes the chart's default `values.yaml`.
 
 **The refusal path is a guard for a value the CRD cannot produce today, not
 dead code to delete.** `exposeImplemented` (`internal/controller/proxygroup_controller.go:1670`)
-and the guard that calls it (`:229`) are unreachable while the CRD's CEL
-rules (`api/v1alpha1/proxygroup_types.go:72-76`) and `exposeImplemented`
-agree — any object with an unrecognised `expose.type` is rejected by the API
-server before this reconciler ever sees it. The branch, and `refuse`'s
+and the guard that calls it (`:229`) are unreachable while the CRD's enum
+and `exposeImplemented` agree. What closes off a fourth value is
+`ExposeType`'s own `+kubebuilder:validation:Enum=LoadBalancer;NodePort;HostPort`
+marker (`api/v1alpha1/proxygroup_types.go:27`), rendered into the generated
+CRD as a plain OpenAPI `enum:` field
+(`config/crd/bases/spawnery.cloud_proxygroups.yaml:174-177`) and enforced by
+structural-schema validation — not the five `XValidation` (CEL) rules at
+`api/v1alpha1/proxygroup_types.go:72-76`, which do a different job entirely: they require the sub-block
+matching whichever type *is* chosen (`nodePort`/`hostPort`/`loadBalancer`),
+and say nothing about a fourth type value. Any object with an unrecognised
+`expose.type` is rejected by the API server before this reconciler ever sees
+it. The branch, and `refuse`'s
 shared tail (`:355`), stay in place for the day a fourth value is added to
 the enum without a branch to serve it; `docs/known-issues.md`'s "From
 milestone 4c-3" section carried this in the present tense in two places and
