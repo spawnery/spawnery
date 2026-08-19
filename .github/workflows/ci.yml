@@ -82,6 +82,18 @@ jobs:
             experimental-features = nix-command flakes
             sandbox = false
 
+      # Debugging aid for the bwrap/sandbox investigation, not a permanent
+      # step -- shows which nix.conf(s) exist and what "sandbox" resolves
+      # to once Nix is actually installed.
+      - name: Debug Nix sandbox config
+        run: |
+          echo "--- nix config show sandbox ---"
+          nix --extra-experimental-features 'nix-command flakes' config show sandbox || true
+          echo "--- /etc/nix/nix.conf ---"
+          cat /etc/nix/nix.conf 2>&1 || true
+          echo "--- ~/.config/nix/nix.conf ---"
+          cat ~/.config/nix/nix.conf 2>&1 || true
+
       # The drift guard docs/known-issues.md has been parking since milestone
       # 2c. make agent-deps regenerates agent/deps.json by resolving against
       # Maven Central, which is why it cannot run inside a Nix build and why
