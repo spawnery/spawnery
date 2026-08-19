@@ -24,13 +24,13 @@ DEADLINE="${DEADLINE:-300}"
 # splits in two, and only one half is something this run's scenarios can see.
 #
 # A spawnery-system literal surviving in one of the chart's *own-namespace*
-# RBAC fields -- a RoleBinding's or ClusterRoleBinding's own
-# metadata.namespace, or the generated Role's namespace: line -- is caught by
-# the `helm install` below, because Kubernetes validates those for existence at
-# admission. Measured, not reasoned: the install refused with `namespaces
-# "spawnery-system" not found`, this script stopped there under set -e, and
-# `go test` never ran -- so no scenario in test/e2e caught that mutation or
-# could have (docs/known-issues.md, "From milestone 6d").
+# RBAC fields -- a RoleBinding's own metadata.namespace, or the generated
+# Role's namespace: line -- is caught by the `helm install` below, because
+# Kubernetes validates those for existence at admission. Measured, not
+# reasoned: the install refused with `namespaces "spawnery-system" not
+# found`, this script stopped there under set -e, and `go test` never ran --
+# so no scenario in test/e2e caught that mutation or could have
+# (docs/known-issues.md, "From milestone 6d").
 #
 # A literal surviving in a *subject* namespace -- subjects[].namespace, which
 # the chart templates as {{ .Release.Namespace }} -- is not validated by the

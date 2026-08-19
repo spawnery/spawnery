@@ -278,10 +278,13 @@ const chartDefaultNamespace = "spawnery-system"
 // can only ever come back allowed — it proves the Role and the binding fit
 // each other and that get is the only verb they open, and it cannot notice a
 // misspelt ServiceAccount name or a subject namespace pointing somewhere no
-// operator runs. Those are checked against the chart instead: the name against
-// the ServiceAccount the chart actually renders, so the two cannot drift apart
-// silently, and the namespace against chartDefaultNamespace, which is what the
-// file says it follows.
+// operator runs. Those are checked separately below: the name against the
+// ServiceAccount the chart actually renders, so the two cannot drift apart
+// silently, and the namespace against chartDefaultNamespace — not against the
+// chart, since nothing the chart renders carries that string (see
+// chartDefaultNamespace's own comment), but against the same
+// documented-default prose in charts/spawnery/README.md that constant
+// restates.
 func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
 	applyForwardingSecretReader(t, readerProbeNamespace)
 	_, binding := readForwardingSecretReader(t)

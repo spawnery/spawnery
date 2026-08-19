@@ -246,21 +246,29 @@ documents made it.
   binaries from the flake, but one more thing that can be absent from a
   shell that skipped `nix develop`.
 - **Three distinct namespaces exist, and each is what it is on purpose.**
-  `spawnery-system` is the chart's documented default. No chart template
-  carries it as a literal — `TestTheChartRendersIntoTheNamespaceItIsGiven`
-  scans every rendered object for it — but it is *not* absent from the
-  repository, and a reader auditing this discipline should expect to find it
-  in all of these: `charts/spawnery/README.md`, in the install command and in
-  the manual-edit instruction; the two `+kubebuilder:rbac` markers and their
-  placeholder comments (`internal/certs/store.go:58-62`,
-  `internal/controller/setup.go:73-77`); `config/rbac/role.yaml:137`, which
-  is controller-gen's output from those markers;
-  `config/rbac/forwarding-secret-reader.yaml:65`, the hand-applied grant §4
-  is entirely about; `hack/chart-templates.sh`, both as the anchor its rbac
-  `sed` matches and as the literal its postcondition refuses to find in the
-  output; and `hack/e2e.sh`, as the same anchor in the two `sed` calls that
-  rewrite the reader file for its own run. Every one of those is an input to
-  a transform, a document about the default, or a guard against the literal —
+  `spawnery-system` is the chart's documented default. No chart template that
+  renders a Kubernetes *object* carries it as a literal —
+  `TestTheChartRendersIntoTheNamespaceItIsGiven` scans every rendered object
+  for it — but `charts/spawnery/templates/NOTES.txt:13` and `:16` do carry it:
+  NOTES.txt renders no object, so that test structurally cannot see it. The
+  literal is *not* absent from the repository more broadly either, and a
+  reader auditing this discipline should expect to find it in all of these:
+  `charts/spawnery/README.md`, in the install command and in the manual-edit
+  instruction; `charts/spawnery/templates/NOTES.txt`, in the same
+  manual-edit instruction restated for whoever reads it after `helm install`;
+  the two `+kubebuilder:rbac` markers and their placeholder comments
+  (`internal/certs/store.go:58-62`, `internal/controller/setup.go:73-77`);
+  `config/rbac/role.yaml:137`, which is controller-gen's output from those
+  markers; `config/rbac/forwarding-secret-reader.yaml:65`, the hand-applied
+  grant §4 is entirely about; `hack/chart-templates.sh`, both as the anchor
+  its rbac `sed` matches and as the literal its postcondition refuses to find
+  in the output; `hack/e2e.sh`, as the same anchor in the two `sed` calls
+  that rewrite the reader file for its own run; and
+  `internal/rbacaudit/audit_envtest_test.go:260`'s `chartDefaultNamespace`
+  constant, which restates the README's prose for
+  `TestTheForwardingSecretReaderOpensExactlyOneNamespace` rather than reading
+  it out of anything the chart renders. Every one of those is an input to a
+  transform, a document about the default, or a guard against the literal —
   none is a namespace anything is installed into.
   `platform-system` is where `hack/e2e.sh` actually installs the chart for
   `make e2e` (`hack/e2e.sh:45`, `test/e2e/e2e_test.go:55`). `audit-system` is

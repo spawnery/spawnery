@@ -257,11 +257,11 @@ Kubernetes validates a RoleBinding's own `metadata.namespace` for existence at
 admission, so `helm install` refused first with `namespaces "spawnery-system"
 not found` and `hack/e2e.sh` aborted under `set -e` before `go test` started.
 The hazard splits: a literal surviving in the chart's **own-namespace** RBAC
-fields — a RoleBinding's or ClusterRoleBinding's own `metadata.namespace`, or
-the generated Role's `namespace:` — is caught at install time by Kubernetes,
-not by this check. A literal surviving in a **subject** namespace is not
-validated by the API server at all; it applies cleanly, binds a ServiceAccount
-that exists nowhere, and is by this design's own reasoning the path
+fields — a RoleBinding's own `metadata.namespace`, or the generated Role's
+`namespace:` — is caught at install time by Kubernetes, not by this check. A
+literal surviving in a **subject** namespace is not validated by the API
+server at all; it applies cleanly, binds a ServiceAccount that exists
+nowhere, and is by this design's own reasoning the path
 `theOperatorWasNeverDenied` catches, once the resulting denial lands on a write
 verb. **That second path was never mutated by this milestone**, so for it the
 claim is reasoning rather than measurement. The corrected statement lives in
