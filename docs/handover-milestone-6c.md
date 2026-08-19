@@ -106,9 +106,16 @@ eighteen scenarios, `139.022s`
 (`ok github.com/spawnery/spawnery/test/e2e 139.022s`, `a_forbidden_host_port_is_reported_on_the_group`
 at `0.10s`), no kind cluster left standing afterward.
 
+**Re-verified after the final whole-branch review's fixes:** `make test`
+green; `make e2e` green with the same eighteen scenarios, `142.766s`
+(`ok github.com/spawnery/spawnery/test/e2e 142.766s`), no kind cluster left
+standing. The one number that moved is the one §2 is about.
+
 **Not driven, and not drivable here:** the `LoadBalancer` address path
-end-to-end, a real CNI's treatment of `HostPort`, and anything about
-reachability. See §2.
+against a real load balancer controller — envtest now drives it against a
+Service whose ingress entry the test writes itself, which is the wiring and
+not the load balancer (§2) — a real CNI's treatment of `HostPort`, and
+anything about reachability. See §2.
 
 ## 2. The one thing 6d must not misread
 
@@ -149,8 +156,9 @@ confirmed at two levels, not assumed at either:
   `svc.Status.LoadBalancer.Ingress` itself and then asserts `status.address`
   **stays empty**, because no image in the manifest resolves so no proxy is
   ever `Ready`. What that proves is the readiness gate on `proxyAddress`, not
-  the address path — the scenario's own doc comment says as much
-  (`test/e2e/expose_test.go:21-31`).
+  the address path — the scenario's own doc comment says as much, and now
+  names the envtest that proves the other half
+  (`test/e2e/expose_test.go:21-34`).
 - `theHostPortGroupBindsThePortAndHasNoService` — a pod's container port
   carries `hostPort: 25565`, no Service exists, and `gateway-host`'s surplus
   replica (two requested on a one-node cluster) is reported
@@ -159,17 +167,29 @@ confirmed at two levels, not assumed at either:
   under its own ServiceAccount when a group switches strategy.
 
 **The `LoadBalancer` address-appears path (an assigned ingress plus a `Ready`
-pod producing a non-empty `status.address`) is proven in exactly one place,
-and it is worth naming precisely rather than loosely as "envtest": the plain
-Go table test `TestProxyAddressPerStrategy`
-(`internal/controller/expose_test.go:182`), case "LoadBalancer publishes the
-assigned ingress IP" (`:237-245`), which calls `proxyAddress(group, pods,
-svc)` directly with literal `*corev1.Pod`/`*corev1.Service` values.** It is
-not an envtest case — no fixture, no real API server, no `Reconcile` call —
-and no envtest test and no `make e2e` scenario anywhere in this repository
-ever sets `svc.Status.LoadBalancer.Ingress` and then reconciles a live object
-to watch `status.address` come out non-empty. The function is proven; the
-path through a running reconciler against a real object is not.
+pod producing a non-empty `status.address`) is now driven through a live
+reconcile, and until the final whole-branch review of this branch it was
+not.** What existed was the plain Go table test `TestProxyAddressPerStrategy`
+(`internal/controller/expose_test.go`), case "LoadBalancer publishes the
+assigned ingress IP", which calls `proxyAddress(group, pods, svc)` directly
+with literal `*corev1.Pod`/`*corev1.Service` values — the function, not the
+path through a running reconciler against a real object. Design §7 described
+the envtest that was meant to close that gap and §12's third acceptance
+criterion required it; neither was written, and replacing
+`r.setStatus(group, pods, svc)` with a call whose Service had been stripped
+of its status left `go test ./internal/controller/...` entirely green.
+
+`TestTheLoadBalancerAddressAppearsOnceAProxyIsReady`
+(`internal/controller/expose_test.go`) is that test. It reconciles a live
+`LoadBalancer` group, patches the Service's status subresource with an
+ingress entry the way MetalLB would, asserts `status.address` stays empty
+while nothing is ready, marks a pod `Ready` the way a kubelet would, and
+observes the assigned address come out. It is the only test in the package
+that fails under that mutation. **It still proves no reachability**: envtest
+runs no load balancer controller and no kubelet, so both halves are written
+by the test itself, and what it establishes is the wiring — the Service
+`reconcileService` returned reaching `setStatus`, and `status.address` coming
+out of it.
 
 **`theOperatorWasNeverDenied` is narrower than it was before this milestone,
 on purpose, and that narrowing is worth stating plainly rather than folding
@@ -180,13 +200,45 @@ into a diff.** Its offender loop
 denial. Without the exclusion, `aForbiddenHostPortIsReportedOnTheGroup` would
 fail this check on every run: Task 6's Mutation 2 (removing the exclusion)
 reproduced this exactly, with the operator's log showing **3,940** quoted
-PodSecurity refusals in one run — the reconciler retrying the create under a
-fresh generated pod name on every pass, none of them an RBAC problem, all of
-them sharing the API server's `is forbidden:` prefix with a genuine denial.
-The narrowing is real and is a weakening, however narrow, of the one check
-the whole E2E package exists to pass; it is scoped to one exact substring, and
-a genuine RBAC denial still fails the check regardless of what else is in the
-log line.
+PodSecurity refusals in one 139-second run — none of them an RBAC problem,
+all of them sharing the API server's `is forbidden:` prefix with a genuine
+denial. The narrowing is real and is a weakening, however narrow, of the one
+check the whole E2E package exists to pass; it is scoped to one exact
+substring, and a genuine RBAC denial still fails the check regardless of what
+else is in the log line.
+
+**That 3,940 was recorded here, and in Task 6's report, as the price of a
+refused create. It was not. It was a hot loop, and the final whole-branch
+review of this branch is what found it — not any of the seven task
+reviews, which had the number in front of them and read it as a cost.**
+`setProxyPodsBlocked` stored the API server's verbatim refusal, which names
+the pod it refused; `NewProxyName` draws a fresh random suffix per attempt,
+so the message differed on every pass; `writeStatus` therefore always wrote
+and always bumped `resourceVersion`; and `For(&spawneryv1alpha1.ProxyGroup{})`
+carries no predicate, so the update event re-enqueued the group immediately,
+ahead of the rate-limited retry. Roughly 28 reconciles a second, one create
+attempt and one status update each, for as long as the refusal stood — which
+for a Pod Security label is forever. Before 6c this path returned the error
+with no status write at all, so nothing re-triggered the watch; 6c introduced
+the write and, with it, the loop.
+
+The fix is in `setProxyPodsBlocked`: a `Degraded` condition already saying
+the same thing is left byte-for-byte alone, where "the same thing" means the
+same `Status`, the same `Reason`, and a message that differs at most in the
+name of the object the API server refused (`sameRefusal`). Nothing edits the
+stored text — it stays the cluster's own words, verbatim, because the remedy
+is in them and nothing else knows it — and a genuinely different refusal
+under the same reason still replaces it. `TestARefusedProxyPodStopsRewritingTheGroup`
+(`internal/controller/expose_test.go`) reconciles a refused group four times
+and asserts `resourceVersion` stops changing; without the guard it reports
+`[230 231 232 233]`. **`make e2e` was re-run on the fix: green, eighteen
+scenarios, 142.8s, and the operator's log for the whole run holds 15 lines
+containing `is forbidden:` — all fifteen of them `gateway-forbidden`'s, with
+fifteen distinct pod names — against the 3,940 the same count produced
+before.** Fifteen is what exponential backoff alone predicts. 6d should read
+the old number wherever it still appears in
+`.superpowers/sdd/2026-08-18-expose-strategies/task-6-report.md` as the
+measurement of a defect, not of a cost.
 
 **What follows for anything 6d writes or claims:** no image in
 `test/e2e/manifests/e2e.yaml` resolves, so no container process runs in any
@@ -277,7 +329,11 @@ everywhere.
 The SDD ledger
 (`.superpowers/sdd/2026-08-18-expose-strategies/progress.md`) is the only
 place this list exists in full; it is restated here with what caught each
-one.
+one. The seven below came from the seven task reviews. The final
+whole-branch review, which ran after all of them and is the last gate before
+merge, produced eight more; they are the second list, and the fact that the
+worst defect in this milestone is in the second list and not the first is
+itself the finding worth carrying to 6d.
 
 1. **Task 2, minor, deferred.** `proxyAddress`'s `svc == nil` guard in the
    `LoadBalancer` branch has no test and is unreachable as wired:
@@ -351,6 +407,70 @@ finding set is therefore a mix in a way 6b's plan-test-code defects were not
 shape, Task 1's and Task 6's, are the ones worth carrying forward as what to
 watch for.
 
+### The final whole-branch review
+
+Eight findings and two suggestions, against the eleven commits as a whole
+rather than task by task. Every one is fixed in this branch; the fix commits
+are `07fa157`, `77be254`, `e00154f` and the docs commit that carries this
+paragraph.
+
+1. **Critical — the refused-create path was a reconcile hot loop.** §2 above
+   tells it in full. Found by an envtest probe (three failing `Reconcile`
+   calls, resourceVersions 230 → 231 → 232, three distinct pod names) and by
+   re-reading this branch's own `task-6-report.md`: 3,940 refusals in 139
+   seconds where backoff predicts about fifteen. Caught by reading a number
+   the milestone had already measured and mis-explained.
+2. **Important — the `LoadBalancer` address wiring was tested by nothing.**
+   §2 above tells it in full. Caught by mutation: stripping the Service's
+   status before `setStatus` left the whole package green.
+3. **Important — a test comment claimed evidence that did not exist.**
+   `test/e2e/expose_test.go`'s doc comment said the address-appears half was
+   "proven in envtest, where a test can make a pod ready" while no such test
+   existed; §2 of this handover then corrected that claim at length, and
+   that correction is now itself rewritten, because the envtest exists.
+   Caught by review reading, and only visible because finding 2 had already
+   established there was nothing there.
+4. **Minor — the `services: delete` ownership guard was half-tested and
+   deviated from the design.** `TestSwitchingToHostPortLeavesAForeignServiceAlone`
+   used a Service with no owner reference, so narrowing the guard to
+   `owner == nil` left the suite green; and design §4 requires the guard to
+   check `podspec.LabelManagedBy` as well as the controller reference, which
+   the code did not, with no task report recording the deviation. Both
+   halves are now checked and both are now tested. Caught by mutation.
+5. **Minor — the milestone's one enforced observation was asserted loosely.**
+   Both the envtest and the E2E asserted only that the refusal message
+   contained `PodSecurity`, never `hostPort`; a proxy pod that acquired an
+   unrelated `baseline` violation with the container host port dropped
+   entirely would have kept both green with the strategy under test gone.
+   Caught by review reading.
+6. **Minor — `status.address` can advertise a Service that has been deleted.**
+   Recorded rather than fixed; see `docs/known-issues.md`, "From milestone
+   6c", for the exact scenario and why. Caught by review reading.
+7. **Minor — the all-clear message asserted more than it checked.**
+   `reportBlockedProxies` wrote "every proxy pod this group asked for exists"
+   without comparing the pod count to `spec.Replicas`. The condition's
+   semantics were right; the sentence was not, and it now says what the pass
+   established. Caught by review reading.
+8. **Minor — this handover miscounted its own record**, citing six task
+   reports where there are seven. Fixed in §7. Caught by review reading.
+
+Plus two suggestions, both taken: `internal/rbacaudit/required.go`'s `Why`
+for `services: delete` named `reconcileService` where the `r.Delete` is in
+`deleteServiceIfOurs`, and now names both; and design §7 said "the pod hash
+differs across the three", contradicting design §2 and
+`TestDesiredProxyHashSeparatesHostPortFromTheServiceStrategies`, which
+deliberately make `NodePort` and `LoadBalancer` hash **identically**.
+
+**What 6d should take from the split.** Two of the eight were mutation
+catches (2 and 4), continuing the streak `docs/known-issues.md` has tracked
+since milestone 5. The other six were reading, and the two that matter most
+— the hot loop and the false evidence claim — were found by reading the
+milestone's *own paperwork* against its own code: a number a task report had
+recorded, and a comment a task had written. Neither is reachable by looking
+at a single task's diff, which is exactly why neither of the seven task
+reviews found them. A whole-branch pass over the branch's documents, not
+only its code, is what this milestone says is worth keeping.
+
 ## 6. The environment
 
 Unchanged from 6b's own §6; nothing in 6c touched the harness beyond adding
@@ -393,7 +513,7 @@ systemd-run --scope --user --property=Delegate=yes -- \
 - The SDD record of how this milestone was built, task by task, including
   every mutation run and its verbatim output:
   [`.superpowers/sdd/2026-08-18-expose-strategies/`](../.superpowers/sdd/2026-08-18-expose-strategies/)
-  (`task-1-report.md` through `task-6-report.md`, and `progress.md`, the
-  ledger §5 restates).
+  (`task-1-report.md` through `task-7-report.md` — there are seven, not six —
+  and `progress.md`, the ledger §5 restates).
 - 6b's record, and what 6c started from:
   [`handover-milestone-6b.md`](handover-milestone-6b.md).

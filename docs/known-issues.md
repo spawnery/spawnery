@@ -3305,6 +3305,40 @@ own, separate from the `restricted` namespaces the rest of the network runs
 in), or drop the `HostPort` leg of the rollout and expose only through
 `NodePort` or `LoadBalancer` where CIS `restricted` is required everywhere.
 
+**`status.address` can go on advertising a Service that has been deleted, and
+6c made that reachable through its own headline path.** `Reconcile` returns
+early on any error, and `setStatus` — the only writer of `status.address` —
+is after every one of those returns, so a group that fails partway through a
+pass keeps whatever address the last successful pass published. The shape
+predates 6c. What 6c added is a way to sit in it indefinitely:
+
+> A `NodePort` group publishing `10.0.0.7:30765` is switched to `HostPort` in
+> a namespace enforcing Pod Security `baseline`. `reconcileService` deletes
+> the Service; `reconcileReplicas` is then refused by the API server, so
+> `Reconcile` returns before `setStatus`. `status.address` keeps naming the
+> node port of a Service that no longer exists — and because the create can
+> never succeed while the namespace's label stands, no later pass corrects
+> it. The group does say `Degraded=True`/`ReasonProxyPodRejected` with the
+> API server's own message, so the failure is legible; the address beside it
+> is not.
+
+Recorded rather than fixed, deliberately, and the reasoning is worth keeping
+because the obvious fix is worse than it looks. Recomputing the address on
+the error path with `proxyAddress(group, pods, svc)` does clear the deleted
+Service's node port — but in this exact scenario the group's old `NodePort`
+pods are still `Ready` while their replacements are refused, so the
+`HostPort` branch would publish `hostIP:25565` for a port no pod in existence
+binds. That trades a stale address for a fabricated one. Clearing the address
+outright on the error path is worse again: the same error return covers a
+group that stays `NodePort` and hits an unrelated quota or RBAC refusal while
+its live Service and ready pods keep serving players, and blanking that
+group's address would be a regression caused by this entry rather than a fix.
+
+The honest fix is structural — recompute the status on every return path
+rather than only the successful one — and that is a change to the shape of
+`Reconcile`, not a patch to one branch of it. It is 6d's or later, and it
+should be taken as a whole or not at all.
+
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
 **The CA has no rotation procedure.** The bundle format of the CA ConfigMap is

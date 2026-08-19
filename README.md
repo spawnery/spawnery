@@ -444,21 +444,39 @@ twice, by two different mechanisms, before the label was restored. That
 measurement forced a real, if narrow, trade elsewhere: `theOperatorWasNeverDenied`,
 the check the whole E2E package exists to pass, now excludes any log line
 containing `violates PodSecurity` from counting as a denial — without the
-exclusion, the reconciler's own retries of the refused create (3,940 of them
-in one run) would fail that check on every green run, for a rejection this
-milestone causes on purpose.
+exclusion, the reconciler's own retries of the refused create would fail that
+check on every green run, for a rejection this milestone causes on purpose.
+
+**How many retries that is, this branch recorded as 3,940 in one 139-second
+run and filed as the normal cost of a refused create. It was neither normal
+nor a cost of refusal: it was a hot loop of the milestone's own making, found
+by the final whole-branch review and by none of the seven task reviews before
+it.** The API server's refusal names the pod it refused, a fresh random
+suffix is drawn for every attempt, so the stored message differed on every
+pass, so the status write always bumped `resourceVersion`, and the
+`ProxyGroup` watch turned each of those writes straight back into an enqueue
+ahead of the rate-limited retry — about 28 reconciles a second for as long as
+the refusal stood, which for a Pod Security label is forever. The condition
+is now left byte-for-byte alone while it is saying the same thing, and the
+same E2E run logs **15** refusals in 143 seconds, which is what exponential
+backoff alone predicts. What the message carries is unchanged: the API
+server's own words, verbatim, because the remedy is in them.
 
 What it leaves open is that nothing in 6c demonstrates that a client can
 reach a proxy. No `LoadBalancer` controller runs anywhere in this repository,
 no image in the E2E manifest resolves so no container process ever runs, and
 the one thing observed being enforced is the API server's refusal of a
 `HostPort` pod, not anything about a connection succeeding. The `LoadBalancer`
-address path itself — an assigned ingress plus a ready pod producing a
-non-empty `status.address` — is proven only by a plain Go unit test of the
-pure function that computes it, not by any envtest case or `make e2e`
-scenario reconciling a live object end to end: the E2E's own `LoadBalancer`
-scenario writes the ingress entry itself and asserts only that
-`status.address` stays empty while no proxy is ever ready. The honest verb
+address path — an assigned ingress plus a ready pod producing a non-empty
+`status.address` — is now driven through a live reconcile in envtest, which
+is where the same final review found it had never been driven at all: the
+E2E's own `LoadBalancer` scenario writes the ingress entry itself and asserts
+only that `status.address` stays empty while no proxy is ever ready, and
+until that envtest was written the whole package stayed green with the
+Service severed from the status it is read out of. What that envtest proves
+is the wiring, in an API server with no load balancer controller and no
+kubelet: it writes both the ingress entry and the pod's readiness itself.
+The honest verb
 for what 6c ships is that the operator *publishes* an address once
 conditions hold, or that an object *exists* — not that anything *reaches* or
 *works*. The RKE2 rollout at the end of milestone 6 is the first thing that
