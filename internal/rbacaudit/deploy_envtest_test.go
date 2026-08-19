@@ -224,10 +224,10 @@ func splitRendered(out []byte) (map[string][]byte, error) {
 	}
 }
 
-// renderedManifest decodes one rendered object, strictly, for the reason
-// readManifest's own comment gives: a plain Unmarshal drops keys the target
-// type does not have, so a misspelled field would decode to a zero value and
-// every assertion below would then be checking something nobody set.
+// renderedManifest decodes one rendered object, strictly. sigs.k8s.io/yaml's
+// plain Unmarshal drops keys the target type does not have, so a typo like
+// `serviceAccountNam:` or `readOnlyRootFilesytem:` would decode into a zero
+// value and every assertion below would then be checking a field nobody set.
 func renderedManifest[T any](t *testing.T, key string, into *T) {
 	t.Helper()
 	doc, ok := renderChart(t)[key]
@@ -244,25 +244,13 @@ func renderedManifest[T any](t *testing.T, key string, into *T) {
 	}
 }
 
-// readManifest decodes a single-document YAML manifest from the repository.
-// Strictly: sigs.k8s.io/yaml's plain Unmarshal drops keys the target type does
-// not have, so `serviceAccountNam:` or `readOnlyRootFilesytem:` would decode
-// into a zero value and every assertion below would then be checking a field
-// nobody set.
-func readManifest[T any](t *testing.T, rel string, into *T) {
-	t.Helper()
-	raw, err := os.ReadFile(testenv.RepoPath(t, rel))
-	if err != nil {
-		t.Fatalf("read %s: %v", rel, err)
-	}
-	if err := yaml.UnmarshalStrict(raw, into); err != nil {
-		t.Fatalf("decode %s: %v", rel, err)
-	}
-}
-
-// generatedRoles names the rendered chart objects that carry every role the
-// controller-gen markers ask for: the cluster-wide ClusterRole and the Role
-// scoped to the operator's own namespace.
+// generatedClusterRoleKey and generatedRoleKey are the rendered chart's keys
+// (see renderChart, splitRendered) for the two roles the controller-gen
+// markers ask for: the cluster-wide ClusterRole and the Role scoped to the
+// operator's own namespace. readGeneratedRoles below uses these same
+// constants both to look the objects up and to name them in a "the chart
+// renders no ..." failure, so the two strings cannot drift apart the way a
+// separately hand-written diagnostic could.
 //
 // controller-gen still writes config/rbac/role.yaml, and
 // hack/chart-templates.sh (run by `make manifests`) transforms it into
@@ -272,16 +260,22 @@ func readManifest[T any](t *testing.T, rel string, into *T) {
 // an intact input exits 0 and writes a Role whose namespace is the literal
 // spawnery-system. Auditing config/rbac/role.yaml would not see that; it never
 // goes near the sed. Auditing the rendered chart does.
-const generatedRoles = "ClusterRole/spawnery-operator and Role/spawnery-operator"
+const (
+	generatedClusterRoleKey = "ClusterRole/spawnery-operator"
+	generatedRoleKey        = "Role/spawnery-operator"
+)
 
 // readMultiDocManifest splits a multi-document YAML manifest at rel and hands
-// each document's Kind and raw bytes to decode. readManifest cannot be reused
-// here because it decodes exactly one document; this is the loop both
-// readGeneratedRoles and readForwardingSecretReader (audit_envtest_test.go)
-// need, factored out so neither restates it. decode owns everything
-// kind-specific — including its own "second one of this kind" refusal and its
-// own diagnostics — this helper only owns finding the file, splitting it, and
-// skipping blank documents.
+// each document's Kind and raw bytes to decode. Its only caller today is
+// readForwardingSecretReader (audit_envtest_test.go), for
+// config/rbac/forwarding-secret-reader.yaml — a Role and a RoleBinding in one
+// file, so a single-document decode cannot read it. readGeneratedRoles used to
+// be a second caller, over config/rbac/role.yaml, before the chart became the
+// source of truth for the generated roles; it now reads the rendered chart's
+// ClusterRole and Role directly through renderedManifest instead. decode owns
+// everything kind-specific — including its own "second one of this kind"
+// refusal and its own diagnostics — this helper only owns finding the file,
+// splitting it, and skipping blank documents.
 func readMultiDocManifest(t *testing.T, rel string, decode func(kind string, doc []byte)) {
 	t.Helper()
 
@@ -325,20 +319,26 @@ func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 	t.Helper()
 
 	rendered := renderChart(t)
+	keys := make([]string, 0, len(rendered))
+	for k := range rendered {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	renders := strings.Join(keys, ", ")
 
-	if _, ok := rendered["ClusterRole/spawnery-operator"]; !ok {
-		t.Fatalf("the chart renders no ClusterRole/spawnery-operator")
+	if _, ok := rendered[generatedClusterRoleKey]; !ok {
+		t.Fatalf("the chart renders no %s; it renders: %s", generatedClusterRoleKey, renders)
 	}
 	var cluster rbacv1.ClusterRole
-	renderedManifest(t, "ClusterRole/spawnery-operator", &cluster)
+	renderedManifest(t, generatedClusterRoleKey, &cluster)
 
-	if _, ok := rendered["Role/spawnery-operator"]; !ok {
-		t.Fatalf("the chart renders no Role/spawnery-operator — a namespace= " +
-			"qualifier fell off a marker, and the operator would hold its Secret " +
-			"and Lease rights in every namespace")
+	if _, ok := rendered[generatedRoleKey]; !ok {
+		t.Fatalf("the chart renders no %s; it renders: %s — a namespace= "+
+			"qualifier fell off a marker, and the operator would hold its Secret "+
+			"and Lease rights in every namespace", generatedRoleKey, renders)
 	}
 	var namespaced rbacv1.Role
-	renderedManifest(t, "Role/spawnery-operator", &namespaced)
+	renderedManifest(t, generatedRoleKey, &namespaced)
 
 	return &cluster, &namespaced
 }

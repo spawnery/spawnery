@@ -292,7 +292,7 @@ func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
 
 // forwardingSecretReaderManifest is the repository-relative path of the
 // hand-written Role and RoleBinding an administrator applies per namespace.
-// Unlike generatedRoles, controller-gen never touches this file — nothing
+// Unlike the objects readGeneratedRoles reads, controller-gen never touches this file — nothing
 // else in the build checks it against anything, which is why both directions
 // of the audit run against it here.
 const forwardingSecretReaderManifest = "config/rbac/forwarding-secret-reader.yaml"
