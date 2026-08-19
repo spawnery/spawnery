@@ -26,9 +26,12 @@ import (
 // What that proves is the readiness gate on proxyAddress: no image in this
 // run's manifest resolves, so no proxy is ever ready, and status.address must
 // stay empty even with an address assigned. The other half of that branch --
-// the address appearing once both conditions hold -- is proven in envtest,
-// where a test can make a pod ready. Nothing here says a load balancer was
-// involved, because none was.
+// the address appearing once both conditions hold -- is proven in envtest, by
+// TestTheLoadBalancerAddressAppearsOnceAProxyIsReady
+// (`internal/controller/expose_test.go`), which drives a live Reconcile with
+// an assigned ingress and a pod it marks Ready itself and watches
+// status.address come out non-empty. Nothing here says a load balancer was
+// involved, because none was, and nothing there does either.
 func theLoadBalancerGroupGetsItsService(t *testing.T) {
 	var svc corev1.Service
 	eventually(t, 2*time.Minute, "the gateway-lb Service", func() (bool, string) {
@@ -210,8 +213,14 @@ func aForbiddenHostPortIsReportedOnTheGroup(t *testing.T) {
 		if cond.Status != metav1.ConditionTrue || cond.Reason != spawneryv1alpha1.ReasonProxyPodRejected {
 			return false, "Degraded is " + string(cond.Status) + "/" + cond.Reason
 		}
-		if !strings.Contains(cond.Message, "PodSecurity") {
-			return false, "message does not name PodSecurity: " + cond.Message
+		// Both substrings, not just the first. If the proxy pod acquired some
+		// unrelated baseline violation and the container host port were
+		// dropped entirely, a PodSecurity-only assertion would stay green
+		// with the strategy under test gone.
+		for _, want := range []string{"PodSecurity", "hostPort"} {
+			if !strings.Contains(cond.Message, want) {
+				return false, "message does not name " + want + ": " + cond.Message
+			}
 		}
 		return true, ""
 	})

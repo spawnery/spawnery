@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -940,4 +942,73 @@ func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 				"(err = %v); design section 4 requires both halves of the guard", err)
 		}
 	})
+}
+
+// TestTheLoadBalancerAddressAppearsOnceAProxyIsReady is design section 12's
+// third acceptance criterion, and the only place in this repository where the
+// LoadBalancer address is driven through a live reconcile rather than through
+// the pure function that computes it.
+//
+// envtest can do this precisely because it runs no kubelet and no load
+// balancer controller: the test writes both halves itself -- the Service's
+// ingress entry the way MetalLB would, and the pod's readiness the way a
+// kubelet would -- and then asks the reconciler what it publishes. Nothing
+// here pretends a load balancer ran, and nothing here says a client reached
+// anything. What it proves is the wiring: reconcileService's returned Service
+// reaching setStatus, and status.address coming out of it.
+//
+// The mutation that has to fail: severing that wiring in Reconcile, by
+// passing setStatus a Service stripped of its status
+// (`if svc != nil { svc = &corev1.Service{} }`). Before this test the whole
+// package stayed green under it.
+func TestTheLoadBalancerAddressAppearsOnceAProxyIsReady(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:         spawneryv1alpha1.ExposeLoadBalancer,
+			LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{},
+		}
+	})
+	f.reconcileProxyGroup(r, "gateway")
+
+	// What MetalLB or kube-vip would write once it had picked an address.
+	var svc corev1.Service
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
+		t.Fatalf("the LoadBalancer group got no Service: %v", err)
+	}
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "192.0.2.10"}}
+	if err := f.c.Status().Update(f.ctx, &svc); err != nil {
+		t.Fatalf("assign an ingress address the way a load balancer controller would: %v", err)
+	}
+
+	// An assigned address alone publishes nothing. This is the same gate the
+	// E2E's own LoadBalancer scenario is able to observe, restated here
+	// because the pass that follows would otherwise prove only that some
+	// address appeared, not that both conditions were required.
+	f.reconcileProxyGroup(r, "gateway")
+	if addr := f.proxyGroup("gateway").Status.Address; addr != "" {
+		t.Fatalf("status.address = %q with an assigned ingress and no ready proxy, want "+
+			"empty -- the Service knows nothing about whether anything is serving", addr)
+	}
+
+	pods := f.proxyPods("gateway")
+	if len(pods) == 0 {
+		t.Fatal("no proxy pods to make ready")
+	}
+	f.markProxyPodReady(t, &pods[0])
+	f.reconcileProxyGroup(r, "gateway")
+
+	group := f.proxyGroup("gateway")
+	want := net.JoinHostPort(svc.Status.LoadBalancer.Ingress[0].IP,
+		strconv.Itoa(int(podspec.MinecraftPort)))
+	if group.Status.Address != want {
+		t.Errorf("status.address = %q, want %q. Both halves are read back from where "+
+			"this test wrote them: the host from the Service's assigned ingress, the "+
+			"port from the Service's own port rather than any node port",
+			group.Status.Address, want)
+	}
+	if group.Status.ReadyReplicas != 1 {
+		t.Errorf("status.readyReplicas = %d, want 1", group.Status.ReadyReplicas)
+	}
 }
