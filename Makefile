@@ -201,12 +201,15 @@ publish:
 # invocation this machine needs.
 #
 # It depends on `manifests` for the same reason `test` does, and here the
-# consequence is worse: hack/e2e.sh applies config/rbac/role.yaml into a real
-# cluster, so without this a marker edit is driven against the role generated
-# before it. The whole point of design §8's first mutation is that removing a
-# verb from a marker turns this run red -- which it cannot do if the run
-# installs a stale role. controller-gen takes about a second against the
-# minutes the cluster costs.
+# consequence is worse. Since milestone 6d hack/e2e.sh applies no RBAC of its
+# own: it runs `helm install charts/spawnery`, and the chart's rbac.yaml and
+# crds.yaml are hack/chart-templates.sh's output, which is the second half of
+# `manifests`. So the stale-object hazard is the same one, one step further
+# along the pipeline -- without this dependency a marker edit is driven
+# against templates generated before it. The whole point of design §8's first
+# mutation is that removing a verb from a marker turns this run red, which it
+# cannot do if the run installs a chart built from the old markers.
+# controller-gen takes about a second against the minutes the cluster costs.
 .PHONY: e2e
 e2e: manifests
 	hack/e2e.sh

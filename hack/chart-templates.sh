@@ -53,6 +53,7 @@ fi
 # by `annotations:` on the next line, so the insertion point is that
 # annotations block; the script refuses per file if it is absent rather than
 # emitting a CRD Helm will delete on uninstall.
+crd_files=0
 {
 	echo "$header"
 	for f in "$crds_in"/*.yaml; do
@@ -60,9 +61,58 @@ fi
 			echo "hack/chart-templates.sh: $f has no top-level annotations block." >&2
 			exit 1
 		fi
+		crd_files=$((crd_files + 1))
 		echo "---"
 		sed '0,/^  annotations:$/s|^  annotations:$|  annotations:\n    helm.sh/resource-policy: keep|' "$f"
 	done
 } > "$out_dir/crds.yaml"
+
+# --- the postconditions ---------------------------------------------------
+#
+# Everything above this line checks controller-gen's *input*: that the lines
+# the two `sed` expressions are anchored to are still there. That is exactly
+# what a broken `sed` leaves untouched, so an intact input and a substitution
+# that never fired look identical to those guards -- they exit 0 and write a
+# corrupted template. What follows checks the files that actually got written.
+#
+# The CRD half is the one with teeth. A `crds.yaml` missing
+# `helm.sh/resource-policy: keep` installs and lints exactly like a correct
+# one, and the difference only appears at `helm uninstall`, when Helm deletes
+# all four CRDs and Kubernetes cascades that into every Network, ServerGroup,
+# ProxyGroup and Server in the cluster and, through owner references, into
+# every Pod, Service and ConfigMap the operator created for them -- the
+# outcome charts/spawnery/README.md's "Uninstalling" section promises cannot
+# happen. Nothing else in the repository looks at that annotation.
+#
+# The count is against the number of files this run actually processed, not a
+# literal 4: a fifth CRD whose annotation never landed must fail here rather
+# than pass because the other four still carry theirs.
+if [ "$crd_files" -eq 0 ]; then
+	echo "hack/chart-templates.sh: $crds_in matched no *.yaml files; crds.yaml would ship no CRDs at all." >&2
+	exit 1
+fi
+kept="$(grep -c '^    helm.sh/resource-policy: keep$' "$out_dir/crds.yaml" || true)"
+if [ "$kept" -ne "$crd_files" ]; then
+	echo "hack/chart-templates.sh: $out_dir/crds.yaml carries helm.sh/resource-policy: keep $kept time(s) for $crd_files CRD file(s)." >&2
+	echo "The annotation transform did not apply to every file. \`helm uninstall\` would delete the unannotated CRDs and every object of their kinds in the cluster." >&2
+	exit 1
+fi
+
+# rbac.yaml's outcome, the same way. A surviving spawnery-system literal
+# installs cleanly in any namespace and then denies the operator its own
+# Secret at the first certs.Store.Ensure. internal/rbacaudit's
+# TestTheChartRendersIntoTheNamespaceItIsGiven now catches this too, by
+# rendering the chart somewhere the literal cannot be right; this keeps the
+# failure at `make manifests` time, where the cause is one line away.
+templated="$(grep -c '^  namespace: {{ .Release.Namespace }}$' "$out_dir/rbac.yaml" || true)"
+if [ "$templated" -ne 1 ]; then
+	echo "hack/chart-templates.sh: $out_dir/rbac.yaml has $templated templated namespace lines, want exactly 1." >&2
+	exit 1
+fi
+if grep -q 'spawnery-system' "$out_dir/rbac.yaml"; then
+	echo "hack/chart-templates.sh: $out_dir/rbac.yaml still carries the literal spawnery-system." >&2
+	echo "The namespace transform did not apply. The Role would install into a namespace holding no operator." >&2
+	exit 1
+fi
 
 echo "wrote $out_dir/rbac.yaml and $out_dir/crds.yaml"
