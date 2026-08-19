@@ -66,7 +66,18 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            sandbox = false
 
+      # Unlike test and lint, this job builds a derivation that is not on
+      # any binary cache -- gradle.fetchDeps's updateScript is unique to
+      # this flake -- so it is the one job that actually invokes Nix's
+      # build sandbox rather than only substituting. Ubuntu's hosted
+      # runners restrict unprivileged user namespaces by default, which is
+      # what that sandbox needs (bwrap fails with "setting up uid map:
+      # Permission denied"). The build itself is a trivial script writer
+      # with no isolation-worthy side effects, so sandboxing buys nothing
+      # here; disabling it is what lets this job run on a hosted runner at
+      # all.
       # The drift guard docs/known-issues.md has been parking since milestone
       # 2c. make agent-deps regenerates agent/deps.json by resolving against
       # Maven Central, which is why it cannot run inside a Nix build and why
