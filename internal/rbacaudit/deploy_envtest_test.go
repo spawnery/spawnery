@@ -138,6 +138,76 @@ func TestTheSelectorsCarryOnlyTheFrozenPair(t *testing.T) {
 	}
 }
 
+// renderedObjectKeys is every object the chart renders with default values,
+// keyed the way splitRendered keys them. It is a closed set on purpose.
+//
+// The rest of this package audits objects it names one at a time:
+// readGeneratedRoles looks up two keys, applyDeploymentAndDeriveSubject
+// applies six, and splitRendered refuses only a duplicate kind and name. A
+// template added to the chart is therefore invisible to all of them. Add
+// charts/spawnery/templates/metrics-rbac.yaml rendering a second ClusterRole
+// and a ClusterRoleBinding granting the operator's ServiceAccount
+// secrets: list cluster-wide, and nothing above would say a word:
+// TestClusterRoleGrantsNothingExtra reads only ClusterRole/spawnery-operator,
+// and TestTheAuthorizerActuallyDenies would notice the widened subject only if
+// the new binding were among the objects it applies -- which it is not,
+// because that list is fixed. An unaudited cluster-wide secrets grant would
+// ship green.
+//
+// So the list below is the gate. A new template fails this test until someone
+// adds its key here, and adding the key is the moment to decide what audits
+// it: a new binding belongs in applyDeploymentAndDeriveSubject, a new role in
+// readGeneratedRoles and the rbacaudit tables, or the object needs a reason
+// recorded here for why neither applies to it.
+var renderedObjectKeys = []string{
+	"ClusterRole/spawnery-operator",
+	"ClusterRoleBinding/spawnery-operator",
+	"CustomResourceDefinition/networks.spawnery.cloud",
+	"CustomResourceDefinition/proxygroups.spawnery.cloud",
+	"CustomResourceDefinition/servergroups.spawnery.cloud",
+	"CustomResourceDefinition/servers.spawnery.cloud",
+	"Deployment/spawnery-operator",
+	"NetworkPolicy/spawnery-operator-agent",
+	"Role/spawnery-operator",
+	"RoleBinding/spawnery-operator",
+	"Service/spawnery-operator",
+	"ServiceAccount/spawnery-operator",
+}
+
+// TestTheChartRendersExactlyTheseObjects is the audit's own completeness
+// check: not "does every object this package names render", which every other
+// test here already answers, but "does the chart render anything this package
+// has never looked at".
+//
+// Default values, because that is what renderChart uses. The one object under
+// a condition is the NetworkPolicy (.Values.networkPolicy.enabled, default
+// true); a value that switched something else off would show up here as a
+// missing key rather than silently reducing what the audit covers.
+func TestTheChartRendersExactlyTheseObjects(t *testing.T) {
+	rendered := renderChart(t)
+
+	got := slices.Sorted(maps.Keys(rendered))
+	want := slices.Clone(renderedObjectKeys)
+	slices.Sort(want)
+
+	for _, key := range got {
+		if !slices.Contains(want, key) {
+			t.Errorf("the chart renders %s, which this package audits nowhere. Every "+
+				"other test here looks up objects by name, so a new template is invisible "+
+				"to all of them -- a ClusterRoleBinding widening the operator's grants "+
+				"would ship with every test green. Add the key to renderedObjectKeys, and "+
+				"in the same edit decide what audits the object", key)
+		}
+	}
+	for _, key := range want {
+		if !slices.Contains(got, key) {
+			t.Errorf("renderedObjectKeys lists %s, which the chart does not render. Either "+
+				"a template was deleted or its condition is now false by default; whichever "+
+				"it is, some test below is reading an object the cluster never sees", key)
+		}
+	}
+}
+
 // renderChart runs the chart through helm once per package run and returns its
 // objects keyed "<Kind>/<name>".
 //
@@ -254,12 +324,14 @@ func renderedManifest[T any](t *testing.T, key string, into *T) {
 //
 // controller-gen still writes config/rbac/role.yaml, and
 // hack/chart-templates.sh (run by `make manifests`) transforms it into
-// charts/spawnery/templates/rbac.yaml before anything is installed. That
-// script's own guards check controller-gen's *input* — that it still looks the
-// shape they expect — not that the transformation applied: a broken sed with
-// an intact input exits 0 and writes a Role whose namespace is the literal
-// spawnery-system. Auditing config/rbac/role.yaml would not see that; it never
-// goes near the sed. Auditing the rendered chart does.
+// charts/spawnery/templates/rbac.yaml before anything is installed. Auditing
+// config/rbac/role.yaml would never go near that sed, so a transform that
+// stopped applying — writing a Role whose namespace is still the literal
+// spawnery-system — would leave every assertion here green. Auditing the
+// rendered chart is what sees it. The script now carries its own
+// postcondition over the file it writes as well, which fails at `make
+// manifests` time rather than here; both are wanted, because only one of them
+// runs when somebody edits the chart by hand.
 const (
 	generatedClusterRoleKey = "ClusterRole/spawnery-operator"
 	generatedRoleKey        = "Role/spawnery-operator"
