@@ -26,6 +26,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -540,9 +541,18 @@ func TestARejectedProxyPodIsReportedOnTheGroup(t *testing.T) {
 	if cond.Reason != spawneryv1alpha1.ReasonProxyPodRejected {
 		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonProxyPodRejected)
 	}
-	if !strings.Contains(cond.Message, "PodSecurity") {
-		t.Errorf("message = %q; it must carry the API server's own words, because the "+
-			"remedy is in them and nothing else knows it", cond.Message)
+	// Both substrings, not just the first. PodSecurity alone would stay green
+	// if the proxy pod acquired some unrelated baseline violation and the
+	// container host port were dropped entirely -- and the host port is the
+	// strategy under test. This pair, with its counterpart in
+	// test/e2e/expose_test.go, is the whole evidentiary basis for the one
+	// thing this milestone observed being enforced.
+	for _, want := range []string{"PodSecurity", "hostPort"} {
+		if !strings.Contains(cond.Message, want) {
+			t.Errorf("message = %q, want it to name %q; it must carry the API server's "+
+				"own words, because the remedy is in them and nothing else knows it",
+				cond.Message, want)
+		}
 	}
 	if group.Status.Phase != "Degraded" {
 		t.Errorf("phase = %q, want Degraded", group.Status.Phase)
@@ -832,4 +842,102 @@ func TestSameRefusalSeparatesThePodNameFromTheRemedy(t *testing.T) {
 			"only thing making that condition attributable\n%q\n%q",
 			scheduler, schedulerElsewhere)
 	}
+}
+
+// The delete guard has two halves and both are load-bearing, because
+// cmd/spawnery-operator does not narrow the manager's cache for Services the
+// way it does for ConfigMaps, ServiceAccounts and PVCs -- so this guard is
+// the only thing between a stray object at the group's name and a delete
+// that cannot be undone.
+//
+// TestSwitchingToHostPortLeavesAForeignServiceAlone above covers the Service
+// with no owner at all. These are the two cases it does not: a Service
+// controlled by a different object, and one carrying this group's controller
+// reference without the operator's own label. Narrowing the guard to
+// `owner == nil` left the whole package green before these existed.
+func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
+	t.Run("controlled by a different object", func(t *testing.T) {
+		f := newFixture(t)
+		r := proxyGroupReconciler(f)
+		group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+			g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+				Type:     spawneryv1alpha1.ExposeHostPort,
+				HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+			}
+		})
+
+		// A ProxyGroup of the same name that was deleted and recreated: the
+		// old Service still carries the old object's UID, and the garbage
+		// collector has not caught up with it yet. Same kind, same name,
+		// different object -- which is exactly what the UID comparison is
+		// for, and what a name comparison could never tell apart.
+		predecessor := &corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "gateway",
+				Namespace: f.ns,
+				Labels:    map[string]string{podspec.LabelManagedBy: podspec.ManagedByValue},
+				OwnerReferences: []metav1.OwnerReference{{
+					APIVersion: spawneryv1alpha1.GroupVersion.String(),
+					Kind:       "ProxyGroup",
+					Name:       group.Name,
+					UID:        types.UID("00000000-0000-0000-0000-0000deadbeef"),
+					Controller: ptr.To(true),
+				}},
+			},
+			Spec: corev1.ServiceSpec{
+				Type:     corev1.ServiceTypeNodePort,
+				Ports:    []corev1.ServicePort{{Port: 25565, Protocol: corev1.ProtocolTCP}},
+				Selector: podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name),
+			},
+		}
+		if err := f.c.Create(f.ctx, predecessor); err != nil {
+			t.Fatalf("create the predecessor's Service: %v", err)
+		}
+
+		if _, err := r.reconcileService(f.ctx, group); err != nil {
+			t.Fatalf("reconcileService: %v", err)
+		}
+
+		var after corev1.Service
+		if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &after); err != nil {
+			t.Fatalf("the operator deleted a Service controlled by a different object "+
+				"(err = %v). A same-named group recreated after deletion would take "+
+				"its predecessor's Service down with it", err)
+		}
+	})
+
+	t.Run("ours by owner reference but not by label", func(t *testing.T) {
+		f := newFixture(t)
+		r := proxyGroupReconciler(f)
+		group := f.createProxyGroup("gateway")
+
+		// Built the way the operator builds it, so the owner reference is
+		// genuinely this group's, and then stripped of the one other thing
+		// design section 4 requires the guard to see.
+		if _, err := r.reconcileService(f.ctx, group); err != nil {
+			t.Fatalf("reconcileService as NodePort: %v", err)
+		}
+		var svc corev1.Service
+		if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
+			t.Fatalf("get the Service the operator just built: %v", err)
+		}
+		delete(svc.Labels, podspec.LabelManagedBy)
+		if err := f.c.Update(f.ctx, &svc); err != nil {
+			t.Fatalf("strip the managed-by label: %v", err)
+		}
+
+		group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeHostPort,
+			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+		}
+		if _, err := r.reconcileService(f.ctx, group); err != nil {
+			t.Fatalf("reconcileService as HostPort: %v", err)
+		}
+
+		var after corev1.Service
+		if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &after); err != nil {
+			t.Fatalf("the operator deleted a Service that does not carry its own label "+
+				"(err = %v); design section 4 requires both halves of the guard", err)
+		}
+	})
 }

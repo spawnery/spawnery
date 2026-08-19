@@ -1363,6 +1363,19 @@ func loadBalancerTrafficPolicy(group *spawneryv1alpha1.ProxyGroup) corev1.Servic
 // preconditions pin the object the decision was made about -- between the
 // Get and the Delete the name could have come to hold a different object
 // entirely.
+//
+// Both halves of that check are required, as design section 4 specifies: a
+// controller reference whose UID is this group's, and podspec.LabelManagedBy.
+// The UID is the strong half -- it fails for a Service controlled by anything
+// else, this group's own predecessor of the same name included, which is the
+// case the garbage collector can leave standing after a delete-and-recreate.
+// The label is the cheap half and is kept anyway, because it is the same
+// label cmd/spawnery-operator narrows the manager's cache by for every other
+// kind the operator writes. Services are the one kind it does not narrow
+// (main.go's ByObject list covers ConfigMaps, ServiceAccounts and PVCs), so
+// this function is the only thing standing between a stray object at the
+// group's name and an irreversible delete, and it checks everything the
+// operator stamps rather than the cheapest sufficient thing.
 func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
@@ -1376,6 +1389,9 @@ func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 		return err
 	}
 	if owner := metav1.GetControllerOf(svc); owner == nil || owner.UID != group.UID {
+		return nil
+	}
+	if svc.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
 		return nil
 	}
 	uid := svc.UID
@@ -1543,6 +1559,12 @@ func elideFirstQuoted(msg string) string {
 	return msg[:open+1] + msg[open+1+rest:]
 }
 
+// proxyPodsAdmittedMessage is the all-clear, and it is deliberately narrower
+// than "every proxy pod this group asked for exists" -- the sentence it
+// replaces, which claimed a count nothing on this path compares.
+const proxyPodsAdmittedMessage = "the API server refused no proxy pod of this group, " +
+	"and none is reported unschedulable"
+
 // reportBlockedProxies is the second of the two ways a proxy pod fails to
 // exist: the scheduler has nowhere to put it. With hostPort at most one pod
 // of a group fits per node, so replicas is silently capped by the node count
@@ -1582,16 +1604,24 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 			return
 		}
 	}
+	// What the pass actually established, and no more: reconcileReplicas
+	// returned without the API server refusing anything, and no pod in the
+	// list is reported unschedulable. It did not establish that the group has
+	// as many pods as spec.replicas -- a create this pass suppressed by a
+	// pending expectation is not refused, merely deferred -- so the sentence
+	// must not say so. The condition's own semantics are unchanged: Degraded
+	// answers "is a pod of this group blocked from existing", not "is this
+	// group at size", which is what status.replicas is for.
 	wasBlocked := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
 	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionDegraded,
 		Status:  metav1.ConditionFalse,
 		Reason:  spawneryv1alpha1.ReasonProxyPodsAdmitted,
-		Message: "every proxy pod this group asked for exists",
+		Message: proxyPodsAdmittedMessage,
 	})
 	if wasBlocked {
 		r.Recorder.Eventf(group, corev1.EventTypeNormal, "ProxyPodsAdmitted",
-			"every proxy pod this group asked for exists")
+			proxyPodsAdmittedMessage)
 	}
 }
 
