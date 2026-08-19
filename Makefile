@@ -16,6 +16,7 @@ manifests:
 	$(CONTROLLER_GEN) crd rbac:roleName=spawnery-operator paths="./..." \
 		output:crd:artifacts:config=config/crd/bases \
 		output:rbac:artifacts:config=config/rbac
+	./hack/chart-templates.sh
 
 .PHONY: generate
 generate:
@@ -60,8 +61,17 @@ vet:
 #
 # It is not a substitute for reasoning about concurrency. The peer rate limit's
 # key was wrong for a whole milestone and -race would never have said so.
-test: manifests generate fmt vet
+test: manifests generate fmt vet chart-lint
 	go test -race ./... -coverprofile cover.out
+
+.PHONY: chart-lint
+chart-lint:
+	helm lint charts/spawnery
+	# helm lint alone accepts templates that fail to render with a real
+	# namespace, and a chart that lints but does not template is a chart
+	# nobody can install -- so rendering it here is not redundant with the
+	# line above.
+	helm template spawnery charts/spawnery --namespace chart-lint-check >/dev/null
 
 .PHONY: build
 build:
@@ -191,12 +201,18 @@ publish:
 # invocation this machine needs.
 #
 # It depends on `manifests` for the same reason `test` does, and here the
-# consequence is worse: hack/e2e.sh applies config/rbac/role.yaml into a real
-# cluster, so without this a marker edit is driven against the role generated
-# before it. The whole point of design §8's first mutation is that removing a
-# verb from a marker turns this run red -- which it cannot do if the run
-# installs a stale role. controller-gen takes about a second against the
-# minutes the cluster costs.
+# consequence is worse. hack/e2e.sh does apply
+# config/rbac/forwarding-secret-reader.yaml by hand, twice, but that file is
+# hand-written rather than controller-gen output, so it is not what this
+# dependency is about: hack/e2e.sh also runs `helm install charts/spawnery`,
+# and the chart's rbac.yaml and crds.yaml are hack/chart-templates.sh's
+# output, which is the second half of `manifests`. So the stale-object hazard
+# is the same one, one step further along the pipeline -- without this
+# dependency a marker edit is driven against templates generated before it.
+# The whole point of design §8's first mutation is that removing a verb from
+# a marker turns this run red, which it cannot do if the run installs a chart
+# built from the old markers.
+# controller-gen takes about a second against the minutes the cluster costs.
 .PHONY: e2e
 e2e: manifests
 	hack/e2e.sh

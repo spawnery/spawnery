@@ -137,11 +137,12 @@ func theFinalizerIsReleased(t *testing.T) {
 // cannot become Ready, so --startup-deadline is what ends the attempt, and
 // failedRetentionSeconds: 30 is what clears the corpse afterwards.
 //
-// The second is indirect and worth naming. config/deploy/deployment.yaml
-// carries --startup-deadline=5m and hack/e2e.sh appends a second occurrence of
-// the flag rather than rewriting the list. If Go's flag package did not resolve
-// a repeated flag to the last one, nothing would fail loudly -- this test would
-// simply time out. That makes this the only place the append is checked.
+// The second is indirect and worth naming. charts/spawnery's production
+// default is --startup-deadline=5m (values.yaml); hack/e2e.sh overrides it
+// with --set operator.startupDeadline=20s for its own run. If that value did
+// not reach the container's args, the deadline would stay 5m and this test
+// would simply time out waiting on the 3-minute budget below. That makes this
+// the only place the override is checked.
 func theStartupDeadlineFailsAServerAndClearsIt(t *testing.T) {
 	eventually(t, 3*time.Minute, "a Server to reach phase Failed", func() (bool, string) {
 		var seen []string

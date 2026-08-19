@@ -483,15 +483,55 @@ conditions hold, or that an object *exists* — not that anything *reaches* or
 can test any of the three strategies against a client that actually tries to
 connect.
 
-Milestone 6 continues with 6d, the Helm chart, and 6e, CI. It ends with the
-whole system rolled out to a real RKE2 cluster and driven from a runbook.
+Milestone 6d is done: the operator installs by a Helm chart, and
+`config/deploy/` — the seven flat manifests it replaces, six of which
+hard-coded the operator's namespace by hand, which every handover since 6a
+has called the single most likely way this project ships something that
+works on the author's machine and nowhere else — no longer exists.
+`charts/spawnery/` renders every object that directory used to hold, plus a
+`ClusterRole` and namespaced `Role` generated from `config/rbac/role.yaml`
+and four CRDs generated from `config/crd/bases/`, both by a second half
+`make manifests` gained, `hack/chart-templates.sh`. `internal/rbacaudit`'s
+whole suite now audits what `helm template` actually renders instead of an
+intermediate on disk, and `make e2e` proves the chart moves by installing it
+into `platform-system`, a namespace chosen to share nothing with the chart's
+own documented default, `spawnery-system` — eighteen scenarios still pass,
+`theOperatorWasNeverDenied` still last. One file stays outside the chart on
+purpose: `config/rbac/forwarding-secret-reader.yaml`, the per-game-namespace
+grant milestone 5c kept out of `config/deploy/` for the same reason a chart
+installed once still cannot know a namespace a user creates later, and it
+carries a manual edit an operator installed anywhere but the default
+namespace has to make by hand — `charts/spawnery/README.md` now says so in
+its installation steps.
 
-Anyone starting milestone 6d begins at
-[`docs/handover-milestone-6c.md`](docs/handover-milestone-6c.md): it says where
-6c stopped, what it proved and what it only wrote down, what 6d finds in place,
-and what the RKE2 rollout now owes — which has grown by everything 6c could not
-prove. It is written to be read by someone with no memory of how any of this
-was built.
+The one thing worth naming is what `theOperatorWasNeverDenied` turned out to
+guard, because a mutation showed it narrower than this milestone's own design
+document claims. A `spawnery-system` literal leaked into the chart's own
+RoleBinding namespace was caught, but by Kubernetes' own admission check
+refusing a namespace that does not exist — before the Go test suite ever
+ran, not by the check the design credited. The equivalent leak in a
+RoleBinding's *subject* namespace, the shape that actually matches the
+hazard in `forwarding-secret-reader.yaml`, was never mutated, so the claim
+that `theOperatorWasNeverDenied` catches it stands as reasoning, not
+measurement. `docs/handover-milestone-6d.md` has the full account. And no
+`helm upgrade` has ever run: the four CRDs carry
+`helm.sh/resource-policy: keep` precisely so that a future upgrade would
+carry a CRD schema change through and an uninstall would not destroy every
+`Network` in the cluster — `helm uninstall` leaving them standing was driven
+once, against a real cluster, and observed; upgrade was not driven at all.
+
+Milestone 6 continues with 6e, CI, plus the RKE2 rollout at its end, driven
+from a runbook against a real cluster.
+
+Anyone starting milestone 6e begins at
+[`docs/handover-milestone-6d.md`](docs/handover-milestone-6d.md): it says
+where 6d stopped, what it proved and what it only wrote down, what 6e finds
+in place, and what the RKE2 rollout now owes — which has grown by the one
+manual step 6d's own chart cannot make. It is written to be read by someone
+with no memory of how any of this was built.
+[`docs/handover-milestone-6c.md`](docs/handover-milestone-6c.md), written for
+6d and kept because its §3 is the record of what 6d started from and had to
+decide,
 [`docs/handover-milestone-6b.md`](docs/handover-milestone-6b.md), written for 6c
 and kept because its §2 and §3 are the record of what 6c started from and had
 to decide,
@@ -572,8 +612,8 @@ had nothing to check against on a tree anybody had touched.
 
 `make operator-image` builds the operator's own image, `make operator-image-load`
 hands it to the local container runtime, and `make operator-image-test` runs it
-under the constraints `config/deploy/deployment.yaml` imposes — non-root and a
-read-only root filesystem — rather than more comfortable ones, plus
+under the constraints `charts/spawnery/templates/deployment.yaml` imposes —
+non-root and a read-only root filesystem — rather than more comfortable ones, plus
 `--network none`, which is the script's own choice and not the Deployment's,
 and cheap here because the run only asks the binary to print its usage.
 Since milestone 6a the operator is a container like the other two, and
@@ -591,9 +631,10 @@ still builds every image it was asked for — on a machine without them cached
 that is the expensive part — and then prints what it would copy where instead
 of copying it, so nothing reaches the registry and no credential is needed;
 `FORCE=1` overwrites a tag that already exists, which it otherwise refuses to
-do; `WRITE_DIGEST=1` rewrites the operator's image reference in
-`config/deploy/deployment.yaml` to the digest `skopeo copy` reported for the
-push it just made.
+do; `WRITE_DIGEST=1` writes the digest `skopeo copy` reported for the push it
+just made into `charts/spawnery/values.yaml`'s `image.digest` key — the chart
+is the only installation form since milestone 6d, and therefore the only
+place a digest means anything.
 
 `make publish IMAGES=operator-image` publishes one image rather than all three,
 and that is the ordinary case rather than an escape hatch: `flake.nix` keeps
@@ -608,12 +649,16 @@ until it happens every consumer still needs `kind load docker-image` or the
 equivalent.
 
 `make e2e` (`hack/e2e.sh`) is the driven end-to-end run: it builds the operator
-image, creates a `kind` cluster, loads the image into it, installs the CRDs and
-`config/deploy/`, and then runs a Go test package that drives the operator
-through twelve ordered scenarios under its own ServiceAccount before reading its
-whole log and failing on `is forbidden:`. The operator runs *in* the cluster
-here, from its own image, so nothing hand-builds a `Service` — which is the
-difference between this and the local flow below. It is part of neither
+image, creates a `kind` cluster, loads the image into it, and installs
+`charts/spawnery` with `helm install --create-namespace` — which is also where
+the CRDs come from now, so there is no separate apply for them — into a
+namespace, `platform-system`, that shares nothing with the chart's own
+documented default, `spawnery-system`. It then runs a Go test package that
+drives the operator through eighteen ordered scenarios under its own
+ServiceAccount before reading its whole log and failing on `is forbidden:`.
+The operator runs *in* the cluster here, from its own image, so nothing
+hand-builds a `Service` — which is the difference between this and the local
+flow below. It is part of neither
 `make test` nor `make all`: it builds a cluster and takes minutes, and the
 commit loop stays where it is. Like the image targets it needs a container
 runtime and only works on `x86_64-linux`. On a machine where `kind` runs under

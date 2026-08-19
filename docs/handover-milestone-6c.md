@@ -16,6 +16,41 @@ Service of the right type, a container port, a condition, a deletion. §2 says
 exactly what was driven and what only exists; read it before writing a
 sentence about what 6c proves.
 
+**Superseded as the document to start from: milestone 6d has landed, and
+anyone starting 6e begins at
+[`handover-milestone-6d.md`](handover-milestone-6d.md).** This one is kept
+unedited as the record of what 6d started from — §3's survey of the tree is
+the evidence base for the decisions 6d then made, and its tense is the tense
+of 2026-08-19, before 6d existed. §3 makes four distinct claims; all four
+were checked against the code as it now stands. One is now false and must
+not be read as open. "`spawnery-system` is still hard-wired in three places,
+unchanged by 6c" is gone in the way that paragraph itself anticipated:
+`config/deploy/networkpolicy.yaml:14`'s hard-coded namespace no longer
+exists — the file it was in was deleted along with the rest of
+`config/deploy/` — and the operator's NetworkPolicy is now
+`charts/spawnery/templates/networkpolicy.yaml`, templated on
+`{{ .Release.Namespace }}` like everything else the chart installs. The two
+`+kubebuilder:rbac` markers this paragraph also names
+(`internal/certs/store.go:57`, `internal/controller/setup.go:72`) still
+carry the literal `namespace=spawnery-system` — controller-gen requires
+*some* namespace to emit a Role at all — but each now carries a comment
+saying the literal is a placeholder `hack/chart-templates.sh` replaces at
+render time, not a statement about where the operator runs. The other three
+claims hold exactly as written: `config/samples/network.yaml` still shows
+all three strategies, with `NodePort` active and the other two commented
+alongside the cost each carries; the refusal path
+(`exposeImplemented`, now at `internal/controller/proxygroup_controller.go:1762`,
+line numbers having moved since this document's own §3 was written)
+is still a guard for an enum value the CRD cannot produce, unreachable while
+`ExposeType`'s own `+kubebuilder:validation:Enum` marker and
+`exposeImplemented` agree, kept for the day a fourth value is added to one
+without the other; and `ProxyGroupReconciler.Recorder`'s own field doc
+comment still undercounts what it announces, untouched by any 6d commit.
+`docs/handover-milestone-6d.md`'s own §3 carries the current facts for the
+claim that changed; this document's §3 is left as written, for the same
+reason `handover-milestone-6b.md`'s was: it is the record of what 6d was
+decided against, not a claim about what is true today.
+
 This document is not a spec. It says where 6c stopped and what 6d — the Helm
 chart — finds when it starts, checked against the code as 6c leaves it rather
 than against the plan that preceded it. The design decisions live in

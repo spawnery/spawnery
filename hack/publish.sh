@@ -26,8 +26,8 @@
 #                   needed -- but the Nix builds still run, which on a machine
 #                   without them cached is the expensive part.
 #   FORCE=1         overwrite a tag that already exists.
-#   WRITE_DIGEST=1  rewrite config/deploy/deployment.yaml's operator image to
-#                   the digest this run pushed.
+#   WRITE_DIGEST=1  write the digest this run pushed for the operator image
+#                   into charts/spawnery/values.yaml's image.digest.
 set -euo pipefail
 
 DRY_RUN="${DRY_RUN:-0}"
@@ -154,25 +154,39 @@ for entry in "${images[@]}"; do
 done
 
 if [ "$WRITE_DIGEST" = "1" ] && [ -n "$operator_digest" ]; then
-	manifest="config/deploy/deployment.yaml"
-	name="$(nix eval --raw '.#operator-image.imageName')"
-	# The one line that names the operator image, replaced with a digest
-	# reference. The master design's §8 asks for this in shipped manifests
-	# because a tag can move under a running cluster.
+	manifest="charts/spawnery/values.yaml"
+	# The one line that carries the operator's digest, set rather than the
+	# `image:` line the old config/deploy/deployment.yaml rewrite touched.
+	# charts/spawnery/templates/_helpers.tpl's spawnery.image helper already
+	# prefers image.digest over image.tag whenever it is non-empty, so
+	# repository and tag are left exactly as they are -- only this key
+	# changes, for the reason the master design's §8 asks for a digest in
+	# shipped manifests: a tag can move under a running cluster.
 	#
 	# Matched with grep before it is substituted, because `sed -i` exits 0
 	# whether or not its pattern matched anything and would leave the run
 	# printing "wrote ... into ..." over a file it had not touched. This line
 	# runs once, by hand, on the run that closes acceptance criterion 7, and
 	# the person reading that sentence has no other signal.
-	pattern="(^[[:space:]]*image:[[:space:]]*)${name}[:@].*$"
+	pattern='(^[[:space:]]*digest:[[:space:]]*)".*"[[:space:]]*$'
 	if ! grep -qE "$pattern" "$manifest"; then
-		echo "no image line naming ${name} in ${manifest}; the manifest's shape has" >&2
-		echo "moved and this substitution would have reported success over an" >&2
-		echo "unchanged file. Fix the pattern here, or set the digest by hand:" >&2
-		echo "  ${name}@${operator_digest}" >&2
+		echo "no digest: line in ${manifest}; the chart's shape has moved and this" >&2
+		echo "substitution would have reported success over an unchanged file. Fix" >&2
+		echo "the pattern here, or set the digest by hand:" >&2
+		echo "  ${operator_digest}" >&2
 		exit 1
 	fi
-	sed -i -E "s|${pattern}|\1${name}@${operator_digest}|" "$manifest"
-	echo "wrote ${name}@${operator_digest} into ${manifest}"
+	sed -i -E "s|${pattern}|\1\"${operator_digest}\"|" "$manifest"
+	# The grep above only proved the anchor existed before the edit -- sed -i
+	# exits 0 regardless of whether its replacement text matches the pattern
+	# it was asked to substitute, so a typo in the replacement would pass that
+	# check and still leave the file unchanged or wrong. Reading the value
+	# back is the only way to know the write actually took.
+	if ! grep -qF "digest: \"${operator_digest}\"" "$manifest"; then
+		echo "sed reported success but ${manifest} does not carry" >&2
+		echo "  digest: \"${operator_digest}\"" >&2
+		echo "after the substitution; refusing to claim the write succeeded." >&2
+		exit 1
+	fi
+	echo "wrote digest ${operator_digest} into ${manifest}"
 fi

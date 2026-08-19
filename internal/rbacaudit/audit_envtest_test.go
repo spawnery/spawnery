@@ -32,8 +32,11 @@ import (
 )
 
 // operatorNamespace is where the operator itself runs, and the only namespace
-// the namespaced Role grants anything in.
-const operatorNamespace = "spawnery-system"
+// the namespaced Role grants anything in. It is renderNamespace
+// (deploy_envtest_test.go), not the literal spawnery-system: every object this
+// file applies now comes from renderChart, which renders into renderNamespace,
+// so a Role or Deployment applied here lands there and nowhere else.
+const operatorNamespace = renderNamespace
 
 // foreignNamespace is a namespace that is not the operator's own. The
 // cluster-wide half of the permissions must answer the same there — the binding
@@ -50,17 +53,16 @@ const foreignNamespace = "minecraft"
 func applyDeploymentAndDeriveSubject(t *testing.T) string {
 	t.Helper()
 
-	var ns corev1.Namespace
+	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: renderNamespace}}
 	var sa corev1.ServiceAccount
 	var clusterBinding rbacv1.ClusterRoleBinding
 	var binding rbacv1.RoleBinding
 	var deploy appsv1.Deployment
 
-	readManifest(t, "config/deploy/namespace.yaml", &ns)
-	readManifest(t, "config/deploy/serviceaccount.yaml", &sa)
-	readManifest(t, "config/deploy/clusterrolebinding.yaml", &clusterBinding)
-	readManifest(t, "config/deploy/rolebinding.yaml", &binding)
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "ServiceAccount/spawnery-operator", &sa)
+	renderedManifest(t, "ClusterRoleBinding/spawnery-operator", &clusterBinding)
+	renderedManifest(t, "RoleBinding/spawnery-operator", &binding)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 	clusterRole, role := readGeneratedRoles(t)
 
 	apply(t, &ns, &sa, clusterRole, role, &clusterBinding, &binding, &deploy)
@@ -248,11 +250,68 @@ func TestTheForwardingSecretReaderGrantsEverythingRequired(t *testing.T) {
 	}
 }
 
+// chartDefaultNamespace is the namespace charts/spawnery/README.md's install
+// command uses, and the one config/rbac/forwarding-secret-reader.yaml's own
+// header comment says its RoleBinding subject tracks. It is deliberately not
+// renderNamespace: the reader file is applied by hand, outside the chart, and
+// promises to follow the chart's *documented default* rather than wherever a
+// particular install put the operator. Asserting it against renderNamespace
+// would demand the file track something it never claimed to.
+const chartDefaultNamespace = "spawnery-system"
+
 // The file has to work when applied, not only when parsed: a RoleBinding whose
 // subject names the wrong ServiceAccount parses perfectly and grants nothing.
+//
+// The subject comes from the reader file's own RoleBinding, not from
+// applyDeploymentAndDeriveSubject. forwarding-secret-reader.yaml's subject
+// names its ServiceAccount and namespace as a literal in the file (spawnery-
+// operator in spawnery-system — see the file's own comments on why: kubectl
+// apply -n rewrites the Role's and RoleBinding's own metadata.namespace, never
+// a namespace field inside a subject), not wherever this package's render
+// happens to install the chart. Deriving the probe subject from the render
+// would tie this test to renderNamespace, which the file never promised to
+// track, instead of to what the file actually says.
+//
+// That derivation is why the two assertions above the probe are the ones doing
+// the work on the subject itself. A RoleBinding always grants to whatever
+// subject it names, so probing with a subject read out of that same binding
+// can only ever come back allowed — it proves the Role and the binding fit
+// each other and that get is the only verb they open, and it cannot notice a
+// misspelt ServiceAccount name or a subject namespace pointing somewhere no
+// operator runs. Those are checked separately below: the name against the
+// ServiceAccount the chart actually renders, so the two cannot drift apart
+// silently, and the namespace against chartDefaultNamespace — not against the
+// chart, since nothing the chart renders carries that string (see
+// chartDefaultNamespace's own comment), but against the same
+// documented-default prose in charts/spawnery/README.md that constant
+// restates.
 func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
-	subject := applyDeploymentAndDeriveSubject(t)
 	applyForwardingSecretReader(t, readerProbeNamespace)
+	_, binding := readForwardingSecretReader(t)
+	if len(binding.Subjects) != 1 {
+		t.Fatalf("the reader RoleBinding has %d subjects, want exactly one", len(binding.Subjects))
+	}
+	subj := binding.Subjects[0]
+
+	var sa corev1.ServiceAccount
+	renderedManifest(t, "ServiceAccount/spawnery-operator", &sa)
+	if subj.Kind != "ServiceAccount" {
+		t.Errorf("the reader RoleBinding's subject is a %q, want a ServiceAccount", subj.Kind)
+	}
+	if subj.Name != sa.Name {
+		t.Errorf("%s names the ServiceAccount %q, but the chart renders %q — the binding "+
+			"would apply cleanly and grant the operator nothing, and the only symptom is a "+
+			"Network's ForwardingSecretResolved going SecretReadForbidden at runtime",
+			forwardingSecretReaderManifest, subj.Name, sa.Name)
+	}
+	if subj.Namespace != chartDefaultNamespace {
+		t.Errorf("%s names the namespace %q, but the chart's documented default is %q — "+
+			"the file's own header says it tracks that default, and an administrator who "+
+			"installed elsewhere edits this line by hand (charts/spawnery/README.md)",
+			forwardingSecretReaderManifest, subj.Namespace, chartDefaultNamespace)
+	}
+
+	subject := fmt.Sprintf("system:serviceaccount:%s:%s", subj.Namespace, subj.Name)
 
 	if ok, reason := allowed(t, subject, authzv1.ResourceAttributes{
 		Namespace: readerProbeNamespace, Resource: "secrets", Verb: "get",
@@ -275,17 +334,21 @@ func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
 
 // forwardingSecretReaderManifest is the repository-relative path of the
 // hand-written Role and RoleBinding an administrator applies per namespace.
-// Unlike generatedRoles, controller-gen never touches this file — nothing
+// Unlike the objects readGeneratedRoles reads, controller-gen never touches this file — nothing
 // else in the build checks it against anything, which is why both directions
 // of the audit run against it here.
 const forwardingSecretReaderManifest = "config/rbac/forwarding-secret-reader.yaml"
 
 // readForwardingSecretReader decodes both objects in
-// forwardingSecretReaderManifest, using the same multi-document split
-// readGeneratedRoles uses (readMultiDocManifest, in deploy_envtest_test.go).
-// Like readGeneratedRoles it refuses to silently drop a second object of a
-// kind it already saw — except this file holds a Role and a RoleBinding
-// rather than a ClusterRole and a Role.
+// forwardingSecretReaderManifest through readMultiDocManifest
+// (deploy_envtest_test.go), of which it is now the only caller.
+// readGeneratedRoles used to share that path, over config/rbac/role.yaml; it
+// reads the rendered chart through renderedManifest since the chart became
+// the source of truth for the generated roles. This file is still read off
+// disk because it is hand-applied per namespace and the chart never templates
+// it. It refuses to silently drop a second object of a kind it already saw,
+// the same refusal splitRendered makes for the rendered objects — except this
+// file holds a Role and a RoleBinding rather than a ClusterRole and a Role.
 func readForwardingSecretReader(t *testing.T) (*rbacv1.Role, *rbacv1.RoleBinding) {
 	t.Helper()
 

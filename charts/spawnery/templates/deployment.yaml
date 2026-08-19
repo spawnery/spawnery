@@ -2,10 +2,9 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: spawnery-operator
-  namespace: spawnery-system
+  namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: spawnery
-    app.kubernetes.io/component: operator
+    {{- include "spawnery.labels" . | nindent 4 }}
 spec:
   replicas: 1
   # Replace, do not overlap. Ever since readyz hangs off the leader lock, a new
@@ -18,13 +17,11 @@ spec:
     type: Recreate
   selector:
     matchLabels:
-      app.kubernetes.io/name: spawnery
-      app.kubernetes.io/component: operator
+      {{- include "spawnery.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: spawnery
-        app.kubernetes.io/component: operator
+        {{- include "spawnery.selectorLabels" . | nindent 8 }}
     spec:
       serviceAccountName: spawnery-operator
       terminationGracePeriodSeconds: 10
@@ -39,13 +36,15 @@ spec:
           # back. The master design's §8 asks for digests in shipped manifests
           # because tags are mutable; ":dev" before milestone 6a was worse than
           # either, being a tag nothing produced.
-          image: ghcr.io/spawnery/spawnery-operator:0.1.0
+          image: {{ include "spawnery.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            - --leader-elect=true
-            # The production value. This manifest is installed, not test
-            # scaffolding: hack/e2e.sh appends a second --startup-deadline=20s
-            # for its own run, and the flag package takes the last occurrence.
-            - --startup-deadline=5m
+            - --leader-elect={{ .Values.operator.leaderElect }}
+            # .Values.operator.startupDeadline defaults to the production
+            # value (see values.yaml); hack/e2e.sh overrides it with
+            # --set operator.startupDeadline=20s for its own run, so there is
+            # one occurrence of the flag, set from one value.
+            - --startup-deadline={{ .Values.operator.startupDeadline }}
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
           env:
@@ -76,14 +75,22 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              memory: 256Mi
+            {{- toYaml .Values.resources | nindent 12 }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities:
               drop:
                 - ALL
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

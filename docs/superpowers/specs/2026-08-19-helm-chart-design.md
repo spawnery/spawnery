@@ -52,6 +52,11 @@ accepted. Without it the `Network` reports `SecretReadForbidden` — the
 condition milestone 5c built for precisely this failure — and every group in
 the namespace refuses.
 
+**See §9's correction.** The `SecretReadForbidden` half is right; the rest of
+that sentence is not. The `Network` is accepted regardless, and its groups keep
+scheduling — what the missing grant costs is forwarding-secret rotation
+detection in that namespace, silently.
+
 ## 3. The chart
 
 `charts/spawnery/`, containing `Chart.yaml`, `values.yaml`, `README.md`, and
@@ -244,6 +249,27 @@ first `certs.Store.Ensure` with `Forbidden` — which
 catch. The check this E2E package has had since 6a becomes, without being
 modified at all, the guard over this milestone's principal risk.
 
+**Corrected after the milestone's final review: that holds for one of the two
+ways the literal can leak, and the other was never measured.** Task 4 put a
+`spawnery-system` literal on the chart's own RoleBinding `metadata.namespace`
+and expected `theOperatorWasNeverDenied` to go red. It never executed.
+Kubernetes validates a RoleBinding's own `metadata.namespace` for existence at
+admission, so `helm install` refused first with `namespaces "spawnery-system"
+not found` and `hack/e2e.sh` aborted under `set -e` before `go test` started.
+The hazard splits: a literal surviving in the chart's **own-namespace** RBAC
+fields — a RoleBinding's own `metadata.namespace`, or the generated Role's
+`namespace:` — is caught at install time by Kubernetes, not by this check. A
+literal surviving in a **subject** namespace is not validated by the API
+server at all; it applies cleanly, binds a ServiceAccount that exists
+nowhere, and is by this design's own reasoning the path
+`theOperatorWasNeverDenied` catches, once the resulting denial lands on a write
+verb. **That second path was never mutated by this milestone**, so for it the
+claim is reasoning rather than measurement. The corrected statement lives in
+`docs/handover-milestone-6d.md` §2 and in
+`docs/known-issues.md`'s "From milestone 6d" section;
+`hack/e2e.sh`'s `OPERATOR_NAMESPACE` comment and
+`test/e2e/e2e_test.go`'s `operatorNamespace` comment now carry the same split.
+
 The chart keeps `spawnery-system` as its documented default, so the README
 and every document stay true for the ordinary case.
 
@@ -351,3 +377,24 @@ reports `SecretReadForbidden` and every group in it refuses with
 `NetworkNotAccepted`. The chart's README must say this in its installation
 steps rather than in a footnote, because the failure it produces names the
 secret and not the namespace, and a reader will look in the wrong place.
+
+**Corrected after the milestone's final review: the second half of that
+consequence is false, and the truth is quieter.** Read against
+`internal/controller/network_controller.go`, nothing on this path can produce
+`NetworkNotAccepted`: `ConditionAccepted` is set `True` at `:93-97`, the
+forwarding secret is read afterwards at `:142`, and everything persists
+together at `:171`, so a `Network` whose reader grant is missing or points at
+the wrong operator namespace stays `Accepted=True`. Both group controllers
+gate on that condition, so every `ServerGroup` and `ProxyGroup` in the
+namespace keeps scheduling normally. `ReasonNetworkNotAccepted` exists
+(`internal/controller/servergroup_controller.go:152`,
+`internal/controller/proxygroup_controller.go:217`) but nothing in this code
+path ever sets it. What actually breaks is narrower and silent: the read's
+outcome only ever reaches `ConditionForwardingSecretResolved` and
+`ConditionForwardingSecretRotationPending`, so that namespace loses
+forwarding-secret rotation detection and reports it nowhere a group's status
+would show. Everything the paragraph above says about the README stands, and
+`charts/spawnery/README.md` states this narrower consequence. The corrected
+statement lives in `docs/handover-milestone-6d.md`
+§2 and §4 and in `docs/known-issues.md`'s "From
+milestone 6d" section.

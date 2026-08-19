@@ -1,3 +1,4 @@
+{{- if .Values.networkPolicy.enabled }}
 # The agent endpoint's ingress rule, and the network-independent half of
 # milestone 6b. The per-Network policy that protects the backends is written by
 # the operator itself, into each game namespace, because those namespaces are
@@ -11,18 +12,16 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: spawnery-operator-agent
-  namespace: spawnery-system
+  namespace: {{ .Release.Namespace }}
   labels:
-    app.kubernetes.io/name: spawnery
-    app.kubernetes.io/component: operator
+    {{- include "spawnery.labels" . | nindent 4 }}
 spec:
   # The operator pod does NOT carry spawnery.cloud/managed-by. The two ends of
   # the agent channel need different rules, so this selects the operator by its
-  # own two labels -- the same pair config/deploy/service.yaml selects on.
+  # own two labels -- the same pair templates/service.yaml selects on.
   podSelector:
     matchLabels:
-      app.kubernetes.io/name: spawnery
-      app.kubernetes.io/component: operator
+      {{- include "spawnery.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
   ingress:
@@ -48,3 +47,4 @@ spec:
           port: 8081
         - protocol: TCP
           port: 8080
+{{- end }}

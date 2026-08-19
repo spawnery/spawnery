@@ -1,0 +1,34 @@
+spawnery {{ .Chart.AppVersion }} installed as release {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+
+  kubectl -n {{ .Release.Namespace }} rollout status deployment/spawnery-operator
+
+ONE STEP REMAINS, AND SKIPPING IT FAILS SILENTLY.
+
+Every namespace that will hold a Network needs the forwarding-secret reader
+grant. This chart cannot template it: the game namespaces do not exist yet
+when the chart is installed, which is why the file stays outside the chart.
+Apply it once per game namespace, after that namespace exists:
+
+  kubectl apply -n <game-namespace> -f config/rbac/forwarding-secret-reader.yaml
+{{ if ne .Release.Namespace "spawnery-system" }}
+!! You installed into {{ .Release.Namespace }}, not this chart's documented
+!! default. That file names the operator's ServiceAccount as
+!! "spawnery-operator" in "spawnery-system", and `kubectl apply -n` rewrites
+!! an object's own metadata.namespace -- never a namespace inside a subject.
+!! Change its line 65 to
+!!
+!!     namespace: {{ .Release.Namespace }}
+!!
+!! before you apply it, or the RoleBinding grants nothing at all.
+{{ end }}
+Nothing refuses a grant that binds a ServiceAccount which does not exist: the
+apply succeeds, the Network is still Accepted, and its ServerGroups and
+ProxyGroups keep scheduling. What is lost is forwarding-secret rotation
+detection in that namespace, reported only on the Network itself:
+
+  kubectl -n <game-namespace> get network <name> \
+    -o jsonpath='{.status.conditions[?(@.type=="ForwardingSecretResolved")]}'
+
+Uninstalling leaves the four CRDs standing, and with them every Network,
+ServerGroup, ProxyGroup and Server in the cluster. charts/spawnery/README.md
+has both procedures in full.
