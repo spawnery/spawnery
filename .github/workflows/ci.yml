@@ -39,3 +39,42 @@ jobs:
 
       - name: make test
         run: nix develop -c make test
+
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: make lint
+        run: nix develop -c make lint
+
+  deps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # The drift guard docs/known-issues.md has been parking since milestone
+      # 2c. make agent-deps regenerates agent/deps.json by resolving against
+      # Maven Central, which is why it cannot run inside a Nix build and why
+      # it lives here. It is also the only check in this workflow that can go
+      # red for a reason outside this repository: an outage upstream, or an
+      # artifact moving, produces a diff nobody caused.
+      - name: make agent-deps
+        run: nix develop -c make agent-deps
+
+      - name: agent/deps.json is in step with build.gradle.kts
+        run: git diff --exit-code -- agent/deps.json
