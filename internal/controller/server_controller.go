@@ -855,7 +855,7 @@ func (r *ServerReconciler) mirrorPlayerCount(
 	}
 	significant := snap.Players != srv.Status.Players || snap.Slots != srv.Status.Slots
 	overdue := srv.Status.PlayersUpdatedAt == nil ||
-		now.Time.Sub(srv.Status.PlayersUpdatedAt.Time) >= r.PlayerStatusInterval
+		now.Sub(srv.Status.PlayersUpdatedAt.Time) >= r.PlayerStatusInterval
 	if !significant && !overdue {
 		return
 	}

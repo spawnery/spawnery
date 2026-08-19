@@ -473,7 +473,7 @@ func TestProxyGroupAddressIsEmptyWithNoReadyPod(t *testing.T) {
 func TestProxyGroupScalesDown(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
 		g.Spec.Replicas = 3
 	})
 	f.reconcileProxyGroup(r, "gateway")
@@ -494,7 +494,7 @@ func TestProxyGroupScalesDown(t *testing.T) {
 	// go.
 	f.reportProxyPlayers(t, before[0], 0)
 
-	group = f.proxyGroup("gateway")
+	group := f.proxyGroup("gateway")
 	group.Spec.Replicas = 1
 	if err := f.c.Update(f.ctx, group); err != nil {
 		t.Fatalf("scale down: %v", err)

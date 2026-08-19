@@ -166,7 +166,7 @@ func TestServerFailedStraightFromReadyClearsReadySince(t *testing.T) {
 	if srv.Status.ReadySince != nil {
 		t.Errorf("status.readySince = %v on a Failed server, want nil: a corpse that keeps its "+
 			"readySince looks to CountFailures like the success that ends its own streak",
-			srv.Status.ReadySince.Time.UTC())
+			srv.Status.ReadySince.UTC())
 	}
 }
 
@@ -205,7 +205,7 @@ func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 	if blipped.Status.StartedAt == nil || !blipped.Status.StartedAt.Time.Equal(f.clock.Now()) {
 		var got any
 		if blipped.Status.StartedAt != nil {
-			got = blipped.Status.StartedAt.Time.UTC()
+			got = blipped.Status.StartedAt.UTC()
 		}
 		t.Fatalf("status.startedAt = %v, want it re-armed to %v on entry into Starting",
 			got, f.clock.Now().UTC())

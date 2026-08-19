@@ -487,7 +487,7 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 // difference between the two functions; see the wrapper for the term it adds
 // and why the two consumers cannot share an answer.
 func proxyOccupied(snap agent.Snapshot) bool {
-	return !(snap.Players == 0 && !snap.PlayersStale && snap.Connected)
+	return snap.Players != 0 || snap.PlayersStale || !snap.Connected
 }
 
 // proxyOccupiedForBudget is proxyOccupied asked by the two consumers that have

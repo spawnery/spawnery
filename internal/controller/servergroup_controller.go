@@ -526,7 +526,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if group.Status.LastFailureAt != nil {
 			backingOff.Message = fmt.Sprintf(
 				"no server has failed to start recently (last failure at %s)",
-				group.Status.LastFailureAt.Time.Format(time.RFC3339))
+				group.Status.LastFailureAt.Format(time.RFC3339))
 		}
 	}
 
