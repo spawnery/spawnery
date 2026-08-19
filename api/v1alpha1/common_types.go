@@ -101,6 +101,14 @@ const (
 	ReasonStorageResized       = "StorageResized"
 	ReasonStorageResizeRefused = "StorageResizeRefused"
 
+	// The three ProxyPods reasons on a ProxyGroup's Degraded condition. Two
+	// failures rather than one because the remedies differ: a create the API
+	// server refused is fixed at the namespace's policy, and a pod the
+	// scheduler cannot place is fixed at the node count or at replicas.
+	ReasonProxyPodRejected      = "ProxyPodRejected"
+	ReasonProxyPodUnschedulable = "ProxyPodUnschedulable"
+	ReasonProxyPodsAdmitted     = "ProxyPodsAdmitted"
+
 	// The five ForwardingSecretResolved reasons. Three failures rather than
 	// one because each has a different remedy: a name the user can fix, an
 	// install step that was skipped, and neither of those.

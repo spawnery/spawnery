@@ -1480,10 +1480,19 @@ pass began.
 decision rather than an omission.** An entry in that map measures how long a
 pod has been diverging *while something was watching*, so a pass that does not
 call `observe` for a group must not leave a first-seen timestamp behind to fire
-the moment observation resumes. Three of `Reconcile`'s steady-state early
-returns handle that by calling `forget` explicitly — `NetworkNotFound`,
-`NetworkNotAccepted` and `ExposeNotImplemented`, each of which returns before
-`reconcileReplicas` runs while the group itself still exists. Every error
+the moment observation resumes. Two of `Reconcile`'s steady-state early
+returns handle that by calling `forget` explicitly — `NetworkNotFound` and
+`NetworkNotAccepted`, both of which return before `reconcileReplicas` runs
+while the group itself still exists. A third path shares the same `forget`
+call — the guard at `internal/controller/proxygroup_controller.go:229`,
+`if !exposeImplemented(group.Spec.Expose.Type)` — but since milestone 6c it is
+unreachable rather than merely unlikely: all three strategies the CRD's enum
+has always named (`NodePort`, `LoadBalancer`, `HostPort`) are implemented, and
+the `+kubebuilder:validation:Enum=LoadBalancer;NodePort;HostPort` marker on
+`ExposeType` itself (`api/v1alpha1/proxygroup_types.go:27`) keeps any object
+carrying a fourth, unrecognised value from ever reaching the API server, so
+the branch is a guard for the day a fourth `expose.type` is added without a
+branch to serve it, not a path a live `ProxyGroup` takes today. Every error
 return above `reconcileReplicas` leaves the identical shape and does not
 forget: a `ProxyGroup` read that failed for any reason other than the object
 being gone, a failed `Network` read, the status write, `Bootstrap.Ensure`, the
@@ -1602,7 +1611,10 @@ this milestone exists to end.
 budget still protects players, but nothing moves them off. `Reconcile`
 (`internal/controller/proxygroup_controller.go`) gives up before
 `reconcileReplicas` on three paths — a missing `Network`, one that is not
-`Accepted`, and an `expose.type` this milestone refuses — and each of them
+`Accepted`, and an `expose.type` this operator has no branch for, the last of
+which milestone 6c made unreachable while the CRD's enum and
+`exposeImplemented` agree, and kept only as the fail-safe for an enum value
+added without a branch to serve it — and each of them
 calls `protectPlayersOnly` instead, which re-derives the
 `spawnery.cloud/occupied` labels, re-sizes the budget from them, and
 republishes the `NodeDraining` condition. What `protectPlayersOnly` does not
@@ -3263,6 +3275,69 @@ dropping a live entry.
 - The new RBAC entries' `Why` fields will go stale the first time a second call
   site appears, exactly as `configmaps`' and `pods: patch`'s did. Nothing in
   the audit can catch it; both precedents are under "On the RBAC audit" below.
+
+## From milestone 6c (the LoadBalancer and HostPort expose strategies)
+
+**`HostPort` and CIS `restricted` cannot both hold in one namespace, and the
+RKE2 rollout at the end of milestone 6 is currently promised both.** 6a's
+handover §6 lists CIS `restricted` pod security and `HostPort` under the
+cluster's real CNI among what that rollout owes
+(`docs/handover-milestone-6.md`). Pod Security `baseline` — which
+`restricted` inherits, per the Kubernetes Pod Security Standards rather than
+anything measured here — disallows a container `hostPort` outright, so a
+namespace enforcing either policy refuses every `HostPort` pod's create, and
+`ProxyGroupReconciler` reports the refusal on the group's own `Degraded`
+condition (`ReasonProxyPodRejected`) rather than ever admitting one. This
+refusal is the one thing 6c observed being enforced: `baseline`, not
+`restricted`, against a real API server, in both envtest
+(`internal/controller/expose_test.go`,
+`TestARejectedProxyPodIsReportedOnTheGroup`) and `make e2e`
+(`test/e2e/expose_test.go`, `aForbiddenHostPortIsReportedOnTheGroup`).
+`restricted` was not itself driven anywhere in this milestone; it is named
+here because it inherits every restriction `baseline` sets, and `baseline`'s
+`hostPort` restriction is not one it relaxes.
+
+Milestone 6c makes the refusal legible on the object; it cannot make the two
+requirements compatible, and nothing in the code should try to. The remedy
+is the runbook's to take, not the code's: give the namespace running the
+`HostPort` `ProxyGroup` a relaxed Pod Security label (or a namespace of its
+own, separate from the `restricted` namespaces the rest of the network runs
+in), or drop the `HostPort` leg of the rollout and expose only through
+`NodePort` or `LoadBalancer` where CIS `restricted` is required everywhere.
+
+**`status.address` can go on advertising a Service that has been deleted, and
+6c made that reachable through its own headline path.** `Reconcile` returns
+early on any error, and `setStatus` — the only writer of `status.address` —
+is after every one of those returns, so a group that fails partway through a
+pass keeps whatever address the last successful pass published. The shape
+predates 6c. What 6c added is a way to sit in it indefinitely:
+
+> A `NodePort` group publishing `10.0.0.7:30765` is switched to `HostPort` in
+> a namespace enforcing Pod Security `baseline`. `reconcileService` deletes
+> the Service; `reconcileReplicas` is then refused by the API server, so
+> `Reconcile` returns before `setStatus`. `status.address` keeps naming the
+> node port of a Service that no longer exists — and because the create can
+> never succeed while the namespace's label stands, no later pass corrects
+> it. The group does say `Degraded=True`/`ReasonProxyPodRejected` with the
+> API server's own message, so the failure is legible; the address beside it
+> is not.
+
+Recorded rather than fixed, deliberately, and the reasoning is worth keeping
+because the obvious fix is worse than it looks. Recomputing the address on
+the error path with `proxyAddress(group, pods, svc)` does clear the deleted
+Service's node port — but in this exact scenario the group's old `NodePort`
+pods are still `Ready` while their replacements are refused, so the
+`HostPort` branch would publish `hostIP:25565` for a port no pod in existence
+binds. That trades a stale address for a fabricated one. Clearing the address
+outright on the error path is worse again: the same error return covers a
+group that stays `NodePort` and hits an unrelated quota or RBAC refusal while
+its live Service and ready pods keep serving players, and blanking that
+group's address would be a regression caused by this entry rather than a fix.
+
+The honest fix is structural — recompute the status on every return path
+rather than only the successful one — and that is a change to the shape of
+`Reconcile`, not a patch to one branch of it. It is 6d's or later, and it
+should be taken as a whole or not at all.
 
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 

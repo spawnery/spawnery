@@ -206,15 +206,34 @@ func renderProxyPod(
 		})
 	}
 
+	minecraft := corev1.ContainerPort{
+		Name:          MinecraftPortName,
+		ContainerPort: MinecraftPort,
+		Protocol:      corev1.ProtocolTCP,
+	}
+	// The HostPort strategy publishes this port on whatever node the pod
+	// lands on, which is what lets it work with no Service at all -- and what
+	// makes the kube-scheduler decline to place a second pod of this group on
+	// the same node, capping replicas at the node count.
+	//
+	// Set here, inside renderProxyPod, rather than by any caller:
+	// DesiredProxyHash renders through this same function, so a hostPort
+	// applied anywhere else would not reach the hash, and a group switched
+	// into or out of HostPort would keep pods the rollout still called
+	// current. The nil check is not defensive noise -- the CRD's CEL rules
+	// guarantee the sub-block only for objects that went through the API
+	// server, and a ProxyGroup built in a unit test never does. This is the
+	// same hazard DefaultDrainTimeoutSeconds exists for.
+	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort &&
+		group.Spec.Expose.HostPort != nil {
+		minecraft.HostPort = group.Spec.Expose.HostPort.Port
+	}
+
 	container := corev1.Container{
 		Name:  ProxyContainerName,
 		Image: group.Spec.Image,
 		Ports: []corev1.ContainerPort{
-			{
-				Name:          MinecraftPortName,
-				ContainerPort: MinecraftPort,
-				Protocol:      corev1.ProtocolTCP,
-			},
+			minecraft,
 			{
 				Name:          ProxyReadyPortName,
 				ContainerPort: ProxyReadyPort,

@@ -15,6 +15,49 @@ here has tested on any CNI. §2 is that measurement, what it rules out, and how
 far it does and does not generalise. Read it before writing a sentence about
 what 6b protects.
 
+**Superseded as the document to start from: milestone 6c has landed, and
+anyone starting 6d begins at
+[`handover-milestone-6c.md`](handover-milestone-6c.md).** This one is kept
+unedited as the record of what 6c started from — §3's survey of the tree is
+the evidence base for the decisions 6c then made, and its tense is the tense
+of 2026-08-17, before 6c existed. §3 makes seven distinct claims; all seven
+were checked against the code as it now stands. Two are now false and must
+not be read as open. "The refusal 6c replaces is still where 6a left it" is
+gone in three ways at once: `ProxyGroupReconciler` now accepts all three
+strategies `expose.type` has always named, and `ReasonExposeNotImplemented`'s
+guard is a fail-safe for a fourth, unrecognised value — what closes that
+value off is `ExposeType`'s own
+`+kubebuilder:validation:Enum=LoadBalancer;NodePort;HostPort` marker
+(`api/v1alpha1/proxygroup_types.go:27`), rendered into the generated CRD as a
+plain OpenAPI `enum:` field
+(`config/crd/bases/spawnery.cloud_proxygroups.yaml:174-177`) and enforced by
+structural-schema validation; the
+unconditional `group.Spec.Expose.NodePort` dereference that same paragraph
+locates at the two call sites is gone with it — `proxyAddress` no longer
+takes a plain `int32`, it takes `(group, pods, svc)` and branches on the
+strategy itself (now at
+`internal/controller/proxygroup_controller.go:1611`), and `reconcileService`
+— the Service builder that paragraph points at — moved to `:1248` with a
+rewritten signature, `(ctx, group) (*corev1.Service, error)`, in place of the
+old inline dereference; and a container `hostPort` is now set outside the
+generated deepcopy, in `internal/podspec/proxy.go`'s `renderProxyPod`
+(`:227-229`), for the `HostPort` strategy alone. "The E2E seam is unchanged
+and now carries fourteen scenarios" is unchanged in its mechanics but not its
+count — fourteen is now eighteen. The other five claims hold exactly as
+written: the per-`Network` policy still selects no proxy pod; the operator's
+namespace is still reached two ways with only one parameterised
+(`config/deploy/networkpolicy.yaml` still hard-codes `spawnery-system`);
+`internal/rbacaudit` still goes red on any marker/table disagreement, and
+6c's one new entry (`services: delete`) left the five `networkpolicies`
+entries this paragraph describes untouched; `reconcileNetworkPolicy`'s
+ordering behaviour is exactly as described, because `internal/controller/network_controller.go`
+is a file no 6c commit touched; and the `grpcauth` fixture claim holds for
+the same reason — no 6c commit touched anything under `internal/grpcauth/`.
+`docs/handover-milestone-6c.md`'s own §1 and §3 carry the current figures and
+line numbers for the two claims that changed; this document's §3 is left as
+written, for the same reason `handover-milestone-6.md`'s was: it is the
+record of what 6c was decided against, not a claim about what is true today.
+
 This document is not a spec. It says where 6b stopped and what 6c — the
 `LoadBalancer` and `HostPort` expose strategies — finds when it starts, checked
 against the code as 6b leaves it rather than against the plan that preceded it.

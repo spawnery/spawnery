@@ -186,8 +186,14 @@ already reads the condition and routes it to phase `Degraded`
 ## 7. What is proven, and where
 
 **`internal/podspec` (unit).** `hostPort` appears on the container port for
-exactly one strategy, and the pod hash differs across the three. The mutation
-that has to fail: setting `hostPort` on the `NodePort` path.
+exactly one strategy, and the pod hash separates that strategy from the other
+two — `NodePort` and `LoadBalancer` hash **identically**, for the reason §2
+gives: they differ only in the Service, and rolling every pod for that switch
+would disconnect players for nothing. (An earlier draft of this section said
+the hash "differs across the three", which contradicted §2 and
+`TestDesiredProxyHashSeparatesHostPortFromTheServiceStrategies`, the test
+that pins it. §2 and the test were right.) The mutation that has to fail:
+setting `hostPort` on the `NodePort` path.
 
 **`internal/controller` (unit and envtest).** The three Service shapes. The
 delete branch, including its refusal to touch a Service this group does not
@@ -198,7 +204,12 @@ envtest is where the `LoadBalancer` address is proven end to end, and it can
 do it because it runs no kubelet: the test writes pod status itself, marks
 pods ready, patches the Service's status subresource with an ingress entry,
 and observes `status.address`. Nothing there pretends a load balancer
-controller ran.
+controller ran. That test is
+`TestTheLoadBalancerAddressAppearsOnceAProxyIsReady`
+(`internal/controller/expose_test.go`); it was written by the final
+whole-branch review of the milestone rather than by the task that shipped the
+strategy, and the mutation it exists to fail is severing the Service
+`reconcileService` returns from `setStatus`.
 
 **`test/e2e` (four scenarios).** The seam is unchanged: a
 `func theXxx(t *testing.T)` per scenario plus a line in

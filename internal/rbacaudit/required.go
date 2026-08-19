@@ -144,6 +144,7 @@ var RequiredCluster = []Permission{
 	{Group: "", Resource: "services", Verb: "watch", Why: "ProxyGroupReconciler Owns(&corev1.Service{})"},
 	{Group: "", Resource: "services", Verb: "create", Why: "CreateOrUpdate in ProxyGroupReconciler"},
 	{Group: "", Resource: "services", Verb: "update", Why: "CreateOrUpdate in ProxyGroupReconciler"},
+	{Group: "", Resource: "services", Verb: "delete", Why: "reconcileService's HostPort branch, through deleteServiceIfOurs, removes the Service of a group switched to HostPort"},
 
 	// Two things fetch a single ProxyGroup as of this milestone: the
 	// reconciler itself, and the fan-out reading a group's fallback list.

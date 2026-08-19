@@ -374,3 +374,133 @@ func TestProxyPodCarriesTheFallbackGroups(t *testing.T) {
 		t.Fatalf("%s = %q, want %q", EnvFallbackGroups, got, "lobby,hub")
 	}
 }
+
+// A hostPort is the whole of what makes the HostPort strategy work without a
+// Service, and it is also what makes the kube-scheduler refuse a second pod
+// of the same group on one node. Setting it under any other strategy would
+// impose that cap on groups that never asked for it.
+func TestBuildProxyPodBindsAHostPortOnlyForThatStrategy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		expose spawneryv1alpha1.ExposeSpec
+		want   int32
+	}{
+		{
+			name: "NodePort",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:     spawneryv1alpha1.ExposeNodePort,
+				NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30001},
+			},
+			want: 0,
+		},
+		{
+			name: "LoadBalancer",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:         spawneryv1alpha1.ExposeLoadBalancer,
+				LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{},
+			},
+			want: 0,
+		},
+		{
+			name: "HostPort",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:     spawneryv1alpha1.ExposeHostPort,
+				HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+			},
+			want: 25565,
+		},
+		{
+			// The CEL rules on ExposeSpec forbid a NodePort object from also
+			// carrying a hostPort sub-block, but a unit test builds the Go
+			// struct directly and never goes through the API server's
+			// validation. If the type check were ever dropped from the
+			// condition below, this is the case that would catch it: every
+			// other subtest here has HostPort == nil, so a mutation that
+			// keys off presence alone would sail through them unnoticed.
+			name: "NodePort with a stray HostPort sub-block",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:     spawneryv1alpha1.ExposeNodePort,
+				NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30001},
+				HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+			},
+			want: 0,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			net := testNetwork()
+			group := testProxyGroup()
+			group.Spec.Expose = tc.expose
+
+			pod, err := BuildProxyPod(net, group, "gateway-abcd", testEndpoint, nil)
+			if err != nil {
+				t.Fatalf("BuildProxyPod: %v", err)
+			}
+
+			var minecraft *corev1.ContainerPort
+			for i := range pod.Spec.Containers[0].Ports {
+				if pod.Spec.Containers[0].Ports[i].Name == MinecraftPortName {
+					minecraft = &pod.Spec.Containers[0].Ports[i]
+				}
+			}
+			if minecraft == nil {
+				t.Fatalf("no port named %q on the container: %+v",
+					MinecraftPortName, pod.Spec.Containers[0].Ports)
+			}
+			if minecraft.HostPort != tc.want {
+				t.Errorf("hostPort = %d, want %d", minecraft.HostPort, tc.want)
+			}
+			// The ready port is the kubelet's probe target and is never
+			// published on a node: a second host port would cap the group by
+			// node count for a port no player dials.
+			for _, p := range pod.Spec.Containers[0].Ports {
+				if p.Name == ProxyReadyPortName && p.HostPort != 0 {
+					t.Errorf("the ready port carries hostPort %d; it must never be published",
+						p.HostPort)
+				}
+			}
+		})
+	}
+}
+
+// The hash is what makes a strategy switch roll the pods, and what makes a
+// switch that changes nothing about the pods roll nothing. Both halves are
+// asserted here because only the pair says what the field is for: without
+// the equality, adding the strategy to the hash by any other means would
+// pass while replacing every pod of a group that switched NodePort to
+// LoadBalancer for no reason at all.
+func TestDesiredProxyHashSeparatesHostPortFromTheServiceStrategies(t *testing.T) {
+	hashFor := func(t *testing.T, expose spawneryv1alpha1.ExposeSpec) string {
+		t.Helper()
+		group := testProxyGroup()
+		group.Spec.Expose = expose
+		h, err := DesiredProxyHash(testNetwork(), group, testEndpoint, nil)
+		if err != nil {
+			t.Fatalf("DesiredProxyHash: %v", err)
+		}
+		return h
+	}
+
+	nodePort := hashFor(t, spawneryv1alpha1.ExposeSpec{
+		Type:     spawneryv1alpha1.ExposeNodePort,
+		NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30001},
+	})
+	loadBalancer := hashFor(t, spawneryv1alpha1.ExposeSpec{
+		Type:         spawneryv1alpha1.ExposeLoadBalancer,
+		LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{},
+	})
+	hostPort := hashFor(t, spawneryv1alpha1.ExposeSpec{
+		Type:     spawneryv1alpha1.ExposeHostPort,
+		HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+	})
+
+	if nodePort != loadBalancer {
+		t.Errorf("NodePort and LoadBalancer hash differently (%s vs %s). Those two "+
+			"differ only in the Service; rolling every pod for that switch would "+
+			"disconnect players for nothing", nodePort, loadBalancer)
+	}
+	if hostPort == nodePort {
+		t.Errorf("HostPort hashes the same as NodePort (%s). A group switched into "+
+			"or out of HostPort would keep pods whose container ports no longer "+
+			"match the strategy", hostPort)
+	}
+}

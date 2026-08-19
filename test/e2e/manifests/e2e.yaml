@@ -102,3 +102,122 @@ spec:
   config:
     playerLimit: 100
     motd: "spawnery e2e"
+---
+# gateway-lb exercises the LoadBalancer branch. kind runs no load balancer
+# controller, so status.loadBalancer stays empty until the test writes an
+# ingress entry into it by hand. That is a test of the operator's read-back,
+# and nothing here claims a load balancer was involved.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway-lb
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  replicas: 1
+  image: ghcr.io/spawnery/velocity:e2e-no-such-tag
+  expose:
+    type: LoadBalancer
+    loadBalancer:
+      externalTrafficPolicy: Local
+      annotations:
+        metallb.universe.tf/address-pool: spawnery-e2e
+  routing:
+    fallbackGroups:
+      - lobby
+---
+# gateway-host binds 25565 on the node. The cluster has one node, so its
+# second replica is the surplus the scheduler cannot place -- which is the
+# point: it is the likeliest HostPort mistake a user can make, and this run
+# gets it for free.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway-host
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  replicas: 2
+  image: ghcr.io/spawnery/velocity:e2e-no-such-tag
+  expose:
+    type: HostPort
+    hostPort:
+      port: 25565
+  routing:
+    fallbackGroups:
+      - lobby
+---
+# gateway-switch starts as NodePort and is patched to HostPort by
+# aSwitchToHostPortRemovesTheService. It is a group of its own rather than a
+# mutation of `gateway`, because the scenario list is ordered and every later
+# scenario would inherit the change. Its host port is 25566, not 25565:
+# gateway-host's pod holds that one on the single node whether or not its
+# container ever starts.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway-switch
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  replicas: 1
+  image: ghcr.io/spawnery/velocity:e2e-no-such-tag
+  expose:
+    type: NodePort
+    nodePort:
+      port: 30766
+  routing:
+    fallbackGroups:
+      - lobby
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: velocity-forwarding-secret
+  namespace: minecraft-baseline
+stringData:
+  secret: e2e-forwarding-secret
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: Network
+metadata:
+  name: production
+  namespace: minecraft-baseline
+spec:
+  forwardingSecretRef:
+    name: velocity-forwarding-secret
+  defaults:
+    minecraftVersion: "26.2"
+---
+# The group whose pods the API server refuses. Pod Security baseline
+# disallows host ports outright, so no pod of this group can ever be created,
+# and the refusal is the only thing this run can observe being enforced by
+# anything.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway-forbidden
+  namespace: minecraft-baseline
+spec:
+  networkRef:
+    name: production
+  replicas: 1
+  image: ghcr.io/spawnery/velocity:e2e-no-such-tag
+  expose:
+    type: HostPort
+    # Not 25565. minecraft-baseline is a different namespace from minecraft,
+    # but the cluster has one node, and a host port is a node-wide resource
+    # -- namespaces don't isolate it. Sharing 25565 with gateway-host would
+    # mean that if Pod Security enforcement were ever weakened, this pod's
+    # fate would be decided by a scheduler collision with gateway-host's pod
+    # rather than by Pod Security, so this scenario would fail (if it failed
+    # at all) for a reason that has nothing to do with what it exists to
+    # measure. 25567 is unused by every other group in this manifest.
+    hostPort:
+      port: 25567
+  routing:
+    fallbackGroups:
+      - lobby

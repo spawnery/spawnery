@@ -127,6 +127,15 @@ kubectl apply -f config/deploy/
 kubectl create namespace minecraft
 kubectl apply -n minecraft -f config/rbac/forwarding-secret-reader.yaml
 
+# The second namespace exists to be hostile. Pod Security baseline disallows
+# host ports, so the HostPort group the manifest puts here can never get a
+# pod -- which is the one refusal this whole run can observe being enforced,
+# and it is the API server enforcing it, not a CNI. The label goes on at
+# creation rather than later so no pod can slip in before it.
+kubectl create namespace minecraft-baseline
+kubectl label namespace minecraft-baseline pod-security.kubernetes.io/enforce=baseline
+kubectl apply -n minecraft-baseline -f config/rbac/forwarding-secret-reader.yaml
+
 # Three edits, none of which belongs in the manifest itself.
 #
 # The image: the run tests the bits just built, not whatever the registry

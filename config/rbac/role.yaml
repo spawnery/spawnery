@@ -8,7 +8,6 @@ rules:
   - ""
   resources:
   - configmaps
-  - services
   verbs:
   - create
   - get
@@ -59,6 +58,17 @@ rules:
   - create
   - get
   - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - services
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
   - watch
 - apiGroups:
   - authentication.k8s.io

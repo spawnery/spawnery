@@ -19,7 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -89,7 +91,7 @@ func NewProxyName(group string) string { return NewServerName(group) }
 // contract exists for: reconcileReplicas removes a surplus pod once it is
 // empty, or once its deadline has passed, and not before.
 //
-// It emits Kubernetes events on three occasions, and the bar all three clear
+// It emits Kubernetes events on four occasions, and the bar all four clear
 // is the same one: something happened that no other signal on the object
 // reports.
 //
@@ -110,6 +112,17 @@ func NewProxyName(group string) string { return NewServerName(group) }
 //     since cleared. An agent that heard a withdrawal and went on taking
 //     connections looks healthy from every angle the kubelet reports, so
 //     nothing outside this pair reports it.
+//   - A proxy pod that cannot come into existence, on the flank in either
+//     direction (ProxyPodBlocked as a Warning, from either the create path in
+//     Reconcile when the API server refuses a pod or the scheduler-reading
+//     branch of reportBlockedProxies when one cannot be placed; and the
+//     recovery back to every proxy pod existing, ProxyPodsAdmitted as a
+//     Normal, from reportBlockedProxies). Same shape as the readiness pair
+//     above: the Degraded condition already carries which of the two is
+//     true, so what the event adds is that a transition happened and when —
+//     a group that recovers between two resyncs would otherwise show a
+//     clean Degraded=False with nothing on its timeline saying it was ever
+//     anything else.
 //
 // Pod creation and ordinary deletion stay silent: they are recorded on the
 // objects themselves and an event would say nothing the group's status does
@@ -159,7 +172,7 @@ type ProxyGroupReconciler struct {
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups/status,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups/finalizers,verbs=update
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 
 // Reconcile brings one ProxyGroup in line with its spec.
 func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -206,24 +219,22 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.refuse(ctx, group)
 	}
 
-	// Milestone 6 owns the other two strategies. Refusing is the honest
-	// version: a LoadBalancer branch written now would reach milestone 6 having
-	// never run, because the local flow cannot produce a cluster that would
-	// exercise it. A refusal on the object is also the only form a user can
-	// see — a group that silently does nothing looks like a dead operator.
-	if group.Spec.Expose.Type != spawneryv1alpha1.ExposeNodePort {
+	// The strategies differ in reconcileService and proxyAddress and nowhere
+	// else. This guard is not about any of them: the CRD's enum is closed, so
+	// no object carrying an unrecognised type can be created, and the branch
+	// below is reachable only if a fourth value is added to the enum without
+	// a branch to serve it. A refusal on the object is a message a user can
+	// read; the alternative is a nil dereference on a sub-block that was
+	// never validated.
+	if !exposeImplemented(group.Spec.Expose.Type) {
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonExposeNotImplemented,
-			fmt.Sprintf("expose.type %s arrives with milestone 6; only NodePort is implemented",
+			fmt.Sprintf("expose.type %s is not implemented by this operator",
 				group.Spec.Expose.Type))
-		// This path used to requeue never: a refusal only changes when the
-		// spec does, and a spec change reconciles on its own. refuse requeues
-		// it like the other two, because the player-safety pass it runs has to
-		// happen again -- whether a proxy is occupied is a fact about the agent
-		// registry, which nothing watches, so without a timer the budget
-		// written here would be the last one this group ever gets. A user who
-		// switched an already running group from NodePort to LoadBalancer has
-		// real pods with real players on them for as long as this refusal
-		// stands.
+		// refuse rather than a bare return, for the reason it documents: the
+		// player-safety pass has to run again, and whether a proxy is
+		// occupied is a fact about the agent registry that nothing watches.
+		// A user whose group is stuck here has real pods with real players on
+		// them for as long as the refusal stands.
 		return r.refuse(ctx, group)
 	}
 	setProxyGroupAccepted(group, true, spawneryv1alpha1.ReasonAccepted, "")
@@ -251,7 +262,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.reconcileConfigMap(ctx, group); err != nil {
 		return ctrl.Result{}, err
 	}
-	if err := r.reconcileService(ctx, group); err != nil {
+	svc, err := r.reconcileService(ctx, group)
+	if err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -265,6 +277,29 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 	if err := r.reconcileReplicas(ctx, network, group, pods); err != nil {
+		// A create the API server refused is the group's business and not
+		// only the log's. IsForbidden covers both ways it happens: a Pod
+		// Security profile that forbids the pod's shape -- which is how every
+		// HostPort group in a baseline or restricted namespace ends -- and an
+		// RBAC grant the operator does not have. IsInvalid covers a pod the
+		// API server rejects outright, a quota or a webhook among them.
+		//
+		// The status write is on the error path deliberately: without it the
+		// reconcile returns having recorded nothing, and the group sits at
+		// Pending with no conditions, indistinguishable from one no reconcile
+		// has ever touched. A failure to write the status is reported by
+		// returning the original error regardless -- the create failure is
+		// the cause and the one worth backing off on.
+		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
+			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodRejected, err.Error()) {
+				r.Recorder.Eventf(group, corev1.EventTypeWarning, "ProxyPodBlocked",
+					"the API server refused a proxy pod: %s", err.Error())
+			}
+			group.Status.Phase = "Degraded"
+			if werr := r.writeStatus(ctx, group); werr != nil {
+				log.FromContext(ctx).Error(werr, "recording a refused proxy pod on the group")
+			}
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -274,18 +309,25 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	// Before setStatus: setStatus reads the Degraded condition to derive the
+	// phase, so whether a pod this group asked for failed to come into
+	// existence has to be known before that read.
+	r.reportBlockedProxies(group, pods)
 	// Before setStatus: the budget's selector has to find the label already on
 	// the pods it is sizing minAvailable for, on the same pass.
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
 		return ctrl.Result{}, err
 	}
-	r.setStatus(group, pods)
+	r.setStatus(group, pods, svc)
 	return ctrl.Result{RequeueAfter: resyncInterval}, r.writeStatus(ctx, group)
 }
 
 // refuse is the shared tail of the three paths that give up before
 // reconcileReplicas: a missing Network, one that is not Accepted, and an
-// expose.type this milestone does not implement. The caller has already put
+// expose.type this operator has no branch for. The third is unreachable
+// while the CRD's enum and exposeImplemented agree — the API server rejects
+// any object this operator could not classify — but the branch, and this
+// tail, stay in place for the day they disagree. The caller has already put
 // the reason on the group's Accepted condition; this does everything that is
 // the same for all three.
 //
@@ -1196,8 +1238,21 @@ func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod
 	return nil
 }
 
-// reconcileService keeps the NodePort Service in step with the group.
-func (r *ProxyGroupReconciler) reconcileService(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
+// reconcileService keeps the group's Service in step with its expose
+// strategy, and returns the Service it settled on so the caller can read
+// status.loadBalancer off it without a second Get.
+//
+// HostPort gets no Service and returns nil: nothing inside the cluster dials
+// a proxy. Players arrive from outside, agents dial the operator, and
+// Velocity dials backends.
+func (r *ProxyGroupReconciler) reconcileService(
+	ctx context.Context,
+	group *spawneryv1alpha1.ProxyGroup,
+) (*corev1.Service, error) {
+	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort {
+		return nil, r.deleteServiceIfOurs(ctx, group)
+	}
+
 	svc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: group.Name, Namespace: group.Namespace},
 	}
@@ -1206,31 +1261,144 @@ func (r *ProxyGroupReconciler) reconcileService(ctx context.Context, group *spaw
 			svc.Labels = map[string]string{}
 		}
 		svc.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
-		svc.Spec.Type = corev1.ServiceTypeNodePort
-		// Local, not the Cluster default, for the same reason
-		// LoadBalancerSpec.ExternalTrafficPolicy defaults to Local: the default
-		// SNATs, so Velocity would never see a player's real IP, and bans and
-		// rate limits depend on it. The consequence is the trade-off this makes:
-		// a client that reaches a node running no proxy pod for this group gets
-		// no answer at all, rather than being routed to one that does. That is
-		// consistent with proxyAddress below only ever publishing the hostIP of
-		// a node that demonstrably runs a ready proxy — a client dialing the
-		// published address never hits the empty case.
-		svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+
+		// Unconditional rather than inside the LoadBalancer arm: a group that
+		// leaves LoadBalancer has to release the keys it set, and nil is how
+		// that is said.
+		var lbAnnotations map[string]string
+		if group.Spec.Expose.Type == spawneryv1alpha1.ExposeLoadBalancer &&
+			group.Spec.Expose.LoadBalancer != nil {
+			lbAnnotations = group.Spec.Expose.LoadBalancer.Annotations
+		}
+		applyExposeAnnotations(svc, lbAnnotations)
+
 		// The selector must pin the role as well as the group: without it the
 		// Service would also select any server pod that happened to share the
 		// group name, and players would land on a backend directly.
 		svc.Spec.Selector = podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
-		svc.Spec.Ports = []corev1.ServicePort{{
+
+		port := corev1.ServicePort{
 			Name:       podspec.MinecraftPortName,
 			Port:       podspec.MinecraftPort,
 			TargetPort: intstr.FromString(podspec.MinecraftPortName),
-			NodePort:   group.Spec.Expose.NodePort.Port,
 			Protocol:   corev1.ProtocolTCP,
-		}}
+		}
+		switch group.Spec.Expose.Type {
+		case spawneryv1alpha1.ExposeLoadBalancer:
+			svc.Spec.Type = corev1.ServiceTypeLoadBalancer
+			svc.Spec.ExternalTrafficPolicy = loadBalancerTrafficPolicy(group)
+			// No node port is named. A LoadBalancer Service gets one anyway,
+			// allocated by the API server, and naming one here would add a
+			// second way for two groups in different namespaces to collide
+			// over a number no player ever dials.
+		default:
+			svc.Spec.Type = corev1.ServiceTypeNodePort
+			// Local, not the Cluster default, for the same reason
+			// LoadBalancerSpec.ExternalTrafficPolicy defaults to Local: the
+			// default SNATs, so Velocity would never see a player's real IP,
+			// and bans and rate limits depend on it. The consequence is the
+			// trade-off this makes: a client that reaches a node running no
+			// proxy pod for this group gets no answer at all, rather than
+			// being routed to one that does. That is consistent with
+			// proxyAddress only ever publishing the address of a node that
+			// demonstrably runs a ready proxy -- a client dialing the
+			// published address never hits the empty case.
+			svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
+			port.NodePort = group.Spec.Expose.NodePort.Port
+		}
+		svc.Spec.Ports = []corev1.ServicePort{port}
+
 		return controllerutil.SetControllerReference(group, svc, r.Scheme)
 	})
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// applyExposeAnnotations reconciles the annotations the operator owns on a
+// Service, leaving every other key untouched. See
+// podspec.AnnotationExposeAnnotations for why the record is necessary.
+func applyExposeAnnotations(svc *corev1.Service, want map[string]string) {
+	if svc.Annotations == nil {
+		svc.Annotations = map[string]string{}
+	}
+	if owned := svc.Annotations[podspec.AnnotationExposeAnnotations]; owned != "" {
+		for _, k := range strings.Split(owned, ",") {
+			if _, still := want[k]; !still {
+				delete(svc.Annotations, k)
+			}
+		}
+	}
+	keys := make([]string, 0, len(want))
+	for k, v := range want {
+		svc.Annotations[k] = v
+		keys = append(keys, k)
+	}
+	if len(keys) == 0 {
+		delete(svc.Annotations, podspec.AnnotationExposeAnnotations)
+		return
+	}
+	sort.Strings(keys)
+	svc.Annotations[podspec.AnnotationExposeAnnotations] = strings.Join(keys, ",")
+}
+
+// loadBalancerTrafficPolicy is the CRD's Local default, restated in code.
+// A ProxyGroup built in a unit test never passes through the API server's
+// defaulting, and an empty policy on a Service is not a valid value -- the
+// same hazard podspec.DefaultDrainTimeoutSeconds exists for.
+func loadBalancerTrafficPolicy(group *spawneryv1alpha1.ProxyGroup) corev1.ServiceExternalTrafficPolicy {
+	if lb := group.Spec.Expose.LoadBalancer; lb != nil && lb.ExternalTrafficPolicy != "" {
+		return lb.ExternalTrafficPolicy
+	}
+	return corev1.ServiceExternalTrafficPolicyLocal
+}
+
+// deleteServiceIfOurs removes the Service a group had before it switched to
+// HostPort, and only that one.
+//
+// The ownership check is the whole of the function's care: a Service
+// somebody else put at the group's name is not this operator's to remove,
+// and a delete is the one action here that cannot be undone. The
+// preconditions pin the object the decision was made about -- between the
+// Get and the Delete the name could have come to hold a different object
+// entirely.
+//
+// Both halves of that check are required, as design section 4 specifies: a
+// controller reference whose UID is this group's, and podspec.LabelManagedBy.
+// The UID is the strong half -- it fails for a Service controlled by anything
+// else, this group's own predecessor of the same name included, which is the
+// case the garbage collector can leave standing after a delete-and-recreate.
+// The label is the cheap half and is kept anyway, because it is the same
+// label cmd/spawnery-operator narrows the manager's cache by for every other
+// kind the operator writes. Services are the one kind it does not narrow
+// (main.go's ByObject list covers ConfigMaps, ServiceAccounts and PVCs), so
+// this function is the only thing standing between a stray object at the
+// group's name and an irreversible delete, and it checks everything the
+// operator stamps rather than the cheapest sufficient thing.
+func (r *ProxyGroupReconciler) deleteServiceIfOurs(
+	ctx context.Context,
+	group *spawneryv1alpha1.ProxyGroup,
+) error {
+	svc := &corev1.Service{}
+	err := r.Get(ctx, client.ObjectKey{Namespace: group.Namespace, Name: group.Name}, svc)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if owner := metav1.GetControllerOf(svc); owner == nil || owner.UID != group.UID {
+		return nil
+	}
+	if svc.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+		return nil
+	}
+	uid := svc.UID
+	rv := svc.ResourceVersion
+	return client.IgnoreNotFound(r.Delete(ctx, svc, &client.DeleteOptions{
+		Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv},
+	}))
 }
 
 // reconcileConfigMap keeps the group's rendered ConfigMap — design section
@@ -1310,6 +1478,153 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 	return values
 }
 
+// setProxyPodsBlocked records why a proxy pod this group asked for does not
+// exist. It reports whether the condition transitioned to True on this call,
+// so the caller can put an event on the flank rather than on every resync.
+//
+// This is the first writer of Degraded on a ProxyGroup. setStatus has always
+// read it and routed it to phase Degraded; until now only ServerGroup ever
+// set one.
+//
+// A condition already saying this exact thing is left byte-for-byte alone,
+// and that is load-bearing rather than an optimisation. The refused-create
+// caller passes the API server's own text, which names the pod it refused --
+// and NewProxyName draws a fresh random suffix for every attempt, so the
+// message differs on every single pass. Rewriting it made writeStatus bump
+// resourceVersion every pass, which the For(&ProxyGroup{}) watch turned
+// straight back into an enqueue, ahead of the rate-limited retry: a group
+// whose pods the API server refuses -- exactly what a HostPort group in a
+// baseline namespace is -- span at roughly 28 reconciles a second, forever.
+// The milestone measured that as 3,940 refusals in a 139-second E2E run and
+// filed the number as a normal cost; it was not.
+//
+// sameRefusal is what makes "this exact thing" mean the refusal rather than
+// the string: two messages that differ only in the name of the object the
+// API server refused are the same refusal, so the write is skipped, while a
+// genuinely different refusal under the same reason -- a quota after a Pod
+// Security fix, say -- still replaces the message. Nothing here edits what
+// gets stored. The stored text stays the cluster's own, verbatim, because
+// the remedy is in the API server's wording and nothing else knows it.
+func setProxyPodsBlocked(group *spawneryv1alpha1.ProxyGroup, reason, message string) bool {
+	// Read out, not held: FindStatusCondition returns a pointer into the
+	// slice SetStatusCondition below writes through, so a verdict read after
+	// that call is the value just written and never the value it replaced.
+	existing := meta.FindStatusCondition(group.Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded)
+	was := existing != nil && existing.Status == metav1.ConditionTrue
+	if was && existing.Reason == reason && sameRefusal(existing.Message, message) {
+		return false
+	}
+	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionDegraded,
+		Status:  metav1.ConditionTrue,
+		Reason:  reason,
+		Message: message,
+	})
+	return !was
+}
+
+// sameRefusal reports whether two cluster messages describe the same refusal,
+// differing at most in the name of the object refused.
+//
+// The API server renders a refused create as
+//
+//	pods "gateway-kt84" is forbidden: violates PodSecurity "baseline:latest": hostPort ...
+//
+// where the first quoted run is the pod's name and everything after it is the
+// remedy. The name is the only part that moves between two attempts at the
+// same create, and it names a pod that never came into existence, so two
+// messages that agree once it is elided are the same fact reported twice.
+//
+// This is a comparison and only a comparison: it elides nothing from the
+// message that gets stored on the condition.
+//
+// The unschedulable half of Degraded carries no quoted run at all -- its
+// message is "<pod> cannot be scheduled: <scheduler text>" -- so both sides
+// pass through unchanged there and a different pod, or a different scheduler
+// verdict on the same pod, is correctly seen as a different fact.
+func sameRefusal(a, b string) bool {
+	return elideFirstQuoted(a) == elideFirstQuoted(b)
+}
+
+func elideFirstQuoted(msg string) string {
+	open := strings.Index(msg, `"`)
+	if open < 0 {
+		return msg
+	}
+	rest := strings.Index(msg[open+1:], `"`)
+	if rest < 0 {
+		return msg
+	}
+	return msg[:open+1] + msg[open+1+rest:]
+}
+
+// proxyPodsAdmittedMessage is the all-clear, and it is deliberately narrower
+// than "every proxy pod this group asked for exists" -- the sentence it
+// replaces, which claimed a count nothing on this path compares.
+const proxyPodsAdmittedMessage = "the API server refused no proxy pod of this group, " +
+	"and none is reported unschedulable"
+
+// reportBlockedProxies is the second of the two ways a proxy pod fails to
+// exist: the scheduler has nowhere to put it. With hostPort at most one pod
+// of a group fits per node, so replicas is silently capped by the node count
+// -- the likeliest HostPort mistake there is, and one that produces a pod
+// that exists, never runs, and explains itself only on its own object.
+//
+// The pod's name is in the message because a group has several, and a
+// condition that says only "a pod cannot be placed" cannot be acted on.
+//
+// It does not count nodes and predict. Doing that would mean reimplementing
+// the scheduler's view of node selectors, taints and foreign hostPort
+// holders in order to guess ahead of it, and being wrong the moment a node
+// joins. Both halves of this condition report what the cluster said.
+//
+// The all-clear tail below fires an event too, on the same flank-only terms
+// as setProxyPodsBlocked and matching ServerGroupReconciler's own
+// BackingOff/Degraded pair: read the condition before writing it, write, and
+// fire only when the write actually changed the verdict. Without this a
+// group that recovers from a rejected or unschedulable proxy pod back to
+// fully admitted did so silently — the Degraded condition would read False
+// again, but nothing on the object's event timeline would say the recovery
+// ever happened, unlike every other condition pair this reconciler reports.
+func (r *ProxyGroupReconciler) reportBlockedProxies(
+	group *spawneryv1alpha1.ProxyGroup,
+	pods []corev1.Pod,
+) {
+	for i := range pods {
+		for _, c := range pods[i].Status.Conditions {
+			if c.Type != corev1.PodScheduled || c.Status != corev1.ConditionFalse {
+				continue
+			}
+			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodUnschedulable,
+				fmt.Sprintf("%s cannot be scheduled: %s", pods[i].Name, c.Message)) {
+				r.Recorder.Eventf(group, corev1.EventTypeWarning, "ProxyPodBlocked",
+					"proxy pod %s cannot be scheduled: %s", pods[i].Name, c.Message)
+			}
+			return
+		}
+	}
+	// What the pass actually established, and no more: reconcileReplicas
+	// returned without the API server refusing anything, and no pod in the
+	// list is reported unschedulable. It did not establish that the group has
+	// as many pods as spec.replicas -- a create this pass suppressed by a
+	// pending expectation is not refused, merely deferred -- so the sentence
+	// must not say so. The condition's own semantics are unchanged: Degraded
+	// answers "is a pod of this group blocked from existing", not "is this
+	// group at size", which is what status.replicas is for.
+	wasBlocked := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionDegraded,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonProxyPodsAdmitted,
+		Message: proxyPodsAdmittedMessage,
+	})
+	if wasBlocked {
+		r.Recorder.Eventf(group, corev1.EventTypeNormal, "ProxyPodsAdmitted",
+			proxyPodsAdmittedMessage)
+	}
+}
+
 // setStatus writes what is observably true of the group's pods.
 //
 // The two counts deliberately answer different questions about the same pods.
@@ -1317,7 +1632,7 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 // calls Ready. connectedPlayers is about people, so it counts every pod in the
 // group, ready or not — the CRD calls it "the sum of players across all
 // proxies" and it is a printed column.
-func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod) {
+func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *corev1.Service) {
 	var ready int32
 	var players int32
 	for i := range pods {
@@ -1348,7 +1663,7 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 
 	group.Status.ReadyReplicas = ready
 	group.Status.ConnectedPlayers = players
-	group.Status.Address = proxyAddress(pods, group.Spec.Expose.NodePort.Port)
+	group.Status.Address = proxyAddress(group, pods, svc)
 	group.Status.ObservedGeneration = group.Generation
 
 	switch {
@@ -1363,23 +1678,67 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 
 // proxyAddress is where players connect.
 //
-// With NodePort that is a node's address plus the node port, and the operator
-// has no right to read Node objects — nor does it need one: hostIP on a ready
-// proxy pod is the address of a node that demonstrably has a proxy on it, and
-// the pod is already watched. Granting a cluster-wide node read for a status
-// string would be the same trade the bootstrapper refused when it declined the
-// update verb on ServiceAccounts to restore a cosmetic label.
+// Every branch publishes an address only while a proxy is demonstrably
+// serving, and that is the property the whole function is built around.
+// Empty is the truthful answer otherwise: there is nowhere to connect yet,
+// and printing an address for a proxy that is not serving would send players
+// at a closed port.
 //
-// Empty while nothing is ready, which is the truthful answer: there is nowhere
-// to connect yet, and printing a node address for a proxy that is not serving
-// would send players at a closed port.
-func proxyAddress(pods []corev1.Pod, nodePort int32) string {
+// For NodePort and HostPort the address is a node's, and the operator has no
+// right to read Node objects -- nor does it need one: hostIP on a ready
+// proxy pod is the address of a node that demonstrably has a proxy on it,
+// and the pod is already watched. Granting a cluster-wide node read for a
+// status string would be the same trade the bootstrapper refused when it
+// declined the update verb on ServiceAccounts to restore a cosmetic label.
+//
+// For LoadBalancer the address comes from the Service instead, and the
+// readiness gate has to be stated rather than inherited -- the Service knows
+// nothing about whether anything is serving, so without the gate this would
+// publish an address the moment a load balancer answered, including for a
+// group whose every pod is in ImagePullBackOff.
+//
+// net.JoinHostPort rather than a format string: a node with an IPv6 hostIP
+// needs brackets, and the old formatting produced an address no client could
+// use. For an IPv4 address the two are identical.
+func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *corev1.Service) string {
+	hostIP := ""
 	for i := range pods {
 		if isPodReady(&pods[i]) && pods[i].Status.HostIP != "" {
-			return fmt.Sprintf("%s:%d", pods[i].Status.HostIP, nodePort)
+			hostIP = pods[i].Status.HostIP
+			break
 		}
 	}
-	return ""
+	if hostIP == "" {
+		return ""
+	}
+
+	port := func(p int32) string { return strconv.Itoa(int(p)) }
+
+	switch group.Spec.Expose.Type {
+	case spawneryv1alpha1.ExposeLoadBalancer:
+		if svc == nil {
+			return ""
+		}
+		for _, ing := range svc.Status.LoadBalancer.Ingress {
+			if ing.IP != "" {
+				return net.JoinHostPort(ing.IP, port(podspec.MinecraftPort))
+			}
+			if ing.Hostname != "" {
+				return net.JoinHostPort(ing.Hostname, port(podspec.MinecraftPort))
+			}
+		}
+		return ""
+	case spawneryv1alpha1.ExposeHostPort:
+		if group.Spec.Expose.HostPort == nil {
+			return ""
+		}
+		return net.JoinHostPort(hostIP, port(group.Spec.Expose.HostPort.Port))
+	default:
+		if group.Spec.Expose.NodePort == nil {
+			return ""
+		}
+		return net.JoinHostPort(hostIP, port(group.Spec.Expose.NodePort.Port))
+	}
 }
 
 // isPodReady reports what the kubelet says about the pod's readiness probe.
@@ -1394,6 +1753,21 @@ func isPodReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+// exposeImplemented reports whether this operator has a branch for the
+// strategy. See the call site in Reconcile for why it exists at all, and
+// TestExposeImplementedCoversTheEnumAndNothingElse for why it is a function
+// rather than an inline default arm.
+func exposeImplemented(t spawneryv1alpha1.ExposeType) bool {
+	switch t {
+	case spawneryv1alpha1.ExposeNodePort,
+		spawneryv1alpha1.ExposeLoadBalancer,
+		spawneryv1alpha1.ExposeHostPort:
+		return true
+	default:
+		return false
+	}
 }
 
 // setProxyGroupAccepted records whether the operator manages this group.

@@ -89,6 +89,18 @@ const (
 // — that is what the PodDisruptionBudget is for.
 const AnnotationSafeToEvict = "cluster-autoscaler.kubernetes.io/safe-to-evict"
 
+// AnnotationExposeAnnotations records which annotation keys on a proxy
+// group's Service the operator put there, comma-separated and sorted.
+//
+// It exists because the Service is shared ground: spec.expose.loadBalancer
+// .annotations is written by the user, and the load balancer controller that
+// acts on it -- MetalLB, kube-vip -- annotates the same object with its own
+// keys. Without this record the operator could only choose between never
+// removing a key the user dropped, and removing keys that were never its to
+// touch. Sorted so the value is stable across passes; an unsorted join would
+// make CreateOrUpdate write on every reconcile.
+const AnnotationExposeAnnotations = "spawnery.cloud/expose-annotations"
+
 // ServerLabels are the labels of a Paper pod.
 func ServerLabels(network, group, server string) map[string]string {
 	return map[string]string{

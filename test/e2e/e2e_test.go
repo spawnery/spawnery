@@ -110,6 +110,10 @@ func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("the startup deadline fails a server and clears it", theStartupDeadlineFailsAServerAndClearsIt)
 	t.Run("a persistent group's claim outlives its server", aPersistentGroupsClaimOutlivesItsServer)
 	t.Run("the proxy group gets its Service", theProxyGroupGetsItsService)
+	t.Run("the LoadBalancer group gets its Service", theLoadBalancerGroupGetsItsService)
+	t.Run("the HostPort group binds the port and has no Service", theHostPortGroupBindsThePortAndHasNoService)
+	t.Run("a switch to HostPort removes the Service", aSwitchToHostPortRemovesTheService)
+	t.Run("a forbidden host port is reported on the group", aForbiddenHostPortIsReportedOnTheGroup)
 	t.Run("the operator holds its secret and its lease", theOperatorHoldsItsSecretAndItsLease)
 	t.Run("the table holds against the real authorizer", theTableHoldsAgainstTheRealAuthorizer)
 	t.Run("the network gets its policy", theNetworkGetsItsPolicy)
@@ -204,7 +208,18 @@ func theOperatorWasNeverDenied(t *testing.T) {
 
 	var offenders []string
 	for _, line := range strings.Split(log, "\n") {
-		if strings.Contains(line, "is forbidden:") {
+		// A Pod Security rejection is not an RBAC denial, and it carries the
+		// same `is forbidden:` prefix. aForbiddenHostPortIsReportedOnTheGroup
+		// causes one on purpose -- it is the only enforced refusal this run
+		// can observe -- and without this exclusion the last and most
+		// important scenario of the run would fail for a reason another
+		// scenario created.
+		//
+		// The exclusion is one substring on purpose. Everything else the API
+		// server phrases with `is forbidden:` still counts, including an RBAC
+		// denial on a pod create, which shares nothing with this text.
+		if strings.Contains(line, "is forbidden:") &&
+			!strings.Contains(line, "violates PodSecurity") {
 			offenders = append(offenders, line)
 		}
 	}

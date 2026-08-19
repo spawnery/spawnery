@@ -70,6 +70,24 @@ spec:
     type: NodePort
     nodePort:
       port: 30001
+    # Alternative: LoadBalancer. Costs a controller this cluster does not
+    # ship on bare metal (MetalLB, kube-vip) -- without one, no address is
+    # ever assigned and status.address stays empty forever, not merely late.
+    # externalTrafficPolicy defaults to Local so the player's real IP
+    # survives instead of being replaced by the load balancer's.
+    # type: LoadBalancer
+    # loadBalancer: {}
+    #
+    # Alternative: HostPort. Binds the port on every node that runs a proxy
+    # pod, so replicas are capped by the node count -- a second pod cannot be
+    # scheduled onto a node the first already occupies. It also costs Pod
+    # Security: both baseline and restricted disallow a host port outright, so
+    # a group in a namespace enforcing either policy never gets a pod, and
+    # says so on its own Degraded condition rather than only in the
+    # operator's log.
+    # type: HostPort
+    # hostPort:
+    #   port: 25565
   routing:
     fallbackGroups:
       - lobby
