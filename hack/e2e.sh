@@ -154,8 +154,35 @@ kubectl create namespace minecraft
 # and this script does not remove it from the world, only from this one run:
 # it performs the identical edit programmatically so the run matches
 # $OPERATOR_NAMESPACE instead of stopping to ask a person to do it.
+#
+# sed exits 0 whether or not its pattern matched. If the anchor above ever
+# goes missing -- the file reformatted, the string changed -- the unedited
+# YAML applies without complaint: a RoleBinding subject naming a namespace
+# that does not exist is not validated by the API server the way the
+# RoleBinding's own metadata.namespace is, so `kubectl apply` would succeed
+# having granted nothing. The only symptom would be a Network's
+# ForwardingSecretResolved condition going SecretReadForbidden at runtime --
+# and test/e2e cannot see that: readForwardingSecret folds the 403 into a
+# condition message with no `is forbidden:` substring and nothing on that
+# path logs (see theOperatorWasNeverDenied's doc comment,
+# test/e2e/e2e_test.go:180-186), so a broken rewrite here would still produce
+# a fully green 18/18 run. Reading the applied object back and checking what
+# it actually says is the only check that catches that; checking the input
+# file's shape before the sed runs would not, for the same reason
+# hack/chart-templates.sh's own input-shape guards don't catch a broken
+# transform there.
+check_forwarding_secret_reader_subject() {
+	local ns="$1" got
+	got="$(kubectl -n "$ns" get rolebinding spawnery-forwarding-secret-reader -o jsonpath='{.subjects[0].namespace}')"
+	if [ "$got" != "$OPERATOR_NAMESPACE" ]; then
+		echo "hack/e2e.sh: spawnery-forwarding-secret-reader in $ns names a ServiceAccount in namespace '$got', want '$OPERATOR_NAMESPACE'. kubectl apply does not reject this, so it would otherwise fail silently. Likely cause: the sed rewrite above did not match -- config/rbac/forwarding-secret-reader.yaml's 'namespace: spawnery-system' anchor (line 65) may have moved." >&2
+		exit 1
+	fi
+}
+
 sed "s/namespace: spawnery-system/namespace: ${OPERATOR_NAMESPACE}/" config/rbac/forwarding-secret-reader.yaml |
 	kubectl apply -n minecraft -f -
+check_forwarding_secret_reader_subject minecraft
 
 # The second namespace exists to be hostile. Pod Security baseline disallows
 # host ports, so the HostPort group the manifest puts here can never get a
@@ -166,6 +193,7 @@ kubectl create namespace minecraft-baseline
 kubectl label namespace minecraft-baseline pod-security.kubernetes.io/enforce=baseline
 sed "s/namespace: spawnery-system/namespace: ${OPERATOR_NAMESPACE}/" config/rbac/forwarding-secret-reader.yaml |
 	kubectl apply -n minecraft-baseline -f -
+check_forwarding_secret_reader_subject minecraft-baseline
 
 kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --timeout="${DEADLINE}s"
 
