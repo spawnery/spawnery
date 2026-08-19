@@ -1,0 +1,17 @@
+apiVersion: v2
+name: spawnery
+description: A Kubernetes-native control plane for Minecraft server networks
+type: application
+
+# The chart's own version, and the operator release it installs by default.
+# They move independently: a chart fix that changes no image is a chart
+# version bump alone.
+version: 0.1.0
+appVersion: "0.1.0"
+
+# The floor is the CRDs', not the operator's. api/v1alpha1 carries
+# +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec
+# alone -- and CEL validation reaches beta and on-by-default in 1.25.
+# Declared rather than measured: nothing in this repository installs the
+# chart on an old cluster to find out.
+kubeVersion: ">=1.25.0-0"

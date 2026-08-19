@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spawnery-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spawnery.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Replace, do not overlap. Ever since readyz hangs off the leader lock, a new
+  # pod only turns ready once it holds that lock — and the old pod holds it for
+  # as long as it runs. With a single replica a rolling update waits for
+  # exactly that readiness (maxUnavailable 0) before it removes the old pod, so
+  # it would sit there until somebody intervenes by hand. Do not switch this
+  # back to RollingUpdate.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "spawnery.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "spawnery.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: spawnery-operator
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: operator
+          # Level B replaces this image with the locally built one.
+          # A tag until hack/publish.sh has run once, then the digest it writes
+          # back. The master design's §8 asks for digests in shipped manifests
+          # because tags are mutable; ":dev" before milestone 6a was worse than
+          # either, being a tag nothing produced.
+          image: {{ include "spawnery.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - --leader-elect={{ .Values.operator.leaderElect }}
+            # The production value. This manifest is installed, not test
+            # scaffolding: hack/e2e.sh appends a second --startup-deadline=20s
+            # for its own run, and the flag package takes the last occurrence.
+            - --startup-deadline={{ .Values.operator.startupDeadline }}
+            - --metrics-bind-address=:8080
+            - --health-probe-bind-address=:8081
+          env:
+            # The default for --operator-namespace. Both the SANs of the
+            # serving certificate and the address the agents dial derive
+            # from it.
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: metrics
+              containerPort: 8080
+            - name: health
+              containerPort: 8081
+            - name: agent
+              containerPort: 9443
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

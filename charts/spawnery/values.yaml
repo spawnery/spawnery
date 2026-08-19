@@ -1,0 +1,36 @@
+image:
+  repository: ghcr.io/spawnery/spawnery-operator
+  # A tag until hack/publish.sh has run once against a real registry, then the
+  # digest it writes below. The master design's section 8 asks for digests in
+  # shipped manifests because a tag can move under a running cluster.
+  tag: "0.1.0"
+  # Set, this wins over tag and the image is referenced by digest.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+# Passed through to the operator pod unchanged. On a cluster whose control
+# plane carries a taint, tolerations are often the difference between Running
+# and Pending.
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+networkPolicy:
+  # The ingress rule in front of the agent endpoint, milestone 6b's
+  # network-independent half. Disabling it is the right answer on a cluster
+  # that manages its own policies centrally -- and makes no difference at all
+  # on a CNI that implements no NetworkPolicy controller, which is what 6b
+  # measured of the CNI in this repository's own end-to-end harness.
+  enabled: true
+
+operator:
+  # The production value. hack/e2e.sh overrides it for its own run.
+  startupDeadline: 5m
+  leaderElect: true
