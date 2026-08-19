@@ -208,8 +208,16 @@ spec:
   image: ghcr.io/spawnery/velocity:e2e-no-such-tag
   expose:
     type: HostPort
+    # Not 25565. minecraft-baseline is a different namespace from minecraft,
+    # but the cluster has one node, and a host port is a node-wide resource
+    # -- namespaces don't isolate it. Sharing 25565 with gateway-host would
+    # mean that if Pod Security enforcement were ever weakened, this pod's
+    # fate would be decided by a scheduler collision with gateway-host's pod
+    # rather than by Pod Security, so this scenario would fail (if it failed
+    # at all) for a reason that has nothing to do with what it exists to
+    # measure. 25567 is unused by every other group in this manifest.
     hostPort:
-      port: 25565
+      port: 25567
   routing:
     fallbackGroups:
       - lobby
