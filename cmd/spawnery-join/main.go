@@ -81,7 +81,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// this one can name the two flags that disagree. Both have defaults, so
 	// asking for a hold at all is what usually produces it.
 	if *hold >= *timeout {
-		fmt.Fprintf(stderr, "spawnery-join: --hold %s does not fit inside --timeout %s\n", *hold, *timeout)
+		_, _ = fmt.Fprintf(stderr, "spawnery-join: --hold %s does not fit inside --timeout %s\n", *hold, *timeout)
 		return 2
 	}
 
@@ -90,7 +90,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	result, err := mcjoin.JoinAndHold(ctx, *host, *port, *username, *hold)
 	if err != nil {
-		fmt.Fprintf(stderr, "spawnery-join: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spawnery-join: %v\n", err)
 		return 1
 	}
 
@@ -98,9 +98,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	// rather than on prose.
 	line, err := json.Marshal(result)
 	if err != nil {
-		fmt.Fprintf(stderr, "spawnery-join: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spawnery-join: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s\n", line)
+	_, _ = fmt.Fprintf(stdout, "%s\n", line)
 	return 0
 }

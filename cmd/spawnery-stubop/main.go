@@ -194,7 +194,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if *dir == "" {
-		fmt.Fprintln(stderr, "--dir is required: the agent reads its CA and token from a directory")
+		_, _ = fmt.Fprintln(stderr, "--dir is required: the agent reads its CA and token from a directory")
 		return 1
 	}
 	if len(sans) == 0 {
@@ -203,13 +203,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 	material, err := materialise(*dir, sans)
 	if err != nil {
-		fmt.Fprintf(stderr, "could not write the agent's credentials: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "could not write the agent's credentials: %v\n", err)
 		return 1
 	}
 
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
-		fmt.Fprintf(stderr, "listen on %s: %v\n", *listen, err)
+		_, _ = fmt.Fprintf(stderr, "listen on %s: %v\n", *listen, err)
 		return 1
 	}
 
@@ -249,9 +249,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		server.Stop()
 	}()
 
-	fmt.Fprintf(stderr, "serving AgentService on %s for %v\n", listener.Addr(), []string(sans))
+	_, _ = fmt.Fprintf(stderr, "serving AgentService on %s for %v\n", listener.Addr(), []string(sans))
 	if err := server.Serve(listener); err != nil {
-		fmt.Fprintf(stderr, "serve: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "serve: %v\n", err)
 		return 1
 	}
 	return 0

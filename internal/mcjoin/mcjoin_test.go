@@ -172,7 +172,7 @@ func start(t *testing.T, f *fake) (string, int) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	t.Cleanup(func() { ln.Close() })
+	t.Cleanup(func() { _ = ln.Close() })
 
 	go func() {
 		for {
@@ -181,7 +181,7 @@ func start(t *testing.T, f *fake) (string, int) {
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				f.record(f.serve(conn))
 			}()
 		}

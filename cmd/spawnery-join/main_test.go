@@ -50,7 +50,7 @@ func serveOneJoin(t *testing.T) int {
 				return
 			}
 			go func() {
-				defer conn.Close()
+				defer func() { _ = conn.Close() }()
 				_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
 				serveConn(conn)
 			}()
