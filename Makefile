@@ -61,8 +61,17 @@ vet:
 #
 # It is not a substitute for reasoning about concurrency. The peer rate limit's
 # key was wrong for a whole milestone and -race would never have said so.
-test: manifests generate fmt vet
+test: manifests generate fmt vet chart-lint
 	go test -race ./... -coverprofile cover.out
+
+.PHONY: chart-lint
+chart-lint:
+	helm lint charts/spawnery
+	# helm lint alone accepts templates that fail to render with a real
+	# namespace, and a chart that lints but does not template is a chart
+	# nobody can install -- so rendering it here is not redundant with the
+	# line above.
+	helm template spawnery charts/spawnery --namespace chart-lint-check >/dev/null
 
 .PHONY: build
 build:
