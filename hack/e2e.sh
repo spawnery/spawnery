@@ -20,14 +20,28 @@ CLUSTER="${CLUSTER:-spawnery-e2e}"
 E2E_KEEP="${E2E_KEEP:-0}"
 DEADLINE="${DEADLINE:-300}"
 
-# Deliberately not spawnery-system, the chart's own default. Every one of this
-# run's scenarios is thereby a guard over the chart's templating: a literal
-# that survived puts the Role in a namespace holding no operator, the operator
-# fails at its first certs.Store.Ensure with Forbidden, and
-# theOperatorWasNeverDenied -- the last scenario, unchanged since 6a -- is what
-# catches it. The name shares nothing with the default on purpose: a near-miss
-# like spawnery-operators reads as a variant and invites somebody to tidy it
-# back.
+# Deliberately not spawnery-system, the chart's own default. What that buys
+# splits in two, and only one half is something this run's scenarios can see.
+#
+# A spawnery-system literal surviving in one of the chart's *own-namespace*
+# RBAC fields -- a RoleBinding's or ClusterRoleBinding's own
+# metadata.namespace, or the generated Role's namespace: line -- is caught by
+# the `helm install` below, because Kubernetes validates those for existence at
+# admission. Measured, not reasoned: the install refused with `namespaces
+# "spawnery-system" not found`, this script stopped there under set -e, and
+# `go test` never ran -- so no scenario in test/e2e caught that mutation or
+# could have (docs/known-issues.md, "From milestone 6d").
+#
+# A literal surviving in a *subject* namespace -- subjects[].namespace, which
+# the chart templates as {{ .Release.Namespace }} -- is not validated by the
+# API server at all: it applies cleanly and binds a ServiceAccount that exists
+# nowhere. That is by design the path theOperatorWasNeverDenied catches, once
+# the resulting denial lands on a write verb; this milestone never mutated it,
+# so that half is reasoning rather than measurement and nothing here has
+# proven it.
+#
+# The name shares nothing with the default on purpose: a near-miss like
+# spawnery-operators reads as a variant and invites somebody to tidy it back.
 OPERATOR_NAMESPACE=platform-system
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -165,12 +179,13 @@ kubectl create namespace minecraft
 # and test/e2e cannot see that: readForwardingSecret folds the 403 into a
 # condition message with no `is forbidden:` substring and nothing on that
 # path logs (see theOperatorWasNeverDenied's doc comment,
-# test/e2e/e2e_test.go:180-186), so a broken rewrite here would still produce
+# test/e2e/e2e_test.go:187-193), so a broken rewrite here would still produce
 # a fully green 18/18 run. Reading the applied object back and checking what
 # it actually says is the only check that catches that; checking the input
 # file's shape before the sed runs would not, for the same reason
-# hack/chart-templates.sh's own input-shape guards don't catch a broken
-# transform there.
+# hack/chart-templates.sh's input-shape guards did not catch a broken
+# transform there -- that script now checks the files it wrote as well, and
+# this is the same shape of check on the object this one wrote.
 check_forwarding_secret_reader_subject() {
 	local ns="$1" got
 	got="$(kubectl -n "$ns" get rolebinding spawnery-forwarding-secret-reader -o jsonpath='{.subjects[0].namespace}')"

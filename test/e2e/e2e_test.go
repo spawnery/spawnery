@@ -42,10 +42,16 @@ import (
 
 const (
 	// operatorNamespace is where hack/e2e.sh installs the chart, and it is
-	// deliberately not the chart's own default. See the comment on
-	// OPERATOR_NAMESPACE in hack/e2e.sh: every scenario in this package is a
-	// guard over the chart's templating precisely because this is not
-	// spawnery-system.
+	// deliberately not the chart's own default. What that buys is split, and
+	// the larger half never reaches this package: a spawnery-system literal
+	// left in one of the chart's own-namespace RBAC fields is refused at
+	// admission by Kubernetes, so `helm install` fails and hack/e2e.sh aborts
+	// under set -e before `go test` runs -- measured, and no scenario here
+	// executed at all. The half that would reach this package is a literal in
+	// a subject namespace, which applies cleanly and is by design caught at
+	// runtime by theOperatorWasNeverDenied once the denial it causes lands on
+	// a write verb; that path was never mutated, so it is reasoning rather
+	// than measurement. See the comment on OPERATOR_NAMESPACE in hack/e2e.sh.
 	operatorNamespace = "platform-system"
 
 	// testNamespace is where test/e2e/manifests/e2e.yaml puts its objects.

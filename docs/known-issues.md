@@ -3433,37 +3433,50 @@ chart that lints but does not render. Measured directly with a typo'd
 not catch it either — it asserts only the Deployment's and the Role's
 namespaces, never the Service's. What catches it is
 `TestAgentServiceReachesTheOperatorPods`
-(`internal/rbacaudit/deploy_envtest_test.go:468`), incidentally: it applies
+(`internal/rbacaudit/deploy_envtest_test.go:538`), incidentally: it applies
 the rendered Service into envtest's real API server, which refuses to
 create a `Service` with an empty `namespace`. `chart-lint` still catches a
 template that fails to render at all; it does not catch this class. Measured
 by mutation (`.superpowers/sdd/2026-08-19-helm-chart/task-5-report.md`,
 "Mutation 1").
 
-**`hack/chart-templates.sh`'s two guards check controller-gen's input, not
-that either transform applied.** Both guards (`grep -q` on
-`config/rbac/role.yaml` and on each file under `config/crd/bases/`) confirm
-the *source* still has the shape the following `sed` is anchored to. A
-broken `sed` with an intact input still exits 0 and writes a corrupted
+**`hack/chart-templates.sh` now checks its outcomes as well as its inputs.**
+Its two original guards (`grep -q` on `config/rbac/role.yaml` and on each
+file under `config/crd/bases/`) confirm only that the *source* still has the
+shape the following `sed` is anchored to, which is exactly what a broken
+`sed` leaves untouched: an intact input and a substitution that never fired
+were indistinguishable to them, and both exited 0 while writing a corrupted
 `rbac.yaml` (a surviving `spawnery-system` literal) or `crds.yaml` (no
-`helm.sh/resource-policy: keep` annotation) — the reviewer reproduced both
-bypasses directly. A ~4-line postcondition would close it: `rbac.yaml` has
-exactly one `{{ .Release.Namespace }}` and no `spawnery-system`; `crds.yaml`
-has the `keep` annotation four times. Deferred, unimplemented at the end of
-this milestone.
+`helm.sh/resource-policy: keep` annotation). The whole-branch review measured
+that the CRD half was uncovered by anything else in the repository — a broken
+CRD anchor gave `make manifests` exit 0, `make chart-lint` exit 0 and
+`go test ./internal/rbacaudit/` fully green, with zero `keep` annotations in
+`crds.yaml` — while the rbac half had become covered by
+`TestTheChartRendersIntoTheNamespaceItIsGiven` when the audit moved onto the
+rendered chart. The script now also asserts, over the files it wrote, that
+`crds.yaml` carries the `keep` annotation once per CRD file processed
+(counted against the files the run walked, so a fifth CRD cannot pass on the
+other four's annotations) and that `rbac.yaml` carries exactly one
+`{{ .Release.Namespace }}` and no `spawnery-system`. Closed; kept here
+because the shape of the mistake — a guard that checks its input rather than
+its outcome — recurred three times in this milestone.
 
 **The forwarding-secret grant's failure is invisible to `test/e2e` by
 design, and narrower than the design document claims.**
 `readForwardingSecret` folds a `403` into a condition message with no
 `is forbidden:` substring and logs nothing
-(`test/e2e/e2e_test.go:180-186`), so no scenario in the harness would ever
+(`test/e2e/e2e_test.go:187-193`), so no scenario in the harness would ever
 notice a broken `config/rbac/forwarding-secret-reader.yaml` grant. Separately,
 `docs/superpowers/specs/2026-08-19-helm-chart-design.md` §9 and this
 milestone's own Task 6 brief both state that a misconfigured grant leaves
 "every group in the namespace refuses with `NetworkNotAccepted`."
 `internal/controller/network_controller.go`'s `Reconcile` sets
-`ConditionAccepted` `True` and persists it unconditionally, before the
-forwarding secret is ever read; the read's outcome only ever reaches
+`ConditionAccepted` `True` and persists it before the forwarding secret is
+ever read, and nothing on the forwarding-secret path can prevent that persist.
+Not *unconditionally* in the literal sense — the milestone 6b entry above ("A
+`Forbidden` on the policy write stops the whole namespace") records the one
+path that does return before it, the NetworkPolicy write at
+`network_controller.go:107` — but unconditionally as regards this failure; the read's outcome only ever reaches
 `ConditionForwardingSecretResolved` and
 `ConditionForwardingSecretRotationPending`, never `Accepted`. The real
 consequence of the missing or misdirected grant is narrower and quieter:
@@ -3480,6 +3493,43 @@ and `Server` in the cluster. Only the second half was observed: `helm
 uninstall` leaving the CRDs standing was driven once against a real cluster
 (`.superpowers/sdd/2026-08-19-helm-chart/task-5-report.md`, "Step 7"). The
 upgrade half is designed and unproven.
+
+**The chart has no `values.schema.json`, so a wrong value is rejected by the
+operator's flag parser rather than by Helm.** Helm validates `values.yaml`
+against a `values.schema.json` if the chart ships one; this chart does not, so
+`--set` accepts anything that is valid YAML. Three examples, all measured in
+this repository's shell:
+
+- `--set operator.startupDeadline=30` — no unit. Renders fine, the container
+  gets `--startup-deadline=30`, and the binary exits at startup with `invalid
+  value "30" for flag -startup-deadline: parse error`.
+- `--set operator.leaderElect=yes` — YAML string, not a bool. Renders fine,
+  and the binary exits with `invalid boolean value "yes" for -leader-elect:
+  parse error`.
+- `--set image.tag=""` with no digest set. Fails at render, but as `Error:
+  YAML parse error on spawnery/templates/deployment.yaml: error converting
+  YAML to JSON: yaml: line 45: mapping values are not allowed in this
+  context` — a message about the template, naming neither the value nor the
+  key that is empty.
+
+In the first two cases the container exits before it does anything, so a
+cluster shows a `CrashLoopBackOff` and nothing that names the value; that last
+step is reasoning from the exits above, not an install anyone drove here. A
+schema would turn all three into a named message at `helm install` time.
+Deliberately not written during the whole-branch review: it is a new
+install-time validation surface that needs its own tests, and `hack/e2e.sh`
+passes four `--set` values (`image.repository`, `image.tag`,
+`image.pullPolicy=Never`, `operator.startupDeadline=20s`) that a schema
+written slightly wrong would break in a target nobody runs on the commit loop.
+
+**`TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` flaked once.**
+`internal/controller/server_controller_test.go`. It failed once during
+milestone 6d's Task 6 `make test`, then passed both in isolation and on a full
+rerun, and 6d changed nothing it touches — the test is envtest-backed and the
+suspicion is timing around the predecessor pod's disappearance, but that is a
+guess and nothing has reproduced it since. Recorded because an unrecorded
+flake is rediscovered from scratch by whoever meets it next; if it recurs,
+this entry is the second data point rather than the first.
 
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
