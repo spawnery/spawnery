@@ -41,11 +41,12 @@ import (
 )
 
 const (
-	// operatorNamespace is where config/deploy/ puts everything, and the
-	// literal the kubebuilder markers carry for the operator's own Secret and
-	// Lease rights. See docs/known-issues.md, "spawnery-system is hard-wired
-	// into the RBAC markers".
-	operatorNamespace = "spawnery-system"
+	// operatorNamespace is where hack/e2e.sh installs the chart, and it is
+	// deliberately not the chart's own default. See the comment on
+	// OPERATOR_NAMESPACE in hack/e2e.sh: every scenario in this package is a
+	// guard over the chart's templating precisely because this is not
+	// spawnery-system.
+	operatorNamespace = "platform-system"
 
 	// testNamespace is where test/e2e/manifests/e2e.yaml puts its objects.
 	testNamespace = "minecraft"

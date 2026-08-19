@@ -20,6 +20,16 @@ CLUSTER="${CLUSTER:-spawnery-e2e}"
 E2E_KEEP="${E2E_KEEP:-0}"
 DEADLINE="${DEADLINE:-300}"
 
+# Deliberately not spawnery-system, the chart's own default. Every one of this
+# run's scenarios is thereby a guard over the chart's templating: a literal
+# that survived puts the Role in a namespace holding no operator, the operator
+# fails at its first certs.Store.Ensure with Forbidden, and
+# theOperatorWasNeverDenied -- the last scenario, unchanged since 6a -- is what
+# catches it. The name shares nothing with the default on purpose: a near-miss
+# like spawnery-operators reads as a variant and invites somebody to tidy it
+# back.
+OPERATOR_NAMESPACE=platform-system
+
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
@@ -39,7 +49,7 @@ created_cluster=0
 
 dump() {
 	echo "================ operator log ================"
-	kubectl -n spawnery-system logs deployment/spawnery-operator --tail=-1 2>&1 || true
+	kubectl -n "$OPERATOR_NAMESPACE" logs deployment/spawnery-operator --tail=-1 2>&1 || true
 	echo "================ objects ================"
 	kubectl get networks,servergroups,proxygroups,servers,pods,pvc -A 2>&1 || true
 	echo "================ events ================"
@@ -69,7 +79,8 @@ cleanup() {
 trap cleanup EXIT
 
 nix build .#operator-image --out-link result-operator
-image="$(nix eval --raw '.#operator-image.imageName'):$(nix eval --raw '.#operator-image.imageTag')"
+image_repo="$(nix eval --raw '.#operator-image.imageName')"
+image_tag="$(nix eval --raw '.#operator-image.imageTag')"
 
 # dockerTools.buildLayeredImage emits a gzipped archive; `kind load
 # image-archive` wants a plain tar. Decompress if it is compressed and copy if
@@ -87,19 +98,23 @@ created_cluster=1
 kind create cluster --name "$CLUSTER" --wait 120s
 kind load image-archive "$archive" --name "$CLUSTER"
 
-# config/rbac/role.yaml carries both a cluster-scoped ClusterRole and a
-# namespace-scoped Role in spawnery-system (the operator's own Secret and
-# Lease rights). Applying it before the namespace exists fails with
-# "namespaces \"spawnery-system\" not found" -- a real failure a first run of
-# this script hit, not a hypothetical. config/deploy/namespace.yaml is applied
-# on its own first so the namespace is there for both role.yaml and the rest
-# of config/deploy/, which kubectl would otherwise apply in the alphabetical
-# file order of that directory (clusterrolebinding, deployment, namespace,
-# ...) -- deployment.yaml before namespace.yaml, the same failure again.
-kubectl apply -f config/crd/bases/
-kubectl apply -f config/deploy/namespace.yaml
-kubectl apply -f config/rbac/role.yaml
-kubectl apply -f config/deploy/
+# A first run of this script hit "namespaces \"spawnery-system\" not found":
+# kubectl apply -f config/deploy/ walks that directory alphabetically, so the
+# Deployment landed before the Namespace. Helm has its own answer to install
+# ordering; use it, rather than porting the script's sequence. It also creates
+# the CRDs in charts/spawnery/templates/, so there is no separate
+# `kubectl apply -f config/crd/bases/` here either.
+#
+# The image is set to what was just built, not whatever a registry holds, and
+# imagePullPolicy Never makes that a guarantee rather than a hope: a missing
+# local image then fails loudly instead of being fetched.
+helm install spawnery charts/spawnery \
+	--namespace "$OPERATOR_NAMESPACE" \
+	--create-namespace \
+	--set image.repository="$image_repo" \
+	--set image.tag="$image_tag" \
+	--set image.pullPolicy=Never \
+	--set operator.startupDeadline=20s
 
 # The per-namespace grant milestone 5c deliberately kept out of config/deploy/.
 # The ClusterRole grants no access to secrets outside the operator's own
@@ -125,7 +140,22 @@ kubectl apply -f config/deploy/
 # can exist before the operator ever looks; applyManifest tolerates the
 # namespace already being there.
 kubectl create namespace minecraft
-kubectl apply -n minecraft -f config/rbac/forwarding-secret-reader.yaml
+
+# config/rbac/forwarding-secret-reader.yaml hard-codes its RoleBinding
+# subject's namespace to spawnery-system (line 65) because that is the
+# operator's own default -- this file stays outside the chart on purpose, per
+# its own header comment, and nothing in this milestone templates it. With the
+# operator running in $OPERATOR_NAMESPACE instead, applying it unedited would
+# name a ServiceAccount that does not exist where the operator actually runs,
+# and every Network here would report SecretReadForbidden for a reason that
+# has nothing to do with the templating this run exists to check. A real
+# administrator installing the chart into a non-default namespace hits this by
+# hand and has to edit the file before applying it -- that manual step is real
+# and this script does not remove it from the world, only from this one run:
+# it performs the identical edit programmatically so the run matches
+# $OPERATOR_NAMESPACE instead of stopping to ask a person to do it.
+sed "s/namespace: spawnery-system/namespace: ${OPERATOR_NAMESPACE}/" config/rbac/forwarding-secret-reader.yaml |
+	kubectl apply -n minecraft -f -
 
 # The second namespace exists to be hostile. Pod Security baseline disallows
 # host ports, so the HostPort group the manifest puts here can never get a
@@ -134,29 +164,9 @@ kubectl apply -n minecraft -f config/rbac/forwarding-secret-reader.yaml
 # creation rather than later so no pod can slip in before it.
 kubectl create namespace minecraft-baseline
 kubectl label namespace minecraft-baseline pod-security.kubernetes.io/enforce=baseline
-kubectl apply -n minecraft-baseline -f config/rbac/forwarding-secret-reader.yaml
+sed "s/namespace: spawnery-system/namespace: ${OPERATOR_NAMESPACE}/" config/rbac/forwarding-secret-reader.yaml |
+	kubectl apply -n minecraft-baseline -f -
 
-# Three edits, none of which belongs in the manifest itself.
-#
-# The image: the run tests the bits just built, not whatever the registry
-# happens to hold. imagePullPolicy Never makes that a guarantee rather than a
-# hope -- with it, a missing local image fails loudly instead of being fetched.
-#
-# The deadline: config/deploy/deployment.yaml carries the production five
-# minutes, which is longer than this run. Appending a second occurrence rather
-# than rewriting the list means the manifest stays the single place the flags
-# are written; Go's flag package resolves a repeated flag to the last one, and
-# scenario 6 is what proves it did.
-kubectl -n spawnery-system patch deployment spawnery-operator --type=json -p "$(
-	cat <<EOF
-[
-  {"op": "replace", "path": "/spec/template/spec/containers/0/image", "value": "${image}"},
-  {"op": "add", "path": "/spec/template/spec/containers/0/imagePullPolicy", "value": "Never"},
-  {"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--startup-deadline=20s"}
-]
-EOF
-)"
-
-kubectl -n spawnery-system rollout status deployment/spawnery-operator --timeout="${DEADLINE}s"
+kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --timeout="${DEADLINE}s"
 
 go test -tags e2e -count=1 -v -timeout 20m ./test/e2e/...

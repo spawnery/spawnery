@@ -40,9 +40,10 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.operator.leaderElect }}
-            # The production value. This manifest is installed, not test
-            # scaffolding: hack/e2e.sh appends a second --startup-deadline=20s
-            # for its own run, and the flag package takes the last occurrence.
+            # .Values.operator.startupDeadline defaults to the production
+            # value (see values.yaml); hack/e2e.sh overrides it with
+            # --set operator.startupDeadline=20s for its own run, so there is
+            # one occurrence of the flag, set from one value.
             - --startup-deadline={{ .Values.operator.startupDeadline }}
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
