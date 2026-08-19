@@ -419,16 +419,18 @@ DNATed a Service ClusterIP to a pod IP. The RKE2 rollout at the
 end of milestone 6 is the first thing that can turn these objects into a
 guarantee.
 
-Milestone 6 continues with 6c, the `LoadBalancer` and `HostPort` expose
-strategies, then 6d, the Helm chart, and 6e, CI. It ends with the whole system
-rolled out to a real RKE2 cluster and driven from a runbook.
+Milestone 6 continues with 6d, the Helm chart, and 6e, CI. It ends with the
+whole system rolled out to a real RKE2 cluster and driven from a runbook.
 
-Anyone starting milestone 6c begins at
-[`docs/handover-milestone-6b.md`](docs/handover-milestone-6b.md): it says where
-6b stopped, what it proved and what it only wrote down, what 6c finds in place,
-and what the RKE2 rollout now owes — which has grown by everything 6b could not
+Anyone starting milestone 6d begins at
+[`docs/handover-milestone-6c.md`](docs/handover-milestone-6c.md): it says where
+6c stopped, what it proved and what it only wrote down, what 6d finds in place,
+and what the RKE2 rollout now owes — which has grown by everything 6c could not
 prove. It is written to be read by someone with no memory of how any of this
 was built.
+[`docs/handover-milestone-6b.md`](docs/handover-milestone-6b.md), written for 6c
+and kept because its §2 and §3 are the record of what 6c started from and had
+to decide,
 [`docs/handover-milestone-6.md`](docs/handover-milestone-6.md), written for 6b
 and kept because its §2 and §3 are the record of what 6b started from and had
 to decide,
