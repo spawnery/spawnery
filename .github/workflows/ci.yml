@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A second push to the same branch cancels the first: nothing here needs the
+# older run's answer, and the runners are shared.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # make test runs manifests, generate, fmt, vet and chart-lint before
+    # go test -race across every package, several of which are envtest-backed
+    # and start a real API server. Twenty-five minutes is roughly double what
+    # it takes on the author's machine.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Timed on purpose. The store is cold on every hosted runner, and this
+      # number is what decides whether a cache is worth its dependency --
+      # see the design's §2.1.
+      - name: Warm the dev shell
+        run: |
+          start=$(date +%s)
+          nix develop -c true
+          echo "dev shell ready in $(( $(date +%s) - start ))s"
+
+      - name: make test
+        run: nix develop -c make test
