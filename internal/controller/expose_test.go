@@ -725,3 +725,111 @@ func (f *fixture) enforcePodSecurity(t *testing.T, profile string) {
 		t.Fatalf("label namespace %s: %v", f.ns, err)
 	}
 }
+
+// A refused create must leave the group's status alone on every pass after
+// the first, and this test fails if it does not.
+//
+// The API server names the pod it refused, and NewProxyName draws a fresh
+// random suffix for every attempt, so the refusal text differs on every pass.
+// Storing it each time bumped resourceVersion; For(&ProxyGroup{}) carries no
+// predicate, so the update event re-enqueued the group immediately, ahead of
+// the rate-limited retry, and the group spun. The final review of 6c
+// measured what that costs in a cluster: 3,940 refusals in a 139-second E2E
+// run, where the backoff alone predicts about fifteen.
+//
+// The second half of this test is not decoration. The stored message has to
+// stay the API server's own words -- the remedy is in them and nothing else
+// knows it -- so a fix that stopped the churn by paraphrasing the refusal
+// into words of its own would pass the resourceVersion assertion while
+// breaking something worse. Both are asserted here for that reason.
+func TestARefusedProxyPodStopsRewritingTheGroup(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.enforcePodSecurity(t, "baseline")
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeHostPort,
+			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+		}
+	})
+
+	const passes = 4
+	var versions, messages []string
+	for i := 1; i <= passes; i++ {
+		// Every pass fails: the namespace forbids host ports for as long as
+		// its label stands, which is forever. reconcileProxyGroup fails the
+		// test on any error, so it is the wrong helper here.
+		if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+			NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
+		}); err == nil {
+			t.Fatalf("pass %d succeeded in a namespace that forbids host ports", i)
+		}
+		group := f.proxyGroup("gateway")
+		cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+		if cond == nil || cond.Status != metav1.ConditionTrue ||
+			cond.Reason != spawneryv1alpha1.ReasonProxyPodRejected {
+			t.Fatalf("pass %d: Degraded = %+v, want True/%s", i, cond,
+				spawneryv1alpha1.ReasonProxyPodRejected)
+		}
+		versions = append(versions, group.ResourceVersion)
+		messages = append(messages, cond.Message)
+	}
+
+	// From the second pass on, nothing about the group changes: the first
+	// pass is where the refusal is recorded, and every pass after it has
+	// nothing new to say.
+	for i := 2; i < passes; i++ {
+		if versions[i] != versions[1] {
+			t.Fatalf("resourceVersion by pass = %v, want no change after the second. "+
+				"A refused pass that rewrites the object turns the ProxyGroup watch "+
+				"into an immediate re-enqueue ahead of the backoff, and the operator "+
+				"spins at the API server's expense for as long as the refusal stands",
+				versions)
+		}
+		if messages[i] != messages[1] {
+			t.Errorf("message by pass = %v, want the stored refusal to hold still", messages)
+		}
+	}
+
+	// The stored text is the cluster's, verbatim: the object it names, the
+	// verb the API server used, the policy that refused it, and the field
+	// that violated it. Nothing here is this operator's wording.
+	got := messages[len(messages)-1]
+	for _, want := range []string{`pods "`, "is forbidden:", "PodSecurity", "hostPort"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("message = %q, want it to contain %q -- the remedy is in the API "+
+				"server's own words and nothing else knows it", got, want)
+		}
+	}
+}
+
+// sameRefusal is the one thing standing between "stop rewriting the object"
+// and "report a stale remedy forever", so it is pinned on its own rather than
+// only through the reconcile above.
+func TestSameRefusalSeparatesThePodNameFromTheRemedy(t *testing.T) {
+	const first = `pods "gateway-kt84" is forbidden: violates PodSecurity ` +
+		`"baseline:latest": hostPort (container "velocity" uses hostPort 25565)`
+	const retry = `pods "gateway-9xz2" is forbidden: violates PodSecurity ` +
+		`"baseline:latest": hostPort (container "velocity" uses hostPort 25565)`
+	const other = `pods "gateway-9xz2" is forbidden: exceeded quota: pods, ` +
+		`used: 4, limited: 4`
+	const scheduler = "gateway-kt84 cannot be scheduled: 0/1 nodes are available: " +
+		"1 node(s) didn't have free ports for the requested pod ports."
+	const schedulerElsewhere = "gateway-9xz2 cannot be scheduled: 0/1 nodes are available: " +
+		"1 node(s) didn't have free ports for the requested pod ports."
+
+	if !sameRefusal(first, retry) {
+		t.Errorf("two attempts at the same refused create read as different refusals; "+
+			"that is the hot loop\n%q\n%q", first, retry)
+	}
+	if sameRefusal(first, other) {
+		t.Errorf("a quota refusal reads as the PodSecurity one it replaced, so the "+
+			"group would keep reporting a remedy that no longer applies\n%q\n%q",
+			first, other)
+	}
+	if sameRefusal(scheduler, schedulerElsewhere) {
+		t.Errorf("two different unschedulable pods read as one; the pod's name is the "+
+			"only thing making that condition attributable\n%q\n%q",
+			scheduler, schedulerElsewhere)
+	}
+}

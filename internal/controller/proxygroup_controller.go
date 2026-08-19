@@ -1469,9 +1469,36 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 // This is the first writer of Degraded on a ProxyGroup. setStatus has always
 // read it and routed it to phase Degraded; until now only ServerGroup ever
 // set one.
+//
+// A condition already saying this exact thing is left byte-for-byte alone,
+// and that is load-bearing rather than an optimisation. The refused-create
+// caller passes the API server's own text, which names the pod it refused --
+// and NewProxyName draws a fresh random suffix for every attempt, so the
+// message differs on every single pass. Rewriting it made writeStatus bump
+// resourceVersion every pass, which the For(&ProxyGroup{}) watch turned
+// straight back into an enqueue, ahead of the rate-limited retry: a group
+// whose pods the API server refuses -- exactly what a HostPort group in a
+// baseline namespace is -- span at roughly 28 reconciles a second, forever.
+// The milestone measured that as 3,940 refusals in a 139-second E2E run and
+// filed the number as a normal cost; it was not.
+//
+// sameRefusal is what makes "this exact thing" mean the refusal rather than
+// the string: two messages that differ only in the name of the object the
+// API server refused are the same refusal, so the write is skipped, while a
+// genuinely different refusal under the same reason -- a quota after a Pod
+// Security fix, say -- still replaces the message. Nothing here edits what
+// gets stored. The stored text stays the cluster's own, verbatim, because
+// the remedy is in the API server's wording and nothing else knows it.
 func setProxyPodsBlocked(group *spawneryv1alpha1.ProxyGroup, reason, message string) bool {
-	was := meta.IsStatusConditionTrue(group.Status.Conditions,
+	// Read out, not held: FindStatusCondition returns a pointer into the
+	// slice SetStatusCondition below writes through, so a verdict read after
+	// that call is the value just written and never the value it replaced.
+	existing := meta.FindStatusCondition(group.Status.Conditions,
 		spawneryv1alpha1.ConditionDegraded)
+	was := existing != nil && existing.Status == metav1.ConditionTrue
+	if was && existing.Reason == reason && sameRefusal(existing.Message, message) {
+		return false
+	}
 	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionDegraded,
 		Status:  metav1.ConditionTrue,
@@ -1479,6 +1506,41 @@ func setProxyPodsBlocked(group *spawneryv1alpha1.ProxyGroup, reason, message str
 		Message: message,
 	})
 	return !was
+}
+
+// sameRefusal reports whether two cluster messages describe the same refusal,
+// differing at most in the name of the object refused.
+//
+// The API server renders a refused create as
+//
+//	pods "gateway-kt84" is forbidden: violates PodSecurity "baseline:latest": hostPort ...
+//
+// where the first quoted run is the pod's name and everything after it is the
+// remedy. The name is the only part that moves between two attempts at the
+// same create, and it names a pod that never came into existence, so two
+// messages that agree once it is elided are the same fact reported twice.
+//
+// This is a comparison and only a comparison: it elides nothing from the
+// message that gets stored on the condition.
+//
+// The unschedulable half of Degraded carries no quoted run at all -- its
+// message is "<pod> cannot be scheduled: <scheduler text>" -- so both sides
+// pass through unchanged there and a different pod, or a different scheduler
+// verdict on the same pod, is correctly seen as a different fact.
+func sameRefusal(a, b string) bool {
+	return elideFirstQuoted(a) == elideFirstQuoted(b)
+}
+
+func elideFirstQuoted(msg string) string {
+	open := strings.Index(msg, `"`)
+	if open < 0 {
+		return msg
+	}
+	rest := strings.Index(msg[open+1:], `"`)
+	if rest < 0 {
+		return msg
+	}
+	return msg[:open+1] + msg[open+1+rest:]
 }
 
 // reportBlockedProxies is the second of the two ways a proxy pod fails to
