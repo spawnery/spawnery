@@ -54,6 +54,11 @@ type Store struct {
 // the operator's own namespace, and a cluster-wide write on secrets would be the
 // wrong right to hand out. Note the absent list and watch — Store uses an
 // uncached client precisely so those are not needed.
+//
+// spawnery-system below is a placeholder, not a claim about where the bundle
+// actually lives: controller-gen needs some literal namespace to emit a
+// namespaced Role at all, and hack/chart-templates.sh replaces it with Helm's
+// release namespace on every `make manifests`.
 // +kubebuilder:rbac:groups="",namespace=spawnery-system,resources=secrets,verbs=get;create;update
 
 // Ensure returns a usable bundle, creating or renewing it if needed. Safe to

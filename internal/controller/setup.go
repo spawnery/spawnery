@@ -69,6 +69,11 @@ type Options struct {
 // wiring rather than on a reconciler. The namespace qualifier puts the right in
 // a namespaced Role — granting it cluster-wide would let the operator take a
 // leader lock anywhere.
+//
+// spawnery-system below is not where the operator runs; it is the literal
+// controller-gen requires to emit a namespaced Role at all. Real placement is
+// decided at install time, when hack/chart-templates.sh rewrites this
+// namespace to Helm's release namespace as part of `make manifests`.
 // +kubebuilder:rbac:groups=coordination.k8s.io,namespace=spawnery-system,resources=leases,verbs=create;get;update
 
 // SetupAll registers every controller and the orphan sweep with the manager.

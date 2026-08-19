@@ -16,6 +16,7 @@ manifests:
 	$(CONTROLLER_GEN) crd rbac:roleName=spawnery-operator paths="./..." \
 		output:crd:artifacts:config=config/crd/bases \
 		output:rbac:artifacts:config=config/rbac
+	./hack/chart-templates.sh
 
 .PHONY: generate
 generate:
