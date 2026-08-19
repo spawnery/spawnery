@@ -34,6 +34,12 @@ cannot know the game namespaces an operator will create later, and rendering
 a namespaced grant for a namespace that does not exist yet is not something
 `helm install` can do. Its own header comment explains this in full.
 
+Because forgetting this step fails silently rather than loudly (see below),
+`helm install` prints it: `charts/spawnery/templates/NOTES.txt` names the
+step, and when the release namespace is not `spawnery-system` it also prints
+the exact line the file needs changed to. That is a reminder, not a check —
+nothing verifies the grant was ever applied.
+
 **Its RoleBinding hard-codes the operator's ServiceAccount to this chart's own
 documented default namespace, `spawnery-system`, at line 65:**
 
