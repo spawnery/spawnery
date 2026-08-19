@@ -61,38 +61,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Unlike test and lint, this job builds a derivation that is not on
-      # any binary cache -- gradle.fetchDeps's updateScript is unique to
-      # this flake -- so it is the one job that actually invokes Nix's
-      # build sandbox rather than only substituting. That sandbox uses
-      # bwrap, which needs unprivileged user namespaces; Ubuntu's hosted
-      # runners restrict those by default via AppArmor, and bwrap fails
-      # with "setting up uid map: Permission denied". `sandbox = false`
-      # alone did not avoid this: install-nix-action's default multi-user
-      # daemon still invoked bwrap regardless of the client-supplied
-      # setting. Installing single-user instead removes the daemon from
-      # the picture entirely, so the same `sandbox = false` is honored for
-      # the one build (the mitmCache updateScript) this job needs to
-      # perform from scratch -- no privilege change to the runner itself.
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
-          install_options: "--no-daemon"
           extra_nix_config: |
             experimental-features = nix-command flakes
-            sandbox = false
-
-      # Debugging aid for the bwrap/sandbox investigation, not a permanent
-      # step -- shows which nix.conf(s) exist and what "sandbox" resolves
-      # to once Nix is actually installed.
-      - name: Debug Nix sandbox config
-        run: |
-          echo "--- nix config show sandbox ---"
-          nix --extra-experimental-features 'nix-command flakes' config show sandbox || true
-          echo "--- /etc/nix/nix.conf ---"
-          cat /etc/nix/nix.conf 2>&1 || true
-          echo "--- ~/.config/nix/nix.conf ---"
-          cat ~/.config/nix/nix.conf 2>&1 || true
 
       # The drift guard docs/known-issues.md has been parking since milestone
       # 2c. make agent-deps regenerates agent/deps.json by resolving against
@@ -100,8 +73,25 @@ jobs:
       # it lives here. It is also the only check in this workflow that can go
       # red for a reason outside this repository: an outage upstream, or an
       # artifact moving, produces a diff nobody caused.
+      #
+      # USE_BWRAP=0: the mitmCache updateScript nixpkgs builds for this
+      # (gradle.fetchDeps) wraps the actual Gradle dependency fetch in its
+      # own bwrap sandbox -- unrelated to Nix's own build sandbox, and on
+      # by default -- solely "to prevent messy build scripts from touching
+      # ~" per the script's own comment. That bwrap call needs unprivileged
+      # user namespaces, which GitHub's hosted Ubuntu runners restrict by
+      # default, so it fails before Gradle ever runs: "bwrap: setting up
+      # uid map: Permission denied". Two earlier attempts on this branch
+      # (sandbox = false in extra_nix_config; installing Nix single-user)
+      # changed Nix's own sandbox setting and had no effect, because Nix's
+      # sandbox was never the thing failing -- this script's independent
+      # bwrap call was. USE_BWRAP=0 is the escape hatch the script itself
+      # defines for exactly this case, trading only the containment of a
+      # trusted, first-party Gradle invocation touching $HOME.
       - name: make agent-deps
         run: nix develop -c make agent-deps
+        env:
+          USE_BWRAP: "0"
 
       - name: agent/deps.json is in step with build.gradle.kts
         run: git diff --exit-code -- agent/deps.json
