@@ -3,7 +3,7 @@
  "!version": 1,
  "https://plugins.gradle.org/m2": {
   "com/fasterxml#oss-parent/55": {
-   "pom": "sha256-D14Y8rNev22Dn3/VSZcog/aWwhD5rjIwr9LCC6iGwE0="
+   "pom": "sha256-000000000000000000000000000000000000000A="
   },
   "com/fasterxml#oss-parent/61": {
    "pom": "sha256-NklRPPWX6RhtoIVZhqjFQ+Er29gF7e75wSTbVt0DZUQ="
