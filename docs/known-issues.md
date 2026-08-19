@@ -181,8 +181,11 @@ with CI in milestone 6.
 *Half met by milestone 6a: the mechanism exists, the push has not happened.*
 `hack/publish.sh` (`make publish`) copies all three Nix image archives straight
 to `ghcr.io/spawnery/` with `skopeo`, refuses a tag that is already there unless
-`FORCE=1`, and can write the operator's returned digest back into
-`config/deploy/deployment.yaml` under `WRITE_DIGEST=1`. What has actually been
+`FORCE=1`, and can write the operator's returned digest back under
+`WRITE_DIGEST=1` — into `config/deploy/deployment.yaml` as milestone 6a left
+it; milestone 6d moved the target to `charts/spawnery/values.yaml`'s
+`image.digest` key once the chart became the only installation form, with no
+change to the underlying claim below. What has actually been
 run is `DRY_RUN=1`, which contacts no registry. **The first real push needs a
 GitHub token with `write:packages` that nobody in milestone 6a had, so it has
 not been driven by anyone**, and `ghcr.io/spawnery/paper` was confirmed not
@@ -330,11 +333,14 @@ will meet the same wall, and the durable answer there is to run the operator
 inside the cluster from its own image, where the Service is a Service.
 
 *Closed by milestone 6a for the half that matters, and still true for the
-other.* Anything that runs the operator **in** the cluster now gets the Service
-from `config/deploy/service.yaml`, which carries an ordinary selector over
+other.* Anything that runs the operator **in** the cluster now gets a Service
+carrying an ordinary selector over
 `app.kubernetes.io/name=spawnery,app.kubernetes.io/component=operator` and needs
 no hand-written `Endpoints` and no relay; `hack/e2e.sh` installs exactly that and
-`make e2e` runs on it. The README's local `go run` flow is unchanged and still
+`make e2e` runs on it. *The source moved under milestone 6d*: what was
+`config/deploy/service.yaml` is now `charts/spawnery/templates/service.yaml`,
+rendered by `helm install` rather than applied directly — the selector itself
+is unchanged. The README's local `go run` flow is unchanged and still
 needs the whole workaround — the selector-less `Service`, the hand-written
 `Endpoints`, and under rootless Podman the relay container — because the process
 is still outside the cluster there and no selector can reach it. Read this entry
@@ -531,12 +537,21 @@ but 3c is where its absence first has to be worked around a second time
 rather than once.
 
 *Decided by milestone 6a: it runs inside.* `nix/operator-image.nix` builds
-`.#operator-image`, `hack/e2e.sh` loads that archive into a `kind` cluster and
-installs `config/deploy/`, and the operator runs there as a Deployment under the
-`spawnery-operator` ServiceAccount in `spawnery-system` — which is what
-`make e2e` drives and what every claim in `test/e2e` is made against. The
-hand-built `Service`/`Endpoints` pair is gone from that path. It is still how
-the README's `go run` flow works, and that flow is unchanged.
+`.#operator-image`, `hack/e2e.sh` loads that archive into a `kind` cluster, and
+the operator runs there as a Deployment under the `spawnery-operator`
+ServiceAccount — which is what `make e2e` drives and what every claim in
+`test/e2e` is made against. The hand-built `Service`/`Endpoints` pair is gone
+from that path. It is still how the README's `go run` flow works, and that
+flow is unchanged.
+
+*Narrowed by milestone 6d, in two ways at once.* `hack/e2e.sh` no longer
+installs `config/deploy/` — that directory is gone — it runs
+`helm install charts/spawnery`. And the namespace named above,
+`spawnery-system`, is no longer where `make e2e` actually installs: it now
+installs into `platform-system`, chosen to share nothing with the chart's own
+documented default. `spawnery-system` remains true only as the chart's
+documented default for a real operator, not as what this repository's own
+driven run uses.
 
 What follows is what 3b discovered while closing its own two preconditions,
 and what 3c inherits as a result.
@@ -2443,9 +2458,21 @@ the manifest and the `kubectl apply` line
 `ForwardingSecretRotationPending` reads `Unknown/SecretUnresolved` because
 there is no digest to compare against. So the gap announces itself rather than
 hiding — but it is a gap, and a namespace nobody opened has rotation detection
-that reports nothing about rotations. Closing it for good belongs to milestone
-6's Helm chart, which is where rendering this Role for each configured network
-namespace goes.
+that reports nothing about rotations.
+
+*Not closed by milestone 6d, on purpose — the design changed rather than the
+gap.* This entry expected the Helm chart to render this Role for each
+configured network namespace; 6d's design
+(`docs/superpowers/specs/2026-08-19-helm-chart-design.md` §2) decided the
+opposite: a chart installed once cannot know the game namespaces a user will
+create later, so `config/rbac/forwarding-secret-reader.yaml` stays a
+hand-applied file, exactly as it was. What 6d changed is elsewhere — an
+operator installed outside the chart's default namespace now needs a manual
+edit to this file's RoleBinding subject before applying it anywhere, and
+`charts/spawnery/README.md` carries that edit in its installation steps. The
+consequence of skipping it is narrower than a first read of the design
+suggests: `ServerGroup`s and `ProxyGroup`s in the namespace keep scheduling,
+and only rotation detection stays blind — see "From milestone 6d" below.
 
 **No per-group condition.** Which group is still stale is in the Network
 condition's message and nowhere else: `staleSummary`
@@ -2551,6 +2578,14 @@ without secret and lease permissions, and the operator fails at its first
 where the problem is. The Helm chart has to parameterize the namespace here, not
 only in the object names.
 
+*Closed by milestone 6d, for the namespace the operator actually runs in.*
+`hack/chart-templates.sh` rewrites the generated Role's `namespace:` field to
+`{{ .Release.Namespace }}` in `charts/spawnery/templates/rbac.yaml`. The two
+markers themselves are unchanged — controller-gen needs *some* namespace to
+emit a Role at all — but each now carries a comment saying the literal is a
+placeholder the render step replaces, not a statement about where the
+operator runs. See "From milestone 6d" below.
+
 **Completeness of the permission table.** The audit in `internal/rbacaudit`
 catches drift between table and role. If a permission is missing from both, it
 stays green — only the operator running under its ServiceAccount in a real
@@ -2617,11 +2652,14 @@ with three of its four bullets amended and its conclusion still standing.*
   sentence as "a pod in a connection loop with one good token is not rate
   limited". What it bounds is the API-server load such a pod can generate, not
   the connections it can open.
-- **The NetworkPolicy exists in `config/deploy/`**, admitting 9443 on the
-  operator pod only from pods labelled `spawnery.cloud/managed-by`, in any
-  namespace. Whether it removes the anonymous half of the attack depends
-  entirely on the cluster's CNI, and nothing in this repository has observed a
-  connection to 9443 being refused — see "From milestone 6b" below.
+- **The NetworkPolicy exists** (`config/deploy/` at 6b, now
+  `charts/spawnery/templates/networkpolicy.yaml`, gated on
+  `values.networkPolicy.enabled` since milestone 6d and on by default),
+  admitting 9443 on the operator pod only from pods labelled
+  `spawnery.cloud/managed-by`, in any namespace. Whether it removes the
+  anonymous half of the attack depends entirely on the cluster's CNI, and
+  nothing in this repository has observed a connection to 9443 being
+  refused — see "From milestone 6b" below.
 
 **So the conclusion of this entry survives 6b intact.** A single pod in a
 connection loop can still open connections without bound, and a *compromised
@@ -2802,15 +2840,18 @@ Both are absence-of-agent gaps in what the harness proves rather than defects:
 a deployment with a resolvable image exercises both. `pods: patch` is
 deliberately **not** on this list, and why is under "On the RBAC audit" below.
 
-**The digest reference in `config/deploy/deployment.yaml` is exercised by
-nothing.** `hack/e2e.sh` patches the Deployment's image to the archive it just
-built and sets `imagePullPolicy: Never`, precisely so the run tests those bits
-and not whatever a registry holds — so `make e2e` never resolves the reference
-the manifest ships. Nor has anything else: no `make publish` has been driven
-(see "No image is published" above), so no digest has ever been written back
-and the manifest still carries the version tag. The design's acceptance
-criterion 7 — "a digest reference that resolves" — is therefore **open**, and
-it is the repository owner's to close, in the same way an evidence run is.
+**The digest reference is exercised by nothing.** `hack/e2e.sh` sets the
+chart's `image.repository`/`image.tag` values to the archive it just built and
+`image.pullPolicy=Never`, precisely so the run tests those bits and not
+whatever a registry holds — so `make e2e` never resolves a digest reference at
+all. Nor has anything else: no `make publish` has been driven (see "No image
+is published" above), so no digest has ever been written back. What it would
+be written back to moved under milestone 6d: `config/deploy/deployment.yaml`
+no longer exists, and `hack/publish.sh`'s `WRITE_DIGEST=1` path now sets
+`charts/spawnery/values.yaml`'s `image.digest` key. The design's acceptance
+criterion 7 — "a digest reference that resolves" — is therefore still
+**open**, and it is the repository owner's to close, in the same way an
+evidence run is.
 
 **The E2E cluster is a single node, so a whole class of behaviour is
 untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
@@ -2851,6 +2892,14 @@ half follows from the same ordering. The script now applies
 exactly this ordering problem and has to answer it with Helm's own ordering
 rather than by copying a script.
 
+*Closed by milestone 6d, by deleting the hazard rather than porting it.*
+`config/deploy/` — the directory this whole entry is about — no longer
+exists. The chart templates no `Namespace` object at all; `--create-namespace`
+is Helm's own answer, and without it `helm install` refuses immediately with
+the same `namespaces "..." not found` this entry names, before any other
+object is applied. There is no alphabetical-apply-order for a chart's own
+install ordering to walk into.
+
 **Any patch to a `ServerGroup`'s spec bumps `metadata.generation`,** and
 therefore starts a rolling update beside whatever the patch was for. Task 5's
 scaling scenario was written against `minReplicas`, passed, and passed for the
@@ -2878,6 +2927,15 @@ it was caught by reading the switch rather than by the run.
   when it matches nothing. Inert today — the manifest has one matching line,
   verified by count — and silent if that line's shape ever moves. A `grep -q`
   guard before the `sed` closes it.
+
+  *Closed by milestone 6d, and with a second guard this entry did not ask
+  for.* The rewrite now targets `charts/spawnery/values.yaml`'s `image.digest`
+  key rather than `config/deploy/deployment.yaml`. `hack/publish.sh` gained
+  the `grep -q` pre-check this entry named, and — because this exact failure
+  class (an intact anchor, a `sed` that silently no-ops) shipped twice
+  elsewhere in the same milestone — a second, post-substitution `grep`
+  confirming the file now actually carries the written digest, refusing
+  rather than claiming success if it does not.
 - `hack/operator-image-test.sh` says Go's `flag` package "exits 2 for `-h`"; it
   exits 0, and 2 is for parse errors. The script discards the status and
   matches on output, so nothing depends on it — it only misleads the next
@@ -3022,18 +3080,21 @@ agent failure is a downstream effect and the first thing to check is the wrong
 one.
 
 **The peerless rule is the widest-open thing 6b writes, and one unit test is
-all that stands behind it.** `config/deploy/networkpolicy.yaml`'s second
-ingress rule has no `from` at all — it admits 8081 and 8080 from anywhere in
+all that stands behind it.** The operator's own `NetworkPolicy` (`config/deploy/networkpolicy.yaml`
+at 6b, now `charts/spawnery/templates/networkpolicy.yaml`)'s second ingress
+rule has no `from` at all — it admits 8081 and 8080 from anywhere in
 the cluster — because the kubelet's source is a node rather than a pod and no
 selector names it. That is the only formulation correct on every CNI, and it is
 also the rule where a mistake is worst: an extra port there admits that port
 from every source in the cluster. Since the harness enforces nothing, the
 manifest test in `internal/rbacaudit/deploy_envtest_test.go` is the only thing
-in this repository standing behind it. Task 3's fix round made that check
-bidirectional — it had been one-directional, and adding port 9999 to the
-peerless rule left it green — and it now matches the container port *named*
-`agent` rather than the number 9443, so it survives a port change. The most
-dangerous mutation of all, adding 9443 to the peerless rule, is caught.
+in this repository standing behind it — since milestone 6d that test reads the
+rendered chart rather than the file directly, and the claim is otherwise
+unchanged. Task 3's fix round made that check bidirectional — it had been
+one-directional, and adding port 9999 to the peerless rule left it green — and
+it now matches the container port *named* `agent` rather than the number
+9443, so it survives a port change. The most dangerous mutation of all,
+adding 9443 to the peerless rule, is caught.
 
 **A `Forbidden` on the policy write stops the whole namespace, and the design
 did not predict that.** `reconcileNetworkPolicy` is called after the `Accepted`
@@ -3339,6 +3400,87 @@ rather than only the successful one — and that is a change to the shape of
 `Reconcile`, not a patch to one branch of it. It is 6d's or later, and it
 should be taken as a whole or not at all.
 
+## From milestone 6d (the Helm chart)
+
+`config/deploy/` no longer exists. The operator installs by
+`helm install charts/spawnery`, and `internal/rbacaudit` now audits what
+`helm template` actually renders rather than an intermediate on disk. Full
+account: `docs/handover-milestone-6d.md`.
+
+**`theOperatorWasNeverDenied` guards a narrower hazard than
+`docs/superpowers/specs/2026-08-19-helm-chart-design.md` §5.2 claims.** §5.2
+says that check "becomes, without being modified at all, the guard over this
+milestone's principal risk." A mutation putting a `spawnery-system` literal
+on the chart's own RoleBinding `metadata.namespace` was instead caught by
+`helm install` itself — Kubernetes refuses a RoleBinding naming a namespace
+that does not exist, at admission, before `go test` ever runs. The
+equivalent leak in a RoleBinding's *subject* namespace — the shape that
+actually matches `config/rbac/forwarding-secret-reader.yaml:65`'s real
+hazard — is not validated by the API server at all, and is, by the design's
+own reasoning, the path `theOperatorWasNeverDenied` exists to catch once the
+resulting denial lands on a write verb. That path was never mutated by this
+milestone. The claim holds for one of the two ways the defect can leak and
+is unproven for the other. Caught by mutation
+(`.superpowers/sdd/2026-08-19-helm-chart/task-4-report.md`, "Mutation 1").
+
+**`make chart-lint` does not catch a chart that renders with an empty
+namespace.** The plan justified `chart-lint`'s `helm template` line by a
+chart that lints but does not render. Measured directly with a typo'd
+`{{ .Release.Namspace }}` in a template: Helm v4.2.3 renders an unresolved
+`.Release` field as empty rather than erroring, so both `helm lint` and
+`helm template` exit 0.
+`internal/rbacaudit`'s `TestTheChartRendersIntoTheNamespaceItIsGiven` does
+not catch it either — it asserts only the Deployment's and the Role's
+namespaces, never the Service's. What catches it is
+`TestAgentServiceReachesTheOperatorPods`
+(`internal/rbacaudit/deploy_envtest_test.go:468`), incidentally: it applies
+the rendered Service into envtest's real API server, which refuses to
+create a `Service` with an empty `namespace`. `chart-lint` still catches a
+template that fails to render at all; it does not catch this class. Measured
+by mutation (`.superpowers/sdd/2026-08-19-helm-chart/task-5-report.md`,
+"Mutation 1").
+
+**`hack/chart-templates.sh`'s two guards check controller-gen's input, not
+that either transform applied.** Both guards (`grep -q` on
+`config/rbac/role.yaml` and on each file under `config/crd/bases/`) confirm
+the *source* still has the shape the following `sed` is anchored to. A
+broken `sed` with an intact input still exits 0 and writes a corrupted
+`rbac.yaml` (a surviving `spawnery-system` literal) or `crds.yaml` (no
+`helm.sh/resource-policy: keep` annotation) — the reviewer reproduced both
+bypasses directly. A ~4-line postcondition would close it: `rbac.yaml` has
+exactly one `{{ .Release.Namespace }}` and no `spawnery-system`; `crds.yaml`
+has the `keep` annotation four times. Deferred, unimplemented at the end of
+this milestone.
+
+**The forwarding-secret grant's failure is invisible to `test/e2e` by
+design, and narrower than the design document claims.**
+`readForwardingSecret` folds a `403` into a condition message with no
+`is forbidden:` substring and logs nothing
+(`test/e2e/e2e_test.go:180-186`), so no scenario in the harness would ever
+notice a broken `config/rbac/forwarding-secret-reader.yaml` grant. Separately,
+`docs/superpowers/specs/2026-08-19-helm-chart-design.md` §9 and this
+milestone's own Task 6 brief both state that a misconfigured grant leaves
+"every group in the namespace refuses with `NetworkNotAccepted`."
+`internal/controller/network_controller.go`'s `Reconcile` sets
+`ConditionAccepted` `True` and persists it unconditionally, before the
+forwarding secret is ever read; the read's outcome only ever reaches
+`ConditionForwardingSecretResolved` and
+`ConditionForwardingSecretRotationPending`, never `Accepted`. The real
+consequence of the missing or misdirected grant is narrower and quieter:
+`ServerGroup`s and `ProxyGroup`s in the affected namespace keep scheduling
+normally, and only forwarding-secret rotation detection breaks, silently,
+for that namespace. `charts/spawnery/README.md` states the narrower,
+grep-verified consequence.
+
+**No `helm upgrade` has run anywhere in this milestone.** The four CRDs sit
+in `charts/spawnery/templates/` with `helm.sh/resource-policy: keep`,
+precisely so a future upgrade would carry a CRD schema change through and an
+`uninstall` would not destroy every `Network`, `ServerGroup`, `ProxyGroup`
+and `Server` in the cluster. Only the second half was observed: `helm
+uninstall` leaving the CRDs standing was driven once against a real cluster
+(`.superpowers/sdd/2026-08-19-helm-chart/task-5-report.md`, "Step 7"). The
+upgrade half is designed and unproven.
+
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
 **The CA has no rotation procedure.** The bundle format of the CA ConfigMap is
@@ -3387,23 +3529,36 @@ intentional — the following points each concern only one of the two halves.
   `--startup-deadline=20s` for level B; no test guards that so far.
 
   *Closed by milestone 6a, and the required value above was wrong by the time
-  it was.* `config/deploy/deployment.yaml` is now a manifest a person installs
-  rather than scaffolding, so the value it has to carry is the production one:
-  `--startup-deadline=5m`, `cmd/spawnery-operator/main.go`'s own default.
-  `hack/e2e.sh` appends a second `--startup-deadline=20s` for its own run and
-  Go's `flag` package takes the last occurrence, so level B gets its short
-  deadline without the installed manifest carrying a test value. The check is
-  `TestTheOperatorDeploymentCarriesProductionFlags`
+  it was.* `config/deploy/deployment.yaml` was, at 6a, a manifest a person
+  installs rather than scaffolding, so the value it had to carry was the
+  production one: `--startup-deadline=5m`, `cmd/spawnery-operator/main.go`'s
+  own default. `hack/e2e.sh` appended a second `--startup-deadline=20s` for
+  its own run and Go's `flag` package took the last occurrence, so level B
+  got its short deadline without the installed manifest carrying a test
+  value. The check was `TestTheOperatorDeploymentCarriesProductionFlags`
   (`internal/rbacaudit/deploy_envtest_test.go`), which parses the container's
   args, rejects any flag it was not told about, and asserts a **floor** of at
   least five minutes rather than an exact string — a longer deadline is a
   legitimate operator choice and 20s is not. `readManifest` in that file
-  decodes with `yaml.UnmarshalStrict`, so a mistyped *key* is an error there
-  rather than a silent zero value; it turned no manifest red when it landed, so
-  it guards the next edit rather than fixing an existing fault, and the other
-  decode sites in the same file are still non-strict.
+  decoded with `yaml.UnmarshalStrict`, so a mistyped *key* was an error there
+  rather than a silent zero value.
   `TestTheOperatorImageIsNotAMutableTag` beside it guards what the manifest
   points at.
+
+  *Superseded by milestone 6d, in mechanism as well as in path.* Both halves
+  of this note describe machinery milestone 6d deleted rather than moved.
+  `config/deploy/deployment.yaml` no longer exists; the production default
+  now lives in `charts/spawnery/values.yaml`'s `operator.startupDeadline`
+  (`5m`), rendered into `charts/spawnery/templates/deployment.yaml`. And
+  `hack/e2e.sh` no longer appends a second, competing flag — Task 4 deleted
+  that mechanism outright and replaced it with a single Helm value,
+  `--set operator.startupDeadline=20s`, so there is only ever one
+  `--startup-deadline` argument on the container, not two resolved by flag
+  precedence. `TestTheOperatorDeploymentCarriesProductionFlags` and
+  `TestTheOperatorImageIsNotAMutableTag` both moved onto `renderedManifest`
+  in Task 3's rewrite and read the rendered chart now, not a file decoded
+  with `readManifest`; their floor-not-exact-value assertions are otherwise
+  unchanged.
 - **Nothing enforces that `Why` is filled in and `Required` is free of
   duplicates.** `Compare` collects duplicates, and the last one wins.
 - **The `configmaps` grant's `Why` no longer names everything that uses it.**
