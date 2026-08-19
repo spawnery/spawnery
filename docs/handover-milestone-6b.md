@@ -15,6 +15,34 @@ here has tested on any CNI. §2 is that measurement, what it rules out, and how
 far it does and does not generalise. Read it before writing a sentence about
 what 6b protects.
 
+**Superseded as the document to start from: milestone 6c has landed, and
+anyone starting 6d begins at
+[`handover-milestone-6c.md`](handover-milestone-6c.md).** This one is kept
+unedited as the record of what 6c started from — §3's survey of the tree is
+the evidence base for the decisions 6c then made, and its tense is the tense
+of 2026-08-17, before 6c existed. Four things §3 leaves in the present tense
+are now answered and must not be read as open: the refusal it names in "The
+refusal 6c replaces is still where 6a left it" is gone —
+`ProxyGroupReconciler` now accepts all three strategies `expose.type` has
+always named, and `ReasonExposeNotImplemented`'s guard is a fail-safe for a
+fourth, unrecognised value the CRD's own CEL rules keep unreachable, not a
+live path; the unconditional `group.Spec.Expose.NodePort` dereference that
+same paragraph locates at the two call sites is gone with it —
+`proxyAddress` no longer takes a plain `int32`, it takes `(group, pods, svc)`
+and branches on the strategy itself (now at
+`internal/controller/proxygroup_controller.go:1611`), and `reconcileService`
+— the Service builder that paragraph points at — moved to `:1248` with a
+rewritten signature, `(ctx, group) (*corev1.Service, error)`, in place of the
+old inline dereference; a container `hostPort`
+is now set outside the generated deepcopy, in `internal/podspec/proxy.go`'s
+`renderProxyPod` (`:227-229`), for the `HostPort` strategy alone; and "The
+E2E seam is unchanged and now carries fourteen scenarios" is unchanged in its
+mechanics but not its count — fourteen is now eighteen.
+`docs/handover-milestone-6c.md`'s own §1 and §3 carry the current figures and
+line numbers; this document's §3 is left as written, for the same reason
+`handover-milestone-6.md`'s was: it is the record of what 6c was decided
+against, not a claim about what is true today.
+
 This document is not a spec. It says where 6b stopped and what 6c — the
 `LoadBalancer` and `HostPort` expose strategies — finds when it starts, checked
 against the code as 6b leaves it rather than against the plan that preceded it.

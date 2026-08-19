@@ -419,6 +419,52 @@ DNATed a Service ClusterIP to a pod IP. The RKE2 rollout at the
 end of milestone 6 is the first thing that can turn these objects into a
 guarantee.
 
+Milestone 6c is done: all three expose strategies `ProxyGroup.spec.expose`
+has named since milestone 1 now reconcile, not one. `NodePort` and
+`LoadBalancer` each get a Service built through one `CreateOrUpdate`,
+branching on type, external traffic policy and whether a node port is named;
+`HostPort` gets none, and a group switching into or out of it makes every
+proxy pod stale, so the drain-aware rollout milestone 4 built replaces them
+one at a time. The operator now owns only the annotations it itself writes
+onto a `LoadBalancer` Service, releasing them the moment a group leaves the
+strategy and never touching a key MetalLB or kube-vip put there. And
+`ProxyGroup` gained its first writer of `Degraded`: a proxy pod the API
+server refuses to create, or one the scheduler cannot place, now says why on
+the object instead of only in the operator's log.
+
+The one thing worth naming is what was actually observed being enforced,
+because it is exactly one thing and everything else 6c ships is an object. A
+`HostPort` pod in a namespace enforcing Pod Security `baseline` is refused by
+the API server, and `ProxyGroupReconciler` reports it —
+`Degraded=True`/`ReasonProxyPodRejected`, carrying the API server's own
+message — confirmed at two levels: envtest, where Kubernetes 1.36.3 runs the
+PodSecurity admission plugin for real, and a real `kind` cluster, where
+commenting out the enforcing namespace label made the same scenario fail
+twice, by two different mechanisms, before the label was restored. That
+measurement forced a real, if narrow, trade elsewhere: `theOperatorWasNeverDenied`,
+the check the whole E2E package exists to pass, now excludes any log line
+containing `violates PodSecurity` from counting as a denial — without the
+exclusion, the reconciler's own retries of the refused create (3,940 of them
+in one run) would fail that check on every green run, for a rejection this
+milestone causes on purpose.
+
+What it leaves open is that nothing in 6c demonstrates that a client can
+reach a proxy. No `LoadBalancer` controller runs anywhere in this repository,
+no image in the E2E manifest resolves so no container process ever runs, and
+the one thing observed being enforced is the API server's refusal of a
+`HostPort` pod, not anything about a connection succeeding. The `LoadBalancer`
+address path itself — an assigned ingress plus a ready pod producing a
+non-empty `status.address` — is proven only by a plain Go unit test of the
+pure function that computes it, not by any envtest case or `make e2e`
+scenario reconciling a live object end to end: the E2E's own `LoadBalancer`
+scenario writes the ingress entry itself and asserts only that
+`status.address` stays empty while no proxy is ever ready. The honest verb
+for what 6c ships is that the operator *publishes* an address once
+conditions hold, or that an object *exists* — not that anything *reaches* or
+*works*. The RKE2 rollout at the end of milestone 6 is the first thing that
+can test any of the three strategies against a client that actually tries to
+connect.
+
 Milestone 6 continues with 6d, the Helm chart, and 6e, CI. It ends with the
 whole system rolled out to a real RKE2 cluster and driven from a runbook.
 
