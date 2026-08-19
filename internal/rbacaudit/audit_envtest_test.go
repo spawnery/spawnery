@@ -32,8 +32,11 @@ import (
 )
 
 // operatorNamespace is where the operator itself runs, and the only namespace
-// the namespaced Role grants anything in.
-const operatorNamespace = "spawnery-system"
+// the namespaced Role grants anything in. It is renderNamespace
+// (deploy_envtest_test.go), not the literal spawnery-system: every object this
+// file applies now comes from renderChart, which renders into renderNamespace,
+// so a Role or Deployment applied here lands there and nowhere else.
+const operatorNamespace = renderNamespace
 
 // foreignNamespace is a namespace that is not the operator's own. The
 // cluster-wide half of the permissions must answer the same there — the binding
@@ -50,17 +53,16 @@ const foreignNamespace = "minecraft"
 func applyDeploymentAndDeriveSubject(t *testing.T) string {
 	t.Helper()
 
-	var ns corev1.Namespace
+	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: renderNamespace}}
 	var sa corev1.ServiceAccount
 	var clusterBinding rbacv1.ClusterRoleBinding
 	var binding rbacv1.RoleBinding
 	var deploy appsv1.Deployment
 
-	readManifest(t, "config/deploy/namespace.yaml", &ns)
-	readManifest(t, "config/deploy/serviceaccount.yaml", &sa)
-	readManifest(t, "config/deploy/clusterrolebinding.yaml", &clusterBinding)
-	readManifest(t, "config/deploy/rolebinding.yaml", &binding)
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "ServiceAccount/spawnery-operator", &sa)
+	renderedManifest(t, "ClusterRoleBinding/spawnery-operator", &clusterBinding)
+	renderedManifest(t, "RoleBinding/spawnery-operator", &binding)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 	clusterRole, role := readGeneratedRoles(t)
 
 	apply(t, &ns, &sa, clusterRole, role, &clusterBinding, &binding, &deploy)
@@ -250,9 +252,24 @@ func TestTheForwardingSecretReaderGrantsEverythingRequired(t *testing.T) {
 
 // The file has to work when applied, not only when parsed: a RoleBinding whose
 // subject names the wrong ServiceAccount parses perfectly and grants nothing.
+//
+// The subject comes from the reader file's own RoleBinding, not from
+// applyDeploymentAndDeriveSubject. forwarding-secret-reader.yaml's subject
+// names its ServiceAccount and namespace as a literal in the file (spawnery-
+// operator in spawnery-system — see the file's own comments on why: kubectl
+// apply -n rewrites the Role's and RoleBinding's own metadata.namespace, never
+// a namespace field inside a subject), not wherever this package's render
+// happens to install the chart. Deriving the probe subject from the render
+// would tie this test to renderNamespace, which the file never promised to
+// track, instead of to what the file actually says.
 func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
-	subject := applyDeploymentAndDeriveSubject(t)
 	applyForwardingSecretReader(t, readerProbeNamespace)
+	_, binding := readForwardingSecretReader(t)
+	if len(binding.Subjects) != 1 {
+		t.Fatalf("the reader RoleBinding has %d subjects, want exactly one", len(binding.Subjects))
+	}
+	subj := binding.Subjects[0]
+	subject := fmt.Sprintf("system:serviceaccount:%s:%s", subj.Namespace, subj.Name)
 
 	if ok, reason := allowed(t, subject, authzv1.ResourceAttributes{
 		Namespace: readerProbeNamespace, Resource: "secrets", Verb: "get",

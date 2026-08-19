@@ -18,12 +18,18 @@ package rbacaudit_test
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"os"
+	"os/exec"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +54,196 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+// renderNamespace is the namespace renderChart renders with, and it is
+// deliberately none of the two namespaces this project otherwise uses.
+//
+// Not spawnery-system, the chart's default: a template that forgot
+// {{ .Release.Namespace }} and hard-coded the default renders byte-identically
+// there, and this whole audit would then confirm a chart that cannot move.
+// Not platform-system either, which is where hack/e2e.sh installs -- two
+// checks that can pass for the same wrong reason are one check.
+const renderNamespace = "audit-system"
+
+// TestTheChartRendersIntoTheNamespaceItIsGiven is the assertion the rest of
+// this file rests on. Everything below reads objects out of renderChart, so if
+// the chart ignored the release namespace, every one of those assertions would
+// still pass while the chart installed nowhere but its default.
+func TestTheChartRendersIntoTheNamespaceItIsGiven(t *testing.T) {
+	rendered := renderChart(t)
+
+	// Only meaningful away from the chart's default: rendered at
+	// spawnery-system itself, a template that correctly substitutes
+	// .Release.Namespace and one that forgot it and hard-coded the default
+	// produce byte-identical output, so scanning for the literal here would
+	// report every object as broken even when nothing is. That is the whole
+	// reason renderNamespace is not spawnery-system in the first place.
+	if renderNamespace != "spawnery-system" {
+		for key, doc := range rendered {
+			if strings.Contains(string(doc), "spawnery-system") {
+				t.Errorf("%s carries the literal spawnery-system when rendered into %s:\n%s",
+					key, renderNamespace, doc)
+			}
+		}
+	}
+
+	var deploy appsv1.Deployment
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
+	if deploy.Namespace != renderNamespace {
+		t.Errorf("the Deployment renders into %q, want %q", deploy.Namespace, renderNamespace)
+	}
+
+	var role rbacv1.Role
+	renderedManifest(t, "Role/spawnery-operator", &role)
+	if role.Namespace != renderNamespace {
+		t.Errorf("the Role renders into %q, want %q. A Role in the wrong namespace "+
+			"installs cleanly and then denies the operator its own Secret at the "+
+			"first certs.Store.Ensure -- which is the failure this milestone exists "+
+			"to remove", role.Namespace, renderNamespace)
+	}
+}
+
+// TestTheSelectorsCarryOnlyTheFrozenPair guards the one label mistake that
+// cannot be corrected in place. A Deployment's spec.selector is immutable
+// after creation, and the Service and NetworkPolicy would stop matching the
+// pod -- which presents as a network fault rather than as a label one.
+func TestTheSelectorsCarryOnlyTheFrozenPair(t *testing.T) {
+	want := map[string]string{
+		"app.kubernetes.io/name":      "spawnery",
+		"app.kubernetes.io/component": "operator",
+	}
+
+	var deploy appsv1.Deployment
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
+	if !maps.Equal(deploy.Spec.Selector.MatchLabels, want) {
+		t.Errorf("the Deployment's selector = %v, want exactly %v",
+			deploy.Spec.Selector.MatchLabels, want)
+	}
+	for k, v := range want {
+		if deploy.Spec.Template.Labels[k] != v {
+			t.Errorf("the pod template is missing %s=%s; the selector would match nothing", k, v)
+		}
+	}
+
+	var svc corev1.Service
+	renderedManifest(t, "Service/spawnery-operator", &svc)
+	if !maps.Equal(svc.Spec.Selector, want) {
+		t.Errorf("the Service's selector = %v, want exactly %v", svc.Spec.Selector, want)
+	}
+
+	var policy networkingv1.NetworkPolicy
+	renderedManifest(t, "NetworkPolicy/spawnery-operator-agent", &policy)
+	if !maps.Equal(policy.Spec.PodSelector.MatchLabels, want) {
+		t.Errorf("the NetworkPolicy's podSelector = %v, want exactly %v",
+			policy.Spec.PodSelector.MatchLabels, want)
+	}
+}
+
+// renderChart runs the chart through helm once per package run and returns its
+// objects keyed "<Kind>/<name>".
+//
+// This package used to read config/deploy/ off disk. That directory no longer
+// exists: the chart is the only installation form, so the only honest thing to
+// audit is what helm produces. The subprocess is the price. helm comes from
+// the flake (flake.nix's kubernetes-helm), and nothing in this repository runs
+// outside `nix develop`, so its absence means the shell is wrong rather than
+// the tree -- which is why the failure below says that rather than reporting a
+// parse error on empty input.
+//
+// Memoised because rendering is a process spawn and eleven tests in this
+// package want the same objects. sync.Once rather than a package-level
+// initialiser so that a failure is reported against a real *testing.T.
+var (
+	renderOnce sync.Once
+	renderDocs map[string][]byte
+	renderErr  error
+)
+
+func renderChart(t *testing.T) map[string][]byte {
+	t.Helper()
+	renderOnce.Do(func() {
+		chart := testenv.RepoPath(t, "charts/spawnery")
+		cmd := exec.Command("helm", "template", "spawnery", chart,
+			"--namespace", renderNamespace)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		out, err := cmd.Output()
+		if err != nil {
+			if errors.Is(err, exec.ErrNotFound) {
+				renderErr = fmt.Errorf("helm is not on PATH; run this through `nix develop`: %w", err)
+				return
+			}
+			renderErr = fmt.Errorf("helm template: %w\n%s", err, stderr.String())
+			return
+		}
+		renderDocs, renderErr = splitRendered(out)
+	})
+	if renderErr != nil {
+		t.Fatalf("render %s: %v", "charts/spawnery", renderErr)
+	}
+	return renderDocs
+}
+
+// splitRendered indexes helm's multi-document output by Kind and name. A
+// duplicate key is an error rather than a last-one-wins: two objects of the
+// same kind and name cannot both be installed, and silently keeping one would
+// audit an object the cluster never sees.
+func splitRendered(out []byte) (map[string][]byte, error) {
+	docs := map[string][]byte{}
+	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(out)))
+	for {
+		doc, err := reader.Read()
+		if errors.Is(err, io.EOF) {
+			if len(docs) == 0 {
+				return nil, errors.New("helm produced no objects at all")
+			}
+			return docs, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(string(doc)) == "" {
+			continue
+		}
+		var meta struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name string `json:"name"`
+			} `json:"metadata"`
+		}
+		if err := yaml.Unmarshal(doc, &meta); err != nil {
+			return nil, err
+		}
+		if meta.Kind == "" {
+			continue
+		}
+		key := meta.Kind + "/" + meta.Metadata.Name
+		if _, dup := docs[key]; dup {
+			return nil, fmt.Errorf("the chart renders %s twice", key)
+		}
+		docs[key] = doc
+	}
+}
+
+// renderedManifest decodes one rendered object, strictly, for the reason
+// readManifest's own comment gives: a plain Unmarshal drops keys the target
+// type does not have, so a misspelled field would decode to a zero value and
+// every assertion below would then be checking something nobody set.
+func renderedManifest[T any](t *testing.T, key string, into *T) {
+	t.Helper()
+	doc, ok := renderChart(t)[key]
+	if !ok {
+		keys := make([]string, 0, len(renderDocs))
+		for k := range renderDocs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		t.Fatalf("the chart renders no %s; it renders: %s", key, strings.Join(keys, ", "))
+	}
+	if err := yaml.UnmarshalStrict(doc, into); err != nil {
+		t.Fatalf("decode %s: %v", key, err)
+	}
+}
+
 // readManifest decodes a single-document YAML manifest from the repository.
 // Strictly: sigs.k8s.io/yaml's plain Unmarshal drops keys the target type does
 // not have, so `serviceAccountNam:` or `readOnlyRootFilesytem:` would decode
@@ -64,12 +260,19 @@ func readManifest[T any](t *testing.T, rel string, into *T) {
 	}
 }
 
-// generatedRoles is the repository-relative path of the manifest controller-gen
-// writes. It holds every role the markers ask for, in one multi-document file:
-// the cluster-wide ClusterRole and the Role scoped to the operator's own
-// namespace. Nothing in the build splits them apart, so readManifest — which
-// decodes a single document — cannot be used on it.
-const generatedRoles = "config/rbac/role.yaml"
+// generatedRoles names the rendered chart objects that carry every role the
+// controller-gen markers ask for: the cluster-wide ClusterRole and the Role
+// scoped to the operator's own namespace.
+//
+// controller-gen still writes config/rbac/role.yaml, and
+// hack/chart-templates.sh (run by `make manifests`) transforms it into
+// charts/spawnery/templates/rbac.yaml before anything is installed. That
+// script's own guards check controller-gen's *input* — that it still looks the
+// shape they expect — not that the transformation applied: a broken sed with
+// an intact input exits 0 and writes a Role whose namespace is the literal
+// spawnery-system. Auditing config/rbac/role.yaml would not see that; it never
+// goes near the sed. Auditing the rendered chart does.
+const generatedRoles = "ClusterRole/spawnery-operator and Role/spawnery-operator"
 
 // readMultiDocManifest splits a multi-document YAML manifest at rel and hands
 // each document's Kind and raw bytes to decode. readManifest cannot be reused
@@ -108,64 +311,36 @@ func readMultiDocManifest(t *testing.T, rel string, decode func(kind string, doc
 	}
 }
 
-// readGeneratedRoles decodes both halves of the generated RBAC manifest. It
-// insists on finding exactly one of each.
+// readGeneratedRoles decodes both halves of the generated RBAC manifest from
+// the rendered chart. It insists on finding exactly one of each.
 //
-// A missing Role means a namespace= qualifier fell off a marker and the operator
-// would hold its Secret and Lease rights everywhere. A *second* Role is the
-// quieter failure and the reason this refuses rather than takes the last one:
-// returning one of two would leave the other unaudited in both directions while
-// every test still reported green. controller-gen emits one Role per namespace
-// named in a marker, so a second one arrives the moment a second namespace does —
-// which the Helm chart makes likely.
+// A missing Role means a namespace= qualifier fell off a marker and the
+// operator would hold its Secret and Lease rights everywhere. A *second*
+// object of either kind used to be this function's own refusal; it is now
+// splitRendered's, enforced for every kind and name the chart renders, not
+// just these two — returning one of two would leave the other unaudited in
+// both directions while every test still reported green, whichever helper
+// catches it first.
 func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 	t.Helper()
 
-	var cluster *rbacv1.ClusterRole
-	var namespaced *rbacv1.Role
-	readMultiDocManifest(t, generatedRoles, func(kind string, doc []byte) {
-		switch kind {
-		case "ClusterRole":
-			decoded := &rbacv1.ClusterRole{}
-			if err := yaml.Unmarshal(doc, decoded); err != nil {
-				t.Fatalf("decode the ClusterRole in %s: %v", generatedRoles, err)
-			}
-			if cluster != nil {
-				t.Fatalf("%s contains more than one ClusterRole (%q and %q). This audit "+
-					"compares exactly one against rbacaudit.RequiredCluster; taking the "+
-					"last would leave the other unchecked in both directions without "+
-					"saying so. Teach it to handle several before adding one",
-					generatedRoles, cluster.Name, decoded.Name)
-			}
-			cluster = decoded
-		case "Role":
-			decoded := &rbacv1.Role{}
-			if err := yaml.Unmarshal(doc, decoded); err != nil {
-				t.Fatalf("decode the Role in %s: %v", generatedRoles, err)
-			}
-			if namespaced != nil {
-				t.Fatalf("%s contains more than one Role (%s/%s and %s/%s). This audit "+
-					"compares exactly one against rbacaudit.RequiredNamespaced; taking "+
-					"the last would leave the other unchecked in both directions without "+
-					"saying so. A second namespace= qualifier needs the namespaced table "+
-					"split per namespace first",
-					generatedRoles, namespaced.Namespace, namespaced.Name,
-					decoded.Namespace, decoded.Name)
-			}
-			namespaced = decoded
-		default:
-			t.Fatalf("%s contains an unexpected %s; this audit only models roles", generatedRoles, kind)
-		}
-	})
-	if cluster == nil {
-		t.Fatalf("%s contains no ClusterRole", generatedRoles)
+	rendered := renderChart(t)
+
+	if _, ok := rendered["ClusterRole/spawnery-operator"]; !ok {
+		t.Fatalf("the chart renders no ClusterRole/spawnery-operator")
 	}
-	if namespaced == nil {
-		t.Fatalf("%s contains no Role — a namespace= qualifier fell off a marker, and "+
-			"the operator would hold its Secret and Lease rights in every namespace",
-			generatedRoles)
+	var cluster rbacv1.ClusterRole
+	renderedManifest(t, "ClusterRole/spawnery-operator", &cluster)
+
+	if _, ok := rendered["Role/spawnery-operator"]; !ok {
+		t.Fatalf("the chart renders no Role/spawnery-operator — a namespace= " +
+			"qualifier fell off a marker, and the operator would hold its Secret " +
+			"and Lease rights in every namespace")
 	}
-	return cluster, namespaced
+	var namespaced rbacv1.Role
+	renderedManifest(t, "Role/spawnery-operator", &namespaced)
+
+	return &cluster, &namespaced
 }
 
 // apply creates objects that several tests in this package share. The cluster
@@ -189,22 +364,24 @@ func apply(t *testing.T, objs ...client.Object) {
 func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 	c, ctx := testenv.Client(t)
 
-	var ns corev1.Namespace
+	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: renderNamespace}}
 	var sa corev1.ServiceAccount
 	var binding rbacv1.ClusterRoleBinding
 	var deploy appsv1.Deployment
 
-	readManifest(t, "config/deploy/namespace.yaml", &ns)
-	readManifest(t, "config/deploy/serviceaccount.yaml", &sa)
-	readManifest(t, "config/deploy/clusterrolebinding.yaml", &binding)
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "ServiceAccount/spawnery-operator", &sa)
+	renderedManifest(t, "ClusterRoleBinding/spawnery-operator", &binding)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 	role, _ := readGeneratedRoles(t)
 
 	apply(t, &ns, &sa, role, &binding, &deploy)
 
-	if ns.Name != "spawnery-system" {
-		t.Errorf("namespace = %q, want spawnery-system", ns.Name)
-	}
+	// ns.Name is renderNamespace by construction, not read from anywhere
+	// independent, so there is nothing left to check it against here;
+	// TestTheChartRendersIntoTheNamespaceItIsGiven is what proves the chart
+	// actually renders into the namespace it is given. What still matters is
+	// that every other rendered object agrees with the namespace this test
+	// chose to apply into.
 	if sa.Namespace != ns.Name {
 		t.Errorf("serviceAccount namespace = %q, want %q", sa.Namespace, ns.Name)
 	}
@@ -246,13 +423,12 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 // Forbidden on the operator's own Secret while every file on its own still
 // looked plausible.
 func TestTheRoleBindingBindsTheOperatorInItsOwnNamespace(t *testing.T) {
-	var ns corev1.Namespace
+	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: renderNamespace}}
 	var sa corev1.ServiceAccount
 	var binding rbacv1.RoleBinding
 
-	readManifest(t, "config/deploy/namespace.yaml", &ns)
-	readManifest(t, "config/deploy/serviceaccount.yaml", &sa)
-	readManifest(t, "config/deploy/rolebinding.yaml", &binding)
+	renderedManifest(t, "ServiceAccount/spawnery-operator", &sa)
+	renderedManifest(t, "RoleBinding/spawnery-operator", &binding)
 	_, role := readGeneratedRoles(t)
 
 	apply(t, &ns, role, &binding)
@@ -290,12 +466,11 @@ func TestTheRoleBindingBindsTheOperatorInItsOwnNamespace(t *testing.T) {
 // nothing, or a targetPort naming a container port that does not exist, leaves
 // the agents with a connection refused and the operator looking healthy.
 func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
-	var ns corev1.Namespace
+	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: renderNamespace}}
 	var svc corev1.Service
 	var deploy appsv1.Deployment
-	readManifest(t, "config/deploy/namespace.yaml", &ns)
-	readManifest(t, "config/deploy/service.yaml", &svc)
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "Service/spawnery-operator", &svc)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 
 	apply(t, &ns, &svc)
 
@@ -369,7 +544,7 @@ func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
 // being "improved" back.
 func TestTheOperatorIsReplacedRatherThanRolled(t *testing.T) {
 	var deploy appsv1.Deployment
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 
 	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 1 {
 		t.Fatalf("replicas = %v, want 1 — this test reasons about the single-replica case",
@@ -387,7 +562,7 @@ func TestTheOperatorIsReplacedRatherThanRolled(t *testing.T) {
 // enforces on the game servers it creates.
 func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
 	var deploy appsv1.Deployment
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 
 	pod := deploy.Spec.Template.Spec
 	if pod.SecurityContext == nil ||
@@ -431,7 +606,7 @@ func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
 // flag, which Go's flag package resolves to the last one.
 func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
 	var deploy appsv1.Deployment
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 
 	if len(deploy.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
@@ -488,7 +663,7 @@ func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
 // version tag is what resolves.
 func TestTheOperatorImageIsNotAMutableTag(t *testing.T) {
 	var deploy appsv1.Deployment
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 
 	if len(deploy.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
@@ -621,8 +796,8 @@ func contains(haystack []string, needle string) bool {
 func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	var policy networkingv1.NetworkPolicy
 	var deploy appsv1.Deployment
-	readManifest(t, "config/deploy/networkpolicy.yaml", &policy)
-	readManifest(t, "config/deploy/deployment.yaml", &deploy)
+	renderedManifest(t, "NetworkPolicy/spawnery-operator-agent", &policy)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 
 	if policy.Namespace != deploy.Namespace {
 		t.Errorf("policy namespace = %q, deployment namespace = %q — a "+
