@@ -48,6 +48,10 @@ func TestProxyGroupExposeValidation(t *testing.T) {
 		name    string
 		expose  spawneryv1alpha1.ExposeSpec
 		wantErr bool
+		// wantMsg is a substring of the refusal. Empty means the row only
+		// claims that the API server refused, which is the weaker claim the
+		// rows written before CEL messages were worth asserting still make.
+		wantMsg string
 	}{
 		{
 			name:   "loadbalancer without sub-block",
@@ -94,6 +98,56 @@ func TestProxyGroupExposeValidation(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "clusterip with matching sub-block",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+		},
+		{
+			name:    "clusterip without sub-block",
+			expose:  spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeClusterIP},
+			wantErr: true,
+			wantMsg: "expose.clusterIP is required for type ClusterIP",
+		},
+		{
+			name: "clusterip sub-block under another type",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeNodePort,
+				NodePort:  &spawneryv1alpha1.NodePortSpec{Port: 30565},
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			wantErr: true,
+			wantMsg: "expose.clusterIP is only allowed for type ClusterIP",
+		},
+		{
+			name: "an address is not a URL",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "tcp://mc.example.test"},
+			},
+			wantErr: true,
+			wantMsg: "not a URL",
+		},
+		{
+			name: "an address carries no spaces",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test "},
+			},
+			wantErr: true,
+			wantMsg: "no spaces",
+		},
+		{
+			name: "an empty address is refused",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: ""},
+			},
+			wantErr: true,
+			wantMsg: "should be at least 1 chars long",
+		},
 	}
 
 	for _, tc := range cases {
@@ -105,6 +159,9 @@ func TestProxyGroupExposeValidation(t *testing.T) {
 			}
 			if !tc.wantErr && err != nil {
 				t.Fatalf("create rejected: %v", err)
+			}
+			if tc.wantErr && tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error = %v, want it to mention %q", err, tc.wantMsg)
 			}
 		})
 	}
