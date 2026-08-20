@@ -770,6 +770,109 @@ removal path was observed — the addition path still has nothing that drives it
 
 ## Scenario 8 — the widened denial measurement
 
+§6 is careful about what milestone 6a established and what it did not:
+`theOperatorWasNeverDenied` caught a revoked **write** immediately, two
+cache-backed **lists** produced nothing at all over eight minutes, and *reads
+as a class were never measured* — the explanation that would generalise the
+list result is called "a hypothesis nothing established".
+
+`readForwardingSecret` is the right instrument: an uncached read
+(`internal/controller/forwardingsecret.go:57-59` says why it must be uncached),
+on a path known to fold a 403 into a condition message carrying no
+`is forbidden:` substring, with nothing on that path logging.
+
+**Before**, and the log count is over the operator's whole lifetime:
+
+```
+$ kubectl -n minecraft get network production \
+    -o jsonpath='{.status.conditions[?(@.type=="ForwardingSecretResolved")]}'
+{"reason":"SecretResolved","status":"True",
+ "message":"secret \"velocity-forwarding-secret\" carries a \"secret\" key"}
+
+$ kubectl -n spawnery-system logs deployment/spawnery-operator --tail=3000 | grep -c 'is forbidden'
+24
+```
+
+Those 24 are scenario 5's teardown — `unable to create new content in namespace
+minecraft-hostport because it is being terminated` — and they are worth keeping
+in view, because they are the **loud** kind: every one produced a log line
+carrying `is forbidden:`, which is exactly what a grep-based denial check
+detects.
+
+**The revocation:**
+
+```
+$ kubectl -n minecraft delete rolebinding spawnery-forwarding-secret-reader
+$ kubectl auth can-i get secrets --as=system:serviceaccount:spawnery-system:spawnery-operator -n minecraft
+no
+$ kubectl -n minecraft annotate network production rollout-probe=... --overwrite
+```
+
+**After 90 seconds:**
+
+```
+$ kubectl -n minecraft get network production \
+    -o jsonpath='{.status.conditions[?(@.type=="ForwardingSecretResolved")]}'
+{"reason":"SecretReadForbidden","status":"Unknown",
+ "message":"the operator may not read secret \"velocity-forwarding-secret\" in namespace
+            \"minecraft\"; grant it with kubectl apply -n minecraft -f
+            config/rbac/forwarding-secret-reader.yaml"}
+
+$ kubectl -n spawnery-system logs deployment/spawnery-operator --tail=3000 | grep -c 'is forbidden'
+24                                    # unchanged
+
+$ kubectl -n spawnery-system logs deployment/spawnery-operator --tail=300 \
+    | grep -iE 'secret|forbidden' | grep -v 'being terminated'
+                                      # nothing
+```
+
+**Twenty denied reads, and not one line of log.** The metric is where they are:
+
+```
+rest_client_requests_total{code="403",host="10.43.0.1:443",method="GET"}   20
+rest_client_requests_total{code="403",host="10.43.0.1:443",method="POST"}  24     # scenario 5, unchanged
+```
+
+### What this establishes
+
+**A denied uncached read is silent in the operator's log.** This is the
+measurement §6 asked for and did not have. A check that greps the log for
+`is forbidden:` — which is what `theOperatorWasNeverDenied` does — cannot see
+this denial, and the reason is not the manager's cache: the read reached the
+API server, was refused, and the refusal was handled rather than surfaced.
+
+It does **not** establish the wider claim that reads as a class are invisible.
+This is one read on one path whose quietness was already known by inspection;
+what was missing was the measurement, and what it adds is that the quietness is
+real at runtime and not merely apparent in the source.
+
+**And it establishes where such a denial *is* visible**, which §6 did not ask
+for and is the more useful half: `rest_client_requests_total` counts it. The
+counter has no per-resource label, so it cannot say *what* was denied — but
+`code="403"` on a client that should never be denied anything is a signal that
+needs no code change to obtain, and it caught this one where the log did not.
+
+### Recovery
+
+Flux restored the RoleBinding, which also demonstrates that the GitOps loop
+repairs a hand-deleted object:
+
+```
+$ flux reconcile kustomization spawnery-network
+$ kubectl -n minecraft get rolebinding spawnery-forwarding-secret-reader \
+    -o jsonpath='{.subjects[0].namespace}'
+spawnery-system
+$ kubectl auth can-i get secrets --as=system:serviceaccount:spawnery-system:spawnery-operator -n minecraft
+yes
+$ kubectl -n minecraft get network production \
+    -o jsonpath='{.status.conditions[?(@.type=="ForwardingSecretResolved")]}'
+{"reason":"SecretResolved","status":"True", ...}
+```
+
+No pod restarted and no server was lost while the network was in
+`SecretReadForbidden`: the condition is a report, not an outage.
+
+
 ## Scenario 9 — the NetworkPolicy, enforced for the first time
 
 Milestone 6b wrote this policy; nothing has ever enforced it. `kindnet`
