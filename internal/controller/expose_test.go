@@ -450,9 +450,19 @@ func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 	}
 }
 
-// The three strategies end to end, through Reconcile rather than through the
+// The four strategies end to end, through Reconcile rather than through the
 // pieces, because the refusal that stood in front of two of them is what this
 // task removes.
+//
+// ClusterIP is here for a reason the other rows do not need stated. Every
+// other ClusterIP test in this file calls reconcileService or proxyAddress
+// directly, which leaves the wiring between them -- exposeImplemented
+// admitting the type, Reconcile reaching reconcileService for it, the result
+// reaching status.address -- unexercised. That wiring has been found severed
+// before: README.md records the LoadBalancer address path having never been
+// driven through a live reconcile at all, with this package staying green
+// while the Service sat disconnected from the status it is read out of. A row
+// here is what makes the same severance fail.
 func TestReconcileAcceptsEveryStrategy(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -476,6 +486,14 @@ func TestReconcileAcceptsEveryStrategy(t *testing.T) {
 				LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{},
 			},
 			wantSvc: true, wantType: corev1.ServiceTypeLoadBalancer,
+		},
+		{
+			name: "ClusterIP",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			wantSvc: true, wantType: corev1.ServiceTypeClusterIP,
 		},
 		{
 			name: "HostPort",
@@ -1083,36 +1101,43 @@ func TestClusterIPServiceShape(t *testing.T) {
 // A group moving from NodePort to ClusterIP was suspected of carrying two
 // fields forward into a Service where neither belongs: externalTrafficPolicy,
 // which the API server should refuse, and the allocated node port, which
-// nothing would dial any more. Both come back cleared -- but not for the same
-// reason, and this test's two assertions guard two different things.
+// nothing would dial any more. Both come back cleared, and -- measured
+// against the envtest API server, Kubernetes v1.36.3 -- both are cleared by
+// the same mechanism: the API server normalises type-dependent fields away on
+// an update that changes a Service's type, before validation ever sees the
+// stale values. Neither assertion here is a guard on anything this operator
+// does.
 //
-// externalTrafficPolicy lives on svc.Spec, the object CreateOrUpdate fetched
-// before this arm ran, and the ClusterIP arm never assigns it. So a stale
-// Local really would go out on the wire unless something else stripped it.
-// Measured against the envtest API server, Kubernetes v1.36.3: it does. The
-// API server normalises the field away on the update to a type that doesn't
-// support it, before validation ever sees the stale value. This half is a
-// guard on the API server's behaviour, not the operator's -- and it stays
-// that way on purpose. This repository's standing position is that a
-// mechanism reporting nothing is indistinguishable from an absent one, and an
-// explicit `ExternalTrafficPolicy = ""` in the ClusterIP arm is unfalsifiable:
-// no test could ever fail without it, so it would be decoration wearing the
-// shape of a fix. If this half ever goes red, the API server's normalisation
-// has changed or stopped, and the fix is to add that explicit reset to the
-// ClusterIP arm.
+// That both halves observe the API server was settled by experiment, not by
+// reading the code, and only after two earlier attempts to reason it out from
+// the source got it wrong. Both concluded that the node-port half guarded
+// reconcileService's own port reconstruction -- the argument being that the
+// arm builds a fresh corev1.ServicePort literal on every reconcile and
+// replaces svc.Spec.Ports wholesale, so the operator sends NodePort: 0 itself
+// and there is nothing left for the API server to clear. The argument is
+// sound about what the operator sends and wrong about what the assertion
+// therefore proves. The counterfactual: patch the ClusterIP arm to carry the
+// stored port forward,
 //
-// The node port is not the same kind of field. It lives on the
-// corev1.ServicePort, and reconcileService builds that port as a fresh
-// literal on every reconcile and replaces svc.Spec.Ports with it wholesale,
-// in every arm including ClusterIP's -- so nothing from the previous
-// NodePort Service ever reaches this arm to be carried forward in the first
-// place. The operator sends NodePort: 0 itself; there is nothing for the API
-// server to clear. This half guards reconcileService's own port
-// reconstruction, not the API server. If it ever goes red, that
-// reconstruction changed to carry a nonzero node port forward, and the fix is
-// there -- not an explicit reset, which would just be restating what the
-// port literal already guarantees.
-func TestTheClusterIPArmClearsNodePortItselfWhileTheAPIServerClearsTrafficPolicy(t *testing.T) {
+//	case spawneryv1alpha1.ExposeClusterIP:
+//	        svc.Spec.Type = corev1.ServiceTypeClusterIP
+//	        if len(svc.Spec.Ports) > 0 { port.NodePort = svc.Spec.Ports[0].NodePort }
+//
+// and this test still passes. Instrumented, the operator was seen sending
+// NodePort=30001 on the update and the stored Service still read 0, so the
+// patch was doing what it looked like and the API server was undoing it. A
+// test that cannot fail when the mechanism it names is removed is not
+// measuring that mechanism.
+//
+// The consequence is the same for both halves, and it is the reason neither
+// arm sets these fields explicitly. This repository's standing position is
+// that a mechanism reporting nothing is indistinguishable from an absent one:
+// an explicit `ExternalTrafficPolicy = ""` or `NodePort = 0` in the ClusterIP
+// arm would be unfalsifiable, since no test could ever fail without it, and
+// so would be decoration wearing the shape of a fix. If either half ever goes
+// red, the API server's normalisation has changed or stopped, and the fix is
+// to add the explicit reset that is deliberately absent today.
+func TestTheAPIServerClearsBothNodePortAndTrafficPolicyOnTheMoveToClusterIP(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
 	group := f.createProxyGroup("gateway")
@@ -1144,10 +1169,11 @@ func TestTheClusterIPArmClearsNodePortItselfWhileTheAPIServerClearsTrafficPolicy
 	}
 	if got := stored.Spec.Ports[0].NodePort; got != 0 {
 		t.Errorf("nodePort = %d, want 0: it was allocated under the previous strategy and "+
-			"nothing dials it now. Unlike the traffic policy above, this is not the API "+
-			"server clearing a stale value -- reconcileService rebuilds the port from a "+
-			"fresh literal on every reconcile and never carries the old one forward, so "+
-			"a nonzero result here means that reconstruction changed", got)
+			"nothing dials it now. Like the traffic policy above, this is the API server "+
+			"normalising a type-dependent field away on the change to ClusterIP, not "+
+			"anything reconcileService does -- carrying the stored port forward in the "+
+			"ClusterIP arm leaves this test green. A nonzero result here means that "+
+			"normalisation changed or stopped", got)
 	}
 }
 
