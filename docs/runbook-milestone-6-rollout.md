@@ -568,6 +568,114 @@ The production network was untouched throughout — same three pods, same ages.
 
 ## Scenario 7 — the three RBAC gaps
 
+`docs/handover-milestone-6.md` §6 names three, each open for a different
+reason. Two are now settled and one is not, and the difference matters.
+
+### `tokenreviews: create` — reasoned in §6, still reasoned here
+
+```
+$ kubectl -n minecraft get servergroup lobby -o wide
+NAME   TYPE       PHASE  READY  PLAYERS  FREE SLOTS  AGE
+lobby  Ephemeral  Ready  1      0        100         28m
+```
+
+`FREE SLOTS 100` is reported by the agent inside the Paper pod over the agent
+channel, and that channel authenticates the pod's projected token with a
+`TokenReview` (`podspec.AgentTokenAudience`). A failed review means no `Hello`,
+no slots, and a group that never leaves `Pending`. So the review succeeded.
+
+**That is an inference, not a measurement, and it is the same inference §6
+called reasoning.** What is new is only that a real agent now exists to reason
+about: the client metrics carry no per-resource label, and nothing in the
+operator's log names a `TokenReview`. A direct measurement would need either
+API-server audit logs or a deliberate revocation, and the second belongs to
+scenario 8's method rather than this one.
+
+### `persistentvolumeclaims: patch` — measured, and it was absent before
+
+§6 lists this as measured-absent: nothing in the harness grows a claim. The
+operator's own client metrics settle it, because they count HTTP verbs.
+
+**Before**, after 40 minutes of ordinary reconciliation with a lobby and two
+proxies running — no `PATCH` line exists at all:
+
+```
+rest_client_requests_total{code="200",method="DELETE"} 1
+rest_client_requests_total{code="200",method="GET"}    397
+rest_client_requests_total{code="200",method="PUT"}    3316
+rest_client_requests_total{code="201",method="POST"}   49
+```
+
+A persistent group was then created on Longhorn and grown:
+
+```
+$ kubectl -n minecraft get pvc
+NAME             PHASE  REQ  CAP  SC        OWNER
+survival-0-data  Bound  1Gi  1Gi  longhorn  <none>
+
+$ kubectl -n minecraft patch servergroup survival --type=merge \
+    -p '{"spec":{"storage":{"size":"2Gi"}}}'
+servergroup.spawnery.cloud/survival patched
+
+$ kubectl -n minecraft get pvc survival-0-data -o jsonpath='{.status.conditions}'
+[{"lastTransitionTime":"2026-08-20T11:15:08Z","status":"True","type":"Resizing"}]
+```
+
+**After** — exactly one `PATCH`, and it succeeded:
+
+```
+rest_client_requests_total{code="200",method="PATCH"} 1
+```
+
+and the claim reached its new size:
+
+```
+$ kubectl -n minecraft get pvc survival-0-data
+survival-0-data  Bound  2Gi  2Gi
+```
+
+The claim carried **no owner reference**, as designed, so it outlived its
+group and had to be removed by hand:
+
+```
+$ kubectl -n minecraft delete servergroup survival
+$ kubectl -n minecraft get pvc
+survival-0-data  Bound  ...  2Gi  longhorn      # still there
+$ kubectl -n minecraft delete pvc survival-0-data
+```
+
+### `pods: patch` — the call site exists, and it was *not* exercised
+
+§6 asks whether `syncOccupiedLabel`, the call site `required.go` names for
+`pods: patch`, works at all. Half of that is answered by reading:
+
+```
+$ grep -rn 'syncOccupiedLabel' internal/ --include=*.go | grep -v _test
+internal/rbacaudit/required.go:69:    ... Why: "syncOccupiedLabel patches the occupied label"
+internal/controller/server_controller.go:846:  if err := r.syncOccupiedLabel(ctx, srv, pod, snap); err != nil {
+internal/controller/server_controller.go:900:  func (r *ServerReconciler) syncOccupiedLabel(
+```
+
+The name is real and the Server controller calls it, so `required.go`'s `Why`
+does not name a function that does not exist. But the label is absent on every
+pod:
+
+```
+$ kubectl -n minecraft get pods -l spawnery.cloud/role=server \
+    -o custom-columns='NAME:...,OCCUPIED:.metadata.labels.spawnery\.cloud/occupied'
+lobby-3dxq   <none>
+```
+
+and "absent" is indistinguishable from "never written" by inspection alone.
+The metrics decide it: the **only** `PATCH` this operator has ever issued is
+the claim expansion above. With no players, `syncOccupiedLabel` has nothing to
+write, so the grant it justifies is still unexercised — and remains so because
+scenario 3 could not be driven.
+
+**This is the one §6 item this rollout leaves open**, and it is left open by
+the port filtering in front of the cluster rather than by anything in the code.
+
+
 ## Scenario 8 — the widened denial measurement
 
 ## Scenario 9 — the NetworkPolicy, enforced for the first time
