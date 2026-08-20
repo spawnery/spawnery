@@ -83,6 +83,128 @@ cannot reduce.
 
 ## Scenario 1 — installation
 
+Two Flux Kustomizations, `spawnery-operator` gating `spawnery-network` by
+`dependsOn`. This section covers the first; §4 of the design says why they are
+two and why neither lives under `apps/` or `infrastructure/`.
+
+```
+$ flux get kustomizations spawnery-operator
+NAME              REVISION            SUSPENDED  READY  MESSAGE
+spawnery-operator main@sha1:10aaa206  False      True   Applied revision: main@sha1:10aaa206
+
+$ flux get helmreleases -n spawnery-system
+NAME      REVISION  SUSPENDED  READY  MESSAGE
+spawnery  0.1.0     False      True   Helm install succeeded for release spawnery-system/spawnery.v1 with chart spawnery@0.1.0
+
+$ kubectl get crd | grep spawnery
+networks.spawnery.cloud       2026-08-20T10:30:27Z
+proxygroups.spawnery.cloud    2026-08-20T10:30:27Z
+servergroups.spawnery.cloud   2026-08-20T10:30:27Z
+servers.spawnery.cloud        2026-08-20T10:30:27Z
+```
+
+### The chart cannot carry the digest of its own tag
+
+The install came up running **the tag**, not the digest:
+
+```
+$ kubectl -n spawnery-system get deployment spawnery-operator \
+    -o jsonpath='{.spec.template.spec.containers[0].image}'
+ghcr.io/spawnery/spawnery-operator:0.1.0
+```
+
+The design's §4 asserts that the chart at `v0.1.0` carries the operator's
+digest, and its acceptance criterion 2 requires the operator to run "from the
+digest in `charts/spawnery/values.yaml`". Both were wrong, and not by an
+oversight anybody could have avoided:
+
+```
+$ git rev-parse v0.1.0 && git log --oneline -1 v0.1.0
+0742b884cd4e3744de0b1bcd7bd21434ed2ab7c7
+017ee94 feat(6e): CI, and the count it proved wrong on its first run
+
+$ git show v0.1.0:charts/spawnery/values.yaml | sed -n '1,9p'
+image:
+  repository: ghcr.io/spawnery/spawnery-operator
+  tag: "0.1.0"
+  digest: ""
+```
+
+`hack/publish.sh` takes the digest from `skopeo copy`'s own `--digestfile`, so
+it exists only **after** the tag has been published. The commit that writes it
+back (`e7877f8`) is therefore necessarily behind the tag it describes. **No tag
+can contain its own digest**, and the value in `charts/spawnery/values.yaml` is
+structurally always one release behind — which makes it documentation of the
+previous release rather than a pin for this one.
+
+The fix belongs where the deployment is described, not in the chart. The
+`HelmRelease` sets the value:
+
+```yaml
+  values:
+    image:
+      digest: sha256:e5eb7626cdf2b7ac186e844aad418fd388c5c3d6ab225d09a37c041b5b4414ca
+```
+
+which is what the master design's §8 actually asks for: a digest in the
+manifest a cluster runs. The chart stays general.
+
+### After the pin
+
+Read at two levels, because the Deployment's spec is what was asked for and
+the container status is what the kubelet did:
+
+```
+$ kubectl -n spawnery-system get deployment spawnery-operator \
+    -o jsonpath='{.spec.template.spec.containers[0].image}'
+ghcr.io/spawnery/spawnery-operator@sha256:e5eb7626cdf2b7ac186e844aad418fd388c5c3d6ab225d09a37c041b5b4414ca
+
+$ kubectl -n spawnery-system get pod \
+    -o jsonpath='{.items[0].status.containerStatuses[0].imageID}'
+ghcr.io/spawnery/spawnery-operator@sha256:e5eb7626cdf2b7ac186e844aad418fd388c5c3d6ab225d09a37c041b5b4414ca
+
+$ kubectl -n spawnery-system get pods -o wide
+NAME                                 READY  STATUS   RESTARTS  AGE  IP           NODE
+spawnery-operator-6cbf4b8457-sztmp   1/1    Running  0         23s  10.42.1.153  server02
+```
+
+No pull secret anywhere in the chain — the images were made public earlier the
+same day, and this is the cluster-side confirmation of it:
+
+```
+$ kubectl -n spawnery-system get deployment spawnery-operator -o jsonpath='{.spec.template.spec.imagePullSecrets}'
+$ kubectl -n spawnery-system get sa spawnery-operator -o jsonpath='{.imagePullSecrets}'
+```
+
+Both empty.
+
+### Pod Security
+
+```
+$ kubectl get ns spawnery-system -o jsonpath='{.metadata.labels}'
+{"goldilocks.fairwinds.com/enabled":"true","kubernetes.io/metadata.name":"spawnery-system",
+ "kustomize.toolkit.fluxcd.io/name":"spawnery-operator",
+ "kustomize.toolkit.fluxcd.io/namespace":"flux-system",
+ "pod-security.kubernetes.io/enforce":"restricted",
+ "pod-security.kubernetes.io/warn":"restricted"}
+
+$ kubectl -n spawnery-system get pod -o jsonpath='{.items[0].spec.securityContext}'
+{"runAsNonRoot":true,"seccompProfile":{"type":"RuntimeDefault"}}
+$ kubectl -n spawnery-system get pod -o jsonpath='{.items[0].spec.containers[0].securityContext}'
+{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]},"readOnlyRootFilesystem":true}
+```
+
+The namespace enforces `restricted` and the pod runs, which is admission and
+execution rather than admission alone. This is the first half of §6's "CIS
+`restricted` against the operator's own security context"; the game server
+namespace is scenario 2.
+
+The NetworkPolicy from 6b is installed and selects the operator by
+`app.kubernetes.io/component=operator,app.kubernetes.io/name=spawnery`. Whether
+it is *enforced* is scenario 9 — it has never been, under any CNI this project
+has run on.
+
+
 ## Scenario 2 — `restricted` against a game server namespace
 
 ## Scenario 3 — a real join
