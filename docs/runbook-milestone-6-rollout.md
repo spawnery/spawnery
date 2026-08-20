@@ -621,7 +621,7 @@ player-info-forwarding-mode = 'modern'
 show-max-players = 100
 ```
 
-The other half did not. With the same client on both paths:
+The other half did not, at first. With the same client on both paths:
 
 | path | header | result |
 |---|---|---|
@@ -629,22 +629,71 @@ The other half did not. With the same client on both paths:
 | through Traefik | PROXY v2 | `read packet length: EOF` |
 | through Traefik | PROXY v1 | `read packet length: EOF` |
 
-and unchanged after deleting both proxy pods and letting them start fresh.
-Velocity behaves as though `haproxy-protocol` were `false`: it does not require
-a header and it drops a connection that brings one — silently, with nothing in
-its log. Two other things were established on the way: the entryPoint key
-`ports.<name>.proxyProtocol` is about *trusting an incoming* header rather than
-sending one, and the Traefik chart ignored it there anyway — the pods carried
-only `--entryPoints.minecraft.address=:25565/tcp`. Sending is
+Two things were established while chasing that, both of them true and neither
+of them the cause: the entryPoint key `ports.<name>.proxyProtocol` governs
+whether an *incoming* header is trusted rather than whether one is sent, and
+the Traefik chart ignored it there anyway — the pods carried only
+`--entryPoints.minecraft.address=:25565/tcp`. Sending is
 `IngressRouteTCP.spec.routes[].services[].proxyProtocol`.
 
-**Left unresolved**, and the header was removed rather than left broken: a path
-that works without real player addresses is worth more than one that does not
-work with them. The cost is stated plainly — Velocity currently sees the
-address of the Traefik pod that relays the connection, so per-player bans and
-rate limits do not have what they need.
+**The cause was the overlay, and it was mine.** `haproxy-protocol` lives under
+Velocity's `[advanced]` table — `internal/render/testdata/velocity.default.toml`
+carries the upstream default at line 135, under the `[advanced]` header at line
+114. The overlay set it at the top level, where it renders into the file,
+*reads* exactly as intended, and means nothing.
 
-### What the network answers now
+Isolating it took a scratch `ProxyGroup` in its own namespace and a PROXY v1
+header built by hand and sent straight to the pod, with no reverse proxy
+anywhere in the path — which is what took Traefik out of the question rather
+than merely making it look innocent:
+
+| key placed | no header | with header |
+|---|---|---|
+| top level | status response | silence |
+| under `[advanced]` | silence | status response |
+
+Perfectly inverted, which is the signature of a setting that is either off or
+on rather than of anything subtler.
+
+### What the network answers now, and from where
+
+With `[advanced].haproxy-protocol = true` on the ProxyGroup and
+`proxyProtocol.version: 2` on the route, both halves land together — either
+alone breaks every connection:
+
+```
+$ go run ./cmd/spawnery-slp --host mc.paul.wtf --port 25565      # through Traefik
+exit 0    (three times)
+
+$ spawnery-slp --host gateway.minecraft.svc.cluster.local --port 25565   # from a pod, no header
+spawnery-slp: read packet length: read tcp ...->10.43.101.155:25565: i/o timeout
+exit 1
+```
+
+The control is the half that matters: the direct path now **fails**, which is
+what a proxy that requires a PROXY header looks like from inside.
+
+And the payoff, measured rather than assumed. A login attempt from this
+workstation, which Velocity logs even when it refuses it:
+
+```
+$ curl -s https://api.ipify.org
+45.131.108.160
+
+$ go run ./cmd/spawnery-join --host mc.paul.wtf --port 25565
+spawnery-join: the server is in online mode and asked for encryption,
+which this client cannot answer
+
+[16:53:49 INFO]: [initial connection] /45.131.108.160:41952 has disconnected
+```
+
+**The address Velocity logs is this machine's own public address.** Before the
+fix the same line read `/10.42.2.69` — a Traefik pod in the cluster's CIDR.
+Per-player bans and rate limits have what they need. The refusal itself is a
+second result: `online-mode: true` is enforced against a client with no
+Microsoft account.
+
+### The server list ping
 
 Not "TCP connects" but the Minecraft protocol itself, spoken end to end from
 outside, using this repository's own client:
@@ -1210,21 +1259,14 @@ And two claims in the design were wrong:
 ## What this run did not establish
 
 Beyond §1's standing limits — one cluster, one CNI, one distribution, nothing
-about scale — one thing is left open, and it is not the port:
-
-**The player's real address does not reach the proxy.** Behind Traefik it
-survives only in a PROXY header, and Velocity would not take one despite
-`haproxy-protocol = true` reaching its rendered config. Measured, not inferred:
-the connected player's address in Velocity's log is `10.42.2.69`, a pod in this
-cluster's CIDR. Per-player bans and rate limits have nothing to key on. The
-alternatives are all worse in ways this run also measured — a fourth address
-needs ARP nobody answers without hand configuration, and sharing one of
-Traefik's needs `Cluster` on both sides, which loses the same addresses anyway.
-
-Two smaller ones:
+about scale — two things, and neither is the network path:
 
 - **`tokenreviews: create` is still an inference.** A `Ready` group means the
   agent authenticated; nothing measures the review itself.
 - **`status.address` is wrong in this topology**, reporting the unused NodePort
   rather than the ingress players connect to — the missing expose strategy,
   recorded in `docs/known-issues.md`.
+
+The node drain proper was declined rather than failed, and scenario 6 says on
+what measured grounds; the eviction path it would have exercised was driven
+directly instead, in both directions.

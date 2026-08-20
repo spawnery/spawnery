@@ -3880,72 +3880,29 @@ to, while players use the name the ingress carries. A fourth strategy, with the
 advertised address supplied rather than derived, is the shape that would fix
 it.
 
-**Velocity does not honour `haproxy-protocol = true` as rendered by the
-overlay.** Behind a reverse proxy the client's address survives only in a PROXY
-header, so the ProxyGroup was given `configOverlay` with
-`haproxy-protocol = true`. The overlay itself works — the key reaches
-`/data/velocity.toml` inside a running proxy pod, which is the first end-to-end
-confirmation this project has that `configOverlay` reaches the agent's rendered
-config at all. But the proxy behaves as though the switch were off: measured on
-2026-08-20 with the same client on both paths, a connection **without** a header
-straight to the ClusterIP succeeds, and a connection **with** one through
-Traefik fails at `read packet length: EOF` for both PROXY v1 and v2, unchanged
-after deleting both proxy pods and letting them start fresh. Nothing appears in
-Velocity's log either way.
+**A `configOverlay` key in the wrong TOML table is silently ignored, and looks
+right in the rendered file.** Velocity's `haproxy-protocol` lives under
+`[advanced]`. Set at the top level it reaches the rendered
+`/data/velocity.toml` — where it reads exactly as intended — and Velocity acts
+as though it were `false`: no PROXY header is required, and a connection
+carrying one is dropped without a log line. Measured on 2026-08-20 against a
+scratch ProxyGroup with a hand-built PROXY v1 header sent straight to the pod,
+no reverse proxy involved:
 
-Unresolved. The header was removed rather than left in place, so the network
-works and Velocity sees the relaying Traefik pod's address instead of the
-player's — which means per-player bans and rate limits do not have what they
-need. Two facts found on the way are worth keeping: Traefik's
-`ports.<name>.proxyProtocol` governs whether an *incoming* header is trusted,
-not whether one is sent, and the chart ignored the key there entirely (the pods
-carried only `--entryPoints.minecraft.address=:25565/tcp`); sending is
-`IngressRouteTCP.spec.routes[].services[].proxyProtocol`.
+| key placed | no header | with header |
+|---|---|---|
+| top level | status response | silence |
+| under `[advanced]` | silence | status response |
 
-**An `IngressRouteTCP` gives external-dns nothing to target.** An `Ingress`
-carries its address in `status.loadBalancer`, written there by Traefik, and
-external-dns reads it. A route has no such status, so external-dns deleted the
-existing record and created nothing — the name stopped resolving with no error
-anywhere. `external-dns.alpha.kubernetes.io/target` has to name the addresses
-explicitly.
-
-**A denied uncached read is invisible in the operator's log.** Milestone 6's
-handover §6 recorded that reads *as a class* had never been measured and that
-the explanation which would generalise the two list results was "a hypothesis
-nothing established". Revoking the forwarding-secret RoleBinding settles the
-one read that matters: the `Network` reported
-`ForwardingSecretResolved=Unknown/SecretReadForbidden` with its remedy,
-`rest_client_requests_total{code="403",method="GET"}` reached 20 — and the
-count of `is forbidden:` lines in the operator's log did not move at all,
-staying at the 24 that a *write* path had produced minutes earlier for an
-unrelated reason. So `theOperatorWasNeverDenied`'s grep cannot see this, and
-not because of the manager's cache: the read reached the API server and the
-refusal was handled instead of surfaced.
-
-Do not widen this to reads as a class. It is one read on one path, and the
-path's quietness was already visible in the source; what was missing, and is
-now present, is the runtime measurement.
-
-**The client metrics see denials the logs do not.** The same measurement
-found where such a denial *is* observable without any code change:
-`rest_client_requests_total` carries `code="403"` per HTTP verb. It has no
-per-resource label, so it cannot say what was refused — but a 403 on a client
-that should never be refused anything is a signal, and it caught the read the
-log missed. A denial check built on that counter would have caught both the
-write path and the read path; the one built on a log grep catches only the
-write path.
-
-**The player's real address does not reach the proxy behind an ingress.**
-Measured on 2026-08-20 during a real join: Velocity logged
-`[connected player] paul_wtf (/10.42.2.69:53802) has connected`, and
-`10.42.2.69` is a pod in this cluster's CIDR — the Traefik pod relaying the
-connection. Per-player bans and rate limits have nothing to key on. The cause
-is the entry above: `haproxy-protocol = true` reaches the rendered config and
-Velocity does not act on it. Every alternative measured on this cluster costs
-the same thing or more — a dedicated address needs ARP that nothing answers
-without hand configuration on a node, and sharing one of Traefik's requires
-`externalTrafficPolicy: Cluster` on both sides, which discards the addresses
-just as thoroughly.
+The overlay mechanism itself is sound and this is the first end-to-end
+confirmation that it works: `internal/render/velocity.go` assigns whole
+top-level keys from the fragment, the operator writes no `[advanced]` table of
+its own, and Velocity fills the rest of that table from its defaults. What the
+mechanism cannot do is tell an author that a key is in the wrong place —
+nothing in the operator knows Velocity's schema, so a misplaced key is
+indistinguishable from a correct one until something downstream behaves
+strangely. Half a day was spent on this one, most of it suspecting the reverse
+proxy.
 
 **`syncOccupiedLabel` runs, and the entry below can be closed.** The "On the
 RBAC audit" list records that `required.go`'s `Why` for `pods: patch` names
