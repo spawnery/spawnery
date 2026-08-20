@@ -122,13 +122,40 @@ kind load image-archive "$archive" --name "$CLUSTER"
 # The image is set to what was just built, not whatever a registry holds, and
 # imagePullPolicy Never makes that a guarantee rather than a hope: a missing
 # local image then fails loudly instead of being fetched.
+#
+# image.digest is cleared, and that is not belt-and-braces. _helpers.tpl's
+# spawnery.image prefers digest over tag whenever digest is non-empty, so
+# overriding only the tag leaves the Deployment naming
+# ghcr.io/spawnery/spawnery-operator@sha256:... -- an image no `kind load`
+# put on the node -- and the run dies five minutes later in a rollout
+# timeout whose only clue is ErrImageNeverPull. That is exactly what CI run
+# 32352012323 did, on the commit that first wrote a real digest into
+# values.yaml. Until then digest was "" and the tag happened to win, so this
+# override was correct by accident for as long as the field was empty.
 helm install spawnery charts/spawnery \
 	--namespace "$OPERATOR_NAMESPACE" \
 	--create-namespace \
 	--set image.repository="$image_repo" \
 	--set image.tag="$image_tag" \
+	--set image.digest="" \
 	--set image.pullPolicy=Never \
 	--set operator.startupDeadline=20s
+
+# And read back what the install actually produced, rather than trusting the
+# flags above to have been the ones that win. The flag list is the input; the
+# container's image is the outcome, and this repository has now shipped three
+# guards that checked the first and missed the second. If a later values.yaml
+# key comes to outrank both tag and digest, this says so in one line at the
+# point of installation instead of as a pull failure two hundred lines down.
+installed_image="$(kubectl -n "$OPERATOR_NAMESPACE" get deployment spawnery-operator \
+	-o jsonpath='{.spec.template.spec.containers[0].image}')"
+if [ "$installed_image" != "${image_repo}:${image_tag}" ]; then
+	echo "the installed Deployment names ${installed_image}, not the image this run" >&2
+	echo "just built and loaded (${image_repo}:${image_tag}). Nothing put that image on" >&2
+	echo "the kind node, so every pod would fail ErrImageNeverPull. Check what in" >&2
+	echo "charts/spawnery outranks image.tag now." >&2
+	exit 1
+fi
 
 # The per-namespace grant milestone 5c deliberately kept out of config/deploy/.
 # The ClusterRole grants no access to secrets outside the operator's own
