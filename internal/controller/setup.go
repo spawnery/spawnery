@@ -111,7 +111,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	if err := (&ServerReconciler{
 		Client:               mgr.GetClient(),
 		Scheme:               mgr.GetScheme(),
-		Recorder:             mgr.GetEventRecorderFor("server"),
+		Recorder:             mgr.GetEventRecorder("server"),
 		Agents:               opts.Agents,
 		Clock:                opts.Clock,
 		StartupDeadline:      opts.StartupDeadline,
@@ -129,7 +129,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 
 	if err := mgr.Add(&OrphanReconciler{
 		Client:   mgr.GetClient(),
-		Recorder: mgr.GetEventRecorderFor("orphan"),
+		Recorder: mgr.GetEventRecorder("orphan"),
 		Agents:   opts.Agents,
 		Interval: opts.OrphanInterval,
 	}); err != nil {
@@ -152,7 +152,7 @@ func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
 	return &NetworkReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
-		Recorder:          mgr.GetEventRecorderFor("network"),
+		Recorder:          mgr.GetEventRecorder("network"),
 		Clock:             opts.Clock,
 		OperatorNamespace: opts.OperatorNamespace,
 		// Uncached, for the reason SecretReader's own comment gives. The
@@ -184,7 +184,7 @@ func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconc
 	return &ServerGroupReconciler{
 		Client:         mgr.GetClient(),
 		Scheme:         mgr.GetScheme(),
-		Recorder:       mgr.GetEventRecorderFor("servergroup"),
+		Recorder:       mgr.GetEventRecorder("servergroup"),
 		Agents:         opts.Agents,
 		Clock:          opts.Clock,
 		Expectations:   newExpectations(opts.Clock),
@@ -196,7 +196,7 @@ func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconcil
 	return &ProxyGroupReconciler{
 		Client:         mgr.GetClient(),
 		Scheme:         mgr.GetScheme(),
-		Recorder:       mgr.GetEventRecorderFor("proxygroup"),
+		Recorder:       mgr.GetEventRecorder("proxygroup"),
 		Agents:         opts.Agents,
 		Bootstrap:      opts.Bootstrapper,
 		AgentEndpoint:  opts.AgentEndpoint,

@@ -30,7 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -70,7 +70,7 @@ func NewServerName(group string) string {
 type ServerGroupReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	// Agents is the runtime state reported by the in-game agents.
 	Agents *agent.Registry
@@ -398,7 +398,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if decision.Limited {
 				eventType = corev1.EventTypeWarning
 			}
-			r.Recorder.Event(group, eventType, limited.Reason, limited.Message)
+			r.Recorder.Eventf(group, nil, eventType, limited.Reason, actionSyncStatus, "%s", limited.Message)
 		}
 	}
 
@@ -434,7 +434,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if isRefused {
 				eventType = corev1.EventTypeWarning
 			}
-			r.Recorder.Event(group, eventType, resize.Reason, resize.Message)
+			r.Recorder.Eventf(group, nil, eventType, resize.Reason, actionSyncStatus, "%s", resize.Message)
 		}
 	}
 
@@ -544,14 +544,14 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if isTrue {
 			eventType = corev1.EventTypeWarning
 		}
-		r.Recorder.Event(group, eventType, backingOff.Reason, backingOff.Message)
+		r.Recorder.Eventf(group, nil, eventType, backingOff.Reason, actionSyncStatus, "%s", backingOff.Message)
 	}
 	if isTrue := degraded.Status == metav1.ConditionTrue; sized && isTrue != wasDegraded {
 		eventType := corev1.EventTypeNormal
 		if isTrue {
 			eventType = corev1.EventTypeWarning
 		}
-		r.Recorder.Event(group, eventType, degraded.Reason, degraded.Message)
+		r.Recorder.Eventf(group, nil, eventType, degraded.Reason, actionSyncStatus, "%s", degraded.Message)
 	}
 
 	if group.IsEphemeral() {
@@ -1041,7 +1041,8 @@ func (r *ServerGroupReconciler) createServer(
 	if err := r.Create(ctx, srv); err != nil {
 		return "", err
 	}
-	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerCreated", "created server %s", srv.Name)
+	r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, "ServerCreated", actionCreateServer,
+		"created server %s", srv.Name)
 	return srv.Name, nil
 }
 
@@ -1074,7 +1075,8 @@ func (r *ServerGroupReconciler) createPersistentServer(
 		}
 		return srv.Name, nil
 	}
-	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerCreated", "created server %s", srv.Name)
+	r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, "ServerCreated", actionCreateServer,
+		"created server %s", srv.Name)
 	return srv.Name, nil
 }
 
@@ -1099,7 +1101,7 @@ func (r *ServerGroupReconciler) deleteServer(
 	if err := r.Delete(ctx, srv); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
-	r.Recorder.Eventf(group, corev1.EventTypeNormal, reason, message, name)
+	r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, reason, actionDeleteServer, message, name)
 	return nil
 }
 
@@ -1129,7 +1131,7 @@ func (r *ServerGroupReconciler) retireServer(
 	if err := r.Patch(ctx, srv, patch); err != nil {
 		return err
 	}
-	r.Recorder.Eventf(group, corev1.EventTypeNormal, "ServerRetiring",
+	r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, "ServerRetiring", actionRetireServer,
 		"retiring server %s for a rolling update", name)
 	return nil
 }

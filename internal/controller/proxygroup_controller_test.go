@@ -32,7 +32,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/yaml"
@@ -135,7 +135,7 @@ func proxyGroupReconciler(f *fixture) *ProxyGroupReconciler {
 		// under an unusual condition — here, a drain that ran out of time —
 		// cannot nil-dereference in a test that stumbled into it. A test that
 		// wants to read the events replaces this with its own handle.
-		Recorder: record.NewFakeRecorder(100),
+		Recorder: events.NewFakeRecorder(100),
 	}
 }
 
@@ -791,7 +791,7 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 		// the comment there. Without it this test kills a mutation on the
 		// divergence event by nil-dereferencing, which is a coincidence of
 		// this literal's shape rather than anything the test asserts.
-		Recorder: record.NewFakeRecorder(100),
+		Recorder: events.NewFakeRecorder(100),
 	}
 	f.createProxyGroup("gateway")
 
@@ -1389,7 +1389,7 @@ func (f *fixture) reportProxyPlayers(t *testing.T, pod corev1.Pod, players int32
 // drainEvents empties a FakeRecorder and returns what it held, so a test can
 // make several assertions about the same batch. Reading the channel twice
 // would not work: each event is delivered once.
-func drainEvents(rec *record.FakeRecorder) []string {
+func drainEvents(rec *events.FakeRecorder) []string {
 	var out []string
 	for {
 		select {
@@ -1639,7 +1639,7 @@ func TestAZeroFromADeadStreamDoesNotDeleteTheProxy(t *testing.T) {
 func TestTheDeadlineDeletesLoudly(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	rec := record.NewFakeRecorder(100)
+	rec := events.NewFakeRecorder(100)
 	r.Recorder = rec
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
@@ -1685,7 +1685,7 @@ func TestTheDeadlineDeletesLoudly(t *testing.T) {
 func TestAProxyThatIgnoresItsWithdrawalIsReported(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	rec := record.NewFakeRecorder(10)
+	rec := events.NewFakeRecorder(10)
 	r.Recorder = rec
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
@@ -1841,7 +1841,7 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	rec := record.NewFakeRecorder(10)
+	rec := events.NewFakeRecorder(10)
 	r.Recorder = rec
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
@@ -3114,7 +3114,7 @@ func TestNodeDrainingConditionNamesTheNodeOnAProxyGroup(t *testing.T) {
 func TestANodeDrainMarkFiresANodeDrainingEvent(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	rec := r.Recorder.(*record.FakeRecorder)
+	rec := r.Recorder.(*events.FakeRecorder)
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -3181,7 +3181,7 @@ func TestANodeDrainMarkFiresANodeDrainingEvent(t *testing.T) {
 func TestAHashMismatchMarkDoesNotFireANodeDrainingEvent(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	rec := r.Recorder.(*record.FakeRecorder)
+	rec := r.Recorder.(*events.FakeRecorder)
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
 

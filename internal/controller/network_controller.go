@@ -26,7 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -40,7 +40,7 @@ import (
 type NetworkReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	// Clock is injectable so the time rules are testable.
 	Clock func() time.Time
@@ -142,8 +142,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	read := readForwardingSecret(ctx, r.SecretReader, network)
 	if read.Hash != "" {
 		if previous := network.Status.ForwardingSecretHash; previous != "" && previous != read.Hash {
-			r.Recorder.Eventf(network, corev1.EventTypeWarning,
-				spawneryv1alpha1.EventForwardingSecretRotated,
+			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
+				spawneryv1alpha1.EventForwardingSecretRotated, actionSyncStatus,
 				"the forwarding secret changed; roll the server groups first, then the proxy groups — see %s",
 				rotationRunbook)
 		}
@@ -155,8 +155,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if read.Reason == spawneryv1alpha1.ReasonSecretNotFound &&
 		!hasConditionReason(network.Status.Conditions,
 			spawneryv1alpha1.ConditionForwardingSecretResolved, read.Reason) {
-		r.Recorder.Eventf(network, corev1.EventTypeWarning,
-			spawneryv1alpha1.EventForwardingSecretNotFound, "%s", read.Message)
+		r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
+			spawneryv1alpha1.EventForwardingSecretNotFound, actionSyncStatus, "%s", read.Message)
 	}
 	meta.SetStatusCondition(&network.Status.Conditions, resolvedCondition(read))
 

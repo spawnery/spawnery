@@ -41,8 +41,23 @@ package rbacaudit
 var RequiredCluster = []Permission{
 	// Events — the recorder writes them for every phase change and every
 	// warning, and patches them when it aggregates repeats.
-	{Group: "", Resource: "events", Verb: "create", Why: "Recorder.Eventf in every controller"},
-	{Group: "", Resource: "events", Verb: "patch", Why: "the recorder's event aggregation"},
+	//
+	// Two API groups, because two recorders are in play. The controllers use
+	// k8s.io/client-go/tools/events, whose sink is the events.k8s.io/v1
+	// client, so their events land in that group. The core group is not left
+	// over from before the migration off tools/record: controller-runtime's
+	// leader election still builds its resource lock with the deprecated
+	// GetEventRecorderFor, and that recorder writes core events. Dropping the
+	// core entry would cost the "became leader" event on every failover.
+	//
+	// Nothing in the test suite can catch either of these missing. envtest
+	// grants the test client everything, so an event the operator is not
+	// allowed to write is only visible under the real ServiceAccount — which
+	// is what the cluster-level end-to-end test is for.
+	{Group: "events.k8s.io", Resource: "events", Verb: "create", Why: "Recorder.Eventf in every controller"},
+	{Group: "events.k8s.io", Resource: "events", Verb: "patch", Why: "the recorder's event aggregation"},
+	{Group: "", Resource: "events", Verb: "create", Why: "leader election's resource lock records elections"},
+	{Group: "", Resource: "events", Verb: "patch", Why: "the leader election recorder's event aggregation"},
 
 	// Pods — the Server controller owns a game server pod's whole life cycle;
 	// since this milestone ProxyGroupReconciler owns a proxy pod's the same way.

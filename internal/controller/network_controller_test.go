@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -43,18 +43,18 @@ func networkReconciler(f *fixture) *NetworkReconciler {
 // networkReconcilerWithEvents hands back the recorder too, which the forwarding
 // secret tests need: the events are emitted on entering a state, so proving
 // "exactly once" means reading the channel rather than the object.
-func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *record.FakeRecorder) {
-	events := record.NewFakeRecorder(100)
+func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *events.FakeRecorder) {
+	rec := events.NewFakeRecorder(100)
 	return &NetworkReconciler{
 		Client:   f.c,
 		Scheme:   f.reconc.Scheme,
-		Recorder: events,
+		Recorder: rec,
 		Clock:    f.clock.Now,
 		// Matches what config/deploy/ installs; the NetworkPolicy tests need
 		// this non-empty, and no other test cares what it is.
 		OperatorNamespace: "spawnery-system",
 		SecretReader:      f.c,
-	}, events
+	}, rec
 }
 
 func (f *fixture) reconcileNetwork(t *testing.T, r *NetworkReconciler, name string) {
