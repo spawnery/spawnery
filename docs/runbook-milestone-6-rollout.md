@@ -489,6 +489,66 @@ So §6's "a `LoadBalancer` address a client can reach" is **half met**: the
 address exists, is unique to this network, is reported by the operator and
 resolves under a name. That a client reaches it is untested.
 
+### Addendum — what was actually closing the port, in two parts
+
+The filtering was found, and it was where the cluster's own repository said it
+would be. `infrastructure/cilium/host-firewall-policy.yaml` is a
+`CiliumClusterwideNetworkPolicy` over the host endpoints, and its `world` rule
+admitted exactly ICMP echo, 6443, 80, 443, 25, 465, 587, 143, 993 and 5432.
+Every observation above follows from that list: `ping` to a node answered
+because type 8 is explicitly allowed, 443 served all day, and 25565 and the
+NodePort 32458 were dropped without a trace. `25565/TCP` was added to that
+rule and the policy object carries it:
+
+```
+$ kubectl get ciliumclusterwidenetworkpolicy host-firewall-ingress \
+    -o jsonpath='{.spec.ingress[3].toPorts[0].ports}'
+['6443','80','443','25','465','587','143','993','5432','25565']
+```
+
+**And the port stayed closed**, which turned out to be a second, independent
+cause — the first one had been hiding it.
+
+```
+$ ip -4 addr show          # on server01, inside its cilium agent
+inet 45.137.203.198/28 brd 45.137.203.207 scope global eth0
+```
+
+A **/28**. The subnet is `45.137.203.192/28`, so `45.137.203.199` is not routed
+*to* server01 — it is **on-link on the same segment**, and the upstream router
+resolves it by ARP. Nothing answers: the address is configured on no interface,
+Cilium's `enable-l2-announcements` is unset, and there is no
+`CiliumL2AnnouncementPolicy`.
+
+The cluster side is complete, which is what makes the diagnosis certain rather
+than likely. From a pod, the same address on the same port answers:
+
+```
+$ nc -zv -w6 45.137.203.199 25565
+Connection to 45.137.203.199 25565 port [tcp/*] succeeded!
+$ nc -zv -w6 gateway.minecraft.svc.cluster.local 25565
+Connection to ... (10.43.101.155) 25565 port [tcp/*] succeeded!
+```
+
+kube-proxy has programmed the LoadBalancer address, the endpoints are healthy,
+and Velocity is listening. Packets from outside simply never arrive.
+
+**What would fix it**, in the order of least surprise:
+
+1. Configure `45.137.203.199/28` on `server01`'s `eth0`. The kernel then answers
+   ARP and kube-proxy's existing DNAT rule does the rest. One line, and a
+   machine-level change outside this cluster's GitOps.
+2. Enable Cilium L2 announcements with a `CiliumL2AnnouncementPolicy`, which is
+   the mechanism designed for exactly this — and a larger change to a
+   Cilium configuration RKE2 manages.
+
+Option 1 carries a coupling worth writing down: under
+`externalTrafficPolicy: Local`, an address answered by `server01` serves traffic
+only while a proxy pod runs **on server01**. Two replicas across three nodes do
+not guarantee that. Three replicas, a `nodeSelector`, or an affinity rule would;
+so would `Cluster`, at the cost of the player addresses the policy exists to
+preserve.
+
 
 ## Scenario 5 — HostPort under the real CNI
 
