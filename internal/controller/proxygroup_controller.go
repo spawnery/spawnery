@@ -222,10 +222,14 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// The strategies differ in reconcileService and proxyAddress and nowhere
 	// else. This guard is not about any of them: the CRD's enum is closed, so
 	// no object carrying an unrecognised type can be created, and the branch
-	// below is reachable only if a fourth value is added to the enum without
+	// below is reachable only if a fifth value is added to the enum without
 	// a branch to serve it. A refusal on the object is a message a user can
-	// read; the alternative is a nil dereference on a sub-block that was
-	// never validated.
+	// read; the alternative is now reconcileService's named error, which
+	// fails the reconcile into the log where nobody looking at the group
+	// would find it. (Before this operator gained a ClusterIP branch that
+	// alternative was a nil dereference on an unvalidated sub-block. It is
+	// not any more, and this guard's value is the reporting, not the crash
+	// it used to prevent.)
 	if !exposeImplemented(group.Spec.Expose.Type) {
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonExposeNotImplemented,
 			fmt.Sprintf("expose.type %s is not implemented by this operator",
@@ -1715,6 +1719,22 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 // publish an address the moment a load balancer answered, including for a
 // group whose every pod is in ImagePullBackOff.
 //
+// For ClusterIP the address is neither a node's nor the Service's: it is the
+// string the operator wrote in the spec, echoed back unchanged, because the
+// thing that owns it -- an ingress controller's TCP entry point, a gateway, a
+// tunnel, a DNS record -- lives under an API this operator does not read.
+//
+// That arm is still behind the ready-pod gate above, and that is the
+// surprising part, because it never reads hostIP. A ClusterIP group whose
+// pods are all in ImagePullBackOff has a perfectly valid configured address
+// and publishes nothing. This is deliberate and is the same promise every
+// other branch makes: status.address means "players can connect here now",
+// not "this is what was configured". The configured value is already
+// readable at spec.expose.clusterIP.address, so publishing it unconditionally
+// would add no information while breaking the one invariant the field has.
+// The consequence to accept is that the gate borrows a readiness signal from
+// a pod whose hostIP is irrelevant to the answer.
+//
 // net.JoinHostPort rather than a format string: a node with an IPv6 hostIP
 // needs brackets, and the old formatting produced an address no client could
 // use. For an IPv4 address the two are identical.
@@ -1789,6 +1809,16 @@ func isPodReady(pod *corev1.Pod) bool {
 // strategy. See the call site in Reconcile for why it exists at all, and
 // TestExposeImplementedCoversTheEnumAndNothingElse for why it is a function
 // rather than an inline default arm.
+//
+// Adding a strategy means editing four things that must agree and are not
+// checked against each other by anything: the CRD's enum, this list, the
+// switch in reconcileService, and the switch in proxyAddress. Nothing
+// automated enforces the agreement -- the enum is closed, so no test can
+// construct an object that exercises a disagreement through the API, which is
+// exactly why the disagreement can be committed green. Stated here because
+// this is the list a fifth strategy's author edits first, and the two
+// default: arms are what catch the half-done edit: reconcileService returns
+// an error naming the type, proxyAddress returns "".
 func exposeImplemented(t spawneryv1alpha1.ExposeType) bool {
 	switch t {
 	case spawneryv1alpha1.ExposeNodePort,

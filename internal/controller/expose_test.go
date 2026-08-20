@@ -423,9 +423,18 @@ func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
 }
 
 // The API server's enum makes the false branch unreachable for any object
-// that exists. The guard is here for the day a fourth value is added to the
+// that exists. The guard is here for the day a fifth value is added to the
 // enum without a branch in reconcileService: a refusal on the object is a
-// message a user can read, and a nil dereference is a crash loop.
+// message a user can read, carried on the group where a user looks, while
+// reconcileService's error reaches only the log.
+//
+// The older wording here promised a crash loop instead. That was true when
+// reconcileService's default: arm fell through to reading NodePort.Port on a
+// sub-block the CRD had never validated; this branch replaced that arm with
+// an error naming the type, so the failure mode this guard is measured
+// against is a named error, not a panic. The guard is worth keeping anyway:
+// the two are not redundant, since only this one puts the refusal somewhere
+// a user can read it.
 //
 // A pure function rather than an inline default arm because the enum is
 // closed: no ProxyGroup carrying an unknown type can be created through
@@ -444,8 +453,10 @@ func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 	}
 	for _, unknown := range []spawneryv1alpha1.ExposeType{"", "Anycast", "nodeport"} {
 		if exposeImplemented(unknown) {
-			t.Errorf("%q is accepted as implemented; reconcileService has no branch for "+
-				"it and would dereference a nil sub-block", unknown)
+			t.Errorf("%q is accepted as implemented; reconcileService has no branch "+
+				"for it and would fail the reconcile with an error only the log "+
+				"sees, instead of refusing the group where a user would find out",
+				unknown)
 		}
 	}
 }

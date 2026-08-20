@@ -3868,15 +3868,25 @@ deployment is described. The design's §4 and its acceptance criterion 2 both
 assumed the opposite; both were wrong, and this is structural rather than an
 oversight anyone could have avoided.
 
-**`ProxyGroup.spec.expose` gained a fourth strategy for this.** The rollout
-put a network behind Traefik's TCP entryPoint and had to use `NodePort` as a
+**`ProxyGroup.spec.expose` needed a fourth strategy for this, and got one
+afterwards.** What was measured on `paulwtf` is the gap: the rollout put a
+network behind Traefik's TCP entryPoint and had to use `NodePort` as a
 stand-in, which left a node port allocated that nobody dialled and made
 `status.address` report `<node>:<nodePort>` — an address nobody plays on.
-`type: ClusterIP` with a required `clusterIP.address` replaces that: the
-operator creates the Service the fronting thing routes to, publishes the
-address it was given, and creates no routing object and verifies no address.
-See `docs/superpowers/specs/2026-08-20-clusterip-expose-design.md` §4 for why
-each of those is a refusal rather than an omission.
+
+The rest of this entry is not a claim about that cluster on that day.
+`type: ClusterIP` with a required `clusterIP.address` was built after the
+rollout, and unlike everything else in this section it has been driven
+against no cluster at all — only envtest and the E2E kind cluster, where no
+proxy image resolves and no player has ever connected. It is what the
+operator does, not something observed working: the operator creates the
+Service the fronting thing routes to, publishes the address it was given —
+once a proxy pod of the group is ready, and nothing before then, the same
+gate every other strategy's address is behind — and creates no routing object
+and verifies no address. Whether Traefik actually routes to that Service is
+the next rollout's finding, not this one's. See
+`docs/superpowers/specs/2026-08-20-clusterip-expose-design.md` §4 for why each
+of those refusals is a refusal rather than an omission.
 
 **A `configOverlay` key in the wrong TOML table is silently ignored, and looks
 right in the rendered file.** Velocity's `haproxy-protocol` lives under
