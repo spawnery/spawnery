@@ -511,11 +511,19 @@ Match the struct's actual field names as the file has them; if a row needs an
 
 Run: `nix --extra-experimental-features 'nix-command flakes' develop -c go test ./internal/controller/ -run TestProxyAddressPerStrategy -v`
 
-Expected: **a nil-pointer panic** on the first new row, for the same reason as
-Task 2 — `proxyAddress`'s `default:` reads `Expose.NodePort.Port`. The second
-row passes already, because the ready-pod gate returns `""` before the switch
-is reached. Note both outcomes: one row proves the arm is missing, the other
-proves the gate is in front of it.
+Expected: **a plain value mismatch** on the first new row —
+`proxyAddress = "", want "mc.example.test"` — and a PASS on the second.
+
+An earlier version of this step predicted a nil-pointer panic here, by analogy
+with Task 2. That was wrong, and the guard it overlooked was one the plan's
+author had already read: `proxyAddress`'s `default:` arm opens with
+`if group.Spec.Expose.NodePort == nil { return "" }`, which
+`reconcileService`'s did not. A ClusterIP group falls through it to `""`
+instead of dereferencing nil.
+
+Both outcomes still carry their intent: the first row proves the arm is
+missing, the second proves the ready-pod gate sits in front of the switch. A
+test that fails for a plain reason is worth as much as one that panics.
 
 - [ ] **Step 3: Give that switch explicit arms too**
 
