@@ -679,3 +679,52 @@ the port filtering in front of the cluster rather than by anything in the code.
 ## Scenario 8 — the widened denial measurement
 
 ## Scenario 9 — the NetworkPolicy, enforced for the first time
+
+Milestone 6b wrote this policy; nothing has ever enforced it. `kindnet`
+implements no NetworkPolicy controller, which 6b measured and
+`charts/spawnery/README.md` records. Cilium does.
+
+The policy selects the operator by its own two labels and admits 9443 from
+pods carrying `spawnery.cloud/managed-by: spawnery-operator` under a
+`namespaceSelector: {}` — **every** namespace, deliberately, because
+`agentEndpoint` builds its dial name from the operator's own namespace and the
+chart cannot know the game namespaces' names:
+
+```
+$ kubectl -n spawnery-system get networkpolicy spawnery-operator-agent -o jsonpath='{.spec}'
+{"podSelector":{"matchLabels":{"app.kubernetes.io/component":"operator",
+                               "app.kubernetes.io/name":"spawnery"}},
+ "policyTypes":["Ingress"],
+ "ingress":[{"from":[{"namespaceSelector":{},
+                      "podSelector":{"matchLabels":{"spawnery.cloud/managed-by":"spawnery-operator"}}}],
+             "ports":[{"port":9443,"protocol":"TCP"}]},
+            {"ports":[{"port":8081,"protocol":"TCP"},{"port":8080,"protocol":"TCP"}]}]}
+```
+
+So the discriminator is the pod label, not the namespace. Both probes therefore
+run **from the same namespace**, from the same image, with the same command,
+differing in one label — probing from two namespaces would have measured
+something the policy does not select on:
+
+```
+# no spawnery.cloud/managed-by label
+$ nc -zv -w6 spawnery-operator.spawnery-system.svc.cluster.local 9443
+nc: connect to ... (10.43.251.87) port 9443 (tcp) timed out: Operation in progress
+exit=1
+
+# identical pod, plus spawnery.cloud/managed-by: spawnery-operator
+$ nc -zv -w6 spawnery-operator.spawnery-system.svc.cluster.local 9443
+Connection to ... (10.43.251.87) 9443 port [tcp/*] succeeded!
+exit=0
+```
+
+**The policy refuses what it should and admits what it must**, and the pair is
+what makes that a result. A refusal alone would be equally consistent with a
+misspelled Service name, a policy that denies everything, or an operator not
+listening; the success on the labelled pod rules out all three, and the two
+runs differ in nothing else.
+
+The admitting half was already established indirectly in scenario 2 — the
+lobby reached `Ready`, which requires the agent to have reached 9443 — but that
+was one direction only. This is the direction 6b was written for.
+
