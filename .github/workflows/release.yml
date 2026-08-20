@@ -142,12 +142,46 @@ jobs:
             esac
           done
           echo "operator_published=${operator_published}" >> "$GITHUB_OUTPUT"
+          # "This tag published nothing" means two different things, and only
+          # one of them is a mistake.
+          #
+          # On the first attempt it is the mistake the guard exists for: a v*
+          # tag pushed without bumping anything in flake.nix, which the
+          # preflight above cannot catch on its own -- the tag matches a
+          # version, that version is simply already on the registry. Failing
+          # loudly there is right, and the remedy it prints is right.
+          #
+          # On a re-run it is the expected state. The steps after this one --
+          # the WRITE_DIGEST guard, which is the first thing in this project's
+          # history ever to exercise that path against a registry, and the
+          # Release creation -- can each fail on their own, and when they do,
+          # the owner clicks Re-run. The job restarts from the top, every tag
+          # this run already pushed now exists, all three exit 3, and without
+          # this exemption the guard would stop the recovery attempt before it
+          # reached the very steps it was re-run for -- printing "bump and tag
+          # again", which would re-publish images that were never the problem.
+          # The Release step below was written to be idempotent precisely so a
+          # re-run could recover; this is what lets the re-run get there.
+          #
+          # The alternative shape was to drop the dependency instead -- run the
+          # digest and Release steps with if: always(), so nothing upstream can
+          # keep them from firing. That costs more than it saves: it would
+          # create a GitHub Release for a tag whose publish genuinely failed,
+          # announcing images that are not in the registry, and it would fire on
+          # the first-attempt mistake above too, turning the loud refusal into a
+          # Release. Keying on the attempt number keeps the guard's teeth on the
+          # attempt where the mistake is possible and takes them out on the
+          # attempt where the same state is the normal one.
           if [ "$dry_run" = "0" ] && [ "$published" -eq 0 ]; then
-            echo >&2
-            echo "all three images were already published at the versions flake.nix names," >&2
-            echo "so ${GITHUB_REF_NAME} releases nothing. Bump imageVersion or operatorVersion" >&2
-            echo "in flake.nix and tag again." >&2
-            exit 1
+            if [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ]; then
+              echo "::notice::attempt ${GITHUB_RUN_ATTEMPT}: all three images are already on the registry at the versions flake.nix names, which is what a re-run of a tag that already published looks like. Carrying on to the digest and Release steps, which is what a re-run is for."
+            else
+              echo >&2
+              echo "all three images were already published at the versions flake.nix names," >&2
+              echo "so ${GITHUB_REF_NAME} releases nothing. Bump imageVersion or operatorVersion" >&2
+              echo "in flake.nix and tag again." >&2
+              exit 1
+            fi
           fi
 
       # The digest is emitted, not committed -- design §5, and the comment the
@@ -169,6 +203,14 @@ jobs:
           if [ "${{ steps.publish.outputs.operator_published }}" != "true" ]; then
             echo "the operator image was already published at this version; charts/spawnery/values.yaml"
             echo "keeps the digest it already carries (${digest:-none})."
+            # Note what a re-run cannot recover, and why nothing here tries.
+            # hack/publish.sh takes the digest from skopeo copy's own
+            # --digestfile, so it exists only on the attempt that did the
+            # copying. Reading it back with skopeo inspect would need exactly
+            # the read scope the script's guard is built to survive without,
+            # and would re-read a mutable tag. So on a re-run the digest is in
+            # the log of the attempt that published it, and the Release body
+            # below says so rather than implying there was never one.
             exit 0
           fi
           if [ -z "$digest" ]; then
@@ -186,6 +228,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DIGEST: ${{ steps.digest.outputs.digest }}
+          OPERATOR_PUBLISHED: ${{ steps.publish.outputs.operator_published }}
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/release-notes.md"
@@ -202,6 +245,13 @@ jobs:
               echo "This workflow does not commit it. Put it into \`charts/spawnery/values.yaml\`'s"
               echo "\`image.digest\` -- the reason that step is a person's and not this job's is in"
               echo "the CI design's §5."
+            elif [ "${OPERATOR_PUBLISHED:-false}" != "true" ] && [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ]; then
+              echo "This is attempt ${GITHUB_RUN_ATTEMPT} of the run for this tag, and the operator image"
+              echo "was already on the registry when it started -- so an earlier attempt published it"
+              echo "and this one had nothing to push. The digest is not recoverable from this attempt:"
+              echo "\`hack/publish.sh\` takes it from \`skopeo copy\`'s own \`--digestfile\`, which only"
+              echo "the attempt that did the copying has. It is in that attempt's log, under"
+              echo "\`published ghcr.io/spawnery/spawnery-operator\`."
             else
               echo "No new operator image on this tag: it was already published at the version"
               echo "\`flake.nix\` names, and \`charts/spawnery/values.yaml\`'s \`image.digest\` is"
