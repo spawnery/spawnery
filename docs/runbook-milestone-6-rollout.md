@@ -204,6 +204,65 @@ The NetworkPolicy from 6b is installed and selects the operator by
 it is *enforced* is scenario 9 — it has never been, under any CNI this project
 has run on.
 
+### The network namespace, its secret and the scoped grant
+
+`spawnery-network` is gated on `spawnery-operator` by `dependsOn`, so the CRDs
+exist before anything references them. It landed without the `Network` on
+purpose: a `SecretReadForbidden` produced by a grant that was never applied
+measures nothing.
+
+```
+$ flux get kustomizations spawnery-network
+NAME             REVISION            SUSPENDED  READY  MESSAGE
+spawnery-network main@sha1:e8ffac20  False      True   Applied revision: main@sha1:e8ffac20
+
+$ kubectl -n minecraft get externalsecret velocity-forwarding-secret
+NAME                        STORETYPE           STORE        REFRESH INTERVAL  STATUS        READY  LAST SYNC
+velocity-forwarding-secret  ClusterSecretStore  vault-store  1h0m0s            SecretSynced  True   7s
+
+$ kubectl -n minecraft get secret velocity-forwarding-secret -o jsonpath='{.data.secret}' | wc -c
+60
+```
+
+The byte count rather than the value: `readForwardingSecret` rejects an empty
+`secret` key with `SecretKeyMissing`, so what has to be established is that the
+key exists and is non-empty. The value is a credential and stays in Vault.
+
+The grant is read back rather than assumed, because `kubectl apply` accepts a
+RoleBinding whose subject names a namespace that does not exist — it applies
+cleanly and grants nothing. This is the same check `hack/e2e.sh`'s
+`check_forwarding_secret_reader_subject` performs, for the same reason:
+
+```
+$ kubectl -n minecraft get rolebinding spawnery-forwarding-secret-reader \
+    -o jsonpath='{.subjects[0].kind}/{.subjects[0].name}/{.subjects[0].namespace}'
+ServiceAccount/spawnery-operator/spawnery-system
+
+$ kubectl -n default get role spawnery-forwarding-secret-reader
+Error from server (NotFound): roles.rbac.authorization.k8s.io "spawnery-forwarding-secret-reader" not found
+```
+
+The second command is the one that matters. `config/rbac/forwarding-secret-reader.yaml`
+carries no `metadata.namespace` — by design, so that `kubectl apply -n` supplies
+it — and Flux supplies nothing, so an unedited copy would have put both objects
+in `default`. Proving they are *not* there is the only way to know the copy in
+`spawnery/network/rbac.yaml` writes its namespace out.
+
+And the grant's width, measured with an access review rather than read off the
+Role:
+
+```
+$ kubectl auth can-i get secrets --as=system:serviceaccount:spawnery-system:spawnery-operator -n minecraft
+yes
+$ kubectl auth can-i get secrets --as=system:serviceaccount:spawnery-system:spawnery-operator -n default
+no
+```
+
+`no` is the informative half: the ClusterRole grants no access to secrets
+outside the operator's own namespace, and an administrator opens exactly the
+namespaces that hold a `Network`. This is the first time that claim has been
+checked against a real API server's authorizer rather than against the YAML.
+
 
 ## Scenario 2 — `restricted` against a game server namespace
 
