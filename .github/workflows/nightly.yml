@@ -1,0 +1,34 @@
+name: Nightly
+
+on:
+  schedule:
+    # 03:17 UTC. The odd minute is deliberate: the top of an hour is when
+    # every other repository's cron fires, and a job that waits in a queue
+    # for its runner is a job whose duration measures the queue.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  # TEMPORARY, removed in Step 4 of this task. workflow_dispatch is not
+  # available for a workflow that is not on the default branch, so this is
+  # the only way to drive this job before the branch merges. What needs
+  # proving is not the one-line make invocation but whether a hosted runner
+  # can build three images twice without running out of disk.
+  pull_request:
+
+jobs:
+  image-repro:
+    runs-on: ubuntu-latest
+    # Three images, built twice and compared. Milestone 6a's acceptance
+    # criterion 2 is the bit-identical rebuild; this turns it from a thing
+    # measured once into a thing measured continuously. It does not block a
+    # pull request, because a nightly failure says nothing about the code
+    # somebody proposed today.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: make image-repro
+        run: nix develop -c make image-repro

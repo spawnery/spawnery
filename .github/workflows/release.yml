@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Authenticate skopeo to ghcr.io
+        run: |
+          nix develop -c skopeo login ghcr.io \
+            -u "${{ github.actor }}" \
+            --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+
+      # WRITE_DIGEST=1 writes charts/spawnery/values.yaml's image.digest.
+      # That write is NOT committed: the digest is emitted for the repository
+      # owner to commit. Giving a CI job write access to the default branch
+      # needs a loop-brake against the commit it would itself trigger and
+      # collides with any branch protection added later -- see design §5.
+      - name: hack/publish.sh
+        run: nix develop -c env WRITE_DIGEST=1 ./hack/publish.sh
+
+      - name: Emit the digest
+        run: |
+          digest="$(nix develop -c grep -oE 'sha256:[0-9a-f]{64}' charts/spawnery/values.yaml || true)"
+          if [ -z "$digest" ]; then
+            echo "publish.sh produced no digest in charts/spawnery/values.yaml" >&2
+            exit 1
+          fi
+          echo "operator image digest: $digest"
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
