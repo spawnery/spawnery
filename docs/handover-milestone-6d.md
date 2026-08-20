@@ -22,6 +22,21 @@ driven, once, against a real cluster
 upgrade half is built and unproven, and every document 6d writes has to say
 so in those words rather than imply otherwise.
 
+**Superseded as the document to start from: milestone 6e has landed, and
+anyone starting the RKE2 rollout begins at
+[`handover-milestone-6e.md`](handover-milestone-6e.md).** This one is kept
+unedited as the record of what 6e started from — §3's survey of the tree
+below is the evidence base for what 6e found already true and did not have
+to redecide. §3 makes six distinct claims; all six were checked against the
+code as 6e leaves it, and all six still hold, unchanged. 6e's own scope —
+GitHub Actions, `.golangci.yml`, the events-API recorder migration, the two
+new workflow files — never touched the chart's namespace templating, the
+three-namespace scheme, `config/rbac/forwarding-secret-reader.yaml`, or
+`hack/chart-templates.sh`, so nothing here needed correcting the way one of
+6c's own claims did when 6d landed. `docs/handover-milestone-6e.md`'s own §3
+carries the current facts as a fresh survey rather than a diff against this
+one, for the same reason 6d's did against 6c's.
+
 This document is not a spec. It says where 6d stopped and what 6e — CI, plus
 the RKE2 rollout — finds when it starts, checked against the code as 6d
 leaves it rather than against the plan that preceded it. The design decisions

@@ -298,6 +298,25 @@ from `agent/paper/build.gradle.kts`; the drift only shows up when someone runs
 because it reaches Maven Central, so the check belongs with CI in milestone 6:
 run `make agent-deps` and fail on a non-empty `git diff`.
 
+*Closed by milestone 6e — and this entry's own path had gone stale by the
+time it was closed.* The `deps` job in `.github/workflows/ci.yml` runs `make
+agent-deps` against a real Maven Central, then `git diff --exit-code --
+agent/deps.json`, blocking every pull request. The guard was shown to fire,
+not only wired: a corrupted hash committed on purpose
+(`test(6e): perturb agent/deps.json to prove the drift guard fires`, reverted
+in the next commit) reproduced through a real Gradle resolution, and the
+comparison step failed naming the file and the exact line; `make agent-deps`
+itself stayed green throughout, so the failure lands on the diff, the way it
+is meant to, not on the regeneration. The path this entry names above,
+`agent/paper/deps.json`, has been `agent/deps.json` since milestone 6d's
+`14eee4f`, which split `agent/` into `common` and `paper` subprojects and
+moved the lockfile to the repository root — this entry was never updated to
+say so until now. One environmental fix the job needed and this entry could
+not have predicted: `USE_BWRAP=0` on the `make agent-deps` step, because
+nixpkgs' `gradle.fetchDeps` update script wraps the real dependency fetch in
+its own `bwrap` sandbox — unrelated to Nix's — which GitHub's hosted runners
+refuse by default.
+
 **Two toolchain versions are pinned twice each, and a nixpkgs bump moves only
 one half.** `protoc-gen-grpc-java` comes from nixpkgs (1.83.1 at this pin) while
 the grpc-java runtime artifacts come from `deps.json`; `protoc` comes from
@@ -308,6 +327,12 @@ runs against. The failure is loud — `compileProtoJava` fails with "cannot find
 symbol" — but it appears nowhere near the pin that caused it. `flake.nix` now
 names the coupling at both edit sites, which is the cheapest half; the standing
 check still does not exist, and belongs with the `deps.json` guard above.
+
+**Not closed by milestone 6e.** Nothing in this milestone's scope built the
+standing check this entry asks for, and `.github/workflows/ci.yml` runs no
+such check. Read the neighbouring entry's closure as scoped to the
+`deps.json` guard alone — this entry's own coupling is exactly as open as it
+was when milestone 2c wrote it.
 
 **The level-2 harness has rough edges milestone 3 inherits.** `hack/agent-test.sh`
 and `cmd/spawnery-stubop` are exactly what a Velocity agent will be tested with,
@@ -3530,6 +3555,169 @@ suspicion is timing around the predecessor pod's disappearance, but that is a
 guess and nothing has reproduced it since. Recorded because an unrecorded
 flake is rediscovered from scratch by whoever meets it next; if it recurs,
 this entry is the second data point rather than the first.
+
+**What milestone 6e adds to this entry: frequency, not a diagnosis.**
+`go test -race ./...` now runs on every pull request through `ci.yml`'s
+`test` job, which means this suite runs on the rhythm of how often somebody
+pushes rather than the rhythm of how often somebody happens to run
+`make test` by hand — far more often than a person does. A test with a real,
+low-probability timing flake that nobody has diagnosed will therefore surface
+more often simply because it is asked more often, with nothing about the
+underlying flake having changed. A red `test` job in CI's first weeks, on
+this test specifically, is a measurement of how often the flake already
+happened to occur, not a regression CI introduced.
+
+## From milestone 6e (CI)
+
+GitHub Actions now runs three workflows: `.github/workflows/ci.yml` blocks
+four jobs — `test`, `lint`, `deps`, `e2e` — on every pull request and on
+push to `master`; `.github/workflows/nightly.yml` runs `make image-repro` on
+a schedule plus `workflow_dispatch`; `.github/workflows/release.yml` runs
+`hack/publish.sh` on a `v*` tag. Full account:
+`docs/handover-milestone-6e.md`.
+
+**`make lint` was never actually green, and a runner's cold cache is what
+proved it.** Three local runs and two reviewers all reported `make lint`
+exiting 0 during this milestone's own Task 3. `lint`'s first CI run found
+five real `SA1019` findings in `internal/controller/setup.go`
+(`mgr.GetEventRecorderFor`, deprecated) that none of them had seen. The
+cause was `golangci-lint`'s own disk cache: every local run had been
+answering from a cache warmed before those five findings existed, and a
+hosted runner starts with none. `golangci-lint cache clean` followed by
+`golangci-lint run` reproduced the five findings locally, and reproduced a
+second thing: the milestone's own accepted count of "33" findings — written
+into the design spec and into Task 2's commit message — was measured
+against the same stale cache and was wrong for the same reason. The true
+count, from a cleared cache, was **38** (26 `errcheck`, 12 `staticcheck`);
+the missing five are exactly the `setup.go` findings the cache had been
+hiding. This is the clearest demonstration in this milestone of what CI
+actually bought: a check that had been "clean" on three different local runs
+and two independent reviews was not clean, and only a machine with no
+opinion about what it had already seen could say so.
+
+**The lesson generalises past `golangci-lint`.** Any tool that caches its
+own answers — a linter, a formatter, a build system's incremental state —
+can report a tree as clean when the cache, not the tree, is what is clean.
+The fix is not a smarter cache; it is to clear the cache before trusting a
+count from it, the same way this entry's own correction (33 → 38) only
+became visible once someone did.
+
+**Plain `golangci-lint run` with no config reports at most three findings
+sharing a message per linter, and the concurrent package walk means the
+subset shown is not guaranteed to be the same one twice.** Three consecutive
+runs during this milestone's design each reported seventeen issues, and the
+note recorded alongside them at the time claimed each of the three named a
+different set of files — read together, that would mean the cap was hiding
+a genuinely unstable sample. That second half did not hold up: a reviewer's
+three consecutive runs later, against the same pre-fix tree, each returned
+the identical seventeen. So this entry says only what was actually
+confirmed twice — the cap is real, seventeen against a true (cleared-cache)
+count of thirty-eight is not close — and says the varying-subset claim was
+observed once, during design, and did not reproduce when it was checked
+again, rather than asserting it as established behaviour. `.golangci.yml`
+now pins `max-issues-per-linter: 0` and `max-same-issues: 0`, so
+`golangci-lint run` reports the true count with no explicit flags needed.
+Worth an entry rather than only a commit message because the failure mode
+generalises the same way the cache one does: any tool with a default output
+cap reports a sample, and a sample that looks like a total is how a count
+gets trusted that should not be.
+
+**The events-API migration this milestone's lint fix forced, and how far
+the one piece of evidence for its RBAC grant actually reaches.** Fixing the
+five `SA1019` findings above meant migrating `internal/controller`'s five
+`Recorder` fields from the deprecated `record.EventRecorder` to
+`events.EventRecorder` — twenty-three production call sites, twenty-one
+fake-recorder constructions across eight test files. The new recorder's
+sink is the `events.k8s.io/v1` API, not the core group controller-runtime
+used before, so it needed its own RBAC grant
+(`config/rbac/role.yaml`, `charts/spawnery/templates/rbac.yaml`); the old
+core-group grant stays, unrelated to this migration, because
+controller-runtime's own leader-election lock still calls the deprecated
+`GetEventRecorderFor` internally, and leader election is on by default here.
+`internal/rbacaudit` checks the rendered chart's RBAC against a
+hand-maintained table in both directions, so it catches the table and the
+role disagreeing — but the table itself is hand-maintained, and nothing
+catches the table and the role agreeing while both are wrong against what
+the code actually needs. envtest cannot close that gap either: its test
+client is granted everything, so a missing grant is invisible to every
+envtest-backed test in this repository. The only thing that has exercised
+the operator's real ServiceAccount against a real API server since the
+grant changed is one `make e2e` run, and that run's `PASS` reaches exactly
+as far as the check it drives allows, no further:
+`theOperatorWasNeverDenied` excludes any log line containing `violates
+PodSecurity` (milestone 6c's own narrowing, so a deliberate Pod Security
+refusal in an unrelated scenario in the same run cannot fail this one), and
+two paths can carry a real denial without ever producing the `is forbidden:`
+line the check looks for — a revoked cache-backed read (tried against pods
+and against networks, watched for close to eight minutes, no log line and
+no `403` in the operator's own client metrics either time) and
+`readForwardingSecret` folding a real `403` into a condition message with no
+`is forbidden:` substring and no log call at all. A grep of the CI job's own
+stdout for `is forbidden:` was tried as independent corroboration of the
+grant and does not stand as any: `hack/e2e.sh` prints the operator's pod log
+only when the job's own exit status is non-zero, and the check's log source
+reads the same log through the Kubernetes API in-process, never printing it
+— so on a green run the corpus that grep searches structurally cannot
+contain the thing being searched for, and a zero-match result against it is
+not evidence about the grant one way or the other.
+
+**`events.k8s.io/v1` caps a note at 1024 bytes — a limit the core `v1.Event`
+this operator used before never had — and the check is `len()` on bytes,
+not on characters.** A note over the limit is refused outright by the API
+server, and the client library abandons the refused event with a `klog`
+line; nothing retries it and nothing on the reconciled object says an event
+was lost. Measured directly against envtest's real API server: 512
+em-dashes is 512 *characters* and 1536 *bytes*, and is refused, despite the
+API server's own error text saying "characters" — a rune-counting helper
+would have been the wrong fix. Five sites build their note from text this
+operator did not write — an admission refusal, a scheduler explanation, a
+divergence list, a bootstrap error, a secret-resolution message — and the
+sharpest case is the one milestone 6c built on purpose: a PodSecurity
+`restricted` refusal is exactly the kind of API server text that runs past 1
+KB, and before this fix it would have been dropped from `kubectl get
+events` entirely while the `Degraded` condition (which allows 32 KB) kept
+the full text. `internal/controller/events.go`'s `eventNote` helper now
+formats first, truncates on a rune boundary, and appends a marker pointing
+at the condition for the untruncated text; applied at those five sites.
+**A sixth site of the same shape is not fixed.**
+`internal/controller/servergroup_controller.go:437` builds its note from
+`resize.Message`, which traces through `storageResizeCondition` →
+`worst.ResizeError` → `resizeConditionError` (`server_controller.go:471`) to
+a `PersistentVolumeClaimControllerResizeError`/`NodeResizeError` condition
+message an external CSI driver writes — text this operator does not
+control, structurally identical to the PodSecurity case that motivated the
+fix, and open.
+
+**The rootless-podman path is now unexercised by anything automatic.**
+Before this milestone there was exactly one way `hack/e2e.sh` ran: by hand,
+on the author's machine, under rootless Podman with `KIND_EXPERIMENTAL_PROVIDER=podman`
+and a `systemd-run --scope --user --property=Delegate=yes` wrapper — so
+there was no gap between what was proven and what anyone relied on.
+`ci.yml`'s `e2e` job now runs the same unmodified script on a hosted
+runner's Docker daemon, which is a genuine second, independent execution of
+it — eighteen scenarios green — but from this point on nothing automatic
+ever exercises the podman path again. CI proves Docker; the author's machine
+proves podman; neither proves the other, and a change that only breaks under
+one container runtime can now sit green in CI indefinitely.
+
+**Two workflow paths exist only on paper.** `nightly.yml` was driven once,
+but not in the shape that merges: it needed a temporary `pull_request:`
+trigger to run at all before it reached the default branch (GitHub will not
+run `workflow_dispatch` on a workflow that has never been on it), and that
+trigger was removed before merging. So the file that actually ran and the
+file that ships differ by exactly that one trigger line, and neither of the
+merged file's real triggers — `schedule`, `workflow_dispatch` — has ever
+fired. Confirming either is a one-time, post-merge check for whoever owns
+this repository: wait for the 03:17 UTC cron, or run
+`gh workflow run nightly.yml` once the file is on `master`. `release.yml`
+has never run at all — `gh api repos/spawnery/spawnery/actions/workflows`
+does not even list it, because GitHub only registers a workflow once
+something has triggered it or it reaches the default branch, and neither has
+happened. Its `skopeo login`, its real `hack/publish.sh` invocation with
+`WRITE_DIGEST=1`, and its digest-guard step have run zero times combined;
+the `WRITE_DIGEST` branch of `hack/publish.sh` has never run against a real
+registry anywhere in this project's history. The first `v*` tag is still the
+first real test of all three.
 
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
