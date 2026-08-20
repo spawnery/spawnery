@@ -4,7 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
-	"os"
+	"io/fs"
+	"path/filepath"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -226,6 +227,16 @@ var knownActions = map[string]string{
 	"actionSyncStatus":     actionSyncStatus,
 }
 
+// wantEventfSites is how many Eventf call sites this package has.
+//
+// Asserted rather than logged, because a count that is only printed cannot
+// notice its own coverage shrinking. Deleting a call site outright left the
+// scan green at 22 when this was a t.Logf, and moving a controller into a
+// subpackage would have done the same silently. Changing this number is
+// therefore a deliberate act with a diff, which is what it should be: adding
+// an event is a change to the operator's output.
+const wantEventfSites = 23
+
 // TestEveryEventfCallSitePassesAKnownAction reads this package's own source.
 //
 // It is here because nothing else in the repository can see the action at all.
@@ -250,6 +261,19 @@ var knownActions = map[string]string{
 // of them passes, and a table restating twenty-three literals would be a
 // second copy of the code that goes stale the first time somebody adds a
 // twenty-fourth. This reads whatever is there.
+//
+// Three assertions, and the second and third exist because the first alone was
+// weaker than it looked. It requires every Eventf's action argument to be an
+// identifier named in knownActions. It requires the number of call sites found
+// to be wantEventfSites, because a count that is only logged cannot notice its
+// own corpus shrinking -- a deleted call site left it green at 22. And it
+// requires that no local anywhere in the package shadows one of those nine
+// names, which is what makes matching by name mean anything at all: without
+// it, `actionCreatePod := ""` above a call site passes. See shadowedActions.
+//
+// What none of the three reaches, said here rather than left to be assumed: it
+// cannot tell whether the constant a call site chose is the right one for that
+// call site. actionSyncStatus where actionCreatePod was meant passes.
 func TestEveryEventfCallSitePassesAKnownAction(t *testing.T) {
 	for name, value := range knownActions {
 		if value == "" {
@@ -257,25 +281,42 @@ func TestEveryEventfCallSitePassesAKnownAction(t *testing.T) {
 		}
 	}
 
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("read the package directory: %v", err)
-	}
-
 	fset := token.NewFileSet()
-	sites := 0
-	for _, entry := range entries {
-		name := entry.Name()
+	var files []*ast.File
+	// Recursive, not one directory deep. A non-recursive scan makes this
+	// test's coverage a function of where the controllers happen to live: move
+	// one into a subpackage of internal/controller and its call sites leave
+	// the corpus with nothing saying so.
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			// testdata is not compiled and may hold anything.
+			if d.Name() == "testdata" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		// Test files are excluded on purpose: a fixture may legitimately drive
 		// a recorder with a literal, and what this guards is the operator's
 		// own output.
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-			continue
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
 		}
-		file, err := parser.ParseFile(fset, name, nil, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", name, err)
+		file, perr := parser.ParseFile(fset, path, nil, 0)
+		if perr != nil {
+			return perr
 		}
+		files = append(files, file)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk the package sources: %v", err)
+	}
+
+	sites := 0
+	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -310,14 +351,114 @@ func TestEveryEventfCallSitePassesAKnownAction(t *testing.T) {
 		})
 	}
 
-	// A scan that matched nothing would pass every assertion above without
-	// having read a single call site, which is the one way this test could be
-	// green and worthless.
-	if sites == 0 {
-		t.Fatal("no Eventf call site found in this package; the scan is not looking " +
-			"at what it thinks it is")
+	if sites != wantEventfSites {
+		t.Errorf("found %d Eventf call sites, want %d. If an event was added or "+
+			"removed on purpose, change wantEventfSites in the same commit; if it "+
+			"was not, a call site has moved out of this scan's reach",
+			sites, wantEventfSites)
 	}
-	t.Logf("checked %d Eventf call sites", sites)
+
+	// The other half of matching by name, and the reason matching by name is
+	// sound at all. See shadowedActions.
+	for _, file := range files {
+		for _, shadow := range shadowedActions(fset, file) {
+			t.Errorf("%s: %s shadows one of events.go's action constants. "+
+				"TestEveryEventfCallSitePassesAKnownAction matches the action "+
+				"argument by identifier name and does not resolve types, so a "+
+				"local of this name would let a call site pass while carrying "+
+				"something else entirely -- rename the local", shadow.pos, shadow.name)
+		}
+	}
+}
+
+// shadow is one local declaration that takes an action constant's name.
+type shadow struct {
+	name string
+	pos  token.Position
+}
+
+// shadowedActions finds locals that shadow one of events.go's action
+// constants.
+//
+// This is what makes the name-matching in the test above sound. That test asks
+// whether the action argument is an identifier called, say, actionCreatePod;
+// it does not and cannot resolve what that identifier refers to, because
+// resolving it means running a type checker over the package, which is a great
+// deal of machinery to answer one question. So the identifier's meaning is
+// pinned from the other side instead: the nine names are package-level
+// constants, nothing in the package has any business declaring a local of the
+// same name, and if nothing does then the name determines the constant.
+// `actionCreatePod := ""` above a call site went green before this existed --
+// which is exactly the shape the test claims to catch.
+//
+// The remaining limit, stated rather than papered over: none of this says the
+// constant a call site chose is the *right* one for that call site.
+// actionSyncStatus where actionCreatePod was meant passes both halves, and
+// only a reader applying events.go's own rule can tell. docs/known-issues.md
+// says the same.
+//
+// Declarations, not uses: a parameter, a `:=`, a `var`/`const` inside a
+// function, a range variable, a function literal's parameter. A package-level
+// redeclaration is not checked because the compiler refuses it.
+func shadowedActions(fset *token.FileSet, file *ast.File) []shadow {
+	var found []shadow
+	report := func(idents ...*ast.Ident) {
+		for _, id := range idents {
+			if id == nil || id.Name == "_" {
+				continue
+			}
+			if _, known := knownActions[id.Name]; known {
+				found = append(found, shadow{name: id.Name, pos: fset.Position(id.Pos())})
+			}
+		}
+	}
+	fields := func(list *ast.FieldList) {
+		if list == nil {
+			return
+		}
+		for _, f := range list.List {
+			report(f.Names...)
+		}
+	}
+
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok {
+			// A package-level var or const of one of these names is a
+			// redeclaration the compiler rejects, so there is nothing here to
+			// find.
+			continue
+		}
+		fields(fn.Recv)
+		ast.Inspect(fn, func(n ast.Node) bool {
+			switch node := n.(type) {
+			case *ast.FuncType:
+				fields(node.Params)
+				fields(node.Results)
+			case *ast.AssignStmt:
+				if node.Tok == token.DEFINE {
+					for _, lhs := range node.Lhs {
+						if id, ok := lhs.(*ast.Ident); ok {
+							report(id)
+						}
+					}
+				}
+			case *ast.RangeStmt:
+				if node.Tok == token.DEFINE {
+					if id, ok := node.Key.(*ast.Ident); ok {
+						report(id)
+					}
+					if id, ok := node.Value.(*ast.Ident); ok {
+						report(id)
+					}
+				}
+			case *ast.ValueSpec:
+				report(node.Names...)
+			}
+			return true
+		})
+	}
+	return found
 }
 
 // TestTheRealAPIServerRefusesAnEventWithNoAction measures the premise the test
