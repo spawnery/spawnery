@@ -173,6 +173,28 @@ spec:
     fallbackGroups:
       - lobby
 ---
+# gateway-clusterip exercises the strategy for a network something else
+# publishes. Nothing in this harness stands in front of it -- the point is the
+# Service's shape and the published address, both of which the operator owns
+# and neither of which needs a real ingress to check.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway-clusterip
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  replicas: 1
+  image: ghcr.io/spawnery/velocity:e2e-no-such-tag
+  expose:
+    type: ClusterIP
+    clusterIP:
+      address: mc.e2e.test
+  routing:
+    fallbackGroups:
+      - lobby
+---
 apiVersion: v1
 kind: Secret
 metadata:

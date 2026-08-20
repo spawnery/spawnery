@@ -120,6 +120,7 @@ func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("the LoadBalancer group gets its Service", theLoadBalancerGroupGetsItsService)
 	t.Run("the HostPort group binds the port and has no Service", theHostPortGroupBindsThePortAndHasNoService)
 	t.Run("a switch to HostPort removes the Service", aSwitchToHostPortRemovesTheService)
+	t.Run("the ClusterIP group gets a plain Service and publishes its address", theClusterIPGroupGetsAPlainServiceAndPublishesItsAddress)
 	t.Run("a forbidden host port is reported on the group", aForbiddenHostPortIsReportedOnTheGroup)
 	t.Run("the operator holds its secret and its lease", theOperatorHoldsItsSecretAndItsLease)
 	t.Run("the table holds against the real authorizer", theTableHoldsAgainstTheRealAuthorizer)
