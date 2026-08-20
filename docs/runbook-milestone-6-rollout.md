@@ -347,9 +347,144 @@ checked against a real API server's authorizer rather than against the YAML.
 
 ## Scenario 2 — `restricted` against a game server namespace
 
+The `minecraft` namespace enforces `restricted`, and the pods do not merely
+pass admission — they run:
+
+```
+$ kubectl -n minecraft get pods -o wide
+NAME           READY  STATUS   RESTARTS  AGE  IP            NODE
+gateway-dnhp   1/1    Running  0         18m  10.42.2.131   server03
+gateway-q7qw   1/1    Running  0         18m  10.42.0.65    server01
+lobby-3dxq     1/1    Running  0         18m  10.42.1.149   server02
+
+$ kubectl -n minecraft get servergroup lobby -o wide
+NAME   TYPE       PHASE  READY  PLAYERS  FREE SLOTS  AGE
+lobby  Ephemeral  Ready  1      0        100         18m
+
+$ kubectl -n minecraft get proxygroup gateway -o wide
+NAME     PHASE  READY  ADDRESS               PLAYERS  AGE
+gateway  Ready  2      45.137.203.199:25565  0        18m
+
+$ kubectl -n minecraft get network production -o jsonpath='{.status.conditions}'
+Accepted                  True   "this network owns its namespace"
+ForwardingSecretResolved  True   secret "velocity-forwarding-secret" carries a "secret" key
+```
+
+**This is the first time real Paper and Velocity images have run in any
+cluster.** `test/e2e/manifests/e2e.yaml` names unresolvable tags on purpose, so
+every earlier run stopped at `ErrImagePull` by design. Three things follow from
+`READY 1` and `FREE SLOTS 100` that no previous run could establish:
+
+- Paper starts under Pod Security `restricted` — `runAsNonRoot`,
+  `readOnlyRootFilesystem`, `capabilities: drop: [ALL]` and all — rather than
+  merely being admitted under it;
+- the agent inside the pod reached the operator on 9443 and reported its slots,
+  which is what moves the group to `Ready`;
+- and therefore **the NetworkPolicy from 6b, enforced here for the first time
+  ever, does not block the agent channel.** Under `kindnet` it was inert. Had
+  its selector been wrong, this line would read `READY 0` and the group would
+  never have left `Pending`. Scenario 9 measures the other direction — that it
+  refuses what it should.
+
+The proxies reached `Ready` too, which needs the Velocity agent to bind its
+readiness port: `PHASE Ready, READY 2`.
+
+
 ## Scenario 3 — a real join
 
+**Not driven.** TCP 25565 does not reach this cluster from outside, and the
+cause is not in spawnery — see scenario 4. A join could not be attempted
+without first changing something in front of the cluster, which is outside
+this rollout's scope and the repository owner's to decide.
+
+What that leaves unmeasured, stated plainly rather than inferred from the
+green statuses above: nothing here shows a player being routed through the
+proxy to a lobby server, and nothing here exercises `syncOccupiedLabels` under
+a real occupancy — scenario 7 records what could be established about it
+without a join.
+
+
 ## Scenario 4 — the LoadBalancer address
+
+**Assigned, and reported by the operator. Not proven reachable from outside.**
+
+The sharing plan of §5 was abandoned on evidence, not on preference. With both
+Services on `externalTrafficPolicy: Local`, Cilium refused:
+
+```
+$ kubectl -n minecraft get svc gateway -o jsonpath='{.status.conditions}'
+[{"message":"The IP '185.117.3.72' is already allocated to an incompatible service.
+   Reason: compatible ExternalTrafficPolicy local but selecting different set of pods",
+  "reason":"already_allocated_incompatible_service","status":"False",
+  "type":"cilium.io/IPAMRequestSatisfied"}]
+```
+
+That is a property of `Local`, not a misconfiguration: the load balancer may
+only steer to nodes holding a local endpoint, and Traefik's DaemonSet across
+three nodes is a different set of nodes from two Velocity pods on two. **The
+design's §5 premise was incomplete** — non-overlapping ports are necessary for
+sharing but not sufficient. On this cluster the choice was between real player
+addresses and a shared address; a fourth address settled it.
+
+`45.137.203.199` was added to the `node-ips` pool. It is routed to `server01`
+rather than owned by a node, which the three original addresses are not:
+
+```
+$ kubectl get ciliumloadbalancerippools node-ips -o wide
+NAME      DISABLED  CONFLICTING  IPS AVAILABLE  AGE
+node-ips  false     False        1              143d
+
+$ kubectl -n minecraft get svc gateway -o wide
+NAME     TYPE          CLUSTER-IP     EXTERNAL-IP     PORT(S)          AGE
+gateway  LoadBalancer  10.43.101.155  45.137.203.199  25565:32458/TCP  18m
+
+$ kubectl -n minecraft get svc gateway -o jsonpath='{.status.conditions}'
+[{"lastTransitionTime":"2026-08-20T11:06:09Z","message":"","reason":"satisfied",
+  "status":"True","type":"cilium.io/IPAMRequestSatisfied"}]
+
+$ kubectl -n minecraft get proxygroup gateway -o jsonpath='{.status.address}'
+45.137.203.199:25565
+```
+
+The operator's read-back of a load balancer address is therefore driven for
+the first time against a real controller. Until now the E2E wrote
+`status.loadBalancer` by hand, and its own manifest says so.
+
+DNS is correct, and the `cloudflare-proxied` annotation is load-bearing:
+
+```
+$ dig +short mc.paul.wtf @1.1.1.1
+45.137.203.199
+```
+
+A Cloudflare-proxied record would answer with a Cloudflare address, and
+Cloudflare forwards no TCP on 25565 without Spectrum — the name would resolve
+and nothing would connect, with no error on any object. It answers with the
+address itself, so external-dns honoured
+`external-dns.alpha.kubernetes.io/cloudflare-proxied: "false"` over its own
+global `--cloudflare-proxied` default.
+
+**What is not established.** TCP 25565 does not answer from outside:
+
+```
+$ timeout 6 bash -c 'cat < /dev/null > /dev/tcp/45.137.203.199/25565'   # closed
+$ timeout 6 bash -c 'cat < /dev/null > /dev/tcp/45.137.203.198/32458'   # closed
+$ curl -o /dev/null -w '%{http_code}' --resolve immich.paul.wtf:443:45.137.203.198 \
+    https://immich.paul.wtf/                                             # 200
+```
+
+The second line is the one that locates the cause. `45.137.203.198` is an
+ordinary node address that pings, serves HTTPS, and has done so throughout this
+run — and *its* NodePort is closed too. Whatever refuses 25565 refuses 32458 on
+a known-good address as well, while 443 passes. That points at port filtering
+in front of the cluster and not at the new address, at Cilium's IPAM, or at
+anything spawnery configures. It was not pursued further: opening a port on the
+path into this cluster is the owner's decision and outside this rollout.
+
+So §6's "a `LoadBalancer` address a client can reach" is **half met**: the
+address exists, is unique to this network, is reported by the operator and
+resolves under a name. That a client reaches it is untested.
+
 
 ## Scenario 5 — HostPort under the real CNI
 
