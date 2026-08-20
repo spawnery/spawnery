@@ -1457,30 +1457,46 @@ The chart's policy has never been enforced: `kindnet` implements no
 NetworkPolicy controller, which 6b measured and
 `charts/spawnery/README.md` records. Cilium enforces it.
 
-```bash
-kubectl -n spawnery-system get networkpolicy -o yaml | head -60
-kubectl -n default run netpol-probe --rm -i --restart=Never \
-  --image=ghcr.io/nicolaka/netshoot:latest --command -- \
-  timeout 8 nc -zv spawnery-operator.spawnery-system.svc 9443
-```
-
-Expected: the connection refused or timing out from a namespace the policy
-does not admit. Then prove the policy is what refused it, rather than
-something else:
+The policy admits port 9443 `from` pods carrying
+`spawnery.cloud/managed-by: spawnery-operator` under a `namespaceSelector: {}`
+— which means **every** namespace, deliberately, because `agentEndpoint`
+builds its dial name from the operator's own namespace and the chart cannot
+know the game namespaces' names. So the discriminator is the pod label, not
+the namespace, and both probes run from the same namespace with only the label
+differing. Probing from two namespaces would measure nothing the policy
+selects on.
 
 ```bash
-kubectl -n minecraft run netpol-probe --rm -i --restart=Never \
-  --image=ghcr.io/nicolaka/netshoot:latest --command -- \
-  timeout 8 nc -zv spawnery-operator.spawnery-system.svc 9443
+kubectl -n spawnery-system get networkpolicy spawnery-operator-agent -o yaml
 ```
 
-Expected: this one succeeds, because the agent channel runs over exactly that
-port from exactly those pods. One probe alone proves nothing — a refusal with
-no matching success could just as easily be a wrong Service name.
+The negative control — no `managed-by` label, so the policy's only matching
+rule does not apply:
 
-If `minecraft` enforces `restricted`, the probe pod needs a compliant security
-context; add `--overrides` with `runAsNonRoot`, `seccompProfile` and
-`capabilities: drop: [ALL]` rather than relaxing the namespace.
+```bash
+kubectl -n minecraft run netpol-deny-probe --rm -i --restart=Never \
+  --image=ghcr.io/nicolaka/netshoot:latest \
+  --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"netpol-deny-probe","image":"ghcr.io/nicolaka/netshoot:latest","command":["timeout","8","nc","-zv","spawnery-operator.spawnery-system.svc","9443"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}'
+```
+
+Expected: timeout or refusal.
+
+The positive control — the identical pod carrying the one label the policy
+selects on:
+
+```bash
+kubectl -n minecraft run netpol-allow-probe --rm -i --restart=Never \
+  --labels='spawnery.cloud/managed-by=spawnery-operator' \
+  --image=ghcr.io/nicolaka/netshoot:latest \
+  --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":1000,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"netpol-allow-probe","image":"ghcr.io/nicolaka/netshoot:latest","command":["timeout","8","nc","-zv","spawnery-operator.spawnery-system.svc","9443"],"securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}'
+```
+
+Expected: connected. One probe alone proves nothing — a refusal with no
+matching success is equally consistent with a misspelled Service name, a
+NetworkPolicy that denies everything, or an operator that is not listening.
+
+Both pods run under `restricted`, which `minecraft` enforces: the security
+context is supplied rather than the namespace relaxed.
 
 - [ ] **Step 4: Write scenarios 8 and 9 into the runbook and commit**
 
