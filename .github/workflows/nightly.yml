@@ -7,12 +7,6 @@ on:
     # for its runner is a job whose duration measures the queue.
     - cron: "17 3 * * *"
   workflow_dispatch:
-  # TEMPORARY, removed in Step 4 of this task. workflow_dispatch is not
-  # available for a workflow that is not on the default branch, so this is
-  # the only way to drive this job before the branch merges. What needs
-  # proving is not the one-line make invocation but whether a hosted runner
-  # can build three images twice without running out of disk.
-  pull_request:
 
 jobs:
   image-repro:
