@@ -7,17 +7,29 @@ on:
 
 # A second push to the same branch cancels the first: nothing here needs the
 # older run's answer, and the runners are shared.
+#
+# Except on master, where the older run's answer is the only one that commit
+# will ever get. Two merges minutes apart would have the first master run
+# cancelled mid-e2e and never re-run, leaving a master commit with no green
+# verdict -- and a v* tag cut on that commit publishing from a ref CI never
+# finished. A pull request always gets another run when it is pushed again;
+# a merged commit does not.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
 
 jobs:
   test:
     runs-on: ubuntu-latest
     # make test runs manifests, generate, fmt, vet and chart-lint before
     # go test -race across every package, several of which are envtest-backed
-    # and start a real API server. Twenty-five minutes is roughly double what
-    # it takes on the author's machine.
+    # and start a real API server. Twenty-five minutes is about 4.7x what this
+    # job has actually taken on a runner -- 5m19s on run 32334756738, the last
+    # driven CI run of the milestone that added this file. It is deliberately
+    # not sized against the local number instead (Makefile:53 records the race
+    # suite at 89.8-109.2s): a timeout's job is to stop a wedged run, and the
+    # machine it has to be generous to is the runner, whose cold Nix store and
+    # shared CPU already put it at 3x local before anything goes wrong.
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +51,45 @@ jobs:
 
       - name: make test
         run: nix develop -c make test
+
+      # The deps job below has been guarding one generated file since this
+      # workflow was written. Seven others had no guard at all, and the reason
+      # is the same shape in each case: `make test` depends on `manifests
+      # generate fmt`, so it *regenerates* them before it tests anything.
+      # config/rbac/role.yaml, config/crd/bases/*.yaml and (via
+      # hack/chart-templates.sh) charts/spawnery/templates/{rbac,crds}.yaml are
+      # all rewritten in place, and `go fmt ./...` rewrites and exits 0. So a
+      # contributor who adds a +kubebuilder:rbac marker and forgets `make
+      # manifests` gets a green run: rbacaudit compares a freshly generated
+      # role against the table and agrees, e2e helm installs a freshly
+      # generated chart and passes, and the pull request merges with a stale
+      # chart that installs an operator missing the grant. A formatting
+      # violation could likewise never fail CI.
+      #
+      # The guard belongs here rather than in the Makefile. `make manifests`
+      # regenerating for a developer mid-edit is the right behaviour and this
+      # must not change it; what is wrong is only that nobody afterwards
+      # compares the result with what is committed. This is one line and it is
+      # the deps job's own lesson, applied to the other seven files.
+      - name: the generated files are in step with their sources
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code; then
+            echo >&2
+            echo "make test regenerated a tracked file and the result differs from what is" >&2
+            echo "committed. Run 'make manifests generate fmt' and commit the diff above." >&2
+            exit 1
+          fi
+          # git diff sees nothing when generation *adds* a file -- a new CRD,
+          # for instance, which is exactly the change most likely to be
+          # forgotten. cover.out is the only untracked file make test leaves,
+          # and it is gitignored, so --exclude-standard makes this quiet.
+          untracked="$(git ls-files --others --exclude-standard -- api config charts)"
+          if [ -n "$untracked" ]; then
+            echo "make test generated a file that is not committed:" >&2
+            echo "$untracked" >&2
+            exit 1
+          fi
 
   lint:
     runs-on: ubuntu-latest
