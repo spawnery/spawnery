@@ -3,6 +3,13 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A dispatch can only ever dry-run. It takes no input, and the DRY_RUN below
+  # is not conditional on one: publishing three images under this project's
+  # name is a decision a tag records, and a button that could take it by
+  # accident is not the same decision. What a dispatch is for is the thing
+  # design §5 said DRY_RUN was for and no mechanism actually offered --
+  # exercising this file's own shape, on a runner, before a real tag exists.
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -12,6 +19,10 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    outputs:
+      # The digest of the operator image this run pushed, for anything that
+      # wants it machine-readably rather than out of the Release body.
+      digest: ${{ steps.digest.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Nix
@@ -20,26 +31,188 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # skopeo writes its credential to $XDG_RUNTIME_DIR/containers/auth.json,
+      # and GitHub's hosted Ubuntu runners do not set XDG_RUNTIME_DIR. With it
+      # unset, containers/image falls back to /run/containers/$UID/auth.json --
+      # a path a non-root runner cannot create. Reproduced in this repository's
+      # own dev shell:
+      #
+      #   $ env -u XDG_RUNTIME_DIR skopeo logout --all
+      #   level=fatal msg="mkdir /run/containers: permission denied"
+      #
+      # and containers/skopeo#1654 reports the identical failure on a hosted
+      # runner at /run/containers/1001/auth.json. Naming the file directly is
+      # what fixes it, and REGISTRY_AUTH_FILE is preferred over setting
+      # XDG_RUNTIME_DIR because it names exactly this one file: XDG_RUNTIME_DIR
+      # is a broader contract -- an owner-only, login-lifetime directory that
+      # several other tools in this dev shell would also start writing into --
+      # and pointing it at a scratch path to fix a credential path changes more
+      # than the credential path. Verified in the dev shell that both
+      # --authfile and REGISTRY_AUTH_FILE take the /run/containers path out of
+      # play; this is the one that also reaches skopeo inspect and skopeo copy
+      # inside hack/publish.sh without the script learning a new flag.
+      #
+      # It matters more than a failed step would suggest. If the credential
+      # were merely absent rather than the step failing, hack/publish.sh's
+      # inspect would go to ghcr.io anonymously, which answers 403 Forbidden
+      # rather than "manifest unknown" -- and 403 is not the one answer that
+      # guard reads as permission to proceed, so the run would stop at
+      # "cannot tell whether ... already exists" instead.
+      - name: Where skopeo keeps its credential
+        run: echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json" >> "$GITHUB_ENV"
+
+      # The git tag and flake.nix's versions are decoupled on purpose --
+      # imageVersion is the agent's and operatorVersion is the reconciler's,
+      # and flake.nix:128-134 explains why hanging one off the other would be
+      # wrong. Nothing coupled them here either; what this refuses is only the
+      # tag that names neither, which is a tag nobody meant to push. The table
+      # is printed either way, so the run's log says what v0.1.1 actually
+      # released without anyone opening flake.nix.
+      - name: The tag, against the versions in flake.nix
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          agent="$(nix eval --raw .#paper-image.imageTag)"
+          operator="$(nix eval --raw .#operator-image.imageTag)"
+          tag="${GITHUB_REF_NAME#v}"
+          echo "tag                      ${GITHUB_REF_NAME} (${tag})"
+          echo "flake.nix imageVersion   ${agent}    (paper, velocity)"
+          echo "flake.nix operatorVersion ${operator}   (operator)"
+          if [ "$tag" != "$agent" ] && [ "$tag" != "$operator" ]; then
+            echo >&2
+            echo "${GITHUB_REF_NAME} names a version no image in flake.nix carries. A tag that" >&2
+            echo "corresponds to nothing anybody bumped is how a release goes out under a" >&2
+            echo "number the images inside it do not have. Bump imageVersion or" >&2
+            echo "operatorVersion in flake.nix to match, or tag the version that is there." >&2
+            exit 1
+          fi
+
       - name: Authenticate skopeo to ghcr.io
+        if: github.event_name == 'push'
         run: |
           nix develop -c skopeo login ghcr.io \
             -u "${{ github.actor }}" \
             --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
 
-      # WRITE_DIGEST=1 writes charts/spawnery/values.yaml's image.digest.
-      # That write is NOT committed: the digest is emitted for the repository
-      # owner to commit. Giving a CI job write access to the default branch
-      # needs a loop-brake against the commit it would itself trigger and
-      # collides with any branch protection added later -- see design §5.
-      - name: hack/publish.sh
-        run: nix develop -c env WRITE_DIGEST=1 ./hack/publish.sh
-
-      - name: Emit the digest
+      # One invocation per image, and not one invocation for all three.
+      #
+      # hack/publish.sh's own header says why: the three versions move
+      # independently, so the ordinary case after a reconciler fix is that
+      # exactly one tag is new. Publishing all three refuses at the first image
+      # whose tag is already there -- correctly -- and never reaches the one
+      # that changed, which would make this workflow a release path that works
+      # exactly once. The script's answer for a human is to name the image; a
+      # tag push has nobody to name it, so the naming happens here, and the
+      # script's refusal now carries a distinct exit status (3) so that "this
+      # tag is already there" is separable from "I could not tell whether it
+      # is" without re-implementing the guard in YAML. Nothing is overwritten
+      # and FORCE is never set: an image already at its tag is skipped, not
+      # re-pushed.
+      #
+      # WRITE_DIGEST=1 on every invocation, and only the operator's writes
+      # anything -- the script keys that on the image it just pushed.
+      - name: hack/publish.sh, one image at a time
+        id: publish
         run: |
-          digest="$(nix develop -c grep -oE 'sha256:[0-9a-f]{64}' charts/spawnery/values.yaml || true)"
+          set -euo pipefail
+          dry_run=0
+          if [ "${{ github.event_name }}" != "push" ]; then
+            dry_run=1
+            echo "::notice::dispatched, not tagged: DRY_RUN=1, nothing is sent to the registry"
+          fi
+          published=0
+          operator_published=false
+          for image in paper-image velocity-image operator-image; do
+            status=0
+            nix develop -c env DRY_RUN="$dry_run" WRITE_DIGEST=1 \
+              ./hack/publish.sh "$image" || status=$?
+            case "$status" in
+              0)
+                published=$(( published + 1 ))
+                if [ "$image" = "operator-image" ]; then
+                  operator_published=true
+                fi
+                ;;
+              3)
+                echo "::notice::${image} is already published at the version flake.nix names; skipping it"
+                ;;
+              *)
+                exit "$status"
+                ;;
+            esac
+          done
+          echo "operator_published=${operator_published}" >> "$GITHUB_OUTPUT"
+          if [ "$dry_run" = "0" ] && [ "$published" -eq 0 ]; then
+            echo >&2
+            echo "all three images were already published at the versions flake.nix names," >&2
+            echo "so ${GITHUB_REF_NAME} releases nothing. Bump imageVersion or operatorVersion" >&2
+            echo "in flake.nix and tag again." >&2
+            exit 1
+          fi
+
+      # The digest is emitted, not committed -- design §5, and the comment the
+      # previous shape of this file carried. What it now also does is put the
+      # digest somewhere a machine can read: a step id, so the job output above
+      # resolves, and the Release body below.
+      #
+      # This is the first real test of hack/publish.sh's WRITE_DIGEST path
+      # against a registry, so it fails loudly rather than continuing -- but
+      # only when the operator image was actually pushed on this tag. A release
+      # that bumps only imageVersion leaves the operator at a digest already in
+      # the chart, and demanding a new one there would fail a correct release.
+      - name: Emit the digest
+        id: digest
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          digest="$(grep -oE 'sha256:[0-9a-f]{64}' charts/spawnery/values.yaml || true)"
+          if [ "${{ steps.publish.outputs.operator_published }}" != "true" ]; then
+            echo "the operator image was already published at this version; charts/spawnery/values.yaml"
+            echo "keeps the digest it already carries (${digest:-none})."
+            exit 0
+          fi
           if [ -z "$digest" ]; then
             echo "publish.sh produced no digest in charts/spawnery/values.yaml" >&2
             exit 1
           fi
           echo "operator image digest: $digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # The other half of design §5's "the digest goes into the GitHub Release
+      # body and a job output". contents: write is granted for exactly this and
+      # for nothing else -- the workflow still commits nothing.
+      - name: The GitHub Release, carrying the digest
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIGEST: ${{ steps.digest.outputs.digest }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/release-notes.md"
+          {
+            echo "Published by \`.github/workflows/release.yml\` from ${GITHUB_SHA}."
+            echo
+            if [ -n "${DIGEST:-}" ]; then
+              echo "Operator image digest:"
+              echo
+              echo '```'
+              echo "${DIGEST}"
+              echo '```'
+              echo
+              echo "This workflow does not commit it. Put it into \`charts/spawnery/values.yaml\`'s"
+              echo "\`image.digest\` -- the reason that step is a person's and not this job's is in"
+              echo "the CI design's §5."
+            else
+              echo "No new operator image on this tag: it was already published at the version"
+              echo "\`flake.nix\` names, and \`charts/spawnery/values.yaml\`'s \`image.digest\` is"
+              echo "unchanged."
+            fi
+          } > "$notes"
+          # Created if absent, updated if a release for this tag already
+          # exists: re-running a release must not fail on the artefact of its
+          # own earlier attempt.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release edit "$GITHUB_REF_NAME" --notes-file "$notes"
+          else
+            gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file "$notes"
+          fi
