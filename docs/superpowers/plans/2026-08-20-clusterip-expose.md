@@ -717,7 +717,11 @@ nothing about a rule if no shape gets through.
 
 - [ ] **Step 3: Run it**
 
-Run: `nix --extra-experimental-features 'nix-command flakes' develop -c make test ARGS='-run TestProxyGroupExposeValidation ./api/...'`
+Run: `nix --extra-experimental-features 'nix-command flakes' develop -c go test ./api/... -run TestProxyGroupExposeValidation -v`
+
+Not `make test ARGS=...`: `$(ARGS)` appears nowhere in the Makefile, whose
+`test` target always runs `go test -race ./...`. The `ARGS` form was this
+plan's invention and it silently runs the whole suite.
 
 Expected: PASS. **These rows were written after the markers they check, so they
 are regression tests and not design pressure** — say so in the commit rather
@@ -730,7 +734,7 @@ Delete the `contains('://')` half of the CEL rule in
 
 ```bash
 nix --extra-experimental-features 'nix-command flakes' develop -c make manifests
-nix --extra-experimental-features 'nix-command flakes' develop -c make test ARGS='-run TestProxyGroupExposeValidation ./api/...'
+nix --extra-experimental-features 'nix-command flakes' develop -c go test ./api/... -run TestProxyGroupExposeValidation -v
 ```
 
 Expected: the "not a URL" row fails. Restore the rule, regenerate again, and
