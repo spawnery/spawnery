@@ -3935,6 +3935,18 @@ log missed. A denial check built on that counter would have caught both the
 write path and the read path; the one built on a log grep catches only the
 write path.
 
+**The player's real address does not reach the proxy behind an ingress.**
+Measured on 2026-08-20 during a real join: Velocity logged
+`[connected player] paul_wtf (/10.42.2.69:53802) has connected`, and
+`10.42.2.69` is a pod in this cluster's CIDR — the Traefik pod relaying the
+connection. Per-player bans and rate limits have nothing to key on. The cause
+is the entry above: `haproxy-protocol = true` reaches the rendered config and
+Velocity does not act on it. Every alternative measured on this cluster costs
+the same thing or more — a dedicated address needs ARP that nothing answers
+without hand configuration on a node, and sharing one of Traefik's requires
+`externalTrafficPolicy: Cluster` on both sides, which discards the addresses
+just as thoroughly.
+
 **`syncOccupiedLabel` runs, and the entry below can be closed.** The "On the
 RBAC audit" list records that `required.go`'s `Why` for `pods: patch` names
 `syncOccupiedLabel` — the Server controller's, singular — while
@@ -3943,16 +3955,23 @@ driven by hand-labelling pods `spawnery.cloud/occupied=true` and watching the
 operator remove the label, which is the same `Patch` call the grant exists for:
 `rest_client_requests_total{method="PATCH"}` moved 1→3 for the two proxy pods
 and 3→4 for the lobby's server pod. The named call site does run and does issue
-the patch. Only the *removal* direction was observed; nothing yet drives the
-addition, which needs a player.
+the patch. Both directions were then driven by a real join: with one player online the
+labels appeared on their own — `true` on the occupied proxy pod and on the
+lobby's server pod — the PATCH counter moved from 8 to 12, and both went away
+again on disconnect.
 
 **A PodDisruptionBudget's protective behaviour cannot be simulated.** Both
 budgets select on `spawnery.cloud/occupied: true` and the operator sizes
 `minAvailable` from its own occupancy tally rather than from the labels on the
 pods. Hand-labelling pods occupied moved `currentHealthy` to 2 and left
 `desiredHealthy` at 0, so the eviction API still allowed the eviction — which
-is correct. Only real players can make the budget refuse anything, so §6's
-"PodDisruptionBudget under a real eviction" stays open on this cluster.
+is correct. Only real players can make the budget refuse anything.
+
+A real player did, later the same day: both budgets went to `minAvailable 1`,
+`disruptionsAllowed 0`, and the eviction API answered
+`TooManyRequests: Cannot evict pod as it would violate the pod's disruption
+budget` for the occupied proxy and for the lobby server carrying the session.
+§6's "PodDisruptionBudget under a real eviction" is met.
 
 **Cilium will not share a LoadBalancer address between two `Local` Services
 that select different pods.** Non-overlapping ports are necessary and not

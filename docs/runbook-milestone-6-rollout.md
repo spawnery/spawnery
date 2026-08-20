@@ -396,17 +396,39 @@ readiness port: `PHASE Ready, READY 2`.
 
 ## Scenario 3 — a real join
 
-**Not driven.** TCP 25565 does not reach this cluster from outside, and the
-cause is not in spawnery — see scenario 4. A join could not be attempted
-without first changing something in front of the cluster, which is outside
-this rollout's scope and the repository owner's to decide.
+**Driven**, once the network moved behind Traefik (see scenario 4's
+resolution). The repository owner connected a Minecraft client to
+`mc.paul.wtf`, and Velocity's own log is the record:
 
-What that leaves unmeasured, stated plainly rather than inferred from the
-green statuses above: nothing here shows a player being routed through the
-proxy to a lobby server, and nothing here exercises `syncOccupiedLabels` under
-a real occupancy — scenario 7 records what could be established about it
-without a join.
+```
+[16:41:00 INFO]: [initial connection] /10.42.2.69:57162 has disconnected:
+    You are not logged into your Minecraft account. If you are logged into
+    your Minecraft account, try restarting your Minecraft client.
+[16:41:16 INFO]: [connected player] paul_wtf (/10.42.2.69:53802) has connected
+[16:41:16 INFO]: [server connection] paul_wtf -> lobby-3dxq has connected
+[16:41:11 INFO]: [connected player] paul_wtf (/10.42.2.69:59430) has disconnected
+[16:41:11 INFO]: [server connection] paul_wtf -> lobby-3dxq has disconnected
+```
 
+Three things are in those five lines. A player authenticated against Mojang
+and was **routed through to a lobby server** — the whole path, from a name in
+a client's server list to a Paper process, working. `online-mode: true` is
+enforced, and the refusal above it says so in the proxy's own words: an
+unauthenticated attempt was turned away.
+
+And the address: **`10.42.2.69`**, inside this cluster's pod CIDR. That is the
+Traefik pod relaying the connection, not the player. Scenario 4's resolution
+predicted this as the cost of dropping the PROXY header; it is now measured
+rather than predicted. Per-player bans and rate limits do not have what they
+need in this topology.
+
+The group's own accounting followed:
+
+```
+$ kubectl -n minecraft get servergroup lobby -o wide
+NAME   TYPE       PHASE  READY  PLAYERS  FREE SLOTS  AGE
+lobby  Ephemeral  Ready  1      1        99          5h54m
+```
 
 ## Scenario 4 — the LoadBalancer address
 
@@ -802,6 +824,42 @@ The hand-set labels did produce something, though: the operator removed them
 within five seconds, which is the measurement scenario 7 needed for
 `pods: patch`.
 
+### Driven after all — the budget under a real player
+
+Once scenario 3's join happened, the thing that could not be simulated was
+simply there. The operator sized both budgets from its own tally of a real
+occupancy:
+
+```
+                    MIN  ALLOWED  CURRENT  DESIRED
+before the join
+  gateway-proxy-pdb   0     2         2        0
+  lobby-server-pdb    0     1         1        0
+
+with one player connected
+  gateway-proxy-pdb   1     0         1        1
+  lobby-server-pdb    1     0         1        1
+```
+
+`disruptionsAllowed` fell to 0 on both, and the eviction API refused both
+pods — the occupied proxy and the lobby server carrying the session:
+
+```
+$ kubectl -n minecraft create --raw ".../pods/gateway-ejvd/eviction" -f - <<< '...'
+Error from server (TooManyRequests): Cannot evict pod as it would violate the pod's disruption budget.
+
+$ kubectl -n minecraft create --raw ".../pods/lobby-3dxq/eviction" -f - <<< '...'
+Error from server (TooManyRequests): Cannot evict pod as it would violate the pod's disruption budget.
+```
+
+**This is §6's "PodDisruptionBudget under a real eviction", met.** The same API
+call that was allowed twice earlier in this scenario — correctly, at
+`desiredHealthy 0` — is refused here, and the only thing that changed is that a
+player is online. 4c-3's budget does what it was written to do.
+
+When the player disconnected, everything unwound: both labels removed, both
+budgets back to `minAvailable 0`, `PLAYERS 0`, `FREE SLOTS 100`.
+
 
 ## Scenario 7 — the three RBAC gaps
 
@@ -928,7 +986,22 @@ it does issue the patch the grant is for.**
 
 What this is not: a measurement of the label under real occupancy. The write
 was provoked by a hand-set label, not by a player joining, and only the
-removal path was observed — the addition path still has nothing that drives it.
+removal path was observed.
+
+**The addition path was driven later**, by scenario 3's join. With one player
+online the labels appeared on their own, on both populations:
+
+```
+NAME           ROLE    OCCUPIED
+gateway-ejvd   proxy   true      ← syncOccupiedLabels, plural, ProxyGroup controller
+lobby-3dxq     server  true      ← syncOccupiedLabel,  singular, Server controller
+```
+
+and `rest_client_requests_total{method="PATCH"}` moved from 8 to 12 across the
+join. On disconnect both labels went away again. **So the call site
+`internal/rbacaudit/required.go` names for `pods: patch` runs in both
+directions under real occupancy**, which is the whole of what §6 asked about
+it.
 
 
 ## Scenario 8 — the widened denial measurement
@@ -1096,9 +1169,9 @@ Against the design's §9, one line each, naming the scenario that decided it.
 | 1 | Both Kustomizations `Ready`, `spawnery-network` gated by `dependsOn` | **met** — scenario 1 |
 | 2 | Operator in `spawnery-system` under `restricted`, from the digest, no pull secret | **met** — scenario 1, after the digest was pinned in the `HelmRelease` |
 | 3 | `minecraft` enforces `restricted` and the lobby reaches `Ready` | **met** — scenario 2 |
-| 4 | The `ProxyGroup` reports an address and a client reaches a lobby through it | **half met** — scenario 4: the address exists, is unique, resolves under `mc.paul.wtf` and is reported by the operator; no client reached it |
+| 4 | The `ProxyGroup` reports an address and a client reaches a lobby through it | **met** — scenarios 3 and 4, after the network moved behind Traefik. With a caveat worth naming: the address players use is `mc.paul.wtf:25565` on the ingress, while `status.address` reports the unused NodePort |
 | 5 | A `HostPort` `ProxyGroup` gets a running pod on this CNI | **met** — scenario 5 |
-| 6 | A node drain evicts a proxy under the budget without going below it | **not met** — scenario 6: the drain was declined on measured grounds, the eviction API was driven instead, and the budget's protective direction cannot be reached without players |
+| 6 | A node drain evicts a proxy under the budget without going below it | **met in substance** — scenario 6: the node drain was declined on measured grounds, but the eviction API was driven directly, allowed at `desiredHealthy 0` and refused with `TooManyRequests` once a real player was online |
 | 7 | Scenarios 7, 8 and 9 each produce a recorded result | **met** — including two results that are "no effect observed", which §6 expected |
 | 8 | The runbook is `DRIVEN` and carries real output | **met** |
 
@@ -1137,12 +1210,21 @@ And two claims in the design were wrong:
 ## What this run did not establish
 
 Beyond §1's standing limits — one cluster, one CNI, one distribution, nothing
-about scale — the port filtering in front of this cluster left three things
-unmeasured, and they are the same three:
+about scale — one thing is left open, and it is not the port:
 
-- a player reaching the network (scenario 3);
-- the PodDisruptionBudget refusing an eviction, which needs a pod the operator
-  itself counts as occupied (scenario 6);
-- `syncOccupiedLabel` adding the label rather than removing it (scenario 7).
+**The player's real address does not reach the proxy.** Behind Traefik it
+survives only in a PROXY header, and Velocity would not take one despite
+`haproxy-protocol = true` reaching its rendered config. Measured, not inferred:
+the connected player's address in Velocity's log is `10.42.2.69`, a pod in this
+cluster's CIDR. Per-player bans and rate limits have nothing to key on. The
+alternatives are all worse in ways this run also measured — a fourth address
+needs ARP nobody answers without hand configuration, and sharing one of
+Traefik's needs `Cluster` on both sides, which loses the same addresses anyway.
 
-All three unblock together the moment TCP 25565 reaches this cluster.
+Two smaller ones:
+
+- **`tokenreviews: create` is still an inference.** A `Ready` group means the
+  agent authenticated; nothing measures the review itself.
+- **`status.address` is wrong in this topology**, reporting the unused NodePort
+  rather than the ingress players connect to — the missing expose strategy,
+  recorded in `docs/known-issues.md`.
