@@ -1,11 +1,20 @@
 # Without this file golangci-lint applies its defaults, and the default
 # max-same-issues is 3: at most three findings sharing a message text are
-# shown per linter. The package walk is concurrent, so *which* three survive
-# varies between runs. Three consecutive runs during milestone 6e's design
-# each reported exactly 17 issues and each named a different set of files;
-# the real figure was 33. A check whose output is a varying sample is not a
-# measurement, and CI would have reported a different subset every run while
-# nobody could tell whether a falling count meant better code.
+# shown per linter, which can undercount badly on its own. Three consecutive
+# runs during milestone 6e's design each reported exactly 17 issues; a
+# design-time note claimed each run named a different set of files, but that
+# was observed once and did not reproduce -- a reviewer's own three
+# consecutive runs later, against the same tree, returned the identical
+# seventeen every time. Read the concurrent package walk as a plausible
+# cause of a varying subset, not a confirmed one.
+#
+# What is confirmed: the true figure, from a cleared golangci-lint cache, was
+# 38 -- not the 17 a capped run shows, and not the 33 once recorded here,
+# which was itself measured against a stale cache (docs/known-issues.md,
+# "From milestone 6e"). A check whose output can be a sample rather than a
+# total is not a measurement, and CI would have reported an uncertain count
+# while nobody could tell whether a falling number meant better code or a
+# different sample.
 version: "2"
 
 linters:

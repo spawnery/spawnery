@@ -223,11 +223,16 @@ count of pre-existing `golangci-lint` findings. Both were measured against a
 existed. `golangci-lint cache clean` followed by a plain run, against the
 tree as it stood just before that commit, reports 38 (26 `errcheck`, 12
 `staticcheck`). Per this project's own rule, the design spec is a living
-reference and may be corrected in place with a visible marker the way
+reference, and this round of review corrected it in place at all four sites
+that assert 33 (§4's two paragraphs, its per-package breakdown, and fact 3
+of §6), each carrying a `**Corrected after the milestone's final
+review:**` marker that leaves the original claim standing rather than
+rewriting it away — the form
 `docs/superpowers/specs/2026-08-17-network-policies-design.md` §2.4 already
-does this; the commit message cannot be edited, and stands as the record of
-what was believed at the time, corrected here and in
-`docs/known-issues.md`'s new "From milestone 6e" section.
+established, from milestone 6d's `8de9683`. The commit message cannot be
+edited, and stands as the record of what was believed at the time,
+corrected here, in the spec itself, and in `docs/known-issues.md`'s new
+"From milestone 6e" section.
 
 **The varying-subset claim about the truncation cap was observed once and
 did not reproduce — do not read it as established.** Three runs during this
@@ -597,8 +602,11 @@ systemd-run --scope --user --property=Delegate=yes -- \
 
 Every file path, line number, run ID, duration and constant in this
 document was checked against the repository or against `gh api` before it
-shipped, per the brief's own instruction. What that pass caught, and fixed,
-before this document reached its current form:
+shipped, per the brief's own instruction. **Eight corrections** came out of
+that pass, listed below with what confirmed each one; the bullets that
+found nothing wrong are kept too, because a verification pass that only
+ever reports what it fixed is indistinguishable from one that skipped
+everything it didn't fix.
 
 - **Five call-site line numbers had moved since Task 3b's own report was
   written**, because the fix round's edits shifted lines below them.
@@ -648,8 +656,14 @@ before this document reached its current form:
   slowest package, matching the proportion every prior task report in this
   milestone also recorded for it.
 
-Nothing else this pass checked required a correction; the list above is
-exactly what it caught.
+Nothing else this pass checked required a correction. Tallied: five
+line-number corrections in the first bullet, two more in the sixth, and one
+in the seventh (`operatorLog()`'s range) — **eight in total**, not the six
+this branch's prior commit (`41e6398`) claimed in its own message. That
+commit message is not edited — this repository creates a new commit for a
+correction rather than rewriting one already made, pushed or not — so the
+record of what was believed at the time stands there, and this section and
+this round's own commit message carry the true count.
 
 ## 8. Where everything lives
 

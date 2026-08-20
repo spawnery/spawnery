@@ -520,8 +520,9 @@ carry a CRD schema change through and an uninstall would not destroy every
 `Network` in the cluster — `helm uninstall` leaving them standing was driven
 once, against a real cluster, and observed; upgrade was not driven at all.
 
-Milestone 6e is done: GitHub Actions now blocks a pull request on four jobs
-and watches two more on its own schedule. `.github/workflows/ci.yml`'s
+Milestone 6e is done: GitHub Actions now blocks a pull request on four jobs,
+watches one more on its own schedule, and holds a third ready for a tag.
+`.github/workflows/ci.yml`'s
 `test`, `lint`, `deps` and `e2e` jobs run on every pull request and on push
 to `master`; `.golangci.yml` pins `errcheck` and `staticcheck` with
 `max-issues-per-linter: 0` and `max-same-issues: 0`, closing a default
