@@ -488,6 +488,82 @@ resolves under a name. That a client reaches it is untested.
 
 ## Scenario 5 — HostPort under the real CNI
 
+A temporary namespace with **no** `pod-security.kubernetes.io/enforce` label at
+all — `restricted` and `baseline` both forbid host ports, and this scenario is
+about the case where they are allowed. The refusal under `baseline` is already
+measured by the E2E and is not re-derived here.
+
+The per-namespace grant was copied with `sed` and then read back, because
+`sed` exits 0 whether or not it matched and this repository has shipped that
+mistake three times:
+
+```
+$ sed 's/namespace: minecraft$/namespace: minecraft-hostport/' \
+    /home/paul/git/fluxcd/spawnery/network/rbac.yaml | kubectl apply -f -
+role.rbac.authorization.k8s.io/spawnery-forwarding-secret-reader created
+rolebinding.rbac.authorization.k8s.io/spawnery-forwarding-secret-reader created
+
+$ kubectl -n minecraft-hostport get rolebinding spawnery-forwarding-secret-reader \
+    -o jsonpath='eigener-ns={.metadata.namespace} subject-ns={.subjects[0].namespace}'
+eigener-ns=minecraft-hostport subject-ns=spawnery-system
+```
+
+The `$` anchor is what keeps the subject's `namespace: spawnery-system` out of
+the substitution; the read-back is what proves it did.
+
+**The pod, and no Service:**
+
+```
+$ kubectl -n minecraft-hostport get pod -l spawnery.cloud/role=proxy \
+    -o jsonpath='{.items[0].spec.containers[0].ports}'
+[{"containerPort":25565,"hostPort":25566,"name":"minecraft","protocol":"TCP"},
+ {"containerPort":8081,"name":"ready","protocol":"TCP"}]
+
+$ kubectl -n minecraft-hostport get svc
+No resources found in minecraft-hostport namespace.
+
+$ kubectl -n minecraft-hostport get proxygroup gateway -o wide
+NAME     PHASE  READY  ADDRESS               PLAYERS  AGE
+gateway  Ready  1      45.137.203.198:25566  0        21s
+```
+
+`status.address` naming the node rather than a Service is milestone 6c's
+`proxyAddress` running against a real node for the first time.
+
+**The measurement, with a control.** A `Ready` pod carrying a `hostPort` field
+proves the API server accepted the field, not that the CNI bound the port, so
+the port is connected to — from inside the cluster, against the node's own
+address, because TCP into this cluster from outside is filtered (scenario 4)
+and that would have measured the filter rather than the CNI:
+
+```
+$ nc -zv -w5 45.137.203.198 25566
+Connection to 45.137.203.198 25566 port [tcp/*] succeeded!     # exit 0
+$ nc -zv -w5 45.137.203.198 25567
+nc: connect to 45.137.203.198 port 25567 (tcp) failed: Connection refused   # exit 1
+```
+
+The second line is the control and it is the reason this counts. 25567 has
+nothing bound to it; `Connection refused` means the packets reached the host's
+stack and were rejected by it, so the success on 25566 is a port that is
+actually bound and not an artefact of something upstream accepting everything.
+
+**HostPort works on Cilium `v1.18.4` with `cni-chaining-mode: portmap` and
+`kube-proxy-replacement: false`.** That is a claim about this cluster on this
+day; §1 says why it is not a claim about any other CNI.
+
+Torn down, and the teardown read back:
+
+```
+$ kubectl delete namespace minecraft-hostport --wait=true
+namespace "minecraft-hostport" deleted
+$ kubectl get ns minecraft-hostport
+Error from server (NotFound): namespaces "minecraft-hostport" not found
+```
+
+The production network was untouched throughout — same three pods, same ages.
+
+
 ## Scenario 6 — node drain and the PodDisruptionBudget
 
 ## Scenario 7 — the three RBAC gaps
