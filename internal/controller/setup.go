@@ -127,9 +127,12 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		return fmt.Errorf("setup proxy group controller: %w", err)
 	}
 
+	// No Recorder. The sweep emits no event -- it deletes a pod whose Server is
+	// gone and a Server whose group is gone, both of which are already absent
+	// from the object an event would hang off. The field it used to have was
+	// residue of the migration off tools/record and was read by nothing.
 	if err := mgr.Add(&OrphanReconciler{
 		Client:   mgr.GetClient(),
-		Recorder: mgr.GetEventRecorder("orphan"),
 		Agents:   opts.Agents,
 		Interval: opts.OrphanInterval,
 	}); err != nil {

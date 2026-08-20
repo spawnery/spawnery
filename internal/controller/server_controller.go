@@ -105,7 +105,28 @@ type ServerReconciler struct {
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;patch
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+
+// The two event grants are not the same right twice, and only one of them is
+// cluster-wide.
+//
+// events.k8s.io is where every controller in this package writes, through
+// events.EventRecorder, and it regards objects in whatever namespace a Network
+// put its game servers -- so it has to be cluster-wide.
+//
+// The core group is not left over from before the migration off tools/record:
+// controller-runtime's leader election still builds its resource lock with the
+// deprecated GetEventRecorderFor, and that recorder writes core events. But
+// leader election locks on a Lease in the operator's own namespace and its
+// events regard that Lease, so the right it needs is namespaced -- the same
+// argument, and the same spawnery-system placeholder, as the lease grant at
+// internal/controller/setup.go:77. Granting it cluster-wide would let the
+// operator write a core event into any namespace in the cluster for a lock it
+// can only ever take in one.
+//
+// spawnery-system is not where the operator runs; it is the literal
+// controller-gen requires to emit a namespaced Role at all, rewritten to
+// Helm's release namespace by hack/chart-templates.sh.
+// +kubebuilder:rbac:groups="",namespace=spawnery-system,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile collects the inputs, asks the state machine and executes the

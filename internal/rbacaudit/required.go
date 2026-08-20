@@ -42,13 +42,15 @@ var RequiredCluster = []Permission{
 	// Events — the recorder writes them for every phase change and every
 	// warning, and patches them when it aggregates repeats.
 	//
-	// Two API groups, because two recorders are in play. The controllers use
-	// k8s.io/client-go/tools/events, whose sink is the events.k8s.io/v1
-	// client, so their events land in that group. The core group is not left
-	// over from before the migration off tools/record: controller-runtime's
-	// leader election still builds its resource lock with the deprecated
-	// GetEventRecorderFor, and that recorder writes core events. Dropping the
-	// core entry would cost the "became leader" event on every failover.
+	// Only events.k8s.io is here, and only because these events regard objects
+	// in namespaces the operator does not know in advance: every controller in
+	// internal/controller writes through k8s.io/client-go/tools/events, whose
+	// sink is the events.k8s.io/v1 client, about Servers and pods wherever a
+	// Network put them. The core group's own grant is real and still needed —
+	// controller-runtime's leader election builds its resource lock with the
+	// deprecated GetEventRecorderFor, which writes core events — but that lock
+	// is a Lease in the operator's own namespace, so its right is namespaced
+	// and lives in RequiredNamespaced below.
 	//
 	// Nothing in the test suite can catch either of these missing. envtest
 	// grants the test client everything, so an event the operator is not
@@ -56,8 +58,6 @@ var RequiredCluster = []Permission{
 	// is what the cluster-level end-to-end test is for.
 	{Group: "events.k8s.io", Resource: "events", Verb: "create", Why: "Recorder.Eventf in every controller"},
 	{Group: "events.k8s.io", Resource: "events", Verb: "patch", Why: "the recorder's event aggregation"},
-	{Group: "", Resource: "events", Verb: "create", Why: "leader election's resource lock records elections"},
-	{Group: "", Resource: "events", Verb: "patch", Why: "the leader election recorder's event aggregation"},
 
 	// Pods — the Server controller owns a game server pod's whole life cycle;
 	// since this milestone ProxyGroupReconciler owns a proxy pod's the same way.
@@ -193,11 +193,11 @@ var RequiredCluster = []Permission{
 }
 
 // RequiredNamespaced is what the operator does in its own namespace only, and
-// is checked against the generated Role rather than the ClusterRole. Both
-// entries were cluster-wide before milestone 2a: the lease because nobody had
-// split the table yet, the secret because it did not exist yet — and granting a
-// cluster-wide write on secrets would have been the wrong signal in exactly the
-// milestone that introduces the TLS channel.
+// is checked against the generated Role rather than the ClusterRole. The lease
+// and the secret were both cluster-wide before milestone 2a: the lease because
+// nobody had split the table yet, the secret because it did not exist yet — and
+// granting a cluster-wide write on secrets would have been the wrong signal in
+// exactly the milestone that introduces the TLS channel.
 //
 // Note which verbs are absent: no list and no watch on secrets. certs.Store
 // therefore runs on an uncached client on purpose, because a cached Secret would
@@ -212,6 +212,16 @@ var RequiredNamespaced = []Permission{
 	{Group: "coordination.k8s.io", Resource: "leases", Verb: "create", Why: "leader election on startup"},
 	{Group: "coordination.k8s.io", Resource: "leases", Verb: "get", Why: "leader election renews the lock"},
 	{Group: "coordination.k8s.io", Resource: "leases", Verb: "update", Why: "leader election renews the lock"},
+
+	// The core group's events, which are the leader-election lock's and
+	// nobody else's. This was cluster-wide until milestone 6e's final review:
+	// before the migration off tools/record every controller wrote core
+	// events, so the width was right; afterwards the controllers write only to
+	// events.k8s.io and the sole remaining consumer is a lock on a Lease in
+	// this one namespace. A cluster-wide grant that no cluster-wide caller
+	// needs is the kind that outlives its reason quietly.
+	{Group: "", Resource: "events", Verb: "create", Why: "leader election's resource lock records elections"},
+	{Group: "", Resource: "events", Verb: "patch", Why: "the leader election recorder's event aggregation"},
 }
 
 // RequiredNetworkNamespace is what the operator needs in every namespace that

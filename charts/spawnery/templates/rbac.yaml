@@ -66,19 +66,18 @@ rules:
   - update
   - watch
 - apiGroups:
-  - ""
+  - authentication.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
   - events.k8s.io
   resources:
   - events
   verbs:
   - create
   - patch
-- apiGroups:
-  - authentication.k8s.io
-  resources:
-  - tokenreviews
-  verbs:
-  - create
 - apiGroups:
   - networking.k8s.io
   resources:
@@ -139,6 +138,13 @@ metadata:
   name: spawnery-operator
   namespace: {{ .Release.Namespace }}
 rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - ""
   resources:

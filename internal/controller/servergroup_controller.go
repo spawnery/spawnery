@@ -434,7 +434,8 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			if isRefused {
 				eventType = corev1.EventTypeWarning
 			}
-			r.Recorder.Eventf(group, nil, eventType, resize.Reason, actionSyncStatus, "%s", resize.Message)
+			r.Recorder.Eventf(group, nil, eventType, resize.Reason, actionSyncStatus, "%s",
+				eventNote("%s", resize.Message))
 		}
 	}
 

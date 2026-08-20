@@ -7,7 +7,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
@@ -40,9 +39,8 @@ func (f *fixture) createProxyPod(name, group string) string {
 
 func orphanReconciler(f *fixture) *OrphanReconciler {
 	return &OrphanReconciler{
-		Client:   f.c,
-		Recorder: events.NewFakeRecorder(100),
-		Agents:   f.agents,
+		Client: f.c,
+		Agents: f.agents,
 	}
 }
 
