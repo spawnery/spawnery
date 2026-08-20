@@ -5,7 +5,7 @@ image:
   # shipped manifests because a tag can move under a running cluster.
   tag: "0.1.0"
   # Set, this wins over tag and the image is referenced by digest.
-  digest: ""
+  digest: "sha256:e5eb7626cdf2b7ac186e844aad418fd388c5c3d6ab225d09a37c041b5b4414ca"
   pullPolicy: IfNotPresent
 
 resources:
