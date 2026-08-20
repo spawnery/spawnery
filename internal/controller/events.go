@@ -1,5 +1,10 @@
 package controller
 
+import (
+	"fmt"
+	"unicode/utf8"
+)
+
 // Event actions.
 //
 // The events API (k8s.io/client-go/tools/events, which replaced the deprecated
@@ -74,3 +79,60 @@ const (
 // information in the operator's output that no test covers and no design asked
 // for, so the migration leaves it nil throughout and says why once, here,
 // rather than at twenty-three call sites.
+
+// The event note's size limit, which is not the same limit the old API had.
+//
+// events.k8s.io/v1 validation rejects an event whose note exceeds 1024 bytes;
+// the core v1 Event the deprecated tools/record wrote had no such cap. Nothing
+// between a call site and the API server enforces it: the recorder does
+// `fmt.Sprintf(note, args...)` and assigns the result straight to Note
+// (k8s.io/client-go/tools/events/event_recorder.go), and when the API server
+// then refuses the create, the broadcaster classifies a *errors.StatusError as
+// non-retryable and abandons the event with a klog line. The operator loses the
+// event silently -- and loses it precisely when the text was long, which for an
+// API server's own error message means precisely when it had the most to say.
+//
+// A note built entirely from compile-time literals cannot reach the limit and
+// needs nothing. A note built from text this operator did not write -- an
+// admission webhook's refusal, a scheduler's explanation, a list that grows
+// with the group -- must go through eventNote below.
+//
+// The limit is counted in bytes even though the API server's own message says
+// "can have at most 1024 characters". Probed against envtest's real API server:
+// 1024 ASCII bytes is accepted, 1025 is refused, and 512 em-dashes -- 512
+// characters, 1536 bytes -- is refused too.
+const maxEventNote = 1024
+
+// eventNoteTruncated marks a cut note and says where the whole one is.
+//
+// The marker is not decoration. A reader who sees an API server's explanation
+// stop mid-sentence cannot otherwise tell whether the API server phrased it that
+// way or whether this operator cut it, and the difference matters when the
+// remedy is in the wording. So the cut announces itself, and it points at the
+// copy that is not cut: the same text is on the object's status conditions,
+// which allow 32 KB and are written from the same values.
+const eventNoteTruncated = " ... (truncated; the full text is on the object's status conditions)"
+
+// eventNote formats an event note and guarantees the result fits maxEventNote.
+//
+// Call sites pass the result as the whole note -- `Eventf(..., "%s",
+// eventNote(...))` -- rather than passing a format and letting the recorder
+// expand it. That is the only shape that can promise anything: the limit
+// applies to the formatted string, so a helper that saw only the format and the
+// arguments would be guessing at the length of what it had not yet built.
+//
+// A note already within the limit is returned byte for byte unchanged.
+func eventNote(format string, args ...any) string {
+	note := fmt.Sprintf(format, args...)
+	if len(note) <= maxEventNote {
+		return note
+	}
+	keep := maxEventNote - len(eventNoteTruncated)
+	// Back off to a rune boundary. Cutting a multi-byte rune in half would
+	// put invalid UTF-8 in the note, which the API server rejects for its own
+	// reasons -- trading a too-long event for an invalid one is no fix.
+	for keep > 0 && !utf8.RuneStart(note[keep]) {
+		keep--
+	}
+	return note[:keep] + eventNoteTruncated
+}

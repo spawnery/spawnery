@@ -283,8 +283,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err := r.Bootstrap.Ensure(ctx, srv.Namespace); err != nil {
 			logger.Info("waiting to bootstrap the namespace before creating the pod",
 				"namespace", srv.Namespace, "reason", err.Error())
-			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, ReasonNamespaceNotBootstrapped, actionCreatePod,
-				"cannot bootstrap namespace %s: %v", srv.Namespace, err)
+			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, ReasonNamespaceNotBootstrapped, actionCreatePod, "%s",
+				eventNote("cannot bootstrap namespace %s: %v", srv.Namespace, err))
 			setAccepted(srv, false, ReasonNamespaceNotBootstrapped,
 				fmt.Sprintf("namespace %q does not hold the CA bundle and the agent ServiceAccount yet (%v); "+
 					"no pod is created until it does", srv.Namespace, err))

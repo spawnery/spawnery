@@ -156,7 +156,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		!hasConditionReason(network.Status.Conditions,
 			spawneryv1alpha1.ConditionForwardingSecretResolved, read.Reason) {
 		r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
-			spawneryv1alpha1.EventForwardingSecretNotFound, actionSyncStatus, "%s", read.Message)
+			spawneryv1alpha1.EventForwardingSecretNotFound, actionSyncStatus, "%s",
+			eventNote("%s", read.Message))
 	}
 	meta.SetStatusCondition(&network.Status.Conditions, resolvedCondition(read))
 

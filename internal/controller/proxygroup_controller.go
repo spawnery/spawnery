@@ -293,7 +293,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
 			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodRejected, err.Error()) {
 				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
-					actionCreateProxyPod, "the API server refused a proxy pod: %s", err.Error())
+					actionCreateProxyPod, "%s",
+					eventNote("the API server refused a proxy pod: %s", err.Error()))
 			}
 			group.Status.Phase = "Degraded"
 			if werr := r.writeStatus(ctx, group); werr != nil {
@@ -1126,7 +1127,8 @@ func (r *ProxyGroupReconciler) reportReadinessDivergence(
 		if isTrue {
 			eventType = corev1.EventTypeWarning
 		}
-		r.Recorder.Eventf(group, nil, eventType, diverged.Reason, actionSyncStatus, "%s", diverged.Message)
+		r.Recorder.Eventf(group, nil, eventType, diverged.Reason, actionSyncStatus, "%s",
+			eventNote("%s", diverged.Message))
 	}
 }
 
@@ -1599,7 +1601,8 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodUnschedulable,
 				fmt.Sprintf("%s cannot be scheduled: %s", pods[i].Name, c.Message)) {
 				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
-					actionSyncStatus, "proxy pod %s cannot be scheduled: %s", pods[i].Name, c.Message)
+					actionSyncStatus, "%s",
+					eventNote("proxy pod %s cannot be scheduled: %s", pods[i].Name, c.Message))
 			}
 			return
 		}
