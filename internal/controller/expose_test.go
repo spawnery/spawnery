@@ -414,6 +414,7 @@ func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 		spawneryv1alpha1.ExposeNodePort,
 		spawneryv1alpha1.ExposeLoadBalancer,
 		spawneryv1alpha1.ExposeHostPort,
+		spawneryv1alpha1.ExposeClusterIP,
 	} {
 		if !exposeImplemented(known) {
 			t.Errorf("%s is in the CRD's enum, so a user can create a group asking for "+

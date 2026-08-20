@@ -1766,7 +1766,8 @@ func exposeImplemented(t spawneryv1alpha1.ExposeType) bool {
 	switch t {
 	case spawneryv1alpha1.ExposeNodePort,
 		spawneryv1alpha1.ExposeLoadBalancer,
-		spawneryv1alpha1.ExposeHostPort:
+		spawneryv1alpha1.ExposeHostPort,
+		spawneryv1alpha1.ExposeClusterIP:
 		return true
 	default:
 		return false
