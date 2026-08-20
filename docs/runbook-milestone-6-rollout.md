@@ -566,6 +566,80 @@ The production network was untouched throughout — same three pods, same ages.
 
 ## Scenario 6 — node drain and the PodDisruptionBudget
 
+**The node drain was not performed.** Two facts, both measured before the fact
+rather than argued after it, made it the wrong trade:
+
+```
+$ kubectl get pods -A --field-selector spec.nodeName=server03 --no-headers | wc -l
+67
+```
+
+Sixty-seven pods, among them `hashicorp-vault-0` — the source every
+`ExternalSecret` on this cluster reads from, including spawnery's own — and the
+CloudNativePG primaries `immich-cluster-1` and `authentik-cluster-1`. A drain
+moves all of it, with the Longhorn volumes underneath.
+
+And what the drain could have measured is smaller than it looks:
+
+```
+$ kubectl -n minecraft get pdb
+NAME               MIN  ALLOWED  CURRENT  DESIRED  SELECTOR
+gateway-proxy-pdb  0    0        0        0        ... spawnery.cloud/occupied:true ...
+lobby-server-pdb   0    0        0        0        ... spawnery.cloud/occupied:true ...
+```
+
+Both budgets select on `occupied: true`, no pod carries it without players, and
+`desiredHealthy` is therefore **0**. The budget would not have refused
+anything — correctly, and by its own selector's design. Without the join, §6's
+"PodDisruptionBudget under a real eviction" cannot be measured at all, and what
+remains — a pod evicted and replaced elsewhere — is what 4c-2's rolling updates
+already exercise.
+
+**What was driven instead: the eviction API itself, against one proxy pod.**
+It touches nothing outside `minecraft` and exercises the same spawnery path:
+
+```
+$ kubectl -n minecraft create --raw "/api/v1/namespaces/minecraft/pods/gateway-dnhp/eviction" -f - <<< \
+    '{"apiVersion":"policy/v1","kind":"Eviction","metadata":{"name":"gateway-dnhp","namespace":"minecraft"}}'
+{"kind":"Status","apiVersion":"v1","metadata":{},"status":"Success","code":201}
+
+$ kubectl -n minecraft get pods -o wide      # 15 seconds later
+gateway-3k7f   1/1  Running  0  15s  10.42.2.159  server03
+gateway-q7qw   1/1  Running  0  32m  10.42.0.65   server01
+lobby-3dxq     1/1  Running  0  32m  10.42.1.149  server02
+
+$ kubectl -n minecraft get proxygroup gateway -o wide
+gateway  Ready  2  45.137.203.199:25565  0  32m
+```
+
+The eviction was **allowed**, which is the correct answer at `desiredHealthy 0`,
+and the operator had a replacement running on the same node within fifteen
+seconds.
+
+**An attempt at the protective direction, and why it failed.** Labelling both
+proxy pods `spawnery.cloud/occupied=true` by hand moved `currentHealthy` to 2
+but left `minAvailable` and `desiredHealthy` at 0, so a second eviction was
+allowed as well:
+
+```
+$ kubectl -n minecraft label pods -l spawnery.cloud/role=proxy spawnery.cloud/occupied=true --overwrite
+$ kubectl -n minecraft get pdb gateway-proxy-pdb
+MIN  ALLOWED  CURRENT  DESIRED
+0    2        2        0
+```
+
+The operator sizes `minAvailable` from **its own** occupancy tally, not from
+the labels on the pods, so a hand-set label cannot make the budget protective —
+it only changes who the budget counts as healthy. That is a sound design
+(the label follows the tally, not the reverse) and it means **the budget's
+protective behaviour cannot be simulated. Only real players can drive it**, so
+§6's item stays open, blocked by the same port filtering as scenario 3.
+
+The hand-set labels did produce something, though: the operator removed them
+within five seconds, which is the measurement scenario 7 needed for
+`pods: patch`.
+
+
 ## Scenario 7 — the three RBAC gaps
 
 `docs/handover-milestone-6.md` §6 names three, each open for a different
@@ -667,13 +741,31 @@ lobby-3dxq   <none>
 ```
 
 and "absent" is indistinguishable from "never written" by inspection alone.
-The metrics decide it: the **only** `PATCH` this operator has ever issued is
-the claim expansion above. With no players, `syncOccupiedLabel` has nothing to
-write, so the grant it justifies is still unexercised — and remains so because
-scenario 3 could not be driven.
+At this point in the run the metrics agreed with the pessimistic reading: the
+only `PATCH` the operator had ever issued was the claim expansion above.
 
-**This is the one §6 item this rollout leaves open**, and it is left open by
-the port filtering in front of the cluster rather than by anything in the code.
+**Scenario 6 then settled it**, by provoking the write instead of waiting for a
+player. `syncOccupiedLabel` reconciles the label *to* reality in both
+directions, so setting it by hand on a pod that carries no players makes the
+controller remove it — and removal is the same `r.Patch(...)` call
+(`server_controller.go:923`) that adding it would be. The label went away in
+under five seconds and the counter moved:
+
+```
+PATCH 1  →  3   after hand-labelling the two proxy pods    (syncOccupiedLabels, plural)
+PATCH 3  →  4   after hand-labelling the lobby server pod  (syncOccupiedLabel,  singular)
+```
+
+The split matters, and it is exactly the distinction `docs/known-issues.md`
+draws: `required.go`'s `Why` names the **singular** — the Server controller's
+`syncOccupiedLabel` — while `ProxyGroupReconciler.syncOccupiedLabels` is what
+runs on every ordinary pass. The first two patches came from the plural, the
+third from the singular. **So the call site `required.go` names does run, and
+it does issue the patch the grant is for.**
+
+What this is not: a measurement of the label under real occupancy. The write
+was provoked by a hand-set label, not by a player joining, and only the
+removal path was observed — the addition path still has nothing that drives it.
 
 
 ## Scenario 8 — the widened denial measurement
