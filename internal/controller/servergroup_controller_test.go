@@ -68,14 +68,15 @@ func groupReconciler(f *fixture) *ServerGroupReconciler {
 }
 
 // scalingEvents drains the recorder and counts the events carrying a given
-// reason. FakeRecorder renders an event as "<type> <reason> <message>", so a
-// substring match on the reason is enough to tell them apart.
+// reason. It matched the reason as a substring of the whole rendered line until
+// milestone 6e's final review, which is a match a mutated, longer reason walks
+// straight through -- see eventHasReason, which is what it compares with now.
 func scalingEvents(rec *events.FakeRecorder, reason string) int {
 	n := 0
 	for {
 		select {
 		case e := <-rec.Events:
-			if strings.Contains(e, reason) {
+			if eventHasReason(e, reason) {
 				n++
 			}
 		default:

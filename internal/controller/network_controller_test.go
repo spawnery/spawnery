@@ -343,10 +343,13 @@ func putForwardingSecret(t *testing.T, f *fixture, value string) {
 	}
 }
 
+// countEvents counts the events carrying a given reason. It matched the reason
+// as a substring of the whole rendered line until milestone 6e's final review;
+// eventHasReason says why that was wrong.
 func countEvents(events []string, reason string) int {
 	n := 0
 	for _, e := range events {
-		if strings.Contains(e, reason) {
+		if eventHasReason(e, reason) {
 			n++
 		}
 	}

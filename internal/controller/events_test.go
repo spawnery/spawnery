@@ -1,6 +1,10 @@
 package controller
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -14,6 +18,29 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
+
+// eventHasReason reports whether one of FakeRecorder's rendered event strings
+// carries exactly the given reason.
+//
+// FakeRecorder renders an event as "<type> <reason> <note>", so the reason is
+// the second space-separated field, and it is compared as a field rather than
+// as a substring of the whole line. The difference is not theoretical: a
+// substring match accepts a note that merely mentions the reason in prose, and
+// it accepts a *longer* reason that contains the wanted one -- so a reason
+// mutated from "ServerRetiring" to "ServerRetiringMUTATED" slides straight past
+// a test that was written to pin it. Two helpers in this package matched that
+// way until this was fixed, and the mutation above passed against both.
+//
+// Note what this deliberately cannot do: the action the events API also takes
+// is dropped by FakeRecorder entirely (client-go's tools/events/fake.go emits
+// eventtype, reason and note and nothing else), so no assertion over these
+// strings can say anything about it. That gap is closed by
+// TestEveryEventfCallSitePassesAKnownAction and
+// TestTheRealAPIServerRefusesAnEventWithNoAction below, not here.
+func eventHasReason(rendered, reason string) bool {
+	fields := strings.SplitN(rendered, " ", 3)
+	return len(fields) >= 2 && fields[1] == reason
+}
 
 // TestEventNoteLeavesAShortNoteAlone is the half that protects the other 18
 // call sites. eventNote sits in front of text this operator did not write, so
@@ -178,5 +205,158 @@ func TestAnUnschedulableProxyPodsEventStaysWithinTheNoteLimit(t *testing.T) {
 	}
 	if len(cond.Message) <= maxEventNote {
 		t.Errorf("the condition is %d bytes, so this test is not exercising truncation", len(cond.Message))
+	}
+}
+
+// knownActions is every action constant in events.go, keyed by the identifier
+// the call sites spell. The map is written out rather than derived so that both
+// halves are checked: the value side is the constant itself, so a constant that
+// loses its value fails to compile into a non-empty string here, and the key
+// side is the name TestEveryEventfCallSitePassesAKnownAction looks for in the
+// source.
+var knownActions = map[string]string{
+	"actionAdoptPod":       actionAdoptPod,
+	"actionCreatePod":      actionCreatePod,
+	"actionDeletePod":      actionDeletePod,
+	"actionCreateProxyPod": actionCreateProxyPod,
+	"actionDrainProxy":     actionDrainProxy,
+	"actionCreateServer":   actionCreateServer,
+	"actionDeleteServer":   actionDeleteServer,
+	"actionRetireServer":   actionRetireServer,
+	"actionSyncStatus":     actionSyncStatus,
+}
+
+// TestEveryEventfCallSitePassesAKnownAction reads this package's own source.
+//
+// It is here because nothing else in the repository can see the action at all.
+// events.FakeRecorder renders an event as eventtype, reason and note and drops
+// the action entirely (client-go v0.36.0, tools/events/fake.go), so every
+// event assertion in this package is blind to it; envtest's tests go through
+// the same fake; and go vet cannot help either, because it cannot see through
+// the events.EventRecorder interface to know Eventf's note is a format string
+// -- a missing argument at one of these call sites produces no diagnostic. The
+// four action constants were replaced with garbage during milestone 6e's final
+// review and the whole package stayed green.
+//
+// What is at stake is not cosmetic. events.k8s.io/v1 rejects an event with an
+// empty action outright (TestTheRealAPIServerRefusesAnEventWithNoAction below
+// measures that against a real API server), the broadcaster classifies the
+// refusal as non-retryable and abandons the event with a klog line, and
+// nothing on the reconciled object says an event was lost. A new call site
+// that passes "" would go green through unit tests, envtest and e2e alike.
+//
+// A source-level check rather than twenty-three assertions: what needs
+// guarding is a property of every call site, not the particular string any one
+// of them passes, and a table restating twenty-three literals would be a
+// second copy of the code that goes stale the first time somebody adds a
+// twenty-fourth. This reads whatever is there.
+func TestEveryEventfCallSitePassesAKnownAction(t *testing.T) {
+	for name, value := range knownActions {
+		if value == "" {
+			t.Errorf("%s is empty; events.k8s.io/v1 refuses an event with no action", name)
+		}
+	}
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("read the package directory: %v", err)
+	}
+
+	fset := token.NewFileSet()
+	sites := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		// Test files are excluded on purpose: a fixture may legitimately drive
+		// a recorder with a literal, and what this guards is the operator's
+		// own output.
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			fun, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || fun.Sel.Name != "Eventf" {
+				return true
+			}
+			sites++
+			pos := fset.Position(call.Pos())
+			// Eventf(regarding, related, eventtype, reason, action, note, ...).
+			const actionArg = 4
+			if len(call.Args) <= actionArg {
+				t.Errorf("%s: Eventf with %d arguments, too few to carry an action",
+					pos, len(call.Args))
+				return true
+			}
+			ident, ok := call.Args[actionArg].(*ast.Ident)
+			if !ok {
+				t.Errorf("%s: the action argument is not one of events.go's action "+
+					"constants but %T; add it to events.go and to knownActions, or use "+
+					"one that is already there", pos, call.Args[actionArg])
+				return true
+			}
+			if _, known := knownActions[ident.Name]; !known {
+				t.Errorf("%s: action %q is not one of events.go's action constants. "+
+					"events.go's own rule is that adding an event means choosing from "+
+					"that list, not inventing a string", pos, ident.Name)
+			}
+			return true
+		})
+	}
+
+	// A scan that matched nothing would pass every assertion above without
+	// having read a single call site, which is the one way this test could be
+	// green and worthless.
+	if sites == 0 {
+		t.Fatal("no Eventf call site found in this package; the scan is not looking " +
+			"at what it thinks it is")
+	}
+	t.Logf("checked %d Eventf call sites", sites)
+}
+
+// TestTheRealAPIServerRefusesAnEventWithNoAction measures the premise the test
+// above rests on, against envtest's real API server rather than a comment.
+//
+// If events.k8s.io/v1 ever stopped refusing an empty action, the source-level
+// check would still be worth having for legibility, but it would no longer be
+// guarding a dropped event -- and a reader deserves to be told which of those
+// two things it is. This is what tells them.
+func TestTheRealAPIServerRefusesAnEventWithNoAction(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	create := func(name, action string) error {
+		return c.Create(ctx, &eventsv1.Event{
+			ObjectMeta:          metav1.ObjectMeta{Name: name, Namespace: ns},
+			EventTime:           metav1.NowMicro(),
+			ReportingController: "spawnery.cloud/proxygroup",
+			ReportingInstance:   "spawnery-operator-0",
+			Action:              action,
+			Reason:              "ProxyPodBlocked",
+			Type:                corev1.EventTypeWarning,
+			Regarding: corev1.ObjectReference{
+				Kind: "Namespace", Name: ns, Namespace: ns, APIVersion: "v1",
+			},
+			Note: "a proxy pod could not be scheduled",
+		})
+	}
+
+	if err := create("no-action", ""); err == nil {
+		t.Error("the API server accepted an event with an empty action; the whole " +
+			"reason every call site carries one has moved, and events.go's " +
+			"opening comment needs revisiting")
+	} else if !strings.Contains(err.Error(), "action") {
+		t.Errorf("refused for the wrong reason: %v", err)
+	}
+
+	if err := create("with-action", actionSyncStatus); err != nil {
+		t.Errorf("the API server refused an event carrying %q: %v",
+			actionSyncStatus, err)
 	}
 }

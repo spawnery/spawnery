@@ -1401,16 +1401,11 @@ func drainEvents(rec *events.FakeRecorder) []string {
 	}
 }
 
-// containsEvent reports whether any event carries the given reason.
-//
-// FakeRecorder renders an event as "<type> <reason> <message>", so the reason
-// is the second space-separated field, and it is compared exactly rather than
-// as a substring of the whole line: the reason also appears in prose in this
-// file, and a message that merely mentioned it must not be able to stand in
-// for an event that was actually recorded.
+// containsEvent reports whether any event carries the given reason. The field
+// comparison, and why it is not a substring match, is eventHasReason's.
 func containsEvent(events []string, reason string) bool {
 	for _, e := range events {
-		if fields := strings.SplitN(e, " ", 3); len(fields) >= 2 && fields[1] == reason {
+		if eventHasReason(e, reason) {
 			return true
 		}
 	}
