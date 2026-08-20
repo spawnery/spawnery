@@ -1724,16 +1724,20 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 // thing that owns it -- an ingress controller's TCP entry point, a gateway, a
 // tunnel, a DNS record -- lives under an API this operator does not read.
 //
-// That arm is still behind the ready-pod gate above, and that is the
-// surprising part, because it never reads hostIP. A ClusterIP group whose
-// pods are all in ImagePullBackOff has a perfectly valid configured address
-// and publishes nothing. This is deliberate and is the same promise every
-// other branch makes: status.address means "players can connect here now",
-// not "this is what was configured". The configured value is already
-// readable at spec.expose.clusterIP.address, so publishing it unconditionally
-// would add no information while breaking the one invariant the field has.
-// The consequence to accept is that the gate borrows a readiness signal from
-// a pod whose hostIP is irrelevant to the answer.
+// That arm is still behind the gate above, and that is the surprising part,
+// because it reads neither of the things the gate tests. The gate needs a pod
+// that is both Ready and carrying a non-empty hostIP, so a ClusterIP group
+// publishes nothing while its pods are in ImagePullBackOff -- and also
+// nothing for a pod that is Ready but whose hostIP has not been reported yet,
+// a value this arm would never have used.
+//
+// This is deliberate, and is the same promise every other branch makes:
+// status.address means "players can connect here now", not "this is what was
+// configured". The configured value is already readable at
+// spec.expose.clusterIP.address, so publishing it unconditionally would add
+// no information while breaking the one invariant the field has. The
+// consequence to accept is that this arm's answer is gated on two facts about
+// a pod that it never reads.
 //
 // net.JoinHostPort rather than a format string: a node with an IPv6 hostIP
 // needs brackets, and the old formatting produced an address no client could
