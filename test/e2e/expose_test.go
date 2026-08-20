@@ -77,14 +77,16 @@ func theLoadBalancerGroupGetsItsService(t *testing.T) {
 }
 
 // The ClusterIP group gets a Service with no way out of the cluster of its
-// own, and publishes the address its operator wrote down.
+// own: cluster-internal type, no node port, no external traffic policy.
 //
-// The address itself is deliberately not asserted here. The group's pods
-// never become ready with an unresolvable image, so proxyAddress publishes
-// nothing, and asserting an empty string would be asserting the image tag
-// rather than the strategy. The readiness gate is covered by Task 3's table,
-// TestProxyAddressPerStrategy (`internal/controller/expose_test.go`).
-func theClusterIPGroupGetsAPlainServiceAndPublishesItsAddress(t *testing.T) {
+// The published address is deliberately not asserted here, and the name says
+// only what is checked, because a subtest name is what CI prints when
+// everything passes. The group's pods never become ready with an
+// unresolvable image, so proxyAddress publishes nothing, and asserting an
+// empty string would be asserting the image tag rather than the strategy.
+// The readiness gate is covered by Task 3's table, TestProxyAddressPerStrategy
+// (`internal/controller/expose_test.go`).
+func theClusterIPGroupGetsAPlainServiceWithNoNodePort(t *testing.T) {
 	var svc corev1.Service
 	eventually(t, 2*time.Minute, "the gateway-clusterip Service", func() (bool, string) {
 		if err := k8s.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "gateway-clusterip"}, &svc); err != nil {
