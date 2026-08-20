@@ -1058,3 +1058,56 @@ func TestClusterIPServiceShape(t *testing.T) {
 			"--publish-internal-services would publish the ClusterIP itself", svc.Annotations)
 	}
 }
+
+// CreateOrUpdate mutates the Service it fetched, so a field the ClusterIP arm
+// never sets keeps whatever a prior strategy left there. A group moving from
+// NodePort -- whose arm sets externalTrafficPolicy to Local -- to ClusterIP
+// was suspected of carrying that value forward into a Service the API server
+// should refuse, since the field is meaningless there.
+//
+// It doesn't happen. Measured against the envtest API server, Kubernetes
+// v1.36.3: with no explicit reset in reconcileService's ClusterIP arm, the
+// field comes back empty anyway. The API server clears it itself on the
+// update to a type that doesn't support it, before validation ever sees the
+// stale value.
+//
+// That makes this a guard on the API server's behaviour, not the operator's
+// -- and it stays that way on purpose. This repository's standing position
+// is that a mechanism reporting nothing is indistinguishable from an absent
+// one, and an explicit `ExternalTrafficPolicy = ""` in the ClusterIP arm is
+// unfalsifiable: no test could ever fail without it, so it would be decoration
+// wearing the shape of a fix. This test is the real guard instead. If it ever
+// goes red, the API server's normalisation has changed or stopped, and the
+// fix is to add that explicit reset to the ClusterIP arm -- the line this
+// test exists so that nobody has to add speculatively today.
+func TestTheAPIServerClearsExternalTrafficPolicyOnTheMoveToClusterIP(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway")
+
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("reconcileService as NodePort: %v", err)
+	}
+
+	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+		Type:      spawneryv1alpha1.ExposeClusterIP,
+		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+	}
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("reconcileService as ClusterIP: %v", err)
+	}
+
+	var svc corev1.Service
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
+		t.Fatalf("get the Service: %v", err)
+	}
+	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("Service type = %s, want ClusterIP", svc.Spec.Type)
+	}
+	if svc.Spec.ExternalTrafficPolicy != "" {
+		t.Errorf("externalTrafficPolicy = %q, want empty: the API server should have "+
+			"cleared what the NodePort Service this group used to be left behind, "+
+			"since reconcileService's ClusterIP arm never resets the field itself",
+			svc.Spec.ExternalTrafficPolicy)
+	}
+}
