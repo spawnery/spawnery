@@ -520,15 +520,68 @@ carry a CRD schema change through and an uninstall would not destroy every
 `Network` in the cluster — `helm uninstall` leaving them standing was driven
 once, against a real cluster, and observed; upgrade was not driven at all.
 
-Milestone 6 continues with 6e, CI, plus the RKE2 rollout at its end, driven
-from a runbook against a real cluster.
+Milestone 6e is done: GitHub Actions now blocks a pull request on four jobs,
+watches one more on its own schedule, and holds a third ready for a tag.
+`.github/workflows/ci.yml`'s
+`test`, `lint`, `deps` and `e2e` jobs run on every pull request and on push
+to `master`; `.golangci.yml` pins `errcheck` and `staticcheck` with
+`max-issues-per-linter: 0` and `max-same-issues: 0`, closing a default
+output cap that otherwise shows a sample and lets it be trusted as a total;
+`deps` regenerates `agent/deps.json` against a real Maven Central and fails
+on a non-empty diff, paying a debt `docs/known-issues.md` has carried since
+milestone 2c and shown, by a deliberate corruption and revert, to actually
+fire; `e2e` runs `hack/e2e.sh` completely unmodified on a hosted runner's
+Docker daemon, eighteen scenarios green in 7m00s on the first attempt.
+`.github/workflows/nightly.yml` re-runs milestone 6a's bit-identical-rebuild
+acceptance criterion on a schedule — driven once, by a temporary trigger,
+9m21s green. `.github/workflows/release.yml` waits for a `v*` tag to publish
+for real; no tag has been pushed by this milestone, and none should be —
+that is the repository owner's decision, not this one's.
 
-Anyone starting milestone 6e begins at
-[`docs/handover-milestone-6d.md`](docs/handover-milestone-6d.md): it says
-where 6d stopped, what it proved and what it only wrote down, what 6e finds
-in place, and what the RKE2 rollout now owes — which has grown by the one
-manual step 6d's own chart cannot make. It is written to be read by someone
-with no memory of how any of this was built.
+The one thing worth naming is what this milestone's own first cold-cache
+run found, because it is the best evidence in this repository for what CI
+is worth. Three local runs and two independent reviewers had all reported
+`make lint` clean going into this milestone's own fix round. CI's first
+`lint` run, on a runner with no cache to answer from, found five real
+`SA1019` findings in `internal/controller/setup.go` every one of those five
+checks had missed — a stale `golangci-lint` cache, not a stale tree, had
+been answering "clean" for all of them. The count this milestone had
+already written down as final, 33, was measured against that same stale
+cache and was short by exactly those five: the true figure, from a cleared
+cache, is 38. Fixing them forced a real migration — `internal/controller`'s
+five event recorders off the deprecated `record.EventRecorder` onto
+`events.EventRecorder`, twenty-three call sites, twenty-one fake
+recorders — which needed its own RBAC grant and surfaced a length limit,
+`events.k8s.io/v1`'s 1024-byte note cap, the old API never enforced; five
+call sites needed it and were fixed, a sixth is recorded open in
+`docs/known-issues.md`.
+
+What it leaves open is that running a check more often does not make the
+check itself see more. `chart-lint` still catches neither half of a typo'd
+`{{ .Release.Namespace }}`, measured by milestone 6d, and putting every
+check in this repository behind a schedule instead of a memory changes
+nothing about what any one of them can see. CI introduces its own version of
+that limit on day one: `make e2e` on a hosted runner proves `hack/e2e.sh`
+under Docker, and from this milestone on nothing automatic proves it under
+the rootless Podman the author's machine has always run it under — CI
+proves Docker, the author's machine proves podman, and neither proves the
+other. `docs/known-issues.md`'s new "From milestone 6e" section carries the
+rest, including the two workflow paths — `nightly.yml`'s `workflow_dispatch`
+and cron, and all of `release.yml` — that exist only on paper until the
+repository owner drives them for real.
+
+Milestone 6 continues to the RKE2 rollout, driven from a runbook against a
+real cluster — the last thing it owes.
+
+Anyone starting there begins at
+[`docs/handover-milestone-6e.md`](docs/handover-milestone-6e.md): it says
+where 6e stopped, what was actually driven versus what only exists, what the
+next milestone finds in place, and what the RKE2 rollout still owes —
+carried forward from 6d's own list unchanged. It is written to be read by
+someone with no memory of how any of this was built.
+[`docs/handover-milestone-6d.md`](docs/handover-milestone-6d.md), written for
+6e and kept because its §3 is the record of what 6e started from and had to
+decide,
 [`docs/handover-milestone-6c.md`](docs/handover-milestone-6c.md), written for
 6d and kept because its §3 is the record of what 6d started from and had to
 decide,

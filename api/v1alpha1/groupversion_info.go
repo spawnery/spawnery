@@ -29,6 +29,22 @@ var (
 	GroupVersion = schema.GroupVersion{Group: "spawnery.cloud", Version: "v1alpha1"}
 
 	// SchemeBuilder registers the Spawnery types with a runtime scheme.
+	//
+	// scheme.Builder is deprecated: controller-runtime's own note says api
+	// packages should carry minimal dependencies and this helper pulls in
+	// more than that. The alternative it names is apimachinery's own
+	// runtime.SchemeBuilder ([]func(*runtime.Scheme) error) together with a
+	// hand-written registration function per type, plus an explicit call to
+	// metav1.AddToGroupVersion. Adopting it here would touch all four
+	// _types.go files, replacing each file's
+	// SchemeBuilder.Register(&T{}, &TList{}) with a closure that calls
+	// scheme.AddKnownTypes itself, and would need metav1.AddToGroupVersion
+	// wired in by hand where scheme.Builder.Register currently does it for
+	// every call. Silenced rather than migrated because that rewrite is a
+	// four-file api-package change with no behavioural motivation, out of
+	// scope for a lint-cleanup task; it belongs in its own change if this
+	// package's dependency footprint ever becomes a real problem.
+	//nolint:staticcheck // deprecated scheme.Builder; see above
 	SchemeBuilder = &scheme.Builder{GroupVersion: GroupVersion}
 
 	// AddToScheme adds the Spawnery types to a runtime scheme.

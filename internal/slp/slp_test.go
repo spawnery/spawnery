@@ -43,7 +43,7 @@ func serve(t *testing.T, handle func(net.Conn)) (string, int) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		handle(conn)
 	}()
 

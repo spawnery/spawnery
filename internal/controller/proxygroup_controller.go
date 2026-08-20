@@ -33,7 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -149,7 +149,7 @@ type ProxyGroupReconciler struct {
 	// players still on the proxy, and the flank of a readiness divergence.
 	// See the type comment for the bar both clear and why nothing else here
 	// is announced.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	// Expectations reserves the pod creates and deletes this reconciler has
 	// issued and the cache has not shown yet. One instance is shared across
 	// groups. Task 4 made a rollout create a pod per replacement rather than
@@ -292,8 +292,9 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// the cause and the one worth backing off on.
 		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
 			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodRejected, err.Error()) {
-				r.Recorder.Eventf(group, corev1.EventTypeWarning, "ProxyPodBlocked",
-					"the API server refused a proxy pod: %s", err.Error())
+				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
+					actionCreateProxyPod, "%s",
+					eventNote("the API server refused a proxy pod: %s", err.Error()))
 			}
 			group.Status.Phase = "Degraded"
 			if werr := r.writeStatus(ctx, group); werr != nil {
@@ -487,7 +488,7 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 // difference between the two functions; see the wrapper for the term it adds
 // and why the two consumers cannot share an answer.
 func proxyOccupied(snap agent.Snapshot) bool {
-	return !(snap.Players == 0 && !snap.PlayersStale && snap.Connected)
+	return snap.Players != 0 || snap.PlayersStale || !snap.Connected
 }
 
 // proxyOccupiedForBudget is proxyOccupied asked by the two consumers that have
@@ -963,7 +964,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		// spends draining, matching markDraining's own guard against
 		// re-stamping a mark it already made.
 		if going && !wasMarked && nodeGoing[i] {
-			r.Recorder.Eventf(group, corev1.EventTypeNormal, spawneryv1alpha1.ReasonNodeDraining,
+			r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, spawneryv1alpha1.ReasonNodeDraining, actionDrainProxy,
 				"draining proxy %s off a node that is going away", pods[i].Name)
 		}
 		diverging[pods[i].UID] = going && isPodReady(&pods[i])
@@ -1055,7 +1056,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 			// The one path in this milestone that disconnects anybody. It is
 			// configured rather than accidental, so it says so loudly and
 			// names the cost.
-			r.Recorder.Eventf(group, corev1.EventTypeWarning, "ProxyDrainTimeout",
+			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyDrainTimeout", actionDrainProxy,
 				"deleting proxy %s after %s with %d player(s) still connected",
 				pod.Name, group.DrainTimeout(), players)
 		default:
@@ -1126,7 +1127,8 @@ func (r *ProxyGroupReconciler) reportReadinessDivergence(
 		if isTrue {
 			eventType = corev1.EventTypeWarning
 		}
-		r.Recorder.Event(group, eventType, diverged.Reason, diverged.Message)
+		r.Recorder.Eventf(group, nil, eventType, diverged.Reason, actionSyncStatus, "%s",
+			eventNote("%s", diverged.Message))
 	}
 }
 
@@ -1598,8 +1600,9 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 			}
 			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodUnschedulable,
 				fmt.Sprintf("%s cannot be scheduled: %s", pods[i].Name, c.Message)) {
-				r.Recorder.Eventf(group, corev1.EventTypeWarning, "ProxyPodBlocked",
-					"proxy pod %s cannot be scheduled: %s", pods[i].Name, c.Message)
+				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
+					actionSyncStatus, "%s",
+					eventNote("proxy pod %s cannot be scheduled: %s", pods[i].Name, c.Message))
 			}
 			return
 		}
@@ -1620,8 +1623,8 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 		Message: proxyPodsAdmittedMessage,
 	})
 	if wasBlocked {
-		r.Recorder.Eventf(group, corev1.EventTypeNormal, "ProxyPodsAdmitted",
-			proxyPodsAdmittedMessage)
+		r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, "ProxyPodsAdmitted",
+			actionSyncStatus, "%s", proxyPodsAdmittedMessage)
 	}
 }
 

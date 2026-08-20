@@ -66,7 +66,7 @@ func run(args []string, stderr io.Writer) int {
 	defer cancel()
 
 	if _, err := slp.Ping(ctx, *host, *port); err != nil {
-		fmt.Fprintf(stderr, "spawnery-slp: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spawnery-slp: %v\n", err)
 		return 1
 	}
 	return 0

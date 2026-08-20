@@ -55,13 +55,13 @@ func run(args []string, stderr io.Writer) int {
 	}
 
 	if *flavor != "paper" && *flavor != "velocity" {
-		fmt.Fprintf(stderr, "spawnery-config: --flavor must be \"paper\" or \"velocity\", got %q\n", *flavor)
+		_, _ = fmt.Fprintf(stderr, "spawnery-config: --flavor must be \"paper\" or \"velocity\", got %q\n", *flavor)
 		return 2
 	}
 
 	values, secret, overlay, err := render.Load(*configDir)
 	if err != nil {
-		fmt.Fprintf(stderr, "spawnery-config: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spawnery-config: %v\n", err)
 		return 1
 	}
 
@@ -78,12 +78,12 @@ func run(args []string, stderr io.Writer) int {
 		files, err = render.Velocity(values, filepath.Join(*configDir, render.SecretFile), overlay)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "spawnery-config: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spawnery-config: %v\n", err)
 		return 1
 	}
 
 	if err := render.WriteAll(*out, files); err != nil {
-		fmt.Fprintf(stderr, "spawnery-config: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "spawnery-config: %v\n", err)
 		return 1
 	}
 	return 0

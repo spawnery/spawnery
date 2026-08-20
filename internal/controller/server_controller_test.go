@@ -32,7 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -166,7 +166,7 @@ func TestServerFailedStraightFromReadyClearsReadySince(t *testing.T) {
 	if srv.Status.ReadySince != nil {
 		t.Errorf("status.readySince = %v on a Failed server, want nil: a corpse that keeps its "+
 			"readySince looks to CountFailures like the success that ends its own streak",
-			srv.Status.ReadySince.Time.UTC())
+			srv.Status.ReadySince.UTC())
 	}
 }
 
@@ -205,7 +205,7 @@ func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 	if blipped.Status.StartedAt == nil || !blipped.Status.StartedAt.Time.Equal(f.clock.Now()) {
 		var got any
 		if blipped.Status.StartedAt != nil {
-			got = blipped.Status.StartedAt.Time.UTC()
+			got = blipped.Status.StartedAt.UTC()
 		}
 		t.Fatalf("status.startedAt = %v, want it re-armed to %v on entry into Starting",
 			got, f.clock.Now().UTC())
@@ -1237,8 +1237,8 @@ func (denyingCreator) Create(context.Context, client.Object, ...client.CreateOpt
 // Pending forever with a log line as its only trace.
 func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
 	f := newFixture(t)
-	events := record.NewFakeRecorder(20)
-	f.reconc.Recorder = events
+	rec := events.NewFakeRecorder(20)
+	f.reconc.Recorder = rec
 	f.reconc.Bootstrap = &Bootstrapper{
 		Client: denyingCreator{Client: f.c},
 		Reader: f.c,
@@ -1262,7 +1262,7 @@ func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
 	var recorded []string
 	for done := false; !done; {
 		select {
-		case ev := <-events.Events:
+		case ev := <-rec.Events:
 			recorded = append(recorded, ev)
 		default:
 			done = true

@@ -24,7 +24,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -44,7 +43,6 @@ const DefaultOrphanInterval = time.Minute
 // full comparison and not a reaction to an event.
 type OrphanReconciler struct {
 	client.Client
-	Recorder record.EventRecorder
 
 	// Agents is the runtime state to be pruned.
 	Agents *agent.Registry

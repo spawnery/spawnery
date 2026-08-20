@@ -44,7 +44,7 @@ func TestSampleManifestIsAcceptedByTheAPIServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open %s: %v", path, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	decoder := apimachineryyaml.NewYAMLOrJSONDecoder(f, 4096)
 	count := 0

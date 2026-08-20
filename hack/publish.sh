@@ -28,6 +28,19 @@
 #   FORCE=1         overwrite a tag that already exists.
 #   WRITE_DIGEST=1  write the digest this run pushed for the operator image
 #                   into charts/spawnery/values.yaml's image.digest.
+#
+# Exit status:
+#   0  everything asked for was published (or, under DRY_RUN, described).
+#   2  an argument named an image this script does not know.
+#   3  the refusal below: a tag asked for is already on the registry, and
+#      nothing was overwritten. Separate from 1 on purpose. A person reads the
+#      message and does not need the number, but .github/workflows/release.yml
+#      publishes one image at a time and has to tell "already there, nothing to
+#      do" apart from "I could not tell whether it is there" -- and those two
+#      are the same message to a caller that only sees a non-zero exit. Making
+#      the distinction here keeps the guard in one place instead of a second
+#      copy of it in YAML.
+#   1  anything else, including "cannot tell whether it already exists".
 set -euo pipefail
 
 DRY_RUN="${DRY_RUN:-0}"
@@ -114,7 +127,8 @@ for entry in "${images[@]}"; do
 			echo "refusing to overwrite ${name}:${tag}, which already exists. Bump the" >&2
 			echo "version in flake.nix, or publish only the image that changed (e.g." >&2
 			echo "\`hack/publish.sh operator-image\`), or re-run with FORCE=1 if you mean it." >&2
-			exit 1
+			# 3, not 1: see "Exit status" in the header.
+			exit 3
 		elif ! grep -qi 'manifest unknown' <<<"$inspect_err"; then
 			echo "cannot tell whether ${name}:${tag} already exists -- skopeo inspect" >&2
 			echo "failed for a reason other than a missing tag:" >&2

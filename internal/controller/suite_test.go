@@ -30,7 +30,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -208,7 +208,7 @@ func newFixture(t *testing.T) *fixture {
 		reconc: &ServerReconciler{
 			Client:               c,
 			Scheme:               testenv.Scheme(t),
-			Recorder:             record.NewFakeRecorder(100),
+			Recorder:             events.NewFakeRecorder(100),
 			Agents:               agents,
 			Clock:                clock.Now,
 			StartupDeadline:      5 * time.Minute,
@@ -242,7 +242,7 @@ func newFixture(t *testing.T) *fixture {
 	netReconciler := &NetworkReconciler{
 		Client:       c,
 		Scheme:       testenv.Scheme(t),
-		Recorder:     record.NewFakeRecorder(100),
+		Recorder:     events.NewFakeRecorder(100),
 		Clock:        clock.Now,
 		SecretReader: c,
 	}

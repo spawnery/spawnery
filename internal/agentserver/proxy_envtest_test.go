@@ -62,7 +62,7 @@ func dialProxy(t *testing.T, ctx context.Context, addr string, ca []byte, token 
 	streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 	stream, err := agentpb.NewAgentServiceClient(conn).ProxySession(streamCtx)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		t.Fatalf("open ProxySession: %v", err)
 	}
 	return stream, func() { _ = conn.Close() }

@@ -85,7 +85,7 @@ func PingVersion(ctx context.Context, host string, port int, protocol int32) (*S
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {

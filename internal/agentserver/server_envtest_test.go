@@ -73,7 +73,7 @@ func dialAgent(t *testing.T, ctx context.Context, addr string, ca []byte, token 
 	streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 	stream, err := agentpb.NewAgentServiceClient(conn).ServerSession(streamCtx)
 	if err != nil {
-		conn.Close()
+		_ = conn.Close()
 		t.Fatalf("open ServerSession: %v", err)
 	}
 	return stream, func() { _ = conn.Close() }
@@ -618,7 +618,7 @@ func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	ctx := metadata.AppendToOutgoingContext(f.ctx, "authorization", "Bearer "+f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	stream, err := agentpb.NewAgentServiceClient(conn).ProxySession(ctx)

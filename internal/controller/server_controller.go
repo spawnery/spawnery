@@ -28,7 +28,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -78,7 +78,7 @@ const resyncInterval = 5 * time.Second
 type ServerReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	// Agents is the runtime state reported by the in-game agents.
 	Agents *agent.Registry
@@ -105,7 +105,29 @@ type ServerReconciler struct {
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;patch
-// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+
+// The two event grants are not the same right twice, and only one of them is
+// cluster-wide.
+//
+// events.k8s.io is where every controller in this package writes, through
+// events.EventRecorder, and it regards objects in whatever namespace a Network
+// put its game servers -- so it has to be cluster-wide.
+//
+// The core group is not left over from before the migration off tools/record:
+// controller-runtime's leader election still builds its resource lock with the
+// deprecated GetEventRecorderFor, and that recorder writes core events. But
+// leader election locks on a Lease in the operator's own namespace and its
+// events regard that Lease, so the right it needs is namespaced -- the same
+// argument, and the same spawnery-system placeholder, as the lease grant at
+// internal/controller/setup.go:77. Granting it cluster-wide would let the
+// operator write a core event into any namespace in the cluster for a lock it
+// can only ever take in one.
+//
+// spawnery-system is not where the operator runs; it is the literal
+// controller-gen requires to emit a namespaced Role at all, rewritten to
+// Helm's release namespace by hack/chart-templates.sh.
+// +kubebuilder:rbac:groups="",namespace=spawnery-system,resources=events,verbs=create;patch
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
 // Reconcile collects the inputs, asks the state machine and executes the
 // decision. It contains no rule of its own about deleting an occupied pod.
@@ -183,13 +205,13 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				started := pod.CreationTimestamp
 				srv.Status.StartedAt = &started
 			}
-			r.Recorder.Eventf(srv, corev1.EventTypeNormal, "PodAdopted",
+			r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, "PodAdopted", actionAdoptPod,
 				"adopted existing pod %s after a lost status write", pod.Name)
 		} else {
 			// Someone else's pod holds this name. Adopting it would put this
 			// Server in charge of a workload it never created, and deleting it
 			// is not ours to do. Stand off and say so.
-			r.Recorder.Eventf(srv, corev1.EventTypeWarning, "PodNameConflict",
+			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, "PodNameConflict", actionAdoptPod,
 				"pod %s exists but is not controlled by this Server", pod.Name)
 			setAccepted(srv, false, ReasonPodNameConflict,
 				fmt.Sprintf("pod %q exists but is not controlled by this Server", pod.Name))
@@ -282,8 +304,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err := r.Bootstrap.Ensure(ctx, srv.Namespace); err != nil {
 			logger.Info("waiting to bootstrap the namespace before creating the pod",
 				"namespace", srv.Namespace, "reason", err.Error())
-			r.Recorder.Eventf(srv, corev1.EventTypeWarning, ReasonNamespaceNotBootstrapped,
-				"cannot bootstrap namespace %s: %v", srv.Namespace, err)
+			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, ReasonNamespaceNotBootstrapped, actionCreatePod, "%s",
+				eventNote("cannot bootstrap namespace %s: %v", srv.Namespace, err))
 			setAccepted(srv, false, ReasonNamespaceNotBootstrapped,
 				fmt.Sprintf("namespace %q does not hold the CA bundle and the agent ServiceAccount yet (%v); "+
 					"no pod is created until it does", srv.Namespace, err))
@@ -318,7 +340,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err := r.Create(ctx, built); err != nil && !apierrors.IsAlreadyExists(err) {
 			return ctrl.Result{}, err
 		}
-		r.Recorder.Eventf(srv, corev1.EventTypeNormal, "PodCreated", "created pod %s", built.Name)
+		r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, "PodCreated", actionCreatePod,
+			"created pod %s", built.Name)
 
 		srv.Status.PodName = built.Name
 		now := metav1.NewTime(r.Clock())
@@ -760,7 +783,7 @@ func (r *ServerReconciler) applyDecision(
 
 	if d.CountReadinessLoss {
 		srv.Status.ReadinessLosses++
-		r.Recorder.Eventf(srv, corev1.EventTypeWarning, phase.ReasonReadinessLost,
+		r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, phase.ReasonReadinessLost, actionSyncStatus,
 			"%s (loss %d of %d)", d.Message, srv.Status.ReadinessLosses, phase.MaxReadinessLosses)
 	}
 	if d.ResetReadinessLosses {
@@ -770,7 +793,7 @@ func (r *ServerReconciler) applyDecision(
 	// Phase bookkeeping. These timestamps are what the time-driven inputs are
 	// derived from, so they have to survive an operator restart.
 	if d.Next != current {
-		r.Recorder.Eventf(srv, corev1.EventTypeNormal, d.Reason,
+		r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, d.Reason, actionSyncStatus,
 			"phase %s -> %s: %s", current, d.Next, d.Message)
 	}
 	switch d.Next {
@@ -829,7 +852,7 @@ func (r *ServerReconciler) applyDecision(
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}
-		r.Recorder.Eventf(srv, corev1.EventTypeNormal, "PodDeleted",
+		r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, "PodDeleted", actionDeletePod,
 			"deleted pod %s: %s", pod.Name, d.Message)
 	}
 
@@ -855,7 +878,7 @@ func (r *ServerReconciler) mirrorPlayerCount(
 	}
 	significant := snap.Players != srv.Status.Players || snap.Slots != srv.Status.Slots
 	overdue := srv.Status.PlayersUpdatedAt == nil ||
-		now.Time.Sub(srv.Status.PlayersUpdatedAt.Time) >= r.PlayerStatusInterval
+		now.Sub(srv.Status.PlayersUpdatedAt.Time) >= r.PlayerStatusInterval
 	if !significant && !overdue {
 		return
 	}

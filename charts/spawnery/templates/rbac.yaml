@@ -19,13 +19,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
-  verbs:
-  - create
-  - patch
-- apiGroups:
-  - ""
-  resources:
   - nodes
   verbs:
   - get
@@ -78,6 +71,13 @@ rules:
   - tokenreviews
   verbs:
   - create
+- apiGroups:
+  - events.k8s.io
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - networking.k8s.io
   resources:
@@ -138,6 +138,13 @@ metadata:
   name: spawnery-operator
   namespace: {{ .Release.Namespace }}
 rules:
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
 - apiGroups:
   - ""
   resources:

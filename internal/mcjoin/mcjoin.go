@@ -273,7 +273,7 @@ func JoinAndHold(ctx context.Context, host string, port int, username string, ho
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := c.SetDeadline(deadline); err != nil {
@@ -609,7 +609,7 @@ func (c *framedConn) readPacket() (int32, []byte, error) {
 		if err != nil {
 			return 0, nil, fmt.Errorf("inflate: %w", err)
 		}
-		defer zr.Close()
+		defer func() { _ = zr.Close() }()
 		// dataLen is what the server says the packet inflates to, so it is
 		// both the allocation and the bound: reading one byte more than that
 		// means the stream disagrees with its own header.
