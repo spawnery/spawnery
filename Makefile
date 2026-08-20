@@ -40,10 +40,20 @@ proto:
 .PHONY: fmt
 fmt:
 	go fmt ./...
+# The e2e package a second time, by hand: its //go:build e2e constraint keeps
+# it out of ./..., so `go fmt ./...` above never sees it. gofmt takes files
+# rather than packages and does not consult build constraints, so naming the
+# directory is enough.
+	gofmt -l -w ./test/e2e
 
 .PHONY: vet
 vet:
 	go vet ./...
+# And the same package with its tag, for the same reason. `make lint` is the
+# one of the three that actually fails a build on what it finds; this and the
+# gofmt above only rewrite or report, so treat .golangci.yml's build-tags as
+# the enforcing half.
+	go vet -tags e2e ./test/...
 
 .PHONY: test
 # -race unconditionally, rather than behind a second target. Milestone 6b added

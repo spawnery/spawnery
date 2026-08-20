@@ -17,6 +17,22 @@
 # different sample.
 version: "2"
 
+run:
+  # Without this, the entire test/e2e package is invisible to this linter.
+  # Its files carry a //go:build e2e constraint, so `./...` does not resolve
+  # them -- `go list ./test/e2e/` answers "build constraints exclude all Go
+  # files" -- and the same is true of `go fmt ./...` and `go vet ./...`, which
+  # the Makefile's test target depends on. Measured on 2026-08-20: the package
+  # was unchecked by all three, and one of its seven files had been
+  # unformatted for long enough that nobody could say since when.
+  #
+  # Turning it on costs nothing: with the tag, errcheck and staticcheck report
+  # 0 issues across test/e2e. It was never broken, only unobserved -- which is
+  # this repository's own definition of a check that is indistinguishable from
+  # an absent one.
+  build-tags:
+    - e2e
+
 linters:
   # Named rather than inherited, so that a toolchain bump cannot silently
   # change what "green" means here. These two are what the tree was already
