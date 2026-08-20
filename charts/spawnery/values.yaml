@@ -1,11 +1,28 @@
 image:
   repository: ghcr.io/spawnery/spawnery-operator
-  # A tag until hack/publish.sh has run once against a real registry, then the
-  # digest it writes below. The master design's section 8 asks for digests in
-  # shipped manifests because a tag can move under a running cluster.
-  tag: "0.1.0"
-  # Set, this wins over tag and the image is referenced by digest.
-  digest: "sha256:e5eb7626cdf2b7ac186e844aad418fd388c5c3d6ab225d09a37c041b5b4414ca"
+  # The tag, and it stays the tag here. The master design's section 8 asks for
+  # digests in shipped manifests because a tag can move under a running
+  # cluster -- but a digest cannot live in this file usefully, and the RKE2
+  # rollout is what established that: hack/publish.sh takes it from
+  # `skopeo copy --digestfile`, so it does not exist until after the tag is
+  # published, and the commit writing it back is necessarily behind the tag it
+  # describes. A chart installed at vX therefore renders whatever digest vX-1
+  # produced, which is worse than rendering the tag.
+  #
+  # Keeping it empty also re-arms a check the digest had quietly disarmed:
+  # internal/rbacaudit's TestTheOperatorImageIsNotAMutableTag returns early
+  # when a digest is set, so with one here nothing compared this tag against
+  # flake.nix's operatorVersion. Measured on 2026-08-20 -- with digest empty
+  # and this line left at 0.1.0 against an operatorVersion of 0.1.1, that test
+  # fails and names both.
+  #
+  # A deployment that wants an immutable reference pins it where the
+  # deployment is described. See docs/known-issues.md, "From the RKE2
+  # rollout".
+  tag: "0.1.1"
+  # Set, this wins over tag and the image is referenced by digest. Left empty
+  # deliberately; see above.
+  digest: ""
   pullPolicy: IfNotPresent
 
 resources:
