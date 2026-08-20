@@ -79,27 +79,43 @@ These catch the two mistakes anyone actually makes — a URL pasted in, and a
 value copied with whitespace — at admission rather than at the first player.
 Nothing more is checked: see §4.
 
-## 3. The controller, and the trap that closes with it
+## 3. The controller
 
-Two functions switch on `Expose.Type`, and in both the `default:` arm **means
-NodePort**:
+**Corrected after reading the code this section is about.** An earlier draft
+claimed a fourth enum value would be silently treated as a NodePort, and that
+making the two switches exhaustive was the safety fix. That is wrong, and
+milestone 6c is why: `Reconcile` already gates on `exposeImplemented`
+(`proxygroup_controller.go:229`), whose comment states the case exactly —
 
-- `ProxyGroupReconciler.reconcileService` — the `default:` at
-  `proxygroup_controller.go:1296` sets `Type: NodePort` and reads
-  `Expose.NodePort.Port`;
-- `proxyAddress` — the `default:` at `proxygroup_controller.go:1739`
-  publishes `hostIP:NodePort.Port`.
+> the branch below is reachable only if a fourth value is added to the enum
+> without a branch to serve it. A refusal on the object is a message a user can
+> read; the alternative is a nil dereference on a sub-block that was never
+> validated.
 
-A fourth enum value added without touching them would be silently treated as a
-NodePort: a Service nobody asked for, on a port nobody covered, advertised at
-an address nobody dials. **Both switches therefore become exhaustive**, with an
-explicit `case` per strategy and a `default:` that returns an error naming the
-unknown type.
+— and `TestExposeImplementedCoversTheEnumAndNothingElse` enumerates the known
+values, so **growing the enum makes an existing test fail**. The guard has
+teeth and they are already sharp. The claim to have found an open trap was made
+without checking, and the check took one `grep`.
 
-That is worth more than this one strategy. It is what makes the *next* one
-impossible to add wrongly, and it is the same class of defect this project has
-now shipped and repaired three times: a guard whose fallthrough silently means
-something.
+What is actually true, and still worth doing:
+
+**`exposeImplemented` must learn `ClusterIP`**, and so must the known-values
+list in its test. Until both, a `ClusterIP` group is refused with
+`ExposeNotImplemented` — correctly, and visibly.
+
+**Once it is admitted, it reaches two switches whose `default:` arm means
+NodePort.** In `reconcileService` (`proxygroup_controller.go:1296`) that arm
+reads `group.Spec.Expose.NodePort.Port`, which for a `ClusterIP` group is
+`nil` — the nil dereference the guard's comment names. So the two `case` arms
+are not optional tidiness; without them the strategy panics.
+
+**The `default:` arms become errors anyway.** With `exposeImplemented` in front
+they are unreachable, which is precisely why they should say so: a `default:`
+that silently means NodePort is a landmine for whoever adds the fifth strategy
+and updates one guard but not the other. Converting it to an error named after
+the unknown type turns a disagreement between the two guards into a message
+instead of a panic. This is a second line of defence and the spec calls it
+that; it is not the reason this work is being done.
 
 **The `ClusterIP` arm of `reconcileService`:**
 
@@ -164,11 +180,23 @@ reasoned about:
 
 ## 6. How it is proven
 
-**The exhaustiveness test is the important one, and it fails today.** An
-`ExposeType` the code does not know must produce an error, not a NodePort
-Service. Written against the current code it goes green for the wrong reason,
-so the plan mutates `default:` back to meaning NodePort and requires the test to
-fail; a test that survives that mutation is testing nothing.
+**The test that matters most already exists and will fail on the first
+commit.** `TestExposeImplementedCoversTheEnumAndNothingElse` lists the known
+strategies; adding `ClusterIP` to the enum without adding it there turns that
+test red. That is the guard working, and the plan treats its failure as the
+signal to proceed rather than as a break to fix quietly.
+
+**The nil dereference is the one to prove.** A `ClusterIP` group admitted by
+`exposeImplemented` but reaching a `default:` arm that reads
+`Expose.NodePort.Port` panics. The plan writes that test before the `case`
+arms exist and requires it to fail with a nil-pointer panic, so the arms are
+demonstrably what fixes it rather than something added alongside a test that
+was green all along.
+
+**And the erroring `default:` is proven by mutation**, since nothing can reach
+it once both guards agree: the plan makes `exposeImplemented` return `true` for
+an invented type and requires the reconcile to surface a named error rather
+than a panic or a NodePort Service.
 
 **Against a real API server**, because CEL runs at admission and envtest is
 where this project checks admission:
@@ -194,9 +222,9 @@ and whose `status.address` equals the configured value.
    `ClusterIP` with no node port and no external traffic policy.
 2. `status.address` carries the configured address once a proxy pod is ready,
    and is empty before.
-3. Both switches are exhaustive: an unknown `ExposeType` produces an error
-   naming it, and the test proving so fails when `default:` is mutated back to
-   meaning NodePort.
+3. `exposeImplemented` and its test both know `ClusterIP`; both switches carry
+   an explicit `case` for it; and their `default:` arms return an error naming
+   the unknown type, proven by making `exposeImplemented` admit an invented one.
 4. The five admission cases of §6 behave as listed against a real API server.
 5. Each of the three transitions in §5 is asserted against the object read back.
 6. The E2E carries a `ClusterIP` group and asserts the Service's shape and the
