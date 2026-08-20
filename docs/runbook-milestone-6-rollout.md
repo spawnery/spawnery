@@ -1025,12 +1025,49 @@ channel, and that channel authenticates the pod's projected token with a
 `TokenReview` (`podspec.AgentTokenAudience`). A failed review means no `Hello`,
 no slots, and a group that never leaves `Pending`. So the review succeeded.
 
-**That is an inference, not a measurement, and it is the same inference §6
-called reasoning.** What is new is only that a real agent now exists to reason
-about: the client metrics carry no per-resource label, and nothing in the
-operator's log names a `TokenReview`. A direct measurement would need either
-API-server audit logs or a deliberate revocation, and the second belongs to
-scenario 8's method rather than this one.
+That much is an inference. **The measurement is in the operator's own
+instrumentation**, which turned out to carry exactly the right counter:
+`spawnery_agent_token_review_cache_misses_total`, documented in
+`internal/grpcauth/metrics.go` as "Token checks that required a TokenReview".
+
+The client metrics could never have answered this — they label by HTTP verb and
+host, not by resource. Neither could the API server's own
+`apiserver_request_total{resource="tokenreviews"}`, which stood at 38 607 on
+this cluster: it counts every TokenReview from every client, kubelets included,
+so a single agent is invisible in it. The operator's counter is attributable by
+construction.
+
+```
+$ ... /metrics | grep '^spawnery_agent'          # before
+spawnery_agent_open_streams{role="proxy"}                 2
+spawnery_agent_open_streams{role="server"}                1
+spawnery_agent_token_review_cache_hits_total              0
+spawnery_agent_token_review_cache_misses_total            7
+
+$ kubectl -n minecraft delete pod lobby-uby6              # force one fresh agent
+$ ... /metrics | grep '^spawnery_agent'          # after
+spawnery_agent_open_streams{role="proxy"}                 2
+spawnery_agent_open_streams{role="server"}                1
+spawnery_agent_token_review_cache_hits_total              0
+spawnery_agent_token_review_cache_misses_total            8
+```
+
+**Exactly one more, for exactly one new agent stream.** `tokenreviews: create`
+is exercised, and §6's "reasoned, not measured" no longer applies. The baseline
+of 7 is itself a result: one per stream established since the operator started,
+across every pod roll this run produced.
+
+`hits 0, misses 8` says something else worth keeping: the review cache never
+served a hit here. Each stream arrives with its own token, so nothing repeats
+within a token's lifetime in a run this short — the cache is built for a
+different traffic shape than a rollout produces.
+
+*(An earlier attempt at this went the other way — revoking
+`authentication.k8s.io/tokenreviews: create` from the ClusterRole to watch the
+failure, the same method scenario 8 uses. It was refused by this environment's
+guard on RBAC edits, which is a fair objection to make automatically; the
+counter above is the better measurement anyway, because it needs no outage to
+produce.)*
 
 ### `persistentvolumeclaims: patch` — measured, and it was absent before
 
@@ -1356,10 +1393,8 @@ And two claims in the design were wrong:
 ## What this run did not establish
 
 Beyond §1's standing limits — one cluster, one CNI, one distribution, nothing
-about scale — two things, and neither is the network path:
+about scale — one thing, and it is not the network path:
 
-- **`tokenreviews: create` is still an inference.** A `Ready` group means the
-  agent authenticated; nothing measures the review itself.
 - **`status.address` is wrong in this topology**, reporting the unused NodePort
   rather than the ingress players connect to — the missing expose strategy,
   recorded in `docs/known-issues.md`.
