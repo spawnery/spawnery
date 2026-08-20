@@ -26,7 +26,7 @@ jobs:
     # and start a real API server. Twenty-five minutes is about 4.7x what this
     # job has actually taken on a runner -- 5m19s on run 32334756738, the last
     # driven CI run of the milestone that added this file. It is deliberately
-    # not sized against the local number instead (Makefile:53 records the race
+    # not sized against the local number instead (Makefile:58 records the race
     # suite at 89.8-109.2s): a timeout's job is to stop a wedged run, and the
     # machine it has to be generous to is the runner, whose cold Nix store and
     # shared CPU already put it at 3x local before anything goes wrong.

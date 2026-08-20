@@ -3745,13 +3745,29 @@ now stand in for what the fake cannot see, in
 `internal/controller/events_test.go`:
 `TestTheRealAPIServerRefusesAnEventWithNoAction` measures the premise
 against envtest's real API server, and
-`TestEveryEventfCallSitePassesAKnownAction` parses this package's own
+`TestEveryEventfCallSitePassesAKnownAction` walks this package's own
 non-test sources and requires the fifth argument of every `Eventf` call to
-be one of `events.go`'s action constants. The second is a source-level
-check and says nothing about whether the constant chosen is the *right* one
-for that call site — `actionSyncStatus` where `actionCreatePod` was meant
-would pass it. Nothing observes the action end to end, and nothing will
-until a test reads `Event.Action` back off a real API server for an event a
+be one of `events.go`'s action constants.
+
+The second is a source-level check, and two of its three assertions exist
+because the obvious one alone was weaker than it looked — both found by the
+re-review of the fix that added it. It matches the action argument by
+*identifier name* and resolves no types, so `actionCreatePod := ""`
+declared above a call site passed; it now also requires that no local
+anywhere in the package shadows one of the nine constant names, which is
+what makes matching by name mean anything (a package-level redeclaration is
+a compile error, so the two together pin the identifier to the constant
+without a type checker). And it logged the number of call sites rather than
+asserting it, so deleting a call site outright left it green at 22, and a
+controller moved into a subpackage would have dropped out of a
+non-recursive scan the same way; the walk is recursive now and the count is
+asserted against `wantEventfSites`.
+
+What the check still cannot say — stated in its own comment as well — is
+whether the constant a call site chose is the *right* one for that call
+site. `actionSyncStatus` where `actionCreatePod` was meant passes every
+assertion. Nothing observes the action end to end, and nothing will until a
+test reads `Event.Action` back off a real API server for an event a
 controller actually emitted.
 
 **The rootless-podman path is now unexercised by anything automatic.**
@@ -3809,7 +3825,15 @@ stopped on Paper's existing tag and never published the operator. The
 workflow now invokes the script once per image and the script's refusal
 carries exit status 3, distinct from 1, so "already there" is separable
 from "I could not tell" without a second copy of the guard in YAML. Neither
-fix has run either. What is verified about the first tag is only what the
+fix has run either. A third defect in the same file was found by the
+re-review of that fix and closed the same way: with the loop above, a
+re-run of a tag that already published finds all three tags present, and
+the "this tag releases nothing" guard would have failed the job before it
+reached the digest and Release steps — which are exactly what a re-run
+after a transient failure there is for, and whose remedy text ("bump and
+tag again") would have been actively wrong. The guard now exempts
+`github.run_attempt > 1`, keeping its teeth on the attempt where a tag
+pushed without a version bump is actually possible. What is verified about the first tag is only what the
 review could check from outside: authenticated, GHCR answers `manifest
 unknown` for a repository that does not exist, so the guard proceeds rather
 than falsely aborting; and `gh api /orgs/spawnery/packages?package_type=container`
