@@ -923,6 +923,89 @@ player is online. 4c-3's budget does what it was written to do.
 When the player disconnected, everything unwound: both labels removed, both
 budgets back to `minAvailable 0`, `PLAYERS 0`, `FREE SLOTS 100`.
 
+### The node drain, driven after all
+
+`server02` was chosen on measured grounds: 59 pods against 69 on `server03`,
+no Vault, no single Redis master, and every CloudNativePG cluster on it had a
+peer elsewhere. It also carried `lobby-3dxq`, the server holding the session,
+which is what made it the interesting node rather than merely the cheap one.
+
+**Longhorn stopped the drain, not spawnery.** `kubectl drain` spent its whole
+three-minute budget on one pod:
+
+```
+evicting pod longhorn-system/instance-manager-fb190bac93ef061ba413fa83bda61e8f
+error when evicting ... : Cannot evict pod as it would violate the pod's disruption budget.
+   (× 10, every 5s, until) global timeout reached: 3m0s
+```
+
+Longhorn protects its instance manager while volume replicas are attached to
+the node. A node carrying attached Longhorn volumes does not drain without
+moving those replicas first — a property of this cluster, unrelated to
+spawnery, and the reason a plain `kubectl drain` cannot be the whole story
+here.
+
+**But the spawnery path ran, and it is milestone 4c-1's, for the first time in
+a real cluster.** The operator watches for a node going away rather than
+waiting to be evicted:
+
+```
+NodeDraining       servergroup/lobby   draining server lobby-3dxq off a node that is going away
+DeletionRequested  server/lobby-3dxq   phase Ready -> Draining: deletion requested, moving players off
+DrainTimeout       server/lobby-3dxq   phase Draining -> Terminating: drain deadline reached with players online
+PodDeleted         server/lobby-3dxq   deleted pod lobby-3dxq: drain deadline reached with players online
+```
+
+64 seconds separate `DeletionRequested` from `DrainTimeout`, against the
+`drain.timeoutSeconds: 60` this network is configured with. The deadline
+expired **with a player still online**, which is the branch that only a real
+session can reach, and the operator then deleted the pod itself.
+
+That is not the budget being bypassed. `handover-milestone-6.md` §2 states the
+rule the code implements: a node drain answers to none of the three limits,
+because the node is leaving with or without the group's consent. The
+PodDisruptionBudget refuses the *eviction API* — measured above — and the
+operator's own drain path deliberately outranks it. Both were exercised here,
+on the same pod, minutes apart.
+
+**And the network healed.** Velocity's log, from the player's side:
+
+```
+[17:01:41] [connected player] paul_wtf (/46.95.187.239:42290) has disconnected:
+             You were kicked from lobby-3dxq: Server closed
+[17:01:47] [connected player] paul_wtf (/46.95.187.239:40714) has connected
+[17:01:47] [server connection] paul_wtf -> lobby-uby6 has connected
+```
+
+Six seconds between being kicked off a draining server and being routed to its
+replacement on another node.
+
+### What the drain cost, recorded because it was not free
+
+Two things went wrong for the cluster's owner, and neither was spawnery's:
+
+**Seven CloudNativePG pods went `Pending`** — `authentik-cluster-6`,
+`davinci-resolve-cluster-1`, `linkhop-cluster-1`, `mailu-cluster-1`,
+`grafana-cluster-6`, `tidalwave-cluster-1`, `vaultwarden-cluster-6`. A
+three-node cluster with one node cordoned cannot satisfy their spread rules.
+All of them scheduled within a minute of `kubectl uncordon server02`.
+
+**The owner's homepage went down and stayed down**, which the uncordon did not
+fix. Its manifest names `ghcr.io/spotifynutzeer/homepage:v0.1.10`; the
+organisation has since been renamed to `paul-wtf`, and GHCR does not redirect a
+renamed package — an anonymous pull answers `403 Forbidden`, while the same tag
+under `ghcr.io/paul-wtf/homepage` returns its digest. The pod had been running
+on `server02` the whole time, served by that node's image cache, so nothing had
+needed to pull it since the rename. Moving it to another node was the first
+event that did.
+
+This is worth recording beyond the apology it deserves: **a node drain is also
+a test of whether every image on that node can still be fetched**, and nothing
+in the pre-drain survey looked for that. The survey counted pods, found the
+single points of failure among databases and Vault, and never asked which
+images were still pullable. Fixed with an `images:` override in the Flux
+Kustomization that already patches that foreign manifest for other reasons.
+
 
 ## Scenario 7 — the three RBAC gaps
 
@@ -1234,7 +1317,7 @@ Against the design's §9, one line each, naming the scenario that decided it.
 | 3 | `minecraft` enforces `restricted` and the lobby reaches `Ready` | **met** — scenario 2 |
 | 4 | The `ProxyGroup` reports an address and a client reaches a lobby through it | **met** — scenarios 3 and 4, after the network moved behind Traefik. With a caveat worth naming: the address players use is `mc.paul.wtf:25565` on the ingress, while `status.address` reports the unused NodePort |
 | 5 | A `HostPort` `ProxyGroup` gets a running pod on this CNI | **met** — scenario 5 |
-| 6 | A node drain evicts a proxy under the budget without going below it | **met in substance** — scenario 6: the node drain was declined on measured grounds, but the eviction API was driven directly, allowed at `desiredHealthy 0` and refused with `TooManyRequests` once a real player was online |
+| 6 | A node drain evicts a proxy under the budget without going below it | **met** — scenario 6, in both of its mechanisms: the eviction API refused an occupied pod with `TooManyRequests`, and a real `kubectl drain` drove 4c-1's node-drain path, whose deadline expired with a player online and which then deleted the pod itself, as designed |
 | 7 | Scenarios 7, 8 and 9 each produce a recorded result | **met** — including two results that are "no effect observed", which §6 expected |
 | 8 | The runbook is `DRIVEN` and carries real output | **met** |
 
@@ -1281,6 +1364,8 @@ about scale — two things, and neither is the network path:
   rather than the ingress players connect to — the missing expose strategy,
   recorded in `docs/known-issues.md`.
 
-The node drain proper was declined rather than failed, and scenario 6 says on
-what measured grounds; the eviction path it would have exercised was driven
-directly instead, in both directions.
+The node drain was driven, but `kubectl drain` never completed: Longhorn's
+instance-manager budget holds a node with attached volume replicas, and moving
+those replicas first was outside this run's scope. What that leaves unmeasured
+is the *end* of a drain — a node emptied and returned to service — not any
+spawnery path, all of which ran.
