@@ -780,39 +780,30 @@ already.
 
 - [ ] **Step 1: Write the three tests**
 
+**Corrected after Task 2's fix round.** Task 2 already produced a test over the
+`NodePort` → `ClusterIP` transition —
+`TestTheAPIServerClearsExternalTrafficPolicyOnTheMoveToClusterIP` — after a
+review finding about `ExternalTrafficPolicy` turned out not to reproduce: the
+API server normalises the field away on the type change, which the test now
+holds it to. **Do not write a second test over the same transition.** Extend
+that one with the node-port assertion instead, so one place answers "what does
+the API server do when this group changes strategy":
+
 ```go
-// NodePort -> ClusterIP has to release the allocated node port. The API
-// server clears it on a type change, which is what the documentation says;
-// this asserts it against the stored object rather than believing it.
-func TestSwitchingFromNodePortToClusterIPReleasesTheNodePort(t *testing.T) {
-	f := newFixture(t)
-	r := proxyGroupReconciler(f)
-	group := f.createProxyGroup("gateway")
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
-		t.Fatalf("first reconcile: %v", err)
-	}
-
-	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
-		Type:      spawneryv1alpha1.ExposeClusterIP,
-		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
-	}
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
-		t.Fatalf("second reconcile: %v", err)
-	}
-
-	var stored corev1.Service
-	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: group.Name}, &stored); err != nil {
-		t.Fatalf("reading the Service back: %v", err)
-	}
-	if stored.Spec.Type != corev1.ServiceTypeClusterIP {
-		t.Errorf("type = %s, want ClusterIP", stored.Spec.Type)
-	}
+	// ... after the existing type and ExternalTrafficPolicy assertions:
 	if got := stored.Spec.Ports[0].NodePort; got != 0 {
 		t.Errorf("nodePort = %d, want 0: it was allocated under the previous strategy "+
-			"and nothing dials it now", got)
+			"and nothing dials it now. Like the traffic policy above, this is the API "+
+			"server's normalisation on a type change and not something reconcileService "+
+			"does -- if it ever fails, the fix is to clear the field explicitly in the "+
+			"ClusterIP arm", got)
 	}
-}
+```
 
+Widen its doc comment to say it now covers both fields, and rename it if the
+name no longer reads true for what it asserts.
+
+```go
 // LoadBalancer -> ClusterIP releases exactly the annotations the operator set
 // and leaves every foreign key alone. Milestone 6c built that mechanism;
 // this is the first strategy to leave LoadBalancer for something other than
