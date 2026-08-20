@@ -68,16 +68,63 @@ jobs:
       # tag that names neither, which is a tag nobody meant to push. The table
       # is printed either way, so the run's log says what v0.1.1 actually
       # released without anyone opening flake.nix.
+      #
+      # It reads .#agents.version and .#spawnery-operator.version, and not the
+      # imageTag attributes it read until v0.1.0. Those are composed: paper's
+      # is "${paper.paperVersion}-${imageVersion}" (nix/paper-image.nix:36),
+      # so the value this compared against was 26.2-0.2.0 and never 0.2.0. The
+      # accident is that operatorVersion reaches operator-image.nix's tag
+      # bare, so v0.1.0 -- the one tag this project has -- matched and the
+      # guard passed. The first release that bumped only imageVersion would
+      # have had no valid tag at all: v0.3.0 refused, and only the unusable
+      # v26.2-0.3.0 accepted. nix/agents.nix:31 sets version = imageVersion
+      # and flake.nix:202 sets version = operatorVersion, so these two
+      # attributes are the versions themselves rather than a string built out
+      # of them.
       - name: The tag, against the versions in flake.nix
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
-          agent="$(nix eval --raw .#paper-image.imageTag)"
-          operator="$(nix eval --raw .#operator-image.imageTag)"
+          agent="$(nix eval --raw .#agents.version)"
+          operator="$(nix eval --raw .#spawnery-operator.version)"
           tag="${GITHUB_REF_NAME#v}"
-          echo "tag                      ${GITHUB_REF_NAME} (${tag})"
-          echo "flake.nix imageVersion   ${agent}    (paper, velocity)"
+          echo "tag                       ${GITHUB_REF_NAME} (${tag})"
+          echo "flake.nix imageVersion    ${agent}   (paper, velocity)"
           echo "flake.nix operatorVersion ${operator}   (operator)"
+          echo "what this tag publishes:"
+          paper_tag="$(nix eval --raw .#paper-image.imageTag)"
+          velocity_tag="$(nix eval --raw .#velocity-image.imageTag)"
+          operator_tag="$(nix eval --raw .#operator-image.imageTag)"
+          echo "  paper     ${paper_tag}"
+          echo "  velocity  ${velocity_tag}"
+          echo "  operator  ${operator_tag}"
+          # And check that the versions above are still the versions those tags
+          # carry. Reading a version from one attribute and publishing a tag
+          # built in another is precisely how the old shape of this step came
+          # to compare the wrong string for two milestones without anybody
+          # noticing: nothing ever asserted the relationship, so the guard
+          # measured a number that had quietly stopped being the one it named.
+          for pair in "paper:${paper_tag}" "velocity:${velocity_tag}"; do
+            case "${pair#*:}" in
+              *-"${agent}") ;;
+              *)
+                echo >&2
+                echo "the ${pair%%:*} image is tagged ${pair#*:}, which does not end in the" >&2
+                echo "imageVersion this step read (${agent}). The tag and the version have" >&2
+                echo "come apart, so the check below would compare ${GITHUB_REF_NAME} against a" >&2
+                echo "number no image carries. Fix nix/agents.nix or nix/${pair%%:*}-image.nix." >&2
+                exit 1
+                ;;
+            esac
+          done
+          if [ "$operator_tag" != "$operator" ]; then
+            echo >&2
+            echo "the operator image is tagged ${operator_tag}, not the operatorVersion this" >&2
+            echo "step read (${operator}). nix/operator-image.nix used to take the tag from" >&2
+            echo "operatorVersion unchanged; if that is no longer true, this guard is" >&2
+            echo "comparing ${GITHUB_REF_NAME} against a number no image carries." >&2
+            exit 1
+          fi
           if [ "$tag" != "$agent" ] && [ "$tag" != "$operator" ]; then
             echo >&2
             echo "${GITHUB_REF_NAME} names a version no image in flake.nix carries. A tag that" >&2
