@@ -129,6 +129,24 @@ the unknown type turns a disagreement between the two guards into a message
 instead of a panic. This is a second line of defence and the spec calls it
 that; it is not the reason this work is being done.
 
+**Corrected after the milestone's final review: only one of the two became an
+error.** `reconcileService`'s `default:` returns
+`fmt.Errorf("expose.type %s reached reconcileService without a branch", ...)`,
+as written above. `proxyAddress`'s returns `""`. The paragraph above assumed
+the two arms were symmetric, and they cannot be: `proxyAddress` returns a
+bare `string` and has no error to return, no `ctx` to log against and no
+object to condition — it is called while the status is being assembled, from
+a caller that has already committed to writing one. Giving it an error return
+to serve an unreachable arm would change the signature of a pure function,
+and every one of its callers, for a branch the CRD's enum forbids reaching.
+Empty is also the same answer that arm gives for every reachable
+"nothing to publish yet" case, so it is not a silent wrong answer: a group
+whose type somehow escaped both guards reports no address, which is exactly
+what "there is nowhere to connect" means. The named error still exists at the
+one place that can carry it, which is where the fifth-strategy author is
+sent. Argued at the time in commit `bca02bd`; recorded here because the
+design never was.
+
 **The `ClusterIP` arm of `reconcileService`:**
 
 - `svc.Spec.Type = corev1.ServiceTypeClusterIP`;
@@ -211,6 +229,10 @@ it once both guards agree: the plan makes `exposeImplemented` return `true` for
 an invented type and requires the reconcile to surface a named error rather
 than a panic or a NodePort Service.
 
+**Corrected after the milestone's final review: this was required and not
+recorded, and has now been run.** See criterion 3 for the measured output.
+The mutation applies to `reconcileService` only, for the reason §3 now gives.
+
 **Against a real API server**, because CEL runs at admission and envtest is
 where this project checks admission:
 
@@ -229,6 +251,11 @@ out of the cluster rather than against the patch that was sent.
 `ClusterIP` group whose Service has type `ClusterIP`, no `nodePort` on its port,
 and whose `status.address` equals the configured value.
 
+**Corrected after the milestone's final review: the last clause of that
+sentence is not achievable in this E2E.** No image in the manifest resolves,
+so no proxy pod is ready and `status.address` is correctly empty. See
+criterion 6.
+
 ## 7. Acceptance criteria
 
 1. `expose.type: ClusterIP` with `clusterIP.address` produces a Service of type
@@ -238,10 +265,36 @@ and whose `status.address` equals the configured value.
 3. `exposeImplemented` and its test both know `ClusterIP`; both switches carry
    an explicit `case` for it; and their `default:` arms return an error naming
    the unknown type, proven by making `exposeImplemented` admit an invented one.
+
+   **Corrected after the milestone's final review: met, with one deviation
+   stated in §3.** Only `reconcileService`'s `default:` returns the named
+   error; `proxyAddress`'s returns `""`, because it has no way to report an
+   error. The mutation proof was run against `reconcileService` — with
+   `ExposeType("Anycast")` temporarily admitted by `exposeImplemented`, the
+   arm returned `expose.type Anycast reached reconcileService without a
+   branch`. The same run recorded why the proof cannot be driven through
+   `Reconcile`: the API server refuses the object outright — `spec.expose.type:
+   Unsupported value: "Anycast": supported values: "LoadBalancer", "NodePort",
+   "HostPort", "ClusterIP"` — which is the closed enum that makes both
+   `default:` arms unreachable in the first place.
 4. The five admission cases of §6 behave as listed against a real API server.
 5. Each of the three transitions in §5 is asserted against the object read back.
 6. The E2E carries a `ClusterIP` group and asserts the Service's shape and the
    published address.
+
+   **Corrected after the milestone's final review: met in part — the shape,
+   not the address.** The E2E asserts type `ClusterIP`, exactly one port, no
+   node port and no external traffic policy. It does not assert
+   `status.address`, and should not: no image in the E2E manifest resolves, so
+   no proxy pod ever becomes ready, and `proxyAddress`'s readiness gate
+   correctly publishes nothing. Asserting the empty string there would pin the
+   manifest's unresolvable image tag rather than the strategy, and would go
+   green for the wrong reason the day the images do resolve. The address is
+   proven where a ready pod can be manufactured: `TestProxyAddressPerStrategy`
+   in `internal/controller/expose_test.go`, which writes pod readiness itself.
+   Closing this in the E2E needs a resolvable proxy image, which is the
+   milestone-6 rollout's problem and not this strategy's. The subtest is named
+   for what it checks, since its name is what CI prints.
 7. `docs/known-issues.md`'s entry recording this gap is replaced by what the
    strategy does, and `config/samples/network.yaml` shows it as an alternative
    beside the three it already documents.
