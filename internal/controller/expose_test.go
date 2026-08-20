@@ -286,6 +286,27 @@ func TestProxyAddressPerStrategy(t *testing.T) {
 			svc:  nil,
 			want: "",
 		},
+		{
+			name: "ClusterIP publishes the configured address",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			pods: []corev1.Pod{readyPod()},
+			want: "mc.example.test",
+		},
+		{
+			// The address is a static string that needs no pod to compute, and
+			// it is still withheld until one is ready. The column means the
+			// same thing for all four strategies: you can connect here now.
+			name: "ClusterIP publishes nothing until a proxy is ready",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			pods: []corev1.Pod{notReadyPod()},
+			want: "",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			group := &spawneryv1alpha1.ProxyGroup{
@@ -402,9 +423,18 @@ func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
 }
 
 // The API server's enum makes the false branch unreachable for any object
-// that exists. The guard is here for the day a fourth value is added to the
+// that exists. The guard is here for the day a fifth value is added to the
 // enum without a branch in reconcileService: a refusal on the object is a
-// message a user can read, and a nil dereference is a crash loop.
+// message a user can read, carried on the group where a user looks, while
+// reconcileService's error reaches only the log.
+//
+// The older wording here promised a crash loop instead. That was true when
+// reconcileService's default: arm fell through to reading NodePort.Port on a
+// sub-block the CRD had never validated; this branch replaced that arm with
+// an error naming the type, so the failure mode this guard is measured
+// against is a named error, not a panic. The guard is worth keeping anyway:
+// the two are not redundant, since only this one puts the refusal somewhere
+// a user can read it.
 //
 // A pure function rather than an inline default arm because the enum is
 // closed: no ProxyGroup carrying an unknown type can be created through
@@ -414,6 +444,7 @@ func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 		spawneryv1alpha1.ExposeNodePort,
 		spawneryv1alpha1.ExposeLoadBalancer,
 		spawneryv1alpha1.ExposeHostPort,
+		spawneryv1alpha1.ExposeClusterIP,
 	} {
 		if !exposeImplemented(known) {
 			t.Errorf("%s is in the CRD's enum, so a user can create a group asking for "+
@@ -422,15 +453,28 @@ func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 	}
 	for _, unknown := range []spawneryv1alpha1.ExposeType{"", "Anycast", "nodeport"} {
 		if exposeImplemented(unknown) {
-			t.Errorf("%q is accepted as implemented; reconcileService has no branch for "+
-				"it and would dereference a nil sub-block", unknown)
+			t.Errorf("%q is accepted as implemented; reconcileService has no branch "+
+				"for it and would fail the reconcile with an error only the log "+
+				"sees, instead of refusing the group where a user would find out",
+				unknown)
 		}
 	}
 }
 
-// The three strategies end to end, through Reconcile rather than through the
+// The four strategies end to end, through Reconcile rather than through the
 // pieces, because the refusal that stood in front of two of them is what this
 // task removes.
+//
+// ClusterIP is here for a reason the other rows do not need stated. Every
+// other ClusterIP test in this file calls reconcileService or proxyAddress
+// directly, so without this row nothing drives exposeImplemented admitting
+// the type and Reconcile reaching reconcileService for it.
+//
+// What this row does not cover is the rest of that path. It never reads
+// status.address and cannot: no pod here is made ready, so proxyAddress
+// returns "" for every row, and severing its ClusterIP arm leaves all four
+// green -- measured. TestTheClusterIPAddressAppearsOnceAProxyIsReady is where
+// that half is driven, and it is red under the same severance.
 func TestReconcileAcceptsEveryStrategy(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -454,6 +498,14 @@ func TestReconcileAcceptsEveryStrategy(t *testing.T) {
 				LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{},
 			},
 			wantSvc: true, wantType: corev1.ServiceTypeLoadBalancer,
+		},
+		{
+			name: "ClusterIP",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			wantSvc: true, wantType: corev1.ServiceTypeClusterIP,
 		},
 		{
 			name: "HostPort",
@@ -1010,5 +1062,287 @@ func TestTheLoadBalancerAddressAppearsOnceAProxyIsReady(t *testing.T) {
 	}
 	if group.Status.ReadyReplicas != 1 {
 		t.Errorf("status.readyReplicas = %d, want 1", group.Status.ReadyReplicas)
+	}
+}
+
+// The configured ClusterIP address reaches status.address through Reconcile,
+// and only once a proxy is ready.
+//
+// TestReconcileAcceptsEveryStrategy's ClusterIP row drives the first half of
+// that wiring -- exposeImplemented admitting the type, Reconcile reaching
+// reconcileService for it -- and cannot drive this half: no pod in that table
+// is ever made ready, so proxyAddress returns "" for every row there and an
+// address assertion would pass just as well with the ClusterIP arm deleted.
+// Making the pod ready is what gives the assertion something to fail on, and
+// it is why this is a separate test rather than another column on the table:
+// the other three rows would each need their own readiness and their own
+// expected address, and LoadBalancer's would need an ingress written by hand.
+//
+// The mutation that has to fail, and was confirmed failing before this
+// comment was written: return "" from proxyAddress's ClusterIP arm. That is
+// the severance README.md records going unnoticed for LoadBalancer, where the
+// Service sat disconnected from the status it is read out of and the package
+// stayed green.
+func TestTheClusterIPAddressAppearsOnceAProxyIsReady(t *testing.T) {
+	const want = "mc.example.test"
+
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:      spawneryv1alpha1.ExposeClusterIP,
+			ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: want},
+		}
+	})
+	f.reconcileProxyGroup(r, "gateway")
+
+	// The gate matters more here than anywhere else: this is the one strategy
+	// that already knows its whole answer before any pod exists, so without
+	// the gate it would publish on the very first reconcile, for a group that
+	// may never serve anyone.
+	if addr := f.proxyGroup("gateway").Status.Address; addr != "" {
+		t.Fatalf("status.address = %q with no ready proxy, want empty -- a configured "+
+			"address is not evidence that anything is serving it", addr)
+	}
+
+	pods := f.proxyPods("gateway")
+	if len(pods) == 0 {
+		t.Fatal("no proxy pods to make ready")
+	}
+	f.markProxyPodReady(t, &pods[0])
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := f.proxyGroup("gateway").Status.Address; got != want {
+		t.Errorf("status.address = %q, want %q -- the configured address carried out "+
+			"through Reconcile and setStatus, not read from proxyAddress directly",
+			got, want)
+	}
+}
+
+// A ClusterIP group gets a Service the thing in front of it can route to, and
+// nothing that reaches outside the cluster on its own. The absence of a node
+// port is half the point: the strategy exists because the NodePort workaround
+// left one allocated that nobody dialled and a firewall had to cover.
+func TestClusterIPServiceShape(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:      spawneryv1alpha1.ExposeClusterIP,
+			ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+		}
+	})
+
+	svc, err := r.reconcileService(f.ctx, group)
+	if err != nil {
+		t.Fatalf("reconcileService: %v", err)
+	}
+	if svc == nil {
+		t.Fatal("no Service was created; a ClusterIP group is fronted by something that needs one to route to")
+	}
+	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("Service type = %s, want ClusterIP", svc.Spec.Type)
+	}
+	if svc.Spec.ExternalTrafficPolicy != "" {
+		t.Errorf("externalTrafficPolicy = %q, want empty: the field is meaningless on a "+
+			"ClusterIP Service and the API server rejects it", svc.Spec.ExternalTrafficPolicy)
+	}
+	if len(svc.Spec.Ports) != 1 {
+		t.Fatalf("got %d ports, want exactly one", len(svc.Spec.Ports))
+	}
+	if got := svc.Spec.Ports[0].NodePort; got != 0 {
+		t.Errorf("nodePort = %d, want 0: the strategy exists so that no node port is "+
+			"allocated for a group nobody dials on a node", got)
+	}
+	if got := svc.Spec.Ports[0].Port; got != podspec.MinecraftPort {
+		t.Errorf("port = %d, want %d", got, podspec.MinecraftPort)
+	}
+	if len(svc.Annotations) != 0 {
+		t.Errorf("annotations = %v, want none: nothing reads annotations on a ClusterIP "+
+			"Service that could change where traffic goes, and external-dns with "+
+			"--publish-internal-services would publish the ClusterIP itself", svc.Annotations)
+	}
+}
+
+// A group moving from NodePort to ClusterIP was suspected of carrying two
+// fields forward into a Service where neither belongs: externalTrafficPolicy,
+// which the API server should refuse, and the allocated node port, which
+// nothing would dial any more. Both come back cleared. The two halves are not
+// the same kind of assertion, and this comment has been wrong about the
+// difference twice, so it is worth being exact about what each one can
+// detect.
+//
+// externalTrafficPolicy is the straightforward half. It lives on svc.Spec,
+// the object CreateOrUpdate fetched before this arm ran, and the ClusterIP
+// arm never assigns it -- so a stale Local really would go out on the wire
+// unless something else stripped it. Measured against the envtest API server,
+// Kubernetes v1.36.3: the API server normalises it away on the update to a
+// type that does not support it. That half genuinely observes the API server,
+// and would go red if the normalisation stopped.
+//
+// The node port is overdetermined, and that is the whole finding. Two
+// independent mechanisms each force it to zero:
+//
+//   - reconcileService builds `port` as a fresh corev1.ServicePort literal
+//     with no NodePort set and replaces svc.Spec.Ports wholesale in every arm,
+//     so the update already carries nodePort: 0 and leaves nothing stale for
+//     anyone to normalise;
+//   - and the API server would clear it anyway, on the type change, if the
+//     operator did send one.
+//
+// Either alone is sufficient, so this assertion is insensitive to both. It
+// cannot go red unless the operator starts carrying a stale port forward AND
+// the API server stops normalising. Both earlier versions of this comment
+// picked one of the two and called it the mechanism under test; the honest
+// answer is that the assertion does not distinguish them, and no reading of
+// the source was ever going to settle which one "really" clears the field,
+// because both do.
+//
+// The experiment is what ruled out the first story -- that this half guards
+// reconcileService's own port reconstruction, so "a nonzero result means that
+// reconstruction changed". Patch the ClusterIP arm to carry the stored port
+// forward,
+//
+//	case spawneryv1alpha1.ExposeClusterIP:
+//	        svc.Spec.Type = corev1.ServiceTypeClusterIP
+//	        if len(svc.Spec.Ports) > 0 { port.NodePort = svc.Spec.Ports[0].NodePort }
+//
+// and this test still passes. Instrumented, the operator was seen sending
+// NodePort=30001 and the stored Service still read 0, so the patch was doing
+// what it looked like and the API server was undoing it. That kills the claim
+// that the operator's reconstruction is what the assertion measures -- but it
+// does not promote the API server into its place, which is the mistake the
+// version after it made.
+//
+// Neither arm sets these fields explicitly, and that stays true. This
+// repository's standing position is that a mechanism reporting nothing is
+// indistinguishable from an absent one: an explicit `ExternalTrafficPolicy =
+// ""` or `NodePort = 0` in the ClusterIP arm would be unfalsifiable, since no
+// test could fail without it, and would be decoration wearing the shape of a
+// fix.
+func TestNeitherNodePortNorTrafficPolicySurvivesTheMoveToClusterIP(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway")
+
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("reconcileService as NodePort: %v", err)
+	}
+
+	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+		Type:      spawneryv1alpha1.ExposeClusterIP,
+		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+	}
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("reconcileService as ClusterIP: %v", err)
+	}
+
+	var stored corev1.Service
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &stored); err != nil {
+		t.Fatalf("get the Service: %v", err)
+	}
+	if stored.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("Service type = %s, want ClusterIP", stored.Spec.Type)
+	}
+	if stored.Spec.ExternalTrafficPolicy != "" {
+		t.Errorf("externalTrafficPolicy = %q, want empty: the API server should have "+
+			"cleared what the NodePort Service this group used to be left behind, "+
+			"since reconcileService's ClusterIP arm never resets the field itself",
+			stored.Spec.ExternalTrafficPolicy)
+	}
+	if got := stored.Spec.Ports[0].NodePort; got != 0 {
+		t.Errorf("nodePort = %d, want 0: it was allocated under the previous strategy "+
+			"and nothing dials it now. Two mechanisms each force this to zero -- "+
+			"reconcileService rebuilding the port from a literal that names no node "+
+			"port, and the API server normalising the field away on the type change -- "+
+			"so a nonzero result means BOTH have changed, and neither alone is the "+
+			"thing to go looking at first", got)
+	}
+}
+
+// LoadBalancer -> ClusterIP releases exactly the annotations the operator set
+// and leaves every foreign key alone. Milestone 6c built that mechanism;
+// this is the first strategy to leave LoadBalancer for something other than
+// NodePort.
+func TestSwitchingFromLoadBalancerToClusterIPReleasesTheAnnotations(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type: spawneryv1alpha1.ExposeLoadBalancer,
+			LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{
+				Annotations: map[string]string{"lbipam.cilium.io/ips": "203.0.113.5"},
+			},
+		}
+	})
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	var svc corev1.Service
+	key := client.ObjectKey{Namespace: f.ns, Name: group.Name}
+	if err := f.c.Get(f.ctx, key, &svc); err != nil {
+		t.Fatalf("reading the Service back: %v", err)
+	}
+	svc.Annotations["someone.else/key"] = "left alone"
+	if err := f.c.Update(f.ctx, &svc); err != nil {
+		t.Fatalf("adding a foreign annotation: %v", err)
+	}
+
+	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+		Type:      spawneryv1alpha1.ExposeClusterIP,
+		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+	}
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	var stored corev1.Service
+	if err := f.c.Get(f.ctx, key, &stored); err != nil {
+		t.Fatalf("reading the Service back: %v", err)
+	}
+	if _, still := stored.Annotations["lbipam.cilium.io/ips"]; still {
+		t.Error("the operator's own annotation survived the move off LoadBalancer")
+	}
+	if stored.Annotations["someone.else/key"] != "left alone" {
+		t.Error("a foreign annotation was removed; the operator releases only what it set")
+	}
+}
+
+// HostPort -> ClusterIP has to create a Service where the HostPort strategy
+// deleted one.
+func TestSwitchingFromHostPortToClusterIPCreatesTheService(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeHostPort,
+			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+		}
+	})
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	key := client.ObjectKey{Namespace: f.ns, Name: group.Name}
+	var absent corev1.Service
+	if err := f.c.Get(f.ctx, key, &absent); err == nil {
+		t.Fatal("a HostPort group left a Service behind; the rest of this test proves nothing")
+	}
+
+	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+		Type:      spawneryv1alpha1.ExposeClusterIP,
+		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+	}
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	var stored corev1.Service
+	if err := f.c.Get(f.ctx, key, &stored); err != nil {
+		t.Fatalf("no Service after moving to ClusterIP: %v", err)
+	}
+	if stored.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("type = %s, want ClusterIP", stored.Spec.Type)
 	}
 }

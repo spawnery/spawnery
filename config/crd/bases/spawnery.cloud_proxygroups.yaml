@@ -127,6 +127,36 @@ spec:
               expose:
                 description: Expose makes the proxies reachable from outside the cluster.
                 properties:
+                  clusterIP:
+                    description: ClusterIP configures type ClusterIP.
+                    properties:
+                      address:
+                        description: |-
+                          Address is what a player types.
+
+                          Required, because the operator cannot learn it: it lives in an
+                          IngressRouteTCP, an HTTPRoute, a tunnel's configuration or a DNS
+                          record — objects under APIs this operator does not read and cannot
+                          know are installed. Optional would make "empty" and "forgotten" the
+                          same state, which is the gap this strategy exists to close.
+
+                          No port is required and none should usually be given: Minecraft
+                          clients default to 25565, so "mc.paul.wtf" is the whole of what a
+                          player types. Give "host:port" only when the entry point really is on
+                          another port.
+
+                          Nothing checks that it resolves, that anything listens, or that it
+                          leads to this group's Service. It is a sign on a door, not a test of
+                          the door.
+                        minLength: 1
+                        type: string
+                    required:
+                    - address
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'expose.clusterIP.address is what a player types, not
+                        a URL: no scheme and no spaces'
+                      rule: '!self.address.contains('' '') && !self.address.contains(''://'')'
                   hostPort:
                     description: HostPort configures type HostPort.
                     properties:
@@ -175,6 +205,7 @@ spec:
                     - LoadBalancer
                     - NodePort
                     - HostPort
+                    - ClusterIP
                     type: string
                 required:
                 - type
@@ -190,6 +221,10 @@ spec:
                   rule: self.type == 'NodePort' || !has(self.nodePort)
                 - message: expose.hostPort is only allowed for type HostPort
                   rule: self.type == 'HostPort' || !has(self.hostPort)
+                - message: expose.clusterIP is required for type ClusterIP
+                  rule: self.type != 'ClusterIP' || has(self.clusterIP)
+                - message: expose.clusterIP is only allowed for type ClusterIP
+                  rule: self.type == 'ClusterIP' || !has(self.clusterIP)
               image:
                 description: Image is the Velocity base image. A digest reference
                   is recommended.

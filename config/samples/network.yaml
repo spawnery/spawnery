@@ -88,6 +88,15 @@ spec:
     # type: HostPort
     # hostPort:
     #   port: 25565
+    #
+    # Alternative: ClusterIP, for a network something else publishes -- an
+    # ingress controller with a TCP entry point, a gateway, a tunnel. The
+    # operator creates the Service that thing routes to and nothing else, and
+    # address is what a player types. It is not checked: nothing here knows
+    # whether the name resolves or leads anywhere.
+    # type: ClusterIP
+    # clusterIP:
+    #   address: mc.example.com
   routing:
     fallbackGroups:
       - lobby

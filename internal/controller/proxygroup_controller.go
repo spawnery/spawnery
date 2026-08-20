@@ -222,10 +222,14 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// The strategies differ in reconcileService and proxyAddress and nowhere
 	// else. This guard is not about any of them: the CRD's enum is closed, so
 	// no object carrying an unrecognised type can be created, and the branch
-	// below is reachable only if a fourth value is added to the enum without
+	// below is reachable only if a fifth value is added to the enum without
 	// a branch to serve it. A refusal on the object is a message a user can
-	// read; the alternative is a nil dereference on a sub-block that was
-	// never validated.
+	// read; the alternative is now reconcileService's named error, which
+	// fails the reconcile into the log where nobody looking at the group
+	// would find it. (Before this operator gained a ClusterIP branch that
+	// alternative was a nil dereference on an unvalidated sub-block. It is
+	// not any more, and this guard's value is the reporting, not the crash
+	// it used to prevent.)
 	if !exposeImplemented(group.Spec.Expose.Type) {
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonExposeNotImplemented,
 			fmt.Sprintf("expose.type %s is not implemented by this operator",
@@ -1293,8 +1297,14 @@ func (r *ProxyGroupReconciler) reconcileService(
 			// allocated by the API server, and naming one here would add a
 			// second way for two groups in different namespaces to collide
 			// over a number no player ever dials.
-		default:
-			svc.Spec.Type = corev1.ServiceTypeNodePort
+		case spawneryv1alpha1.ExposeClusterIP:
+			// No external traffic policy: the field is meaningless on a
+			// ClusterIP Service and the API server rejects it. No node port
+			// either, which is the whole reason this strategy exists -- the
+			// NodePort workaround it replaces left one allocated that nobody
+			// dialled and a host firewall had to account for.
+			svc.Spec.Type = corev1.ServiceTypeClusterIP
+		case spawneryv1alpha1.ExposeNodePort:
 			// Local, not the Cluster default, for the same reason
 			// LoadBalancerSpec.ExternalTrafficPolicy defaults to Local: the
 			// default SNATs, so Velocity would never see a player's real IP,
@@ -1305,8 +1315,17 @@ func (r *ProxyGroupReconciler) reconcileService(
 			// proxyAddress only ever publishing the address of a node that
 			// demonstrably runs a ready proxy -- a client dialing the
 			// published address never hits the empty case.
+			svc.Spec.Type = corev1.ServiceTypeNodePort
 			svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
 			port.NodePort = group.Spec.Expose.NodePort.Port
+		default:
+			// Unreachable while exposeImplemented and this switch agree, and
+			// written out because that is exactly the assumption a fifth
+			// strategy breaks: whoever adds one and updates only one of the
+			// two gets a named error here instead of the nil dereference the
+			// old default: arm produced by reading NodePort.Port.
+			return fmt.Errorf("expose.type %s reached reconcileService without a branch",
+				group.Spec.Expose.Type)
 		}
 		svc.Spec.Ports = []corev1.ServicePort{port}
 
@@ -1700,6 +1719,26 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 // publish an address the moment a load balancer answered, including for a
 // group whose every pod is in ImagePullBackOff.
 //
+// For ClusterIP the address is neither a node's nor the Service's: it is the
+// string the operator wrote in the spec, echoed back unchanged, because the
+// thing that owns it -- an ingress controller's TCP entry point, a gateway, a
+// tunnel, a DNS record -- lives under an API this operator does not read.
+//
+// That arm is still behind the gate above, and that is the surprising part,
+// because it reads neither of the things the gate tests. The gate needs a pod
+// that is both Ready and carrying a non-empty hostIP, so a ClusterIP group
+// publishes nothing while its pods are in ImagePullBackOff -- and also
+// nothing for a pod that is Ready but whose hostIP has not been reported yet,
+// a value this arm would never have used.
+//
+// This is deliberate, and is the same promise every other branch makes:
+// status.address means "players can connect here now", not "this is what was
+// configured". The configured value is already readable at
+// spec.expose.clusterIP.address, so publishing it unconditionally would add
+// no information while breaking the one invariant the field has. The
+// consequence to accept is that this arm's answer is gated on two facts about
+// a pod that it never reads.
+//
 // net.JoinHostPort rather than a format string: a node with an IPv6 hostIP
 // needs brackets, and the old formatting produced an address no client could
 // use. For an IPv4 address the two are identical.
@@ -1736,11 +1775,23 @@ func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *co
 			return ""
 		}
 		return net.JoinHostPort(hostIP, port(group.Spec.Expose.HostPort.Port))
-	default:
+	case spawneryv1alpha1.ExposeClusterIP:
+		// Echoed, not composed: no port is appended, because a Minecraft
+		// client defaults to 25565 and "mc.example.test" is the whole of what
+		// a player types. An operator who needs another port writes it in.
+		if group.Spec.Expose.ClusterIP == nil {
+			return ""
+		}
+		return group.Spec.Expose.ClusterIP.Address
+	case spawneryv1alpha1.ExposeNodePort:
 		if group.Spec.Expose.NodePort == nil {
 			return ""
 		}
 		return net.JoinHostPort(hostIP, port(group.Spec.Expose.NodePort.Port))
+	default:
+		// See reconcileService's default: for why this is written out rather
+		// than folded into the NodePort arm.
+		return ""
 	}
 }
 
@@ -1762,11 +1813,22 @@ func isPodReady(pod *corev1.Pod) bool {
 // strategy. See the call site in Reconcile for why it exists at all, and
 // TestExposeImplementedCoversTheEnumAndNothingElse for why it is a function
 // rather than an inline default arm.
+//
+// Adding a strategy means editing four things that must agree and are not
+// checked against each other by anything: the CRD's enum, this list, the
+// switch in reconcileService, and the switch in proxyAddress. Nothing
+// automated enforces the agreement -- the enum is closed, so no test can
+// construct an object that exercises a disagreement through the API, which is
+// exactly why the disagreement can be committed green. Stated here because
+// this is the list a fifth strategy's author edits first, and the two
+// default: arms are what catch the half-done edit: reconcileService returns
+// an error naming the type, proxyAddress returns "".
 func exposeImplemented(t spawneryv1alpha1.ExposeType) bool {
 	switch t {
 	case spawneryv1alpha1.ExposeNodePort,
 		spawneryv1alpha1.ExposeLoadBalancer,
-		spawneryv1alpha1.ExposeHostPort:
+		spawneryv1alpha1.ExposeHostPort,
+		spawneryv1alpha1.ExposeClusterIP:
 		return true
 	default:
 		return false

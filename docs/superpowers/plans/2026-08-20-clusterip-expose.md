@@ -53,7 +53,7 @@ scenario.
 | `api/v1alpha1/zz_generated.deepcopy.go` | generated |
 | `internal/controller/proxygroup_controller.go` | `exposeImplemented`, `reconcileService`, `proxyAddress` |
 | `internal/controller/expose_test.go` | the new cases and the transition tests |
-| `internal/controller/expose_admission_test.go` | **new** — the CEL cases, against envtest |
+| `api/v1alpha1/proxygroup_envtest_test.go` | the CEL cases, as rows in the table that already asks |
 | `test/e2e/manifests/e2e.yaml` | a fourth `ProxyGroup` |
 | `test/e2e/expose_test.go` | the end-to-end scenario |
 | `config/samples/network.yaml` | the strategy as a documented alternative |
@@ -511,11 +511,19 @@ Match the struct's actual field names as the file has them; if a row needs an
 
 Run: `nix --extra-experimental-features 'nix-command flakes' develop -c go test ./internal/controller/ -run TestProxyAddressPerStrategy -v`
 
-Expected: **a nil-pointer panic** on the first new row, for the same reason as
-Task 2 — `proxyAddress`'s `default:` reads `Expose.NodePort.Port`. The second
-row passes already, because the ready-pod gate returns `""` before the switch
-is reached. Note both outcomes: one row proves the arm is missing, the other
-proves the gate is in front of it.
+Expected: **a plain value mismatch** on the first new row —
+`proxyAddress = "", want "mc.example.test"` — and a PASS on the second.
+
+An earlier version of this step predicted a nil-pointer panic here, by analogy
+with Task 2. That was wrong, and the guard it overlooked was one the plan's
+author had already read: `proxyAddress`'s `default:` arm opens with
+`if group.Spec.Expose.NodePort == nil { return "" }`, which
+`reconcileService`'s did not. A ClusterIP group falls through it to `""`
+instead of dereferencing nil.
+
+Both outcomes still carry their intent: the first row proves the arm is
+missing, the second proves the ready-pod gate sits in front of the switch. A
+test that fails for a plain reason is worth as much as one that panics.
 
 - [ ] **Step 3: Give that switch explicit arms too**
 
@@ -602,44 +610,78 @@ EOF
 ## Task 4: Admission, against a real API server
 
 **Files:**
-- Create: `internal/controller/expose_admission_test.go`
+- Modify: `api/v1alpha1/proxygroup_envtest_test.go:44` (`TestProxyGroupExposeValidation`)
 
 **Interfaces:**
 - Consumes: the CRD generated in Task 1.
 - Produces: nothing other tasks use.
 
-CEL runs at admission, so a fake client proves nothing about it. This file uses
-the same envtest harness the rest of the package does — read the top of an
-existing envtest-backed test in `internal/controller/` and follow it exactly
-rather than standing up a second harness.
+**Corrected after Task 1's review.** An earlier version of this task created
+`internal/controller/expose_admission_test.go`. It should not:
+`TestProxyGroupExposeValidation` is an existing table over exactly this
+question — a `ProxyGroup` submitted to a real API server, `wantErr` per row —
+and it lives in `api/v1alpha1`, the package the markers themselves are in. Two
+files asking the same question in two packages is one file too many. The
+repository owner ruled that the table is extended.
 
-- [ ] **Step 1: Write the five cases**
+The table's rows are `{name string, expose spawneryv1alpha1.ExposeSpec, wantErr bool}`
+and the client comes from `testenv.Client(t)`. It has no message assertion
+today; this task adds one, because "refused" is not the same claim as "refused
+for the stated reason" — a rule that rejects everything would satisfy `wantErr`
+on every row.
+
+- [ ] **Step 1: Give the table a message to check**
+
+Add a field to the case struct and assert it where the error is checked:
 
 ```go
-// The CRD's own rules, against an API server, because CEL runs at admission
-// and a fake client never evaluates it. Milestone 6d's lesson applies: a
-// validation nobody submits an object to is a validation nobody has tested.
-func TestClusterIPAdmission(t *testing.T) {
-	for _, tc := range []struct {
+	cases := []struct {
 		name    string
 		expose  spawneryv1alpha1.ExposeSpec
-		wantErr string
+		wantErr bool
+		// wantMsg is a substring of the refusal. Empty means the row only
+		// claims that the API server refused, which is the weaker claim the
+		// rows written before CEL messages were worth asserting still make.
+		wantMsg string
 	}{
+```
+
+and in the body, after the existing `wantErr` handling confirms an error:
+
+```go
+			if tc.wantMsg != "" && !strings.Contains(err.Error(), tc.wantMsg) {
+				t.Errorf("error = %v, want it to mention %q", err, tc.wantMsg)
+			}
+```
+
+Read the existing body before editing it and keep its shape; if the error
+variable is not called `err` there, use the name it has.
+
+- [ ] **Step 2: Add the five ClusterIP rows**
+
+```go
 		{
-			name: "the sub-block is required",
+			name: "clusterip with matching sub-block",
 			expose: spawneryv1alpha1.ExposeSpec{
-				Type: spawneryv1alpha1.ExposeClusterIP,
-			},
-			wantErr: "expose.clusterIP is required for type ClusterIP",
-		},
-		{
-			name: "the sub-block belongs to no other type",
-			expose: spawneryv1alpha1.ExposeSpec{
-				Type:      spawneryv1alpha1.ExposeNodePort,
-				NodePort:  &spawneryv1alpha1.NodePortSpec{Port: 30765},
+				Type:      spawneryv1alpha1.ExposeClusterIP,
 				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
 			},
-			wantErr: "expose.clusterIP is only allowed for type ClusterIP",
+		},
+		{
+			name:    "clusterip without sub-block",
+			expose:  spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeClusterIP},
+			wantErr: true,
+			wantMsg: "expose.clusterIP is required for type ClusterIP",
+		},
+		{
+			name: "clusterip sub-block under another type",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeNodePort,
+				NodePort:  &spawneryv1alpha1.NodePortSpec{Port: 30565},
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			wantErr: true,
+			wantMsg: "expose.clusterIP is only allowed for type ClusterIP",
 		},
 		{
 			name: "an address is not a URL",
@@ -647,7 +689,8 @@ func TestClusterIPAdmission(t *testing.T) {
 				Type:      spawneryv1alpha1.ExposeClusterIP,
 				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "tcp://mc.example.test"},
 			},
-			wantErr: "not a URL",
+			wantErr: true,
+			wantMsg: "not a URL",
 		},
 		{
 			name: "an address carries no spaces",
@@ -655,7 +698,8 @@ func TestClusterIPAdmission(t *testing.T) {
 				Type:      spawneryv1alpha1.ExposeClusterIP,
 				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test "},
 			},
-			wantErr: "no spaces",
+			wantErr: true,
+			wantMsg: "no spaces",
 		},
 		{
 			name: "an empty address is refused",
@@ -663,92 +707,66 @@ func TestClusterIPAdmission(t *testing.T) {
 				Type:      spawneryv1alpha1.ExposeClusterIP,
 				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: ""},
 			},
-			wantErr: "should be at least 1 chars long",
+			wantErr: true,
+			wantMsg: "should be at least 1 chars long",
 		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newFixture(t)
-			group := &spawneryv1alpha1.ProxyGroup{
-				ObjectMeta: metav1.ObjectMeta{Name: "gateway", Namespace: f.ns},
-				Spec: spawneryv1alpha1.ProxyGroupSpec{
-					NetworkRef: spawneryv1alpha1.ObjectRef{Name: f.network.Name},
-					Replicas:   1,
-					Image:      "ghcr.io/spawnery/velocity:3.4.0-0.2.0",
-					Expose:     tc.expose,
-					Routing:    spawneryv1alpha1.RoutingSpec{FallbackGroups: []string{"lobby"}},
-				},
-			}
-			err := f.c.Create(f.ctx, group)
-			if err == nil {
-				t.Fatalf("the API server accepted it; %s", tc.wantErr)
-			}
-			if !strings.Contains(err.Error(), tc.wantErr) {
-				t.Errorf("error = %v, want it to mention %q", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-// And the shape that must be accepted, so the four refusals above are not
-// simply a CRD that refuses everything.
-func TestClusterIPAdmissionAcceptsAnAddress(t *testing.T) {
-	f := newFixture(t)
-	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
-		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
-			Type:      spawneryv1alpha1.ExposeClusterIP,
-			ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
-		}
-	})
-	// createProxyGroup fails the test itself if the API server refuses, which
-	// is the assertion: four refusals above prove nothing unless one shape
-	// gets through.
-}
 ```
 
-`newFixture(t)` gives each subtest its own namespace and a `Network` to
-reference, so the group name may be the same in every one. The refusal cases
-build the object inline and call `f.c.Create` directly, because
-`f.createProxyGroup` fails the test on a rejected create — which is what makes
-it the right helper for the acceptance case and the wrong one for the four
-refusals.
+The first row is the one that keeps the other five honest: five refusals prove
+nothing about a rule if no shape gets through.
 
-- [ ] **Step 2: Run and record the failures**
+- [ ] **Step 3: Run it**
 
-Run: `nix --extra-experimental-features 'nix-command flakes' develop -c make test ARGS='-run TestClusterIPAdmission ./internal/controller/...'`
+Run: `nix --extra-experimental-features 'nix-command flakes' develop -c go test ./api/... -run TestProxyGroupExposeValidation -v`
 
-Expected: PASS on the first run, because Task 1 already generated the rules.
-**That is a test written after its subject, and it is worth saying so in the
-commit rather than implying it drove anything.** Its value is regression, not
-design.
+Not `make test ARGS=...`: `$(ARGS)` appears nowhere in the Makefile, whose
+`test` target always runs `go test -race ./...`. The `ARGS` form was this
+plan's invention and it silently runs the whole suite.
 
-To show it can fail, delete the `contains('://')` half of the CEL rule in
-`api/v1alpha1/proxygroup_types.go`, run `make manifests`, and re-run: the "not
-a URL" case must fail. Restore the rule and `make manifests` again.
+Expected: PASS. **These rows were written after the markers they check, so they
+are regression tests and not design pressure** — say so in the commit rather
+than implying they drove anything.
 
-- [ ] **Step 3: Confirm the restore took**
+- [ ] **Step 4: Show they can fail**
+
+Delete the `contains('://')` half of the CEL rule in
+`api/v1alpha1/proxygroup_types.go`, regenerate, re-run:
+
+```bash
+nix --extra-experimental-features 'nix-command flakes' develop -c make manifests
+nix --extra-experimental-features 'nix-command flakes' develop -c go test ./api/... -run TestProxyGroupExposeValidation -v
+```
+
+Expected: the "not a URL" row fails. Restore the rule, regenerate again, and
+confirm the tree is clean:
 
 ```bash
 git diff --stat api/v1alpha1 config/crd charts/spawnery/templates/crds.yaml
 ```
 
-Expected: empty. A mutation that is not restored is a mutation that ships.
+Expected: empty for the generated files. A mutation that is not restored is a
+mutation that ships.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add internal/controller/expose_admission_test.go
+git add api/v1alpha1/proxygroup_envtest_test.go
 git commit -m "$(cat <<'EOF'
-test(expose): the CRD's ClusterIP rules, against an API server
+test(expose): the ClusterIP admission rows, in the table that already asks
 
-CEL runs at admission, so a fake client never evaluates it and a rule nobody
-submits an object to is a rule nobody has tested.
+TestProxyGroupExposeValidation submits a ProxyGroup to a real API server and
+records whether it was refused, which is exactly the question the ClusterIP
+rules raise -- so the rows go there rather than into a second file in another
+package.
 
-These passed on their first run -- they were written after the markers in
-task 1, so they are regression tests and not design pressure, and the commit
-says so rather than implying otherwise. That they can fail was shown by
-deleting the contains('://') half of the rule, regenerating, and watching the
-URL case go red; the deletion was restored and the generated files checked
-back to clean.
+The table gained a wantMsg field along the way. "Refused" and "refused for the
+stated reason" are different claims, and a rule that rejected everything would
+have satisfied every wantErr in the table as it stood.
+
+These rows were written after the markers they check: they are regression
+tests, not design pressure. That they can fail was shown by deleting the
+contains('://') half of the rule, regenerating, and watching the URL row go
+red; the deletion was restored and the generated files checked back to clean.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_014xc1DzU4wwe2h1bV5V7zpn
@@ -774,39 +792,43 @@ already.
 
 - [ ] **Step 1: Write the three tests**
 
+**Corrected after Task 2's fix round.** Task 2 already produced a test over the
+`NodePort` → `ClusterIP` transition —
+`TestTheAPIServerClearsExternalTrafficPolicyOnTheMoveToClusterIP` — after a
+review finding about `ExternalTrafficPolicy` turned out not to reproduce: the
+API server normalises the field away on the type change, which the test now
+holds it to. **Do not write a second test over the same transition.** Extend
+that one with the node-port assertion instead, so one place answers "what does
+the API server do when this group changes strategy":
+
 ```go
-// NodePort -> ClusterIP has to release the allocated node port. The API
-// server clears it on a type change, which is what the documentation says;
-// this asserts it against the stored object rather than believing it.
-func TestSwitchingFromNodePortToClusterIPReleasesTheNodePort(t *testing.T) {
-	f := newFixture(t)
-	r := proxyGroupReconciler(f)
-	group := f.createProxyGroup("gateway")
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
-		t.Fatalf("first reconcile: %v", err)
-	}
-
-	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
-		Type:      spawneryv1alpha1.ExposeClusterIP,
-		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
-	}
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
-		t.Fatalf("second reconcile: %v", err)
-	}
-
-	var stored corev1.Service
-	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: group.Name}, &stored); err != nil {
-		t.Fatalf("reading the Service back: %v", err)
-	}
-	if stored.Spec.Type != corev1.ServiceTypeClusterIP {
-		t.Errorf("type = %s, want ClusterIP", stored.Spec.Type)
-	}
+	// ... after the existing type and ExternalTrafficPolicy assertions:
 	if got := stored.Spec.Ports[0].NodePort; got != 0 {
 		t.Errorf("nodePort = %d, want 0: it was allocated under the previous strategy "+
-			"and nothing dials it now", got)
+			"and nothing dials it now. Unlike the traffic policy above, this is not the "+
+			"API server's doing -- reconcileService rebuilds svc.Spec.Ports from a fresh "+
+			"literal on every pass, so the operator sends 0 itself. A red here means that "+
+			"reconstruction changed", got)
 	}
-}
+```
 
+Widen its doc comment to cover both fields **and to state their asymmetry**,
+which an earlier version of this step got wrong by asserting a parity that does
+not exist:
+
+- `ExternalTrafficPolicy` sits on `svc.Spec`, which `CreateOrUpdate` fetched
+  and the `ClusterIP` arm never reassigns — so a stale `Local` goes out and the
+  API server strips it. That half guards the API server.
+- `NodePort` sits on the port, and `reconcileService` rebuilds
+  `svc.Spec.Ports` from a fresh literal on every pass
+  (`proxygroup_controller.go:1282-1287,1326`) — so the operator sends `0`
+  itself and nothing is carried forward. That half guards the operator's own
+  port reconstruction.
+
+Rename the test if its name no longer reads true; the earlier name credited
+the API server with both.
+
+```go
 // LoadBalancer -> ClusterIP releases exactly the annotations the operator set
 // and leaves every foreign key alone. Milestone 6c built that mechanism;
 // this is the first strategy to leave LoadBalancer for something other than

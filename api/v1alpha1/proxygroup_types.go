@@ -24,7 +24,7 @@ import (
 )
 
 // ExposeType selects how the proxies are reachable from outside the cluster.
-// +kubebuilder:validation:Enum=LoadBalancer;NodePort;HostPort
+// +kubebuilder:validation:Enum=LoadBalancer;NodePort;HostPort;ClusterIP
 type ExposeType string
 
 const (
@@ -36,6 +36,11 @@ const (
 	// ExposeHostPort binds a fixed port on the nodes. CNI dependent, and
 	// forbidden by Pod Security restricted.
 	ExposeHostPort ExposeType = "HostPort"
+	// ExposeClusterIP is for a network something else publishes: an ingress
+	// controller, a gateway, a tunnel. The operator creates the Service that
+	// thing routes to, and nothing else. spec.expose.clusterIP.address says
+	// where players connect, because the operator cannot learn it.
+	ExposeClusterIP ExposeType = "ClusterIP"
 )
 
 // LoadBalancerSpec configures the LoadBalancer strategy.
@@ -68,12 +73,38 @@ type HostPortSpec struct {
 	Port int32 `json:"port"`
 }
 
+// ClusterIPSpec configures the ClusterIP strategy.
+//
+// +kubebuilder:validation:XValidation:rule="!self.address.contains(' ') && !self.address.contains('://')",message="expose.clusterIP.address is what a player types, not a URL: no scheme and no spaces"
+type ClusterIPSpec struct {
+	// Address is what a player types.
+	//
+	// Required, because the operator cannot learn it: it lives in an
+	// IngressRouteTCP, an HTTPRoute, a tunnel's configuration or a DNS
+	// record — objects under APIs this operator does not read and cannot
+	// know are installed. Optional would make "empty" and "forgotten" the
+	// same state, which is the gap this strategy exists to close.
+	//
+	// No port is required and none should usually be given: Minecraft
+	// clients default to 25565, so "mc.paul.wtf" is the whole of what a
+	// player types. Give "host:port" only when the entry point really is on
+	// another port.
+	//
+	// Nothing checks that it resolves, that anything listens, or that it
+	// leads to this group's Service. It is a sign on a door, not a test of
+	// the door.
+	// +kubebuilder:validation:MinLength=1
+	Address string `json:"address"`
+}
+
 // ExposeSpec selects exactly one strategy and its matching sub-block.
 // +kubebuilder:validation:XValidation:rule="self.type != 'NodePort' || has(self.nodePort)",message="expose.nodePort is required for type NodePort"
 // +kubebuilder:validation:XValidation:rule="self.type != 'HostPort' || has(self.hostPort)",message="expose.hostPort is required for type HostPort"
 // +kubebuilder:validation:XValidation:rule="self.type == 'LoadBalancer' || !has(self.loadBalancer)",message="expose.loadBalancer is only allowed for type LoadBalancer"
 // +kubebuilder:validation:XValidation:rule="self.type == 'NodePort' || !has(self.nodePort)",message="expose.nodePort is only allowed for type NodePort"
 // +kubebuilder:validation:XValidation:rule="self.type == 'HostPort' || !has(self.hostPort)",message="expose.hostPort is only allowed for type HostPort"
+// +kubebuilder:validation:XValidation:rule="self.type != 'ClusterIP' || has(self.clusterIP)",message="expose.clusterIP is required for type ClusterIP"
+// +kubebuilder:validation:XValidation:rule="self.type == 'ClusterIP' || !has(self.clusterIP)",message="expose.clusterIP is only allowed for type ClusterIP"
 type ExposeSpec struct {
 	// Type selects the strategy.
 	Type ExposeType `json:"type"`
@@ -89,6 +120,10 @@ type ExposeSpec struct {
 	// HostPort configures type HostPort.
 	// +optional
 	HostPort *HostPortSpec `json:"hostPort,omitempty"`
+
+	// ClusterIP configures type ClusterIP.
+	// +optional
+	ClusterIP *ClusterIPSpec `json:"clusterIP,omitempty"`
 }
 
 // RoutingSpec configures where players land.

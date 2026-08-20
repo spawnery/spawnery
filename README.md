@@ -419,13 +419,19 @@ DNATed a Service ClusterIP to a pod IP. The RKE2 rollout at the
 end of milestone 6 is the first thing that can turn these objects into a
 guarantee.
 
-Milestone 6c is done: all three expose strategies `ProxyGroup.spec.expose`
-has named since milestone 1 now reconcile, not one. `NodePort` and
-`LoadBalancer` each get a Service built through one `CreateOrUpdate`,
-branching on type, external traffic policy and whether a node port is named;
+Milestone 6c is done: the three expose strategies `ProxyGroup.spec.expose`
+has named since milestone 1 all reconcile, not one, and a fourth —
+`ClusterIP`, added after the milestone-6 rollout needed it — reconciles
+beside them. `NodePort` and `LoadBalancer` each get a Service built through
+one `CreateOrUpdate`, branching on type, external traffic policy and whether
+a node port is named;
 `HostPort` gets none, and a group switching into or out of it makes every
 proxy pod stale, so the drain-aware rollout milestone 4 built replaces them
-one at a time. The operator now owns only the annotations it itself writes
+one at a time. `ClusterIP` is for a network something else fronts — an
+ingress controller's TCP entry point, a gateway, a tunnel — and gets only
+the Service that thing routes to: no routing object and no check that the
+address it publishes resolves or leads anywhere. The operator now owns only
+the annotations it itself writes
 onto a `LoadBalancer` Service, releasing them the moment a group leaves the
 strategy and never touching a key MetalLB or kube-vip put there. And
 `ProxyGroup` gained its first writer of `Degraded`: a proxy pod the API
@@ -480,7 +486,7 @@ The honest verb
 for what 6c ships is that the operator *publishes* an address once
 conditions hold, or that an object *exists* — not that anything *reaches* or
 *works*. The RKE2 rollout at the end of milestone 6 is the first thing that
-can test any of the three strategies against a client that actually tries to
+can test any of the four strategies against a client that actually tries to
 connect.
 
 Milestone 6d is done: the operator installs by a Helm chart, and

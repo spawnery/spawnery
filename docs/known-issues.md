@@ -3868,17 +3868,25 @@ deployment is described. The design's §4 and its acceptance criterion 2 both
 assumed the opposite; both were wrong, and this is structural rather than an
 oversight anyone could have avoided.
 
-**`ProxyGroup.spec.expose` has no strategy for "something else fronts me".**
-The three strategies milestone 6c designed — `LoadBalancer`, `NodePort`,
-`HostPort` — all assume the operator's Service is what the outside world
-reaches. On `paulwtf` the network ended up behind Traefik's TCP entryPoint,
-where the right object is a plain ClusterIP Service and none of the three says
-so. `NodePort` is the workaround in use: it produces a Service, asks nothing
-else, and its node port is covered by the host firewall. The cost is that
-`status.address` then reports `<node>:<nodePort>` — an address nobody connects
-to, while players use the name the ingress carries. A fourth strategy, with the
-advertised address supplied rather than derived, is the shape that would fix
-it.
+**`ProxyGroup.spec.expose` needed a fourth strategy for this, and got one
+afterwards.** What was measured on `paulwtf` is the gap: the rollout put a
+network behind Traefik's TCP entryPoint and had to use `NodePort` as a
+stand-in, which left a node port allocated that nobody dialled and made
+`status.address` report `<node>:<nodePort>` — an address nobody plays on.
+
+The rest of this entry is not a claim about that cluster on that day.
+`type: ClusterIP` with a required `clusterIP.address` was built after the
+rollout, and unlike everything else in this section it has been driven
+against no cluster at all — only envtest and the E2E kind cluster, where no
+proxy image resolves and no player has ever connected. It is what the
+operator does, not something observed working: the operator creates the
+Service the fronting thing routes to, publishes the address it was given —
+once a proxy pod of the group is ready, and nothing before then, the same
+gate every other strategy's address is behind — and creates no routing object
+and verifies no address. Whether Traefik actually routes to that Service is
+the next rollout's finding, not this one's. See
+`docs/superpowers/specs/2026-08-20-clusterip-expose-design.md` §4 for why each
+of those refusals is a refusal rather than an omission.
 
 **A `configOverlay` key in the wrong TOML table is silently ignored, and looks
 right in the rendered file.** Velocity's `haproxy-protocol` lives under
