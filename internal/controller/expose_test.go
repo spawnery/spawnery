@@ -1013,3 +1013,48 @@ func TestTheLoadBalancerAddressAppearsOnceAProxyIsReady(t *testing.T) {
 		t.Errorf("status.readyReplicas = %d, want 1", group.Status.ReadyReplicas)
 	}
 }
+
+// A ClusterIP group gets a Service the thing in front of it can route to, and
+// nothing that reaches outside the cluster on its own. The absence of a node
+// port is half the point: the strategy exists because the NodePort workaround
+// left one allocated that nobody dialled and a firewall had to cover.
+func TestClusterIPServiceShape(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:      spawneryv1alpha1.ExposeClusterIP,
+			ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+		}
+	})
+
+	svc, err := r.reconcileService(f.ctx, group)
+	if err != nil {
+		t.Fatalf("reconcileService: %v", err)
+	}
+	if svc == nil {
+		t.Fatal("no Service was created; a ClusterIP group is fronted by something that needs one to route to")
+	}
+	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("Service type = %s, want ClusterIP", svc.Spec.Type)
+	}
+	if svc.Spec.ExternalTrafficPolicy != "" {
+		t.Errorf("externalTrafficPolicy = %q, want empty: the field is meaningless on a "+
+			"ClusterIP Service and the API server rejects it", svc.Spec.ExternalTrafficPolicy)
+	}
+	if len(svc.Spec.Ports) != 1 {
+		t.Fatalf("got %d ports, want exactly one", len(svc.Spec.Ports))
+	}
+	if got := svc.Spec.Ports[0].NodePort; got != 0 {
+		t.Errorf("nodePort = %d, want 0: the strategy exists so that no node port is "+
+			"allocated for a group nobody dials on a node", got)
+	}
+	if got := svc.Spec.Ports[0].Port; got != podspec.MinecraftPort {
+		t.Errorf("port = %d, want %d", got, podspec.MinecraftPort)
+	}
+	if len(svc.Annotations) != 0 {
+		t.Errorf("annotations = %v, want none: nothing reads annotations on a ClusterIP "+
+			"Service that could change where traffic goes, and external-dns with "+
+			"--publish-internal-services would publish the ClusterIP itself", svc.Annotations)
+	}
+}

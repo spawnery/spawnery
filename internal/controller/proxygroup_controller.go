@@ -1293,8 +1293,14 @@ func (r *ProxyGroupReconciler) reconcileService(
 			// allocated by the API server, and naming one here would add a
 			// second way for two groups in different namespaces to collide
 			// over a number no player ever dials.
-		default:
-			svc.Spec.Type = corev1.ServiceTypeNodePort
+		case spawneryv1alpha1.ExposeClusterIP:
+			// No external traffic policy: the field is meaningless on a
+			// ClusterIP Service and the API server rejects it. No node port
+			// either, which is the whole reason this strategy exists -- the
+			// NodePort workaround it replaces left one allocated that nobody
+			// dialled and a host firewall had to account for.
+			svc.Spec.Type = corev1.ServiceTypeClusterIP
+		case spawneryv1alpha1.ExposeNodePort:
 			// Local, not the Cluster default, for the same reason
 			// LoadBalancerSpec.ExternalTrafficPolicy defaults to Local: the
 			// default SNATs, so Velocity would never see a player's real IP,
@@ -1305,8 +1311,17 @@ func (r *ProxyGroupReconciler) reconcileService(
 			// proxyAddress only ever publishing the address of a node that
 			// demonstrably runs a ready proxy -- a client dialing the
 			// published address never hits the empty case.
+			svc.Spec.Type = corev1.ServiceTypeNodePort
 			svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
 			port.NodePort = group.Spec.Expose.NodePort.Port
+		default:
+			// Unreachable while exposeImplemented and this switch agree, and
+			// written out because that is exactly the assumption a fifth
+			// strategy breaks: whoever adds one and updates only one of the
+			// two gets a named error here instead of the nil dereference the
+			// old default: arm produced by reading NodePort.Port.
+			return fmt.Errorf("expose.type %s reached reconcileService without a branch",
+				group.Spec.Expose.Type)
 		}
 		svc.Spec.Ports = []corev1.ServicePort{port}
 
