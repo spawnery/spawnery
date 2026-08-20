@@ -3868,6 +3868,47 @@ deployment is described. The design's §4 and its acceptance criterion 2 both
 assumed the opposite; both were wrong, and this is structural rather than an
 oversight anyone could have avoided.
 
+**`ProxyGroup.spec.expose` has no strategy for "something else fronts me".**
+The three strategies milestone 6c designed — `LoadBalancer`, `NodePort`,
+`HostPort` — all assume the operator's Service is what the outside world
+reaches. On `paulwtf` the network ended up behind Traefik's TCP entryPoint,
+where the right object is a plain ClusterIP Service and none of the three says
+so. `NodePort` is the workaround in use: it produces a Service, asks nothing
+else, and its node port is covered by the host firewall. The cost is that
+`status.address` then reports `<node>:<nodePort>` — an address nobody connects
+to, while players use the name the ingress carries. A fourth strategy, with the
+advertised address supplied rather than derived, is the shape that would fix
+it.
+
+**Velocity does not honour `haproxy-protocol = true` as rendered by the
+overlay.** Behind a reverse proxy the client's address survives only in a PROXY
+header, so the ProxyGroup was given `configOverlay` with
+`haproxy-protocol = true`. The overlay itself works — the key reaches
+`/data/velocity.toml` inside a running proxy pod, which is the first end-to-end
+confirmation this project has that `configOverlay` reaches the agent's rendered
+config at all. But the proxy behaves as though the switch were off: measured on
+2026-08-20 with the same client on both paths, a connection **without** a header
+straight to the ClusterIP succeeds, and a connection **with** one through
+Traefik fails at `read packet length: EOF` for both PROXY v1 and v2, unchanged
+after deleting both proxy pods and letting them start fresh. Nothing appears in
+Velocity's log either way.
+
+Unresolved. The header was removed rather than left in place, so the network
+works and Velocity sees the relaying Traefik pod's address instead of the
+player's — which means per-player bans and rate limits do not have what they
+need. Two facts found on the way are worth keeping: Traefik's
+`ports.<name>.proxyProtocol` governs whether an *incoming* header is trusted,
+not whether one is sent, and the chart ignored the key there entirely (the pods
+carried only `--entryPoints.minecraft.address=:25565/tcp`); sending is
+`IngressRouteTCP.spec.routes[].services[].proxyProtocol`.
+
+**An `IngressRouteTCP` gives external-dns nothing to target.** An `Ingress`
+carries its address in `status.loadBalancer`, written there by Traefik, and
+external-dns reads it. A route has no such status, so external-dns deleted the
+existing record and created nothing — the name stopped resolving with no error
+anywhere. `external-dns.alpha.kubernetes.io/target` has to name the addresses
+explicitly.
+
 **A denied uncached read is invisible in the operator's log.** Milestone 6's
 handover §6 recorded that reads *as a class* had never been measured and that
 the explanation which would generalise the two list results was "a hypothesis

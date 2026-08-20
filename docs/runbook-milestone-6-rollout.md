@@ -549,6 +549,105 @@ not guarantee that. Three replicas, a `nodeSelector`, or an affinity rule would;
 so would `Cluster`, at the cost of the player addresses the policy exists to
 preserve.
 
+### Resolution — the network moved behind Traefik
+
+Option 1 was driven and worked: the address was configured on `server01` and
+25565 answered from outside. It was then abandoned for a better shape, on the
+cluster owner's suggestion — the same one his Postfix and PostgreSQL already
+use. Traefik gained a TCP entryPoint on 25565 and an `IngressRouteTCP` in
+`minecraft` routes `HostSNI(\`*\`)` to the `gateway` Service. Minecraft carries
+its hostname in the handshake packet but Traefik does not read it on a raw TCP
+route, so the match is `*` and the entryPoint belongs to exactly one network.
+
+What that buys: no fourth address, nothing configured by hand on a node, the
+`restricted` label kept, DNS still automatic, and the three addresses Traefik
+already holds. `mc.paul.wtf` now resolves to all three.
+
+Three things had to be found by measurement rather than by reading:
+
+**`IngressRouteTCP` has no status for external-dns to read.** An `Ingress` gets
+its address written into `status.loadBalancer` by Traefik — it runs with
+`--providers.kubernetesingress.ingressendpoint.publishedservice` — and
+external-dns reads it there. A route has nothing of the kind, so external-dns
+deleted the old record and created none; the name simply stopped resolving.
+`external-dns.alpha.kubernetes.io/target` with the three addresses is what
+fixes it.
+
+**`ProxyGroup.spec.expose` has no strategy for "something else fronts me".**
+Behind Traefik the right object is a plain ClusterIP Service, and the CRD
+offers `LoadBalancer`, `NodePort` and `HostPort`. `NodePort` is the nearest
+workaround — it produces a Service and asks nothing else, and 30565 is covered
+by the host firewall — but the group then reports
+`status.address: <node>:30565`, an address nobody plays on. This is a gap in
+milestone 6c's design, recorded in `docs/known-issues.md`.
+
+**Velocity would not take the PROXY header.** Traefik replaces the client's
+address unless it sends PROXY protocol, so the ProxyGroup was given
+`configOverlay` with `haproxy-protocol = true`. That half worked, and worked
+exactly as 6c's overlay design says it should — the rendered file inside a
+running proxy pod carries it:
+
+```
+$ kubectl -n minecraft exec gateway-bs5z -- cat /data/velocity.toml
+bind = '0.0.0.0:25565'
+config-version = '2.8'
+forwarding-secret-file = '/etc/spawnery/forwarding.secret'
+haproxy-protocol = true
+motd = 'spawnery'
+online-mode = true
+player-info-forwarding-mode = 'modern'
+show-max-players = 100
+```
+
+The other half did not. With the same client on both paths:
+
+| path | header | result |
+|---|---|---|
+| direct to the ClusterIP | none | `spawnery-slp` exit 0 |
+| through Traefik | PROXY v2 | `read packet length: EOF` |
+| through Traefik | PROXY v1 | `read packet length: EOF` |
+
+and unchanged after deleting both proxy pods and letting them start fresh.
+Velocity behaves as though `haproxy-protocol` were `false`: it does not require
+a header and it drops a connection that brings one — silently, with nothing in
+its log. Two other things were established on the way: the entryPoint key
+`ports.<name>.proxyProtocol` is about *trusting an incoming* header rather than
+sending one, and the Traefik chart ignored it there anyway — the pods carried
+only `--entryPoints.minecraft.address=:25565/tcp`. Sending is
+`IngressRouteTCP.spec.routes[].services[].proxyProtocol`.
+
+**Left unresolved**, and the header was removed rather than left broken: a path
+that works without real player addresses is worth more than one that does not
+work with them. The cost is stated plainly — Velocity currently sees the
+address of the Traefik pod that relays the connection, so per-player bans and
+rate limits do not have what they need.
+
+### What the network answers now
+
+Not "TCP connects" but the Minecraft protocol itself, spoken end to end from
+outside, using this repository's own client:
+
+```
+$ go run ./cmd/spawnery-slp --host mc.paul.wtf --port 25565
+$ echo $?
+0
+
+$ dig +short mc.paul.wtf @1.1.1.1
+45.137.203.198
+185.117.3.72
+45.13.227.226
+```
+
+and the response body, read through `internal/slp` directly:
+
+```json
+{"version": {"name": "Velocity 1.7.2-26.2", "protocol": 771}}
+```
+
+That is the proxy itself answering a server list ping, reporting the Minecraft
+version this network was configured for. **`45.137.203.199` was removed from
+the pool afterwards**, and the address can come off `server01` again.
+
 
 ## Scenario 5 — HostPort under the real CNI
 
