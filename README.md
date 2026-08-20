@@ -570,8 +570,41 @@ rest, including the two workflow paths — `nightly.yml`'s `workflow_dispatch`
 and cron, and all of `release.yml` — that exist only on paper until the
 repository owner drives them for real.
 
-Milestone 6 continues to the RKE2 rollout, driven from a runbook against a
-real cluster — the last thing it owes.
+Milestone 6 is done: the RKE2 rollout has been driven, from
+[`docs/runbook-milestone-6-rollout.md`](docs/runbook-milestone-6-rollout.md),
+against a three-node cluster running RKE2 `v1.34.3` and Cilium `v1.18.4`.
+Spawnery installs through Flux from the chart at tag `v0.1.0` — two
+Kustomizations, the second gated on the first — and runs in `spawnery-system`
+under Pod Security `restricted`, from a digest, with no pull secret anywhere in
+the chain. A `Network`, a lobby of ephemeral Paper servers and two Velocity
+proxies run in a second `restricted` namespace: **the first time either image
+has run in any cluster**, because `test/e2e/manifests/e2e.yaml` names
+unresolvable tags on purpose. Milestone 6b's NetworkPolicy was enforced for the
+first time in this project's history and holds in both directions, measured
+with two probes that differ in one label. `HostPort` binds under Cilium's
+`portmap` chaining, measured by a TCP connect with a control on an unbound
+port.
+
+Three of the run's results are worth naming because the cluster found what
+reading had not. **No git tag can carry its own operator digest** — the digest
+comes from `skopeo copy --digestfile` and so cannot exist until after the tag
+is published, which makes `charts/spawnery/values.yaml`'s value permanently one
+release behind and made the design's own acceptance criterion unachievable as
+written. **A denied uncached read is silent in the operator's log**: revoking
+one RoleBinding produced twenty 403s, a condition carrying its own remedy, and
+not one line containing `is forbidden:` — settling a question milestone 6's
+handover had explicitly left as an unestablished hypothesis, and finding the
+place such a denial *is* visible, which is a metric rather than a log. And
+**Cilium will not share a load balancer address between two `Local` Services
+that select different pods**, which cost the design its plan for reaching the
+network and is a property of `Local` rather than a misconfiguration.
+
+What it leaves open is one thing with three faces: TCP 25565 does not reach
+this cluster from outside, and neither does a NodePort on an address that
+serves HTTPS all day, so the filtering sits in front of the cluster and not in
+anything spawnery configures. Without it there is no real join, no player for
+the PodDisruptionBudget to protect, and nothing to drive the *adding* half of
+the occupied label. All three unblock together.
 
 Anyone starting there begins at
 [`docs/handover-milestone-6e.md`](docs/handover-milestone-6e.md): it says
