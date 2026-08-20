@@ -805,15 +805,28 @@ the API server do when this group changes strategy":
 	// ... after the existing type and ExternalTrafficPolicy assertions:
 	if got := stored.Spec.Ports[0].NodePort; got != 0 {
 		t.Errorf("nodePort = %d, want 0: it was allocated under the previous strategy "+
-			"and nothing dials it now. Like the traffic policy above, this is the API "+
-			"server's normalisation on a type change and not something reconcileService "+
-			"does -- if it ever fails, the fix is to clear the field explicitly in the "+
-			"ClusterIP arm", got)
+			"and nothing dials it now. Unlike the traffic policy above, this is not the "+
+			"API server's doing -- reconcileService rebuilds svc.Spec.Ports from a fresh "+
+			"literal on every pass, so the operator sends 0 itself. A red here means that "+
+			"reconstruction changed", got)
 	}
 ```
 
-Widen its doc comment to say it now covers both fields, and rename it if the
-name no longer reads true for what it asserts.
+Widen its doc comment to cover both fields **and to state their asymmetry**,
+which an earlier version of this step got wrong by asserting a parity that does
+not exist:
+
+- `ExternalTrafficPolicy` sits on `svc.Spec`, which `CreateOrUpdate` fetched
+  and the `ClusterIP` arm never reassigns — so a stale `Local` goes out and the
+  API server strips it. That half guards the API server.
+- `NodePort` sits on the port, and `reconcileService` rebuilds
+  `svc.Spec.Ports` from a fresh literal on every pass
+  (`proxygroup_controller.go:1282-1287,1326`) — so the operator sends `0`
+  itself and nothing is carried forward. That half guards the operator's own
+  port reconstruction.
+
+Rename the test if its name no longer reads true; the earlier name credited
+the API server with both.
 
 ```go
 // LoadBalancer -> ClusterIP releases exactly the annotations the operator set
