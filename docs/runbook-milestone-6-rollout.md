@@ -80,6 +80,87 @@ Traefik changes *Traefik's own* request and causes its allocation to be
 re-evaluated, which is the risk the second half carries and which this probe
 cannot reduce.
 
+### Second half — annotating Traefik
+
+The known-good commit was recorded first, together with the recovery command,
+so that a broken ingress would need nothing composed:
+
+```
+known-good: e8ffac20d0a4f03637bf8fb88b5b441ac9a3e4b4
+recovery:   cd /home/paul/git/fluxcd && git revert --no-edit HEAD && git push \
+              && flux reconcile kustomization infrastructure
+```
+
+**The baseline was measured per address, not per hostname.** All three names
+resolve to all three addresses in round robin, so a single `curl` can succeed
+against a working address while another is dead. `--resolve` pins each one:
+
+```
+$ for ip in 45.137.203.198 45.13.227.226 185.117.3.72; do
+    curl -sS -o /dev/null -m 15 --resolve "immich.paul.wtf:443:$ip" -w "$ip -> %{http_code}\n" https://immich.paul.wtf/
+  done
+45.137.203.198 -> 200
+45.13.227.226 -> 200
+185.117.3.72 -> 200
+$ curl -sS -o /dev/null --resolve "webvault.paul.wtf:443:185.117.3.72" -w '%{http_code}\n' https://webvault.paul.wtf/
+200
+```
+
+A note on the host names, because it nearly produced a false alarm: the plan
+named `vaultwarden.paul.wtf`, which does not exist — the service is at
+`webvault.paul.wtf`. Its `curl` returned `000` before any change was made. Had
+that gone unexamined, the same `000` after the change would have read as an
+outage caused by it.
+
+**A change to `values.yaml` is not a change to the Service.**
+`infrastructure/traefik/kustomization.yaml` generates the values ConfigMap with
+`disableNameSuffixHash: true`, so editing the file changes the ConfigMap's
+*content* while its name stays `traefik-values`. Flux applied the new content
+within seconds; the Service still carried only the old annotation, because
+nothing had asked Helm to re-render. The upgrade happens on the HelmRelease's
+own interval — one hour — or when told:
+
+```
+$ kubectl -n traefik get svc traefik -o jsonpath='{.metadata.annotations}'
+{"io.cilium/lb-ipam-ips":"...","meta.helm.sh/release-name":"traefik", ...}      # no sharing key
+
+$ flux reconcile helmrelease traefik -n traefik --force
+✔ applied revision 41.2.0
+```
+
+**After the upgrade:**
+
+```
+$ kubectl -n traefik get svc traefik -o jsonpath='{.metadata.annotations}'
+{"io.cilium/lb-ipam-ips":"45.137.203.198,45.13.227.226,185.117.3.72",
+ "lbipam.cilium.io/sharing-cross-namespace":"minecraft",
+ "lbipam.cilium.io/sharing-key":"paulwtf-node-ips",
+ "meta.helm.sh/release-name":"traefik","meta.helm.sh/release-namespace":"traefik"}
+
+$ kubectl -n traefik get svc traefik -o jsonpath='{.status.loadBalancer.ingress}'
+[{"ip":"45.137.203.198","ipMode":"VIP"},{"ip":"45.13.227.226","ipMode":"VIP"},{"ip":"185.117.3.72","ipMode":"VIP"}]
+
+$ kubectl -n traefik get svc traefik -o jsonpath='{.status.conditions}'
+[{"lastTransitionTime":"2026-08-12T07:56:35Z","message":"","reason":"satisfied",
+  "status":"True","type":"cilium.io/IPAMRequestSatisfied"}]
+
+$ for ip in 45.137.203.198 45.13.227.226 185.117.3.72; do ... done
+45.137.203.198 -> 200
+45.13.227.226 -> 200
+185.117.3.72 -> 200
+```
+
+The `lastTransitionTime` is the part worth reading closely: **2026-08-12**,
+eight days before this run. The condition did not transition. Cilium did not
+re-evaluate Traefik's allocation into a new state and then satisfy it again —
+adding a sharing key to a Service that already holds its addresses left the
+allocation untouched. That is a stronger result than the three `200`s, which
+would also have been produced by a brief outage that had already healed.
+
+`lbipam.cilium.io/sharing-cross-namespace` is still unverified at this point:
+Traefik shares with nobody yet, so nothing has crossed a namespace. Scenario 4
+is where it is decided.
+
 
 ## Scenario 1 — installation
 
