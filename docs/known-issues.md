@@ -3851,6 +3851,77 @@ branch, so it too is a one-time post-merge check for whoever owns this
 repository: `gh workflow run release.yml`, once, and read what it says it
 would push.
 
+## From the RKE2 rollout (milestone 6, driven 2026-08-20)
+
+Driven against `paulwtf`; the evidence is `docs/runbook-milestone-6-rollout.md`
+and every claim here is a claim about that cluster on that day.
+
+**No git tag can carry its own operator digest.** `hack/publish.sh` takes the
+digest from `skopeo copy`'s `--digestfile`, which exists only after the tag has
+been published, so the commit that writes it back into
+`charts/spawnery/values.yaml` is necessarily behind the tag it describes. A
+`HelmRelease` installing the chart at tag `v0.1.0` therefore runs the *tag*
+`ghcr.io/spawnery/spawnery-operator:0.1.0`, not the digest — measured, the
+install came up that way. The value in the chart is documentation of the
+previous release, and a deployment that wants a digest pins it where the
+deployment is described. The design's §4 and its acceptance criterion 2 both
+assumed the opposite; both were wrong, and this is structural rather than an
+oversight anyone could have avoided.
+
+**A denied uncached read is invisible in the operator's log.** Milestone 6's
+handover §6 recorded that reads *as a class* had never been measured and that
+the explanation which would generalise the two list results was "a hypothesis
+nothing established". Revoking the forwarding-secret RoleBinding settles the
+one read that matters: the `Network` reported
+`ForwardingSecretResolved=Unknown/SecretReadForbidden` with its remedy,
+`rest_client_requests_total{code="403",method="GET"}` reached 20 — and the
+count of `is forbidden:` lines in the operator's log did not move at all,
+staying at the 24 that a *write* path had produced minutes earlier for an
+unrelated reason. So `theOperatorWasNeverDenied`'s grep cannot see this, and
+not because of the manager's cache: the read reached the API server and the
+refusal was handled instead of surfaced.
+
+Do not widen this to reads as a class. It is one read on one path, and the
+path's quietness was already visible in the source; what was missing, and is
+now present, is the runtime measurement.
+
+**The client metrics see denials the logs do not.** The same measurement
+found where such a denial *is* observable without any code change:
+`rest_client_requests_total` carries `code="403"` per HTTP verb. It has no
+per-resource label, so it cannot say what was refused — but a 403 on a client
+that should never be refused anything is a signal, and it caught the read the
+log missed. A denial check built on that counter would have caught both the
+write path and the read path; the one built on a log grep catches only the
+write path.
+
+**`syncOccupiedLabel` runs, and the entry below can be closed.** The "On the
+RBAC audit" list records that `required.go`'s `Why` for `pods: patch` names
+`syncOccupiedLabel` — the Server controller's, singular — while
+`ProxyGroupReconciler.syncOccupiedLabels` is what runs on every pass. Both were
+driven by hand-labelling pods `spawnery.cloud/occupied=true` and watching the
+operator remove the label, which is the same `Patch` call the grant exists for:
+`rest_client_requests_total{method="PATCH"}` moved 1→3 for the two proxy pods
+and 3→4 for the lobby's server pod. The named call site does run and does issue
+the patch. Only the *removal* direction was observed; nothing yet drives the
+addition, which needs a player.
+
+**A PodDisruptionBudget's protective behaviour cannot be simulated.** Both
+budgets select on `spawnery.cloud/occupied: true` and the operator sizes
+`minAvailable` from its own occupancy tally rather than from the labels on the
+pods. Hand-labelling pods occupied moved `currentHealthy` to 2 and left
+`desiredHealthy` at 0, so the eviction API still allowed the eviction — which
+is correct. Only real players can make the budget refuse anything, so §6's
+"PodDisruptionBudget under a real eviction" stays open on this cluster.
+
+**Cilium will not share a LoadBalancer address between two `Local` Services
+that select different pods.** Non-overlapping ports are necessary and not
+sufficient. Measured:
+`"compatible ExternalTrafficPolicy local but selecting different set of pods"`.
+This is a property of `externalTrafficPolicy: Local` — the announcement would
+be wrong for whichever Service lacks an endpoint on a given node — and it means
+a cluster whose address pool is exhausted must choose between real client
+addresses and a shared address.
+
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
 **The CA has no rotation procedure.** The bundle format of the CA ConfigMap is

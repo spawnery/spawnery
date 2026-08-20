@@ -1,8 +1,12 @@
 # Runbook — milestone 6, the RKE2 rollout
 
-**Status: IN PROGRESS**
+**Status: DRIVEN**
 
-Driven against `paulwtf` on 2026-08-20. The design is
+Driven against `paulwtf` on 2026-08-20 — three nodes, all `control-plane,etcd`,
+RKE2 `v1.34.3+rke2r1`, Cilium `v1.18.4` with `cni-chaining-mode: portmap` and
+`kube-proxy-replacement: false`, Longhorn as the default StorageClass, Flux and
+Traefik in front. Spawnery `v0.1.0`, operator image
+`sha256:e5eb7626cdf2b7ac186e844aad418fd388c5c3d6ab225d09a37c041b5b4414ca`. The design is
 `docs/superpowers/specs/2026-08-20-rke2-rollout-design.md`; §7 of it lists
 these scenarios and §1 says what this run does not establish.
 
@@ -923,3 +927,63 @@ The admitting half was already established indirectly in scenario 2 — the
 lobby reached `Ready`, which requires the agent to have reached 9443 — but that
 was one direction only. This is the direction 6b was written for.
 
+
+## Acceptance criteria
+
+Against the design's §9, one line each, naming the scenario that decided it.
+
+| # | Criterion | Result |
+|---|---|---|
+| 1 | Both Kustomizations `Ready`, `spawnery-network` gated by `dependsOn` | **met** — scenario 1 |
+| 2 | Operator in `spawnery-system` under `restricted`, from the digest, no pull secret | **met** — scenario 1, after the digest was pinned in the `HelmRelease` |
+| 3 | `minecraft` enforces `restricted` and the lobby reaches `Ready` | **met** — scenario 2 |
+| 4 | The `ProxyGroup` reports an address and a client reaches a lobby through it | **half met** — scenario 4: the address exists, is unique, resolves under `mc.paul.wtf` and is reported by the operator; no client reached it |
+| 5 | A `HostPort` `ProxyGroup` gets a running pod on this CNI | **met** — scenario 5 |
+| 6 | A node drain evicts a proxy under the budget without going below it | **not met** — scenario 6: the drain was declined on measured grounds, the eviction API was driven instead, and the budget's protective direction cannot be reached without players |
+| 7 | Scenarios 7, 8 and 9 each produce a recorded result | **met** — including two results that are "no effect observed", which §6 expected |
+| 8 | The runbook is `DRIVEN` and carries real output | **met** |
+
+Criterion 4 depended on scenario 0, and scenario 0 succeeded: the sharing
+question was answered, just not the way §5 expected. What criterion 4 finally
+turned on was not Cilium at all but TCP filtering in front of the cluster,
+which also took criterion 6 and half of scenario 7 with it. A `NodePort` was
+not substituted; §6 did not ask for one.
+
+## What this run changed in the repository
+
+Three defects, each found by the cluster rather than by reading:
+
+1. **No tag can carry its own digest.** `hack/publish.sh` takes the digest from
+   `skopeo copy --digestfile`, so it cannot be written until the tag is
+   published. `charts/spawnery/values.yaml`'s `image.digest` is therefore
+   always one release behind, and the design's §4 and criterion 2 both assumed
+   otherwise. The `HelmRelease` pins it instead.
+2. **`service.externalTrafficPolicy` was silently ignored** in Traefik's
+   values. The chart accepts free-form Service spec fields only under
+   `service.spec`, and a key in the wrong place changes nothing and reports
+   nothing.
+3. **A change to a values file is not a change to a Service.** With
+   `disableNameSuffixHash: true` the generated ConfigMap keeps its name, so
+   Helm has no trigger and the upgrade waits for the release's own interval.
+
+And two claims in the design were wrong:
+
+- **§5's sharing premise.** Non-overlapping ports are necessary for two
+  Services to share an address, not sufficient: under `Local` they must also
+  select the same pods.
+- **§7 scenario 9's method**, corrected before it ran: the policy's
+  `namespaceSelector` is empty, so probing from two namespaces would have
+  measured nothing it selects on.
+
+## What this run did not establish
+
+Beyond §1's standing limits — one cluster, one CNI, one distribution, nothing
+about scale — the port filtering in front of this cluster left three things
+unmeasured, and they are the same three:
+
+- a player reaching the network (scenario 3);
+- the PodDisruptionBudget refusing an eviction, which needs a pod the operator
+  itself counts as occupied (scenario 6);
+- `syncOccupiedLabel` adding the label rather than removing it (scenario 7).
+
+All three unblock together the moment TCP 25565 reaches this cluster.
