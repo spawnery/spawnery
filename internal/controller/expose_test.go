@@ -286,6 +286,27 @@ func TestProxyAddressPerStrategy(t *testing.T) {
 			svc:  nil,
 			want: "",
 		},
+		{
+			name: "ClusterIP publishes the configured address",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			pods: []corev1.Pod{readyPod()},
+			want: "mc.example.test",
+		},
+		{
+			// The address is a static string that needs no pod to compute, and
+			// it is still withheld until one is ready. The column means the
+			// same thing for all four strategies: you can connect here now.
+			name: "ClusterIP publishes nothing until a proxy is ready",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			pods: []corev1.Pod{notReadyPod()},
+			want: "",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			group := &spawneryv1alpha1.ProxyGroup{

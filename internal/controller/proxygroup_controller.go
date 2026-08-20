@@ -1751,11 +1751,23 @@ func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *co
 			return ""
 		}
 		return net.JoinHostPort(hostIP, port(group.Spec.Expose.HostPort.Port))
-	default:
+	case spawneryv1alpha1.ExposeClusterIP:
+		// Echoed, not composed: no port is appended, because a Minecraft
+		// client defaults to 25565 and "mc.example.test" is the whole of what
+		// a player types. An operator who needs another port writes it in.
+		if group.Spec.Expose.ClusterIP == nil {
+			return ""
+		}
+		return group.Spec.Expose.ClusterIP.Address
+	case spawneryv1alpha1.ExposeNodePort:
 		if group.Spec.Expose.NodePort == nil {
 			return ""
 		}
 		return net.JoinHostPort(hostIP, port(group.Spec.Expose.NodePort.Port))
+	default:
+		// See reconcileService's default: for why this is written out rather
+		// than folded into the NodePort arm.
+		return ""
 	}
 }
 
