@@ -693,6 +693,20 @@ Per-player bans and rate limits have what they need. The refusal itself is a
 second result: `online-mode: true` is enforced against a client with no
 Microsoft account.
 
+Confirmed a second time by a real player rather than a workstation probe. The
+repository owner joined again after the fix:
+
+```
+[16:55:24 INFO]: [connected player] paul_wtf (/46.95.187.239:42290) has connected
+[16:55:24 INFO]: [server connection] paul_wtf -> lobby-3dxq has connected
+```
+
+`46.95.187.239` is his own connection. The same player's earlier join, before
+the key moved under `[advanced]`, was logged as `/10.42.2.69`. Everything else
+behaved as scenario 6 recorded it — both `occupied` labels set, both budgets at
+`minAvailable 1` with `disruptionsAllowed 0`, the lobby at one player and 99
+free slots.
+
 ### The server list ping
 
 Not "TCP connects" but the Minecraft protocol itself, spoken end to end from
