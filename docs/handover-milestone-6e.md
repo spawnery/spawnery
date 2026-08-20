@@ -145,15 +145,18 @@ the same pattern `handover-milestone-6c.md` and its own predecessors carry.
   guessed; one of the six sites originally thought to need translating was
   already an `Eventf` with a latent bare-format-string bug, fixed in
   passing) and twenty-one `record.NewFakeRecorder` constructions across
-  eight test files. `internal/controller/events.go` (new, no licence
-  header — an oversight, unlike 16 of the package's other 18 production
+  eight test files. `internal/controller/events.go` (new, and without a licence
+  header until this milestone's final fix wave added one — an oversight,
+  unlike 16 of the package's other 18 production
   files) fixes an `action` value at every call site by one rule: a
   subordinate-object mutation names its verb and kind, everything else is
   `actionSyncStatus`. The new sink is `events.k8s.io/v1`, needing its own
   RBAC grant (`config/rbac/role.yaml`, `charts/spawnery/templates/rbac.yaml`,
   `internal/rbacaudit/required.go:57-58`); the old core-group grant stays,
   because controller-runtime's own leader-election lock still uses the
-  deprecated recorder internally. The fix round closed an Important finding
+  deprecated recorder internally — *narrowed by the final fix wave from
+  cluster-wide to the operator's own namespace, which is the only place
+  that lock's events can land now that no controller writes core events.* The fix round closed an Important finding
   the migration itself introduced: `events.k8s.io/v1` refuses a note over
   1024 bytes, measured against envtest's real API server to be a byte, not
   character, count (512 em-dashes — 512 characters, 1536 bytes — refused).
@@ -167,7 +170,8 @@ the same pattern `handover-milestone-6c.md` and its own predecessors carry.
   `storageResizeCondition` → `worst.ResizeError` →
   `resizeConditionError` (`server_controller.go:471`) to a
   `PersistentVolumeClaimControllerResizeError`/`NodeResizeError` message an
-  external CSI driver writes — and is **not fixed**; see §2.
+  external CSI driver writes — and was **not fixed** until this milestone's
+  final fix wave, which made it the sixth; see §2.
 - **The `e2e` job, on somebody else's container runtime** (`6c2a6cc`). Copies
   the other jobs' `checkout`→`Install Nix` shape, one step,
   `nix develop -c make e2e`, 45-minute timeout. `hack/e2e.sh` needed **no
@@ -186,7 +190,16 @@ the same pattern `handover-milestone-6c.md` and its own predecessors carry.
   `17 3 * * *` cron plus `workflow_dispatch`.
   `.github/workflows/release.yml` authenticates `skopeo` to `ghcr.io` and
   runs `hack/publish.sh` with `WRITE_DIGEST=1` on a `v*` tag push, then
-  fails loudly if no digest landed in `charts/spawnery/values.yaml`.
+  fails loudly if no digest landed in `charts/spawnery/values.yaml`. *That
+  is the shape as `4155c7d` wrote it, and three parts of it did not
+  survive this milestone's final review*: the `skopeo login` would have
+  failed on a hosted runner for want of `XDG_RUNTIME_DIR`, one
+  argument-less `hack/publish.sh` could only ever have published on the
+  first tag, and the digest went to `$GITHUB_OUTPUT` from a step with no
+  `id:` in a job with no `outputs:`. The merged file names the credential
+  file with `REGISTRY_AUTH_FILE`, invokes the script once per image, and
+  creates a GitHub Release carrying the digest. See `docs/known-issues.md`,
+  "From milestone 6e", and the design's §5.
   `workflow_dispatch` cannot fire on a workflow absent from the default
   branch, so `nightly.yml` carried a temporary `pull_request:` trigger for
   one push, driving run
@@ -278,6 +291,26 @@ external CSI driver writes — was found after the fix round and after both
 of its reviews, and is not wired to the helper. A single `eventNote()` call
 at that site closes it; nobody has made that call yet.
 
+*Closed by this milestone's final fix wave*, with exactly that call. Read
+this paragraph as the record of a gap that existed between `6a854e3` and
+the end of the milestone, not as an open item.
+
+**`21d1d20`'s commit message says "the six `.Event` call sites" and there
+were five.** The five other corrections above were made and this one was
+not, so it is made here. That message describes the migration off
+`tools/record` and reads: "It has no `Event` method, so the six `.Event`
+call sites become `Eventf` with an explicit `%s`." Six is the number that
+was believed while the change was being written; §1 above already records
+what was actually found — one of the six sites thought to need translating
+was already an `Eventf`, carrying a latent bare-format-string bug that was
+fixed in passing — so five `.Event` calls became `Eventf`, not six, and the
+production total is twenty-three call sites and not twenty-four. Nothing
+downstream is wrong because of it: the count that matters, twenty-three, is
+right in `internal/controller/events.go`, in
+`docs/known-issues.md` and in §1 above. A commit message cannot be edited,
+which is the whole reason this note exists, and it is the same treatment
+the "33" claim in `168b839`'s message got.
+
 **Nothing new here changes what milestone 6c and 6d already said about
 reachability, NetworkPolicy enforcement, or `HostPort` under CIS
 `restricted`.** 6e's whole scope is CI wiring, lint, and the events-API
@@ -349,7 +382,12 @@ those respects.
   digest-guard step have all run zero times. The `WRITE_DIGEST` branch of
   `hack/publish.sh` itself has never run against a real registry anywhere in
   this project's history — milestone 6d only exercised the substitution
-  against scratch copies of `charts/spawnery/values.yaml`.
+  against scratch copies of `charts/spawnery/values.yaml`. It can now at
+  least be dry-run: the final review gave it a `workflow_dispatch` that
+  forces `DRY_RUN=1` and takes no input, so once the file is on `master`,
+  `gh workflow run release.yml` builds the three images and prints what it
+  would copy where without being able to publish. That is a one-time
+  post-merge check, alongside `nightly.yml`'s.
 - **`nightly.yml`'s merge shape has never run.** The commit that removed the
   temporary `pull_request:` trigger (`4155c7d`) is the version on this
   branch; the version that actually produced the one green `image-repro` run
@@ -487,12 +525,16 @@ one, task by task in the order the ledger records them.
     imprecise. Caught by review reading.
 19. Minor, deferred. `internal/controller/events.go` carries no Apache
     licence header, unlike 16 of the package's other 18 production files.
-    Caught by review reading.
+    Caught by review reading. *Closed by the final fix wave.*
 20. Minor, deferred. `OrphanReconciler.Recorder` (`orphan.go:47`) is a dead
     field — no `.Event`/`.Eventf` call anywhere in `orphan.go` — still fed
     by `setup.go:132`; one of the five original `SA1019` findings was on a
     construction site feeding a field nothing reads. Caught by the
     implementer's own reading, recorded as an observation rather than fixed.
+    *Closed by the final fix wave*: the field and the `setup.go` assignment
+    are both gone, and the sweep emits no event by design — it deletes a pod
+    whose Server is gone and a Server whose group is gone, and neither is an
+    object an event could hang off.
 21. FINDING, load-bearing for this document. The report's own "no test
     could catch a missing grant" was narrowed by review:
     `internal/rbacaudit` applies the rendered chart and runs real

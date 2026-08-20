@@ -3634,6 +3634,39 @@ used before, so it needed its own RBAC grant
 core-group grant stays, unrelated to this migration, because
 controller-runtime's own leader-election lock still calls the deprecated
 `GetEventRecorderFor` internally, and leader election is on by default here.
+
+**Corrected after the milestone's final review, on the core grant's width.**
+The sentence above is right that the core grant stays and right about why,
+and wrong by omission about how wide it should be. It was cluster-wide,
+which was correct while every controller wrote core events — and stopped
+being correct the moment they stopped. Its one remaining consumer is a
+leader-election lock on a Lease in the operator's own namespace, so the
+events it writes regard an object in that namespace and nowhere else. The
+marker at `internal/controller/server_controller.go` now carries
+`namespace=spawnery-system` (the same placeholder, rewritten by
+`hack/chart-templates.sh`, as the lease grant at
+`internal/controller/setup.go`), the generated Role carries `""/events`
+instead of the ClusterRole, and both entries moved to
+`internal/rbacaudit/required.go`'s `RequiredNamespaced`. `events.k8s.io`
+stays cluster-wide, because those events really do regard objects in
+namespaces the operator does not know in advance.
+
+**The verb set on both grants is exactly right and exactly minimal, and
+this is readable in client-go rather than inferred from a green e2e run.**
+The paragraph above leans on one `make e2e` `PASS` for the claim that the
+grant is sufficient, and the next paragraph but one says how far that
+reaches — not far. The verbs, at least, do not need it. In client-go
+v0.36.0, the events broadcaster's `recordEvent`
+(`tools/events/event_broadcaster.go:230-273`) calls exactly two methods on
+its sink: `sink.Patch` at `:240`, when the event is a series, and
+`sink.Create` at `:246` otherwise or when the patch found nothing to patch.
+`EventSink.Update` is declared in the same package
+(`tools/events/interfaces.go:71`) and called from nowhere in it. The
+deprecated recorder's own `recordEvent` (`tools/record/event.go:330-341`)
+has the identical shape, `sink.Patch` then `sink.Create` and no `Update`.
+So `create;patch` on `events.k8s.io/events` and on `""/events` is neither
+short a verb the library will reach for nor carrying one it will not, and
+that is a statement about the library's source, not about a run.
 `internal/rbacaudit` checks the rendered chart's RBAC against a
 hand-maintained table in both directions, so it catches the table and the
 role disagreeing — but the table itself is hand-maintained, and nothing
@@ -3688,6 +3721,39 @@ message an external CSI driver writes — text this operator does not
 control, structurally identical to the PodSecurity case that motivated the
 fix, and open.
 
+*Closed by this milestone's final fix wave*, with the one line the paragraph
+above predicted: the site now passes `eventNote("%s", resize.Message)`, the
+same shape as its sibling at `proxygroup_controller.go:1130`. That is all
+six, and the review that found it confirmed independently that there is no
+seventh.
+
+**What is still not covered anywhere, and is now at least recorded: the
+`action` the events API takes at all twenty-three call sites.**
+`events.FakeRecorder` renders an event as `eventtype + " " + reason + " " +
+note` (client-go v0.36.0, `tools/events/fake.go:36-38`) and drops `action`
+entirely, so no assertion reading a fake recorder in this repository can
+say anything about it — four of the action constants were replaced with
+garbage during the final review and `go test ./internal/controller/` stayed
+green in 87.7s. `go vet` gives no cover either: it cannot see through the
+`events.EventRecorder` interface to know `Eventf`'s note is a format
+string, and a deliberately broken format at the `PodCreated` site in
+`internal/controller/server_controller.go` produced no diagnostic. The consequence of a call site passing `""` is a
+silent loss — `events.k8s.io/v1` refuses the event, the broadcaster
+classifies the `*errors.StatusError` as non-retryable and abandons it with
+a `klog` line, and unit tests, envtest and e2e all stay green. Two guards
+now stand in for what the fake cannot see, in
+`internal/controller/events_test.go`:
+`TestTheRealAPIServerRefusesAnEventWithNoAction` measures the premise
+against envtest's real API server, and
+`TestEveryEventfCallSitePassesAKnownAction` parses this package's own
+non-test sources and requires the fifth argument of every `Eventf` call to
+be one of `events.go`'s action constants. The second is a source-level
+check and says nothing about whether the constant chosen is the *right* one
+for that call site — `actionSyncStatus` where `actionCreatePod` was meant
+would pass it. Nothing observes the action end to end, and nothing will
+until a test reads `Event.Action` back off a real API server for an event a
+controller actually emitted.
+
 **The rootless-podman path is now unexercised by anything automatic.**
 Before this milestone there was exactly one way `hack/e2e.sh` ran: by hand,
 on the author's machine, under rootless Podman with `KIND_EXPERIMENTAL_PROVIDER=podman`
@@ -3718,6 +3784,48 @@ happened. Its `skopeo login`, its real `hack/publish.sh` invocation with
 the `WRITE_DIGEST` branch of `hack/publish.sh` has never run against a real
 registry anywhere in this project's history. The first `v*` tag is still the
 first real test of all three.
+
+**Corrected after the milestone's final review, on `release.yml`'s first
+tag specifically: as the file shipped, that tag would have published
+nothing.** Two defects, found by reading rather than by running, because
+nothing can run this file until it is on `master`. First, the `skopeo
+login` step relied on `XDG_RUNTIME_DIR`, which GitHub's hosted Ubuntu
+runners do not set; with it unset, containers/image falls back to
+`/run/containers/$UID/auth.json` and cannot create it as a non-root user
+(`mkdir /run/containers: permission denied`, reproduced in this
+repository's own dev shell, and containers/skopeo#1654 reports the same at
+`/run/containers/1001/auth.json` on a runner). Worse than a failed step
+would be a merely absent credential: `hack/publish.sh`'s guard would then
+inspect ghcr.io anonymously, which answers `403 Forbidden`, and 403 is not
+the `manifest unknown` the guard reads as permission to proceed — so the
+run would stop at "cannot tell whether … already exists". The workflow now
+names the credential file with `REGISTRY_AUTH_FILE` under `$RUNNER_TEMP`,
+which also reaches the `skopeo inspect` and `skopeo copy` inside the
+script. Second, the workflow ran `hack/publish.sh` with no arguments, which
+the script's own header says publishes all three images and "refuses at the
+first image whose tag is already there — correctly — and never reaches the
+one that changed": a `v0.1.1` that bumps only `operatorVersion` would have
+stopped on Paper's existing tag and never published the operator. The
+workflow now invokes the script once per image and the script's refusal
+carries exit status 3, distinct from 1, so "already there" is separable
+from "I could not tell" without a second copy of the guard in YAML. Neither
+fix has run either. What is verified about the first tag is only what the
+review could check from outside: authenticated, GHCR answers `manifest
+unknown` for a repository that does not exist, so the guard proceeds rather
+than falsely aborting; and `gh api /orgs/spawnery/packages?package_type=container`
+returns `[]`, so the first tag is a clean-slate publish.
+
+**`release.yml` can now be dry-run without a tag, which it could not
+before.** It has a `workflow_dispatch` trigger that runs the job with
+`DRY_RUN=1` unconditionally and takes no input — the images are built and
+what would be copied where is printed, and nothing can reach the registry,
+so the button cannot become an accidental publish. This is the mechanism
+the design's §5 already claimed existed ("`DRY_RUN=1` … is how the workflow
+gets exercised before a real tag exists") and did not; §5 now says so. Like
+`nightly.yml`'s, the dispatch cannot fire until the file is on the default
+branch, so it too is a one-time post-merge check for whoever owns this
+repository: `gh workflow run release.yml`, once, and read what it says it
+would push.
 
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
