@@ -92,10 +92,22 @@ milestone 6c is why: `Reconcile` already gates on `exposeImplemented`
 > read; the alternative is a nil dereference on a sub-block that was never
 > validated.
 
-— and `TestExposeImplementedCoversTheEnumAndNothingElse` enumerates the known
-values, so **growing the enum makes an existing test fail**. The guard has
-teeth and they are already sharp. The claim to have found an open trap was made
-without checking, and the check took one `grep`.
+The claim to have found an open trap was made without checking, and the check
+took one `grep`.
+
+**Corrected a second time, because the first correction overreached.** It went
+on to say that `TestExposeImplementedCoversTheEnumAndNothingElse` would fail
+when the enum grew. It does not: that test enumerates the known strategies **by
+hand**, so a value it has not been told about slips past it. What it catches is
+the opposite case — a strategy the test knows and the operator refuses.
+
+So there is no test that fires on its own when the enum grows. What there is,
+and it is enough, is `exposeImplemented` at runtime: a group asking for an
+unserved strategy is refused on the object with a condition a person can read,
+rather than mishandled. That is a visible failure and not a silent one, which
+was the whole of the original question — but it is a runtime refusal, not an
+automated catch, and this section has now been wrong about it twice by
+guessing instead of reading.
 
 What is actually true, and still worth doing:
 
@@ -180,11 +192,12 @@ reasoned about:
 
 ## 6. How it is proven
 
-**The test that matters most already exists and will fail on the first
-commit.** `TestExposeImplementedCoversTheEnumAndNothingElse` lists the known
-strategies; adding `ClusterIP` to the enum without adding it there turns that
-test red. That is the guard working, and the plan treats its failure as the
-signal to proceed rather than as a break to fix quietly.
+**`TestExposeImplementedCoversTheEnumAndNothingElse` has to be told**, since it
+enumerates by hand. Adding `ClusterIP` to its known list before teaching
+`exposeImplemented` turns it red with the message it was written to give — "is
+in the CRD's enum, so a user can create a group asking for it, and this
+operator refuses it" — and that red is the signal the implementation is needed,
+not a break to quietly repair.
 
 **The nil dereference is the one to prove.** A `ClusterIP` group admitted by
 `exposeImplemented` but reaching a `default:` arm that reads
