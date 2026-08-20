@@ -31,11 +31,22 @@ spec:
           type: RuntimeDefault
       containers:
         - name: operator
-          # Level B replaces this image with the locally built one.
-          # A tag until hack/publish.sh has run once, then the digest it writes
-          # back. The master design's §8 asks for digests in shipped manifests
-          # because tags are mutable; ":dev" before milestone 6a was worse than
-          # either, being a tag nothing produced.
+          # hack/e2e.sh replaces this with the image it just built and
+          # loaded into kind, overriding image.repository, image.tag and --
+          # since e7877f8 -- image.digest, because spawnery.image prefers the
+          # digest whenever it is set and an override on the losing key is no
+          # override at all.
+          #
+          # image.digest here is documentation of the *previous* release, not
+          # a pin for this one, and the RKE2 rollout is what established that:
+          # hack/publish.sh takes the digest from `skopeo copy --digestfile`,
+          # so it cannot be written until after the tag is published, and the
+          # commit that writes it back is necessarily behind that tag. A chart
+          # installed at tag vX therefore renders the *tag* unless the
+          # deployment pins a digest itself -- which is where a digest belongs
+          # anyway, and what the master design's §8 is actually asking for:
+          # an immutable reference in the manifest a cluster runs.
+          # See docs/known-issues.md, "From the RKE2 rollout".
           image: {{ include "spawnery.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
