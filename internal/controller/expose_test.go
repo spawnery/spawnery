@@ -1082,26 +1082,27 @@ func TestClusterIPServiceShape(t *testing.T) {
 
 // CreateOrUpdate mutates the Service it fetched, so a field the ClusterIP arm
 // never sets keeps whatever a prior strategy left there. A group moving from
-// NodePort -- whose arm sets externalTrafficPolicy to Local -- to ClusterIP
-// was suspected of carrying that value forward into a Service the API server
-// should refuse, since the field is meaningless there.
+// NodePort -- whose arm sets externalTrafficPolicy to Local and allocates a
+// node port -- to ClusterIP was suspected of carrying both forward into a
+// Service the API server should refuse one of and no one would ever dial the
+// other on.
 //
-// It doesn't happen. Measured against the envtest API server, Kubernetes
-// v1.36.3: with no explicit reset in reconcileService's ClusterIP arm, the
-// field comes back empty anyway. The API server clears it itself on the
-// update to a type that doesn't support it, before validation ever sees the
-// stale value.
+// Neither happens. Measured against the envtest API server, Kubernetes
+// v1.36.3: with no explicit reset in reconcileService's ClusterIP arm, both
+// fields come back cleared anyway. The API server normalises them itself on
+// the update to a type that doesn't support either, before validation ever
+// sees the stale values.
 //
 // That makes this a guard on the API server's behaviour, not the operator's
 // -- and it stays that way on purpose. This repository's standing position
 // is that a mechanism reporting nothing is indistinguishable from an absent
-// one, and an explicit `ExternalTrafficPolicy = ""` in the ClusterIP arm is
+// one, and an explicit reset of either field in the ClusterIP arm is
 // unfalsifiable: no test could ever fail without it, so it would be decoration
 // wearing the shape of a fix. This test is the real guard instead. If it ever
-// goes red, the API server's normalisation has changed or stopped, and the
-// fix is to add that explicit reset to the ClusterIP arm -- the line this
-// test exists so that nobody has to add speculatively today.
-func TestTheAPIServerClearsExternalTrafficPolicyOnTheMoveToClusterIP(t *testing.T) {
+// goes red on either field, the API server's normalisation has changed or
+// stopped, and the fix is to add that explicit reset to the ClusterIP arm --
+// the line this test exists so that nobody has to add speculatively today.
+func TestTheAPIServerClearsExternalTrafficPolicyAndNodePortOnTheMoveToClusterIP(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
 	group := f.createProxyGroup("gateway")
@@ -1118,17 +1119,111 @@ func TestTheAPIServerClearsExternalTrafficPolicyOnTheMoveToClusterIP(t *testing.
 		t.Fatalf("reconcileService as ClusterIP: %v", err)
 	}
 
-	var svc corev1.Service
-	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
+	var stored corev1.Service
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &stored); err != nil {
 		t.Fatalf("get the Service: %v", err)
 	}
-	if svc.Spec.Type != corev1.ServiceTypeClusterIP {
-		t.Errorf("Service type = %s, want ClusterIP", svc.Spec.Type)
+	if stored.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("Service type = %s, want ClusterIP", stored.Spec.Type)
 	}
-	if svc.Spec.ExternalTrafficPolicy != "" {
+	if stored.Spec.ExternalTrafficPolicy != "" {
 		t.Errorf("externalTrafficPolicy = %q, want empty: the API server should have "+
 			"cleared what the NodePort Service this group used to be left behind, "+
 			"since reconcileService's ClusterIP arm never resets the field itself",
-			svc.Spec.ExternalTrafficPolicy)
+			stored.Spec.ExternalTrafficPolicy)
+	}
+	if got := stored.Spec.Ports[0].NodePort; got != 0 {
+		t.Errorf("nodePort = %d, want 0: it was allocated under the previous strategy "+
+			"and nothing dials it now. Like the traffic policy above, this is the API "+
+			"server's normalisation on a type change and not something reconcileService "+
+			"does -- if it ever fails, the fix is to clear the field explicitly in the "+
+			"ClusterIP arm", got)
+	}
+}
+
+// LoadBalancer -> ClusterIP releases exactly the annotations the operator set
+// and leaves every foreign key alone. Milestone 6c built that mechanism;
+// this is the first strategy to leave LoadBalancer for something other than
+// NodePort.
+func TestSwitchingFromLoadBalancerToClusterIPReleasesTheAnnotations(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type: spawneryv1alpha1.ExposeLoadBalancer,
+			LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{
+				Annotations: map[string]string{"lbipam.cilium.io/ips": "203.0.113.5"},
+			},
+		}
+	})
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	var svc corev1.Service
+	key := client.ObjectKey{Namespace: f.ns, Name: group.Name}
+	if err := f.c.Get(f.ctx, key, &svc); err != nil {
+		t.Fatalf("reading the Service back: %v", err)
+	}
+	svc.Annotations["someone.else/key"] = "left alone"
+	if err := f.c.Update(f.ctx, &svc); err != nil {
+		t.Fatalf("adding a foreign annotation: %v", err)
+	}
+
+	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+		Type:      spawneryv1alpha1.ExposeClusterIP,
+		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+	}
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	var stored corev1.Service
+	if err := f.c.Get(f.ctx, key, &stored); err != nil {
+		t.Fatalf("reading the Service back: %v", err)
+	}
+	if _, still := stored.Annotations["lbipam.cilium.io/ips"]; still {
+		t.Error("the operator's own annotation survived the move off LoadBalancer")
+	}
+	if stored.Annotations["someone.else/key"] != "left alone" {
+		t.Error("a foreign annotation was removed; the operator releases only what it set")
+	}
+}
+
+// HostPort -> ClusterIP has to create a Service where the HostPort strategy
+// deleted one.
+func TestSwitchingFromHostPortToClusterIPCreatesTheService(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	group := f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeHostPort,
+			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+		}
+	})
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	key := client.ObjectKey{Namespace: f.ns, Name: group.Name}
+	var absent corev1.Service
+	if err := f.c.Get(f.ctx, key, &absent); err == nil {
+		t.Fatal("a HostPort group left a Service behind; the rest of this test proves nothing")
+	}
+
+	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+		Type:      spawneryv1alpha1.ExposeClusterIP,
+		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+	}
+	if _, err := r.reconcileService(f.ctx, group); err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	var stored corev1.Service
+	if err := f.c.Get(f.ctx, key, &stored); err != nil {
+		t.Fatalf("no Service after moving to ClusterIP: %v", err)
+	}
+	if stored.Spec.Type != corev1.ServiceTypeClusterIP {
+		t.Errorf("type = %s, want ClusterIP", stored.Spec.Type)
 	}
 }
