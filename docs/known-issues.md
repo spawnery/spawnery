@@ -4019,10 +4019,24 @@ deliberately open to several concatenated PEMs (design, section 6.2) so a later
 rotation can run old and new with overlap — but today exactly one is ever
 written, and the overlap path itself does not exist. If the CA expires in ten
 years, or has to be replaced after a compromise, the only recipe is "delete the
-secret, restart all pods". Even then a new CA does not reach every namespace
-immediately: `Bootstrapper.Ensure` only runs before the server controller
-creates a pod. An existing namespace where no new pod is created keeps the old
-`ca.crt` in its ConfigMap until the next pod appears there.
+secret, restart all pods".
+
+A new CA would now reach every namespace holding a `Network` without waiting
+for a pod: `NetworkReconciler` calls `Bootstrapper.Ensure` on every reconcile,
+so a namespace's `ca.crt` follows the operator's current bundle within one
+`resyncInterval`. That was the half of this entry a rotation could not be
+built on — an overlap window closes on "does every agent have the new bundle
+yet", and while a quiet namespace could hold an old one indefinitely, that
+question had no answer. See
+`docs/superpowers/specs/2026-08-21-ca-bundle-distribution-design.md`.
+
+What remains open is the rotation itself: nothing issues a second CA, the
+bundle format's support for several concatenated PEMs is still unexercised,
+and the sequencing — distribute, wait, switch the serving certificate, drop
+the old — exists nowhere. The agent side is ready for it:
+`Environment.Configured` holds paths rather than contents precisely so a
+running agent re-reads the bundle, and `OperatorChannel.trustManager` parses a
+multi-PEM one.
 
 **`controller-gen` silently ignores a `+kubebuilder:rbac` marker inside a doc
 comment — no rule, no error.** The marker has to sit immediately before the
