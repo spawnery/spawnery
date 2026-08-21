@@ -575,6 +575,14 @@ func TestAnUnparseableIncomingCAAbandonsTheRotation(t *testing.T) {
 		t.Errorf("the discarded record = %q, want it to carry the parse error: the bytes "+
 			"are gone, so this is the whole of what a diagnosis has left", got)
 	}
+	// The exact stamp, not merely some stamp: it comes from the store's clock,
+	// which is what makes "when did this happen" answerable against the rest
+	// of the rotation's timeline rather than against wall-clock time in a
+	// process that may have been restarted since.
+	if want := clock.Now().UTC().Format(time.RFC3339); !strings.Contains(got, want) {
+		t.Errorf("the discarded record = %q, want it to carry the time %s: a record with no "+
+			"time cannot be told apart from one left by a rotation two months ago", got, want)
+	}
 	note := expectEvent(t, rec, corev1.EventTypeWarning, certs.ReasonRotationSlotDiscarded)
 	if !strings.Contains(note, "ca-next.crt") || !strings.Contains(note, "abandoned") {
 		t.Errorf("event = %q, want it to name the slot and say the rotation was abandoned: "+
@@ -794,6 +802,229 @@ func TestACorruptSlotDoesNotFailEnsure(t *testing.T) {
 	if bytes.Contains(again.PublishedCA(), []byte("-- not a certificate --")) {
 		t.Error("the corrupt slot is in what PublishedCA returns")
 	}
+}
+
+// An outgoing CA with a second PEM block after it is repaired, not discarded
+// -- and the rollback it was holding for still works.
+//
+// This is the case the "a rollback was already impossible" argument does not
+// cover. parseCA decodes the first block and ignores whatever follows, so
+// RestorePrevious -> Reissue -> parseCA succeeds on these bytes: the rollback
+// is alive, and clearing the slot would have killed it while the warning said
+// it was already dead. Only trustManager, which reads the whole stream,
+// objects -- so the repair is to publish what the operator already signs
+// with.
+func TestAMultiBlockOutgoingCAIsTruncatedAndTheRollbackStillWorks(t *testing.T) {
+	s, clock, ctx, ns := newStore(t)
+	s.AgentSessionDeadline = 10 * time.Minute
+
+	b := switchedAndHolding(t, s, clock, ctx, ns)
+	original := b.PreviousCACertPEM
+	switched := b.CACertPEM
+	rec := events.NewFakeRecorder(8)
+	s.Recorder = rec
+
+	// A chain pasted in: the CA, then a second certificate after it. Exactly
+	// what a restore that carried an intermediate along produces.
+	extra, _, err := certs.IssueCA(clock.Now())
+	if err != nil {
+		t.Fatalf("IssueCA for the second block: %v", err)
+	}
+	breakSlot(t, ctx, s, ns, "ca-previous.crt", append(append([]byte{}, original...), extra...))
+
+	after, inFlight, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation over a multi-block outgoing CA: %v", err)
+	}
+	if !inFlight {
+		t.Error("the rotation reported itself finished; a repaired slot ends nothing")
+	}
+
+	secret := secretOf(t, ctx, s, ns)
+	if !bytes.Equal(secret.Data["ca-previous.crt"], original) {
+		t.Fatalf("ca-previous.crt = %d bytes, want the %d of its first block alone: the "+
+			"repair keeps the certificate parseCA already signs with and drops what "+
+			"followed it", len(secret.Data["ca-previous.crt"]), len(original))
+	}
+	if len(secret.Data["ca-previous.key"]) == 0 {
+		t.Error("the outgoing key was dropped with the extra block; a rollback needs the pair")
+	}
+	if got := secret.Annotations[certs.AnnotationRotationPhase]; got != certs.PhaseSwitched {
+		t.Errorf("phase = %q, want %q left alone: the rollback this hold exists for is "+
+			"still possible, and completing the drop here would destroy it", got, certs.PhaseSwitched)
+	}
+	got := secret.Annotations[certs.AnnotationRotationDiscarded]
+	if !strings.Contains(got, "ca-previous.crt") || !strings.Contains(got, "truncated to the first") {
+		t.Errorf("the record = %q, want it to name the slot and say it was truncated rather "+
+			"than discarded -- nothing was thrown away that anything could have used", got)
+	}
+	note := expectEvent(t, rec, corev1.EventTypeWarning, certs.ReasonRotationSlotTruncated)
+	if !strings.Contains(note, "ca-previous.crt") {
+		t.Errorf("event = %q, want it to name the slot", note)
+	}
+
+	// The proof that the slot is still worth something: the rollback runs.
+	requestRotation(t, ctx, s, certs.RequestRollback)
+	rolled, _, err := s.AdvanceRotation(ctx, after)
+	if err != nil {
+		t.Fatalf("rollback after the repair: %v. This is the ability the discard would "+
+			"have destroyed while reporting that it was already gone", err)
+	}
+	if !bytes.Equal(rolled.CACertPEM, original) {
+		t.Fatal("the rollback did not put the outgoing CA back in charge of signing")
+	}
+	if bytes.Equal(rolled.CACertPEM, switched) {
+		t.Error("the rollback left the switched-to CA signing")
+	}
+	serving := parseCert(t, rolled.ServingCertPEM)
+	if err := serving.CheckSignatureFrom(parseCert(t, original)); err != nil {
+		t.Errorf("the serving certificate does not chain to the restored CA: %v", err)
+	}
+}
+
+// The same repair for ca-next, because the rule keys on the failure mode and
+// not on the slot: the rotation carries on and switches to the first block.
+func TestAMultiBlockIncomingCAIsTruncatedAndTheRotationCarriesOn(t *testing.T) {
+	s, clock, ctx, ns := newStore(t)
+	s.AgentSessionDeadline = 10 * time.Minute
+
+	b := startedAndDistributed(t, s, clock, ctx, ns)
+	incoming := b.NextCACertPEM
+	rec := events.NewFakeRecorder(8)
+	s.Recorder = rec
+
+	extra, _, err := certs.IssueCA(clock.Now())
+	if err != nil {
+		t.Fatalf("IssueCA for the second block: %v", err)
+	}
+	breakSlot(t, ctx, s, ns, "ca-next.crt", append(append([]byte{}, incoming...), extra...))
+
+	after, inFlight, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation over a multi-block incoming CA: %v", err)
+	}
+	if !inFlight {
+		t.Error("a repaired incoming CA ended the rotation")
+	}
+	if !bytes.Equal(after.NextCACertPEM, incoming) {
+		t.Fatal("ca-next.crt was not truncated to its first block")
+	}
+	if got := phaseOf(t, s, ctx, ns); got != certs.PhaseDistributing {
+		t.Errorf("phase = %q, want %q: nothing about the rotation had to change", got, certs.PhaseDistributing)
+	}
+	expectEvent(t, rec, corev1.EventTypeWarning, certs.ReasonRotationSlotTruncated)
+
+	// And the rotation still finishes, on the repaired bytes.
+	writeCA(t, ctx, s.Client, ns, after.PublishedCA())
+	after = switchNow(t, ctx, s, clock, after)
+	if !bytes.Equal(after.CACertPEM, incoming) {
+		t.Error("the switch did not promote the repaired incoming CA")
+	}
+}
+
+// Two broken slots in one call are two records and two events, and neither
+// record borrows the other's outcome.
+func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
+	// A ca-next occupying a `switched` secret is a state no transition
+	// produces, which is the point: both of these arrive by hand, and the
+	// rule has to hold for a combination the sequence never builds.
+	t.Run("one cleared and one truncated", func(t *testing.T) {
+		s, clock, ctx, ns := newStore(t)
+		s.AgentSessionDeadline = 10 * time.Minute
+
+		b := switchedAndHolding(t, s, clock, ctx, ns)
+		spare, _, err := certs.IssueCA(clock.Now())
+		if err != nil {
+			t.Fatalf("IssueCA: %v", err)
+		}
+		rec := events.NewFakeRecorder(8)
+		s.Recorder = rec
+
+		breakSlot(t, ctx, s, ns, "ca-previous.crt", []byte("-- not a certificate --\n"))
+		breakSlot(t, ctx, s, ns, "ca-next.crt", append(append([]byte{}, spare...), spare...))
+
+		if _, _, err := s.AdvanceRotation(ctx, b); err != nil {
+			t.Fatalf("AdvanceRotation over two broken slots: %v", err)
+		}
+
+		// One read-back, after one call: both changes and both records are
+		// there. (One applyStep carries them; a second update would satisfy
+		// this assertion too, so it shows the record is not forgotten rather
+		// than that the write is atomic.)
+		secret := secretOf(t, ctx, s, ns)
+		if len(secret.Data["ca-previous.crt"]) != 0 {
+			t.Error("the unparseable outgoing CA survived")
+		}
+		if !bytes.Equal(secret.Data["ca-next.crt"], spare) {
+			t.Error("the multi-block incoming CA was not truncated to its first block")
+		}
+		if got := secret.Annotations[certs.AnnotationRotationPhase]; got != "" {
+			t.Errorf("phase = %q, want it cleared: the slot the hold existed for is gone", got)
+		}
+		record := secret.Annotations[certs.AnnotationRotationDiscarded]
+		for _, want := range []string{"ca-next.crt", "ca-previous.crt", "truncated to the first"} {
+			if !strings.Contains(record, want) {
+				t.Errorf("the record = %q, want it to contain %q: one call touched two slots "+
+					"and the record is the only account of both", record, want)
+			}
+		}
+
+		notes := drainEvents(t, rec, 2)
+		truncated := noteNaming(t, notes, "ca-next.crt")
+		if !strings.HasPrefix(truncated, corev1.EventTypeWarning+" "+certs.ReasonRotationSlotTruncated+" ") {
+			t.Errorf("the ca-next event = %q, want a %s: it was repaired, not thrown away",
+				truncated, certs.ReasonRotationSlotTruncated)
+		}
+		discarded := noteNaming(t, notes, "ca-previous.crt")
+		if !strings.HasPrefix(discarded, corev1.EventTypeWarning+" "+certs.ReasonRotationSlotDiscarded+" ") {
+			t.Errorf("the ca-previous event = %q, want a %s", discarded, certs.ReasonRotationSlotDiscarded)
+		}
+	})
+
+	// The oddity a test would have caught: with both slots cleared at
+	// `switched`, an outcome clause written per call would put "the drop was
+	// completed" on the ca-next event too, where it describes nothing.
+	t.Run("both cleared, and only one names the drop", func(t *testing.T) {
+		s, clock, ctx, ns := newStore(t)
+		s.AgentSessionDeadline = 10 * time.Minute
+
+		b := switchedAndHolding(t, s, clock, ctx, ns)
+		rec := events.NewFakeRecorder(8)
+		s.Recorder = rec
+
+		breakSlot(t, ctx, s, ns, "ca-previous.crt", []byte("-- not a certificate --\n"))
+		breakSlot(t, ctx, s, ns, "ca-next.crt",
+			pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a certificate")}))
+
+		if _, _, err := s.AdvanceRotation(ctx, b); err != nil {
+			t.Fatalf("AdvanceRotation over two unparseable slots: %v", err)
+		}
+
+		secret := secretOf(t, ctx, s, ns)
+		for _, k := range []string{"ca-previous.crt", "ca-next.crt"} {
+			if len(secret.Data[k]) != 0 {
+				t.Errorf("%s survived the cleanup", k)
+			}
+		}
+
+		notes := drainEvents(t, rec, 2)
+		previous := noteNaming(t, notes, "ca-previous.crt")
+		if !strings.Contains(previous, "the drop was completed") {
+			t.Errorf("the ca-previous event = %q, want it to say the drop was completed: "+
+				"that is the slot the hold at switched existed for", previous)
+		}
+		next := noteNaming(t, notes, "ca-next.crt")
+		if strings.Contains(next, "the drop was completed") {
+			t.Errorf("the ca-next event = %q, want the drop clause left off it: the drop was "+
+				"about ca-previous, and a reader triaging this one would go looking for a "+
+				"rollback that had nothing to do with it", next)
+		}
+		if !strings.Contains(next, "no rotation depended on this slot") {
+			t.Errorf("the ca-next event = %q, want it to say what was true of this slot: a "+
+				"ca-next in a switched secret is a state no transition produces and "+
+				"nothing was waiting on it", next)
+		}
+	})
 }
 
 // --- fixture plumbing ---------------------------------------------------
@@ -1022,4 +1253,45 @@ func expectEvent(t *testing.T, rec *events.FakeRecorder, eventtype, reason strin
 		t.Fatalf("no %s %s event was recorded", eventtype, reason)
 		return ""
 	}
+}
+
+// drainEvents takes exactly n events off the recorder, failing if fewer were
+// recorded or if an n+1th is waiting. Order is not asserted: it is the order
+// of a slice inside the function under test, which is not a property worth
+// pinning, so the caller picks its event out with noteNaming.
+func drainEvents(t *testing.T, rec *events.FakeRecorder, n int) []string {
+	t.Helper()
+	var got []string
+	for i := 0; i < n; i++ {
+		select {
+		case e := <-rec.Events:
+			got = append(got, e)
+		default:
+			t.Fatalf("only %d of %d events were recorded: %q", i, n, got)
+		}
+	}
+	select {
+	case extra := <-rec.Events:
+		t.Fatalf("a %dth event was recorded: %q", n+1, extra)
+	default:
+	}
+	return got
+}
+
+// noteNaming returns the one drained event that mentions slot.
+func noteNaming(t *testing.T, notes []string, slot string) string {
+	t.Helper()
+	var found string
+	for _, n := range notes {
+		if strings.Contains(n, slot) {
+			if found != "" {
+				t.Fatalf("two events name %s: %q and %q", slot, found, n)
+			}
+			found = n
+		}
+	}
+	if found == "" {
+		t.Fatalf("no event names %s; recorded: %q", slot, notes)
+	}
+	return found
 }

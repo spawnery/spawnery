@@ -116,6 +116,7 @@ spawnery.cloud/rotate-ca               start | drop-old | rollback   ← written
 spawnery.cloud/ca-rotation-phase       distributing | switched       ← written by the operator
 spawnery.cloud/ca-rotation-since       2026-08-21T14:02:11Z
 spawnery.cloud/ca-rotation-blocked-on  minigames,creative
+spawnery.cloud/ca-rotation-discarded   ca-next.crt: not PEM (2026-08-21T14:02:11Z)
 ```
 
 `start` issues a second CA into `ca-next.*` and republishes the bundle as
@@ -185,23 +186,31 @@ only one process ever writes. Its loop ticks hourly today
 second cadence: while `ca-rotation-phase` is set, it looks every 30 seconds
 instead.
 
-A rotation is visible without reading logs. Seven events go on the secret —
+A rotation is visible without reading logs. Eight events go on the secret —
 `RotationStarted`, `RotationBlocked`, `RotationSwitched`, `RotationCompleted`,
 `RotationRequestUnrecognised` for the warning three paragraphs up (it is not
 reported as `RotationBlocked`, because an operator triaging a `RotationBlocked`
 warning would go looking for a namespace that is not there — nothing is gated
 on anything, the rotation is only waiting on a second, correctly spelled
 annotation), `RotationRequestRefused` for a request that was understood and
-not carried out, and `RotationSlotDiscarded` for a rotation slot whose
-certificate stopped parsing, which the operator clears because every byte of a
-published slot reaches every agent's trust store. That last one is a reason of
-its own because none of the six above describes it: nothing was refused and
-nothing was misspelled — a hand-edited slot is not a request at all — no gate
-is holding, and the phase it clears on the way past is the consequence rather
-than the news, so `RotationCompleted` would report a `drop-old` somebody asked
-for when what happened is that the rollback the hold existed for had already
-become impossible. `internal/certs/metrics.go` registers two gauges in the
-shape the other packages already use (`internal/agentserver/metrics.go`,
+not carried out, `RotationSlotDiscarded` for a rotation slot whose certificate
+stopped parsing, which the operator clears because every byte of a published
+slot reaches every agent's trust store, and `RotationSlotTruncated` for the one
+such slot it can repair instead — one holding more than one PEM block, cut back
+to the first, which is the block the operator already signs with. The last two
+are reasons of their own because none of the six above describes them: nothing
+was refused and nothing was misspelled — a hand-edited slot is not a request at
+all — no gate is holding, and the phase a discard clears on the way past is the
+consequence rather than the news, so `RotationCompleted` would report a
+`drop-old` somebody asked for when what happened is that the rollback the hold
+existed for had already become impossible. They are two reasons and not one
+because the reason is what a human triages on and a repair throws nothing away.
+Both are recorded durably in `spawnery.cloud/ca-rotation-discarded`, which the
+next accepted `start` clears; that annotation is the only one in the table
+above the operator writes about a slot rather than about the sequence.
+
+`internal/certs/metrics.go` registers two gauges in the shape the other
+packages already use (`internal/agentserver/metrics.go`,
 `internal/grpcauth/metrics.go`): `spawnery_ca_rotation_phase`, labelled by
 phase and carrying 1 for the active one, and
 `spawnery_ca_rotation_blocked_namespaces`. The second exists because "stuck in

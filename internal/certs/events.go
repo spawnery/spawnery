@@ -24,8 +24,8 @@ import (
 // Event reasons recorded on the TLS secret, so that a rotation is visible
 // without reading logs. The first four are the design's own vocabulary
 // (docs/superpowers/specs/2026-08-21-ca-rotation-design.md §4); the next two
-// name the two ways a request ends without a transition, and the last one the
-// way a rotation ends without a request at all.
+// name the two ways a request ends without a transition, and the last two the
+// two things the operator does to a slot nobody asked it to touch.
 //
 // ReasonRotationRequestUnrecognised covers a case §4 deliberately does not
 // route through ReasonRotationBlocked: a spawnery.cloud/rotate-ca value the
@@ -71,6 +71,18 @@ import (
 // hold existed for had already become impossible. The note names the slot and
 // the parse error, and says what became of the rotation; the durable copy is
 // AnnotationRotationDiscarded, because an event expires after about an hour.
+//
+// ReasonRotationSlotTruncated is the eighth, and it is deliberately not the
+// seventh with a different note. It reports the one parse failure the
+// operator repairs instead of discarding: a slot holding more than one PEM
+// block is truncated to the first, which is the block parseCA already signs
+// with, so nothing usable is lost and no phase moves. The reason is the field
+// a human triages on -- a RotationSlotDiscarded that had to be read to the
+// end before one could tell that nothing had in fact been discarded would
+// train a reader to distrust the reason on the ones that mean what they say.
+// The durable record shares AnnotationRotationDiscarded with the discards,
+// because that annotation answers "what happened to my slots" and its own
+// wording distinguishes the two.
 const (
 	ReasonRotationStarted             = "RotationStarted"
 	ReasonRotationBlocked             = "RotationBlocked"
@@ -79,6 +91,7 @@ const (
 	ReasonRotationRequestUnrecognised = "RotationRequestUnrecognised"
 	ReasonRotationRequestRefused      = "RotationRequestRefused"
 	ReasonRotationSlotDiscarded       = "RotationSlotDiscarded"
+	ReasonRotationSlotTruncated       = "RotationSlotTruncated"
 )
 
 // Event actions, in the shape internal/controller/events.go established:
@@ -99,6 +112,7 @@ const (
 	actionReportUnrecognisedRequest = "ReportUnrecognisedRequest"
 	actionRefuseRotationRequest     = "RefuseRotationRequest"
 	actionDiscardRotationSlot       = "DiscardRotationSlot"
+	actionTruncateRotationSlot      = "TruncateRotationSlot"
 )
 
 // event records an event on the TLS secret, or does nothing if no recorder is

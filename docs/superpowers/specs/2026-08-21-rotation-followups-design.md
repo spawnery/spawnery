@@ -70,10 +70,30 @@ part belongs — and it is the only place that decides a rotation's phase.
 (`Ensure` writes the slots too, via `carryRotation`, but only to carry forward
 what a renewal would otherwise drop; it never decides anything about the
 sequence.)
-Finding an unparseable certificate slot, it clears that slot, records what it
-discarded (§4), fires a `Warning`, and leaves the rotation in a state that does
-not advance on its own. What that state is depends on which slot broke, and the
-two cases are not mirror images.
+Finding a certificate slot an agent could not parse, it repairs the slot where
+it can and clears it where it cannot, records what it did (§4), fires a
+`Warning`, and leaves the rotation in a state that does not advance on its own.
+Which of the two, and what that state is, depends on the failure mode first and
+on the slot second.
+
+**One mode is repaired rather than discarded: more than one PEM block.**
+`parsableCert` rejects a slot for three reasons, and this is the only one where
+it and `parseCA` disagree. `parseCA` decodes the first block and ignores
+whatever follows, so a `ca-previous.crt` holding a certificate with a chain
+pasted after it — a restore that carried an intermediate along — still signs:
+`RestorePrevious` → `Reissue` → `parseCA` succeeds on exactly those bytes. Only
+`trustManager`, which reads the whole stream, objects. So that slot is
+truncated to its first block instead of being thrown away. The first block is
+precisely the one `parseCA` was already using, so the repair makes publication
+and signing agree again — and their disagreement is the whole of the defect.
+Nothing usable is lost, no phase moves, and the rotation carries on. This keys
+on the mode and not on the slot: `ca-next.crt` gets the same treatment for the
+same reason.
+
+The other two modes — not PEM, and a PEM envelope around something that is not
+a certificate — leave `parseCA` failing on that same first block, so they are
+unusable in fact and not only in publication. Those slots are cleared, and only
+for them does the phase decide an end state.
 
 **`ca-next.crt`, while `distributing`: abandon the rotation.** It never
 distributed anything usable — no agent can have come to trust a certificate
@@ -86,24 +106,37 @@ the operator performing `drop-old` unasked — the branch's one irreversible ste
 and the whole reason the sequence holds at `switched`. It is not. The hold has
 exactly one purpose, which is that a rollback remains possible, and a rollback
 signs with the previous CA: `RestorePrevious` → `Reissue` → `parseCA`, on those
-very bytes. The moment they stopped parsing the rollback became impossible.
-Clearing the slot takes away no ability; it records that the ability is already
-gone. Nobody is stranded either — at `switched` the serving certificate chains
-to the new CA, which every agent trusts, so narrowing the published bundle to
-the new CA alone changes nothing they depend on.
+very bytes. In both of the modes that reach this branch `parseCA` fails on the
+same first block `parsableCert` rejected, so the rollback was already
+impossible. Clearing the slot takes away no ability; it records that the
+ability is already gone. Nobody is stranded either — at `switched` the serving
+certificate chains to the new CA, which every agent trusts, so narrowing the
+published bundle to the new CA alone changes nothing they depend on.
+
+> **Corrected after review.** This paragraph read "the moment they stopped
+> parsing the rollback became impossible", without qualification, and that was
+> false for one of the three modes — the one where `parseCA` reads only the
+> first block and signs perfectly happily. Completing the drop there would have
+> destroyed a rollback that worked, while the warning told the operator it had
+> already been impossible. Nor could that be answered by clearing the slot and
+> holding the phase: clearing kills the rollback whatever the reason, so the
+> hold would then advertise a choice nobody could act on, which is worse than
+> either alternative. Repairing that one mode is what makes the sentence above
+> true of every mode that now reaches it.
 
 **With no phase set at all:** clear the slot and say so. A leftover
 unparseable slot on an idle secret has nothing to abandon and nothing to
 complete; it simply must not be published, and the annotation of §4 is what
 tells whoever left it there.
 
-**The rule keys on the slot, the phase only decides the end state.** Every
-unparseable certificate slot is cleared and recorded, always. The rotation is
-abandoned or completed only when the slot that broke is the one the current
-phase depends on — so a `ca-previous` slot occupying a `distributing` secret,
-which is a state no transition produces, is cleared and reported without
-disturbing the rotation, and two broken slots are two cleanups under the same
-rule.
+**The rule keys on the mode, then on the slot; the phase only decides the end
+state.** Every certificate slot that an agent's trust store would throw on is
+repaired or cleared, and recorded, always. Only a *cleared* slot ends anything,
+and only when it is the one the current phase depends on — so a `ca-previous`
+slot occupying a `distributing` secret, which is a state no transition
+produces, is cleared and reported without disturbing the rotation, and two
+broken slots are two changes under the same rule, which may well be one repair
+and one clearance in the same step.
 
 ## 4. What survives the cleanup
 
@@ -113,20 +146,33 @@ expires after about an hour. That cost is paid off cheaply without keeping the
 bytes:
 
 ```
-spawnery.cloud/ca-rotation-discarded   ca-next.crt: certificate is not PEM (2026-08-21T14:02:11Z)
+spawnery.cloud/ca-rotation-discarded   ca-next.crt: not PEM (2026-08-21T14:02:11Z)
+spawnery.cloud/ca-rotation-discarded   ca-previous.crt: more than one PEM block; truncated to the first (2026-08-21T14:02:11Z)
 ```
 
-The slot, the parse error and the time — which is what a diagnosis needs; the
-raw bytes are not. It is written in the same `applyStep` as the cleanup, so it
-cannot land without the cleanup or the cleanup without it. It is cleared by the
-next accepted `start`, so it never narrates an old failure beside a running
-rotation.
+The slot, the parse error, what became of the slot, and the time — which is
+what a diagnosis needs; the raw bytes are not. It is written in the same
+`applyStep` as the cleanup, so it cannot land without the cleanup or the
+cleanup without it. It is cleared by the next accepted `start`, so it never
+narrates an old failure beside a running rotation. **One annotation for both
+outcomes**, as the two lines above show: it is the single durable answer to
+"what happened to my slots", its own wording says which of the two happened,
+and one key is one thing to clear and one thing for a reader to know about.
+Two slots touched in one step are two entries in one value.
 
 The event is `Warning`, on the secret, with the existing
 `ReasonRotationRequestRefused`'s neighbours — a seventh reason,
 `RotationSlotDiscarded`, because none of the six describes this: nothing was
 refused, nothing was unrecognised, no gate is holding, and the phase change is
 a consequence rather than the news.
+
+The repair gets an eighth, `RotationSlotTruncated`, rather than sharing the
+seventh with a note that says otherwise. The reason is the field a human
+triages on, and nothing is discarded in a repair: the slot is still in the
+secret, still in the rotation, and now usable. A `RotationSlotDiscarded` that
+had to be read to the end before one could tell that nothing had been
+discarded would teach a reader to distrust the reason on the events that mean
+what they say. The annotation is shared; the reason is not.
 
 ## 5. The second: the conflict retry has no behavioural test
 
@@ -163,11 +209,27 @@ effect, then let the second through.
 - **A slot that is not PEM, and a PEM envelope around something that is not a
   certificate**, are both omitted from `PublishedCA()`. Two cases, because the
   agent throws on both and only one of them is caught by `pem.Decode`.
+- **The repairable mode is repaired, and the ability it would have cost is
+  shown to be real**: a `ca-previous.crt` holding a certificate followed by a
+  second block is truncated to the first, the phase stays `switched`, and a
+  `rollback` issued afterwards succeeds and puts the original CA back in charge
+  of signing. That last step is the finding itself: without it the test would
+  assert the new behaviour without showing why the old one was wrong. The same
+  repair on `ca-next.crt`, after which the rotation still reaches its switch,
+  pins that the rule keys on the mode and not on the slot.
 - **Each of the three cleanup outcomes**, asserted on the secret read back:
   `ca-next` while `distributing` leaves no rotation and no phase; `ca-previous`
   while `switched` leaves no rotation and no phase; a slot with no phase set
   leaves the secret otherwise untouched. All three assert the discarded
   annotation names the slot and the reason.
+- **The record carries the slot, the reason and the time**, the time asserted
+  against the store's own clock rather than merely for being present.
+- **Two broken slots in one call** — one cleared and one truncated — are one
+  step, two entries in the record and two events of the right two reasons. With
+  both cleared at `switched`, the "the drop was completed" clause appears only
+  on the `ca-previous` event: it is a claim about the slot the hold existed
+  for, and on the other event it would send a reader after a rollback that had
+  nothing to do with it.
 - **The discarded annotation is cleared by the next accepted `start`**, so it
   cannot narrate an old failure beside a live rotation.
 - **`Ensure` still does not fail** on a corrupt slot — asserted directly,
@@ -176,7 +238,10 @@ effect, then let the second through.
 - **The conflict**, as §5 describes it: `start` lands, `rollback` survives.
 
 Each of the first two groups gets a mutation: publishing the slot anyway, and
-skipping the cleanup, must each turn its own test red.
+skipping the cleanup, must each turn its own test red. So do the three the
+cleanup adds — discarding the repairable mode with the other two, dropping the
+time from the record, and writing the outcome clause per call instead of per
+slot.
 
 **No `hack/agent-test.sh` phase.** The claim that the agent throws on a
 malformed bundle is already the agent's own test, and the fix is that such a
@@ -189,12 +254,19 @@ bundle never leaves the operator — which is a Go-side property.
 2. `Ensure` does not fail because of it, and the operator starts normally.
 3. An unparseable `ca-next.crt` while `distributing` abandons the rotation,
    leaving the state `rollback` out of `distributing` already produces.
-4. An unparseable `ca-previous.crt` while `switched` completes the drop, and
-   the design says why that is not the operator performing `drop-old` unasked.
+4. A `ca-previous.crt` while `switched` that fails for either of the two modes
+   `parseCA` also fails on completes the drop, and the design says why that is
+   not the operator performing `drop-old` unasked. A slot that fails only for
+   holding more than one PEM block is instead truncated to its first block —
+   the block `parseCA` already signs with — whichever of the two slots it is;
+   no phase moves, and a `rollback` after the repair still works. The numbering
+   here is unchanged from the original list: this criterion gained its second
+   half rather than a criterion being inserted.
 5. An unparseable slot with no phase set is cleared and nothing else changes.
-6. Every cleanup writes `spawnery.cloud/ca-rotation-discarded` naming the slot,
-   the parse error and the time, in the same update as the cleanup, and fires a
-   `RotationSlotDiscarded` warning.
+6. Every repair and every cleanup writes `spawnery.cloud/ca-rotation-discarded`
+   naming the slot, the parse error, what became of the slot and the time, in
+   the same update as the change, and fires a `RotationSlotDiscarded` or
+   `RotationSlotTruncated` warning accordingly.
 7. The next accepted `start` clears that annotation.
 8. A conflict on `applyStep`'s update, with a competing writer replacing
    `rotate-ca` between the read and the write, leaves the competing value in

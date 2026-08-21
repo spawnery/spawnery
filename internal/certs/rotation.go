@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -48,13 +49,16 @@ const (
 	AnnotationRotationSince     = "spawnery.cloud/ca-rotation-since"
 	AnnotationRotationBlockedOn = "spawnery.cloud/ca-rotation-blocked-on"
 
-	// AnnotationRotationDiscarded is what is left of a rotation slot the
-	// cleanup threw away: the slot's name, why its certificate would not
-	// parse, and when. The bytes themselves are not kept -- they are the one
-	// thing that must stop being published -- so this is the whole of what a
-	// diagnosis has, and it outlives the Warning event, which expires after
-	// about an hour. The next accepted start deletes it, so it never narrates
-	// an old failure beside a running rotation.
+	// AnnotationRotationDiscarded is what is left of a rotation slot whose
+	// certificate would not parse: the slot's name, the reason, whether the
+	// slot was cleared or merely truncated to its first PEM block, and when.
+	// Discarded bytes are not kept -- they are the one thing that must stop
+	// being published -- so this is the whole of what a diagnosis has, and it
+	// outlives the Warning event, which expires after about an hour. One key
+	// for both outcomes, because a reader asking what became of their slots
+	// should not have to know two annotations to find out, and both are
+	// cleared by the same next accepted start, so neither ever narrates an
+	// old failure beside a running rotation.
 	AnnotationRotationDiscarded = "spawnery.cloud/ca-rotation-discarded"
 
 	RequestStart    = "start"
@@ -127,8 +131,8 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 	// would be acted on against a state that is about to change under it.
 	// This is the step this call takes when it takes it: a request stays
 	// where it is and is picked up on the next tick, by which time the slots
-	// it would work from are the cleaned ones.
-	cleaned, inFlight, err := s.discardUnparsableSlots(ctx, current, phase, secret)
+	// it would work from are the repaired or cleared ones.
+	cleaned, inFlight, err := s.repairOrDiscardSlots(ctx, current, phase, secret)
 	if err != nil {
 		return nil, false, err
 	}
@@ -166,41 +170,60 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 		secret.Annotations[AnnotationRotationBlockedOn])
 }
 
-// discardUnparsableSlots clears every rotation slot whose certificate an
-// agent could not parse, records what it threw away, and ends the rotation
-// when the slot that broke is the one the current phase depends on.
+// repairOrDiscardSlots puts every rotation slot an agent could not parse back
+// into a state it can, records what it did, and ends the rotation when a slot
+// it had to throw away is the one the current phase depends on.
 //
-// It returns a nil bundle when there was nothing to discard, which is every
+// It returns a nil bundle when there was nothing wrong, which is every
 // ordinary call; anything else is a step taken, and AdvanceRotation returns
 // on it.
 //
-// The rule keys on the slot and the phase only decides the end state. Every
-// unparseable slot is cleared and recorded, always, because the damage is
-// publication and publication does not consult the phase. The rotation is
+// **The failure mode decides repair or discard, and it decides it the same
+// way for either slot.** parsableCert rejects a slot for three reasons, and
+// one of them -- more than one PEM block -- is the only one where it and
+// parseCA disagree: parseCA decodes the first block and ignores the rest, so
+// a certificate with a chain pasted after it still signs perfectly well. That
+// slot is truncated to its first block rather than thrown away. The first
+// block is precisely the one parseCA was already using, so the repair makes
+// publication and signing agree again -- and their disagreement is the whole
+// of the defect. Nothing usable is lost, no phase moves, and the rotation
+// carries on.
+//
+// The other two modes -- not PEM, and a PEM envelope around something that is
+// not a certificate -- leave parseCA failing on that same first block, so
+// they really are unusable, and those slots are cleared.
+//
+// **For a cleared slot the phase decides the end state.** The rotation is
 // abandoned (`distributing`, whose next step is to promote ca-next) or the
 // drop completed (`switched`, whose only remaining step is a rollback signed
-// with ca-previous) only when the broken slot is the one that step needs.
+// with ca-previous) only when the cleared slot is the one that step needs.
 // Anything else -- a ca-previous occupying a `distributing` secret, which no
 // transition produces -- is cleared and reported without disturbing a
 // sequence that does not depend on it.
 //
-// Completing the drop is not the operator performing drop-old unasked. The
-// hold at `switched` exists so that a rollback stays possible, and a rollback
-// signs with these very bytes (RestorePrevious -> Reissue -> parseCA): the
-// moment they stopped parsing the rollback became impossible, and clearing
-// the slot records that rather than causing it. Nobody is stranded either --
-// the serving certificate chains to the new CA, which every agent came to
-// trust during the overlap.
+// Completing the drop is not the operator performing drop-old unasked, and
+// the repair above is what makes that true. The hold at `switched` exists so
+// a rollback stays possible, and a rollback signs with these very bytes
+// (RestorePrevious -> Reissue -> parseCA). In the two modes that reach this
+// branch parseCA fails on the same block parsableCert rejected, so the
+// rollback was already impossible and clearing the slot records that rather
+// than causing it. The mode where the rollback would still have worked is the
+// one that is repaired instead -- which matters because clearing kills a
+// rollback whatever the reason, and "clear it but hold the phase" would
+// advertise a hold nobody could act on. Nobody is stranded either: the
+// serving certificate chains to the new CA, which every agent came to trust
+// during the overlap.
 //
 // The bytes are read from the secret rather than from current, which may
 // predate the hand-edit: AdvanceRotation re-reads the secret precisely
 // because it has two writers, and the slot that has to stop being published
 // is the one in the secret now.
-func (s *Store) discardUnparsableSlots(ctx context.Context, current *Bundle, phase string, stored *corev1.Secret) (*Bundle, bool, error) {
+func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase string, stored *corev1.Secret) (*Bundle, bool, error) {
 	slots := []struct {
 		certKey        string
 		dependentPhase string
 		clear          func(*Bundle)
+		setCert        func(*Bundle, []byte)
 	}{
 		// Only the certificate halves, because they are what gets published.
 		// A malformed key reaches no agent and already fails loudly at the
@@ -208,13 +231,26 @@ func (s *Store) discardUnparsableSlots(ctx context.Context, current *Bundle, pha
 		// certificate all the same: secretFor writes a slot's two keys only
 		// while its certificate is occupied.
 		{keyNextCACert, PhaseDistributing,
-			func(b *Bundle) { b.NextCACertPEM, b.NextCAKeyPEM = nil, nil }},
+			func(b *Bundle) { b.NextCACertPEM, b.NextCAKeyPEM = nil, nil },
+			func(b *Bundle, cert []byte) { b.NextCACertPEM = cert }},
 		{keyPreviousCACert, PhaseSwitched,
-			func(b *Bundle) { b.PreviousCACertPEM, b.PreviousCAKeyPEM = nil, nil }},
+			func(b *Bundle) { b.PreviousCACertPEM, b.PreviousCAKeyPEM = nil, nil },
+			func(b *Bundle, cert []byte) { b.PreviousCACertPEM = cert }},
 	}
 
-	type discard struct{ certKey, reason string }
-	var discarded []discard
+	// One entry per slot this call touched: what it was called, why, and
+	// whether the slot survived. record is the annotation's wording and
+	// outcome the event's closing clause, which is per slot rather than per
+	// call -- two broken slots on one secret produce two records, and a
+	// sentence about the drop belongs only to the slot the drop was about.
+	type change struct {
+		certKey  string
+		record   string
+		reason   string
+		outcome  string
+		repaired bool
+	}
+	var changes []change
 	fresh := *current
 	endsRotation := false
 	for _, slot := range slots {
@@ -226,24 +262,40 @@ func (s *Store) discardUnparsableSlots(ctx context.Context, current *Bundle, pha
 		if reason == nil {
 			continue
 		}
-		slot.clear(&fresh)
-		discarded = append(discarded, discard{slot.certKey, reason.Error()})
-		if phase == slot.dependentPhase {
-			endsRotation = true
+		if errors.Is(reason, errMoreThanOnePEMBlock) {
+			slot.setCert(&fresh, firstPEMBlock(certPEM))
+			changes = append(changes, change{
+				certKey:  slot.certKey,
+				record:   fmt.Sprintf("%s: %.150s; truncated to the first", slot.certKey, reason),
+				repaired: true,
+			})
+			continue
 		}
+		slot.clear(&fresh)
+		dependent := phase == slot.dependentPhase
+		endsRotation = endsRotation || dependent
+		changes = append(changes, change{
+			certKey: slot.certKey,
+			record:  fmt.Sprintf("%s: %.150s", slot.certKey, reason),
+			reason:  reason.Error(),
+			outcome: discardOutcome(phase, dependent),
+		})
 	}
-	if len(discarded) == 0 {
+	if len(changes) == 0 {
 		return nil, false, nil
 	}
 
-	records := make([]string, 0, len(discarded))
-	for _, d := range discarded {
-		records = append(records, fmt.Sprintf("%s: %.150s", d.certKey, d.reason))
+	records := make([]string, 0, len(changes))
+	for _, c := range changes {
+		records = append(records, c.record)
 	}
 	// The slot, the reason and the time, which is what a diagnosis needs; the
-	// bytes are the one thing that must not survive. Written in the same
-	// applyStep as the cleanup, so the record cannot land without the cleanup
-	// or the cleanup without the record.
+	// bytes are the one thing that must not survive a discard. One annotation
+	// for both outcomes, because it is the single durable answer to "what
+	// happened to my slots", it is cleared by the same start, and its own
+	// wording says which of the two happened. Written in the same applyStep
+	// as the repair or the cleanup, so the record cannot land without the
+	// change or the change without the record.
 	record := fmt.Sprintf("%s (%s)", strings.Join(records, "; "),
 		s.Clock().UTC().Format(time.RFC3339))
 	err := s.applyStep(ctx, &fresh, func(secret *corev1.Secret) {
@@ -269,10 +321,22 @@ func (s *Store) discardUnparsableSlots(ctx context.Context, current *Bundle, pha
 	setRotationPhase(remaining)
 
 	// After the write, unlike refuse's event: a refusal is a fact the moment
-	// it is decided, but "discarded" is a claim about the secret, and an
-	// applyStep that failed leaves the slot exactly where it was.
-	outcome := discardOutcome(phase, endsRotation)
-	for _, d := range discarded {
+	// it is decided, but these are claims about the secret, and an applyStep
+	// that failed leaves every slot exactly where it was.
+	for _, c := range changes {
+		if c.repaired {
+			// Its own reason rather than a RotationSlotDiscarded whose note
+			// says otherwise: the reason is the field a human triages on, and
+			// nothing was discarded here -- the slot is still in the secret,
+			// still in the rotation, and now usable. No bound is needed: the
+			// note is 176 bytes of literal ASCII plus a slot name of at most
+			// 15, so 191 against the same 1024-byte limit.
+			s.event(corev1.EventTypeWarning, ReasonRotationSlotTruncated, actionTruncateRotationSlot,
+				"%s carried more than one PEM block and has been truncated to the first, "+
+					"which is the block the operator already signs with: nothing usable was "+
+					"lost and the slot stays where it is", c.certKey)
+			continue
+		}
 		// %.150s: reason carries x509's own wording, which embeds the
 		// structure it choked on, so the bound has to hold for text this
 		// package did not write. fmt counts a string precision in runes, so
@@ -284,28 +348,51 @@ func (s *Store) discardUnparsableSlots(ctx context.Context, current *Bundle, pha
 		// though the API server's own message says characters.
 		s.event(corev1.EventTypeWarning, ReasonRotationSlotDiscarded, actionDiscardRotationSlot,
 			"%s could not be parsed and has been cleared from the secret: %.150s; %s",
-			d.certKey, d.reason, outcome)
+			c.certKey, c.reason, c.outcome)
 	}
 	return &fresh, remaining != "", nil
 }
 
-// discardOutcome is what the event says became of the rotation. It is a
-// property of the call and not of the slot: two broken slots on one secret
-// are two discards with one outcome between them.
-func discardOutcome(phase string, endsRotation bool) string {
+// discardOutcome is what the event says became of the rotation, for one
+// cleared slot. Per slot and not per call: with two slots broken at once, a
+// clause about the drop belongs to the slot the drop was about and would read
+// as a claim about the other one.
+func discardOutcome(phase string, dependent bool) string {
 	switch {
-	case !endsRotation:
-		return "no rotation depended on it, so the sequence was left where it stood"
+	case !dependent:
+		// Deliberately says nothing about where the sequence ended up: the
+		// other slot may have ended it in this same call, and this clause has
+		// to stay true either way.
+		return "no rotation depended on this slot, so nothing about the sequence turns on it"
 	case phase == PhaseSwitched:
 		return "the drop was completed: a rollback would have signed with these bytes, " +
 			"so the hold at switched was already impossible to act on"
 	default:
-		// endsRotation is only true for the two phases above, so this is
+		// dependent is only true for the two phases above, so this is
 		// `distributing`: the incoming CA was the whole of what it had left
 		// to do.
 		return "the rotation was abandoned, and ca.crt is published alone -- " +
 			"nothing usable was ever distributed"
 	}
+}
+
+// firstPEMBlock re-encodes the first PEM block of pemBytes and drops whatever
+// followed it.
+//
+// Re-encoded rather than sliced off at the block's end, because pem.Decode
+// also skips any junk before the first block and slicing would carry that
+// junk along. The DER inside is untouched, so this is the same certificate
+// parseCA reads out of these bytes.
+//
+// The nil guards are unreachable by contract -- the only caller has just had
+// parsableCert accept a first block as a certificate -- and are here because
+// pem.EncodeToMemory dereferences its argument.
+func firstPEMBlock(pemBytes []byte) []byte {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil
+	}
+	return pem.EncodeToMemory(block)
 }
 
 // applyRequest performs the step a human asked for, or refuses it.

@@ -29,6 +29,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"slices"
@@ -187,6 +188,18 @@ func (b *Bundle) PublishedCA() []byte {
 	return b.CACertPEM
 }
 
+// errMoreThanOnePEMBlock is the one parsableCert verdict a caller can repair
+// instead of throwing the slot away, and it is a sentinel rather than a
+// message so that the caller keys on the failure mode rather than on this
+// file's wording.
+//
+// It is the mode where parsableCert and parseCA disagree: parseCA decodes the
+// first block and ignores whatever follows, so a certificate with a second
+// block after it still signs -- while trustManager, which reads the whole
+// stream, throws. The other two modes leave parseCA failing on the very same
+// first block, and a caller can rely on that.
+var errMoreThanOnePEMBlock = errors.New("more than one PEM block")
+
 // parsableCert reports whether pemBytes is something an agent's trust store
 // will accept: one PEM block holding one certificate. Both halves matter --
 // OperatorChannel.trustManager parses with CertificateFactory.generateCertificates,
@@ -205,7 +218,7 @@ func parsableCert(pemBytes []byte) error {
 	// produces, and trustManager throws on the whole stream rather than
 	// stopping at the first valid block -- so "exactly one" is not optional.
 	if len(bytes.TrimSpace(rest)) != 0 {
-		return fmt.Errorf("more than one PEM block")
+		return errMoreThanOnePEMBlock
 	}
 	return nil
 }

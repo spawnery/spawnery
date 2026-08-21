@@ -41,6 +41,7 @@ var certsActions = map[string]string{
 	"actionReportUnrecognisedRequest": actionReportUnrecognisedRequest,
 	"actionRefuseRotationRequest":     actionRefuseRotationRequest,
 	"actionDiscardRotationSlot":       actionDiscardRotationSlot,
+	"actionTruncateRotationSlot":      actionTruncateRotationSlot,
 }
 
 // TestNoCertsActionConstantIsEmpty is this package's copy of the one check
@@ -66,8 +67,8 @@ func TestStoreEventIsANoOpWithNoRecorder(t *testing.T) {
 	s.event("Normal", ReasonRotationStarted, actionStartRotation, "no recorder is wired in")
 }
 
-// TestMainWiresTheRecorderIntoTheStore pins the one line that turns all six
-// events on.
+// TestMainWiresTheRecorderIntoTheStore pins the one line that turns every one
+// of those events on.
 //
 // Store.Recorder is optional by design -- (*Store).event is a no-op without
 // it, which is what lets every fixture in this package build a Store without
@@ -133,7 +134,7 @@ func TestMainWiresTheRecorderIntoTheStore(t *testing.T) {
 	// update this test, not a reason to stop checking.
 	if literals == 0 {
 		t.Fatalf("no certs.Store literal found in %s; the wiring moved and this pin "+
-			"has to follow it, or the six rotation events go unrecorded with nothing noticing", path)
+			"has to follow it, or every rotation event goes unrecorded with nothing noticing", path)
 	}
 	if wired != literals {
 		t.Errorf("%d of %d certs.Store literals in %s set Recorder; without it every "+
