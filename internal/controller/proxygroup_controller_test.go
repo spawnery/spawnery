@@ -567,6 +567,24 @@ func TestAProxyWithAStalePlayerCountWaitsForTheDeadline(t *testing.T) {
 // ConfigMap that does not exist and never start.
 func TestProxyGroupBootstrapsTheNamespace(t *testing.T) {
 	f := newFixture(t)
+
+	// newFixture's own Network reconcile already bootstrapped this namespace,
+	// so the CA ConfigMap and both ServiceAccounts are here before this test
+	// body runs. Remove them, or the assertion below reads the fixture's setup
+	// and stays green with this reconciler's own Ensure call deleted.
+	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: podspec.CAConfigMapName, Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("delete the fixture's CA ConfigMap: %v", err)
+	}
+	for _, name := range []string{podspec.ServerServiceAccountName, podspec.ProxyServiceAccountName} {
+		if err := f.c.Delete(f.ctx, &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+		}); err != nil {
+			t.Fatalf("delete the fixture's %s ServiceAccount: %v", name, err)
+		}
+	}
+
 	r := proxyGroupReconciler(f)
 	f.createProxyGroup("gateway")
 
@@ -576,6 +594,12 @@ func TestProxyGroupBootstrapsTheNamespace(t *testing.T) {
 	key := types.NamespacedName{Name: podspec.ProxyServiceAccountName, Namespace: f.ns}
 	if err := f.c.Get(f.ctx, key, sa); err != nil {
 		t.Fatalf("the proxy ServiceAccount was not bootstrapped: %v", err)
+	}
+	cm := &corev1.ConfigMap{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{
+		Name: podspec.CAConfigMapName, Namespace: f.ns,
+	}, cm); err != nil {
+		t.Fatalf("the CA ConfigMap was not bootstrapped: %v", err)
 	}
 }
 
