@@ -71,6 +71,28 @@ func NetworkPolicyName(network string) string { return network + "-backends" }
 // authenticates nobody and trusts whatever completes the modern-forwarding
 // handshake with the right secret. This is what restricts who may attempt it.
 //
+// It restricts them only as far as the namespace boundary, and that limit is
+// worth stating because the shape of the rule invites the opposite reading.
+// The ingress peer is a podSelector over spawnery's own labels, and a pod's
+// labels are chosen by whoever creates it -- so anyone who may create a pod in
+// a game namespace can wear this policy's colours and reach the backends.
+// Measured on 2026-08-21 against a real CNI: a pod carrying
+// managed-by/network/role=proxy connected to a server on 25565, while the same
+// pod without labels timed out.
+//
+// That is not a hole this operator can close. Vanilla NetworkPolicy offers
+// podSelector, namespaceSelector and ipBlock as peers, and within one namespace
+// the first is forgeable and the second says nothing -- no policy expressible
+// here distinguishes a real proxy from an invented one. Nor would closing it
+// buy much: the same privilege grants the forwarding secret outright, since any
+// pod may mount any Secret in its own namespace, measured the same day by
+// mounting velocity-forwarding-secret from an unlabelled pod.
+//
+// So the boundary is the namespace, not this policy. What the policy does
+// defend against, and does defend well, is the co-tenant that cannot create
+// pods -- a compromised workload cannot relabel itself, and the unlabelled half
+// of that measurement is what it looks like when it tries.
+//
 // It selects server pods and not proxy pods, and that asymmetry is deliberate
 // rather than partial. A server's readiness probe is an exec of spawnery-slp
 // against 127.0.0.1 (server.go), which runs inside the container and no

@@ -3064,17 +3064,38 @@ proxy is the public front door — it sits behind a NodePort with
 `externalTrafficPolicy: Local` — so a rule there would have to admit the world
 on that port anyway, and unlike a backend it authenticates its players.
 
-**An unlabelled pod in a game namespace is unrestricted.** The per-`Network`
-policy selects `spawnery.cloud/managed-by` plus that network's own
-`spawnery.cloud/network` and `spawnery.cloud/role=server`; a NetworkPolicy
-leaves everything it does not select entirely alone, and 6b writes no
-namespace-wide default-deny. That is deliberate — Spawnery does not own the
-game namespaces, and an operator that writes a default-deny into a namespace it
-did not create would break co-tenant workloads it never knew about — but the
-effect is that a pod in the game namespace carrying no Spawnery label is
-governed by nothing 6b writes, in either direction. The same is true of a pod
-belonging to a *losing* `Network` in a namespace with two: the winner's policy
-selects only pods carrying the winner's own network label.
+**A game namespace is one trust domain, and the per-`Network` policy is not a
+boundary inside it.** This entry used to read "an unlabelled pod in a game
+namespace is unrestricted", which is true and is the less interesting half.
+Measured on 2026-08-21 against Cilium on `paulwtf`:
+
+- a pod carrying `spawnery.cloud/managed-by`, `spawnery.cloud/network=production`
+  and `spawnery.cloud/role=proxy` — labels anyone creating a pod may write —
+  **connected to a backend on 25565**;
+- the same pod without them **timed out**;
+- and an ordinary unlabelled pod **mounted `velocity-forwarding-secret`**, 44
+  bytes of it, because any pod may mount any Secret in its own namespace.
+
+So `pods: create` in a game namespace is equivalent to access to that network,
+by two independent routes, and the label filter's forgeability adds nothing to
+whoever holds it. Nor can the operator close it: vanilla NetworkPolicy's peers
+are `podSelector`, `namespaceSelector` and `ipBlock`, and inside one namespace
+the first is forgeable and the second says nothing. **No policy expressible
+here tells a real proxy from an invented one.**
+
+What the policy does defend, and defends well, is the co-tenant that *cannot*
+create pods — a compromised workload cannot relabel itself, and the second
+measurement above is what that looks like from the inside. The
+`spawnery.cloud/network` label also keeps the pods of a *losing* Network in a
+two-Network namespace outside the winner's policy, unchanged from before.
+
+Closing it properly would mean moving proxies to their own namespace, so a
+`namespaceSelector` could discriminate, or an admission webhook forbidding
+foreign pods the `managed-by` label. Both were considered on 2026-08-21 and
+neither was taken: the first breaks "a Network owns its namespace" and the
+second brings certificates and a failure mode to an operator that has no
+webhooks. The boundary is the namespace, and `charts/spawnery/README.md` now
+says so where an administrator chooses one.
 
 **Proxy egress is unrestricted, and vanilla NetworkPolicy is the reason.** A
 proxy configured `onlineMode: true` has to reach Mojang's session servers,

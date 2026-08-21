@@ -17,6 +17,27 @@ not found` — the ordering hazard a plain `kubectl apply -f config/deploy/`
 used to walk into on its own first run, now turned into a refusal at install
 time instead of a Deployment landing before the namespace that would hold it.
 
+### Choosing a game namespace
+
+A game namespace is one trust domain. Anyone who may create a pod in it has
+access to that network, by two routes that do not depend on each other: they
+may mount the `Network`'s forwarding secret, because any pod may mount any
+Secret in its own namespace, and they may wear the labels the operator's
+`NetworkPolicy` admits, because a pod's labels are chosen by whoever creates
+it. Both were measured on 2026-08-21 against a real CNI — a pod labelled as a
+proxy reached a backend on 25565, and an unlabelled pod read the secret.
+
+The policy the operator writes is therefore not a boundary *inside* the
+namespace, and no policy it could write would be: vanilla NetworkPolicy selects
+peers by pod labels, namespace or CIDR, and inside one namespace none of those
+tells a real proxy from an invented one. What it does defend against is the
+co-tenant that cannot create pods — a compromised workload cannot relabel
+itself, and that half of the measurement is a timeout.
+
+So: **do not share a game namespace with workloads you would not trust with
+that network.** Give each `Network` a namespace of its own, and treat the right
+to create pods in it as the right that it is.
+
 ### The one manual step this chart cannot make
 
 `config/rbac/forwarding-secret-reader.yaml` grants the operator's
