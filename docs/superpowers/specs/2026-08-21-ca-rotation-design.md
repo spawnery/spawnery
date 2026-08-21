@@ -175,7 +175,9 @@ pressure. It is its own reason rather than `RotationBlocked` or
 `RotationRequestUnrecognised` for the same triage argument this section already
 makes about the latter: nothing is gated on a namespace here, and nothing was
 misspelled. The request was right and its timing was wrong, and the note says
-which phase refused it and what to send instead.
+the refusal's own wording. That names the phase in two of the three cases,
+and only the `start`-while-rotating refusal names what to send instead; the
+rest leave the remedy to the known-issues entry.
 
 `Provider.Start` drives all of it. It is already a leader-bound `Runnable`, so
 only one process ever writes. Its loop ticks hourly today

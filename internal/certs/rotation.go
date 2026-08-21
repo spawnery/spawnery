@@ -288,13 +288,17 @@ func (s *Store) refuse(ctx context.Context, consume func(*corev1.Secret), reason
 	// exactly the case that most needs the event -- the annotation is then
 	// still sitting there with nothing saying why it was not acted on.
 	//
-	// %.250s: reason embeds the phase annotation, which a human can hand-edit
-	// to arbitrary text. fmt counts a string precision in runes, so this cuts
-	// on a rune boundary by construction and the note stays under the
-	// 1024-byte limit internal/controller/events.go documents even if every
-	// rune kept is four bytes wide.
+	// %.230s: reason embeds the phase annotation, which a human can hand-edit
+	// to arbitrary text, so the bound has to hold for any input rather than
+	// for the inputs this code happens to produce. fmt counts a string
+	// precision in runes, so the cut lands on a rune boundary by construction;
+	// 230 runes are at most 920 bytes, and the 74-byte suffix below brings the
+	// worst case to 994 -- inside the 1024 bytes internal/controller/events.go
+	// documents, having probed it against a real API server. 250 would not
+	// have been: 1000 + 74 overruns it, and only the fixed ASCII prefix every
+	// reason.Error() happens to start with kept it safe.
 	s.event(corev1.EventTypeWarning, ReasonRotationRequestRefused, actionRefuseRotationRequest,
-		"%.250s; the request was consumed, so setting it again is what asks a second time",
+		"%.230s; the request was consumed, so setting it again is what asks a second time",
 		reason.Error())
 	if err := s.applyStep(ctx, nil, consume); err != nil {
 		return nil, false, fmt.Errorf("%w (and clearing it failed: %v)", reason, err)

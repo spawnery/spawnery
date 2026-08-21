@@ -48,8 +48,13 @@ import (
 // to whoever ran it as though it swallowed the instruction. It is a reason of
 // its own rather than either of the two above for the same triage argument
 // §4 makes about RotationBlocked: nothing is gated on a namespace here, and
-// the value was not misspelled -- it was right and its timing was wrong, and
-// the note says which phase refused it and what to do instead.
+// the value was not misspelled -- it was right and its timing was wrong. The
+// note carries the refusal's own wording, which names the phase in two of the
+// three cases and, in the start-while-rotating case, the requests that would
+// end the rotation it is already running. The drop-old-too-early case -- the
+// likeliest of all -- says which phase refused it and why, and leaves the
+// remedy to the entry in docs/known-issues.md, which is where somebody
+// running the procedure is already reading.
 const (
 	ReasonRotationStarted             = "RotationStarted"
 	ReasonRotationBlocked             = "RotationBlocked"

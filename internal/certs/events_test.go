@@ -111,9 +111,18 @@ func TestMainWiresTheRecorderIntoTheStore(t *testing.T) {
 			if !ok {
 				continue
 			}
-			if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Recorder" {
-				wired++
+			key, ok := kv.Key.(*ast.Ident)
+			if !ok || key.Name != "Recorder" {
+				continue
 			}
+			// The value, not just the key. `Recorder: nil` satisfies a
+			// key-only check and disables every event exactly as deleting
+			// the line would -- and nil is the one value a reader might
+			// plausibly write here while wiring something else up.
+			if v, ok := kv.Value.(*ast.Ident); ok && v.Name == "nil" {
+				continue
+			}
+			wired++
 		}
 		return true
 	})
