@@ -172,9 +172,13 @@ only one process ever writes. Its loop ticks hourly today
 second cadence: while `ca-rotation-phase` is set, it looks every 30 seconds
 instead.
 
-A rotation is visible without reading logs. Four events go on the secret —
-`RotationStarted`, `RotationBlocked`, `RotationSwitched`, `RotationCompleted`
-— and `internal/certs/metrics.go` registers two gauges in the shape the other
+A rotation is visible without reading logs. Five events go on the secret —
+`RotationStarted`, `RotationBlocked`, `RotationSwitched`, `RotationCompleted`,
+and `RotationRequestUnrecognised` for the warning two paragraphs up: it is not
+reported as `RotationBlocked`, because an operator triaging a `RotationBlocked`
+warning would go looking for a namespace that is not there — nothing is
+gated on anything, the rotation is only waiting on a second, correctly spelled
+annotation. `internal/certs/metrics.go` registers two gauges in the shape the other
 packages already use (`internal/agentserver/metrics.go`,
 `internal/grpcauth/metrics.go`): `spawnery_ca_rotation_phase`, labelled by
 phase and carrying 1 for the active one, and

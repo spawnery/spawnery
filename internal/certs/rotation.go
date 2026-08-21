@@ -180,11 +180,15 @@ func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phas
 			return nil, false, err
 		}
 		setRotationPhase(PhaseDistributing)
-		// RotationBlockedNamespaces is left alone here rather than zeroed:
-		// every namespace with a Network is missing this brand new CA at the
-		// instant it is minted, so 0 would claim the opposite of the truth.
-		// The gate runs on the very next tick (drivePhase, since == "") and
-		// sets it to the real count within RotationCheckInterval.
+		// RotationBlockedNamespaces is left alone here rather than written to
+		// 0: this branch is only reachable with phase == "", which means the
+		// gauge already reads 0 -- drop-old and rollback both set it to 0 on
+		// their way to phase == "", and a process that has never rotated
+		// exports 0 from its very first scrape, since RotationBlockedNamespaces
+		// is a plain prometheus.NewGauge registered in init(). Writing 0 here
+		// would be the same instruction repeated, not a different one. The gate
+		// runs on the very next tick (drivePhase, since == "") and sets the
+		// real count within RotationCheckInterval regardless.
 		s.event(corev1.EventTypeNormal, ReasonRotationStarted, actionStartRotation,
 			"published a second CA (ca-next.crt); switching once every namespace holding a "+
 				"Network confirms it and the overlap window has elapsed")
@@ -267,13 +271,20 @@ func (s *Store) refuse(ctx context.Context, consume func(*corev1.Secret), reason
 // window, and then the switch. The `switched` phase deliberately has no
 // transition out of it -- the operator holds there until a human asks.
 func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, blockedOn string) (*Bundle, bool, error) {
+	// Set on every tick, not only on the ones that change it, and hoisted
+	// above every return in this function -- including the two guards just
+	// below, which is the point: a freshly restarted process with a secret
+	// that says `distributing` but has no incoming CA, or no
+	// AgentSessionDeadline configured, is exactly the state somebody would
+	// want to query, and those two guards used to return before this ever
+	// ran, leaving the GaugeVec with no series for that phase at all --
+	// Provider.Start calls in here at most once an hour while idle
+	// (RenewCheckInterval) or every RotationCheckInterval while distributing,
+	// and each of those ticks is what re-populates the gauge after a restart,
+	// since the Prometheus client library starts a GaugeVec's series unset
+	// until the first Set.
+	setRotationPhase(phase)
 	if phase != PhaseDistributing {
-		// Set on every tick, not only on the ones that change it: this
-		// package's Provider.Start calls in here at most once an hour while
-		// idle (RenewCheckInterval), and that tick is what re-populates the
-		// gauge after a restart -- the Prometheus client library starts a
-		// GaugeVec's series unset until the first Set.
-		setRotationPhase(phase)
 		return current, phase == PhaseSwitched, nil
 	}
 	if len(current.NextCACertPEM) == 0 {
@@ -300,8 +311,10 @@ func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, b
 		// unlike the annotation below, there is no reason to write it only on
 		// change: RotationBlockedNamespaces is a gauge, not a Kubernetes
 		// object, and setting it to the value it already holds costs nothing.
+		// (RotationPhase itself needs no second Set here: the hoisted call at
+		// the top of this function already set it to PhaseDistributing, and
+		// nothing between there and here changes phase.)
 		RotationBlockedNamespaces.Set(float64(len(missing)))
-		setRotationPhase(PhaseDistributing)
 		if len(missing) > 0 {
 			note := blockedOnNote(missing)
 			if note != blockedOn {
@@ -353,7 +366,9 @@ func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, b
 	// shorter flag afterwards only shortens a wait the restart already
 	// satisfied.
 	if now.Before(stamped.Add(projectionMargin + s.AgentSessionDeadline)) {
-		setRotationPhase(PhaseDistributing)
+		// No second setRotationPhase(PhaseDistributing) needed here either,
+		// for the same reason as the gate-check branch above: the hoisted
+		// call at the top of this function already covers it.
 		return current, true, nil
 	}
 

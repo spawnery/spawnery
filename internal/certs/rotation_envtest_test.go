@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -330,8 +331,16 @@ func TestBlockedGateRecordsAWarningNamingTheNamespaces(t *testing.T) {
 	}
 }
 
-// drop-old ends a rotation, and the design's fourth event says so on the
-// secret: RotationCompleted.
+// drop-old ends a rotation, and the design's fifth event says so on the
+// secret: RotationCompleted. It also has to leave both gauges reading a
+// finished rotation, not a running one -- the brief named this regression by
+// name ("a gauge left at its last value after drop-old reports a finished
+// rotation as one still running"), so this test seeds both gauges with the
+// values a switched rotation actually leaves behind before calling drop-old,
+// rather than relying on whatever a prior test in this binary happened to
+// leave in the shared, package-level metric state. Seeding is what makes this
+// catch a dropped Set/setRotationPhase call: both gauges already read the
+// post-drop-old values by coincidence if nothing seeds them first.
 func TestDropOldRecordsRotationCompleted(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -361,6 +370,13 @@ func TestDropOldRecordsRotationCompleted(t *testing.T) {
 		t.Fatalf("SwitchToNext: %v", err)
 	}
 
+	// What a rotation that just switched actually leaves the gauges reading:
+	// phase=switched, and some namespace count from whenever the gate last
+	// ran (3, an arbitrary non-zero stand-in -- the exact figure does not
+	// matter, only that it is not the 0 drop-old must leave behind).
+	setRotationPhase(PhaseSwitched)
+	RotationBlockedNamespaces.Set(3)
+
 	// applyRequest is unexported -- called directly here the same way
 	// AdvanceRotation calls it, rather than through the annotation, since
 	// this file already reaches into the package for drivePhase above and a
@@ -377,5 +393,17 @@ func TestDropOldRecordsRotationCompleted(t *testing.T) {
 		}
 	default:
 		t.Fatal("no event was recorded for the completed rotation")
+	}
+
+	if got := testutil.ToFloat64(RotationPhase.WithLabelValues(phaseNone)); got != 1 {
+		t.Errorf("RotationPhase{phase=%q} = %v after drop-old, want 1", phaseNone, got)
+	}
+	if got := testutil.ToFloat64(RotationPhase.WithLabelValues(PhaseSwitched)); got != 0 {
+		t.Errorf("RotationPhase{phase=%q} = %v after drop-old, want 0 -- "+
+			"the rotation that just ended", PhaseSwitched, got)
+	}
+	if got := testutil.ToFloat64(RotationBlockedNamespaces); got != 0 {
+		t.Errorf("RotationBlockedNamespaces = %v after drop-old, want 0 -- "+
+			"a gauge left at its last value reports a finished rotation as one still running", got)
 	}
 }
