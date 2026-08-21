@@ -192,23 +192,61 @@ store already uses the uncached client (`main.go:239`), and the secret is now
 written by two parties — an update from a stale copy would silently discard the
 annotation a human had just set.
 
-## 5. The gate, and the one thing it is driven from
+## 5. The gate, and the two things it is driven from
 
 Before the window of §6 starts running, the operator confirms that every
-namespace it is responsible for holds the new CA: it lists `Network` objects,
-takes the set of their namespaces, reads `spawnery-ca` in each, parses the PEMs
-in `ca.crt` and looks for one whose SHA-256 matches `ca-next.crt`.
+namespace where an agent could be running holds the new CA: it takes the union
+of the namespaces of the `Network` objects and the namespaces of the managed
+pods that still run a process, reads `spawnery-ca` in each, parses the PEMs in
+`ca.crt` and looks for one whose SHA-256 matches `ca-next.crt`.
 
-**Driven from the `Network` objects, not from the ConfigMaps.** This is the
-correction that came out of reading the code rather than assuming it. "A
-`Network` owns its namespace" is a rule about which of two `Network` objects
-wins (`pickNamespaceOwner`), not a Kubernetes `OwnerReference` on a `Namespace`
-— the operator never creates a namespace and never owns one. The CA ConfigMap
-carries no owner reference either, deliberately, so that it outlives the
-operator. So a `spawnery-ca` ConfigMap whose `Network` was deleted stays in its
-namespace forever with whatever bundle it last received, and a gate phrased as
-"every managed CA ConfigMap" would wait on a dead namespace until somebody
+**Driven from the `Network` objects and the pods, not from the ConfigMaps.**
+This is the correction that came out of reading the code rather than assuming
+it. "A `Network` owns its namespace" is a rule about which of two `Network`
+objects wins (`pickNamespaceOwner`), not a Kubernetes `OwnerReference` on a
+`Namespace` — the operator never creates a namespace and never owns one. The CA
+ConfigMap carries no owner reference either, deliberately, so that it outlives
+the operator. So a `spawnery-ca` ConfigMap whose `Network` was deleted stays in
+its namespace forever with whatever bundle it last received, and a gate phrased
+as "every managed CA ConfigMap" would wait on a dead namespace until somebody
 cleaned it up by hand.
+
+**The `Network` objects alone are not the whole answer either.** That is the
+second half of the union, and it came out of following the deleted-`Network`
+case the rest of the way. A `ServerGroup` or `ProxyGroup` carries no
+`OwnerReference` to its `Network` — `ServerGroupReconciler` sets group →
+`Server` and nothing sets `Network` → group — so deleting a `Network` leaves
+the groups and their pods running. In that namespace nothing refreshes
+`spawnery-ca` any more: `NetworkReconciler` needs the `Network`,
+`ProxyGroupReconciler` returns through `refuse` before its `Bootstrap.Ensure`,
+and `ServerReconciler` reaches `Ensure` only under its `createPod` guard. A
+gate listing `Network`s alone skips that namespace entirely — the window
+elapses, the switch runs, and every agent there fails its next handshake. So
+the gate also takes every namespace holding a pod labelled
+`spawnery.cloud/managed-by` that is not in a terminal phase, using the same
+label and the same cluster-wide `pods: list` the orphan sweep already has.
+
+This is not a retreat from the paragraph above it. A ConfigMap outlives
+everything, which is exactly why driving the gate from ConfigMaps would block a
+rotation forever on a namespace nobody will ever clean up. Pods do not outlive
+everything: they are deleted, or they finish, and either way they go away. And
+a namespace with running agent pods and no `Network` **should** block the
+rotation and be named in `ca-rotation-blocked-on`, because that is precisely a
+namespace where the switch would strand somebody — blocking loudly is this
+design's own chosen behaviour for "I cannot yet prove this is safe", and the
+remedy is a human deleting or draining the leftover groups. The gate's real
+question was always "where could an agent be running", and `Network` alone was
+an incomplete answer to it.
+
+Terminal is the only exclusion and it is narrow on purpose. A `Succeeded` or
+`Failed` pod runs no process and will never open another agent stream. A
+`Pending` pod counts, because it is about to start and will read whatever
+bundle it finds; a terminating one counts too, because it is still running its
+agent until the kubelet is done with it. This is deliberately not
+`podTerminal`, `internal/controller`'s definition of the same-sounding
+question: that one also calls a crash-looping pod finished, which is right for
+a drain and wrong here, since such a pod's restart policy is `Always` — it
+comes back, re-reads the bundle, and has to find the new CA in it.
 
 While any namespace is missing, the phase stays `distributing`, the missing
 namespaces are named in `ca-rotation-blocked-on`, and a `RotationBlocked`
@@ -222,11 +260,12 @@ most ten namespace names followed by `and N more`; the event and the log carry
 the same summary.
 
 **Once the gate passes, it is not checked again.** `ca-rotation-since` is
-stamped and the window runs. A `Network` created during the window does not
-reset it: its namespace's ConfigMap receives the current bundle — already
-`old‖new` — on its first reconcile, and its pods have never held anything else.
-Re-checking would be the obvious implementation and would let a cluster where
-networks are created regularly push the switch out forever.
+stamped and the window runs. Neither half of the union is re-evaluated: a
+`Network` created during the window does not reset it, and neither does a pod
+started during it. Its namespace's ConfigMap receives the current bundle —
+already `old‖new` — on its first reconcile, and its pods have never held
+anything else. Re-checking would be the obvious implementation and would let a
+cluster where networks are created regularly push the switch out forever.
 
 ## 6. The window
 

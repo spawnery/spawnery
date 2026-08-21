@@ -145,8 +145,13 @@ func TestTheGateIsDrivenFromNetworksNotConfigMaps(t *testing.T) {
 	network(lacksTarget)
 	configMap(lacksTarget, unrelated)
 
-	// Has a stale ConfigMap but no Network -- the deleted-network case. Must
-	// NOT appear in the result even though its ConfigMap lacks the target.
+	// Has a stale ConfigMap, no Network and no pods -- the fully abandoned
+	// namespace. Must NOT appear in the result even though its ConfigMap lacks
+	// the target: nothing runs there, so the switch strands nobody, and the
+	// ConfigMap that outlives everything must not block the rotation forever.
+	// (A namespace with no Network but pods still running is the other half of
+	// the gate's union and does block; that is
+	// TestTheGateAlsoCoversANamespaceWithRunningPodsAndNoNetwork below.)
 	orphaned := testenv.Namespace(t, ctx, c)
 	configMap(orphaned, stale)
 
@@ -405,5 +410,131 @@ func TestDropOldRecordsRotationCompleted(t *testing.T) {
 	if got := testutil.ToFloat64(RotationBlockedNamespaces); got != 0 {
 		t.Errorf("RotationBlockedNamespaces = %v after drop-old, want 0 -- "+
 			"a gauge left at its last value reports a finished rotation as one still running", got)
+	}
+}
+
+// createManagedPod puts a pod carrying podspec.LabelManagedBy in ns, gives it
+// the phase asked for, and force-deletes it again in a t.Cleanup.
+//
+// The force is not a detail. envtest runs no kubelet, so an ordinary Delete
+// only stamps a DeletionTimestamp and the pod sits in Terminating for the
+// rest of the binary's life -- and a terminating pod still counts to the
+// gate, which is the whole point of the predicate under test. Deleting with
+// a zero grace period is what actually removes it from etcd, and without it
+// this helper would leak exactly the object that blocks every later test's
+// gate on a namespace that will never receive that test's freshly minted CA.
+// Same LIFO cleanup ordering argument as createNetwork above: registered
+// after testenv.Client's t.Cleanup(cancel), so it runs while ctx is live.
+func createManagedPod(t *testing.T, ctx context.Context, c client.Client, ns, name string, phase corev1.PodPhase) {
+	t.Helper()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels: map[string]string{
+				podspec.LabelManagedBy: podspec.ManagedByValue,
+				podspec.LabelRole:      podspec.RoleServer,
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "minecraft", Image: "example.invalid/paper:latest"}},
+		},
+	}
+	if err := c.Create(ctx, pod); err != nil {
+		t.Fatalf("create pod %s/%s: %v", ns, name, err)
+	}
+	t.Cleanup(func() {
+		if err := c.Delete(ctx, pod, client.GracePeriodSeconds(0)); err != nil {
+			t.Errorf("cleanup: delete pod %s/%s: %v", ns, name, err)
+		}
+	})
+	// The apiserver defaults a freshly created pod to Pending, so a test that
+	// wants Running or a terminal phase has to say so on the status
+	// subresource itself -- there is no kubelet here to do it.
+	pod.Status.Phase = phase
+	if err := c.Status().Update(ctx, pod); err != nil {
+		t.Fatalf("set pod %s/%s to %s: %v", ns, name, phase, err)
+	}
+}
+
+// The gate also covers a namespace whose Network was deleted but whose agent
+// pods are still running.
+//
+// ServerGroup and ProxyGroup carry no OwnerReference to the Network, so
+// deleting a Network leaves the groups and their pods running, and in such a
+// namespace nothing refreshes spawnery-ca any more. Driven from the Networks
+// alone the gate skips that namespace, the window elapses, the switch runs,
+// and every agent there fails its next handshake. A namespace with running
+// agent pods and no Network is exactly a namespace where the switch would
+// strand somebody, so it must block the rotation and be named.
+//
+// Written against the same shared control plane as the test above, so every
+// namespace this one cares about is filtered out of the result for the same
+// reason -- and every pod it creates is force-deleted in a t.Cleanup, since a
+// leaked one would block the gate of every later test in this binary.
+func TestTheGateAlsoCoversANamespaceWithRunningPodsAndNoNetwork(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	target, _, err := IssueCA(now)
+	if err != nil {
+		t.Fatalf("IssueCA (target): %v", err)
+	}
+	stale, _, err := IssueCA(now)
+	if err != nil {
+		t.Fatalf("IssueCA (stale): %v", err)
+	}
+	configMap := func(ns string, caPEM []byte) {
+		t.Helper()
+		cm := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      podspec.CAConfigMapName,
+				Namespace: ns,
+				Labels:    map[string]string{podspec.LabelManagedBy: podspec.ManagedByValue},
+			},
+			Data: map[string]string{podspec.CAConfigMapKey: string(caPEM)},
+		}
+		if err := c.Create(ctx, cm); err != nil {
+			t.Fatalf("create ConfigMap in %s: %v", ns, err)
+		}
+	}
+
+	// The hole: a running agent pod, no Network, and a spawnery-ca frozen at
+	// whatever it last received. Nothing in the operator will ever refresh
+	// it, so the switch would strand this pod's agent.
+	stranded := testenv.Namespace(t, ctx, c)
+	createManagedPod(t, ctx, c, stranded, "lobby-x7k2", corev1.PodRunning)
+	configMap(stranded, stale)
+
+	// A running agent pod whose namespace did keep up: not missing. Proves
+	// the union adds namespaces to the set the gate reads, and does not turn
+	// every pod-bearing namespace into a blocker.
+	caughtUp := testenv.Namespace(t, ctx, c)
+	createManagedPod(t, ctx, c, caughtUp, "lobby-b3n8", corev1.PodRunning)
+	configMap(caughtUp, target)
+
+	// A pod that has finished for good runs no agent and will never run one
+	// again, so its namespace is not somewhere the switch can strand
+	// anybody. Without this case the predicate could be "any managed pod at
+	// all" and the test would not tell.
+	finished := testenv.Namespace(t, ctx, c)
+	createManagedPod(t, ctx, c, finished, "lobby-done", corev1.PodSucceeded)
+	configMap(finished, stale)
+
+	s := &Store{Client: c}
+	got, err := s.namespacesMissingCA(ctx, target)
+	if err != nil {
+		t.Fatalf("namespacesMissingCA: %v", err)
+	}
+
+	own := map[string]bool{stranded: true, caughtUp: true, finished: true}
+	got = slices.DeleteFunc(slices.Clone(got), func(ns string) bool { return !own[ns] })
+
+	want := []string{stranded}
+	if !slices.Equal(got, want) {
+		t.Errorf("namespacesMissingCA = %v, want %v: %q holds a running agent pod and a "+
+			"stale spawnery-ca that nothing will ever refresh, so switching would strand it; "+
+			"%q has caught up and %q runs no process",
+			got, want, stranded, caughtUp, finished)
 	}
 }

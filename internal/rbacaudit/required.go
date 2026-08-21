@@ -62,7 +62,7 @@ var RequiredCluster = []Permission{
 	// Pods — the Server controller owns a game server pod's whole life cycle;
 	// since this milestone ProxyGroupReconciler owns a proxy pod's the same way.
 	{Group: "", Resource: "pods", Verb: "get", Why: "ServerReconciler.fetchPod and ServerGroupReconciler.podFor"},
-	{Group: "", Resource: "pods", Verb: "list", Why: "OrphanReconciler.Sweep and ProxyGroupReconciler.pods"},
+	{Group: "", Resource: "pods", Verb: "list", Why: "OrphanReconciler.Sweep, ProxyGroupReconciler.pods, and Store.namespacesMissingCA, which unions the namespaces holding a managed pod into a CA rotation's gate"},
 	{Group: "", Resource: "pods", Verb: "watch", Why: "ServerReconciler and ProxyGroupReconciler both Owns(&corev1.Pod{})"},
 	{Group: "", Resource: "pods", Verb: "create", Why: "ServerReconciler and ProxyGroupReconciler create pods from podspec"},
 	{Group: "", Resource: "pods", Verb: "delete", Why: "the terminating decision, the orphan sweep, and ProxyGroupReconciler scaling down"},
@@ -126,7 +126,7 @@ var RequiredCluster = []Permission{
 
 	// The operator's own resources.
 	{Group: "spawnery.cloud", Resource: "networks", Verb: "get", Why: "resolving networkRef"},
-	{Group: "spawnery.cloud", Resource: "networks", Verb: "list", Why: "NetworkReconciler.namespaceOwner"},
+	{Group: "spawnery.cloud", Resource: "networks", Verb: "list", Why: "NetworkReconciler.namespaceOwner, and Store.namespacesMissingCA, which lists them again to find the namespaces a CA rotation's gate has to wait for"},
 	{Group: "spawnery.cloud", Resource: "networks", Verb: "watch", Why: "NetworkReconciler For(&Network{})"},
 	// No entry for networks/status:get. Status().Update issues a PUT against
 	// the status subresource and reads nothing first; the status itself is read

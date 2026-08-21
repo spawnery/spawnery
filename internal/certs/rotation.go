@@ -29,6 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -74,6 +75,17 @@ const projectionMargin = 2 * time.Minute
 // the 1024 bytes an event note allows (internal/controller/events.go documents
 // that limit as probed against a real API server).
 const maxBlockedNamesInAnnotation = 10
+
+// Cluster-wide and unqualified, unlike the secrets marker in store.go: the
+// gate has to see every namespace an agent could be running in, and it cannot
+// know which those are in advance. It duplicates the right
+// internal/controller/orphan.go already asks for -- controller-gen merges the
+// two into one rule -- and is repeated here so the permission is documented
+// where it is used, the way every other pods marker in this repository is.
+// It sits in a comment block of its own with a blank line under it:
+// docs/known-issues.md records that controller-gen silently ignores a marker
+// buried inside a declaration's doc comment.
+// +kubebuilder:rbac:groups="",resources=pods,verbs=list
 
 // AdvanceRotation performs at most one step of a rotation and returns the
 // bundle to publish and whether a rotation is still in flight -- which is
@@ -451,21 +463,45 @@ func blockedOnNote(missing []string) string {
 		len(missing)-maxBlockedNamesInAnnotation)
 }
 
-// namespacesMissingCA returns the namespaces that hold a Network but whose
-// spawnery-ca ConfigMap does not yet carry the given certificate, sorted.
+// namespacesMissingCA returns the namespaces where an agent could be running
+// but whose spawnery-ca ConfigMap does not yet carry the given certificate,
+// sorted.
 //
-// The namespaces to check come from the Network objects, not from the CA
-// ConfigMaps. Those are different sets: the ConfigMap deliberately carries no
-// owner reference (see internal/controller/bootstrap.go) so that it outlives
-// the operator, and a Network's ownership of its namespace is the
-// one-per-namespace convention (pickNamespaceOwner in
-// internal/controller/network_controller.go), never a Kubernetes
-// OwnerReference -- the operator never creates or owns a namespace. So a
-// namespace whose Network was deleted keeps whatever spawnery-ca it last
-// received, forever. Listing ConfigMaps instead of Networks would make the
-// gate wait on that dead namespace until a human cleaned it up by hand, and a
-// rotation would never complete on any cluster where a Network had ever been
-// deleted.
+// The namespaces to check are the union of two sets: those holding a Network,
+// and those holding a managed pod that still runs a process.
+//
+// The Networks are the ordinary answer, and the ConfigMaps are deliberately
+// not: the CA ConfigMap carries no owner reference (see
+// internal/controller/bootstrap.go) so that it outlives the operator, and a
+// Network's ownership of its namespace is the one-per-namespace convention
+// (pickNamespaceOwner in internal/controller/network_controller.go), never a
+// Kubernetes OwnerReference -- the operator never creates or owns a
+// namespace. So a namespace whose Network was deleted keeps whatever
+// spawnery-ca it last received, forever, and a gate phrased as "every managed
+// CA ConfigMap" would wait on that dead namespace until a human cleaned it up
+// by hand: a rotation would never complete on any cluster where a Network had
+// ever been deleted.
+//
+// The pods are the answer to what the Networks alone miss. ServerGroup and
+// ProxyGroup carry no OwnerReference to the Network either -- ServerGroupReconciler
+// sets group -> Server and nothing sets Network -> group -- so deleting a
+// Network leaves the groups and their pods running, and in that namespace
+// nothing refreshes the CA ConfigMap any more: NetworkReconciler needs the
+// Network, ProxyGroupReconciler returns through refuse before its
+// Bootstrap.Ensure, and ServerReconciler reaches Ensure only under its
+// createPod guard. Driven from the Networks alone the gate skips such a
+// namespace entirely, the window elapses, the switch runs, and every agent
+// there fails its next handshake.
+//
+// Adding the pods is not a retreat from the decision above. A ConfigMap
+// outlives everything, which is why one can block a rotation forever; a pod
+// does not -- it is deleted, or it finishes, and either way it goes away. And
+// a namespace with running agent pods and no Network *should* block the
+// rotation and be named in ca-rotation-blocked-on, because that is precisely
+// a namespace where the switch would strand somebody: blocking loudly is this
+// design's chosen behaviour for "I cannot yet prove this is safe". The gate's
+// question was always "where could an agent be running", and the Networks
+// alone were an incomplete answer to it.
 func (s *Store) namespacesMissingCA(ctx context.Context, caCertPEM []byte) ([]string, error) {
 	target, err := fingerprintFirst(caCertPEM)
 	if err != nil {
@@ -486,6 +522,21 @@ func (s *Store) namespacesMissingCA(ctx context.Context, caCertPEM []byte) ([]st
 		namespaces[list.Items[i].Namespace] = struct{}{}
 	}
 
+	// The same label the orphan sweep lists on, and the same cluster-wide
+	// pods:list right it already needs -- this adds a call site, not a
+	// permission.
+	pods := &corev1.PodList{}
+	if err := s.Client.List(ctx, pods, client.MatchingLabels{
+		podspec.LabelManagedBy: podspec.ManagedByValue,
+	}); err != nil {
+		return nil, fmt.Errorf("list managed pods: %w", err)
+	}
+	for i := range pods.Items {
+		if podRunsAnAgent(&pods.Items[i]) {
+			namespaces[pods.Items[i].Namespace] = struct{}{}
+		}
+	}
+
 	var missing []string
 	for ns := range namespaces {
 		ok, err := s.namespaceHasCA(ctx, ns, target)
@@ -502,6 +553,26 @@ func (s *Store) namespacesMissingCA(ctx context.Context, caCertPEM []byte) ([]st
 	}
 	sort.Strings(missing)
 	return missing, nil
+}
+
+// podRunsAnAgent reports whether this pod is one the gate has to wait for.
+//
+// Terminal is the only exclusion, and it is the narrow one on purpose. A
+// Succeeded or Failed pod runs no process, holds no agent stream and will
+// never open another, so its namespace is not somewhere the switch can strand
+// anybody. Everything else counts, including the two cases it would be
+// tempting to skip: a Pending pod is about to start and will read the bundle
+// it finds, and a Terminating pod is still running its agent until the kubelet
+// is done with it. Neither can outlive the rotation the way a ConfigMap can --
+// the gate re-reads this every RotationCheckInterval, and both states resolve
+// on their own.
+//
+// Deliberately not internal/controller's podTerminal, which also counts a
+// crash-looping pod as finished. That is the right question for a drain and
+// the wrong one here: a crash-looping pod has RestartPolicy Always, so it
+// comes back, re-reads the CA bundle and needs to find the new CA in it.
+func podRunsAnAgent(pod *corev1.Pod) bool {
+	return pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed
 }
 
 // namespaceHasCA reports whether the namespace's spawnery-ca ConfigMap
