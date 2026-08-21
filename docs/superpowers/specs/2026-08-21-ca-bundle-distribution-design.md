@@ -56,14 +56,22 @@ one loses.
 
 `NetworkReconciler` gains a `Bootstrap *Bootstrapper` field and calls
 `Bootstrap.Ensure(ctx, network.Namespace)` once per reconcile, **after** the
-`Accepted` condition has been set to true and before
+`Accepted` condition has been set to true and **after**
 `reconcileNetworkPolicy`.
 
 After acceptance, because a `Network` that lost its namespace to an older one
 must write nothing into it — the same reason `reconcileNetworkPolicy` sits
-where it does. Before the policy, because the CA is what a pod needs in order
-to work at all and the policy governs pods that already exist; the order
-matters to nothing else and this is the order that reads correctly.
+where it does.
+
+**Corrected while writing the plan.** An earlier draft put the call before the
+policy and claimed the order mattered to nothing. The comment above
+`reconcileNetworkPolicy` says otherwise, and it is right: "The policy, before
+anything else this reconcile does. A Forbidden here is a security control
+failing to land, and it must not pass silently." Going first is that call's
+whole point. Putting the bootstrap ahead of it would mean a CA that cannot be
+written — the transient startup case of §4, or any ConfigMap trouble — stops a
+NetworkPolicy from being written at all, which trades a stale `ca.crt` for an
+unprotected namespace. The bootstrap goes after.
 
 `NetworkReconciler` is wired with the same `Bootstrapper` instance the
 `ServerReconciler` already has — `internal/controller/setup.go` builds one and
