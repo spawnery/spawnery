@@ -53,6 +53,14 @@ type Store struct {
 	Name      string
 	DNSNames  []string
 	Clock     func() time.Time
+
+	// AgentSessionDeadline is the running operator's own
+	// --agent-session-deadline. It is half of the overlap window: after it,
+	// every agent stream that was open when the CA ConfigMap changed has been
+	// closed and reopened, so every agent has re-read the bundle. Zero means
+	// the flag never reached this store, and a rotation refuses to time its
+	// window rather than compute one that is short by exactly the deadline.
+	AgentSessionDeadline time.Duration
 }
 
 // The namespace qualifier keeps this out of the ClusterRole: the bundle lives in
