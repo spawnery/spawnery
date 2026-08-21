@@ -18,7 +18,14 @@ limitations under the License.
 // the action constants this file checks are unexported.
 package certs
 
-import "testing"
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"testing"
+
+	"github.com/spawnery/spawnery/internal/testenv"
+)
 
 // certsActions is every action constant events.go declares, keyed by the
 // identifier the call sites in rotation.go spell -- the same shape
@@ -32,6 +39,7 @@ var certsActions = map[string]string{
 	"actionSwitchRotation":            actionSwitchRotation,
 	"actionCompleteRotation":          actionCompleteRotation,
 	"actionReportUnrecognisedRequest": actionReportUnrecognisedRequest,
+	"actionRefuseRotationRequest":     actionRefuseRotationRequest,
 }
 
 // TestNoCertsActionConstantIsEmpty is this package's copy of the one check
@@ -55,4 +63,72 @@ func TestNoCertsActionConstantIsEmpty(t *testing.T) {
 func TestStoreEventIsANoOpWithNoRecorder(t *testing.T) {
 	s := &Store{Name: SecretName, Namespace: "spawnery-system"}
 	s.event("Normal", ReasonRotationStarted, actionStartRotation, "no recorder is wired in")
+}
+
+// TestMainWiresTheRecorderIntoTheStore pins the one line that turns all six
+// events on.
+//
+// Store.Recorder is optional by design -- (*Store).event is a no-op without
+// it, which is what lets every fixture in this package build a Store without
+// one -- and that is exactly why nothing else can catch the field going
+// missing from production. Deleting `Recorder:` from cmd/spawnery-operator's
+// certs.Store literal silences every event on the secret, and before this
+// test the whole suite stayed green, because every test that asserts an event
+// wires its own FakeRecorder in.
+//
+// A source scan rather than a runtime assertion, because the property is
+// about the one construction of a Store that is not a test fixture, and no
+// runtime seam distinguishes it: the alternative considered was Provider.Start
+// logging once when Recorder is nil, which is a signal in production but goes
+// green the moment somebody deletes the field and never runs the operator.
+// This goes red on the deletion itself. The AST-scan shape is the one
+// internal/controller/events_test.go already uses for its own event
+// invariants.
+func TestMainWiresTheRecorderIntoTheStore(t *testing.T) {
+	path := testenv.RepoPath(t, "cmd/spawnery-operator/main.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parse %s: %v", path, err)
+	}
+
+	literals, wired := 0, 0
+	ast.Inspect(file, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		sel, ok := lit.Type.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Store" {
+			return true
+		}
+		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "certs" {
+			return true
+		}
+		literals++
+		for _, elt := range lit.Elts {
+			kv, ok := elt.(*ast.KeyValueExpr)
+			if !ok {
+				continue
+			}
+			if key, ok := kv.Key.(*ast.Ident); ok && key.Name == "Recorder" {
+				wired++
+			}
+		}
+		return true
+	})
+
+	// Nought would pass the loop above vacuously, so it is its own failure:
+	// the wiring having moved somewhere this scan cannot see is a reason to
+	// update this test, not a reason to stop checking.
+	if literals == 0 {
+		t.Fatalf("no certs.Store literal found in %s; the wiring moved and this pin "+
+			"has to follow it, or the six rotation events go unrecorded with nothing noticing", path)
+	}
+	if wired != literals {
+		t.Errorf("%d of %d certs.Store literals in %s set Recorder; without it every "+
+			"rotation event is silently dropped, because (*Store).event is a no-op on a "+
+			"nil Recorder and every test that asserts an event supplies its own",
+			wired, literals, path)
+	}
 }

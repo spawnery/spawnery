@@ -35,6 +35,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -537,4 +538,205 @@ func TestTheGateAlsoCoversANamespaceWithRunningPodsAndNoNetwork(t *testing.T) {
 			"%q has caught up and %q runs no process",
 			got, want, stranded, caughtUp, finished)
 	}
+}
+
+// newRecordingStore is the fixture the event tests share: a Store on its own
+// namespace with a frozen clock and a recorder the test drains.
+//
+// The recorder is buffered well past the one event any of these tests
+// provokes, so a second, unexpected event is visible as a second value on the
+// channel rather than as a blocked send inside production code.
+func newRecordingStore(t *testing.T) (*Store, *events.FakeRecorder, context.Context, string, time.Time) {
+	t.Helper()
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	rec := events.NewFakeRecorder(10)
+	return &Store{
+		Client:               c,
+		Namespace:            ns,
+		Name:                 SecretName,
+		DNSNames:             ServingDNSNames("spawnery-operator", ns),
+		Clock:                func() time.Time { return now },
+		AgentSessionDeadline: 10 * time.Minute,
+		Recorder:             rec,
+	}, rec, ctx, ns, now
+}
+
+// expectEvent takes the one event the call under test recorded and returns
+// its text, having checked its type and reason. Fails if nothing was
+// recorded: a missing event is the whole failure these tests exist to catch,
+// and a select with a default is what makes that a failure rather than a
+// hang.
+func expectEvent(t *testing.T, rec *events.FakeRecorder, eventtype, reason string) string {
+	t.Helper()
+	select {
+	case got := <-rec.Events:
+		if want := eventtype + " " + reason + " "; !strings.HasPrefix(got, want) {
+			t.Fatalf("event = %q, want it to start %q", got, want)
+		}
+		return got
+	default:
+		t.Fatalf("no %s %s event was recorded", eventtype, reason)
+		return ""
+	}
+}
+
+// start says so on the secret. Untested until now, and the gap was not
+// theoretical: deleting the s.event call from applyRequest's RequestStart arm
+// left every other test in this package green, so the one signal a human gets
+// that their annotation was picked up at all had nothing holding it in place.
+func TestStartRecordsRotationStarted(t *testing.T) {
+	s, rec, ctx, ns, _ := newRecordingStore(t)
+
+	current, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	fresh, inFlight, err := s.applyRequest(ctx, current, RequestStart, "")
+	if err != nil {
+		t.Fatalf("applyRequest (start): %v", err)
+	}
+	// Asserted so the event below is evidence about a step that happened,
+	// not about a call that returned early.
+	if !inFlight || len(fresh.NextCACertPEM) == 0 {
+		t.Fatalf("start did not mint an incoming CA (inFlight=%v)", inFlight)
+	}
+	if got := secretAnnotation(t, ctx, s, ns, AnnotationRotationPhase); got != PhaseDistributing {
+		t.Fatalf("phase = %q, want %q", got, PhaseDistributing)
+	}
+
+	got := expectEvent(t, rec, corev1.EventTypeNormal, ReasonRotationStarted)
+	if !strings.Contains(got, keyNextCACert) {
+		t.Errorf("event = %q, want it to name %s, the slot a human would go and look at",
+			got, keyNextCACert)
+	}
+}
+
+// The switch says so on the secret too. This is the step that can actually
+// break somebody, so the event that reports it is the one most worth pinning.
+func TestTheSwitchRecordsRotationSwitched(t *testing.T) {
+	s, rec, ctx, _, now := newRecordingStore(t)
+
+	current, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	nextCert, nextKey, err := IssueCA(now)
+	if err != nil {
+		t.Fatalf("IssueCA: %v", err)
+	}
+	distributing := current.WithNextCA(nextCert, nextKey)
+
+	// `since` stamped an hour ago, so the window has elapsed and this call is
+	// the switch itself. No namespaces to set up: once `since` is stamped the
+	// gate does not run again for this rotation, which is exactly what makes
+	// the fixture this small.
+	since := now.Add(-time.Hour).UTC().Format(time.RFC3339)
+	fresh, inFlight, err := s.drivePhase(ctx, distributing, PhaseDistributing, since, "")
+	if err != nil {
+		t.Fatalf("drivePhase: %v", err)
+	}
+	if !inFlight || len(fresh.NextCACertPEM) != 0 {
+		t.Fatalf("the switch did not happen (inFlight=%v, next slot occupied=%v)",
+			inFlight, len(fresh.NextCACertPEM) != 0)
+	}
+
+	got := expectEvent(t, rec, corev1.EventTypeNormal, ReasonRotationSwitched)
+	if !strings.Contains(got, RequestDropOld) {
+		t.Errorf("event = %q, want it to name %s, the request that ends the rotation from here",
+			got, RequestDropOld)
+	}
+}
+
+// A rotate-ca value the operator cannot read is reported on the secret, not
+// only in the log.
+//
+// This event was flagged as load-bearing when it was added and was then
+// asserted only through its log line: deleting s.event from AdvanceRotation's
+// default arm left the whole suite green. It matters because after an earlier
+// fix a mistyped annotation no longer halts anything -- the sequence carries
+// on and takes its next step on schedule -- so the report is the only thing
+// standing between the typo and a switch nobody asked for yet.
+func TestAnUnrecognisedRequestRecordsAWarning(t *testing.T) {
+	s, rec, ctx, ns, _ := newRecordingStore(t)
+
+	current, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	annotate(t, ctx, s, ns, AnnotationRotateRequest, "strat")
+
+	if _, _, err := s.AdvanceRotation(ctx, current); err != nil {
+		t.Fatalf("AdvanceRotation with an unreadable request: %v", err)
+	}
+	if got := secretAnnotation(t, ctx, s, ns, AnnotationRotateRequest); got != "strat" {
+		t.Fatalf("rotate-ca = %q, want it left in place", got)
+	}
+
+	got := expectEvent(t, rec, corev1.EventTypeWarning, ReasonRotationRequestUnrecognised)
+	if !strings.Contains(got, "strat") {
+		t.Errorf("event = %q, want it to quote the value that was typed", got)
+	}
+}
+
+// A request the operator understands and will not perform is reported too.
+//
+// The refusal deletes the annotation and writes nothing else, so this event
+// is the only durable trace of it. drop-old sent while `distributing` is the
+// case that will actually happen: a human a minute early watches the
+// annotation disappear within one tick and has no way to tell whether the
+// operator refused it or lost it.
+func TestARefusedRequestRecordsAWarning(t *testing.T) {
+	s, rec, ctx, ns, _ := newRecordingStore(t)
+
+	current, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	annotate(t, ctx, s, ns, AnnotationRotateRequest, RequestDropOld)
+
+	// distributing, not switched: the CA drop-old would remove is the one
+	// signing the serving certificate right now.
+	if _, _, err := s.applyRequest(ctx, current, RequestDropOld, PhaseDistributing); err == nil {
+		t.Fatal("applyRequest (drop-old during distributing) did not refuse")
+	}
+	// Consumed, which is what makes the event the only trace left.
+	if got := secretAnnotation(t, ctx, s, ns, AnnotationRotateRequest); got != "" {
+		t.Fatalf("rotate-ca = %q after a refusal, want it consumed like an accepted request", got)
+	}
+
+	got := expectEvent(t, rec, corev1.EventTypeWarning, ReasonRotationRequestRefused)
+	if !strings.Contains(got, PhaseDistributing) {
+		t.Errorf("event = %q, want it to name the phase that refused the request", got)
+	}
+	if !strings.Contains(got, "consumed") {
+		t.Errorf("event = %q, want it to say the request was consumed -- the human is "+
+			"looking at an annotation that has just vanished", got)
+	}
+}
+
+// annotate sets one annotation on the store's secret.
+func annotate(t *testing.T, ctx context.Context, s *Store, ns, key, value string) {
+	t.Helper()
+	secret := &corev1.Secret{}
+	if err := s.Client.Get(ctx, types.NamespacedName{Name: s.Name, Namespace: ns}, secret); err != nil {
+		t.Fatalf("get the secret: %v", err)
+	}
+	if secret.Annotations == nil {
+		secret.Annotations = map[string]string{}
+	}
+	secret.Annotations[key] = value
+	if err := s.Client.Update(ctx, secret); err != nil {
+		t.Fatalf("annotate the secret with %s=%s: %v", key, value, err)
+	}
+}
+
+func secretAnnotation(t *testing.T, ctx context.Context, s *Store, ns, key string) string {
+	t.Helper()
+	secret := &corev1.Secret{}
+	if err := s.Client.Get(ctx, types.NamespacedName{Name: s.Name, Namespace: ns}, secret); err != nil {
+		t.Fatalf("get the secret: %v", err)
+	}
+	return secret.Annotations[key]
 }
