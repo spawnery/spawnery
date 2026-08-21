@@ -141,11 +141,19 @@ func TestThePublishedBundleCarriesBothCAsWhileRotating(t *testing.T) {
 // PublishedCA's output travels Provider.Set -> Provider.CABundle ->
 // Bootstrapper.CA -> the spawnery-ca ConfigMap of every namespace, and the
 // consumer is OperatorChannel.trustManager, which parses the whole bundle with
-// CertificateFactory.generateCertificates and throws on anything that is not a
-// certificate. So a slot that does not parse does not cost a rotation; it
-// costs every agent in every namespace its entire trust store. Only a
-// hand-edited secret produces one, which is why this is a guard rather than a
-// repair -- the repair is AdvanceRotation's, and it runs a tick later.
+// CertificateFactory.generateCertificates. A five-hyphen run in the slot that
+// does not open a valid certificate block throws for the whole stream, taking
+// the CA that was signing with it -- so a slot that does not parse does not
+// cost a rotation; it costs every agent in every namespace its entire trust
+// store. Only a hand-edited secret produces one, which is why this is a guard
+// rather than a repair -- the repair is AdvanceRotation's, and it runs a tick
+// later.
+//
+// Every fixture below is a shape the agent genuinely rejects, verified against
+// the OpenJDK in this repository's devshell (design section 2). That matters:
+// the shape this test used to open with, "-- this is not a certificate --",
+// has only two hyphens, and the agent steps straight over it -- so the test
+// named an outage it was not in fact demonstrating.
 //
 // The guard is here, at the one function whose output reaches an agent, rather
 // than at a call site: a later path that publishes the bundle from somewhere
@@ -163,23 +171,23 @@ func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
 		t.Fatalf("IssueCA: %v", err)
 	}
 
-	// Three shapes, because the agent throws on all of them and pem.Decode
-	// alone only catches the first two: bytes that are not PEM at all, a PEM
-	// envelope around something that is not a certificate, and a well-formed
-	// certificate with stray bytes trailing it -- exactly what a hand-edit
-	// that appends rather than replaces produces. parsableCert's contract is
-	// "exactly one PEM block", not "at least one", precisely for this shape.
-	notPEM := []byte("-- this is not a certificate --\n")
+	// Three shapes, because pem.Decode alone only catches the first two:
+	// a header whose body is not base64 at all, a PEM envelope around
+	// something that is not a certificate, and a well-formed certificate with
+	// a stray header trailing it -- exactly what a hand-edit that appends
+	// rather than replaces produces. parsableCert's contract is "exactly one
+	// PEM block", not "at least one", precisely for that last shape.
+	notPEM := []byte("-----BEGIN CERTIFICATE-----\n!!! not base64 !!!\n-----END CERTIFICATE-----\n")
 	pemButNotACert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("nonsense")})
-	pemPlusTrailingJunk := slices.Concat(good, []byte("-- trailing, not PEM --\n"))
+	pemPlusTrailingJunk := slices.Concat(good, []byte("-----not a header-----\n"))
 
 	for _, tc := range []struct {
 		name string
 		bad  []byte
 	}{
-		{"not PEM at all", notPEM},
+		{"a PEM header whose body is not base64", notPEM},
 		{"a PEM envelope around nonsense", pemButNotACert},
-		{"a valid certificate followed by trailing bytes", pemPlusTrailingJunk},
+		{"a valid certificate followed by a stray header", pemPlusTrailingJunk},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			next := &certs.Bundle{
@@ -191,8 +199,9 @@ func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
 			}
 			if got := next.PublishedCA(); !bytes.Equal(got, signing.CACertPEM) {
 				t.Errorf("an unparseable ca-next was published; the bundle every agent "+
-					"pins would have %d bytes of it, and trustManager throws on the whole "+
-					"stream rather than skipping the bad block", len(tc.bad))
+					"pins would have %d bytes of it, and a five-hyphen run that opens no "+
+					"valid block throws for the whole stream -- the signing CA included",
+					len(tc.bad))
 			}
 
 			prev := &certs.Bundle{

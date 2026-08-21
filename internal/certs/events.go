@@ -60,9 +60,10 @@ import (
 // ReasonRotationSlotDiscarded is the seventh, and it is the only one that
 // reports the operator undoing part of a rotation on its own. A rotation slot
 // whose certificate does not parse is cleared, because every byte of it
-// reaches every agent's trust store through PublishedCA and
-// CertificateFactory.generateCertificates throws on the whole stream rather
-// than skipping the bad block. None of the six above says that: nothing was
+// reaches every agent's trust store through PublishedCA, where a five-hyphen
+// run that does not open a valid certificate block makes
+// CertificateFactory.generateCertificates throw for the whole stream -- the
+// CA that was signing included. None of the six above says that: nothing was
 // refused and nothing was unrecognised, since a hand-edited slot is not a
 // request; no gate is holding, so a reader triaging a RotationBlocked would
 // go looking for a namespace that is not there; and the phase change that

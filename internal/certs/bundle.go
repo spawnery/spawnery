@@ -195,17 +195,36 @@ func (b *Bundle) PublishedCA() []byte {
 //
 // It is the mode where parsableCert and parseCA disagree: parseCA decodes the
 // first block and ignores whatever follows, so a certificate with a second
-// block after it still signs -- while trustManager, which reads the whole
-// stream, throws. The other two modes leave parseCA failing on the very same
-// first block, and a caller can rely on that.
+// block after it still signs. What trustManager does with the extra block is
+// not to throw but to trust it -- a stream of valid blocks loads every one of
+// them as a CA -- which is why this mode is repaired rather than published:
+// silently widening the fleet's trust store is the damage here, not an
+// outage. The other two modes leave parseCA failing on the very same first
+// block, and a caller can rely on that.
 var errMoreThanOnePEMBlock = errors.New("more than one PEM block")
 
 // parsableCert reports whether pemBytes is something an agent's trust store
-// will accept: one PEM block holding one certificate. Both halves matter --
-// OperatorChannel.trustManager parses with CertificateFactory.generateCertificates,
-// which throws on bytes that are not PEM and on a PEM envelope around
-// something that is not a certificate, and it throws for the whole stream
-// rather than skipping the offending block.
+// will accept: one PEM block holding one certificate.
+//
+// **What the agent actually rejects, measured rather than assumed.**
+// OperatorChannel.trustManager parses with CertificateFactory.generateCertificates.
+// OpenJDK's X509Factory.readOneBlock skips everything before the first line
+// beginning with a five-hyphen run and returns null at end of stream instead
+// of throwing, so stray bytes carrying no such line are stepped over: a good
+// ca.crt followed by "this is not a certificate" still yields the good CA.
+// What kills the stream is a line that begins with a five-hyphen run and does
+// not open a complete, decodable certificate block -- a PEM envelope around
+// something that is not a certificate, a block whose base64 is malformed, a
+// header with no matching footer, or a bare "-----x-----" line. Then nothing
+// already parsed survives; the whole bundle throws.
+//
+// **This check is deliberately stricter than that.** "Stray bytes that happen
+// to contain no five-hyphen run" is not a property worth depending on: it
+// belongs to one JDK's block scanner rather than to the format, it is
+// invisible in the bytes a human pastes, and a single "-----" anywhere in
+// them flips it. So the rule is the narrow one -- exactly the PEM encoding of
+// one certificate -- and everything else is repaired or cleared by
+// AdvanceRotation rather than published on the strength of that property.
 func parsableCert(pemBytes []byte) error {
 	block, rest := pem.Decode(pemBytes)
 	if block == nil {
@@ -215,8 +234,9 @@ func parsableCert(pemBytes []byte) error {
 		return fmt.Errorf("parse certificate: %w", err)
 	}
 	// A certificate followed by stray bytes is exactly what a hand-edit
-	// produces, and trustManager throws on the whole stream rather than
-	// stopping at the first valid block -- so "exactly one" is not optional.
+	// produces, and whether the agent survives it turns on whether those
+	// bytes happen to contain a five-hyphen run -- so "exactly one" is not
+	// optional.
 	if len(bytes.TrimSpace(rest)) != 0 {
 		return errMoreThanOnePEMBlock
 	}

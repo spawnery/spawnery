@@ -647,7 +647,7 @@ func TestAnUnparseableIncomingCAAbandonsTheRotation(t *testing.T) {
 	// The bundle handed to AdvanceRotation deliberately still carries the
 	// good bytes: the hand-edit lands after Ensure read the secret, which is
 	// the ordering AdvanceRotation's own fresh Get exists for.
-	breakSlot(t, ctx, s, ns, "ca-next.crt", []byte("-- not a certificate --\n"))
+	breakSlot(t, ctx, s, ns, "ca-next.crt", unparseableSlot)
 
 	after, inFlight, err := s.AdvanceRotation(ctx, b)
 	if err != nil {
@@ -723,7 +723,7 @@ func TestAnUnparseableOutgoingCACompletesTheDrop(t *testing.T) {
 	if err := s.Client.Get(ctx, key, secret); err != nil {
 		t.Fatalf("get the secret: %v", err)
 	}
-	secret.Data["ca-previous.crt"] = []byte("-- not a certificate --\n")
+	secret.Data["ca-previous.crt"] = unparseableSlot
 	if err := s.Client.Update(ctx, secret); err != nil {
 		t.Fatalf("break the outgoing CA: %v", err)
 	}
@@ -763,8 +763,9 @@ func TestAnUnparseableOutgoingCACompletesTheDrop(t *testing.T) {
 	if err := serving.CheckSignatureFrom(parseCert(t, after.CACertPEM)); err != nil {
 		t.Errorf("the serving certificate no longer chains to the published CA: %v", err)
 	}
-	if bytes.Contains(after.PublishedCA(), []byte("-- not a certificate --")) {
-		t.Error("the discarded bytes are still published; every agent's trust store throws on the whole stream")
+	if bytes.Contains(after.PublishedCA(), unparseableMarker) {
+		t.Error("the discarded bytes are still published; the five-hyphen run in them opens " +
+			"no valid block, so every agent's trust store throws for the whole stream")
 	}
 	note := expectEvent(t, rec, corev1.EventTypeWarning, certs.ReasonRotationSlotDiscarded)
 	if !strings.Contains(note, "ca-previous.crt") || !strings.Contains(note, "rollback") {
@@ -840,7 +841,7 @@ func TestAStartClearsTheDiscardedRecord(t *testing.T) {
 		t.Fatalf("Ensure: %v", err)
 	}
 	createNetwork(t, ctx, s.Client, ns, "net")
-	breakSlot(t, ctx, s, ns, "ca-next.crt", []byte("-- not a certificate --\n"))
+	breakSlot(t, ctx, s, ns, "ca-next.crt", unparseableSlot)
 	requestRotation(t, ctx, s, certs.RequestStart)
 
 	// The cleanup is this call's one step. The request is not acted on in the
@@ -891,7 +892,7 @@ func TestACorruptSlotDoesNotFailEnsure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	breakSlot(t, ctx, s, ns, "ca-next.crt", []byte("-- not a certificate --\n"))
+	breakSlot(t, ctx, s, ns, "ca-next.crt", unparseableSlot)
 
 	again, err := s.Ensure(ctx)
 	if err != nil {
@@ -907,7 +908,7 @@ func TestACorruptSlotDoesNotFailEnsure(t *testing.T) {
 	}
 	// And what reaches the agents omits it, which is the safety net the
 	// report above complements rather than replaces.
-	if bytes.Contains(again.PublishedCA(), []byte("-- not a certificate --")) {
+	if bytes.Contains(again.PublishedCA(), unparseableMarker) {
 		t.Error("the corrupt slot is in what PublishedCA returns")
 	}
 }
@@ -919,9 +920,10 @@ func TestACorruptSlotDoesNotFailEnsure(t *testing.T) {
 // cover. parseCA decodes the first block and ignores whatever follows, so
 // RestorePrevious -> Reissue -> parseCA succeeds on these bytes: the rollback
 // is alive, and clearing the slot would have killed it while the warning said
-// it was already dead. Only trustManager, which reads the whole stream,
-// objects -- so the repair is to publish what the operator already signs
-// with.
+// it was already dead. What trustManager does with the extra block is not to
+// throw but to load it as a CA -- a stream of valid blocks trusts every one
+// of them -- so the damage is a silent widening of the fleet's trust store,
+// and the repair is to publish exactly what the operator already signs with.
 func TestAMultiBlockOutgoingCAIsTruncatedAndTheRollbackStillWorks(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
@@ -1048,7 +1050,7 @@ func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
 		rec := events.NewFakeRecorder(8)
 		s.Recorder = rec
 
-		breakSlot(t, ctx, s, ns, "ca-previous.crt", []byte("-- not a certificate --\n"))
+		breakSlot(t, ctx, s, ns, "ca-previous.crt", unparseableSlot)
 		breakSlot(t, ctx, s, ns, "ca-next.crt", append(append([]byte{}, spare...), spare...))
 
 		if _, _, err := s.AdvanceRotation(ctx, b); err != nil {
@@ -1100,7 +1102,7 @@ func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
 		rec := events.NewFakeRecorder(8)
 		s.Recorder = rec
 
-		breakSlot(t, ctx, s, ns, "ca-previous.crt", []byte("-- not a certificate --\n"))
+		breakSlot(t, ctx, s, ns, "ca-previous.crt", unparseableSlot)
 		breakSlot(t, ctx, s, ns, "ca-next.crt",
 			pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a certificate")}))
 
@@ -1136,6 +1138,24 @@ func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
 }
 
 // --- fixture plumbing ---------------------------------------------------
+
+// unparseableSlot is a slot shape both parsers genuinely reject. Go's
+// pem.Decode returns no block, because the body is not base64; the agent's
+// CertificateFactory.generateCertificates throws for the whole stream,
+// because the five-hyphen run opens a block it cannot finish -- and it takes
+// the signing CA down with it, which is the outage these tests are about.
+//
+// Deliberately not "-- not a certificate --", which every one of these tests
+// used to use. That shape has two hyphens, and OpenJDK's block scanner steps
+// straight over anything that is not a line beginning with five; the agent
+// keeps its trust store and the fixture demonstrated nothing. Measured
+// against the OpenJDK in this repository's devshell; the table is in section
+// 2 of docs/superpowers/specs/2026-08-21-rotation-followups-design.md.
+var unparseableSlot = []byte("-----BEGIN CERTIFICATE-----\n!!! not base64 !!!\n-----END CERTIFICATE-----\n")
+
+// unparseableMarker is the part of unparseableSlot that could not appear in a
+// well-formed bundle, for asserting that the bytes stopped being published.
+var unparseableMarker = []byte("!!! not base64 !!!")
 
 // startedAndDistributed leaves the rotation one call short of the gate
 // passing: started, with the incoming CA already in the only namespace that

@@ -23,11 +23,51 @@ rotates has to behave exactly as before. From there the bytes travel
 the `spawnery-ca` ConfigMap of every namespace.
 
 The consumer is `OperatorChannel.trustManager`, which parses the whole bundle
-with `CertificateFactory.generateCertificates` and **throws** on input that is
-not a certificate — its own test asserts that. So one bad byte in
-`ca-next.crt` does not cost a rotation; it costs every agent in every namespace
-its entire trust store. Compare the same damage to `ca.crt`, which `Ensure`'s
-`Validate`/`reissueOrIssue` path repairs by itself.
+with `CertificateFactory.generateCertificates`. So a bad `ca-next.crt` does not
+cost a rotation; it costs every agent in every namespace its entire trust
+store — the CA that is still signing included, because the failure is for the
+stream and not for the block. Compare the same damage to `ca.crt`, which
+`Ensure`'s `Validate`/`reissueOrIssue` path repairs by itself.
+
+> **Corrected after review, and measured.** This section, `parsableCert`'s doc
+> and the Go tests' failure messages all used to say that
+> `generateCertificates` "throws for the whole stream rather than skipping the
+> offending block" on anything that is not a certificate. Run against the
+> OpenJDK in this repository's devshell, mirroring `trustManager` exactly, that
+> is wrong in both directions:
+>
+> | second half of `good ca.crt ‖ slot` | result |
+> |---|---|
+> | plain garbage, no five-hyphen run | **OK**, n=1 |
+> | good certificate + trailing garbage | **OK**, n=2 |
+> | leading garbage line + good certificate | **OK**, n=2 |
+> | `-- this is not a certificate --` (two hyphens) | **OK**, n=1 |
+> | good certificate + a *second valid* certificate | **OK**, n=3 — all three trusted |
+> | PEM envelope around a non-certificate | **throws** |
+> | second block with malformed base64 | **throws** |
+> | a bare `-----not a header-----` line | **throws** |
+> | `-----BEGIN CERTIFICATE-----` with no footer | **throws** |
+> | a valid `EC PRIVATE KEY` block | **throws** |
+>
+> `X509Factory.readOneBlock` skips everything before the first line beginning
+> with a five-hyphen run and returns null at end of stream rather than
+> throwing. What kills the stream is **a line beginning with a five-hyphen run
+> that does not open a complete, decodable certificate block**; other stray
+> bytes are stepped over, and anything already parsed is kept. (A stream in
+> which *nothing* parsed and which was not empty throws "No certificate data
+> found", which is why `trustManager`'s own "not a certificate" test passes.)
+>
+> Every treatment in this design was and remains conservative, so none of them
+> changed because of this — but the reasoning left for the next maintainer was
+> false, and one Go fixture (`-- this is not a certificate --`) named an
+> outage the agent does not in fact suffer. §6 now requires a fixture that
+> genuinely throws, and `agent/common`'s own test pins the claim in Kotlin.
+>
+> The last row is the one that changes an *argument* rather than a fixture:
+> the multi-block mode §3 repairs is not an outage in the agent at all. It is
+> a **silent trust expansion** — every extra block a hand-edit pasted is
+> loaded into every agent's trust store as a CA. §3 is corrected accordingly;
+> the treatment is unchanged, and the reason for it is now the stronger one.
 
 Only a hand-edited secret produces it today. That is why it was Minor, and it
 is also why it is worth closing: the blast radius is the whole fleet and the
@@ -59,9 +99,18 @@ matters: `SwitchToNext` and `RestorePrevious` both route through `Reissue` →
 `parseCA`, which refuses a key that does not parse or does not match its
 certificate.
 
-The check is `pem.Decode` **and** `x509.ParseCertificate`, because
-`CertificateFactory.generateCertificates` throws on both a non-PEM blob and a
-PEM envelope around something that is not a certificate.
+The check is `pem.Decode` **and** `x509.ParseCertificate`, because a PEM
+envelope around something that is not a certificate satisfies the first and
+throws in the agent all the same.
+
+**And it is deliberately stricter than the agent.** The table above says the
+agent tolerates stray bytes that carry no five-hyphen run, and this check does
+not. That tolerance is a property of one JDK's block scanner rather than of
+the format, it is invisible in the bytes a human pastes, and a single `-----`
+anywhere in them flips it. Publishing on the strength of it would mean the
+fleet's trust store depends on whether a pasted comment line happened to use
+five dashes. So the rule is the narrow one — exactly the PEM encoding of one
+certificate — and §3 repairs or clears everything else.
 
 ## 3. The cleanup, and why it is not symmetric
 
@@ -81,8 +130,13 @@ on the slot second.
 it and `parseCA` disagree. `parseCA` decodes the first block and ignores
 whatever follows, so a `ca-previous.crt` holding a certificate with a chain
 pasted after it — a restore that carried an intermediate along — still signs:
-`RestorePrevious` → `Reissue` → `parseCA` succeeds on exactly those bytes. Only
-`trustManager`, which reads the whole stream, objects. So that slot is
+`RestorePrevious` → `Reissue` → `parseCA` succeeds on exactly those bytes.
+
+What `trustManager` does with them is *not* to object — the measurement above
+settles it: a stream of three valid blocks loads three CAs. That is worse than
+an outage and not better, because it is silent. Every block a paste buffer
+carried in becomes a certificate authority every agent in the fleet will accept
+an operator identity from, and nothing anywhere says so. So that slot is
 truncated to its first block instead of being thrown away. The first block is
 precisely the one `parseCA` was already using, so the repair makes publication
 and signing agree again — and their disagreement is the whole of the defect.
