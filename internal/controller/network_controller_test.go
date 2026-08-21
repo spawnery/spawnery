@@ -680,20 +680,41 @@ func TestALosingNetworkDoesNotBootstrapTheNamespace(t *testing.T) {
 
 // The objects Ensure writes carry no OwnerReference, and that is deliberate:
 // they are meant to outlive the operator so a pod restarting during an
-// outage still finds a CA to trust. Making the Network own the ConfigMap is
-// the tidy-looking change this design refused, and it would delete a running
-// fleet's trust anchor the moment somebody deleted a Network. Asserted here
-// because "tidy up the ownership" is exactly the kind of edit that arrives
-// later with a green suite.
+// outage still finds a CA to trust and a ServiceAccount to authenticate
+// with. Making the Network own them is the tidy-looking change this design
+// refused, and it would delete a running fleet's trust anchor and its
+// identity the moment somebody deleted a Network. Asserted here because
+// "tidy up the ownership" is exactly the kind of edit that arrives later
+// with a green suite.
+//
+// All three objects, not just the ConfigMap: a pod that keeps its CA but
+// loses its ServiceAccount cannot mint a token, and its projected volume
+// never fills.
 func TestTheCAConfigMapIsOwnedByNothing(t *testing.T) {
 	f := newFixture(t)
 	r, _ := networkReconcilerWithEvents(f)
 	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return []byte("PEM-A") }}
 
+	// Cleared first so the objects read back below are the ones this
+	// reconcile creates, not the ones newFixture's own reconcile left here.
+	key := client.ObjectKey{Namespace: f.ns, Name: podspec.CAConfigMapName}
+	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: podspec.CAConfigMapName, Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("clear the fixture's CA ConfigMap: %v", err)
+	}
+	serviceAccounts := []string{podspec.ServerServiceAccountName, podspec.ProxyServiceAccountName}
+	for _, name := range serviceAccounts {
+		if err := f.c.Delete(f.ctx, &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+		}); err != nil {
+			t.Fatalf("clear the fixture's %s ServiceAccount: %v", name, err)
+		}
+	}
+
 	f.reconcileNetwork(t, r, f.network.Name)
 
 	var cm corev1.ConfigMap
-	key := client.ObjectKey{Namespace: f.ns, Name: podspec.CAConfigMapName}
 	if err := f.c.Get(f.ctx, key, &cm); err != nil {
 		t.Fatalf("read the CA ConfigMap back: %v", err)
 	}
@@ -701,6 +722,18 @@ func TestTheCAConfigMapIsOwnedByNothing(t *testing.T) {
 		t.Errorf("the CA ConfigMap has %d owner reference(s): %v. It must have none — "+
 			"deleting a Network would otherwise take the trust anchor of every pod still "+
 			"running in the namespace with it", len(cm.OwnerReferences), cm.OwnerReferences)
+	}
+	for _, name := range serviceAccounts {
+		var sa corev1.ServiceAccount
+		if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: name}, &sa); err != nil {
+			t.Fatalf("read the %s ServiceAccount back: %v", name, err)
+		}
+		if len(sa.OwnerReferences) != 0 {
+			t.Errorf("the %s ServiceAccount has %d owner reference(s): %v. It must have "+
+				"none — deleting a Network would otherwise strip the identity every pod "+
+				"still running in the namespace authenticates with", name,
+				len(sa.OwnerReferences), sa.OwnerReferences)
+		}
 	}
 }
 
@@ -730,8 +763,14 @@ func TestAReconcileWithoutACABundleFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("the reconcile succeeded with no CA bundle available")
 	}
-	if !strings.Contains(err.Error(), "bootstrap") {
-		t.Errorf("error = %v, want it to name the bootstrap step", err)
+	// The whole wrapper, not the word "bootstrap": Ensure's own message
+	// already starts "bootstrap namespace ...", so a substring match on that
+	// word would pass with the reconcile's wrapper removed and would say
+	// nothing about which step failed.
+	const wrapper = "bootstrap the namespace: "
+	if !strings.HasPrefix(err.Error(), wrapper) {
+		t.Errorf("error = %v, want it to start with %q so the failing step is named "+
+			"by this reconcile and not only by Ensure", err, wrapper)
 	}
 
 	var cm corev1.ConfigMap
