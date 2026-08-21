@@ -163,11 +163,15 @@ func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
 		t.Fatalf("IssueCA: %v", err)
 	}
 
-	// Two shapes, because the agent throws on both and only the first is
-	// caught by pem.Decode: bytes that are not PEM at all, and a PEM envelope
-	// around something that is not a certificate.
+	// Three shapes, because the agent throws on all of them and pem.Decode
+	// alone only catches the first two: bytes that are not PEM at all, a PEM
+	// envelope around something that is not a certificate, and a well-formed
+	// certificate with stray bytes trailing it -- exactly what a hand-edit
+	// that appends rather than replaces produces. parsableCert's contract is
+	// "exactly one PEM block", not "at least one", precisely for this shape.
 	notPEM := []byte("-- this is not a certificate --\n")
 	pemButNotACert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("nonsense")})
+	pemPlusTrailingJunk := slices.Concat(good, []byte("-- trailing, not PEM --\n"))
 
 	for _, tc := range []struct {
 		name string
@@ -175,6 +179,7 @@ func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
 	}{
 		{"not PEM at all", notPEM},
 		{"a PEM envelope around nonsense", pemButNotACert},
+		{"a valid certificate followed by trailing bytes", pemPlusTrailingJunk},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			next := &certs.Bundle{
@@ -214,5 +219,26 @@ func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
 	}
 	if got := ok.PublishedCA(); !bytes.Equal(got, slices.Concat(signing.CACertPEM, good)) {
 		t.Error("a well-formed incoming CA was dropped from the published bundle")
+	}
+
+	// A bad Next does not suppress a good Previous. Next and Previous are
+	// never both populated in a legitimate rotation -- they belong to
+	// sequential phases, not concurrent ones -- so this shape only arises
+	// from a corrupted bundle. But PublishedCA already documents a bad slot
+	// as "treated as absent", and the switch's own case order falls through
+	// from Next to Previous, so the safer reading -- the one that keeps
+	// publishing a CA agents may still need for a rollback, rather than
+	// silently narrowing to just the signing CA -- is that the fallback
+	// still fires.
+	badNextGoodPrevious := &certs.Bundle{
+		CACertPEM:         signing.CACertPEM,
+		CAKeyPEM:          signing.CAKeyPEM,
+		ServingCertPEM:    signing.ServingCertPEM,
+		ServingKeyPEM:     signing.ServingKeyPEM,
+		NextCACertPEM:     notPEM,
+		PreviousCACertPEM: good,
+	}
+	if got := badNextGoodPrevious.PublishedCA(); !bytes.Equal(got, slices.Concat(signing.CACertPEM, good)) {
+		t.Error("a bad Next suppressed a well-formed Previous instead of falling back to it")
 	}
 }

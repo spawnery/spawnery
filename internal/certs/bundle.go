@@ -21,6 +21,7 @@ limitations under the License.
 package certs
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -193,12 +194,18 @@ func (b *Bundle) PublishedCA() []byte {
 // something that is not a certificate, and it throws for the whole stream
 // rather than skipping the offending block.
 func parsableCert(pemBytes []byte) error {
-	block, _ := pem.Decode(pemBytes)
+	block, rest := pem.Decode(pemBytes)
 	if block == nil {
 		return fmt.Errorf("not PEM")
 	}
 	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
 		return fmt.Errorf("parse certificate: %w", err)
+	}
+	// A certificate followed by stray bytes is exactly what a hand-edit
+	// produces, and trustManager throws on the whole stream rather than
+	// stopping at the first valid block -- so "exactly one" is not optional.
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return fmt.Errorf("more than one PEM block")
 	}
 	return nil
 }
