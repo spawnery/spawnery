@@ -342,9 +342,18 @@ jobs:
               echo "${DIGEST}"
               echo '```'
               echo
-              echo "This workflow does not commit it. Put it into \`charts/spawnery/values.yaml\`'s"
-              echo "\`image.digest\` -- the reason that step is a person's and not this job's is in"
-              echo "the CI design's §5."
+              echo "This workflow does not commit it, and the reason that step is a person's"
+              echo "and not this job's is in the CI design's §5."
+              echo
+              echo "Put it where the deployment is described -- a HelmRelease's values, a"
+              echo "kustomize patch -- and **not** into \`charts/spawnery/values.yaml\`'s"
+              echo "\`image.digest\`, which this text told people to do until v0.1.2. A digest"
+              echo "cannot usefully live in the chart: it comes from \`skopeo copy --digestfile\`"
+              echo "and so does not exist until after the tag is published, which makes the"
+              echo "value in any released chart the *previous* release's. Worse, setting it"
+              echo "silences internal/rbacaudit's TestTheOperatorImageIsNotAMutableTag, which"
+              echo "returns early when a digest is present and therefore stops checking the"
+              echo "tag beside it."
             elif [ "${OPERATOR_PUBLISHED:-false}" != "true" ] && [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ]; then
               echo "This is attempt ${GITHUB_RUN_ATTEMPT} of the run for this tag, and the operator image"
               echo "was already on the registry when it started -- so an earlier attempt published it"
