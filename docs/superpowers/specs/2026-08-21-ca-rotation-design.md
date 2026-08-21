@@ -149,11 +149,22 @@ old CA is safe at any moment, because every agent trusted that one throughout.
 The operator **removes** `rotate-ca` once it has acted on it, so a request is
 consumed exactly once and a leftover `start` cannot fire twice. A value it does
 not recognise it leaves in place and reports as a warning: clearing an
-annotation you did not understand hides the typo that produced it. `start`
-while the phase is already `switched` is refused the same way — a third CA is
-not a state this design has, and it would need a third slot in §3's table.
+annotation you did not understand hides the typo that produced it. It stays a
+warning, though — the operator steps over it and drives the phase as it would
+on any other tick, because a value it cannot read is no reason to freeze a
+rotation that is already past its gate, and the step it would otherwise take
+is one `rollback` undoes.
+
+`start` while the phase is already `switched` is refused — a third CA is not a
+state this design has, and it would need a third slot in §3's table.
 `drop-old` during `distributing` is refused too: the CA it would drop is the
-one currently signing.
+one currently signing. A refused request is **consumed like an accepted one**,
+and the refusal reported. Not symmetry for its own sake: the phase is driven
+only on a tick with no request pending, so a refusal left in place would stall
+the sequence where it stands rather than merely repeat its complaint — a
+`drop-old` set during `distributing` would hold the rotation mid-window
+indefinitely. The unrecognised value above is the only one left in place, and
+it is also the only one that is never acted on.
 
 `Provider.Start` drives all of it. It is already a leader-bound `Runnable`, so
 only one process ever writes. Its loop ticks hourly today

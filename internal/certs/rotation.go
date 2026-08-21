@@ -29,6 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
@@ -98,8 +99,22 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 	}
 
 	phase := secret.Annotations[AnnotationRotationPhase]
-	if request := secret.Annotations[AnnotationRotateRequest]; request != "" {
+	switch request := secret.Annotations[AnnotationRotateRequest]; request {
+	case "":
+	case RequestStart, RequestDropOld, RequestRollback:
 		return s.applyRequest(ctx, current, request, phase)
+	default:
+		// Left in place, because clearing an annotation you did not
+		// understand hides the typo that produced it -- but reported and then
+		// stepped over, not treated as a stop. Halting here would freeze a
+		// rotation that may be mid-window, with `phase` and `since` still
+		// reading as if it were progressing and only a log line saying
+		// otherwise. Continuing costs at most one unwanted automatic step,
+		// the switch, and that step is undone by a rollback that re-signs
+		// with a CA every agent has trusted the whole time.
+		log.FromContext(ctx).Info("ignoring an unrecognised CA rotation request",
+			"annotation", AnnotationRotateRequest, "value", request,
+			"expected", strings.Join([]string{RequestStart, RequestDropOld, RequestRollback}, ", "))
 	}
 	return s.drivePhase(ctx, current, phase, secret.Annotations[AnnotationRotationSince],
 		secret.Annotations[AnnotationRotationBlockedOn])
@@ -108,11 +123,15 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 // applyRequest performs the step a human asked for, or refuses it.
 //
 // The refusals are as much of the behaviour as the transitions, and a refused
-// request is consumed like an accepted one. Leaving it in place would not
-// merely repeat the complaint every tick: a drop-old set while the rotation
-// is still distributing would sit there until the window elapsed and then
-// fire the moment the phase became `switched`, which is precisely the hold
-// that phase exists to impose.
+// request is consumed like an accepted one. A recognised request left in
+// place is worse than a complaint repeated every tick: AdvanceRotation
+// reaches drivePhase only when rotate-ca is empty, so it freezes the sequence
+// where it stands. A drop-old set during `distributing` would stall the
+// rotation mid-window rather than -- as one might fear -- lie in wait and
+// fire the moment the phase became `switched`; it can never become
+// `switched`, which is the whole trouble. Consuming it is the same judgement
+// that leaves an unrecognised value reported but stepped over: nothing about
+// this procedure is improved by stopping it in place.
 func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phase string) (*Bundle, bool, error) {
 	now := s.Clock()
 	consume := func(secret *corev1.Secret) {
@@ -196,12 +215,11 @@ func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phas
 		return fresh, false, nil
 	}
 
-	// Unrecognised: left in place, and the phase is not driven either. An
-	// instruction the operator cannot read may well have been meant to stop
-	// the very step it would otherwise take next, and clearing it would hide
-	// the typo that produced it.
-	return nil, false, fmt.Errorf("unrecognised %s=%q, left in place; expected %q, %q or %q",
-		AnnotationRotateRequest, request, RequestStart, RequestDropOld, RequestRollback)
+	// Unreachable: AdvanceRotation dispatches only the three values above
+	// here. Kept because Go needs a terminating statement, and a caller added
+	// later should hear about it rather than get a silent no-op.
+	return nil, false, fmt.Errorf("applyRequest called with an unrecognised %s=%q",
+		AnnotationRotateRequest, request)
 }
 
 // refuse consumes the request and reports why it was not carried out.
@@ -276,6 +294,15 @@ func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, b
 	if err != nil {
 		return nil, false, fmt.Errorf("parse %s=%q: %w", AnnotationRotationSince, since, err)
 	}
+	// The flag this operator is running with is enough; nothing has to be
+	// persisted from the moment the rotation started. The agent endpoint is
+	// leader-bound on the same manager as this provider, so the process that
+	// computes the window is the process that terminates every agent stream
+	// when it restarts or loses the lease, and every reconnect re-reads the
+	// bundle from disk. A restart therefore forces the re-read this window is
+	// waiting for, which is strictly stronger than waiting it out -- so a
+	// shorter flag afterwards only shortens a wait the restart already
+	// satisfied.
 	if now.Before(stamped.Add(projectionMargin + s.AgentSessionDeadline)) {
 		return current, true, nil
 	}
@@ -347,7 +374,7 @@ func blockedOnNote(missing []string) string {
 	if len(missing) <= maxBlockedNamesInAnnotation {
 		return strings.Join(missing, ",")
 	}
-	return fmt.Sprintf("%s (+%d more)",
+	return fmt.Sprintf("%s and %d more",
 		strings.Join(missing[:maxBlockedNamesInAnnotation], ","),
 		len(missing)-maxBlockedNamesInAnnotation)
 }

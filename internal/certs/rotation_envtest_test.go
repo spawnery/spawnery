@@ -26,6 +26,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -243,5 +244,29 @@ func TestTheGatePropagatesAnUnreadableConfigMapAsAnError(t *testing.T) {
 	}
 	if got != nil {
 		t.Errorf("namespacesMissingCA returned a non-nil result (%v) alongside an error", got)
+	}
+}
+
+// The blocked-on annotation is quoted verbatim into an event, so it is
+// bounded, and the design fixes its wording: at most ten namespace names
+// followed by "and N more". Needs no control plane -- it is here rather than
+// in the certs_test files because blockedOnNote is unexported and this is the
+// package's white-box rotation file.
+func TestBlockedOnNoteNamesAtMostTenNamespaces(t *testing.T) {
+	if got, want := blockedOnNote([]string{"alpha", "beta"}), "alpha,beta"; got != want {
+		t.Errorf("blockedOnNote(two) = %q, want %q with no summary tacked on", got, want)
+	}
+
+	many := make([]string, 0, 13)
+	for i := range 13 {
+		many = append(many, fmt.Sprintf("namespace-%02d", i))
+	}
+	got := blockedOnNote(many)
+	if !strings.HasSuffix(got, "and 3 more") {
+		t.Errorf("blockedOnNote(13) = %q, want it to end in \"and 3 more\"", got)
+	}
+	if n := strings.Count(got, "namespace-"); n != maxBlockedNamesInAnnotation {
+		t.Errorf("blockedOnNote(13) names %d namespaces, want %d: an annotation is not an "+
+			"unbounded field, and Task 5 puts this string in an event note", n, maxBlockedNamesInAnnotation)
 	}
 }

@@ -33,11 +33,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/certs"
@@ -405,14 +407,22 @@ func TestANetworkCreatedDuringTheWindowDoesNotPostponeTheSwitch(t *testing.T) {
 	}
 }
 
-// A request the operator does not recognise is left alone and reported; one it
-// does recognise is removed once acted on.
+// A request the operator does not recognise is left alone and reported -- but
+// not obeyed and not halted on; one it does recognise is removed once acted
+// on.
 //
 // Clearing an annotation you did not understand hides the typo that produced
-// it, and leaving one you did act on would fire it again on the next tick.
+// it, and leaving one you did act on would freeze the sequence: the phase is
+// only ever driven on a tick with no request pending.
 func TestAnUnknownRequestIsLeftInPlaceAndAKnownOneIsConsumed(t *testing.T) {
-	s, _, ctx, ns := newStore(t)
+	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
+
+	// "Reported" is half the claim, so it is captured rather than assumed.
+	var logged []string
+	ctx = log.IntoContext(ctx, funcr.New(func(prefix, args string) {
+		logged = append(logged, args)
+	}, funcr.Options{}))
 
 	b, err := s.Ensure(ctx)
 	if err != nil {
@@ -421,10 +431,11 @@ func TestAnUnknownRequestIsLeftInPlaceAndAKnownOneIsConsumed(t *testing.T) {
 	createNetwork(t, ctx, s.Client, ns, "net")
 
 	requestRotation(t, ctx, s, "strat")
-	if _, _, err := s.AdvanceRotation(ctx, b); err == nil {
-		t.Error("a misspelled request was accepted silently")
-	} else if !strings.Contains(err.Error(), "strat") {
-		t.Errorf("the error does not quote the request it could not read: %v", err)
+	if _, _, err := s.AdvanceRotation(ctx, b); err != nil {
+		t.Fatalf("an unreadable request was treated as a reason to stop: %v", err)
+	}
+	if !strings.Contains(strings.Join(logged, "\n"), "strat") {
+		t.Errorf("the value it could not read was not reported; logged: %v", logged)
 	}
 	secret := secretOf(t, ctx, s, ns)
 	if got := secret.Annotations[certs.AnnotationRotateRequest]; got != "strat" {
@@ -455,6 +466,27 @@ func TestAnUnknownRequestIsLeftInPlaceAndAKnownOneIsConsumed(t *testing.T) {
 	}
 	if !bytes.Equal(b.NextCACertPEM, incoming) {
 		t.Error("the incoming CA changed on the next tick; start was acted on twice")
+	}
+
+	// The same typo, now while a rotation is mid-window. Reporting it must not
+	// halt the sequence. Continuing costs at most one unwanted automatic step
+	// -- the switch -- and that step is fully reversible: rollback re-signs
+	// with ca-previous.*, which every agent has trusted throughout. Halting
+	// costs an indefinite freeze with nothing on the object saying so, since
+	// the phase still reads `distributing` and `since` is still stamped.
+	requestRotation(t, ctx, s, "dropp-old")
+	clock.Advance(12*time.Minute + time.Second)
+	b, _, err = s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation with an unreadable request mid-window: %v", err)
+	}
+	if len(b.NextCACertPEM) != 0 {
+		t.Fatal("an unreadable request froze the rotation mid-window. The value is " +
+			"reported and left alone; it is not a reason to stop a procedure that is " +
+			"already past its gate and whose next step can be undone")
+	}
+	if got := secretOf(t, ctx, s, ns).Annotations[certs.AnnotationRotateRequest]; got != "dropp-old" {
+		t.Errorf("rotate-ca = %q after the switch, want the unreadable value still in place", got)
 	}
 }
 
