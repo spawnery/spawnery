@@ -907,4 +907,3 @@ func fingerprintFirst(certPEM []byte) ([sha256.Size]byte, error) {
 	}
 	return sha256.Sum256(block.Bytes), nil
 }
-
