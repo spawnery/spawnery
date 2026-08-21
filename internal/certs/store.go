@@ -263,7 +263,13 @@ func (p *Provider) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ensure the TLS bundle: %w", err)
 	}
-	inFlight := false
+	// Seeded true, not false: if this first pass cannot find out, the
+	// conservative answer is the rotation cadence. A restart in the middle of
+	// a window that then checked hourly would be an hour of silence in the
+	// one phase that is timed in minutes, while a needless 30-second poll of
+	// a single secret costs nothing. The first pass that succeeds corrects
+	// it, and refresh carries the answer from there.
+	inFlight := true
 	if advanced, rotating, err := p.store.AdvanceRotation(ctx, bundle); err != nil {
 		// Not fatal at startup either: a rotation that cannot advance is a
 		// stalled procedure, while the certificate in hand still works, and
