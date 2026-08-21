@@ -803,6 +803,58 @@ func operatorVersionFromFlake(t *testing.T) string {
 	return string(m[1])
 }
 
+// TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease pins the three places
+// that name the operator's version to each other.
+//
+// Chart.yaml's own comment says version and appVersion move independently, and
+// that is right: a chart fix touching no image is a chart bump alone. But
+// appVersion is not free -- it is the operator release the chart installs by
+// default, so it has to agree with flake.nix's operatorVersion and with the
+// tag values.yaml renders. On 2026-08-20 all three drifted apart in one
+// release and nothing noticed: operatorVersion went to 0.1.1 while Chart.yaml
+// stayed at 0.1.0, and the cluster kept serving the previous chart.
+//
+// What this does NOT catch is that failure's actual cause, and saying so is
+// the point: Chart.yaml's `version` is what Flux packages the artifact under,
+// so leaving it still means a changed chart never reaches a cluster. No unit
+// test can know whether the chart changed since the last release -- that is a
+// question about two commits, and .github/workflows/release.yml asks it.
+func TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease(t *testing.T) {
+	flakeVersion := operatorVersionFromFlake(t)
+
+	chart, err := os.ReadFile(testenv.RepoPath(t, "charts/spawnery/Chart.yaml"))
+	if err != nil {
+		t.Fatalf("read Chart.yaml: %v", err)
+	}
+	appRe := regexp.MustCompile(`(?m)^appVersion:\s*"?([^"\s]+)"?\s*$`)
+	m := appRe.FindSubmatch(chart)
+	if m == nil {
+		t.Fatal("no appVersion line in charts/spawnery/Chart.yaml; this test reads it " +
+			"as text and cannot check what it cannot find")
+	}
+	if got := string(m[1]); got != flakeVersion {
+		t.Errorf("Chart.yaml appVersion = %q, flake.nix operatorVersion = %q. appVersion "+
+			"names the operator release this chart installs by default, so a chart that "+
+			"disagrees with the flake ships a claim nobody built", got, flakeVersion)
+	}
+
+	values, err := os.ReadFile(testenv.RepoPath(t, "charts/spawnery/values.yaml"))
+	if err != nil {
+		t.Fatalf("read values.yaml: %v", err)
+	}
+	tagRe := regexp.MustCompile(`(?m)^\s*tag:\s*"([^"]+)"\s*$`)
+	m = tagRe.FindSubmatch(values)
+	if m == nil {
+		t.Fatal("no image tag line in charts/spawnery/values.yaml")
+	}
+	if got := string(m[1]); got != flakeVersion {
+		t.Errorf("values.yaml image.tag = %q, flake.nix operatorVersion = %q. "+
+			"TestTheOperatorImageIsNotAMutableTag checks this too, but only while "+
+			"image.digest is empty -- it returns early otherwise, which is how the tag "+
+			"went stale unnoticed once already", got, flakeVersion)
+	}
+}
+
 // TestLeaderElectionPermissionIsGranted is the regression test for a real gap:
 // leader election is on by default and locks on a Lease, but no kubebuilder
 // marker declared that permission, so the generated role never granted it and

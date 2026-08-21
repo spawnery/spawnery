@@ -25,6 +25,11 @@ jobs:
       digest: ${{ steps.digest.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The chart-version guard below compares this tag against the one
+          # before it, which needs more than the shallow clone actions/checkout
+          # takes by default.
+          fetch-depth: 0
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:
@@ -131,6 +136,54 @@ jobs:
             echo "corresponds to nothing anybody bumped is how a release goes out under a" >&2
             echo "number the images inside it do not have. Bump imageVersion or" >&2
             echo "operatorVersion in flake.nix to match, or tag the version that is there." >&2
+            exit 1
+          fi
+
+      # A chart whose contents moved while its own version stood still never
+      # reaches a cluster, and nothing else in this pipeline can tell.
+      #
+      # Flux packages a chart from a GitRepository and names the artifact after
+      # Chart.yaml's version. Leave that number alone and the artifact is
+      # considered unchanged, so a HelmRelease keeps serving the previous
+      # chart -- with the previous CRDs -- however new the tag it points at is.
+      # Measured on 2026-08-20: v0.1.1 carried a CRD with a fourth expose
+      # strategy, Chart.yaml stayed at 0.1.0, and the cluster's CRD never
+      # learned the new value. The operator image still moved, because the
+      # deployment pins its digest in values, which is what made the failure
+      # look like a success.
+      #
+      # No unit test can ask this: it is a question about two commits.
+      # appVersion and values.yaml's tag are checked against flake.nix by
+      # internal/rbacaudit's TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease;
+      # this is the other half.
+      - name: The chart's own version, against the previous tag
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          previous="$(git tag --list 'v*' --sort=-version:refname \
+            | grep -v "^${GITHUB_REF_NAME}$" | head -1 || true)"
+          if [ -z "$previous" ]; then
+            echo "no earlier v* tag; nothing to compare against"
+            exit 0
+          fi
+          echo "comparing charts/ against ${previous}"
+          if git diff --quiet "${previous}" HEAD -- charts/; then
+            echo "charts/ is unchanged since ${previous}; its version may stand"
+            exit 0
+          fi
+          now="$(grep -E '^version:' charts/spawnery/Chart.yaml | head -1 | awk '{print $2}')"
+          before="$(git show "${previous}:charts/spawnery/Chart.yaml" \
+            | grep -E '^version:' | head -1 | awk '{print $2}')"
+          echo "charts/ changed since ${previous}"
+          echo "  Chart.yaml version there: ${before}"
+          echo "  Chart.yaml version here:  ${now}"
+          if [ "$now" = "$before" ]; then
+            echo >&2
+            echo "charts/ changed since ${previous} but charts/spawnery/Chart.yaml still says" >&2
+            echo "version: ${now}. Flux names a packaged chart after that number, so a cluster" >&2
+            echo "pointed at ${GITHUB_REF_NAME} would keep serving the chart ${previous} produced --" >&2
+            echo "old CRDs, old templates -- while everything else about the release looks" >&2
+            echo "correct. Bump Chart.yaml's version." >&2
             exit 1
           fi
 
