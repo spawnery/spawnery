@@ -640,3 +640,102 @@ func TestAQuietNamespaceFollowsTheCABundle(t *testing.T) {
 			"bring the new bundle here", got, ca)
 	}
 }
+
+// The Network that does not own its namespace bootstraps nothing.
+//
+// pickNamespaceOwner gives the namespace to the oldest Network, and the
+// loser's reconcile returns before it writes anything. That already governed
+// the NetworkPolicy; it governs the CA ConfigMap for the same reason, and
+// this test exists because the new call sits close enough to the acceptance
+// branch that moving it above one line would silently change that.
+func TestALosingNetworkDoesNotBootstrapTheNamespace(t *testing.T) {
+	f := newFixture(t)
+	r, _ := networkReconcilerWithEvents(f)
+	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return []byte("PEM-A") }}
+
+	younger := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: f.ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "velocity-forwarding-secret"},
+		},
+	}
+	if err := f.c.Create(f.ctx, younger); err != nil {
+		t.Fatalf("create the younger Network: %v", err)
+	}
+
+	key := client.ObjectKey{Namespace: f.ns, Name: podspec.CAConfigMapName}
+	var cm corev1.ConfigMap
+	if err := f.c.Get(f.ctx, key, &cm); err == nil {
+		if err := f.c.Delete(f.ctx, &cm); err != nil {
+			t.Fatalf("clear the ConfigMap before the loser reconciles: %v", err)
+		}
+	}
+
+	f.reconcileNetwork(t, r, younger.Name)
+
+	if err := f.c.Get(f.ctx, key, &cm); err == nil {
+		t.Error("the losing Network created the CA ConfigMap; only the namespace's owner writes here")
+	}
+}
+
+// The objects Ensure writes carry no OwnerReference, and that is deliberate:
+// they are meant to outlive the operator so a pod restarting during an
+// outage still finds a CA to trust. Making the Network own the ConfigMap is
+// the tidy-looking change this design refused, and it would delete a running
+// fleet's trust anchor the moment somebody deleted a Network. Asserted here
+// because "tidy up the ownership" is exactly the kind of edit that arrives
+// later with a green suite.
+func TestTheCAConfigMapIsOwnedByNothing(t *testing.T) {
+	f := newFixture(t)
+	r, _ := networkReconcilerWithEvents(f)
+	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return []byte("PEM-A") }}
+
+	f.reconcileNetwork(t, r, f.network.Name)
+
+	var cm corev1.ConfigMap
+	key := client.ObjectKey{Namespace: f.ns, Name: podspec.CAConfigMapName}
+	if err := f.c.Get(f.ctx, key, &cm); err != nil {
+		t.Fatalf("read the CA ConfigMap back: %v", err)
+	}
+	if len(cm.OwnerReferences) != 0 {
+		t.Errorf("the CA ConfigMap has %d owner reference(s): %v. It must have none — "+
+			"deleting a Network would otherwise take the trust anchor of every pod still "+
+			"running in the namespace with it", len(cm.OwnerReferences), cm.OwnerReferences)
+	}
+}
+
+// A reconcile that runs before certs.Provider has published fails and
+// requeues rather than passing quietly. Swallowing it would leave the
+// silently stale ConfigMap this whole change exists to prevent, and
+// ServerReconciler already treats the same call the same way.
+func TestAReconcileWithoutACABundleFails(t *testing.T) {
+	f := newFixture(t)
+	r, _ := networkReconcilerWithEvents(f)
+	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return nil }}
+
+	// newFixture already accepted this Network once, with a real CA, so the
+	// ConfigMap exists before this test's own reconcile runs. Clear it first
+	// so "no ConfigMap after" below tests this reconcile, not the fixture's.
+	key := client.ObjectKey{Namespace: f.ns, Name: podspec.CAConfigMapName}
+	var existing corev1.ConfigMap
+	if err := f.c.Get(f.ctx, key, &existing); err == nil {
+		if err := f.c.Delete(f.ctx, &existing); err != nil {
+			t.Fatalf("clear the ConfigMap the fixture wrote: %v", err)
+		}
+	}
+
+	_, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: client.ObjectKey{Namespace: f.ns, Name: f.network.Name},
+	})
+	if err == nil {
+		t.Fatal("the reconcile succeeded with no CA bundle available")
+	}
+	if !strings.Contains(err.Error(), "bootstrap") {
+		t.Errorf("error = %v, want it to name the bootstrap step", err)
+	}
+
+	var cm corev1.ConfigMap
+	if err := f.c.Get(f.ctx, key, &cm); err == nil {
+		t.Error("a ConfigMap was written despite there being no bundle to write")
+	}
+}
