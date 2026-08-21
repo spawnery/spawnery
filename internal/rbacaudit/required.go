@@ -66,7 +66,7 @@ var RequiredCluster = []Permission{
 	{Group: "", Resource: "pods", Verb: "watch", Why: "ServerReconciler and ProxyGroupReconciler both Owns(&corev1.Pod{})"},
 	{Group: "", Resource: "pods", Verb: "create", Why: "ServerReconciler and ProxyGroupReconciler create pods from podspec"},
 	{Group: "", Resource: "pods", Verb: "delete", Why: "the terminating decision, the orphan sweep, and ProxyGroupReconciler scaling down"},
-	{Group: "", Resource: "pods", Verb: "patch", Why: "syncOccupiedLabel patches the occupied label"},
+	{Group: "", Resource: "pods", Verb: "patch", Why: "ServerReconciler.syncOccupiedLabel and ProxyGroupReconciler.syncOccupiedLabels patch the occupied label"},
 
 	// PersistentVolumeClaims — one per persistent server, created before the
 	// pod that mounts it.
