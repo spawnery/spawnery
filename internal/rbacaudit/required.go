@@ -107,7 +107,7 @@ var RequiredCluster = []Permission{
 	// Namespace bootstrap — Bootstrapper.Ensure keeps the CA ConfigMap and
 	// the server and proxy ServiceAccounts current in every namespace that
 	// runs pods.
-	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure reads the CA ConfigMap"},
+	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure reads the CA ConfigMap, and Store.namespaceHasCA reads it again in every namespace with a Network while a CA rotation's gate is checking who has caught up"},
 	{Group: "", Resource: "configmaps", Verb: "list", Why: "the restricted cache over the CA ConfigMaps"},
 	{Group: "", Resource: "configmaps", Verb: "watch", Why: "the restricted cache over the CA ConfigMaps"},
 	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure creates the CA ConfigMap"},

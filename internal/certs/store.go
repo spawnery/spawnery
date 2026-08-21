@@ -27,6 +27,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
@@ -61,6 +62,12 @@ type Store struct {
 	// the flag never reached this store, and a rotation refuses to time its
 	// window rather than compute one that is short by exactly the deadline.
 	AgentSessionDeadline time.Duration
+
+	// Recorder writes the rotation events (events.go). Optional: left nil, a
+	// Store still rotates correctly and simply reports nothing on the secret
+	// -- which is what every construction of a Store in this package's own
+	// tests does, since only main.go wires mgr.GetEventRecorder("certs") in.
+	Recorder events.EventRecorder
 }
 
 // The namespace qualifier keeps this out of the ClusterRole: the bundle lives in

@@ -35,6 +35,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -43,6 +44,43 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
+
+// createNetwork makes ns a namespace the gate looks at, and deletes the
+// Network again in a t.Cleanup.
+//
+// testenv runs one apiserver+etcd per test binary with no
+// kube-controller-manager, so nothing ever garbage-collects a Namespace (it
+// would sit in Terminating forever) or the objects in it, and
+// namespacesMissingCA lists Networks cluster-wide: a Network left behind here
+// would block every later test's gate on a namespace that will never receive
+// that test's freshly minted CA. Deleting the object (as opposed to the
+// namespace) works fine against a bare apiserver, and Network carries no
+// finalizer (only ServerFinalizer exists), so this completes immediately.
+//
+// Registered after testenv.Client's own t.Cleanup(cancel): Go runs cleanups
+// LIFO, so this one fires first, while ctx is still live -- confirmed with a
+// standalone experiment reproducing that registration order before relying
+// on it. This is the package certs counterpart of createNetwork in
+// rotation_sequence_envtest_test.go (package certs_test); the two exist
+// because an external test package cannot share an unexported helper with
+// this one, not because the logic differs.
+func createNetwork(t *testing.T, ctx context.Context, c client.Client, ns, name string) {
+	t.Helper()
+	n := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "velocity-forwarding-secret"},
+		},
+	}
+	if err := c.Create(ctx, n); err != nil {
+		t.Fatalf("create Network in %s: %v", ns, err)
+	}
+	t.Cleanup(func() {
+		if err := c.Delete(ctx, n); err != nil {
+			t.Errorf("cleanup: delete Network in %s: %v", ns, err)
+		}
+	})
+}
 
 // The gate is driven from the Network objects, not from the ConfigMaps.
 //
@@ -72,38 +110,7 @@ func TestTheGateIsDrivenFromNetworksNotConfigMaps(t *testing.T) {
 		t.Fatalf("IssueCA (stale): %v", err)
 	}
 
-	network := func(ns string) {
-		t.Helper()
-		n := &spawneryv1alpha1.Network{
-			ObjectMeta: metav1.ObjectMeta{Name: "net", Namespace: ns},
-			Spec: spawneryv1alpha1.NetworkSpec{
-				ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "velocity-forwarding-secret"},
-			},
-		}
-		if err := c.Create(ctx, n); err != nil {
-			t.Fatalf("create Network in %s: %v", ns, err)
-		}
-		// testenv runs one apiserver+etcd per test binary with no
-		// kube-controller-manager, so nothing ever garbage-collects a
-		// Namespace (it would sit in Terminating forever) or the objects in
-		// it. A Network left behind here stays visible, cluster-wide, to
-		// every later test in this package that calls namespacesMissingCA
-		// -- including Task 4's, which each issue their own fresh target CA
-		// that this leftover namespace would never be seen holding. Deleting
-		// the object (as opposed to the namespace) works fine against a bare
-		// apiserver, and Network carries no finalizer (only ServerFinalizer
-		// exists), so this completes immediately.
-		//
-		// Registered here, after testenv.Client's own t.Cleanup(cancel): Go
-		// runs cleanups LIFO, so this one fires first, while ctx is still
-		// live -- confirmed with a standalone experiment reproducing that
-		// registration order before relying on it.
-		t.Cleanup(func() {
-			if err := c.Delete(ctx, n); err != nil {
-				t.Errorf("cleanup: delete Network in %s: %v", ns, err)
-			}
-		})
-	}
+	network := func(ns string) { createNetwork(t, ctx, c, ns, "net") }
 	configMap := func(ns string, caPEM ...[]byte) {
 		t.Helper()
 		cm := &corev1.ConfigMap{
@@ -268,5 +275,107 @@ func TestBlockedOnNoteNamesAtMostTenNamespaces(t *testing.T) {
 	if n := strings.Count(got, "namespace-"); n != maxBlockedNamesInAnnotation {
 		t.Errorf("blockedOnNote(13) names %d namespaces, want %d: an annotation is not an "+
 			"unbounded field, and Task 5 puts this string in an event note", n, maxBlockedNamesInAnnotation)
+	}
+}
+
+// A blocked gate records a Warning naming the namespace it is waiting on --
+// asserted against a recorder the test controls, not against the annotation
+// alone, because the annotation and the event are two independent writes
+// (drivePhase's since == "" branch) and a change that broke one while
+// leaving the other would pass every other test in this package.
+func TestBlockedGateRecordsAWarningNamingTheNamespaces(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	rec := events.NewFakeRecorder(10)
+	s := &Store{
+		Client:               c,
+		Namespace:            ns,
+		Name:                 SecretName,
+		DNSNames:             ServingDNSNames("spawnery-operator", ns),
+		Clock:                func() time.Time { return now },
+		AgentSessionDeadline: 10 * time.Minute,
+		Recorder:             rec,
+	}
+
+	current, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	// A Network in ns, and deliberately no spawnery-ca ConfigMap to go with
+	// it: this is what "missing" means to namespacesMissingCA.
+	createNetwork(t, ctx, c, ns, "net")
+	nextCert, nextKey, err := IssueCA(now)
+	if err != nil {
+		t.Fatalf("IssueCA: %v", err)
+	}
+	distributing := current.WithNextCA(nextCert, nextKey)
+
+	if _, _, err := s.drivePhase(ctx, distributing, PhaseDistributing, "", ""); err != nil {
+		t.Fatalf("drivePhase: %v", err)
+	}
+
+	select {
+	case got := <-rec.Events:
+		want := corev1.EventTypeWarning + " " + ReasonRotationBlocked + " "
+		if !strings.HasPrefix(got, want) {
+			t.Fatalf("event = %q, want it to start %q", got, want)
+		}
+		if !strings.Contains(got, ns) {
+			t.Errorf("event = %q, want it to name the blocked namespace %q", got, ns)
+		}
+	default:
+		t.Fatal("no event was recorded for the blocked gate")
+	}
+}
+
+// drop-old ends a rotation, and the design's fourth event says so on the
+// secret: RotationCompleted.
+func TestDropOldRecordsRotationCompleted(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+
+	rec := events.NewFakeRecorder(10)
+	s := &Store{
+		Client:               c,
+		Namespace:            ns,
+		Name:                 SecretName,
+		DNSNames:             ServingDNSNames("spawnery-operator", ns),
+		Clock:                func() time.Time { return now },
+		AgentSessionDeadline: 10 * time.Minute,
+		Recorder:             rec,
+	}
+
+	first, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	nextCert, nextKey, err := IssueCA(now)
+	if err != nil {
+		t.Fatalf("IssueCA: %v", err)
+	}
+	switched, err := first.WithNextCA(nextCert, nextKey).SwitchToNext(now, s.DNSNames)
+	if err != nil {
+		t.Fatalf("SwitchToNext: %v", err)
+	}
+
+	// applyRequest is unexported -- called directly here the same way
+	// AdvanceRotation calls it, rather than through the annotation, since
+	// this file already reaches into the package for drivePhase above and a
+	// second route to the same call would test nothing new.
+	if _, _, err := s.applyRequest(ctx, switched, RequestDropOld, PhaseSwitched); err != nil {
+		t.Fatalf("applyRequest (drop-old): %v", err)
+	}
+
+	select {
+	case got := <-rec.Events:
+		want := corev1.EventTypeNormal + " " + ReasonRotationCompleted + " "
+		if !strings.HasPrefix(got, want) {
+			t.Fatalf("event = %q, want it to start %q", got, want)
+		}
+	default:
+		t.Fatal("no event was recorded for the completed rotation")
 	}
 }

@@ -115,6 +115,15 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 		log.FromContext(ctx).Info("ignoring an unrecognised CA rotation request",
 			"annotation", AnnotationRotateRequest, "value", request,
 			"expected", strings.Join([]string{RequestStart, RequestDropOld, RequestRollback}, ", "))
+		// The log line above is the only signal a human who is not tailing
+		// this operator's logs will ever see. %.150s: request is arbitrary
+		// text a human typed, fmt counts a string precision in runes, so this
+		// cuts on a rune boundary by construction and adds at most 600 bytes
+		// -- nowhere near the note's 1024-byte limit even before the fixed
+		// text around it.
+		s.event(corev1.EventTypeWarning, ReasonRotationRequestUnrecognised, actionReportUnrecognisedRequest,
+			"%s=%.150s is not %s, %s or %s; left in place and stepped over rather than halting the rotation",
+			AnnotationRotateRequest, request, RequestStart, RequestDropOld, RequestRollback)
 	}
 	return s.drivePhase(ctx, current, phase, secret.Annotations[AnnotationRotationSince],
 		secret.Annotations[AnnotationRotationBlockedOn])
@@ -170,6 +179,15 @@ func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phas
 		if err != nil {
 			return nil, false, err
 		}
+		setRotationPhase(PhaseDistributing)
+		// RotationBlockedNamespaces is left alone here rather than zeroed:
+		// every namespace with a Network is missing this brand new CA at the
+		// instant it is minted, so 0 would claim the opposite of the truth.
+		// The gate runs on the very next tick (drivePhase, since == "") and
+		// sets it to the real count within RotationCheckInterval.
+		s.event(corev1.EventTypeNormal, ReasonRotationStarted, actionStartRotation,
+			"published a second CA (ca-next.crt); switching once every namespace holding a "+
+				"Network confirms it and the overlap window has elapsed")
 		return fresh, true, nil
 
 	case RequestDropOld:
@@ -186,6 +204,14 @@ func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phas
 		if err != nil {
 			return nil, false, err
 		}
+		// This is the path the design calls out by name: a rotation that just
+		// ended and a gauge left at its last value are indistinguishable
+		// without this. Both gauges, not just the phase -- nothing is blocked
+		// on anything once there is no incoming CA left to distribute.
+		setRotationPhase(phaseNone)
+		RotationBlockedNamespaces.Set(0)
+		s.event(corev1.EventTypeNormal, ReasonRotationCompleted, actionCompleteRotation,
+			"dropped the outgoing CA; ca.crt is the only CA published now")
 		return fresh, false, nil
 
 	case RequestRollback:
@@ -212,6 +238,13 @@ func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phas
 		if err != nil {
 			return nil, false, err
 		}
+		// A rollback ends a rotation exactly as drop-old does, so it gets the
+		// same gauge treatment -- but no event of its own: the design's
+		// vocabulary (§4) has no RotationRolledBack, and the request that
+		// caused this is already visible as the rotate-ca=rollback a human
+		// wrote, acted on and consumed.
+		setRotationPhase(phaseNone)
+		RotationBlockedNamespaces.Set(0)
 		return fresh, false, nil
 	}
 
@@ -235,6 +268,12 @@ func (s *Store) refuse(ctx context.Context, consume func(*corev1.Secret), reason
 // transition out of it -- the operator holds there until a human asks.
 func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, blockedOn string) (*Bundle, bool, error) {
 	if phase != PhaseDistributing {
+		// Set on every tick, not only on the ones that change it: this
+		// package's Provider.Start calls in here at most once an hour while
+		// idle (RenewCheckInterval), and that tick is what re-populates the
+		// gauge after a restart -- the Prometheus client library starts a
+		// GaugeVec's series unset until the first Set.
+		setRotationPhase(phase)
 		return current, phase == PhaseSwitched, nil
 	}
 	if len(current.NextCACertPEM) == 0 {
@@ -257,6 +296,12 @@ func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, b
 		if err != nil {
 			return nil, false, err
 		}
+		// A ground-truth read just succeeded, so this is always accurate --
+		// unlike the annotation below, there is no reason to write it only on
+		// change: RotationBlockedNamespaces is a gauge, not a Kubernetes
+		// object, and setting it to the value it already holds costs nothing.
+		RotationBlockedNamespaces.Set(float64(len(missing)))
+		setRotationPhase(PhaseDistributing)
 		if len(missing) > 0 {
 			note := blockedOnNote(missing)
 			if note != blockedOn {
@@ -267,6 +312,10 @@ func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, b
 				}); err != nil {
 					return nil, false, err
 				}
+				// Same gate as the annotation write, and for the same reason:
+				// an event fired every 30 seconds for as long as the gate
+				// holds would bury the one that said something changed.
+				s.event(corev1.EventTypeWarning, ReasonRotationBlocked, actionBlockRotation, "%s", note)
 			}
 			return current, true, nil
 		}
@@ -304,6 +353,7 @@ func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, b
 	// shorter flag afterwards only shortens a wait the restart already
 	// satisfied.
 	if now.Before(stamped.Add(projectionMargin + s.AgentSessionDeadline)) {
+		setRotationPhase(PhaseDistributing)
 		return current, true, nil
 	}
 
@@ -322,6 +372,13 @@ func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, b
 	if err != nil {
 		return nil, false, err
 	}
+	setRotationPhase(PhaseSwitched)
+	// Re-asserted rather than left from the gate-pass tick: this is the
+	// point a blocked gate becomes structurally impossible to return to (the
+	// gate never runs again for this rotation), so 0 here is not a guess.
+	RotationBlockedNamespaces.Set(0)
+	s.event(corev1.EventTypeNormal, ReasonRotationSwitched, actionSwitchRotation,
+		"signed the serving certificate with the incoming CA; the outgoing CA stays published until drop-old")
 	return fresh, true, nil
 }
 

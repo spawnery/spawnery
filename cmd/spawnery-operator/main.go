@@ -242,6 +242,7 @@ func main() {
 		Name:      certs.SecretName,
 		DNSNames:  certs.ServingDNSNames(podspec.AgentServiceName, operatorNamespace),
 		Clock:     time.Now,
+		Recorder:  mgr.GetEventRecorder("certs"),
 		// The same value the agent endpoint below cuts streams off with. A CA
 		// rotation waits it out before switching the serving certificate, so
 		// that every stream opened before the new CA was published has been
