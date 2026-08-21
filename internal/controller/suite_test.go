@@ -202,6 +202,15 @@ func newFixture(t *testing.T) *fixture {
 	registrar := &recordingRegistrar{}
 	proxies := &recordingFleet{}
 
+	// A stand-in CA is enough for every test that only cares about the state
+	// machine; agentchannel_envtest_test.go replaces this with the bundle its
+	// gRPC service actually serves. Shared between the two reconcilers below
+	// so the fixture cannot drift on what the test CA is.
+	bootstrap := &Bootstrapper{
+		Client: c, Reader: c,
+		CA: func() []byte { return []byte("test-ca") },
+	}
+
 	f := &fixture{
 		t: t, ctx: ctx, c: c, ns: ns,
 		clock: clock, agents: agents, registrar: registrar, proxies: proxies,
@@ -214,14 +223,8 @@ func newFixture(t *testing.T) *fixture {
 			StartupDeadline:      5 * time.Minute,
 			PlayerStatusInterval: 30 * time.Second,
 			Registrar:            registrar,
-			// A stand-in CA is enough for every test that only cares about
-			// the state machine; agentchannel_envtest_test.go replaces this
-			// with the bundle its gRPC service actually serves.
-			Bootstrap: &Bootstrapper{
-				Client: c, Reader: c,
-				CA: func() []byte { return []byte("test-ca") },
-			},
-			AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
+			Bootstrap:            bootstrap,
+			AgentEndpoint:        "spawnery-operator.spawnery-system.svc:9443",
 		},
 	}
 
@@ -245,6 +248,7 @@ func newFixture(t *testing.T) *fixture {
 		Recorder:     events.NewFakeRecorder(100),
 		Clock:        clock.Now,
 		SecretReader: c,
+		Bootstrap:    bootstrap,
 	}
 	if _, err := netReconciler.Reconcile(ctx, ctrlreconcile.Request{
 		NamespacedName: types.NamespacedName{Name: f.network.Name, Namespace: ns},

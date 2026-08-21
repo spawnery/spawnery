@@ -273,6 +273,18 @@ func TestReconcileBootstrapsTheNamespaceBeforeCreatingThePod(t *testing.T) {
 // fails its handshake, and the operator would have to time it out.
 func TestReconcileCreatesNoPodWhileTheCAIsMissing(t *testing.T) {
 	f := newChannelFixture(t)
+
+	// newChannelFixture's own newFixture(t) already ran a Network reconcile
+	// that bootstrapped this namespace with a real CA (that is this task's
+	// whole point), so the ConfigMap this test checks for absence is already
+	// there. Remove it, or the assertion below observes the fixture's setup
+	// rather than what this reconcile does with an empty CA.
+	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: podspec.CAConfigMapName, Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("delete the fixture's CA ConfigMap: %v", err)
+	}
+
 	f.reconc.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return nil }}
 
 	srv := f.createServer("lobby-abcd")

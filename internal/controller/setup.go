@@ -82,7 +82,8 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	// would surface as a panic inside a reconcile, minutes after start and in
 	// a goroutine, instead of as a startup error.
 	if opts.Bootstrapper == nil {
-		return fmt.Errorf("no bootstrapper: the server controller cannot create pods without one")
+		return fmt.Errorf("no bootstrapper: the server controller cannot create pods " +
+			"without one, and the network controller cannot keep a namespace's CA current")
 	}
 	// Refused for the same reason as a nil Bootstrapper: a nil Proxies would
 	// surface as a panic inside a reconcile, minutes after start and in a
@@ -161,6 +162,7 @@ func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
 		// Uncached, for the reason SecretReader's own comment gives. The
 		// Bootstrapper takes the same reader for the same reason.
 		SecretReader: mgr.GetAPIReader(),
+		Bootstrap:    opts.Bootstrapper,
 	}
 }
 

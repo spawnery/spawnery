@@ -54,6 +54,10 @@ func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *events.FakeRe
 		// this non-empty, and no other test cares what it is.
 		OperatorNamespace: "spawnery-system",
 		SecretReader:      f.c,
+		// Every test that reconciles a Network now bootstraps its namespace.
+		// A test that cares about the bundle replaces this; the rest need it
+		// only to be non-nil and to return something.
+		Bootstrap: &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return []byte("PEM-FIXTURE") }},
 	}, rec
 }
 
@@ -588,5 +592,51 @@ func TestTheOperatorNamespaceReachesTheEgressRule(t *testing.T) {
 	got := last.To[0].NamespaceSelector.MatchLabels[podspec.NamespaceNameLabel]
 	if got != "spawnery-elsewhere" {
 		t.Errorf("egress names namespace %q, want spawnery-elsewhere", got)
+	}
+}
+
+// A namespace where nothing starts still tracks the operator's CA.
+//
+// Before this test's subject existed, Bootstrapper.Ensure ran only from
+// ServerReconciler, on the path that creates a pod
+// (server_controller.go:304). A namespace whose pods were all already
+// running -- or which had none at all -- kept whatever ca.crt it was given
+// the last time a pod happened to be created there, however long ago. That
+// is the second half of docs/known-issues.md's "The CA has no rotation
+// procedure", and it is what makes a rotation's overlap window impossible to
+// close: the operator cannot tell whether a quiet namespace has the new
+// bundle yet.
+//
+// No pod is created anywhere in this test. That is the whole point of it.
+func TestAQuietNamespaceFollowsTheCABundle(t *testing.T) {
+	f := newFixture(t)
+	r, _ := networkReconcilerWithEvents(f)
+
+	ca := []byte("PEM-FIRST")
+	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return ca }}
+
+	f.reconcileNetwork(t, r, f.network.Name)
+
+	read := func() string {
+		t.Helper()
+		var cm corev1.ConfigMap
+		key := client.ObjectKey{Namespace: f.ns, Name: podspec.CAConfigMapName}
+		if err := f.c.Get(f.ctx, key, &cm); err != nil {
+			t.Fatalf("read the CA ConfigMap back: %v", err)
+		}
+		return cm.Data[podspec.CAConfigMapKey]
+	}
+
+	if got := read(); got != string(ca) {
+		t.Fatalf("ca.crt = %q after the first reconcile, want %q", got, ca)
+	}
+
+	ca = []byte("PEM-SECOND")
+	f.reconcileNetwork(t, r, f.network.Name)
+
+	if got := read(); got != string(ca) {
+		t.Errorf("ca.crt = %q after the bundle changed, want %q. The namespace is quiet -- "+
+			"no pod was created in it -- so nothing but the Network's own reconcile can "+
+			"bring the new bundle here", got, ca)
 	}
 }

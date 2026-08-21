@@ -55,6 +55,14 @@ type NetworkReconciler struct {
 	// OperatorNamespace is where this operator runs, and it is the one value
 	// the policy cannot derive from the Network it protects.
 	OperatorNamespace string
+
+	// Bootstrap puts the CA bundle and the agent ServiceAccounts into this
+	// Network's namespace. It is the same instance ServerReconciler holds:
+	// that one guarantees the objects exist before the first pod needs them,
+	// and this one guarantees they stay current afterwards, in a namespace
+	// where no pod is being created and nothing else would call Ensure at
+	// all.
+	Bootstrap *Bootstrapper
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
@@ -106,6 +114,21 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// this object.
 	if err := r.reconcileNetworkPolicy(ctx, network); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconcile the network policy: %w", err)
+	}
+
+	// After the policy, not before it: the comment above that call explains
+	// that it goes first because a Forbidden there is a security control
+	// failing to land. Ensure can fail for a reason that has nothing to do
+	// with this namespace -- the operator has started but certs.Provider has
+	// not published a bundle yet -- and a namespace left unprotected because a
+	// ConfigMap could not be written would be the worse trade.
+	//
+	// The error is returned rather than swallowed. ServerReconciler does the
+	// same on the same call, so neither path invents its own meaning for an
+	// unavailable CA; and a swallowed error here would leave exactly the
+	// silently stale ConfigMap this call exists to prevent.
+	if err := r.Bootstrap.Ensure(ctx, network.Namespace); err != nil {
+		return ctrl.Result{}, fmt.Errorf("bootstrap the namespace: %w", err)
 	}
 
 	serverGroups := &spawneryv1alpha1.ServerGroupList{}
