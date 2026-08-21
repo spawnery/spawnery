@@ -3754,7 +3754,7 @@ events` entirely while the `Degraded` condition (which allows 32 KB) kept
 the full text. `internal/controller/events.go`'s `eventNote` helper now
 formats first, truncates on a rune boundary, and appends a marker pointing
 at the condition for the untruncated text; applied at those five sites.
-**A sixth site of the same shape is not fixed.**
+**A sixth site of the same shape. — FIXED in the same milestone; this heading said otherwise for a day.**
 `internal/controller/servergroup_controller.go:437` builds its note from
 `resize.Message`, which traces through `storageResizeCondition` →
 `worst.ResizeError` → `resizeConditionError` (`server_controller.go:471`) to
