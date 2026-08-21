@@ -29,6 +29,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -488,6 +490,112 @@ func TestAnUnknownRequestIsLeftInPlaceAndAKnownOneIsConsumed(t *testing.T) {
 	}
 	if got := secretOf(t, ctx, s, ns).Annotations[certs.AnnotationRotateRequest]; got != "dropp-old" {
 		t.Errorf("rotate-ca = %q after the switch, want the unreadable value still in place", got)
+	}
+}
+
+// A human's instruction survives a conflict on the operator's own write.
+//
+// applyStep wraps its update in retry.RetryOnConflict with the Get inside the
+// retried function, which is the whole concurrency story for a secret two
+// parties write. The part worth protecting is the consume closure: it deletes
+// rotate-ca only when the value is still the one this call decided on, so a
+// request nobody has acted on yet cannot be swallowed by somebody else's
+// retry.
+//
+// The scenario: the operator decides to act on start; between its read and its
+// write a human replaces the annotation with rollback; the update conflicts;
+// the retry re-reads, finds rollback, and must leave it alone -- while start's
+// own work still lands, because it succeeded.
+func TestAConflictDoesNotSwallowAnInstructionNobodyActedOn(t *testing.T) {
+	// interceptor.NewClient needs a client.WithWatch, and newStore's client
+	// (testenv.Client's plain client.Client) is not one: client.New's
+	// concrete type carries no Watch method, only client.NewWithWatch's does.
+	// Built against the same shared control plane testenv.Config/Scheme
+	// memoize, so this reaches the identical apiserver every other test in
+	// this package talks to.
+	plain, err := client.NewWithWatch(testenv.Config(t), client.Options{Scheme: testenv.Scheme(t)})
+	if err != nil {
+		t.Fatalf("new watch client: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ns := testenv.Namespace(t, ctx, plain)
+	clock := &testClock{now: time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)}
+	s := &certs.Store{
+		Client:    plain,
+		Namespace: ns,
+		Name:      certs.SecretName,
+		DNSNames:  certs.ServingDNSNames("spawnery-operator", ns),
+		Clock:     clock.Now,
+	}
+
+	before, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	// Written through the plain client, before the interceptor goes on: this
+	// is the request applyStep's retry has to protect, not the write under test.
+	requestRotation(t, ctx, s, certs.RequestStart)
+
+	// From here on, s.Client intercepts Update: the first call is applyStep's
+	// own write losing a race to a human's kubectl edit, and it conflicts;
+	// the second is the retry's own write and goes through untouched.
+	conflicted := false
+	s.Client = interceptor.NewClient(plain, interceptor.Funcs{
+		Update: func(ctx context.Context, inner client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if conflicted {
+				return inner.Update(ctx, obj, opts...)
+			}
+			conflicted = true
+			// The competing write, through the underlying client so it is not
+			// itself intercepted: a human's kubectl edit landing between
+			// applyStep's Get and its Update.
+			secret := &corev1.Secret{}
+			key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
+			if err := inner.Get(ctx, key, secret); err != nil {
+				return err
+			}
+			if secret.Annotations == nil {
+				secret.Annotations = map[string]string{}
+			}
+			secret.Annotations[certs.AnnotationRotateRequest] = certs.RequestRollback
+			if err := inner.Update(ctx, secret); err != nil {
+				return err
+			}
+			// A real Conflict, not a stand-in: retry.RetryOnConflict gates on
+			// apierrors.IsConflict, which only a StatusReasonConflict --
+			// exactly what NewConflict produces -- satisfies. Anything else
+			// would exercise applyStep's plain error return, not the retry.
+			return apierrors.NewConflict(corev1.Resource("secrets"), obj.GetName(),
+				errors.New("a human edited rotate-ca first"))
+		},
+	})
+
+	b, inFlight, err := s.AdvanceRotation(ctx, before)
+	if err != nil {
+		t.Fatalf("AdvanceRotation (start) over a conflicting write: %v", err)
+	}
+	if !inFlight {
+		t.Error("start did not report a rotation in flight after surviving the conflict")
+	}
+	if len(b.NextCACertPEM) == 0 {
+		t.Fatal("start's own work did not land: no incoming CA in the bundle the retry returned")
+	}
+
+	secret := secretOf(t, ctx, s, ns)
+	// Both halves, not just one: an implementation that gave up on the
+	// conflict entirely -- consuming nothing and minting no incoming CA --
+	// would also leave rollback sitting on the secret.
+	if got := secret.Annotations[certs.AnnotationRotateRequest]; got != certs.RequestRollback {
+		t.Errorf("rotate-ca = %q, want %q: the retry must not swallow an instruction "+
+			"nobody had acted on when it fired", got, certs.RequestRollback)
+	}
+	if got := secret.Annotations[certs.AnnotationRotationPhase]; got != certs.PhaseDistributing {
+		t.Errorf("phase = %q, want %q: start's own work has to land even though the "+
+			"write that carried it conflicted once", got, certs.PhaseDistributing)
+	}
+	if len(secret.Data["ca-next.crt"]) == 0 {
+		t.Error("ca-next.crt is empty; start's incoming CA did not reach the secret")
 	}
 }
 
