@@ -124,10 +124,25 @@ func (s *Store) Ensure(ctx context.Context) (*Bundle, error) {
 // carryRotation reattaches whatever rotation slots stale was holding onto
 // fresh. Issue, Reissue and reissueOrIssue know nothing about rotation --
 // that would make them a state machine, and Task 4 is where that sequence
-// lives -- so a renewal or a repair produces a bundle with both slots empty.
-// Ensure is the one place positioned to put them back before the write, and
-// it has to: skip this and a rotation vanishes silently on the very next
-// renewal.
+// lives -- so their output always comes back with both slots empty, and
+// Ensure is the one place positioned to put them back before the write.
+//
+// The renewal branch and the parseCA-succeeds half of a repair both keep the
+// signing CA (Reissue signs a fresh serving certificate under the same CA
+// key), so carrying the slots there only restores what Ensure already read
+// out of the secret. The parseCA-fails half of a repair is different:
+// reissueOrIssue falls back to Issue, which mints a CA with no relationship
+// to anything -- so carrying ca-next across that fallback means
+// PublishedCA() will publish that unrelated new CA next to a "next" CA left
+// over from a rotation whose outgoing CA no longer exists. That is a choice,
+// not an oversight, and it was weighed against dropping the slot instead:
+// dropping would leave the stored phase saying a rotation is distributing
+// while the one thing that proves it -- the slot -- is gone, so Task 4's
+// SwitchToNext would find no next CA and the sequence would stall until a
+// human noticed. Agents are already stranded the moment ca.key stops
+// parsing; carrying doesn't fix that, but it is the one outcome that leaves
+// the stored state internally consistent for whoever drives the rotation
+// that follows.
 func carryRotation(fresh, stale *Bundle) *Bundle {
 	fresh.NextCACertPEM = stale.NextCACertPEM
 	fresh.NextCAKeyPEM = stale.NextCAKeyPEM

@@ -265,6 +265,14 @@ func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueCA: %v", err)
 	}
+	// A previous slot alongside the next one: drop-old is the only other
+	// consumer of ca-previous.*, so this is the one test standing between a
+	// deleted write block and a rollback losing the CA it needs to sign with
+	// again.
+	prevCert, prevKey, err := certs.IssueCA(clock.Now())
+	if err != nil {
+		t.Fatalf("IssueCA: %v", err)
+	}
 	secret := &corev1.Secret{}
 	key := types.NamespacedName{Name: certs.SecretName, Namespace: ns}
 	if err := s.Client.Get(ctx, key, secret); err != nil {
@@ -272,8 +280,10 @@ func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 	}
 	secret.Data["ca-next.crt"] = nextCert
 	secret.Data["ca-next.key"] = nextKey
+	secret.Data["ca-previous.crt"] = prevCert
+	secret.Data["ca-previous.key"] = prevKey
 	if err := s.Client.Update(ctx, secret); err != nil {
-		t.Fatalf("plant the incoming CA: %v", err)
+		t.Fatalf("plant the incoming and outgoing CAs: %v", err)
 	}
 
 	// Far enough for the serving certificate to need renewing, so this goes
@@ -287,6 +297,9 @@ func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 	if !bytes.Equal(b.NextCACertPEM, nextCert) {
 		t.Error("Ensure did not read the incoming CA back out of the secret")
 	}
+	if !bytes.Equal(b.PreviousCACertPEM, prevCert) {
+		t.Error("Ensure did not read the outgoing CA back out of the secret")
+	}
 
 	if err := s.Client.Get(ctx, key, secret); err != nil {
 		t.Fatalf("get the secret again: %v", err)
@@ -297,5 +310,62 @@ func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 	}
 	if !bytes.Equal(secret.Data["ca-next.key"], nextKey) {
 		t.Error("a renewal dropped the incoming CA's key from the secret")
+	}
+	if !bytes.Equal(secret.Data["ca-previous.crt"], prevCert) {
+		t.Error("a renewal dropped the outgoing CA from the secret; a rollback " +
+			"would have nothing left to switch back to")
+	}
+	if !bytes.Equal(secret.Data["ca-previous.key"], prevKey) {
+		t.Error("a renewal dropped the outgoing CA's key from the secret")
+	}
+}
+
+// When the stored CA is damaged beyond repair, Ensure has to mint a whole
+// new one -- but a next CA already being distributed has nothing to do with
+// why ca.key stopped parsing, and carrying it forward is a deliberate choice
+// (see carryRotation): dropping it would leave the secret claiming a
+// rotation is still distributing with no slot left to prove it, and Task 4's
+// SwitchToNext would find nothing to switch to. This is the one test that
+// exercises that fallback at all -- every other test's stored CA parses
+// fine, so this is the only place a change to that branch would be caught.
+func TestEnsureCarriesTheNextCAAcrossAFullCAReissue(t *testing.T) {
+	s, clock, ctx, ns := newStore(t)
+
+	before, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	nextCert, nextKey, err := certs.IssueCA(clock.Now())
+	if err != nil {
+		t.Fatalf("IssueCA: %v", err)
+	}
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Name: certs.SecretName, Namespace: ns}
+	if err := s.Client.Get(ctx, key, secret); err != nil {
+		t.Fatalf("get the secret: %v", err)
+	}
+	secret.Data["ca-next.crt"] = nextCert
+	secret.Data["ca-next.key"] = nextKey
+	// Not PEM at all, let alone an EC key -- parseCA has to fail outright,
+	// not just fail to match a certificate, so Ensure takes the Issue
+	// fallback rather than the Reissue-keeps-the-CA one.
+	secret.Data["ca.key"] = []byte("not a key")
+	if err := s.Client.Update(ctx, secret); err != nil {
+		t.Fatalf("plant the incoming CA and corrupt ca.key: %v", err)
+	}
+
+	after, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure after the corruption: %v", err)
+	}
+	if bytes.Equal(after.CACertPEM, before.CACertPEM) {
+		t.Fatal("the signing CA is unchanged; the test did not reach the Issue fallback")
+	}
+	if !bytes.Equal(after.NextCACertPEM, nextCert) {
+		t.Error("Ensure dropped the incoming CA while replacing an unparseable one")
+	}
+	if !bytes.Equal(after.NextCAKeyPEM, nextKey) {
+		t.Error("Ensure dropped the incoming CA's key while replacing an unparseable one")
 	}
 }
