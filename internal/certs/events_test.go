@@ -40,6 +40,7 @@ var certsActions = map[string]string{
 	"actionCompleteRotation":          actionCompleteRotation,
 	"actionReportUnrecognisedRequest": actionReportUnrecognisedRequest,
 	"actionRefuseRotationRequest":     actionRefuseRotationRequest,
+	"actionDiscardRotationSlot":       actionDiscardRotationSlot,
 }
 
 // TestNoCertsActionConstantIsEmpty is this package's copy of the one check

@@ -48,6 +48,15 @@ const (
 	AnnotationRotationSince     = "spawnery.cloud/ca-rotation-since"
 	AnnotationRotationBlockedOn = "spawnery.cloud/ca-rotation-blocked-on"
 
+	// AnnotationRotationDiscarded is what is left of a rotation slot the
+	// cleanup threw away: the slot's name, why its certificate would not
+	// parse, and when. The bytes themselves are not kept -- they are the one
+	// thing that must stop being published -- so this is the whole of what a
+	// diagnosis has, and it outlives the Warning event, which expires after
+	// about an hour. The next accepted start deletes it, so it never narrates
+	// an old failure beside a running rotation.
+	AnnotationRotationDiscarded = "spawnery.cloud/ca-rotation-discarded"
+
 	RequestStart    = "start"
 	RequestDropOld  = "drop-old"
 	RequestRollback = "rollback"
@@ -111,6 +120,22 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 	}
 
 	phase := secret.Annotations[AnnotationRotationPhase]
+
+	// Before any request, because a slot nobody can parse is the one thing
+	// here that is already doing damage -- every byte of it reaches every
+	// agent's trust store -- and because a request acted on in the same call
+	// would be acted on against a state that is about to change under it.
+	// This is the step this call takes when it takes it: a request stays
+	// where it is and is picked up on the next tick, by which time the slots
+	// it would work from are the cleaned ones.
+	cleaned, inFlight, err := s.discardUnparsableSlots(ctx, current, phase, secret)
+	if err != nil {
+		return nil, false, err
+	}
+	if cleaned != nil {
+		return cleaned, inFlight, nil
+	}
+
 	switch request := secret.Annotations[AnnotationRotateRequest]; request {
 	case "":
 	case RequestStart, RequestDropOld, RequestRollback:
@@ -139,6 +164,148 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 	}
 	return s.drivePhase(ctx, current, phase, secret.Annotations[AnnotationRotationSince],
 		secret.Annotations[AnnotationRotationBlockedOn])
+}
+
+// discardUnparsableSlots clears every rotation slot whose certificate an
+// agent could not parse, records what it threw away, and ends the rotation
+// when the slot that broke is the one the current phase depends on.
+//
+// It returns a nil bundle when there was nothing to discard, which is every
+// ordinary call; anything else is a step taken, and AdvanceRotation returns
+// on it.
+//
+// The rule keys on the slot and the phase only decides the end state. Every
+// unparseable slot is cleared and recorded, always, because the damage is
+// publication and publication does not consult the phase. The rotation is
+// abandoned (`distributing`, whose next step is to promote ca-next) or the
+// drop completed (`switched`, whose only remaining step is a rollback signed
+// with ca-previous) only when the broken slot is the one that step needs.
+// Anything else -- a ca-previous occupying a `distributing` secret, which no
+// transition produces -- is cleared and reported without disturbing a
+// sequence that does not depend on it.
+//
+// Completing the drop is not the operator performing drop-old unasked. The
+// hold at `switched` exists so that a rollback stays possible, and a rollback
+// signs with these very bytes (RestorePrevious -> Reissue -> parseCA): the
+// moment they stopped parsing the rollback became impossible, and clearing
+// the slot records that rather than causing it. Nobody is stranded either --
+// the serving certificate chains to the new CA, which every agent came to
+// trust during the overlap.
+//
+// The bytes are read from the secret rather than from current, which may
+// predate the hand-edit: AdvanceRotation re-reads the secret precisely
+// because it has two writers, and the slot that has to stop being published
+// is the one in the secret now.
+func (s *Store) discardUnparsableSlots(ctx context.Context, current *Bundle, phase string, stored *corev1.Secret) (*Bundle, bool, error) {
+	slots := []struct {
+		certKey        string
+		dependentPhase string
+		clear          func(*Bundle)
+	}{
+		// Only the certificate halves, because they are what gets published.
+		// A malformed key reaches no agent and already fails loudly at the
+		// moment it matters, in parseCA. The key is dropped with its
+		// certificate all the same: secretFor writes a slot's two keys only
+		// while its certificate is occupied.
+		{keyNextCACert, PhaseDistributing,
+			func(b *Bundle) { b.NextCACertPEM, b.NextCAKeyPEM = nil, nil }},
+		{keyPreviousCACert, PhaseSwitched,
+			func(b *Bundle) { b.PreviousCACertPEM, b.PreviousCAKeyPEM = nil, nil }},
+	}
+
+	type discard struct{ certKey, reason string }
+	var discarded []discard
+	fresh := *current
+	endsRotation := false
+	for _, slot := range slots {
+		certPEM := stored.Data[slot.certKey]
+		if len(certPEM) == 0 {
+			continue
+		}
+		reason := parsableCert(certPEM)
+		if reason == nil {
+			continue
+		}
+		slot.clear(&fresh)
+		discarded = append(discarded, discard{slot.certKey, reason.Error()})
+		if phase == slot.dependentPhase {
+			endsRotation = true
+		}
+	}
+	if len(discarded) == 0 {
+		return nil, false, nil
+	}
+
+	records := make([]string, 0, len(discarded))
+	for _, d := range discarded {
+		records = append(records, fmt.Sprintf("%s: %.150s", d.certKey, d.reason))
+	}
+	// The slot, the reason and the time, which is what a diagnosis needs; the
+	// bytes are the one thing that must not survive. Written in the same
+	// applyStep as the cleanup, so the record cannot land without the cleanup
+	// or the cleanup without the record.
+	record := fmt.Sprintf("%s (%s)", strings.Join(records, "; "),
+		s.Clock().UTC().Format(time.RFC3339))
+	err := s.applyStep(ctx, &fresh, func(secret *corev1.Secret) {
+		setAnnotation(secret, AnnotationRotationDiscarded, record)
+		if endsRotation {
+			clearRotationAnnotations(secret)
+		}
+	})
+	if err != nil {
+		return nil, false, err
+	}
+
+	remaining := phase
+	if endsRotation {
+		remaining = ""
+		// Both gauges, as drop-old and rollback do: with no rotation left,
+		// nothing is blocked on anything.
+		RotationBlockedNamespaces.Set(0)
+	}
+	// drivePhase's hoisted Set is not reached on this path, and the phase
+	// gauge is only self-healing across a restart if every tick that reads
+	// the annotation writes it.
+	setRotationPhase(remaining)
+
+	// After the write, unlike refuse's event: a refusal is a fact the moment
+	// it is decided, but "discarded" is a claim about the secret, and an
+	// applyStep that failed leaves the slot exactly where it was.
+	outcome := discardOutcome(phase, endsRotation)
+	for _, d := range discarded {
+		// %.150s: reason carries x509's own wording, which embeds the
+		// structure it choked on, so the bound has to hold for text this
+		// package did not write. fmt counts a string precision in runes, so
+		// the cut lands on a rune boundary by construction and 150 runes are
+		// at most 600 bytes; the fixed text is 61, the longer slot name 15
+		// and the longest outcome 127, for 803 bytes worst case -- inside the
+		// 1024 internal/controller/events.go documents, having probed that
+		// limit against a real API server and found it counted in bytes even
+		// though the API server's own message says characters.
+		s.event(corev1.EventTypeWarning, ReasonRotationSlotDiscarded, actionDiscardRotationSlot,
+			"%s could not be parsed and has been cleared from the secret: %.150s; %s",
+			d.certKey, d.reason, outcome)
+	}
+	return &fresh, remaining != "", nil
+}
+
+// discardOutcome is what the event says became of the rotation. It is a
+// property of the call and not of the slot: two broken slots on one secret
+// are two discards with one outcome between them.
+func discardOutcome(phase string, endsRotation bool) string {
+	switch {
+	case !endsRotation:
+		return "no rotation depended on it, so the sequence was left where it stood"
+	case phase == PhaseSwitched:
+		return "the drop was completed: a rollback would have signed with these bytes, " +
+			"so the hold at switched was already impossible to act on"
+	default:
+		// endsRotation is only true for the two phases above, so this is
+		// `distributing`: the incoming CA was the whole of what it had left
+		// to do.
+		return "the rotation was abandoned, and ca.crt is published alone -- " +
+			"nothing usable was ever distributed"
+	}
 }
 
 // applyRequest performs the step a human asked for, or refuses it.
@@ -186,6 +353,12 @@ func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phas
 			setAnnotation(secret, AnnotationRotationPhase, PhaseDistributing)
 			delete(secret.Annotations, AnnotationRotationSince)
 			delete(secret.Annotations, AnnotationRotationBlockedOn)
+			// In the same mutate as the phase, because the two are read
+			// together: a discarded record left beside a phase of
+			// `distributing` describes the rotation that is running, and it
+			// does not -- it is about a slot that was thrown away before this
+			// one started.
+			delete(secret.Annotations, AnnotationRotationDiscarded)
 			consume(secret)
 		})
 		if err != nil {

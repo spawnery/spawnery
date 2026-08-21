@@ -38,6 +38,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -519,6 +520,282 @@ func TestAMissingSessionDeadlineRefusesTheSwitch(t *testing.T) {
 	}
 }
 
+// An incoming CA no agent could parse abandons the rotation.
+//
+// It never distributed anything usable, so the end state is the one a
+// rollback out of `distributing` already produces: no slot, no phase, the
+// signing CA published alone -- and every agent trusted that one throughout.
+func TestAnUnparseableIncomingCAAbandonsTheRotation(t *testing.T) {
+	s, clock, ctx, ns := newStore(t)
+	s.AgentSessionDeadline = 10 * time.Minute
+
+	b := startedAndDistributed(t, s, clock, ctx, ns)
+	signing := b.CACertPEM
+	// Wired in after the fixture, so the only event on the channel is the one
+	// the call under test records -- the fixture's own start is not evidence
+	// about anything here.
+	rec := events.NewFakeRecorder(8)
+	s.Recorder = rec
+	// The bundle handed to AdvanceRotation deliberately still carries the
+	// good bytes: the hand-edit lands after Ensure read the secret, which is
+	// the ordering AdvanceRotation's own fresh Get exists for.
+	breakSlot(t, ctx, s, ns, "ca-next.crt", []byte("-- not a certificate --\n"))
+
+	after, inFlight, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation over a broken incoming CA: %v", err)
+	}
+	if inFlight {
+		t.Error("an abandoned rotation still reported itself in flight; the provider " +
+			"would keep polling every 30s for a rotation that has nothing left to distribute")
+	}
+	if len(after.NextCACertPEM) != 0 || len(after.NextCAKeyPEM) != 0 {
+		t.Error("the bundle still carries the incoming CA nobody can parse")
+	}
+	if !bytes.Equal(after.CACertPEM, signing) {
+		t.Error("the signing CA changed; the cleanup discards the slot that broke, not the one that works")
+	}
+
+	secret := secretOf(t, ctx, s, ns)
+	for _, k := range []string{"ca-next.crt", "ca-next.key"} {
+		if len(secret.Data[k]) != 0 {
+			t.Errorf("%s survived the cleanup", k)
+		}
+	}
+	if got := secret.Annotations[certs.AnnotationRotationPhase]; got != "" {
+		t.Errorf("phase = %q after the incoming CA was discarded, want it cleared — "+
+			"a phase that says `distributing` with no incoming CA left is a rotation "+
+			"the next tick cannot advance and nobody asked to abandon", got)
+	}
+	got := secret.Annotations[certs.AnnotationRotationDiscarded]
+	if !strings.Contains(got, "ca-next.crt") {
+		t.Errorf("the discarded record = %q, want it to name the slot", got)
+	}
+	if !strings.Contains(got, "not PEM") {
+		t.Errorf("the discarded record = %q, want it to carry the parse error: the bytes "+
+			"are gone, so this is the whole of what a diagnosis has left", got)
+	}
+	note := expectEvent(t, rec, corev1.EventTypeWarning, certs.ReasonRotationSlotDiscarded)
+	if !strings.Contains(note, "ca-next.crt") || !strings.Contains(note, "abandoned") {
+		t.Errorf("event = %q, want it to name the slot and say the rotation was abandoned: "+
+			"a human reading this has to know both what was thrown away and what is left", note)
+	}
+}
+
+// A broken ca-previous while switched completes the drop.
+//
+// This looks like the operator performing drop-old unasked, and it is not.
+// The hold at `switched` exists so a rollback stays possible; a rollback signs
+// with the previous CA, through RestorePrevious -> Reissue -> parseCA, on
+// exactly these bytes. They stopped parsing, so the rollback was already
+// impossible. Clearing the slot takes away no ability -- it records that the
+// ability is gone. Nobody is stranded: the serving certificate chains to the
+// new CA, which every agent trusts.
+func TestAnUnparseableOutgoingCACompletesTheDrop(t *testing.T) {
+	s, clock, ctx, ns := newStore(t)
+	s.AgentSessionDeadline = 10 * time.Minute
+
+	b := switchedAndHolding(t, s, clock, ctx, ns)
+	// After the fixture: the start and the switch it performed are not
+	// evidence about this call.
+	rec := events.NewFakeRecorder(8)
+	s.Recorder = rec
+
+	// Break the outgoing CA in place, the way a hand-edit would.
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Name: certs.SecretName, Namespace: ns}
+	if err := s.Client.Get(ctx, key, secret); err != nil {
+		t.Fatalf("get the secret: %v", err)
+	}
+	secret.Data["ca-previous.crt"] = []byte("-- not a certificate --\n")
+	if err := s.Client.Update(ctx, secret); err != nil {
+		t.Fatalf("break the outgoing CA: %v", err)
+	}
+
+	after, inFlight, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation over a broken outgoing CA: %v", err)
+	}
+	if inFlight {
+		t.Error("the rotation still reported itself in flight after the drop it was holding for was completed")
+	}
+
+	if err := s.Client.Get(ctx, key, secret); err != nil {
+		t.Fatalf("read the secret back: %v", err)
+	}
+	for _, k := range []string{"ca-previous.crt", "ca-previous.key"} {
+		if len(secret.Data[k]) != 0 {
+			t.Errorf("%s survived the cleanup", k)
+		}
+	}
+	// The drop is complete, not merely the slot emptied: the hold at
+	// `switched` exists so a rollback stays possible, and a rollback signs
+	// with these very bytes through RestorePrevious -> Reissue -> parseCA.
+	// They stopped parsing, so it was already impossible; leaving the phase
+	// at `switched` would advertise a choice nobody can make.
+	if got := secret.Annotations[certs.AnnotationRotationPhase]; got != "" {
+		t.Errorf("phase = %q after the outgoing CA was discarded, want it cleared — "+
+			"the hold's only purpose is a rollback, and the bytes it would sign with are gone", got)
+	}
+	if got := secret.Annotations[certs.AnnotationRotationDiscarded]; !strings.Contains(got, "ca-previous.crt") {
+		t.Errorf("the discarded record = %q, want it to name the slot", got)
+	}
+	// Nobody is stranded by the narrowing: the serving certificate chains to
+	// the CA that is still published, which is the one every agent came to
+	// trust during the overlap.
+	serving := parseCert(t, after.ServingCertPEM)
+	if err := serving.CheckSignatureFrom(parseCert(t, after.CACertPEM)); err != nil {
+		t.Errorf("the serving certificate no longer chains to the published CA: %v", err)
+	}
+	if bytes.Contains(after.PublishedCA(), []byte("-- not a certificate --")) {
+		t.Error("the discarded bytes are still published; every agent's trust store throws on the whole stream")
+	}
+	note := expectEvent(t, rec, corev1.EventTypeWarning, certs.ReasonRotationSlotDiscarded)
+	if !strings.Contains(note, "ca-previous.crt") || !strings.Contains(note, "rollback") {
+		t.Errorf("event = %q, want it to name the slot and why completing the drop took "+
+			"nothing away: the reader's first thought is that the operator dropped the "+
+			"outgoing CA unasked", note)
+	}
+}
+
+// A broken slot with no phase set is cleared, and nothing else changes.
+//
+// There is nothing to abandon and nothing to complete; the slot simply must
+// not be published, and the record is what tells whoever left it there.
+func TestAnUnparseableSlotWithNoRotationIsJustCleared(t *testing.T) {
+	s, _, ctx, ns := newStore(t)
+	rec := events.NewFakeRecorder(8)
+	s.Recorder = rec
+
+	b, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	// A PEM envelope around something that is not a certificate: pem.Decode
+	// is happy with it and the agent's CertificateFactory is not, so it is
+	// the corruption a check built on pem.Decode alone would wave through.
+	breakSlot(t, ctx, s, ns, "ca-previous.crt",
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a certificate")}))
+
+	after, inFlight, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation over a broken slot on an idle secret: %v", err)
+	}
+	if inFlight {
+		t.Error("a secret with no phase set reported a rotation in flight")
+	}
+
+	secret := secretOf(t, ctx, s, ns)
+	if len(secret.Data["ca-previous.crt"]) != 0 {
+		t.Error("ca-previous.crt survived the cleanup")
+	}
+	if got, ok := secret.Annotations[certs.AnnotationRotationPhase]; ok {
+		t.Errorf("phase = %q; clearing a leftover slot started or ended something", got)
+	}
+	got := secret.Annotations[certs.AnnotationRotationDiscarded]
+	if !strings.Contains(got, "ca-previous.crt") {
+		t.Errorf("the discarded record = %q, want it to name the slot", got)
+	}
+	if !strings.Contains(got, "parse certificate") {
+		t.Errorf("the discarded record = %q, want it to carry the parse error", got)
+	}
+	// "Nothing else changes" is the other half of the claim: the certificate
+	// the operator is serving right now has nothing to do with the slot.
+	if !bytes.Equal(secret.Data["ca.crt"], b.CACertPEM) || !bytes.Equal(secret.Data["tls.crt"], b.ServingCertPEM) {
+		t.Error("the cleanup rewrote the signing CA or the serving certificate")
+	}
+	if !bytes.Equal(after.CACertPEM, b.CACertPEM) {
+		t.Error("the bundle that came back is not the one that went in, apart from the slot")
+	}
+	note := expectEvent(t, rec, corev1.EventTypeWarning, certs.ReasonRotationSlotDiscarded)
+	if !strings.Contains(note, "ca-previous.crt") {
+		t.Errorf("event = %q, want it to name the slot", note)
+	}
+}
+
+// The next accepted start clears the record, so it never narrates an old
+// failure beside a live rotation.
+func TestAStartClearsTheDiscardedRecord(t *testing.T) {
+	s, _, ctx, ns := newStore(t)
+	s.AgentSessionDeadline = 10 * time.Minute
+
+	b, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	createNetwork(t, ctx, s.Client, ns, "net")
+	breakSlot(t, ctx, s, ns, "ca-next.crt", []byte("-- not a certificate --\n"))
+	requestRotation(t, ctx, s, certs.RequestStart)
+
+	// The cleanup is this call's one step. The request is not acted on in the
+	// same call and is not consumed either: it is picked up on the next tick,
+	// against the state the cleanup left.
+	b, _, err = s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation over a broken slot with a start pending: %v", err)
+	}
+	secret := secretOf(t, ctx, s, ns)
+	if got := secret.Annotations[certs.AnnotationRotationDiscarded]; got == "" {
+		t.Fatal("nothing was recorded, so there is no record for the start to clear")
+	}
+	if got := secret.Annotations[certs.AnnotationRotateRequest]; got != certs.RequestStart {
+		t.Errorf("rotate-ca = %q after the cleanup, want %q: the cleanup is one step and "+
+			"the request belongs to the next tick, which sees the cleaned state", got, certs.RequestStart)
+	}
+
+	b, inFlight, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation (start) on the tick after the cleanup: %v", err)
+	}
+	if !inFlight || len(b.NextCACertPEM) == 0 {
+		t.Fatalf("start was not acted on on the next tick (inFlight=%v)", inFlight)
+	}
+	secret = secretOf(t, ctx, s, ns)
+	if got, ok := secret.Annotations[certs.AnnotationRotationDiscarded]; ok {
+		t.Errorf("the discarded record = %q survived a start, want it removed: read beside "+
+			"a phase of `distributing` it describes the running rotation, which it does not", got)
+	}
+	if got := secret.Annotations[certs.AnnotationRotationPhase]; got != certs.PhaseDistributing {
+		t.Errorf("phase = %q, want %q", got, certs.PhaseDistributing)
+	}
+}
+
+// Ensure does not fail because of a corrupt slot, and the operator starts.
+//
+// This is the guard on the obvious implementation. Provider.Start returns
+// Ensure's error from a Runnable, so an error here is fatal at startup:
+// validating in Ensure would mean a hand-edited annotation takes the operator
+// down, which is a worse outage than the one it describes. Asserted directly
+// because "just validate it where you read it" is what a later reader will
+// reach for.
+func TestACorruptSlotDoesNotFailEnsure(t *testing.T) {
+	s, _, ctx, ns := newStore(t)
+
+	first, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	breakSlot(t, ctx, s, ns, "ca-next.crt", []byte("-- not a certificate --\n"))
+
+	again, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure failed over a corrupt rotation slot: %v. Provider.Start returns "+
+			"this from a Runnable, so a hand-edited annotation would take the whole "+
+			"operator down rather than be reported and cleaned up", err)
+	}
+	if !bytes.Equal(again.CACertPEM, first.CACertPEM) || !bytes.Equal(again.ServingCertPEM, first.ServingCertPEM) {
+		t.Error("a corrupt slot made Ensure reissue the bundle; the slot is not part of what Validate judges")
+	}
+	if _, err := again.TLSCertificate(); err != nil {
+		t.Errorf("the bundle Ensure returned cannot serve TLS: %v", err)
+	}
+	// And what reaches the agents omits it, which is the safety net the
+	// report above complements rather than replaces.
+	if bytes.Contains(again.PublishedCA(), []byte("-- not a certificate --")) {
+		t.Error("the corrupt slot is in what PublishedCA returns")
+	}
+}
+
 // --- fixture plumbing ---------------------------------------------------
 
 // startedAndDistributed leaves the rotation one call short of the gate
@@ -691,4 +968,58 @@ func parseCert(t *testing.T, certPEM []byte) *x509.Certificate {
 		t.Fatalf("parse certificate: %v", err)
 	}
 	return cert
+}
+
+// switchedAndHolding leaves the rotation where it stops on its own: switched,
+// with the outgoing CA still in ca-previous.* and nothing that will advance
+// until a human asks. startedAndDistributed followed by switchNow, named for
+// the state rather than the path because that state is what its callers are
+// about.
+func switchedAndHolding(t *testing.T, s *certs.Store, clock *testClock, ctx context.Context, ns string) *certs.Bundle {
+	t.Helper()
+	b := switchNow(t, ctx, s, clock, startedAndDistributed(t, s, clock, ctx, ns))
+	if len(b.PreviousCACertPEM) == 0 {
+		t.Fatal("the switch kept no outgoing CA, so there is no slot to break")
+	}
+	if got := phaseOf(t, s, ctx, ns); got != certs.PhaseSwitched {
+		t.Fatalf("phase = %q after the switch, want %q", got, certs.PhaseSwitched)
+	}
+	return b
+}
+
+// breakSlot puts bytes into one of the secret's rotation slots, the way a
+// person with kubectl and a paste buffer would. The bundle the caller is
+// holding is deliberately not updated: AdvanceRotation re-reads the secret,
+// and this is the edit it re-reads for.
+func breakSlot(t *testing.T, ctx context.Context, s *certs.Store, ns, key string, certPEM []byte) {
+	t.Helper()
+	secret := secretOf(t, ctx, s, ns)
+	if secret.Data == nil {
+		secret.Data = map[string][]byte{}
+	}
+	secret.Data[key] = certPEM
+	if err := s.Client.Update(ctx, secret); err != nil {
+		t.Fatalf("break %s on the secret: %v", key, err)
+	}
+}
+
+// expectEvent takes the one event the call under test recorded and checks its
+// type and reason, failing rather than hanging when nothing was recorded --
+// a missing event being the whole failure these assertions exist to catch.
+//
+// The package certs counterpart in rotation_envtest_test.go is the original;
+// this copy exists because an external test package cannot call an unexported
+// helper, not because the two differ.
+func expectEvent(t *testing.T, rec *events.FakeRecorder, eventtype, reason string) string {
+	t.Helper()
+	select {
+	case got := <-rec.Events:
+		if want := eventtype + " " + reason + " "; !strings.HasPrefix(got, want) {
+			t.Fatalf("event = %q, want it to start %q", got, want)
+		}
+		return got
+	default:
+		t.Fatalf("no %s %s event was recorded", eventtype, reason)
+		return ""
+	}
 }

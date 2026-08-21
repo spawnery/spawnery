@@ -23,8 +23,9 @@ import (
 
 // Event reasons recorded on the TLS secret, so that a rotation is visible
 // without reading logs. The first four are the design's own vocabulary
-// (docs/superpowers/specs/2026-08-21-ca-rotation-design.md §4); the last two
-// name the two ways a request ends without a transition.
+// (docs/superpowers/specs/2026-08-21-ca-rotation-design.md §4); the next two
+// name the two ways a request ends without a transition, and the last one the
+// way a rotation ends without a request at all.
 //
 // ReasonRotationRequestUnrecognised covers a case §4 deliberately does not
 // route through ReasonRotationBlocked: a spawnery.cloud/rotate-ca value the
@@ -55,6 +56,21 @@ import (
 // likeliest of all -- says which phase refused it and why, and leaves the
 // remedy to the entry in docs/known-issues.md, which is where somebody
 // running the procedure is already reading.
+//
+// ReasonRotationSlotDiscarded is the seventh, and it is the only one that
+// reports the operator undoing part of a rotation on its own. A rotation slot
+// whose certificate does not parse is cleared, because every byte of it
+// reaches every agent's trust store through PublishedCA and
+// CertificateFactory.generateCertificates throws on the whole stream rather
+// than skipping the bad block. None of the six above says that: nothing was
+// refused and nothing was unrecognised, since a hand-edited slot is not a
+// request; no gate is holding, so a reader triaging a RotationBlocked would
+// go looking for a namespace that is not there; and the phase change that
+// follows is the consequence, not the news -- RotationCompleted would report
+// a drop-old somebody performed, when what happened is that the rollback the
+// hold existed for had already become impossible. The note names the slot and
+// the parse error, and says what became of the rotation; the durable copy is
+// AnnotationRotationDiscarded, because an event expires after about an hour.
 const (
 	ReasonRotationStarted             = "RotationStarted"
 	ReasonRotationBlocked             = "RotationBlocked"
@@ -62,6 +78,7 @@ const (
 	ReasonRotationCompleted           = "RotationCompleted"
 	ReasonRotationRequestUnrecognised = "RotationRequestUnrecognised"
 	ReasonRotationRequestRefused      = "RotationRequestRefused"
+	ReasonRotationSlotDiscarded       = "RotationSlotDiscarded"
 )
 
 // Event actions, in the shape internal/controller/events.go established:
@@ -81,6 +98,7 @@ const (
 	actionCompleteRotation          = "CompleteRotation"
 	actionReportUnrecognisedRequest = "ReportUnrecognisedRequest"
 	actionRefuseRotationRequest     = "RefuseRotationRequest"
+	actionDiscardRotationSlot       = "DiscardRotationSlot"
 )
 
 // event records an event on the TLS secret, or does nothing if no recorder is
