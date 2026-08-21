@@ -180,6 +180,12 @@ func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
 	notPEM := []byte("-----BEGIN CERTIFICATE-----\n!!! not base64 !!!\n-----END CERTIFICATE-----\n")
 	pemButNotACert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("nonsense")})
 	pemPlusTrailingJunk := slices.Concat(good, []byte("-----not a header-----\n"))
+	// The mirror image, and the one a check phrased as "decode, then look at
+	// what is left" waves through: pem.Decode skips whatever precedes the
+	// first block, so `rest` comes back empty and the junk is invisible to it
+	// -- while the bytes that reach the agent still carry the five-hyphen run
+	// that throws.
+	junkPlusPEM := slices.Concat([]byte("-----not a header-----\n"), good)
 
 	for _, tc := range []struct {
 		name string
@@ -188,6 +194,7 @@ func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
 		{"a PEM header whose body is not base64", notPEM},
 		{"a PEM envelope around nonsense", pemButNotACert},
 		{"a valid certificate followed by a stray header", pemPlusTrailingJunk},
+		{"a stray header before a valid certificate", junkPlusPEM},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			next := &certs.Bundle{

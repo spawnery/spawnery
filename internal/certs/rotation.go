@@ -178,20 +178,20 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 // ordinary call; anything else is a step taken, and AdvanceRotation returns
 // on it.
 //
-// **The failure mode decides repair or discard, and it decides it the same
-// way for either slot.** parsableCert rejects a slot for three reasons, and
-// one of them -- more than one PEM block -- is the only one where it and
-// parseCA disagree: parseCA decodes the first block and ignores the rest, so
-// a certificate with a chain pasted after it still signs perfectly well. That
-// slot is truncated to its first block rather than thrown away. The first
-// block is precisely the one parseCA was already using, so the repair makes
-// publication and signing agree again -- and their disagreement is the whole
-// of the defect. Nothing usable is lost, no phase moves, and the rotation
-// carries on.
+// **One question decides repair or discard, and it decides it the same way
+// for either slot: is the slot's first PEM block a certificate?**
 //
-// The other two modes -- not PEM, and a PEM envelope around something that is
-// not a certificate -- leave parseCA failing on that same first block, so
-// they really are unusable, and those slots are cleared.
+// If it is, the slot is repairable, because that block is precisely the one
+// parseCA was already using -- a certificate with a chain pasted after it, or
+// a header pasted in front of it, still signs perfectly well. Truncating to
+// it makes publication and signing agree again, which is the whole of the
+// defect; nothing usable is lost, no phase moves, and the rotation carries
+// on. (If the slot already *is* that block, parsableCert returns nil and this
+// function never sees it.)
+//
+// If it is not -- not PEM at all, or a PEM envelope around something that is
+// not a certificate -- then parseCA fails on that same first block, so the
+// slot is unusable in fact and not only in publication, and it is cleared.
 //
 // **For a cleared slot the phase decides the end state.** The rotation is
 // abandoned (`distributing`, whose next step is to promote ca-next) or the
@@ -204,13 +204,13 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 // Completing the drop is not the operator performing drop-old unasked, and
 // the repair above is what makes that true. The hold at `switched` exists so
 // a rollback stays possible, and a rollback signs with these very bytes
-// (RestorePrevious -> Reissue -> parseCA). In the two modes that reach this
-// branch parseCA fails on the same block parsableCert rejected, so the
+// (RestorePrevious -> Reissue -> parseCA). A slot only reaches this branch
+// when parseCA fails on the same first block parsableCert rejected, so the
 // rollback was already impossible and clearing the slot records that rather
-// than causing it. The mode where the rollback would still have worked is the
-// one that is repaired instead -- which matters because clearing kills a
-// rollback whatever the reason, and "clear it but hold the phase" would
-// advertise a hold nobody could act on. Nobody is stranded either: the
+// than causing it. Every slot on which the rollback would still have worked
+// is repaired instead -- which matters because clearing kills a rollback
+// whatever the reason, and "clear it but hold the phase" would advertise a
+// hold nobody could act on. Nobody is stranded either: the
 // serving certificate chains to the new CA, which every agent came to trust
 // during the overlap.
 //
@@ -262,11 +262,11 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 		if reason == nil {
 			continue
 		}
-		if errors.Is(reason, errMoreThanOnePEMBlock) {
+		if errors.Is(reason, errNotOnlyTheFirstBlock) {
 			slot.setCert(&fresh, firstPEMBlock(certPEM))
 			changes = append(changes, change{
 				certKey:  slot.certKey,
-				record:   fmt.Sprintf("%s: %.150s; truncated to the first", slot.certKey, reason),
+				record:   fmt.Sprintf("%s: %.150s; truncated to that block", slot.certKey, reason),
 				repaired: true,
 			})
 			continue
@@ -329,11 +329,11 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 			// says otherwise: the reason is the field a human triages on, and
 			// nothing was discarded here -- the slot is still in the secret,
 			// still in the rotation, and now usable. No bound is needed: the
-			// note is 176 bytes of literal ASCII plus a slot name of at most
-			// 15, so 191 against the same 1024-byte limit.
+			// note is 178 bytes of literal ASCII plus a slot name of at most
+			// 15, so 193 against the same 1024-byte limit.
 			s.event(corev1.EventTypeWarning, ReasonRotationSlotTruncated, actionTruncateRotationSlot,
-				"%s carried more than one PEM block and has been truncated to the first, "+
-					"which is the block the operator already signs with: nothing usable was "+
+				"%s held more than its first PEM block and has been truncated to that block, "+
+					"which is the one the operator already signs with: nothing usable was "+
 					"lost and the slot stays where it is", c.certKey)
 			continue
 		}
@@ -374,25 +374,6 @@ func discardOutcome(phase string, dependent bool) string {
 		return "the rotation was abandoned, and ca.crt is published alone -- " +
 			"nothing usable was ever distributed"
 	}
-}
-
-// firstPEMBlock re-encodes the first PEM block of pemBytes and drops whatever
-// followed it.
-//
-// Re-encoded rather than sliced off at the block's end, because pem.Decode
-// also skips any junk before the first block and slicing would carry that
-// junk along. The DER inside is untouched, so this is the same certificate
-// parseCA reads out of these bytes.
-//
-// The nil guards are unreachable by contract -- the only caller has just had
-// parsableCert accept a first block as a certificate -- and are here because
-// pem.EncodeToMemory dereferences its argument.
-func firstPEMBlock(pemBytes []byte) []byte {
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return nil
-	}
-	return pem.EncodeToMemory(block)
 }
 
 // applyRequest performs the step a human asked for, or refuses it.

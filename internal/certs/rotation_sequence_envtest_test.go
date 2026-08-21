@@ -964,7 +964,7 @@ func TestAMultiBlockOutgoingCAIsTruncatedAndTheRollbackStillWorks(t *testing.T) 
 			"still possible, and completing the drop here would destroy it", got, certs.PhaseSwitched)
 	}
 	got := secret.Annotations[certs.AnnotationRotationDiscarded]
-	if !strings.Contains(got, "ca-previous.crt") || !strings.Contains(got, "truncated to the first") {
+	if !strings.Contains(got, "ca-previous.crt") || !strings.Contains(got, "truncated to that block") {
 		t.Errorf("the record = %q, want it to name the slot and say it was truncated rather "+
 			"than discarded -- nothing was thrown away that anything could have used", got)
 	}
@@ -1072,7 +1072,7 @@ func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
 			t.Errorf("phase = %q, want it cleared: the slot the hold existed for is gone", got)
 		}
 		record := secret.Annotations[certs.AnnotationRotationDiscarded]
-		for _, want := range []string{"ca-next.crt", "ca-previous.crt", "truncated to the first"} {
+		for _, want := range []string{"ca-next.crt", "ca-previous.crt", "truncated to that block"} {
 			if !strings.Contains(record, want) {
 				t.Errorf("the record = %q, want it to contain %q: one call touched two slots "+
 					"and the record is the only account of both", record, want)
