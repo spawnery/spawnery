@@ -171,14 +171,36 @@ func Reissue(now time.Time, b *Bundle, dnsNames []string) (*Bundle, error) {
 // holding. Order does not matter to the agent -- OperatorChannel.trustManager
 // loads every certificate in the stream -- but it is deterministic so that a
 // phase which has not changed produces a ConfigMap write that is a no-op.
+//
+// A slot that fails parsableCert is treated as absent rather than surfaced as
+// an error: this function is pure and keeps no logger, because a mistyped
+// annotation reaching here must not take the operator down, and the report is
+// a later concern's, not this one's.
 func (b *Bundle) PublishedCA() []byte {
 	switch {
-	case len(b.NextCACertPEM) > 0:
+	case parsableCert(b.NextCACertPEM) == nil:
 		return slices.Concat(b.CACertPEM, b.NextCACertPEM)
-	case len(b.PreviousCACertPEM) > 0:
+	case parsableCert(b.PreviousCACertPEM) == nil:
 		return slices.Concat(b.CACertPEM, b.PreviousCACertPEM)
 	}
 	return b.CACertPEM
+}
+
+// parsableCert reports whether pemBytes is something an agent's trust store
+// will accept: one PEM block holding one certificate. Both halves matter --
+// OperatorChannel.trustManager parses with CertificateFactory.generateCertificates,
+// which throws on bytes that are not PEM and on a PEM envelope around
+// something that is not a certificate, and it throws for the whole stream
+// rather than skipping the offending block.
+func parsableCert(pemBytes []byte) error {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return fmt.Errorf("not PEM")
+	}
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return fmt.Errorf("parse certificate: %w", err)
+	}
+	return nil
 }
 
 // NeedsRenewal is true once less than a third of the lifetime is left.

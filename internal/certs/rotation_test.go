@@ -19,6 +19,7 @@ package certs_test
 import (
 	"bytes"
 	"encoding/pem"
+	"slices"
 	"testing"
 	"time"
 
@@ -132,5 +133,86 @@ func TestThePublishedBundleCarriesBothCAsWhileRotating(t *testing.T) {
 	}
 	if got := count(switched.WithoutRotation()); got != 1 {
 		t.Errorf("after drop-old the bundle publishes %d certificates, want 1", got)
+	}
+}
+
+// A rotation slot the agent could not parse is never published.
+//
+// PublishedCA's output travels Provider.Set -> Provider.CABundle ->
+// Bootstrapper.CA -> the spawnery-ca ConfigMap of every namespace, and the
+// consumer is OperatorChannel.trustManager, which parses the whole bundle with
+// CertificateFactory.generateCertificates and throws on anything that is not a
+// certificate. So a slot that does not parse does not cost a rotation; it
+// costs every agent in every namespace its entire trust store. Only a
+// hand-edited secret produces one, which is why this is a guard rather than a
+// repair -- the repair is AdvanceRotation's, and it runs a tick later.
+//
+// The guard is here, at the one function whose output reaches an agent, rather
+// than at a call site: a later path that publishes the bundle from somewhere
+// else is exactly how this would come back.
+func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	dnsNames := certs.ServingDNSNames("spawnery-operator", "spawnery-system")
+
+	signing, err := certs.Issue(now, dnsNames)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	good, _, err := certs.IssueCA(now)
+	if err != nil {
+		t.Fatalf("IssueCA: %v", err)
+	}
+
+	// Two shapes, because the agent throws on both and only the first is
+	// caught by pem.Decode: bytes that are not PEM at all, and a PEM envelope
+	// around something that is not a certificate.
+	notPEM := []byte("-- this is not a certificate --\n")
+	pemButNotACert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("nonsense")})
+
+	for _, tc := range []struct {
+		name string
+		bad  []byte
+	}{
+		{"not PEM at all", notPEM},
+		{"a PEM envelope around nonsense", pemButNotACert},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := &certs.Bundle{
+				CACertPEM:      signing.CACertPEM,
+				CAKeyPEM:       signing.CAKeyPEM,
+				ServingCertPEM: signing.ServingCertPEM,
+				ServingKeyPEM:  signing.ServingKeyPEM,
+				NextCACertPEM:  tc.bad,
+			}
+			if got := next.PublishedCA(); !bytes.Equal(got, signing.CACertPEM) {
+				t.Errorf("an unparseable ca-next was published; the bundle every agent "+
+					"pins would have %d bytes of it, and trustManager throws on the whole "+
+					"stream rather than skipping the bad block", len(tc.bad))
+			}
+
+			prev := &certs.Bundle{
+				CACertPEM:         signing.CACertPEM,
+				CAKeyPEM:          signing.CAKeyPEM,
+				ServingCertPEM:    signing.ServingCertPEM,
+				ServingKeyPEM:     signing.ServingKeyPEM,
+				PreviousCACertPEM: tc.bad,
+			}
+			if got := prev.PublishedCA(); !bytes.Equal(got, signing.CACertPEM) {
+				t.Error("an unparseable ca-previous was published")
+			}
+		})
+	}
+
+	// And the good case still publishes two, so the guard has not simply
+	// disabled the feature.
+	ok := &certs.Bundle{
+		CACertPEM:      signing.CACertPEM,
+		CAKeyPEM:       signing.CAKeyPEM,
+		ServingCertPEM: signing.ServingCertPEM,
+		ServingKeyPEM:  signing.ServingKeyPEM,
+		NextCACertPEM:  good,
+	}
+	if got := ok.PublishedCA(); !bytes.Equal(got, slices.Concat(signing.CACertPEM, good)) {
+		t.Error("a well-formed incoming CA was dropped from the published bundle")
 	}
 }
