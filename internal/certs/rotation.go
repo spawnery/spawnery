@@ -257,6 +257,7 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 	var changes []change
 	fresh := *current
 	endsRotation := false
+	restartWindow := false
 	for _, slot := range slots {
 		certPEM := stored.Data[slot.certKey]
 		if len(certPEM) == 0 {
@@ -268,6 +269,19 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 		}
 		if errors.Is(reason, errNotOnlyTheFirstBlock) {
 			slot.setPair(&fresh, firstPEMBlock(certPEM), stored.Data[slot.keyKey])
+			// The gate runs only while `since` is empty (drivePhase), and it
+			// has already run against bytes that are not the bytes now in the
+			// slot. If the block kept here is a different CA from the one
+			// that was distributed -- which is exactly what pasting a
+			// certificate in front of or after the real one can do -- the
+			// switch would promote a CA no namespace ever received, and every
+			// agent would fail its next handshake. So the window is torn up
+			// and the gate re-run against the repaired bytes. The cost is
+			// accepted: a benign repair restarts a quarter of an hour of
+			// waiting. Only for ca-next and only while distributing -- a
+			// ca-previous repair at `switched` has no window to restart.
+			restartWindow = restartWindow ||
+				(slot.certKey == keyNextCACert && phase == PhaseDistributing)
 			changes = append(changes, change{
 				certKey:  slot.certKey,
 				record:   fmt.Sprintf("%s: %.150s; truncated to that block", slot.certKey, reason),
@@ -304,6 +318,9 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 		s.Clock().UTC().Format(time.RFC3339))
 	err := s.applyStep(ctx, &fresh, func(secret *corev1.Secret) {
 		setAnnotation(secret, AnnotationRotationDiscarded, record)
+		if restartWindow {
+			delete(secret.Annotations, AnnotationRotationSince)
+		}
 		if endsRotation {
 			clearRotationAnnotations(secret)
 		}

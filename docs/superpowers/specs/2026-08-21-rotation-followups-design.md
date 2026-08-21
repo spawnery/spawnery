@@ -157,6 +157,23 @@ Nothing usable is lost, no phase moves, and the rotation carries on. This keys
 on the predicate and not on the slot: `ca-next.crt` gets the same treatment for
 the same reason.
 
+**Repairing `ca-next` while `distributing` also deletes
+`spawnery.cloud/ca-rotation-since`, so the gate runs once more.** The gate is
+evaluated only while that annotation is empty (§5 of the rotation design: it
+must not be re-run every tick, or a cluster where networks are created
+regularly would never switch). So a `ca-next` hand-edited in *after* the window
+was stamped would otherwise be repaired and the rotation would carry straight
+on to its switch — and if the block the repair keeps is a different CA from the
+one that was distributed, that switch promotes a CA no namespace ever received
+and every agent fails its next handshake. Tearing the window up puts the
+question back to the namespaces. **The cost is accepted**: a benign repair
+restarts a quarter of an hour of waiting.
+
+Only for `ca-next` and only while `distributing`. A `ca-previous` repair
+happens at `switched`, where there is no window to restart and `since` means
+something else entirely — how long the outgoing CA has been waiting for a
+human.
+
 **Both halves of a repaired slot come from the secret.** The certificate is
 read from there because that is the copy that has to stop being published; the
 *key* has to come from there too, and for a sharper reason. A hand-edit that
@@ -306,6 +323,15 @@ effect, then let the second through.
   assert the new behaviour without showing why the old one was wrong. The same
   repair on `ca-next.crt`, after which the rotation still reaches its switch,
   pins that the rule keys on the predicate and not on the slot.
+- **A `ca-next` repair while `distributing` re-opens the gate**: with the
+  window already stamped, a different CA pasted in front of the one being
+  distributed is repaired, `since` is gone, and the switch then *does not*
+  happen however long the clock is advanced — the gate names the namespace in
+  `ca-rotation-blocked-on` instead, and the rotation only finishes once that
+  namespace has the repaired certificate. Asserting the outcome and not only
+  the missing annotation is the point: the annotation is the mechanism, the
+  un-promoted CA is the finding. The narrowing has its own assertion, on the
+  `ca-previous` repair at `switched`, where `since` must survive.
 - **A repair keeps the secret's own key with the certificate it kept**: a
   hand-edit replacing both halves of `ca-next` with a wholly different CA, the
   certificate carrying a second block, is repaired to that CA's first block

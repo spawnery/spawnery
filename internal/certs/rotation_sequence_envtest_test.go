@@ -964,6 +964,13 @@ func TestAMultiBlockOutgoingCAIsTruncatedAndTheRollbackStillWorks(t *testing.T) 
 		t.Errorf("phase = %q, want %q left alone: the rollback this hold exists for is "+
 			"still possible, and completing the drop here would destroy it", got, certs.PhaseSwitched)
 	}
+	// The other half of "only ca-next, and only while distributing": there is
+	// no window at `switched`, and this stamp says how long the outgoing CA
+	// has been waiting for a human. Clearing it would erase that.
+	if got := secret.Annotations[certs.AnnotationRotationSince]; got == "" {
+		t.Error("a ca-previous repair cleared ca-rotation-since; at `switched` that stamp " +
+			"is not a window to re-open but the age of the hold")
+	}
 	got := secret.Annotations[certs.AnnotationRotationDiscarded]
 	if !strings.Contains(got, "ca-previous.crt") || !strings.Contains(got, "truncated to that block") {
 		t.Errorf("the record = %q, want it to name the slot and say it was truncated rather "+
@@ -1030,6 +1037,87 @@ func TestAMultiBlockIncomingCAIsTruncatedAndTheRotationCarriesOn(t *testing.T) {
 	after = switchNow(t, ctx, s, clock, after)
 	if !bytes.Equal(after.CACertPEM, incoming) {
 		t.Error("the switch did not promote the repaired incoming CA")
+	}
+}
+
+// Repairing ca-next while distributing tears the window up, so the gate runs
+// again against the bytes that were kept.
+//
+// The gate is evaluated only while ca-rotation-since is empty. Without this,
+// a ca-next hand-edited in after the window was stamped is repaired and the
+// rotation carries on -- and if the block the repair keeps is a different CA
+// from the one that was distributed, the switch promotes a CA no namespace
+// ever received and every agent fails its next handshake. The cost of the
+// remedy is that a benign repair restarts a quarter of an hour of waiting.
+func TestARepairedIncomingCARunsTheGateAgain(t *testing.T) {
+	s, clock, ctx, ns := newStore(t)
+	s.AgentSessionDeadline = 10 * time.Minute
+
+	b := startedAndDistributed(t, s, clock, ctx, ns)
+	distributed := b.NextCACertPEM
+
+	// The gate passes and the window is stamped: from here the rotation is on
+	// a timer and nothing looks at the namespaces again.
+	b, _, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation at the gate: %v", err)
+	}
+	if secretOf(t, ctx, s, ns).Annotations[certs.AnnotationRotationSince] == "" {
+		t.Fatal("the fixture did not stamp the window, so there is nothing for the repair to tear up")
+	}
+
+	// A wholly different CA pasted in front of the one being distributed,
+	// both halves, so that the pair still signs and the gate is the only
+	// thing standing between the operator and promoting it.
+	pastedCert, pastedKey, err := certs.IssueCA(clock.Now())
+	if err != nil {
+		t.Fatalf("IssueCA for the pasted-in CA: %v", err)
+	}
+	breakSlot(t, ctx, s, ns, "ca-next.crt", slices.Concat(pastedCert, distributed))
+	breakSlot(t, ctx, s, ns, "ca-next.key", pastedKey)
+
+	after, inFlight, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation over a repaired incoming CA: %v", err)
+	}
+	if !inFlight {
+		t.Fatal("a repaired incoming CA ended the rotation")
+	}
+	if !bytes.Equal(after.NextCACertPEM, pastedCert) {
+		t.Fatal("ca-next.crt was not truncated to the pasted-in certificate, so this test " +
+			"is no longer about a CA nobody received")
+	}
+	secret := secretOf(t, ctx, s, ns)
+	if got := secret.Annotations[certs.AnnotationRotationPhase]; got != certs.PhaseDistributing {
+		t.Errorf("phase = %q, want %q: a repair ends nothing", got, certs.PhaseDistributing)
+	}
+	if got, ok := secret.Annotations[certs.AnnotationRotationSince]; ok {
+		t.Errorf("%s = %q survived the repair, want it deleted: the gate is evaluated only "+
+			"while it is empty, and it passed against bytes that are no longer in the slot",
+			certs.AnnotationRotationSince, got)
+	}
+
+	// The whole point, and not merely that an annotation is gone: the switch
+	// does not happen, however long one waits, until the namespace has the
+	// certificate the repair kept.
+	clock.Advance(projectionMarginPlus(s.AgentSessionDeadline) + time.Hour)
+	held, _, err := s.AdvanceRotation(ctx, after)
+	if err != nil {
+		t.Fatalf("AdvanceRotation after the window would have elapsed: %v", err)
+	}
+	if len(held.PreviousCACertPEM) != 0 || !bytes.Equal(held.CACertPEM, b.CACertPEM) {
+		t.Fatal("the switch promoted a CA that reached no namespace; the gate never re-ran")
+	}
+	if got := secretOf(t, ctx, s, ns).Annotations[certs.AnnotationRotationBlockedOn]; got != ns {
+		t.Errorf("%s = %q, want %q: the gate ran again and found the namespace behind",
+			certs.AnnotationRotationBlockedOn, got, ns)
+	}
+
+	// And once the namespace does have it, the rotation finishes normally.
+	writeCA(t, ctx, s.Client, ns, held.PublishedCA())
+	switched := switchNow(t, ctx, s, clock, held)
+	if !bytes.Equal(switched.CACertPEM, pastedCert) {
+		t.Error("the switch did not promote the repaired incoming CA once it had been distributed")
 	}
 }
 
