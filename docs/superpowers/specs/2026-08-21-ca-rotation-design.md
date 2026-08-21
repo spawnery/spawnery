@@ -149,11 +149,35 @@ old CA is safe at any moment, because every agent trusted that one throughout.
 The operator **removes** `rotate-ca` once it has acted on it, so a request is
 consumed exactly once and a leftover `start` cannot fire twice. A value it does
 not recognise it leaves in place and reports as a warning: clearing an
-annotation you did not understand hides the typo that produced it. `start`
-while the phase is already `switched` is refused the same way — a third CA is
-not a state this design has, and it would need a third slot in §3's table.
+annotation you did not understand hides the typo that produced it. It stays a
+warning, though — the operator steps over it and drives the phase as it would
+on any other tick, because a value it cannot read is no reason to freeze a
+rotation that is already past its gate, and the step it would otherwise take
+is one `rollback` undoes.
+
+`start` while the phase is already `switched` is refused — a third CA is not a
+state this design has, and it would need a third slot in §3's table.
 `drop-old` during `distributing` is refused too: the CA it would drop is the
-one currently signing.
+one currently signing. A refused request is **consumed like an accepted one**,
+and the refusal reported as a `RotationRequestRefused` warning on the secret.
+Consuming is not symmetry for its own sake: the phase is driven only on a tick
+with no request pending, so a refusal left in place would stall the sequence
+where it stands rather than merely repeat its complaint — a `drop-old` set
+during `distributing` would hold the rotation mid-window indefinitely. The
+unrecognised value above is the only one left in place, and it is also the only
+one that is never acted on.
+
+The event is what keeps consuming honest. Deleting the annotation inside 30
+seconds and writing nothing else is, to the human who set it, indistinguishable
+from the procedure swallowing the instruction — and the request most likely to
+be refused is a `drop-old` sent a minute early by somebody working under
+pressure. It is its own reason rather than `RotationBlocked` or
+`RotationRequestUnrecognised` for the same triage argument this section already
+makes about the latter: nothing is gated on a namespace here, and nothing was
+misspelled. The request was right and its timing was wrong, and the note says
+the refusal's own wording. That names the phase in two of the three cases,
+and only the `start`-while-rotating refusal names what to send instead; the
+rest leave the remedy to the known-issues entry.
 
 `Provider.Start` drives all of it. It is already a leader-bound `Runnable`, so
 only one process ever writes. Its loop ticks hourly today
@@ -161,9 +185,14 @@ only one process ever writes. Its loop ticks hourly today
 second cadence: while `ca-rotation-phase` is set, it looks every 30 seconds
 instead.
 
-A rotation is visible without reading logs. Four events go on the secret —
-`RotationStarted`, `RotationBlocked`, `RotationSwitched`, `RotationCompleted`
-— and `internal/certs/metrics.go` registers two gauges in the shape the other
+A rotation is visible without reading logs. Six events go on the secret —
+`RotationStarted`, `RotationBlocked`, `RotationSwitched`, `RotationCompleted`,
+`RotationRequestUnrecognised` for the warning three paragraphs up (it is not
+reported as `RotationBlocked`, because an operator triaging a `RotationBlocked`
+warning would go looking for a namespace that is not there — nothing is gated
+on anything, the rotation is only waiting on a second, correctly spelled
+annotation), and `RotationRequestRefused` for a request that was understood and
+not carried out. `internal/certs/metrics.go` registers two gauges in the shape the other
 packages already use (`internal/agentserver/metrics.go`,
 `internal/grpcauth/metrics.go`): `spawnery_ca_rotation_phase`, labelled by
 phase and carrying 1 for the active one, and
@@ -177,23 +206,61 @@ store already uses the uncached client (`main.go:239`), and the secret is now
 written by two parties — an update from a stale copy would silently discard the
 annotation a human had just set.
 
-## 5. The gate, and the one thing it is driven from
+## 5. The gate, and the two things it is driven from
 
 Before the window of §6 starts running, the operator confirms that every
-namespace it is responsible for holds the new CA: it lists `Network` objects,
-takes the set of their namespaces, reads `spawnery-ca` in each, parses the PEMs
-in `ca.crt` and looks for one whose SHA-256 matches `ca-next.crt`.
+namespace where an agent could be running holds the new CA: it takes the union
+of the namespaces of the `Network` objects and the namespaces of the managed
+pods that still run a process, reads `spawnery-ca` in each, parses the PEMs in
+`ca.crt` and looks for one whose SHA-256 matches `ca-next.crt`.
 
-**Driven from the `Network` objects, not from the ConfigMaps.** This is the
-correction that came out of reading the code rather than assuming it. "A
-`Network` owns its namespace" is a rule about which of two `Network` objects
-wins (`pickNamespaceOwner`), not a Kubernetes `OwnerReference` on a `Namespace`
-— the operator never creates a namespace and never owns one. The CA ConfigMap
-carries no owner reference either, deliberately, so that it outlives the
-operator. So a `spawnery-ca` ConfigMap whose `Network` was deleted stays in its
-namespace forever with whatever bundle it last received, and a gate phrased as
-"every managed CA ConfigMap" would wait on a dead namespace until somebody
+**Driven from the `Network` objects and the pods, not from the ConfigMaps.**
+This is the correction that came out of reading the code rather than assuming
+it. "A `Network` owns its namespace" is a rule about which of two `Network`
+objects wins (`pickNamespaceOwner`), not a Kubernetes `OwnerReference` on a
+`Namespace` — the operator never creates a namespace and never owns one. The CA
+ConfigMap carries no owner reference either, deliberately, so that it outlives
+the operator. So a `spawnery-ca` ConfigMap whose `Network` was deleted stays in
+its namespace forever with whatever bundle it last received, and a gate phrased
+as "every managed CA ConfigMap" would wait on a dead namespace until somebody
 cleaned it up by hand.
+
+**The `Network` objects alone are not the whole answer either.** That is the
+second half of the union, and it came out of following the deleted-`Network`
+case the rest of the way. A `ServerGroup` or `ProxyGroup` carries no
+`OwnerReference` to its `Network` — `ServerGroupReconciler` sets group →
+`Server` and nothing sets `Network` → group — so deleting a `Network` leaves
+the groups and their pods running. In that namespace nothing refreshes
+`spawnery-ca` any more: `NetworkReconciler` needs the `Network`,
+`ProxyGroupReconciler` returns through `refuse` before its `Bootstrap.Ensure`,
+and `ServerReconciler` reaches `Ensure` only under its `createPod` guard. A
+gate listing `Network`s alone skips that namespace entirely — the window
+elapses, the switch runs, and every agent there fails its next handshake. So
+the gate also takes every namespace holding a pod labelled
+`spawnery.cloud/managed-by` that is not in a terminal phase, using the same
+label and the same cluster-wide `pods: list` the orphan sweep already has.
+
+This is not a retreat from the paragraph above it. A ConfigMap outlives
+everything, which is exactly why driving the gate from ConfigMaps would block a
+rotation forever on a namespace nobody will ever clean up. Pods do not outlive
+everything: they are deleted, or they finish, and either way they go away. And
+a namespace with running agent pods and no `Network` **should** block the
+rotation and be named in `ca-rotation-blocked-on`, because that is precisely a
+namespace where the switch would strand somebody — blocking loudly is this
+design's own chosen behaviour for "I cannot yet prove this is safe", and the
+remedy is a human deleting or draining the leftover groups. The gate's real
+question was always "where could an agent be running", and `Network` alone was
+an incomplete answer to it.
+
+Terminal is the only exclusion and it is narrow on purpose. A `Succeeded` or
+`Failed` pod runs no process and will never open another agent stream. A
+`Pending` pod counts, because it is about to start and will read whatever
+bundle it finds; a terminating one counts too, because it is still running its
+agent until the kubelet is done with it. This is deliberately not
+`podTerminal`, `internal/controller`'s definition of the same-sounding
+question: that one also calls a crash-looping pod finished, which is right for
+a drain and wrong here, since such a pod's restart policy is `Always` — it
+comes back, re-reads the bundle, and has to find the new CA in it.
 
 While any namespace is missing, the phase stays `distributing`, the missing
 namespaces are named in `ca-rotation-blocked-on`, and a `RotationBlocked`
@@ -207,11 +274,12 @@ most ten namespace names followed by `and N more`; the event and the log carry
 the same summary.
 
 **Once the gate passes, it is not checked again.** `ca-rotation-since` is
-stamped and the window runs. A `Network` created during the window does not
-reset it: its namespace's ConfigMap receives the current bundle — already
-`old‖new` — on its first reconcile, and its pods have never held anything else.
-Re-checking would be the obvious implementation and would let a cluster where
-networks are created regularly push the switch out forever.
+stamped and the window runs. Neither half of the union is re-evaluated: a
+`Network` created during the window does not reset it, and neither does a pod
+started during it. Its namespace's ConfigMap receives the current bundle —
+already `old‖new` — on its first reconcile, and its pods have never held
+anything else. Re-checking would be the obvious implementation and would let a
+cluster where networks are created regularly push the switch out forever.
 
 ## 6. The window
 

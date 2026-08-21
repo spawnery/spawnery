@@ -17,7 +17,9 @@ limitations under the License.
 package main
 
 import (
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,6 +54,70 @@ func TestMaterialiseWritesACaBundleAndTokenTheAgentCanRead(t *testing.T) {
 	// and nothing else, so the SAN has to be the name the container dials.
 	if got := material.Certificate.Leaf.DNSNames; len(got) != 1 || got[0] != "stubop" {
 		t.Errorf("SANs = %v, want [stubop]", got)
+	}
+}
+
+// TestMaterialiseRotatedSignsWithTheSecondCAOfTheBundle is the cheap half of
+// the --rotate-ca proof: that the fixture is built the way hack/agent-test.sh
+// phase 6 assumes, before a container is ever involved. The expensive half --
+// that a real JVM's TLS stack accepts it -- can only run there; see the
+// script for why.
+func TestMaterialiseRotatedSignsWithTheSecondCAOfTheBundle(t *testing.T) {
+	dir := t.TempDir()
+
+	material, err := materialiseRotated(dir, []string{"stubop"})
+	if err != nil {
+		t.Fatalf("materialiseRotated: %v", err)
+	}
+
+	bundle, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
+	if err != nil {
+		t.Fatalf("ca.crt: %v", err)
+	}
+	var cas []*x509.Certificate
+	rest := bundle
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("ca.crt holds a block that does not parse: %v", err)
+		}
+		cas = append(cas, cert)
+	}
+	if len(cas) != 2 {
+		t.Fatalf("ca.crt holds %d certificates, want 2", len(cas))
+	}
+
+	if material.Certificate.Leaf == nil {
+		t.Fatal("the serving certificate has no parsed Leaf to check the chain against")
+	}
+
+	second := x509.NewCertPool()
+	second.AddCert(cas[1])
+	if _, err := material.Certificate.Leaf.Verify(x509.VerifyOptions{
+		Roots:     second,
+		DNSName:   "stubop",
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err != nil {
+		t.Errorf("the serving certificate does not chain to ca.crt's second entry: %v", err)
+	}
+
+	// The mutation hack/agent-test.sh's phase exists to fail: mounting only the
+	// bundle's first PEM is the pre-rotation state, and a serving certificate
+	// that also chained to it would mean this fixture never moved the
+	// signature at all.
+	first := x509.NewCertPool()
+	first.AddCert(cas[0])
+	if _, err := material.Certificate.Leaf.Verify(x509.VerifyOptions{
+		Roots:     first,
+		DNSName:   "stubop",
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}); err == nil {
+		t.Error("the serving certificate also chains to ca.crt's first entry, so mounting only it would not fail")
 	}
 }
 

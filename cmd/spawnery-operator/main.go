@@ -242,6 +242,13 @@ func main() {
 		Name:      certs.SecretName,
 		DNSNames:  certs.ServingDNSNames(podspec.AgentServiceName, operatorNamespace),
 		Clock:     time.Now,
+		Recorder:  mgr.GetEventRecorder("certs"),
+		// The same value the agent endpoint below cuts streams off with. A CA
+		// rotation waits it out before switching the serving certificate, so
+		// that every stream opened before the new CA was published has been
+		// closed and reopened by then; a second, independently configured
+		// duration would make that a coincidence rather than a bound.
+		AgentSessionDeadline: hardDeadline,
 	})
 	if err := mgr.Add(provider); err != nil {
 		setupLog.Error(err, "unable to add the certificate provider")

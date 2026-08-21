@@ -52,6 +52,22 @@ type Bundle struct {
 	CAKeyPEM       []byte
 	ServingCertPEM []byte
 	ServingKeyPEM  []byte
+
+	// NextCACertPEM and NextCAKeyPEM hold the incoming CA while a rotation is
+	// distributing, and are empty at every other time. The CA that signs the
+	// serving certificate stays CACertPEM/CAKeyPEM throughout that phase --
+	// still the outgoing one -- and that is what makes the phase safe: the new
+	// CA is published for agents to trust well before anything is signed with
+	// it.
+	NextCACertPEM []byte
+	NextCAKeyPEM  []byte
+
+	// PreviousCACertPEM and PreviousCAKeyPEM hold the outgoing CA between the
+	// switch and drop-old. The key is kept and not only the certificate,
+	// because signing with it again is the whole content of a rollback; a
+	// certificate on its own would be trust nobody can act on.
+	PreviousCACertPEM []byte
+	PreviousCAKeyPEM  []byte
 }
 
 // ServingDNSNames are the names an agent may use to reach the service.
@@ -64,15 +80,18 @@ func ServingDNSNames(service, namespace string) []string {
 	}
 }
 
-// Issue creates a fresh CA and a serving certificate signed by it.
-func Issue(now time.Time, dnsNames []string) (*Bundle, error) {
+// IssueCA mints a self-signed CA. Issue calls it for the first one; a rotation
+// calls it for the incoming one, which is why it exists separately: at that
+// point there is no serving certificate to sign, and signing one would be
+// exactly the thing the overlap window has to postpone.
+func IssueCA(now time.Time) (certPEM, keyPEM []byte, err error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return nil, fmt.Errorf("generate CA key: %w", err)
+		return nil, nil, fmt.Errorf("generate CA key: %w", err)
 	}
 	serial, err := newSerial()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          serial,
@@ -85,15 +104,23 @@ func Issue(now time.Time, dnsNames []string) (*Bundle, error) {
 	}
 	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
 	if err != nil {
-		return nil, fmt.Errorf("self-sign CA: %w", err)
+		return nil, nil, fmt.Errorf("self-sign CA: %w", err)
 	}
 	caKeyPEM, err := encodeKey(caKey)
 	if err != nil {
+		return nil, nil, err
+	}
+	return encodeCert(caDER), caKeyPEM, nil
+}
+
+// Issue creates a fresh CA and a serving certificate signed by it.
+func Issue(now time.Time, dnsNames []string) (*Bundle, error) {
+	caCertPEM, caKeyPEM, err := IssueCA(now)
+	if err != nil {
 		return nil, err
 	}
-
 	b := &Bundle{
-		CACertPEM: encodeCert(caDER),
+		CACertPEM: caCertPEM,
 		CAKeyPEM:  caKeyPEM,
 	}
 	return Reissue(now, b, dnsNames)
@@ -139,6 +166,21 @@ func Reissue(now time.Time, b *Bundle, dnsNames []string) (*Bundle, error) {
 	}, nil
 }
 
+// PublishedCA is what the agents pin: the CA that signs the serving
+// certificate, followed by whichever second CA the rotation is currently
+// holding. Order does not matter to the agent -- OperatorChannel.trustManager
+// loads every certificate in the stream -- but it is deterministic so that a
+// phase which has not changed produces a ConfigMap write that is a no-op.
+func (b *Bundle) PublishedCA() []byte {
+	switch {
+	case len(b.NextCACertPEM) > 0:
+		return slices.Concat(b.CACertPEM, b.NextCACertPEM)
+	case len(b.PreviousCACertPEM) > 0:
+		return slices.Concat(b.CACertPEM, b.PreviousCACertPEM)
+	}
+	return b.CACertPEM
+}
+
 // NeedsRenewal is true once less than a third of the lifetime is left.
 func (b *Bundle) NeedsRenewal(now time.Time) bool {
 	cert, err := b.parseServing()
@@ -182,6 +224,59 @@ func (b *Bundle) Validate(now time.Time, dnsNames []string) error {
 // TLSCertificate is the pair the gRPC server serves.
 func (b *Bundle) TLSCertificate() (tls.Certificate, error) {
 	return tls.X509KeyPair(b.ServingCertPEM, b.ServingKeyPEM)
+}
+
+// WithNextCA returns a bundle carrying an incoming CA. The serving certificate
+// is untouched and still chains to CACertPEM.
+func (b *Bundle) WithNextCA(certPEM, keyPEM []byte) *Bundle {
+	return &Bundle{
+		CACertPEM:         b.CACertPEM,
+		CAKeyPEM:          b.CAKeyPEM,
+		ServingCertPEM:    b.ServingCertPEM,
+		ServingKeyPEM:     b.ServingKeyPEM,
+		NextCACertPEM:     certPEM,
+		NextCAKeyPEM:      keyPEM,
+		PreviousCACertPEM: b.PreviousCACertPEM,
+		PreviousCAKeyPEM:  b.PreviousCAKeyPEM,
+	}
+}
+
+// SwitchToNext promotes the incoming CA to the signing one, demotes the
+// outgoing one to the previous slot, and signs a fresh serving certificate
+// with the new CA. This is the step the overlap window exists to protect, and
+// the only one that can strand an agent.
+func (b *Bundle) SwitchToNext(now time.Time, dnsNames []string) (*Bundle, error) {
+	if len(b.NextCACertPEM) == 0 || len(b.NextCAKeyPEM) == 0 {
+		return nil, fmt.Errorf("bundle has no next CA to switch to")
+	}
+	switched, err := Reissue(now, &Bundle{CACertPEM: b.NextCACertPEM, CAKeyPEM: b.NextCAKeyPEM}, dnsNames)
+	if err != nil {
+		return nil, err
+	}
+	switched.PreviousCACertPEM = b.CACertPEM
+	switched.PreviousCAKeyPEM = b.CAKeyPEM
+	return switched, nil
+}
+
+// RestorePrevious is SwitchToNext undone: the outgoing CA signs again and the
+// incoming one is discarded. Meaningful only after a switch.
+func (b *Bundle) RestorePrevious(now time.Time, dnsNames []string) (*Bundle, error) {
+	if len(b.PreviousCACertPEM) == 0 || len(b.PreviousCAKeyPEM) == 0 {
+		return nil, fmt.Errorf("bundle has no previous CA to restore")
+	}
+	return Reissue(now, &Bundle{CACertPEM: b.PreviousCACertPEM, CAKeyPEM: b.PreviousCAKeyPEM}, dnsNames)
+}
+
+// WithoutRotation empties both rotation slots, leaving the signing CA alone.
+// It is what drop-old does, and what a rollback out of the distributing phase
+// does.
+func (b *Bundle) WithoutRotation() *Bundle {
+	return &Bundle{
+		CACertPEM:      b.CACertPEM,
+		CAKeyPEM:       b.CAKeyPEM,
+		ServingCertPEM: b.ServingCertPEM,
+		ServingKeyPEM:  b.ServingKeyPEM,
+	}
 }
 
 func (b *Bundle) parseCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {

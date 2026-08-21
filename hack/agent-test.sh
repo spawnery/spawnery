@@ -34,6 +34,22 @@
 # not been given a server list, open once one has arrived, closed again on a
 # SetReady - are the whole reason this script grew a proxy half. A unit test can
 # see that bind() was called; only a container can see a port.
+#
+# Phase six goes back to the Paper image for one more obligation neither
+# language's unit tests can reach on their own: that the agent's trust survives
+# a CA rotation's overlap. OperatorChannel.trustManager parses every
+# certificate a mounted bundle holds, not only the first, and its own doc
+# comment says that a single-PEM parse "would make the agent the one thing
+# that cannot survive such a rotation". That is a claim about a real JVM's TLS
+# stack meeting a real ServerHello, so a Kotlin unit test can build the same
+# X509TrustManager and call it satisfied without ever proving it against a
+# handshake, and a Go test can build the same two-CA bundle with
+# internal/certs and never hand it to a JVM at all. So the stub, told
+# --rotate-ca, builds that bundle with internal/certs itself - the same
+# IssueCA and SwitchToNext the operator's own rotation calls - and serves a
+# certificate signed by the second entry. Success here is the agent greeting
+# that server; failure is the handshake error a single-PEM trustManager would
+# have produced instead.
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-docker}"
@@ -52,17 +68,21 @@ NAME4="spawnery-agent-test-proxy-$$"
 VOLUME4="spawnery-agent-test-proxy-$$"
 NAME5="spawnery-agent-test-proxy-supersede-$$"
 VOLUME5="spawnery-agent-test-proxy-supersede-$$"
+NAME6="spawnery-agent-test-rotate-$$"
+VOLUME6="spawnery-agent-test-rotate-$$"
 WORK="$(mktemp -d)"
 EVENTS="$WORK/events.jsonl"
 EVENTS2="$WORK/events-supersede.jsonl"
 EVENTS3="$WORK/events-mute.jsonl"
 EVENTS4="$WORK/events-proxy.jsonl"
 EVENTS5="$WORK/events-proxy-supersede.jsonl"
+EVENTS6="$WORK/events-rotate.jsonl"
 STUB_PID=""
 STUB2_PID=""
 STUB3_PID=""
 STUB4_PID=""
 STUB5_PID=""
+STUB6_PID=""
 
 cleanup() {
 	[ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
@@ -70,8 +90,9 @@ cleanup() {
 	[ -n "$STUB3_PID" ] && kill "$STUB3_PID" 2>/dev/null || true
 	[ -n "$STUB4_PID" ] && kill "$STUB4_PID" 2>/dev/null || true
 	[ -n "$STUB5_PID" ] && kill "$STUB5_PID" 2>/dev/null || true
-	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" >/dev/null 2>&1 || true
-	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" "$VOLUME4" "$VOLUME5" \
+	[ -n "$STUB6_PID" ] && kill "$STUB6_PID" 2>/dev/null || true
+	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" "$NAME6" >/dev/null 2>&1 || true
+	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" "$VOLUME4" "$VOLUME5" "$VOLUME6" \
 		>/dev/null 2>&1 || true
 	rm -rf "$WORK"
 }
@@ -1032,5 +1053,72 @@ if ! port_open "$NAME5" 8081; then
 	exit 1
 fi
 echo "the ready gate stayed open across $synced5 syncs and $superseded5 supersessions"
+
+# ---------------------------------------------------------------------------
+# Phase six: the CA rotation's overlap, from the agent's own trust store.
+#
+# Every phase above authenticates the stub's server certificate against a
+# ca.crt holding exactly one CA, which is also what every JUnit test that
+# builds an OperatorChannel does - so none of them can tell a trustManager
+# that reads the first certificate of a bundle from one that reads all of
+# them. --rotate-ca is the one flag that changes what ca.crt holds: two CAs,
+# built with internal/certs the same way a real rotation builds them, with the
+# serving certificate signed by the second. See cmd/spawnery-stubop/main.go's
+# materialiseRotated for why it is built from that package rather than by
+# hand.
+echo
+echo "restarting the agent against a stub mid CA rotation..."
+"$CONTAINER" rm -f "$NAME5" >/dev/null 2>&1 || true
+kill "$STUB5_PID" 2>/dev/null || true
+STUB5_PID=""
+
+# renew-after well past this phase's own patience, for the same reason phase
+# four's proxy stub uses 180: this phase asserts on the handshake alone, and a
+# renewal mid-run would open a second stream signed by the same bundle without
+# adding anything this phase is checking.
+mkdir -p "$WORK/agent-rotate"
+chmod 0755 "$WORK/agent-rotate"
+"$STUBOP" \
+	--dir "$WORK/agent-rotate" \
+	--san stubop \
+	--listen ":19448" \
+	--report-interval 1 \
+	--renew-after 180 \
+	--hard-deadline 240 \
+	--rotate-ca \
+	>"$EVENTS6" 2>"$WORK/stub6.log" &
+STUB6_PID=$!
+
+sleep 1
+if ! kill -0 "$STUB6_PID" 2>/dev/null; then
+	echo "the rotating stub operator did not stay up:" >&2
+	cat "$WORK/stub6.log" >&2
+	exit 1
+fi
+
+"$CONTAINER" volume create "$VOLUME6" >/dev/null
+"$CONTAINER" run -d --name "$NAME6" \
+	--add-host stubop:host-gateway \
+	--read-only --tmpfs /tmp:rw,exec,size=256m \
+	--cap-drop ALL \
+	--security-opt no-new-privileges \
+	--memory 2g \
+	-v "$VOLUME6:/data" \
+	-v "$WORK/agent-rotate:/var/run/spawnery:ro" \
+	-v "$WORK/config:/etc/spawnery:ro" \
+	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19448 \
+	"$IMAGE" >/dev/null
+
+# Reaching this line is the whole proof: the obvious mutation is mounting only
+# ca.crt's first PEM, which is exactly the bundle a pod carries before a
+# rotation ever starts, against a server whose certificate is signed by the
+# second - a handshake a single-PEM trustManager cannot complete, so the agent
+# would never reach hello and this would time out instead.
+echo "waiting up to ${DEADLINE}s for the agent to greet a server signed by the second CA..."
+await_event hello "$EVENTS6" "$NAME6"
+echo "the agent completed a handshake against a certificate signed by the CA that was second in its mounted bundle"
+
+await_event ready "$EVENTS6" "$NAME6"
+echo "the agent completed a session through it"
 
 echo "agent-test: ok"

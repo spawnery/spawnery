@@ -62,7 +62,7 @@ var RequiredCluster = []Permission{
 	// Pods — the Server controller owns a game server pod's whole life cycle;
 	// since this milestone ProxyGroupReconciler owns a proxy pod's the same way.
 	{Group: "", Resource: "pods", Verb: "get", Why: "ServerReconciler.fetchPod and ServerGroupReconciler.podFor"},
-	{Group: "", Resource: "pods", Verb: "list", Why: "OrphanReconciler.Sweep and ProxyGroupReconciler.pods"},
+	{Group: "", Resource: "pods", Verb: "list", Why: "OrphanReconciler.Sweep, ProxyGroupReconciler.pods, and Store.namespacesMissingCA, which unions the namespaces holding a managed pod into a CA rotation's gate"},
 	{Group: "", Resource: "pods", Verb: "watch", Why: "ServerReconciler and ProxyGroupReconciler both Owns(&corev1.Pod{})"},
 	{Group: "", Resource: "pods", Verb: "create", Why: "ServerReconciler and ProxyGroupReconciler create pods from podspec"},
 	{Group: "", Resource: "pods", Verb: "delete", Why: "the terminating decision, the orphan sweep, and ProxyGroupReconciler scaling down"},
@@ -107,7 +107,7 @@ var RequiredCluster = []Permission{
 	// Namespace bootstrap — Bootstrapper.Ensure keeps the CA ConfigMap and
 	// the server and proxy ServiceAccounts current in every namespace that
 	// runs pods.
-	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure reads the CA ConfigMap"},
+	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure reads the CA ConfigMap, and Store.namespaceHasCA reads it again in every namespace with a Network while a CA rotation's gate is checking who has caught up"},
 	{Group: "", Resource: "configmaps", Verb: "list", Why: "the restricted cache over the CA ConfigMaps"},
 	{Group: "", Resource: "configmaps", Verb: "watch", Why: "the restricted cache over the CA ConfigMaps"},
 	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure creates the CA ConfigMap"},
@@ -126,7 +126,7 @@ var RequiredCluster = []Permission{
 
 	// The operator's own resources.
 	{Group: "spawnery.cloud", Resource: "networks", Verb: "get", Why: "resolving networkRef"},
-	{Group: "spawnery.cloud", Resource: "networks", Verb: "list", Why: "NetworkReconciler.namespaceOwner"},
+	{Group: "spawnery.cloud", Resource: "networks", Verb: "list", Why: "NetworkReconciler.namespaceOwner, and Store.namespacesMissingCA, which lists them again to find the namespaces a CA rotation's gate has to wait for"},
 	{Group: "spawnery.cloud", Resource: "networks", Verb: "watch", Why: "NetworkReconciler For(&Network{})"},
 	// No entry for networks/status:get. Status().Update issues a PUT against
 	// the status subresource and reads nothing first; the status itself is read
