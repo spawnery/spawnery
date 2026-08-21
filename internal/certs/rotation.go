@@ -214,28 +214,32 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 // serving certificate chains to the new CA, which every agent came to trust
 // during the overlap.
 //
-// The bytes are read from the secret rather than from current, which may
-// predate the hand-edit: AdvanceRotation re-reads the secret precisely
-// because it has two writers, and the slot that has to stop being published
-// is the one in the secret now.
+// A repaired slot takes **both** its halves from the secret, not from
+// current: AdvanceRotation re-reads the secret precisely because it has two
+// writers, and current may predate the hand-edit. Pairing the secret's
+// certificate with current's older key would produce a slot that cannot sign,
+// and applyStep rewrites the whole of Data from the bundle, so the newer key
+// would be gone -- SwitchToNext would then fail on every tick, with parseCA's
+// "CA key does not match" reaching nobody but the log.
 func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase string, stored *corev1.Secret) (*Bundle, bool, error) {
 	slots := []struct {
 		certKey        string
+		keyKey         string
 		dependentPhase string
 		clear          func(*Bundle)
-		setCert        func(*Bundle, []byte)
+		setPair        func(*Bundle, []byte, []byte)
 	}{
-		// Only the certificate halves, because they are what gets published.
-		// A malformed key reaches no agent and already fails loudly at the
-		// moment it matters, in parseCA. The key is dropped with its
-		// certificate all the same: secretFor writes a slot's two keys only
-		// while its certificate is occupied.
-		{keyNextCACert, PhaseDistributing,
+		// Only the certificate halves are judged, because they are what gets
+		// published. A malformed key reaches no agent and already fails
+		// loudly at the moment it matters, in parseCA. The key is dropped
+		// with its certificate all the same: secretFor writes a slot's two
+		// keys only while its certificate is occupied.
+		{keyNextCACert, keyNextCAKey, PhaseDistributing,
 			func(b *Bundle) { b.NextCACertPEM, b.NextCAKeyPEM = nil, nil },
-			func(b *Bundle, cert []byte) { b.NextCACertPEM = cert }},
-		{keyPreviousCACert, PhaseSwitched,
+			func(b *Bundle, cert, key []byte) { b.NextCACertPEM, b.NextCAKeyPEM = cert, key }},
+		{keyPreviousCACert, keyPreviousCAKey, PhaseSwitched,
 			func(b *Bundle) { b.PreviousCACertPEM, b.PreviousCAKeyPEM = nil, nil },
-			func(b *Bundle, cert []byte) { b.PreviousCACertPEM = cert }},
+			func(b *Bundle, cert, key []byte) { b.PreviousCACertPEM, b.PreviousCAKeyPEM = cert, key }},
 	}
 
 	// One entry per slot this call touched: what it was called, why, and
@@ -263,7 +267,7 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 			continue
 		}
 		if errors.Is(reason, errNotOnlyTheFirstBlock) {
-			slot.setCert(&fresh, firstPEMBlock(certPEM))
+			slot.setPair(&fresh, firstPEMBlock(certPEM), stored.Data[slot.keyKey])
 			changes = append(changes, change{
 				certKey:  slot.certKey,
 				record:   fmt.Sprintf("%s: %.150s; truncated to that block", slot.certKey, reason),
@@ -886,3 +890,4 @@ func fingerprintFirst(certPEM []byte) ([sha256.Size]byte, error) {
 	}
 	return sha256.Sum256(block.Bytes), nil
 }
+

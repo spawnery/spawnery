@@ -30,6 +30,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1029,6 +1030,67 @@ func TestAMultiBlockIncomingCAIsTruncatedAndTheRotationCarriesOn(t *testing.T) {
 	after = switchNow(t, ctx, s, clock, after)
 	if !bytes.Equal(after.CACertPEM, incoming) {
 		t.Error("the switch did not promote the repaired incoming CA")
+	}
+}
+
+// A repair takes both halves of the slot from the secret, so the certificate
+// it keeps and the key it keeps are still a pair.
+//
+// The hand-edit this covers replaces ca-next.crt *and* ca-next.key -- a whole
+// incoming CA pasted in, with a chain trailing the certificate -- in the gap
+// between Ensure's read and AdvanceRotation's re-read. Pairing the secret's
+// new certificate with the bundle's old key would look harmless here and be
+// permanent: applyStep rewrites the whole of Data from the bundle, so the new
+// key is overwritten by the old one and never comes back, and every later
+// tick fails inside SwitchToNext -> Reissue -> parseCA with nothing but a log
+// line to show for it.
+func TestARepairKeepsTheSecretsOwnKeyWithItsCertificate(t *testing.T) {
+	s, clock, ctx, ns := newStore(t)
+	s.AgentSessionDeadline = 10 * time.Minute
+
+	b := startedAndDistributed(t, s, clock, ctx, ns)
+	if len(b.NextCACertPEM) == 0 {
+		t.Fatal("the fixture left no incoming CA to replace")
+	}
+
+	// A different incoming CA altogether, both halves, with a second block
+	// after the certificate so that the slot is repaired rather than cleared.
+	pastedCert, pastedKey, err := certs.IssueCA(clock.Now())
+	if err != nil {
+		t.Fatalf("IssueCA for the pasted-in CA: %v", err)
+	}
+	extra, _, err := certs.IssueCA(clock.Now())
+	if err != nil {
+		t.Fatalf("IssueCA for the second block: %v", err)
+	}
+	breakSlot(t, ctx, s, ns, "ca-next.crt", slices.Concat(pastedCert, extra))
+	breakSlot(t, ctx, s, ns, "ca-next.key", pastedKey)
+
+	after, _, err := s.AdvanceRotation(ctx, b)
+	if err != nil {
+		t.Fatalf("AdvanceRotation over a wholly replaced incoming CA: %v", err)
+	}
+	if !bytes.Equal(after.NextCACertPEM, pastedCert) {
+		t.Fatal("ca-next.crt was not truncated to the pasted-in certificate")
+	}
+	if !bytes.Equal(after.NextCAKeyPEM, pastedKey) {
+		t.Fatal("the repair kept the key the bundle came in with, not the one in the " +
+			"secret beside the certificate it kept")
+	}
+	if !bytes.Equal(secretOf(t, ctx, s, ns).Data["ca-next.key"], pastedKey) {
+		t.Fatal("the repair wrote the older key back over the secret's own; applyStep " +
+			"replaces the whole of Data, so nothing brings it back")
+	}
+
+	// The proof that the pair is a pair: the switch signs with it.
+	writeCA(t, ctx, s.Client, ns, after.PublishedCA())
+	after = switchNow(t, ctx, s, clock, after)
+	if !bytes.Equal(after.CACertPEM, pastedCert) {
+		t.Error("the switch did not promote the pasted-in CA")
+	}
+	serving := parseCert(t, after.ServingCertPEM)
+	if err := serving.CheckSignatureFrom(parseCert(t, pastedCert)); err != nil {
+		t.Errorf("the serving certificate does not chain to the pasted-in CA: %v", err)
 	}
 }
 

@@ -157,6 +157,17 @@ Nothing usable is lost, no phase moves, and the rotation carries on. This keys
 on the predicate and not on the slot: `ca-next.crt` gets the same treatment for
 the same reason.
 
+**Both halves of a repaired slot come from the secret.** The certificate is
+read from there because that is the copy that has to stop being published; the
+*key* has to come from there too, and for a sharper reason. A hand-edit that
+pastes in a whole incoming CA replaces `ca-next.crt` and `ca-next.key`
+together, and `Ensure`'s read of the bundle may predate it. Keeping the
+certificate from the secret beside the key from the bundle would produce a pair
+that cannot sign — and `applyStep` rewrites the whole of `Data` from the
+bundle, so the newer key is overwritten and does not come back. Every later
+tick would then die inside `SwitchToNext` → `Reissue` → `parseCA` with
+"CA key does not match", visible only in the operator's log.
+
 **If it is not a certificate — not PEM at all, or a PEM envelope around
 something that is not one — the slot is unusable.** `parseCA` fails on that
 same first block, so it is unusable in fact and not only in publication. Those
@@ -295,6 +306,12 @@ effect, then let the second through.
   assert the new behaviour without showing why the old one was wrong. The same
   repair on `ca-next.crt`, after which the rotation still reaches its switch,
   pins that the rule keys on the predicate and not on the slot.
+- **A repair keeps the secret's own key with the certificate it kept**: a
+  hand-edit replacing both halves of `ca-next` with a wholly different CA, the
+  certificate carrying a second block, is repaired to that CA's first block
+  *and* that CA's key — proven by the switch afterwards signing with the pair.
+  Taking the key from the bundle instead turns the test red, which is the
+  failure being guarded: it is permanent and its only signal is a log line.
 - **Each of the three cleanup outcomes**, asserted on the secret read back:
   `ca-next` while `distributing` leaves no rotation and no phase; `ca-previous`
   while `switched` leaves no rotation and no phase; a slot with no phase set
