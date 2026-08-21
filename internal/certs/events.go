@@ -23,8 +23,8 @@ import (
 
 // Event reasons recorded on the TLS secret, so that a rotation is visible
 // without reading logs. The first four are the design's own vocabulary
-// (docs/superpowers/specs/2026-08-21-ca-rotation-design.md §4); the fifth is
-// not.
+// (docs/superpowers/specs/2026-08-21-ca-rotation-design.md §4); the last two
+// name the two ways a request ends without a transition.
 //
 // ReasonRotationRequestUnrecognised covers a case §4 deliberately does not
 // route through ReasonRotationBlocked: a spawnery.cloud/rotate-ca value the
@@ -38,12 +38,25 @@ import (
 // for an unreadable request would tell that human the wrong story: there is
 // no gate involved, and the rotation is not waiting on anything but a second,
 // correctly spelled annotation.
+//
+// ReasonRotationRequestRefused is the other one, and it is the likelier of
+// the two to be hit under pressure: a request the operator understands
+// perfectly and will not carry out from the phase it is in -- a drop-old sent
+// a minute early, most of all. §4 has that request consumed like an accepted
+// one, so within one tick the annotation is gone and the secret says nothing;
+// without this event the whole trace is a log line, and the procedure looks
+// to whoever ran it as though it swallowed the instruction. It is a reason of
+// its own rather than either of the two above for the same triage argument
+// §4 makes about RotationBlocked: nothing is gated on a namespace here, and
+// the value was not misspelled -- it was right and its timing was wrong, and
+// the note says which phase refused it and what to do instead.
 const (
 	ReasonRotationStarted             = "RotationStarted"
 	ReasonRotationBlocked             = "RotationBlocked"
 	ReasonRotationSwitched            = "RotationSwitched"
 	ReasonRotationCompleted           = "RotationCompleted"
 	ReasonRotationRequestUnrecognised = "RotationRequestUnrecognised"
+	ReasonRotationRequestRefused      = "RotationRequestRefused"
 )
 
 // Event actions, in the shape internal/controller/events.go established:
@@ -62,6 +75,7 @@ const (
 	actionSwitchRotation            = "SwitchRotation"
 	actionCompleteRotation          = "CompleteRotation"
 	actionReportUnrecognisedRequest = "ReportUnrecognisedRequest"
+	actionRefuseRotationRequest     = "RefuseRotationRequest"
 )
 
 // event records an event on the TLS secret, or does nothing if no recorder is

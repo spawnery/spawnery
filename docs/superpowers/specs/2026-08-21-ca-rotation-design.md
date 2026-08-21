@@ -159,12 +159,23 @@ is one `rollback` undoes.
 state this design has, and it would need a third slot in §3's table.
 `drop-old` during `distributing` is refused too: the CA it would drop is the
 one currently signing. A refused request is **consumed like an accepted one**,
-and the refusal reported. Not symmetry for its own sake: the phase is driven
-only on a tick with no request pending, so a refusal left in place would stall
-the sequence where it stands rather than merely repeat its complaint — a
-`drop-old` set during `distributing` would hold the rotation mid-window
-indefinitely. The unrecognised value above is the only one left in place, and
-it is also the only one that is never acted on.
+and the refusal reported as a `RotationRequestRefused` warning on the secret.
+Consuming is not symmetry for its own sake: the phase is driven only on a tick
+with no request pending, so a refusal left in place would stall the sequence
+where it stands rather than merely repeat its complaint — a `drop-old` set
+during `distributing` would hold the rotation mid-window indefinitely. The
+unrecognised value above is the only one left in place, and it is also the only
+one that is never acted on.
+
+The event is what keeps consuming honest. Deleting the annotation inside 30
+seconds and writing nothing else is, to the human who set it, indistinguishable
+from the procedure swallowing the instruction — and the request most likely to
+be refused is a `drop-old` sent a minute early by somebody working under
+pressure. It is its own reason rather than `RotationBlocked` or
+`RotationRequestUnrecognised` for the same triage argument this section already
+makes about the latter: nothing is gated on a namespace here, and nothing was
+misspelled. The request was right and its timing was wrong, and the note says
+which phase refused it and what to send instead.
 
 `Provider.Start` drives all of it. It is already a leader-bound `Runnable`, so
 only one process ever writes. Its loop ticks hourly today
@@ -172,13 +183,14 @@ only one process ever writes. Its loop ticks hourly today
 second cadence: while `ca-rotation-phase` is set, it looks every 30 seconds
 instead.
 
-A rotation is visible without reading logs. Five events go on the secret —
+A rotation is visible without reading logs. Six events go on the secret —
 `RotationStarted`, `RotationBlocked`, `RotationSwitched`, `RotationCompleted`,
-and `RotationRequestUnrecognised` for the warning two paragraphs up: it is not
+`RotationRequestUnrecognised` for the warning three paragraphs up (it is not
 reported as `RotationBlocked`, because an operator triaging a `RotationBlocked`
-warning would go looking for a namespace that is not there — nothing is
-gated on anything, the rotation is only waiting on a second, correctly spelled
-annotation. `internal/certs/metrics.go` registers two gauges in the shape the other
+warning would go looking for a namespace that is not there — nothing is gated
+on anything, the rotation is only waiting on a second, correctly spelled
+annotation), and `RotationRequestRefused` for a request that was understood and
+not carried out. `internal/certs/metrics.go` registers two gauges in the shape the other
 packages already use (`internal/agentserver/metrics.go`,
 `internal/grpcauth/metrics.go`): `spawnery_ca_rotation_phase`, labelled by
 phase and carrying 1 for the active one, and

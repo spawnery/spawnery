@@ -272,7 +272,30 @@ func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phas
 }
 
 // refuse consumes the request and reports why it was not carried out.
+//
+// The event is not decoration. A refusal deletes the annotation within one
+// tick and writes nothing else, so without it the whole trace is one line in
+// the operator's log -- and the human who set the annotation is not the one
+// tailing that log. The failure it produces is a human under pressure sending
+// drop-old a little early: the annotation vanishes inside 30 seconds, the
+// secret says nothing, and the procedure looks as though it swallowed the
+// instruction. That path was the only one of the two request dead ends with
+// no event at all, while the less likely and less consequential typo path had
+// ReasonRotationRequestUnrecognised.
 func (s *Store) refuse(ctx context.Context, consume func(*corev1.Secret), reason error) (*Bundle, bool, error) {
+	// Recorded before the consume rather than after it: the refusal is a fact
+	// as soon as this function is entered, and a consume that fails is
+	// exactly the case that most needs the event -- the annotation is then
+	// still sitting there with nothing saying why it was not acted on.
+	//
+	// %.250s: reason embeds the phase annotation, which a human can hand-edit
+	// to arbitrary text. fmt counts a string precision in runes, so this cuts
+	// on a rune boundary by construction and the note stays under the
+	// 1024-byte limit internal/controller/events.go documents even if every
+	// rune kept is four bytes wide.
+	s.event(corev1.EventTypeWarning, ReasonRotationRequestRefused, actionRefuseRotationRequest,
+		"%.250s; the request was consumed, so setting it again is what asks a second time",
+		reason.Error())
 	if err := s.applyStep(ctx, nil, consume); err != nil {
 		return nil, false, fmt.Errorf("%w (and clearing it failed: %v)", reason, err)
 	}
