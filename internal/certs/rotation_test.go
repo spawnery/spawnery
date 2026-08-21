@@ -28,13 +28,15 @@ import (
 // The switch pairs each certificate with its own key, and both pairs stay
 // usable afterwards.
 //
-// This is the one operation in the rotation that can produce a bundle which
-// looks complete and is not: pairing the incoming certificate with the
-// outgoing key, or the reverse, yields four non-empty PEMs that Validate
-// rejects and that nothing else would notice until the operator refused to
-// serve. parseCA already checks that a key matches its certificate, so the
-// assertion is available -- it just has to be made about both pairs, not only
-// the signing one.
+// Pairing the incoming certificate with the outgoing key, or the reverse,
+// does not produce a bundle that looks complete: SwitchToNext hands a
+// two-field {CACertPEM, CAKeyPEM} bundle to Reissue before any serving
+// certificate exists, and Reissue's own parseCA already checks that a key
+// matches its certificate, so the mismatch surfaces as an error out of
+// SwitchToNext itself, before Validate ever runs. What still needs asserting
+// here is that both pairs -- the signing one and the one a rollback would
+// sign with -- are each individually correct, since parseCA only ever checks
+// one pair at a time.
 func TestSwitchingToTheNextCAPairsEveryCertificateWithItsOwnKey(t *testing.T) {
 	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
 	dnsNames := certs.ServingDNSNames("spawnery-operator", "spawnery-system")
