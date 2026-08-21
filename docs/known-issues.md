@@ -4120,11 +4120,90 @@ its `RotationRequestUnrecognised` event fires on **every** tick for as long as
 the value sits on the secret — every 30 seconds while a rotation is in flight.
 Correcting or deleting the annotation is what stops it.
 
-Six reasons appear as events on the secret — `RotationStarted`,
+**The operator repairs or throws away a hand-edited rotation slot, and it can
+end the rotation while doing so.** On every tick, *before* it looks at
+`rotate-ca` at all, `AdvanceRotation` re-reads `ca-next.crt` and
+`ca-previous.crt` out of the secret and checks that each is exactly the PEM
+encoding of one certificate — those bytes are published verbatim into every
+namespace's `spawnery-ca` ConfigMap, and an agent that cannot parse the bundle
+loses its entire trust store, not merely the slot. A slot that fails the check
+is dealt with there and then, and that is the tick's one step: a `rotate-ca`
+set at the same moment is **not** consumed, and is picked up on the next tick
+against the state the cleanup left. Only a hand-edited or truncated secret
+reaches this; nothing the procedure itself does can.
+
+Which of the two happens turns on one question — **is the slot's first PEM
+block a certificate?**
+
+- **Yes: the slot is repaired.** It is truncated to that first block, with a
+  `RotationSlotTruncated` warning. This is what a pasted chain, or a stray line
+  before or after the certificate, produces. The operator was already signing
+  with that first block, so nothing usable is lost, no phase moves, and the
+  rotation carries on. It is not cosmetic: a surplus block that happens to be a
+  valid certificate is loaded by every agent as another CA it will accept the
+  operator's identity from, and nothing else would ever say so.
+- **No — not PEM at all, or a PEM envelope around something that is not a
+  certificate: the slot is cleared**, with a `RotationSlotDiscarded` warning.
+  The bytes are gone; they are kept nowhere. What becomes of the rotation then
+  depends on the phase:
+  - **`ca-next.crt` while `distributing` — the rotation is abandoned.** The end
+    state is the one `rollback` out of `distributing` produces: no slot, no
+    phase, `ca.crt` published alone. Nothing usable had been distributed, and
+    every agent trusted `ca.crt` throughout. Start again when ready.
+  - **`ca-previous.crt` while `switched` — the drop is completed.** This is the
+    procedure's one irreversible step, performed without anyone asking, and it
+    is the behaviour worth having read *before* meeting it. The hold at
+    `switched` exists for exactly one purpose — that a `rollback` stays
+    possible — and a rollback signs with the previous CA's bytes
+    (`RestorePrevious` → `Reissue` → `parseCA`). A slot only reaches this
+    branch when those bytes will not parse, so the rollback was already
+    impossible; clearing the slot records that rather than causing it. Nobody
+    is stranded: the serving certificate chains to the new CA, which every
+    agent came to trust during the overlap. But the bytes are gone once the
+    operator has acted, and while a rotation is in flight it acts within 30
+    seconds — so a `ca-previous.crt` damaged by a slipped paste leaves about
+    one tick in which to put it back. After that the old CA can only come from
+    a backup of the secret, not from the operator.
+  - **Anything else** — a `ca-previous` sitting on a `distributing` secret, or
+    either slot on an idle one — is cleared and reported, and a rotation that
+    did not depend on it carries on untouched.
+
+**Repairing `ca-next.crt` during `distributing` also deletes
+`spawnery.cloud/ca-rotation-since` and re-runs the gate.** The wait starts
+over, and `ca-rotation-blocked-on` may reappear naming namespaces that had
+already caught up: the gate had passed against bytes that are no longer in the
+slot, and if what was pasted in front of the certificate is a different CA,
+switching to it would strand every agent in the fleet. Expect to lose up to the
+quarter of an hour again. A `ca-previous` repair at `switched` does not do
+this — there is no window there, and `since` means the age of the hold.
+
+**`spawnery.cloud/ca-rotation-discarded` is the durable record of all of the
+above**, and it is where to look once the events have expired. It carries the
+slot, the parse error, whether the slot was cleared or truncated, and the time
+— everything except the bytes, which are the one thing that must stop existing.
+It is one annotation for both outcomes, and two slots touched in one step are
+two entries in one value, `;`-separated, with a single timestamp at the end:
+
+```
+spawnery.cloud/ca-rotation-discarded: ca-next.crt: not PEM (2026-08-21T14:02:11Z)
+spawnery.cloud/ca-rotation-discarded: ca-next.crt: more than its first PEM block; truncated to that block; ca-previous.crt: parse certificate: x509: malformed certificate (2026-08-21T14:02:11Z)
+```
+
+**It is removed only by the next accepted `start`.** Neither `drop-old` nor
+`rollback` touches it, and neither does a refusal; a later repair or clearance
+overwrites it with that step's own entries. So a record on a secret with no
+phase set describes the last thing that happened to a slot, which is not
+necessarily anything to do with the rotation that has just finished — check its
+timestamp before reading it as news.
+
+Eight reasons appear as events on the secret — `RotationStarted`,
 `RotationBlocked`, `RotationSwitched`, `RotationCompleted`,
-`RotationRequestUnrecognised` and `RotationRequestRefused`
+`RotationRequestUnrecognised`, `RotationRequestRefused`,
+`RotationSlotDiscarded` and `RotationSlotTruncated`
 (`internal/certs/events.go`); `rollback` alone ends a rotation with no event of
-its own, since the human-written annotation already says what happened. Two gauges track it from outside
+its own, since the human-written annotation already says what happened. All of
+them expire out of the API within the hour, which is why the last two have
+`ca-rotation-discarded` behind them. Two gauges track it from outside
 (`internal/certs/metrics.go`): `spawnery_ca_rotation_phase`, 1 for the current
 phase and 0 for the others so "is anything rotating" is one query, and
 `spawnery_ca_rotation_blocked_namespaces`, the count
