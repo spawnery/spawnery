@@ -4034,20 +4034,60 @@ The whole interface is annotations on that secret
   the old CA throughout (`Store.applyRequest`'s `RequestStart` case,
   `Bundle.WithNextCA`). `spawnery.cloud/ca-rotation-phase` becomes
   `distributing`.
+- **`start` can sit unnoticed for up to an hour.** The annotation is only read
+  on a tick of `Provider.Start`'s loop, and while nothing is rotating that loop
+  ticks at `RenewCheckInterval` — one hour (`checkInterval(false)`). On an idle
+  cluster the worst case after annotating is sixty minutes in which nothing at
+  all happens: no phase, no event, no change to either gauge. The 30-second
+  cadence only engages once a phase is set, which is to say after the tick that
+  picked the request up. If that wait is not acceptable, restart the operator
+  pod: `Provider.Start` runs `Store.Ensure` and `AdvanceRotation` once
+  immediately, before it arms its first timer, so the new leader picks the
+  request up as it comes up. `start` is the only request this affects: it is the
+  only one sent while no rotation is in flight. `drivePhase` reports both
+  `distributing` and `switched` as in flight, so from `start` onwards — across
+  restarts, since the phase is re-read from the secret — the loop stays on the
+  30-second cadence and a `drop-old` or `rollback` is picked up within it.
 - From there the operator drives itself, checking every 30 seconds
   (`RotationCheckInterval`). It waits for two things in order. First, every
-  namespace that holds a `Network` to show the new CA in its own
-  `spawnery-ca` ConfigMap — read from the cluster on each check, not assumed
-  (`namespacesMissingCA`). Until that is true, `spawnery.cloud/ca-rotation-blocked-on`
-  names the namespaces still missing it (truncated past ten), and a
-  `RotationBlocked` event repeats the same list. Second, once every namespace
-  has caught up — `spawnery.cloud/ca-rotation-since` is stamped at that
-  moment, not at `start` — a further wait covering the kubelet's projection
-  delay plus the operator's own `--agent-session-deadline`
+  namespace where an agent could be running to show the new CA in its own
+  `spawnery-ca` ConfigMap: the union of the namespaces holding a `Network` and
+  the namespaces holding a managed pod that is not in a terminal phase, read
+  from the cluster on each check until the gate passes (`namespacesMissingCA`).
+  Until that is true, `spawnery.cloud/ca-rotation-blocked-on` names the
+  namespaces still missing it (truncated past ten). Second, once every
+  namespace has caught up — `spawnery.cloud/ca-rotation-since` is stamped at
+  that moment, not at `start` — a further wait covering the kubelet's
+  projection delay plus the operator's own `--agent-session-deadline`
   (`drivePhase`; `projectionMargin` (2 minutes) + `Store.AgentSessionDeadline`,
   which defaults to 10 minutes — roughly a quarter of an hour in total, longer
   if that flag is raised), so that every agent stream open when the ConfigMap
   changed has had a chance to close and reopen at least once.
+- **The gate stops running the moment `since` is stamped**, and is never
+  re-evaluated for that rotation — neither half of the union. That is
+  deliberate (design, section 5: a cluster where networks are created regularly
+  would otherwise push the switch out forever), and it is the fact to reason
+  from when reasoning about safety: what the switch is safe against is the set
+  of namespaces as it stood at the instant the gate passed, plus the argument
+  that anything created afterwards receives the two-CA bundle on its first
+  reconcile and has never held anything else.
+- **A `RotationBlocked` event does not repeat.** It fires only when the list of
+  blocked namespaces *changes* (`drivePhase` compares the new note against
+  `ca-rotation-blocked-on` before writing either), so a gate blocked on the
+  same namespace for days fires once and then goes quiet — and Kubernetes
+  expires the event out of the API within the hour, after which nothing in
+  `kubectl describe secret spawnery-agent-tls` mentions it. The durable signals
+  are the `ca-rotation-blocked-on` annotation and the
+  `spawnery_ca_rotation_blocked_namespaces` gauge; alert on the gauge, not on
+  the event.
+- **A namespace with leftover agent pods and no `Network` blocks the
+  rotation**, by design, and is named in `ca-rotation-blocked-on` like any
+  other. `ServerGroup` and `ProxyGroup` carry no `OwnerReference` to the
+  `Network`, so deleting a `Network` leaves the groups and their pods running,
+  and nothing refreshes `spawnery-ca` in that namespace afterwards — switching
+  would strand those agents at their next handshake. The remedy is to delete or
+  drain the leftover groups; the gate clears within one 30-second check once
+  their pods are gone.
 - Once both conditions hold, the operator switches on its own: the serving
   certificate is re-signed under the new CA,
   `spawnery.cloud/ca-rotation-phase` becomes `switched`, and
@@ -4067,17 +4107,24 @@ The whole interface is annotations on that secret
 The operator clears `rotate-ca` once it has acted on whatever value it held —
 a refusal consumes the annotation exactly as an accepted request does. A
 `start` while a rotation is already open, a `drop-old` outside `switched`, and
-a `rollback` with nothing in progress are all refused this way. A value that
-is none of `start`, `drop-old` or `rollback` is the one exception: it is left
-in place, reported once as a `RotationRequestUnrecognised` event, and does not
-halt whatever step was already due — the sequence keeps advancing on its own
-schedule regardless (`AdvanceRotation`'s default case).
+a `rollback` with nothing in progress are all refused this way, each with a
+`RotationRequestRefused` warning naming the phase that refused it. That event
+is the only trace a refusal leaves: within one tick the annotation itself is
+gone. Asking again means setting the annotation again.
 
-Five reasons appear as events on the secret — `RotationStarted`,
-`RotationBlocked`, `RotationSwitched`, `RotationCompleted` and
-`RotationRequestUnrecognised` (`internal/certs/events.go`); `rollback` alone
-ends a rotation with no event of its own, since the human-written annotation
-already says what happened. Two gauges track it from outside
+A value that is none of `start`, `drop-old` or `rollback` is the one
+exception: it is left in place and does not halt whatever step was already due
+— the sequence keeps advancing on its own schedule regardless
+(`AdvanceRotation`'s default case). Because it is deliberately never consumed,
+its `RotationRequestUnrecognised` event fires on **every** tick for as long as
+the value sits on the secret — every 30 seconds while a rotation is in flight.
+Correcting or deleting the annotation is what stops it.
+
+Six reasons appear as events on the secret — `RotationStarted`,
+`RotationBlocked`, `RotationSwitched`, `RotationCompleted`,
+`RotationRequestUnrecognised` and `RotationRequestRefused`
+(`internal/certs/events.go`); `rollback` alone ends a rotation with no event of
+its own, since the human-written annotation already says what happened. Two gauges track it from outside
 (`internal/certs/metrics.go`): `spawnery_ca_rotation_phase`, 1 for the current
 phase and 0 for the others so "is anything rotating" is one query, and
 `spawnery_ca_rotation_blocked_namespaces`, the count
