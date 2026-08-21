@@ -102,7 +102,7 @@ const (
 // second one. Passing the created Server or the deleted Pod there would be new
 // information in the operator's output that no test covers and no design asked
 // for, so the migration leaves it nil throughout and says why once, here,
-// rather than at twenty-three call sites.
+// rather than at twenty-four call sites.
 
 // The event note's size limit, which is not the same limit the old API had.
 //
