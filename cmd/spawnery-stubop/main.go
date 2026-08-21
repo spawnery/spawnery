@@ -115,6 +115,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/certs"
 )
 
 const (
@@ -189,6 +190,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		"after a proxy's FullSync, wait this long and then tell it to stop being ready; "+
 			"0 disables. Used by hack/agent-test.sh phase 4 to prove the gate closes on the "+
 			"operator's word rather than only at shutdown")
+	rotateCA := fs.Bool("rotate-ca", false,
+		"write a two-PEM ca.crt built with internal/certs and serve a certificate signed by "+
+			"the second of the two, the way an agent sees mid-rotation. Used by "+
+			"hack/agent-test.sh phase 6 to prove OperatorChannel.trustManager trusts every "+
+			"certificate the bundle holds and not only the first")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -201,7 +207,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 		sans = names{"stubop"}
 	}
 
-	material, err := materialise(*dir, sans)
+	var material *material
+	var err error
+	if *rotateCA {
+		material, err = materialiseRotated(*dir, sans)
+	} else {
+		material, err = materialise(*dir, sans)
+	}
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "could not write the agent's credentials: %v\n", err)
 		return 1
@@ -345,6 +357,76 @@ func materialise(dir string, sans []string) (*material, error) {
 		},
 		Token: token,
 	}, nil
+}
+
+// materialiseRotated is materialise's counterpart for --rotate-ca: it writes a
+// two-PEM ca.crt and serves a certificate signed by the second of the two,
+// which is the shape internal/certs.Bundle.PublishedCA produces mid-rotation
+// and OperatorChannel.trustManager is meant to survive.
+//
+// It is built from internal/certs rather than by hand, on purpose: a fixture
+// that minted its own bundle with a different code path would prove that path
+// agrees with itself, not that the agent survives what production actually
+// publishes.
+func materialiseRotated(dir string, sans []string) (*material, error) {
+	if err := os.MkdirAll(dir, worldEnter); err != nil {
+		return nil, fmt.Errorf("create %s: %w", dir, err)
+	}
+	// See materialise: MkdirAll leaves an existing directory's mode alone.
+	if err := os.Chmod(dir, worldEnter); err != nil {
+		return nil, fmt.Errorf("chmod %s: %w", dir, err)
+	}
+
+	now := time.Now()
+	firstCertPEM, firstKeyPEM, err := certs.IssueCA(now)
+	if err != nil {
+		return nil, fmt.Errorf("issue the first CA: %w", err)
+	}
+	secondCertPEM, secondKeyPEM, err := certs.IssueCA(now)
+	if err != nil {
+		return nil, fmt.Errorf("issue the second CA: %w", err)
+	}
+
+	// The bundle as it stands mid-rotation: the first CA still signs, the
+	// second is only published. PublishedCA is the same call
+	// internal/controller makes to write the ConfigMap in that state, and its
+	// result -- first CA then second -- is fixed into bundlePEM below before
+	// SwitchToNext runs, because the claim under test is that mounting *this*
+	// unchanged bundle keeps trusting the serving certificate across the
+	// switch from the first CA to the second.
+	b := &certs.Bundle{CACertPEM: firstCertPEM, CAKeyPEM: firstKeyPEM}
+	b = b.WithNextCA(secondCertPEM, secondKeyPEM)
+	bundlePEM := b.PublishedCA()
+
+	// SwitchToNext is the step that actually moves the signature: the second
+	// CA promotes to signing and a fresh serving certificate is cut with it.
+	// This is what the operator does at the end of the overlap, and it is the
+	// only thing under test here that the agent cannot see directly -- it only
+	// ever sees the certificate this produces.
+	switched, err := b.SwitchToNext(now, sans)
+	if err != nil {
+		return nil, fmt.Errorf("switch to the second CA: %w", err)
+	}
+	servingCert, err := switched.TLSCertificate()
+	if err != nil {
+		return nil, fmt.Errorf("load the certificate signed by the second CA: %w", err)
+	}
+
+	if err := write(filepath.Join(dir, "ca.crt"), bundlePEM); err != nil {
+		return nil, err
+	}
+
+	secret := make([]byte, 32)
+	if _, err := rand.Read(secret); err != nil {
+		return nil, fmt.Errorf("draw a token: %w", err)
+	}
+	token := base64.RawURLEncoding.EncodeToString(secret)
+	// No trailing newline: see materialise, same reason.
+	if err := write(filepath.Join(dir, "token"), []byte(token)); err != nil {
+		return nil, err
+	}
+
+	return &material{Certificate: servingCert, Token: token}, nil
 }
 
 // write puts the file where the agent can read it whatever the umask says.
