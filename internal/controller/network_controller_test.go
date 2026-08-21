@@ -739,3 +739,52 @@ func TestAReconcileWithoutACABundleFails(t *testing.T) {
 		t.Error("a ConfigMap was written despite there being no bundle to write")
 	}
 }
+
+// A namespace whose CA cannot be written must still get a current status and
+// an event saying why.
+//
+// Bootstrap.Ensure runs last, after r.Status().Update, because the state it
+// reports on is not always the transient one. An empty bundle clears itself
+// within seconds of process start; a ConfigMap write refused by an admission
+// webhook, a ResourceQuota or a namespace policy stands until somebody removes
+// it. With the call ahead of the status update, a reconcile in such a
+// namespace records nothing at all for as long as the refusal lasts: a new
+// Network never persists Accepted, and servergroup_controller.go and
+// proxygroup_controller.go both gate on that condition, so every group in the
+// namespace stops; an existing one keeps a stale Accepted=True while its
+// player counts, its group counts and its rotation condition freeze. The
+// error is still returned, so the reconcile still fails and requeues.
+func TestABootstrapFailureStillWritesTheStatus(t *testing.T) {
+	f := newFixture(t)
+	r, rec := networkReconcilerWithEvents(f)
+	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return nil }}
+
+	// newFixture creates its ServerGroup after the reconcile that accepted the
+	// Network, so the stored status still counts none. A non-zero count below
+	// can only have come from this reconcile's own status update.
+	if got := f.getNetwork(t, f.network.Name).Status.ServerGroups; got != 0 {
+		t.Fatalf("serverGroups = %d before the reconcile, want 0", got)
+	}
+
+	_, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: client.ObjectKey{Namespace: f.ns, Name: f.network.Name},
+	})
+	if err == nil {
+		t.Fatal("the reconcile succeeded with no CA bundle available")
+	}
+
+	got := f.getNetwork(t, f.network.Name)
+	if got.Status.ServerGroups != 1 {
+		t.Errorf("serverGroups = %d, want 1 — a namespace the operator cannot bootstrap "+
+			"must not stop the Network's status being written", got.Status.ServerGroups)
+	}
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
+		t.Errorf("conditions = %+v, want Accepted=True persisted; the groups in this "+
+			"namespace are gated on it", got.Status.Conditions)
+	}
+	recorded := drainEvents(rec)
+	if !containsEvent(recorded, ReasonNamespaceNotBootstrapped) {
+		t.Errorf("events = %q, want one naming %s — a log line is the only other trace "+
+			"a refused ConfigMap write leaves", recorded, ReasonNamespaceNotBootstrapped)
+	}
+}

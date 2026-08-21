@@ -80,6 +80,14 @@ const (
 	// soft drain for a rolling update.
 	actionRetireServer = "RetireServer"
 
+	// actionBootstrapNamespace is NetworkReconciler putting the CA bundle and
+	// the agent ServiceAccounts into its namespace. Rule 1: the objects
+	// Bootstrapper.Ensure writes are subordinate ones, and this names the
+	// attempt to write them. ServerReconciler reports the same failure under
+	// actionCreatePod because there the bootstrap only gates the create it is
+	// named after; here nothing follows it, so the bootstrap is the operation.
+	actionBootstrapNamespace = "BootstrapNamespace"
+
 	// actionSyncStatus is rule 2: the controller changed nothing but its own
 	// object's status, and the event reports what it observed while doing so.
 	actionSyncStatus = "SyncStatus"
