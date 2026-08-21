@@ -253,8 +253,9 @@ func (p *Provider) CABundle() []byte {
 	return s.ca
 }
 
-// Start ensures a bundle once and then checks hourly. It is a leader-bound
-// Runnable: only the leader may write the secret.
+// Start ensures a bundle once and then checks on a cadence that depends on
+// whether a rotation is in flight. It is a leader-bound Runnable: only the
+// leader may write the secret.
 func (p *Provider) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("certs")
 
@@ -262,30 +263,69 @@ func (p *Provider) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("ensure the TLS bundle: %w", err)
 	}
+	inFlight := false
+	if advanced, rotating, err := p.store.AdvanceRotation(ctx, bundle); err != nil {
+		// Not fatal at startup either: a rotation that cannot advance is a
+		// stalled procedure, while the certificate in hand still works, and
+		// refusing to serve because of an annotation would be a worse outage
+		// than the one it describes.
+		logger.Error(err, "the CA rotation did not advance")
+	} else {
+		bundle, inFlight = advanced, rotating
+	}
 	if err := p.Set(bundle); err != nil {
 		return err
 	}
 	logger.Info("serving certificate ready")
 
-	ticker := time.NewTicker(RenewCheckInterval)
-	defer ticker.Stop()
+	// A timer rather than a ticker: the interval changes when a rotation
+	// starts or ends, and the point of RotationCheckInterval is that the
+	// window is a quarter of an hour, not an hour.
+	timer := time.NewTimer(checkInterval(inFlight))
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			bundle, err := p.store.Ensure(ctx)
-			if err != nil {
-				// Keep serving the old certificate; it is still valid for a
-				// third of its lifetime.
-				logger.Error(err, "renewal failed, keeping the current certificate")
-				continue
-			}
-			if err := p.Set(bundle); err != nil {
-				logger.Error(err, "the renewed bundle is unusable")
-			}
+		case <-timer.C:
+			inFlight = p.refresh(ctx, inFlight)
+			timer.Reset(checkInterval(inFlight))
 		}
 	}
+}
+
+// refresh runs one renewal-and-rotation pass and reports whether a rotation is
+// still in flight. wasInFlight comes back unchanged whenever the pass could
+// not find out, so a failed read never silently slows the cadence down in the
+// middle of a window.
+func (p *Provider) refresh(ctx context.Context, wasInFlight bool) bool {
+	logger := log.FromContext(ctx).WithName("certs")
+
+	bundle, err := p.store.Ensure(ctx)
+	if err != nil {
+		// Keep serving the old certificate; it is still valid for a third of
+		// its lifetime.
+		logger.Error(err, "renewal failed, keeping the current certificate")
+		return wasInFlight
+	}
+
+	inFlight := wasInFlight
+	if advanced, rotating, err := p.store.AdvanceRotation(ctx, bundle); err != nil {
+		logger.Error(err, "the CA rotation did not advance")
+	} else {
+		bundle, inFlight = advanced, rotating
+	}
+	if err := p.Set(bundle); err != nil {
+		logger.Error(err, "the renewed bundle is unusable")
+	}
+	return inFlight
+}
+
+func checkInterval(inFlight bool) time.Duration {
+	if inFlight {
+		return RotationCheckInterval
+	}
+	return RenewCheckInterval
 }
 
 // NeedLeaderElection makes this a leader-bound runnable.
