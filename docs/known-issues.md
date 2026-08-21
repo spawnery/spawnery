@@ -2865,18 +2865,42 @@ Both are absence-of-agent gaps in what the harness proves rather than defects:
 a deployment with a resolvable image exercises both. `pods: patch` is
 deliberately **not** on this list, and why is under "On the RBAC audit" below.
 
-**The digest reference is exercised by nothing.** `hack/e2e.sh` sets the
-chart's `image.repository`/`image.tag` values to the archive it just built and
-`image.pullPolicy=Never`, precisely so the run tests those bits and not
-whatever a registry holds — so `make e2e` never resolves a digest reference at
-all. Nor has anything else: no `make publish` has been driven (see "No image
-is published" above), so no digest has ever been written back. What it would
-be written back to moved under milestone 6d: `config/deploy/deployment.yaml`
-no longer exists, and `hack/publish.sh`'s `WRITE_DIGEST=1` path now sets
-`charts/spawnery/values.yaml`'s `image.digest` key. The design's acceptance
-criterion 7 — "a digest reference that resolves" — is therefore still
-**open**, and it is the repository owner's to close, in the same way an
-evidence run is.
+**Both were measured by the RKE2 rollout on 2026-08-20**, and the harness
+still exercises neither — the two statements are compatible and worth keeping
+apart. `persistentvolumeclaims: patch`: a persistent group was created on
+Longhorn and grown from `1Gi` to `2Gi`, and the operator's own client metric
+moved from no `PATCH` line at all to exactly one. `tokenreviews: create`, which
+this entry rightly called reasoned rather than measured:
+`spawnery_agent_token_review_cache_misses_total` — `internal/grpcauth/metrics.go`,
+"Token checks that required a TokenReview" — went 7 to 8 when a single lobby pod
+was deleted and its replacement's agent connected. Neither the client metrics
+nor the API server's own `apiserver_request_total` could have answered that
+second one: the first has no per-resource label, and the second stood at 38,607
+across every client on the cluster. See `docs/runbook-milestone-6-rollout.md`,
+scenario 7.
+
+
+**The digest reference is exercised by nothing. — CLOSED 2026-08-20, and
+replaced by a sharper problem.** The claim was true when written: `hack/e2e.sh`
+sets the chart's `image.repository`/`image.tag` to the archive it just built
+with `image.pullPolicy=Never`, so `make e2e` never resolves a digest at all,
+and nothing had published one.
+
+The RKE2 rollout closed it. Release run 32351037208 wrote
+`sha256:e5eb7626…` back through `hack/publish.sh`'s `WRITE_DIGEST` path, and
+the operator has since run from a digest on `paulwtf` three times, verified at
+the kubelet's `imageID` and not only in the Deployment's spec
+(`docs/runbook-milestone-6-rollout.md`, scenario 1).
+
+What the closing found is worth more than the closure. **A digest cannot
+usefully live in `charts/spawnery/values.yaml` at all** — see "No git tag can
+carry its own operator digest" under "From the RKE2 rollout" — because
+`hack/publish.sh` takes it from `skopeo copy --digestfile`, so it does not
+exist until after the tag is published and any released chart's copy is the
+previous release's. The field is deliberately empty as of v0.1.2, a deployment
+pins the digest where the deployment is described, and `release.yml`'s Release
+body was corrected to say so after it spent three releases advising the
+opposite.
 
 **The E2E cluster is a single node, so a whole class of behaviour is
 untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
@@ -3510,14 +3534,32 @@ normally, and only forwarding-secret rotation detection breaks, silently,
 for that namespace. `charts/spawnery/README.md` states the narrower,
 grep-verified consequence.
 
-**No `helm upgrade` has run anywhere in this milestone.** The four CRDs sit
-in `charts/spawnery/templates/` with `helm.sh/resource-policy: keep`,
-precisely so a future upgrade would carry a CRD schema change through and an
-`uninstall` would not destroy every `Network`, `ServerGroup`, `ProxyGroup`
-and `Server` in the cluster. Only the second half was observed: `helm
-uninstall` leaving the CRDs standing was driven once against a real cluster
-(`.superpowers/sdd/2026-08-19-helm-chart/task-5-report.md`, "Step 7"). The
-upgrade half is designed and unproven.
+**No `helm upgrade` has run anywhere in this milestone. — CLOSED 2026-08-20,
+and the upgrade half failed the first time it mattered.** The four CRDs sit in
+`charts/spawnery/templates/` with `helm.sh/resource-policy: keep`, so that an
+upgrade would carry a CRD schema change through and an `uninstall` would not
+destroy every custom resource in the cluster. Only the second half had been
+observed.
+
+The first half has now been observed twice, in both directions, and the
+failure is the useful one. `v0.1.1` added a fourth `expose` strategy to the
+`ProxyGroup` CRD's enum. The upgrade ran, the operator's image moved — and the
+cluster's CRD never learned the new value. Flux names a packaged chart after
+`Chart.yaml`'s `version`, that number had stayed at `0.1.0`, so the artifact
+counted as unchanged and the HelmRelease kept serving the previous chart's
+templates. The image moved only because the deployment pins its digest in
+values, which is exactly what made the failure look like a success.
+
+`v0.1.2` moved `Chart.yaml`'s version with the release and the enum arrived:
+`["LoadBalancer","NodePort","HostPort","ClusterIP"]`.
+
+Two guards were added rather than a note: `internal/rbacaudit`'s
+`TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease` pins `appVersion` and
+`values.yaml`'s tag to `flake.nix`'s `operatorVersion`, and `release.yml`
+refuses a tag whose `charts/` differ from the previous tag's while
+`Chart.yaml`'s version does not — simulated against `v0.1.1` in a worktree,
+where it exits 1. **`v0.1.1` remains a release whose chart no cluster can
+receive**; a tag cannot be moved.
 
 **The chart has no `values.schema.json`, so a wrong value is rejected by the
 operator's flag parser rather than by Helm.** Helm validates `values.yaml`
@@ -3782,24 +3824,26 @@ ever exercises the podman path again. CI proves Docker; the author's machine
 proves podman; neither proves the other, and a change that only breaks under
 one container runtime can now sit green in CI indefinitely.
 
-**Two workflow paths exist only on paper.** `nightly.yml` was driven once,
-but not in the shape that merges: it needed a temporary `pull_request:`
-trigger to run at all before it reached the default branch (GitHub will not
-run `workflow_dispatch` on a workflow that has never been on it), and that
-trigger was removed before merging. So the file that actually ran and the
-file that ships differ by exactly that one trigger line, and neither of the
-merged file's real triggers — `schedule`, `workflow_dispatch` — has ever
-fired. Confirming either is a one-time, post-merge check for whoever owns
-this repository: wait for the 03:17 UTC cron, or run
-`gh workflow run nightly.yml` once the file is on `master`. `release.yml`
-has never run at all — `gh api repos/spawnery/spawnery/actions/workflows`
-does not even list it, because GitHub only registers a workflow once
-something has triggered it or it reaches the default branch, and neither has
-happened. Its `skopeo login`, its real `hack/publish.sh` invocation with
-`WRITE_DIGEST=1`, and its digest-guard step have run zero times combined;
-the `WRITE_DIGEST` branch of `hack/publish.sh` has never run against a real
-registry anywhere in this project's history. The first `v*` tag is still the
-first real test of all three.
+**Two workflow paths exist only on paper. — CLOSED 2026-08-20.** Both have
+now run in the shape that ships.
+
+`nightly.yml` was driven once before the merge, but not in its merged shape: it
+needed a temporary `pull_request:` trigger, because GitHub will not run
+`workflow_dispatch` on a workflow that has never reached the default branch,
+and that trigger was removed before merging. Run 32350280041 is the merged
+file, dispatched from `master`: `image-repro: success`. The `schedule` trigger
+has still never been observed firing on its own — it is the same file and the
+same job, so this is a small residue rather than an open question, but it is
+not the same as having seen it.
+
+`release.yml` has now run four times: once dispatched with `DRY_RUN=1` before
+any tag existed, which is what that trigger is for, and three times on real
+tags — `v0.1.0`, `v0.1.1`, `v0.1.2`. `skopeo login` works on a hosted runner
+with `REGISTRY_AUTH_FILE`, the `WRITE_DIGEST` branch of `hack/publish.sh` has
+run against a real registry, the digest guard has fired, and the per-image loop
+has exercised both of its outcomes — publishing, and skipping an image already
+at its version with exit 3, which `v0.1.1` and `v0.1.2` did for Paper and
+Velocity.
 
 **Corrected after the milestone's final review, on `release.yml`'s first
 tag specifically: as the file shipped, that tag would have published
@@ -4036,7 +4080,16 @@ intentional — the following points each concern only one of the two halves.
   really do share one verb set — only the documentation trailed behind the
   second consumer.
 - **The `pods: patch` grant's `Why` names the one call site this harness never
-  reaches.** Same shape as the entry above it, found by milestone 6a's Task 8
+  reaches. — the call site is now measured; the `Why` is still short by one.**
+  Driven on 2026-08-20 by hand-labelling pods `spawnery.cloud/occupied=true`
+  and watching the operator take the label off again, which is the same
+  `r.Patch` call: the counter moved 1→3 for the two proxy pods, then 3→4 for
+  the lobby's server pod — the named singular site. A real join later drove
+  both directions, 8→12, with the labels appearing on their own and going away
+  on disconnect. So the `Why` names something real. What remains is smaller and
+  still true: the grant has **two** call sites and the `Why` names one, so a
+  reader tracing the permission from the audit finds the site the harness
+  cannot reach and not the one that runs on every pass. Same shape as the entry above it, found by milestone 6a's Task 8
   while measuring what the driven run does and does not exercise.
   `internal/rbacaudit/required.go` documents `pods: patch` as
   "syncOccupiedLabel patches the occupied label" — that is
