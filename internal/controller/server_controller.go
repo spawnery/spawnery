@@ -51,8 +51,13 @@ const MaxContainerRestarts int32 = 3
 // not control.
 const ReasonPodNameConflict = "PodNameConflict"
 
-// ReasonNamespaceNotBootstrapped marks a Server whose namespace does not yet
-// hold the CA bundle and the agent ServiceAccount its pod would mount.
+// ReasonNamespaceNotBootstrapped says a namespace does not yet hold the CA
+// bundle and the agent ServiceAccounts that the pods in it mount. Two
+// controllers report it, and they mean it about different objects: the Server
+// controller sets it as a condition on a Server whose pod it is therefore not
+// creating, and the Network controller records it as an event on a Network
+// whose namespace it could not keep current. One name, because an operator
+// reading either is looking at the same obstacle in the same namespace.
 const ReasonNamespaceNotBootstrapped = "NamespaceNotBootstrapped"
 
 // ReasonPodNameTerminating marks a Server whose pod name is still held by the

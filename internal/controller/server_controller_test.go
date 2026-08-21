@@ -1237,6 +1237,27 @@ func (denyingCreator) Create(context.Context, client.Object, ...client.CreateOpt
 // Pending forever with a log line as its only trace.
 func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
 	f := newFixture(t)
+
+	// newFixture's own Network reconcile already bootstrapped this namespace
+	// (that is this task's whole point), so the CA ConfigMap and both
+	// ServiceAccounts are already here. Remove them, or the denying
+	// Bootstrapper below has nothing left to deny: CreateOrUpdate finds the
+	// ConfigMap present and unchanged and never calls Create, and
+	// ensureServiceAccounts's Get-then-Create finds each ServiceAccount
+	// already there and never calls Create either.
+	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: podspec.CAConfigMapName, Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("delete the fixture's CA ConfigMap: %v", err)
+	}
+	for _, name := range []string{podspec.ServerServiceAccountName, podspec.ProxyServiceAccountName} {
+		if err := f.c.Delete(f.ctx, &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+		}); err != nil {
+			t.Fatalf("delete the fixture's %s ServiceAccount: %v", name, err)
+		}
+	}
+
 	rec := events.NewFakeRecorder(20)
 	f.reconc.Recorder = rec
 	f.reconc.Bootstrap = &Bootstrapper{

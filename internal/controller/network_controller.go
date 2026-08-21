@@ -55,6 +55,14 @@ type NetworkReconciler struct {
 	// OperatorNamespace is where this operator runs, and it is the one value
 	// the policy cannot derive from the Network it protects.
 	OperatorNamespace string
+
+	// Bootstrap puts the CA bundle and the agent ServiceAccounts into this
+	// Network's namespace. It is the same instance ServerReconciler holds:
+	// that one guarantees the objects exist before the first pod needs them,
+	// and this one guarantees they stay current afterwards, in a namespace
+	// where no pod is being created and nothing else would call Ensure at
+	// all.
+	Bootstrap *Bootstrapper
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=networks,verbs=get;list;watch
@@ -169,7 +177,45 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	meta.SetStatusCondition(&network.Status.Conditions,
 		rotationCondition(read, forwardingStamps(pods.Items)))
 
-	return ctrl.Result{RequeueAfter: resyncInterval}, r.Status().Update(ctx, network)
+	if err := r.Status().Update(ctx, network); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// The bootstrap runs after acceptance, after the policy, and last of all
+	// -- after the status has been persisted.
+	//
+	// After acceptance and after the policy because a Network that lost its
+	// namespace must write nothing into it, and because a namespace left
+	// without its NetworkPolicy would be the worse trade if a ConfigMap write
+	// were the thing blocking.
+	//
+	// Last because Ensure fails for two very different reasons and only one of
+	// them passes on its own. An empty bundle -- the operator started, but
+	// certs.Provider has not published yet -- clears itself within seconds. A
+	// refused write does not: an admission webhook, a ResourceQuota on
+	// ConfigMaps, a namespace policy stripping what it does not recognise.
+	// Ahead of the status update, a reconcile in such a namespace would record
+	// nothing at all for as long as the refusal stood. A new Network would
+	// never persist Accepted, and both servergroup_controller.go and
+	// proxygroup_controller.go gate on that condition, so every group in the
+	// namespace would stop with a log line as the only trace. An accepted one
+	// would keep a stale Accepted=True while its player counts, its group
+	// counts and its forwarding-secret rotation condition all froze.
+	//
+	// This is not what ServerReconciler does on the same call, and the
+	// difference is deliberate: there the bootstrap gates a pod creation that
+	// has not happened yet, so it says so on the Server's own Accepted
+	// condition and falls through to the status update. A Network has no such
+	// verdict to record -- it owns its namespace either way -- so the event
+	// carries the report and the returned error requeues.
+	if err := r.Bootstrap.Ensure(ctx, network.Namespace); err != nil {
+		r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
+			ReasonNamespaceNotBootstrapped, actionBootstrapNamespace, "%s",
+			eventNote("cannot bootstrap namespace %s: %v", network.Namespace, err))
+		return ctrl.Result{}, fmt.Errorf("bootstrap the namespace: %w", err)
+	}
+
+	return ctrl.Result{RequeueAfter: resyncInterval}, nil
 }
 
 // reconcileNetworkPolicy keeps the policy that admits only this network's own

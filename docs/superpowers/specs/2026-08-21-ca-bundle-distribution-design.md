@@ -56,8 +56,9 @@ one loses.
 
 `NetworkReconciler` gains a `Bootstrap *Bootstrapper` field and calls
 `Bootstrap.Ensure(ctx, network.Namespace)` once per reconcile, **after** the
-`Accepted` condition has been set to true and **after**
-`reconcileNetworkPolicy`.
+`Accepted` condition has been set to true, **after**
+`reconcileNetworkPolicy`, and **after** `r.Status().Update` — last of
+everything the reconcile does. §4 argues the last of those three.
 
 After acceptance, because a `Network` that lost its namespace to an older one
 must write nothing into it — the same reason `reconcileNetworkPolicy` sits
@@ -88,28 +89,82 @@ the wrong controller.
 
 **The Server controller keeps its call.** A namespace reaches its first pod
 through `ServerReconciler`, and that path must not depend on a `Network`
-reconcile having run first. Two call sites for an idempotent function is the
-correct shape here, not duplication: one guarantees the bundle is present
-before a pod needs it, the other guarantees it stays current afterwards.
+reconcile having run first. That makes **three** call sites, not two:
+`ProxyGroupReconciler` has had one at `proxygroup_controller.go:258` all
+along, before it renders the group's ConfigMap and creates the first proxy
+pod, for the same reason the Server controller has one. Three call sites for
+an idempotent function is the correct shape here, not duplication: two
+guarantee the bundle is present before a pod of either role needs it, the
+third guarantees it stays current afterwards, in a namespace where no pod is
+being created at all.
 
 ## 4. Failure, and the case that will actually happen
 
 `Ensure` refuses when `CA()` returns an empty bundle — the operator has
 started but `certs.Provider` has not published yet. That is a real state, it
-lasts seconds, and it is not the `Network`'s fault.
+lasts seconds, and it is not the `Network`'s fault. It is the case that will
+actually happen, and it is not the only one: `Ensure` fails just as well when
+the ConfigMap write itself is refused, by an admission webhook, by a
+ResourceQuota on ConfigMaps, or by a namespace policy. That state does not
+pass on its own.
 
 The error is returned rather than swallowed, and the reconcile fails and
-requeues. Three reasons: `ServerReconciler` already behaves exactly this way on
-the same call, so the two paths do not disagree about what an unavailable CA
-means; the failure is visible in the controller's error metric and its log
-rather than being invisible; and a swallowed error here would leave a
-ConfigMap silently stale, which is the defect this whole design exists to
-remove.
+requeues. Two reasons: the failure is visible in the controller's error
+metric and its log rather than being invisible, and a swallowed error would
+leave a ConfigMap silently stale, which is the defect this whole design
+exists to remove.
 
-What it costs: a `Network` reconciled during those seconds records no status
-update for that pass. The next pass is 5 seconds later
-(`resyncInterval`), and controller-runtime's backoff is shorter than that on
-the first retries.
+**The call goes last, after `r.Status().Update`.** An earlier draft put it
+before the status update and justified that by saying `ServerReconciler`
+behaves the same way on the same call. It does not. `ServerReconciler`
+(`server_controller.go:304`) logs, records a
+`ReasonNamespaceNotBootstrapped` warning event, sets `Accepted=False` on the
+`Server`, clears `createPod`, and falls through to its status update — its
+own comment says why, in the words of the refused-write case above.
+`ProxyGroupReconciler` is the controller that returns the bare error, and it
+can afford to: it has already persisted its own `Accepted` two lines earlier,
+for exactly this reason.
+
+A `Network` whose reconcile returns before its status update has persisted
+nothing at all. In a namespace where ConfigMap writes are durably refused
+that costs two things. A **new** `Network` never records `Accepted`, and both
+`servergroup_controller.go:132` and `proxygroup_controller.go:216` gate on
+`IsStatusConditionTrue(..., ConditionAccepted)`, so every group in the
+namespace is blocked with a log line as the only trace. An **existing**
+accepted `Network` keeps a stale `Accepted=True` and freezes: player counts,
+group counts, the forwarding-secret hash and its rotation condition all stop
+updating, and nothing on the object says why.
+
+So the order is: status first, bootstrap last, and a warning event on the
+`Network` — reason `ReasonNamespaceNotBootstrapped`, action
+`actionBootstrapNamespace` — before the error is returned. A `Network` has no
+verdict of its own to record here, unlike a `Server` whose pod creation the
+bootstrap gates, so the event carries the report and the returned error
+carries the requeue.
+
+What it costs in the transient case: a `Network` reconciled during those
+seconds gets its status written and then fails the pass. The next pass is 5
+seconds later (`resyncInterval`), and controller-runtime's backoff is shorter
+than that on the first retries.
+
+**The event's rate is the broadcaster's problem, and it handles it.**
+`setup.go` takes the recorder from `mgr.GetEventRecorder("network")`, which
+controller-runtime backs with `events.NewBroadcaster` from
+`k8s.io/client-go/tools/events`. That broadcaster keys events on type,
+action, reason, reporting controller and instance, and the `regarding`
+reference, and collapses repeats into an `EventSeries`: the second identical
+event patches a series onto the first, and every one after that only
+increments a counter in memory, refreshed to the API server every 30 minutes.
+The note is not part of the key, so a changing error message does not defeat
+it. The `regarding` reference carries the object's `resourceVersion`, so the
+collapse holds only while the `Network`'s status is not changing — which is
+what a namespace stuck on a refused ConfigMap write looks like once its
+counts have settled. A namespace that is stuck *and* churning — players
+joining, groups scaling — writes its `Network`'s status every pass, and each
+pass then produces a fresh event object. No throttle is added here for it:
+the events carry the API server's own default TTL and the churn is bounded by
+`resyncInterval`, and a hand-rolled limiter would be a second, worse copy of
+the mechanism above.
 
 ## 5. What it costs when nothing is wrong
 
@@ -119,6 +174,21 @@ client, one `Get` of a ConfigMap and two of ServiceAccounts, and a write only
 when a field differs. The cache is already restricted to objects carrying
 `podspec.LabelManagedBy` and `Ensure` labels everything it writes, so all three
 reads are served from memory.
+
+The repair path is not that cheap, and it now runs on the same clock. If the
+CA ConfigMap ever loses `podspec.LabelManagedBy` — a hand edit, a GitOps
+re-apply from a manifest that never had it, a policy controller that strips
+labels it does not recognise — it drops out of the restricted cache, and
+`ensureConfigMap` takes its `AlreadyExists` branch: the cached `Get` inside
+`controllerutil.CreateOrUpdate` misses, the `Create` reaches the API server
+and is refused as a duplicate, the uncached `Reader.Get` fetches the real
+object, and `Client.Update` writes it back. Three API round-trips instead of
+none, and after this change they happen every 5 seconds per `Network` rather
+than once per pod creation. Ordinarily that is a single pass: the `Update`
+restores the label, the object re-enters the cache, and the next pass is a
+cached read again. The pathological case is a write-fight with whatever keeps
+stripping the label, and there the cost is three round-trips every
+`resyncInterval` for as long as both sides keep going.
 
 This is stated rather than measured because it is arithmetic on operations the
 process already performs; §6 measures the thing that is not arithmetic.
@@ -140,12 +210,18 @@ Three more, each for a decision §2 and §3 record:
   reconcile must not create or modify it. Asserted by deleting the ConfigMap
   after the first reconcile and confirming the loser's reconcile leaves it
   absent.
-- **The ConfigMap still carries no `OwnerReference`.** A direct assertion on
-  the stored object, because the tidy-looking refactor this design refuses is
-  exactly what a later reader might add.
+- **The ConfigMap and both ServiceAccounts still carry no `OwnerReference`.**
+  A direct assertion on all three stored objects, because the tidy-looking
+  refactor this design refuses is exactly what a later reader might add — and
+  a pod that keeps its CA but loses its ServiceAccount is just as dead.
 - **An empty CA fails the reconcile rather than passing quietly.** With the
   provider returning nothing, `Reconcile` returns an error and the ConfigMap is
   not created.
+- **A bootstrap that cannot run still writes the status.** With the provider
+  returning nothing, the `Network`'s group counts are persisted and a
+  `ReasonNamespaceNotBootstrapped` warning event is recorded, and only then
+  does the reconcile fail. This is the §4 placement, and it fails against the
+  call sited before `r.Status().Update`.
 
 **No end-to-end scenario.** `hack/e2e.sh` creates pods, so its namespaces are
 never quiet, and a scenario there would exercise the path that already works.

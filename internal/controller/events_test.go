@@ -224,7 +224,10 @@ var knownActions = map[string]string{
 	"actionCreateServer":   actionCreateServer,
 	"actionDeleteServer":   actionDeleteServer,
 	"actionRetireServer":   actionRetireServer,
-	"actionSyncStatus":     actionSyncStatus,
+
+	"actionBootstrapNamespace": actionBootstrapNamespace,
+
+	"actionSyncStatus": actionSyncStatus,
 }
 
 // wantEventfSites is how many Eventf call sites this package has.
@@ -235,7 +238,7 @@ var knownActions = map[string]string{
 // subpackage would have done the same silently. Changing this number is
 // therefore a deliberate act with a diff, which is what it should be: adding
 // an event is a change to the operator's output.
-const wantEventfSites = 23
+const wantEventfSites = 24
 
 // TestEveryEventfCallSitePassesAKnownAction reads this package's own source.
 //
@@ -256,18 +259,18 @@ const wantEventfSites = 23
 // nothing on the reconciled object says an event was lost. A new call site
 // that passes "" would go green through unit tests, envtest and e2e alike.
 //
-// A source-level check rather than twenty-three assertions: what needs
+// A source-level check rather than twenty-four assertions: what needs
 // guarding is a property of every call site, not the particular string any one
-// of them passes, and a table restating twenty-three literals would be a
+// of them passes, and a table restating twenty-four literals would be a
 // second copy of the code that goes stale the first time somebody adds a
-// twenty-fourth. This reads whatever is there.
+// twenty-fifth. This reads whatever is there.
 //
 // Three assertions, and the second and third exist because the first alone was
 // weaker than it looked. It requires every Eventf's action argument to be an
 // identifier named in knownActions. It requires the number of call sites found
 // to be wantEventfSites, because a count that is only logged cannot notice its
 // own corpus shrinking -- a deleted call site left it green at 22. And it
-// requires that no local anywhere in the package shadows one of those nine
+// requires that no local anywhere in the package shadows one of those ten
 // names, which is what makes matching by name mean anything at all: without
 // it, `actionCreatePod := ""` above a call site passes. See shadowedActions.
 //
@@ -385,7 +388,7 @@ type shadow struct {
 // it does not and cannot resolve what that identifier refers to, because
 // resolving it means running a type checker over the package, which is a great
 // deal of machinery to answer one question. So the identifier's meaning is
-// pinned from the other side instead: the nine names are package-level
+// pinned from the other side instead: the ten names are package-level
 // constants, nothing in the package has any business declaring a local of the
 // same name, and if nothing does then the name determines the constant.
 // `actionCreatePod := ""` above a call site went green before this existed --
