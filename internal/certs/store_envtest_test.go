@@ -17,6 +17,7 @@ limitations under the License.
 package certs_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"testing"
@@ -243,5 +244,58 @@ func TestGetCertificateBeforeSetFails(t *testing.T) {
 
 	if _, err := p.GetCertificate(&tls.ClientHelloInfo{}); err == nil {
 		t.Error("the provider handed out a certificate before it had one")
+	}
+}
+
+// A rotation in progress survives the operator restarting.
+//
+// Everything about the sequence lives in the secret so that a new leader can
+// pick it up, and this is the assertion that the storage layer actually keeps
+// it. Ensure reads the secret back on every call; a rotation slot it did not
+// know about would be dropped on the first renewal, silently, and the operator
+// would go back to publishing one CA while agents were mid-window.
+func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
+	s, clock, ctx, ns := newStore(t)
+
+	if _, err := s.Ensure(ctx); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+
+	nextCert, nextKey, err := certs.IssueCA(clock.Now())
+	if err != nil {
+		t.Fatalf("IssueCA: %v", err)
+	}
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Name: certs.SecretName, Namespace: ns}
+	if err := s.Client.Get(ctx, key, secret); err != nil {
+		t.Fatalf("get the secret: %v", err)
+	}
+	secret.Data["ca-next.crt"] = nextCert
+	secret.Data["ca-next.key"] = nextKey
+	if err := s.Client.Update(ctx, secret); err != nil {
+		t.Fatalf("plant the incoming CA: %v", err)
+	}
+
+	// Far enough for the serving certificate to need renewing, so this goes
+	// down Ensure's rewrite path rather than its no-op one.
+	clock.Advance(80 * 24 * time.Hour)
+
+	b, err := s.Ensure(ctx)
+	if err != nil {
+		t.Fatalf("Ensure after the advance: %v", err)
+	}
+	if !bytes.Equal(b.NextCACertPEM, nextCert) {
+		t.Error("Ensure did not read the incoming CA back out of the secret")
+	}
+
+	if err := s.Client.Get(ctx, key, secret); err != nil {
+		t.Fatalf("get the secret again: %v", err)
+	}
+	if !bytes.Equal(secret.Data["ca-next.crt"], nextCert) {
+		t.Error("a renewal dropped the incoming CA from the secret; a rotation " +
+			"would silently lose its overlap on the next renewal")
+	}
+	if !bytes.Equal(secret.Data["ca-next.key"], nextKey) {
+		t.Error("a renewal dropped the incoming CA's key from the secret")
 	}
 }
