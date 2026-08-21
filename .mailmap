@@ -1,0 +1,16 @@
+# Maps the identity 61 commits carry to the person who made them.
+#
+# On 2026-08-20 a subagent set up a throwaway git worktree to test CI's
+# generated-file drift guard, changed into it, and gave it a throwaway identity
+# with `git config user.email r@r.invalid; git config user.name r`. That is a
+# reasonable thing to want in a scratch worktree, and git does not provide it:
+# a linked worktree shares .git/config with the repository it belongs to, so
+# without `--worktree` the setting is the repository's. Every commit from
+# 1d3cd98 (2026-08-20 09:55) to 68c0b42 was authored as "r" before anyone
+# noticed.
+#
+# The commit objects are left alone. They are pushed, three release tags point
+# into them, and CI runs and GitHub Releases reference them by hash; rewriting
+# 61 commits to correct a name would cost all of that. git log, git shortlog
+# and git blame read this file, which is what it is for.
+Paul Reitmayer <paul.reitmayer@pm.me> r <r@r.invalid>
