@@ -13,7 +13,11 @@
 # snapshot of it and commits move.
 #
 # Requires: GH_TOKEN or an already-authenticated `gh`, network access, and
-# `jq`. Run inside the dev shell, same as every other script here.
+# `jq`. Run inside the dev shell, same as every other script here:
+# `make require-green-ci-test`. That target is in no other target for the same
+# reason, and its comment records when the two live cases below expire --
+# GitHub keeps workflow runs for about 90 days, so GREEN_SHA and RED_SHA stop
+# resolving around 2026-11-20.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
