@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Four cases for hack/require-green-ci.sh, exercised against this
+# Five cases for hack/require-green-ci.sh, exercised against this
 # repository's own live history wherever that history already contains the
-# state being tested, and against a fixture only where it cannot: a live
-# in-progress run cannot be summoned to order, so that one case goes through
-# CI_RUNS_CMD -- the seam hack/require-green-ci.sh's own header documents.
+# state being tested, and against a fixture only where it cannot: neither a
+# live in-progress run nor a live empty response can be summoned to order, so
+# those two go through CI_RUNS_CMD -- the seam hack/require-green-ci.sh's own
+# header documents.
 #
 # The green, red and no-run cases hit api.github.com through `gh` for real.
 # Each one names the commit it asserts about and the `gh run list` output
@@ -117,9 +118,43 @@ else
 	fi
 fi
 
+# ---------------------------------------------------------------------------
+# not a count: the fetch succeeds and produces nothing. jq prints nothing and
+# exits 0 for empty stdin, so the run count comes back as the empty string --
+# and `[ "" -eq 0 ]` is a test *error* rather than false, which as an `if`
+# condition does not trip set -e. Before the guard this case fell through to
+# the status check, found that empty too, and polled for the whole of
+# CI_WAIT_LIMIT before refusing with a message naming an empty status: safe,
+# but twenty minutes and a nonsense reason.
+#
+# So the assertion is on the speed as much as on the exit code. CI_WAIT_LIMIT
+# is left at its 1200s default on purpose: a short limit here would pass
+# whether the guard exists or not, and the point is that the script must not
+# reach the wait loop at all.
+# ---------------------------------------------------------------------------
+: >"$workdir/empty.txt"
+
+out="$workdir/notacount"
+start=$SECONDS
+if CI_RUNS_CMD="cat ${workdir}/empty.txt" \
+	"$sut" "$REPO" "0000000000000000000000000000000000dead" >"$out" 2>&1; then
+	fail "not a count: expected non-zero exit for an empty run list; output: $(cat "$out")"
+else
+	elapsed=$((SECONDS - start))
+	if [ "$elapsed" -ge 14 ]; then
+		fail "not a count: took ${elapsed}s, so it entered the poll loop; an uncountable run list must be refused before any waiting"
+	elif grep -q "integer expected" "$out"; then
+		fail "not a count: still reaches [ \"\" -eq 0 ]; output: $(cat "$out")"
+	elif grep -q "not a count" "$out"; then
+		pass "not a count: refuses an empty run list at once (${elapsed}s) and says why"
+	else
+		fail "not a count: exited non-zero but did not say the run list was uncountable; output: $(cat "$out")"
+	fi
+fi
+
 echo
 if [ "$failures" -eq 0 ]; then
-	echo "require-green-ci-test: ok (4/4)"
+	echo "require-green-ci-test: ok (5/5)"
 	exit 0
 fi
 echo "require-green-ci-test: ${failures} case(s) failed" >&2

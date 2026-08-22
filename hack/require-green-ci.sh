@@ -128,6 +128,24 @@ while true; do
 		exit "${gh_status}"
 	fi
 	count="$(printf '%s' "${runs}" | jq '.workflow_runs | length')"
+	# Checked before it is used as a number, because the interesting case is
+	# not that jq failed -- it is that jq succeeded and produced nothing. Fed
+	# empty stdin, `jq '.workflow_runs | length'` prints nothing and exits 0
+	# (measured), so a fetch that returns an empty body with a zero status
+	# leaves ${count} as the empty string. `[ "" -eq 0 ]` is then a *test
+	# error*, not false, and because it is an `if` condition set -e does not
+	# fire: the script printed "[: : integer expected", fell through to the
+	# status check, found that empty too, and polled for the whole of
+	# CI_WAIT_LIMIT before refusing with a message naming an empty status and
+	# an empty URL. Twenty wasted minutes and a nonsense reason, in the safe
+	# direction. Measured before this guard existed: with CI_WAIT_LIMIT=20 and
+	# an empty fixture, three "integer expected" lines, 30s, and "did not
+	# complete within 20s (still )".
+	case "${count}" in
+	'' | *[!0-9]*)
+		refuse "asked GitHub how many ci.yml runs ${sha} has and got \"${count}\" back, which is not a count -- an empty or unparseable run list, not a verdict. Nothing here says CI passed, so this refuses. Re-run this job; if it says the same thing twice, check gh and the api.github.com status page."
+		;;
+	esac
 	if [ "${count}" -eq 0 ]; then
 		# Absence is not permission. A tag on a commit CI never saw is exactly
 		# as unverified as a tag on a red one -- the empty-list trap this
