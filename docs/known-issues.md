@@ -146,9 +146,11 @@ artifact provisioning.** `api.minecraftservices.com/publickeys` is the
 Yggdrasil key fetch that follows from `online-mode=true`; `fill.papermc.io` is
 Paper's own update checker. Both are measured to fail harmlessly with no
 network reachable — the server still reaches `Done` and answers a ping, which
-is what `make image-test` relies on. It matters twice downstream: the egress
-NetworkPolicy in milestone 6 has to allow both, and the Yggdrasil call
-disappears on its own once milestone 3 flips `online-mode` off.
+is what `make image-test` relies on. Both consequences this entry once named
+have since happened: milestone 3 flipped `online-mode` to false, which retired
+the Yggdrasil call, and milestone 6b built the egress policy. What remains is
+the bare fact — a Paper server still calls `fill.papermc.io` on every start,
+and anything that tightens egress further has to decide about it.
 
 **The image is large because `jdk25_headless` has a 697 MiB closure** — a full
 headless JDK, not a JRE. Measured at 724 MB as a tarball for 26.2-0.1.0, and
@@ -168,61 +170,12 @@ regardless of `DOCKER_HOST`. There is no workaround short of a rootful Podman
 socket, which this user does not have group access to. `kind` under
 `KIND_EXPERIMENTAL_PROVIDER=podman`, wrapped in
 `systemd-run --scope --user --property=Delegate=yes`, works against the same
-rootless socket and is what the README now documents. This matters for
-milestone 6, which wires a local-cluster E2E flow into CI: whatever runs CI
-needs either a real Docker daemon, a rootful Podman socket, or kind the same
-way this was done here.
+rootless socket and is what the README now documents. Milestone 6 settled the
+CI half of this: `ci.yml`'s `e2e` job runs `make e2e` on a GitHub runner,
+which has a real Docker daemon and needs none of the above. What the entry
+still says is about this machine and machines like it — the local flow needs
+kind that way, and the README documents it.
 
-**No image is published.** The tag `ghcr.io/spawnery/paper:26.2-0.2.0` is
-correct but nothing pushes it, so every consumer needs `kind load docker-image`
-(or `k3d image import`, where k3d works) or the equivalent. Publishing belongs
-with CI in milestone 6.
-
-*Half met by milestone 6a: the mechanism exists, the push has not happened.*
-`hack/publish.sh` (`make publish`) copies all three Nix image archives straight
-to `ghcr.io/spawnery/` with `skopeo`, refuses a tag that is already there unless
-`FORCE=1`, and can write the operator's returned digest back under
-`WRITE_DIGEST=1` — into `config/deploy/deployment.yaml` as milestone 6a left
-it; milestone 6d moved the target to `charts/spawnery/values.yaml`'s
-`image.digest` key once the chart became the only installation form, with no
-change to the underlying claim below. What has actually been
-run is `DRY_RUN=1`, which contacts no registry. **The first real push needs a
-GitHub token with `write:packages` that nobody in milestone 6a had, so it has
-not been driven by anyone**, and `ghcr.io/spawnery/paper` was confirmed not
-publicly pullable on 2026-08-17 — an anonymous
-`https://ghcr.io/token?scope=repository:spawnery/paper:pull` returns 403 while
-the same request for a known-public repository returns a token. So this entry's
-own consequence still stands as written: every consumer still needs
-`kind load docker-image`. The push belongs to the repository owner, in the
-manner of an evidence run; automating it is 6e's.
-
-**`/data/config` collides with Paper's own writable config directory.** The
-main design's own §4.3 `ServerGroup` example mounts a ConfigMap at
-`mountPath: /data/config` as the documented way to override configuration —
-but that is also exactly where Paper itself writes `paper-global.yml` and
-`paper-world-defaults.yml` on startup, and a ConfigMap volume is mounted
-read-only. That mount is therefore likely to break the server's start, and
-nothing in this milestone exercises it: the shipped sample carries no `mounts`
-block, so the evidence run never touched the path. Milestone 3 has to reckon
-with this collision when design §5.4's configuration rendering lands — a
-narrower mount (a `subPath` per file, or a different target directory
-entirely) is the likely shape of the fix, since `Mount`
-(`api/v1alpha1/common_types.go:89-105`) has no `subPath` today.
-
-*Met* by construction, not by a narrower mount. Design §5.4's rendering lands
-the operator's own ConfigMap at `/etc/spawnery`
-(`internal/podspec.ConfigMountPath`) — a path neither Paper nor Velocity ever
-writes to — rather than at `/data/config`, which was the mount §4.3's old
-sketch proposed and which this entry warned against. `spawnery-config` writes
-`server.properties` and `config/paper-global.yml` straight into `/data`,
-which Paper already owns and writes to itself; nothing renders a ConfigMap
-there any more. The `subPath` fix this entry expected was never needed: the
-mechanism that would have collided was replaced, not narrowed. A user is
-still free to mount something of their own at `/data/config` —
-`checkMountCollision` does not single that path out, only the exact `/data`
-and `/tmp` roots and the reserved agent and config mounts — but that is now
-an arbitrary user choice, not something the design's own documented override
-path walks into.
 
 ## From milestone 2c (the Paper agent)
 
