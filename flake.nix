@@ -131,7 +131,7 @@
           # Hello.version -- and hanging the operator's tag off it would mean a
           # fix in the reconciler claiming a new agent version, and an agent
           # release renaming an unchanged operator image.
-          operatorVersion = "0.1.2";
+          operatorVersion = "0.2.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
