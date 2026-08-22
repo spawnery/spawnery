@@ -261,63 +261,6 @@ shares the code rather than reimplementing it. `git log` has them.
 What stands below is what 3a and 3b found while closing them, which is a
 different thing and outlived its milestone.
 
-**A proxy must report its configured player limit as `slots`, not zero.**
-`Registry.ReportPlayers` rejects any report where `players > slots`; the
-original proto comment said proxies leave `slots` at zero, which means a
-proxy with even one player online would have every report silently discarded
-— visible only as a `RejectedReports` counter — and
-`ProxyGroup.status.connectedPlayers` would sit at zero forever while players
-were connected. Design §8 corrects the comment: a proxy reports
-`spec.config.playerLimit` as `slots`. The wire format did not move, only the
-agreement about what goes on it, but 3c's Velocity agent has to honor the
-corrected comment rather than the original one — 3a's own stub client already
-reports the corrected way, and is the only thing today that would catch a
-Velocity agent that did not.
-
-**Whether the Velocity and Paper agents share a Gradle subproject was open;
-it is now decided: yes.** `agent/common` will hold the session loop, the
-token source, the channel construction, the credentials and the TLS-1.3
-`ConnectionSpec` override that milestone 2c built for Paper. The cost is real:
-the two agents can no longer be versioned apart, and 3c is where that
-constraint has to be lived with rather than reopened.
-
-**Where the forwarding secret reaches the backend is decided: a mounted
-file, merged by a small Go program, not an extended `set_property`.** Velocity
-points `forwarding-secret-file` directly at the mount; on the Paper side, a
-Go program baked into the image merges `online-mode` and the secret into
-`config/paper-global.yml`, reusing the `buildGoModule` path `spawnery-slp`
-already establishes. This is the concrete answer to "do not extend
-`set_property`" above, and 3b built it: `cmd/spawnery-config` is the Go
-program, `internal/render` is where its logic lives, and the `/data/config`
-collision above is resolved by moving the rendered ConfigMap's mount target
-to `/etc/spawnery` rather than by narrowing the old one.
-
-**Whether the operator runs inside the cluster for the E2E flow is still
-open, and 3c's evidence run is where it starts to cost.** Today it runs
-outside through `go run`, and the local kind flow hand-builds the `Service`
-and `Endpoints` its own pods dial (see "The local kind flow needs a `Service`
-nothing creates" above) — workable for one person at a terminal, a wall for
-milestone 6's CI. An operator image is out of scope for all of milestone 3,
-but 3c is where its absence first has to be worked around a second time
-rather than once.
-
-*Decided by milestone 6a: it runs inside.* `nix/operator-image.nix` builds
-`.#operator-image`, `hack/e2e.sh` loads that archive into a `kind` cluster, and
-the operator runs there as a Deployment under the `spawnery-operator`
-ServiceAccount — which is what `make e2e` drives and what every claim in
-`test/e2e` is made against. The hand-built `Service`/`Endpoints` pair is gone
-from that path. It is still how the README's `go run` flow works, and that
-flow is unchanged.
-
-*Narrowed by milestone 6d, in two ways at once.* `hack/e2e.sh` no longer
-installs `config/deploy/` — that directory is gone — it runs
-`helm install charts/spawnery`. And the namespace named above,
-`spawnery-system`, is no longer where `make e2e` actually installs: it now
-installs into `platform-system`, chosen to share nothing with the chart's own
-documented default. `spawnery-system` remains true only as the chart's
-documented default for a real operator, not as what this repository's own
-driven run uses.
-
 What follows is what 3b discovered while closing its own two preconditions,
 and what 3c inherits as a result.
 
@@ -356,10 +299,14 @@ owner-reference stamped, and deleted the moment the group was. What the
 rename does not do is carry an already-running cluster across the change: a
 group reconciled under the old code has a ConfigMap at the old bare name,
 nothing renames or deletes it once the new code takes over, and nothing
-warns that it is sitting there orphaned. That is acceptable only for as
-long as nothing is deployed against this code yet, which is true today and
-is exactly the condition milestone 6 (Helm, the first thing that makes a
-running upgrade real) will end.
+warns that it is sitting there orphaned. That was acceptable only for as
+long as nothing was deployed against this code, and milestone 6 ended that
+condition — but not the way this entry expected. The first cluster to run
+this operator was installed at v0.1.0 on 2026-08-20, months of milestones
+after the rename, so it never held a ConfigMap at the old bare name and the
+migration gap is moot for it. What the gap now describes is a cluster nobody
+has: one installed before the rename and upgraded across it. Read it as a
+warning for whoever finds such an installation, not as a pending task.
 
 It is also not fully closed on the receiving end: neither
 `reconcileConfigMap` (`internal/controller/servergroup_controller.go` and
