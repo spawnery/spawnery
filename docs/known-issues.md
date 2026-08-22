@@ -250,155 +250,16 @@ needs the whole workaround — the selector-less `Service`, the hand-written
 is still outside the cluster there and no selector can reach it. Read this entry
 as scoped to that flow from 6a onward.
 
-## Preconditions for milestone 3 (proxy integration) — fully discharged
+## From milestones 3a and 3b (the operator's proxy side, and the Velocity image)
 
-All five original preconditions below are discharged: three by milestone 3a
-(the operator's proxy side, 2026-08-10), and the remaining two — the
-image-layer items — by milestone 3b (the Velocity image, 2026-08-11). They are
-kept rather than deleted for the same reason milestone 2c's closed
-preconditions are: the reasoning is what the next sub-project inherits, and
-only the reasoning makes it legible. That next sub-project was 3c, the
-Velocity agent, and it has now also landed (2026-08-11) — its own discoveries
-are their own section, "From milestone 3c", below, in the same shape as "From
-milestone 2c" above rather than folded into this one, because unlike 3a and
-3b it is not itself a precondition of anything later. What 3a itself
-discovered while closing its three follows after them, and what 3b discovered
-while closing its own two follows after that.
+All five of milestone 3's original preconditions were discharged — three by 3a
+on 2026-08-10, two by 3b on 2026-08-11 — and were removed on 2026-08-22 once
+their stated reason for being kept had expired: they were held so the next
+sub-project could inherit the reasoning, and that sub-project, 3c, landed and
+shares the code rather than reimplementing it. `git log` has them.
 
-**Factor the shared image Nix while there is still exactly one consumer.**
-`nix/paper-image.nix` holds four things the Velocity image will need verbatim:
-the `passwd`/`group` pair for the numeric user, the entrypoint's shebang
-rewrite through `substitute --replace-fail`, the copy into `/usr/local/bin` at
-the literal path a pod spec names, and the layered-image configuration around
-them. The Velocity image also needs its own readiness check and the same
-non-root story. Extracting a small `nix/oci-common.nix` before the second image
-exists is much cheaper than reconciling two copies after they have drifted, and
-the drift is the kind nobody notices — an image that starts fine while its user
-or its paths quietly differ from the other one's.
-
-*Met* by `nix/oci-common.nix`, extracted before `nix/velocity-image.nix`
-existed at all. Both `nix/paper-image.nix` and `nix/velocity-image.nix` now
-build on its `passwd`, `group`, `entrypointFrom`, `binIn` and `layeredImage`.
-The store-path proof this entry originally expected turned out to be
-structurally impossible in this repository — `spawnery-slp` is built with
-`src = ./.`, so every tracked-file change moves every derivation's input
-hash, including the extraction's own edits, and an identical path would have
-been the surprise rather than the proof. What stands as evidence instead: the
-pre- and post-extraction Paper image tarballs list identically, and the four
-files `oci-common.nix` took over — `usr/local/bin/spawnery-slp`,
-`usr/local/bin/spawnery-entrypoint`, `etc/passwd` and `etc/group` — have
-matching `sha256sum` values across both images.
-
-**Do not extend `set_property` for the forwarding mode.** It is a
-`.properties` helper and it does not generalise: the forwarding secret and
-`online-mode` live in `config/paper-global.yml`, which is YAML, and design §5.4
-already commits the entrypoint to merging rendered configuration into that
-file. Editing YAML from shell is the wrong tool. A small Go program baked into
-the image is the right one — it reuses the `buildGoModule` path `spawnery-slp`
-already establishes, it is testable the way `internal/slp` is, and it is the
-natural home for §5.4's per-group ConfigMap rendering when that arrives. It is
-also where the `/data/config` collision above has to be resolved, since that is
-the directory the rendered configuration would land in.
-
-*Met* by `cmd/spawnery-config`, a Go program baked into both images with its
-logic in `internal/render`, tested the way `internal/slp` is. It resolves the
-operator's rendered ConfigMap, a user overlay and the fields neither may move
-into `server.properties` and `config/paper-global.yml` on the Paper side and
-`velocity.toml` on the Velocity side, and refuses to start rather than guess
-at a missing secret, a missing `maxPlayers` or an overlay that fails to
-parse — naming the file and the key in every case. `set_property` and the
-`mv`-based rewrite it used are deleted from `image/entrypoint.sh` outright,
-not extended.
-
-**The orphan sweep discarded proxy agents — met.** `OrphanReconciler.Sweep`
-used to list pods with `spawnery.cloud/role=server` and then forget every
-registry entry not in that list, so the first Velocity agent to open a session
-would have been removed from the registry within one sweep interval.
-
-*Met* by widening the filter: `Sweep` now lists by
-`spawnery.cloud/managed-by` and restricts the server-existence check to
-`role=server` (`internal/controller/orphan.go`), so a connected proxy's
-registry entry survives a sweep the same way a connected server's does.
-
-**`ProxySession` answered `Unimplemented`, and no bootstrap created the
-`spawnery-proxy` ServiceAccount — met.** The contract from milestone 2a covers
-both sessions completely (design, section 5), but through milestone 2c only
-`ServerSession` was implemented and authenticated, and
-`internal/controller.Bootstrapper` knew only the `spawnery-server`
-ServiceAccount.
-
-*Met*: `ProxySession` joins the fan-out and streams it back
-(`internal/agentserver/server.go`), and `Bootstrapper.ensureServiceAccounts`
-now creates both `spawnery-server` and `spawnery-proxy` in every namespace it
-touches (`internal/controller/bootstrap.go`).
-
-**`Register` was sent before `WasRegistered` was persisted — met.**
-`applyDecision` called the registrar and only afterwards wrote
-`status.wasRegistered = true`. If the status write were lost while players
-were already joining, a deletion in that window would take the branch "never
-registered → terminate immediately, no drain" — harmless while the registrar
-was a no-op, real from milestone 3a on.
-
-*Met* by reordering: `applyDecision` now persists `WasRegistered` with its own
-`Status().Update` before calling `Registrar.Register`
-(`internal/controller/server_controller.go`), so a crash between the two
-finds the intent already durable.
-
-What follows is what 3a discovered while closing the items above, and what
-3b and 3c inherit as a result (design, §7 and §11).
-
-**No lowerable readiness in the agent registry, and proxy drain will need
-it.** `internal/agent/registry.go`'s contract cannot express "connected, but
-no longer ready" — `Hello{ready:false}` is a no-op once readiness has latched
-(see the milestone 2c precondition above). 3a lives inside that limit by
-making a proxy's readiness startup-only: once ready, a proxy stays ready even
-if its stream later breaks (design §3, §6.6). Proxy drain — stop accepting new
-players while still serving the ones already connected — needs to lower a
-readiness that was already reported, and the registry cannot do that today.
-Milestone 4, which owns proxy drain, is where this becomes a change to the
-milestone 2a contract rather than something worked around.
-
-**A NetworkPolicy restricting backends to proxies-only is now overdue, not
-merely deferred.** Design §7 left it out of 3a on purpose: built then, before
-`online-mode` was off anywhere, the policy would have guarded an invariant
-nothing yet relied on, and a green NetworkPolicy test would have looked like
-proof of an isolation guarantee the servers did not actually have — they
-still trusted whatever connected to them directly.
-
-**As of this milestone that is no longer true.** `online-mode` is `false` on
-the backend and `true` on the proxy (`internal/render.Paper` and
-`internal/render.Velocity`, both asserted in one test per the design). The
-invariant the policy would guard is real now: a Paper server authenticates no
-one itself, so it trusts whatever opens a connection and completes the
-modern-forwarding handshake with the right secret — and nothing today
-restricts *who* can attempt that handshake to begin with. The only thing
-still keeping the NetworkPolicy out is that milestone 6 owns NetworkPolicies
-as a group (see the availability precondition below), not any remaining
-reason to wait on `online-mode`. This is the entry in this file most likely
-to be read as a formality — it is not. Until the NetworkPolicy lands, a
-backend pod accepts a connection attempt from any pod in the cluster that can
-reach port 25565, proxy or not.
-
-*Answered by milestone 6b in the only half a repository can answer: the
-policy is written, and nothing here has seen it refuse a connection.* An
-accepted `Network` now writes a `NetworkPolicy` into its own namespace
-(`podspec.BuildNetworkPolicy`, `NetworkReconciler.reconcileNetworkPolicy`)
-selecting that network's server pods, admitting ingress on 25565 from that
-network's own proxies in that same namespace and nothing else, and the
-object is created on every reconcile of an accepted `Network` — asserted in
-`internal/podspec/netpol_test.go`, in envtest, and against a real cluster in
-`test/e2e/netpol_test.go`. What is **not** established is that any of it
-refuses anything. Enforcement of a `NetworkPolicy` is the CNI's work, not
-the API server's, and 6b measured that the CNI in this repository's own
-end-to-end harness performs none of it (see "From milestone 6b" below). So
-read this entry's last sentence as amended rather than deleted: on a cluster
-whose CNI enforces NetworkPolicy, a backend now admits only its own
-network's proxies on 25565; on a cluster whose CNI does not — kindnet, which
-is what `make e2e` runs on — a backend still accepts a connection attempt
-from any pod that can reach the port, exactly as before, and the object
-changes nothing. Which of the two an operator has is a fact about their
-cluster that no run in this repository has yet tested on any CNI. The first
-occasion to test it is the RKE2 rollout at the end of milestone 6.
+What stands below is what 3a and 3b found while closing them, which is a
+different thing and outlived its milestone.
 
 **A proxy must report its configured player limit as `slots`, not zero.**
 `Registry.ReportPlayers` rejects any report where `players > slots`; the
@@ -2860,10 +2721,22 @@ wholly broken one produce the same green, and the e2e scenario
 `theOperatorStaysReadyBehindItsOwnPolicy` says so in its own doc comment
 rather than leaving a reader to infer it. The invariant open since 3b — a
 Paper server runs `online-mode=false`, authenticates nobody, and trusts
-whatever completes the modern-forwarding handshake with the right secret — now has a policy written against it, and whether that policy is
-enforced is a property of a cluster's CNI that nothing here has tested on any
-CNI. Do not read the object's existence as protection. The RKE2 rollout at the
-end of milestone 6 is the first thing that can turn it into one.
+whatever completes the modern-forwarding handshake with the right secret — now
+has a policy written against it.
+
+*The RKE2 rollout turned that into an observation, on 2026-08-21.* Against
+that cluster's CNI, recorded at `internal/podspec/netpol.go`: a pod carrying
+the managed-by, network and role=proxy labels reached a backend on 25565, and
+the same pod without labels timed out. So the policy does refuse connections
+where the CNI enforces it — and the same measurement established what it
+cannot do, which is the part worth carrying forward. The ingress peer is a
+podSelector over labels a pod's own creator chooses, so anyone who may create
+a pod in a game namespace can wear the policy's colours; and closing that
+would buy little, since the same privilege reads `velocity-forwarding-secret`
+outright, measured the same day by mounting it from an unlabelled pod. The
+boundary is the namespace, not this policy. Everything above about kindnet
+still stands unchanged: on the harness `make e2e` runs, nothing is enforced
+and the object changes nothing.
 
 **Proxy pods are selected by no policy 6b writes, and the reason is an
 asymmetry in how the two pod classes are probed.** A server's readiness probe
