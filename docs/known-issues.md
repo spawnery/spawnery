@@ -2494,28 +2494,6 @@ across every client on the cluster. See `docs/runbook-milestone-6-rollout.md`,
 scenario 7.
 
 
-**The digest reference is exercised by nothing. — CLOSED 2026-08-20, and
-replaced by a sharper problem.** The claim was true when written: `hack/e2e.sh`
-sets the chart's `image.repository`/`image.tag` to the archive it just built
-with `image.pullPolicy=Never`, so `make e2e` never resolves a digest at all,
-and nothing had published one.
-
-The RKE2 rollout closed it. Release run 32351037208 wrote
-`sha256:e5eb7626…` back through `hack/publish.sh`'s `WRITE_DIGEST` path, and
-the operator has since run from a digest on `paulwtf` three times, verified at
-the kubelet's `imageID` and not only in the Deployment's spec
-(`docs/runbook-milestone-6-rollout.md`, scenario 1).
-
-What the closing found is worth more than the closure. **A digest cannot
-usefully live in `charts/spawnery/values.yaml` at all** — see "No git tag can
-carry its own operator digest" under "From the RKE2 rollout" — because
-`hack/publish.sh` takes it from `skopeo copy --digestfile`, so it does not
-exist until after the tag is published and any released chart's copy is the
-previous release's. The field is deliberately empty as of v0.1.2, a deployment
-pins the digest where the deployment is described, and `release.yml`'s Release
-body was corrected to say so after it spent three releases advising the
-opposite.
-
 **The E2E cluster is a single node, so a whole class of behaviour is
 untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
 single-node topology. Nothing in the run can reach node drain and its taint
@@ -2543,26 +2521,6 @@ that — and only then get stuck pulling. An earlier version of the manifest's
 own comment asserted `Pending` from the binding mode alone, without checking;
 the measured answer is `Bound`.
 
-**`config/rbac/role.yaml` cannot be applied before `spawnery-system` exists.**
-It carries a cluster-scoped ClusterRole *and* a namespaced Role for the
-operator's own Secret and Lease rights, and `kubectl apply -f config/deploy/`
-walks that directory in alphabetical file order — `clusterrolebinding`,
-`deployment`, `namespace` — so the Deployment reaches the API server before the
-namespace does. The Role half was reproduced on the first run of `hack/e2e.sh`
-as `namespaces "spawnery-system" not found`, not reasoned about; the Deployment
-half follows from the same ordering. The script now applies
-`config/deploy/namespace.yaml` on its own before either. The Helm chart in 6d inherits
-exactly this ordering problem and has to answer it with Helm's own ordering
-rather than by copying a script.
-
-*Closed by milestone 6d, by deleting the hazard rather than porting it.*
-`config/deploy/` — the directory this whole entry is about — no longer
-exists. The chart templates no `Namespace` object at all; `--create-namespace`
-is Helm's own answer, and without it `helm install` refuses immediately with
-the same `namespaces "..." not found` this entry names, before any other
-object is applied. There is no alphabetical-apply-order for a chart's own
-install ordering to walk into.
-
 **Any patch to a `ServerGroup`'s spec bumps `metadata.generation`,** and
 therefore starts a rolling update beside whatever the patch was for. Task 5's
 scaling scenario was written against `minReplicas`, passed, and passed for the
@@ -2586,25 +2544,6 @@ it was caught by reading the switch rather than by the run.
 
 **Smaller things this milestone leaves, none of them shipping behaviour:**
 
-- `hack/publish.sh`'s `WRITE_DIGEST` `sed` exits 0 and reports success even
-  when it matches nothing. Inert today — the manifest has one matching line,
-  verified by count — and silent if that line's shape ever moves. A `grep -q`
-  guard before the `sed` closes it.
-
-  *Closed by milestone 6d, and with a second guard this entry did not ask
-  for.* The rewrite now targets `charts/spawnery/values.yaml`'s `image.digest`
-  key rather than `config/deploy/deployment.yaml`. `hack/publish.sh` gained
-  the `grep -q` pre-check this entry named, and — because this exact failure
-  class (an intact anchor, a `sed` that silently no-ops) shipped twice
-  elsewhere in the same milestone — a second, post-substitution `grep`
-  confirming the file now actually carries the written digest, refusing
-  rather than claiming success if it does not.
-- `hack/operator-image-test.sh` says Go's `flag` package "exits 2 for `-h`"; it
-  exits 0, and 2 is for parse errors. The script discards the status and
-  matches on output, so nothing depends on it — it only misleads the next
-  reader. The same sentence is in the milestone's plan text.
-- `test/e2e/rbac_test.go` prints each permission's `Why` twice, because
-  `Permission.String()` already appends it.
 - Swapping the namespace in `test/e2e/rbac_test.go`'s third loop to the
   operator's own namespace would leave the scenario green, because
   `secrets: get` is granted there too for `certs.Store.Ensure`. The loop is
