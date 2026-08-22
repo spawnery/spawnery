@@ -4046,8 +4046,17 @@ intentional — the following points each concern only one of the two halves.
 - After deleting the winning `Network`, recovery takes up to roughly 90 seconds,
   because the loser retries every minute and the group every 30 seconds. A watch
   mapping `ServerGroup → Network` would solve both.
-- `NetworkReconciler.Recorder` and `Clock` are unused; a rejection produces no
-  Kubernetes event, only a condition.
+- **A rejected `Network` produces no Kubernetes event, only a condition** —
+  and the reconciler does have a recorder to produce one with. When this was
+  written both `NetworkReconciler.Recorder` and `Clock` were unused; that is
+  half true now. `Recorder` has three call sites
+  (`internal/controller/network_controller.go`, at the forwarding secret's
+  rotation, its absence, and a failed namespace bootstrap), and the
+  duplicate-network branch is still not one of them: it sets
+  `Accepted=False`/`ReasonDuplicateNetwork` and returns
+  (`network_controller.go:89-99`). So the silence is now a gap in one path
+  rather than a missing dependency. `Clock` is still declared, still assigned
+  `time.Now` in `main.go`, and still read nowhere in the file.
 - The `deletionTimestamp` skip in `Sweep` is covered by no test; it concerns only
   an already-deleting orphaned pod, where a second `Delete` is harmless.
 - **`make -j image-test` can load the wrong image.** `image` and
@@ -4074,9 +4083,11 @@ intentional — the following points each concern only one of the two halves.
   .#agents` with no `--out-link` — it is only no longer shared between two
   builds one command can start together.
 - **`record.FakeRecorder`'s buffered channel blocks its writer once full.**
-  Almost every fixture in `internal/controller` builds its recorder with
+  Most fixtures in `internal/controller` build their recorder with
   `record.NewFakeRecorder(100)`, but the buffer is per call site and not a
-  package-wide constant: `server_controller_test.go` builds one with 20. The
+  package-wide constant. Counted across the package's test files: seventeen
+  call sites ask for 100, three ask for **10**, and one — in
+  `server_controller_test.go` — asks for 20. The
   channel holds exactly as many events as its own call site asked for,
   and a reconciler that emits one more blocks inside the `Send` call instead of
   dropping it or erroring. Budget against the buffer the test in front of you
