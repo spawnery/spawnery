@@ -2104,6 +2104,16 @@ consequence of skipping it is narrower than a first read of the design
 suggests: `ServerGroup`s and `ProxyGroup`s in the namespace keep scheduling,
 and only rotation detection stays blind — see "From milestone 6d" below.
 
+*Observed working, 2026-08-22, which nothing before this had.* The step was
+taken on the one real installation during the RKE2 rollout — `kubectl get role
+-n minecraft` shows `spawnery-forwarding-secret-reader` created 2026-08-20 —
+and the whole chain reports healthy on that cluster:
+`ForwardingSecretResolved=True/SecretResolved` naming the secret and its key,
+and `ForwardingSecretRotationPending=False/ForwardingSecretInSync`. So the
+`Unknown/SecretReadForbidden` path this entry describes is what a namespace
+nobody opened reports, and the opened case now has a witness rather than only
+tests.
+
 **No per-group condition.** Which group is still stale is in the Network
 condition's message and nowhere else: `staleSummary`
 (`internal/controller/forwardingsecret.go:197`) renders the counts as
