@@ -631,44 +631,24 @@ what 4b's rolling update needs; the second is what stops the scaler ordering
 the same replacement on every five-second pass. Both files say so; this entry
 is the third place, so a search finds it.
 
-**`provisionalCapacity` cannot tell "has never reported" from "the pod
-vanished"** — both present as `Slots == 0`, because `Registry.Lookup` on an
-unknown pod returns a zero snapshot. A server whose pod is gone is therefore
-credited a full `maxPlayers` of capacity it does not have, for the seconds
-until the Server controller fails it. The blast radius is under-creation for a
-resync or two, and no invariant is touched. The obvious fix — testing `Stale`
-before `Slots == 0` — would be a regression: a server that is genuinely
-starting up is also stale and has never reported, and crediting it zero
-reintroduces exactly the runaway `provisionalCapacity` exists to prevent. The
-right signal is already on the view and unused here: `ServerView.SessionsGone`,
-one line at the top of the function. It belongs with 4b's own work on
-`scaling.go`.
+**`provisionalCapacity` credits a server the informer has not caught up with,
+for one pass.** The original defect here — a server whose pod had vanished
+credited a full `maxPlayers` — was closed by testing `ServerView.SessionsGone`
+before the `Slots == 0` credit, and both the reason and the wrong fix are
+pinned where they belong: `internal/controller/scaling.go` says in its own
+comment why testing `Stale` there would be a regression, and
+`TestProvisionalCapacityStillCreditsAStartingServer` fails if anybody tries.
 
-*Met* by `54a2ef2`: `provisionalCapacity` now tests `ServerView.SessionsGone`
-before the `Slots == 0` credit, exactly the one line this entry named, so a
-server whose pod has vanished is no longer credited a full `maxPlayers` it
-does not have. The obvious fix this entry warned against — testing `Stale`
-instead — stays wrong for the reason given above, and is now pinned rather
-than merely argued: `TestProvisionalCapacityStillCreditsAStartingServer` is
-the regression guard that fails if `Stale` is swapped in for `SessionsGone`,
-because a genuinely starting server is stale too and would then be credited
-zero, reintroducing the runaway this rule exists to prevent.
-
-What `SessionsGone` does not resolve: `servergroup_controller.go`'s
-`SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod))`
-can still read true for a single resync for a server that has genuinely just
-started, if the informer's cache has not yet shown a pod the API server
-already created. A server caught in that window is credited zero for one
-pass instead of the full `maxPlayers`, so `provisionalCapacity`'s sum reads
-lower than the truth and `wanted` reads higher — over-creation for a resync
-or two, against the pre-fix entry's own under-creation above, and the safer
-direction of the two: a group with a server too many costs money, a group
-with a server too few costs joins. It is the same shape of lag this flag
-already carried before this fix gave it a second reader: `isOccupied` has
-relied on it for the same reason since before 4b. It is worth naming here
-because 4b's cold start is the first place this risk feeds a scaling
-decision rather than only the
-occupied-pod protection.
+What is recorded here because it is recorded nowhere else: `SessionsGone` is
+`srv.Status.PodName != "" && (!podFound || podTerminal(pod))`, and that reads
+true for one resync for a server that has genuinely just started, if the
+informer's cache has not yet shown a pod the API server already created. Such
+a server is credited zero instead of its full `maxPlayers`, so the sum reads
+low and `wanted` reads high — over-creation for a pass or two. That is the
+safer of the two directions: a group with a server too many costs money, a
+group with a server too few costs joins. `isOccupied` has carried the same lag
+for the same reason since before 4b; what 4b changed is that a scaling
+decision now reads it too.
 
 **`derivePhase` still measures readiness against `DesiredReplicas()`, and that
 field's meaning changed under it this milestone.** Before 4a,
@@ -683,6 +663,13 @@ is serving — but it is no longer what the field used to mean, and the change
 happened silently. 4b's rolling update, which needs to say "the new generation
 is up" as something other than "one server somewhere is," will want the
 distinction this milestone left unmade.
+
+*4b came and went without making it.* Checked on 2026-08-22:
+`servergroup_controller.go:883` is still `totals.ReadyReplicas >=
+group.DesiredReplicas() && totals.ReadyReplicas > 0`, so a group running above
+its floor for spare slots still publishes `Ready` off the first server up. The
+rolling update found its own answer rather than changing this one, and the
+mismatch between what the field says and what it once meant is still here.
 
 ## From milestone 4b
 
