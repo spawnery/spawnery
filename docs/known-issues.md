@@ -2382,10 +2382,18 @@ reconciles, narrow this for the reconciler-triggered call sites but do
 not by themselves explain why the *informer's own* initial sync — which
 the vendored source's comment says should retry and log on its own,
 unconditionally, without any reconcile — produced nothing observable
-here. That mechanism was not chased further; full raw output for both
-the silent and the loud mutations is in
-`.superpowers/sdd/2026-08-16-operator-image-and-e2e/task-4-report.md`,
-"Fix round 2".
+here. That mechanism was not chased further.
+
+*The raw output is gone, 2026-08-22.* This entry cited
+`.superpowers/sdd/2026-08-16-operator-image-and-e2e/task-4-report.md` for the
+full transcript of both mutations. That directory is git-ignored scratch, and
+the subagent-driven workflow that creates it deletes it on completion by
+design, so nothing there survives and nothing is in git either. What remains
+is the account above, which is why it states its numbers — 32 log lines at
+second 0 and at 7m45s, 24 samples carrying only 200, 201, 404 and 429, restart
+count 0 — rather than deferring them. **Nothing in this file should cite that
+directory**: two other entries did, both under milestone 6d, and both are
+corrected the same way.
 
 ## From milestone 6a (the operator in a cluster)
 
@@ -3108,8 +3116,9 @@ hazard — is not validated by the API server at all, and is, by the design's
 own reasoning, the path `theOperatorWasNeverDenied` exists to catch once the
 resulting denial lands on a write verb. That path was never mutated by this
 milestone. The claim holds for one of the two ways the defect can leak and
-is unproven for the other. Caught by mutation
-(`.superpowers/sdd/2026-08-19-helm-chart/task-4-report.md`, "Mutation 1").
+is unproven for the other. Caught by mutation during the milestone; the
+report that held the transcript was in the deleted SDD workspace, so this
+paragraph is the record.
 
 **`make chart-lint` does not catch a chart that renders with an empty
 namespace.** The plan justified `chart-lint`'s `helm template` line by a
@@ -3125,8 +3134,8 @@ namespaces, never the Service's. What catches it is
 the rendered Service into envtest's real API server, which refuses to
 create a `Service` with an empty `namespace`. `chart-lint` still catches a
 template that fails to render at all; it does not catch this class. Measured
-by mutation (`.superpowers/sdd/2026-08-19-helm-chart/task-5-report.md`,
-"Mutation 1").
+by mutation during the milestone; the report that held the transcript was in
+the deleted SDD workspace, so this paragraph is the record.
 
 **`hack/chart-templates.sh` now checks its outcomes as well as its inputs.**
 Its two original guards (`grep -q` on `config/rbac/role.yaml` and on each
