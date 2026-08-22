@@ -233,8 +233,19 @@ under the shaded names.
 **A permanently unreachable operator writes one WARNING every 30 seconds,
 forever.** There is no rate limit and no deduplication on the reconnect log. One
 line per pod per 30 s is nothing for one server and is a real log bill for a
-fleet that loses its operator for a day. `SessionLoop` owns the cadence; the
-cheap fix is to log the first failure and then only on a change of cause.
+fleet that loses its operator for a day.
+
+*The fix this entry proposed was considered and refused, deliberately.* Both
+`AgentPlugin`s now carry the argument at their `log` callback: `SessionLoop`
+never gives up and never escalates on its own, so that callback is the only
+place deciding how loud an unreachable operator gets to be. INFO would bury a
+30-second cadence among routine startup lines, and by the time anybody looked,
+"unmonitored for six hours" would be indistinguishable from "fine"; SEVERE
+would misrepresent a condition the loop is already recovering from. Logging
+only on a change of cause has the same defect as INFO — a fleet that has been
+down all day would say so once, at the start. So the cost stands as written
+and is accepted; what changed is that it is now a decision with reasons rather
+than an oversight.
 
 **The JRE module list is now derivable, and milestone 3 is where to cut it.**
 The Paper-side classpath stopped moving with this milestone: the agent is the
@@ -244,31 +255,6 @@ So the list can finally be derived from the complete classpath, with `jdeps
 adds Velocity and faces the same question with the same answer, so derive it
 once, there, for both images — see the image-size entry under milestone 2b for
 what it buys.
-
-**`deps.json` has no CI guard.** Nothing fails if `agent/paper/deps.json` drifts
-from `agent/paper/build.gradle.kts`; the drift only shows up when someone runs
-`make agent-deps` and gets a diff. The target cannot run inside a Nix build,
-because it reaches Maven Central, so the check belongs with CI in milestone 6:
-run `make agent-deps` and fail on a non-empty `git diff`.
-
-*Closed by milestone 6e — and this entry's own path had gone stale by the
-time it was closed.* The `deps` job in `.github/workflows/ci.yml` runs `make
-agent-deps` against a real Maven Central, then `git diff --exit-code --
-agent/deps.json`, blocking every pull request. The guard was shown to fire,
-not only wired: a corrupted hash committed on purpose
-(`test(6e): perturb agent/deps.json to prove the drift guard fires`, reverted
-in the next commit) reproduced through a real Gradle resolution, and the
-comparison step failed naming the file and the exact line; `make agent-deps`
-itself stayed green throughout, so the failure lands on the diff, the way it
-is meant to, not on the regeneration. The path this entry names above,
-`agent/paper/deps.json`, has been `agent/deps.json` since milestone 6d's
-`14eee4f`, which split `agent/` into `common` and `paper` subprojects and
-moved the lockfile to the repository root — this entry was never updated to
-say so until now. One environmental fix the job needed and this entry could
-not have predicted: `USE_BWRAP=0` on the `make agent-deps` step, because
-nixpkgs' `gradle.fetchDeps` update script wraps the real dependency fetch in
-its own `bwrap` sandbox — unrelated to Nix's — which GitHub's hosted runners
-refuse by default.
 
 **Two toolchain versions are pinned twice each, and a nixpkgs bump moves only
 one half.** `protoc-gen-grpc-java` comes from nixpkgs (1.83.1 at this pin) while
@@ -292,10 +278,11 @@ and `cmd/spawnery-stubop` are exactly what a Velocity agent will be tested with,
 so what they do not check is worth writing down: stream indices `0` and `1` are
 hard-coded in the overlap verdict; `seq` is record order and not arrival order,
 which the verdict's wording overstates; two wait loops after `await_event` do not
-check that the container is still alive; the three phases are a near-verbatim
-copy of one another rather than one parameterised function, so what each varies
-has to be found by eye; and the stub's own Go tests cover neither the
-never-closes property nor the uniqueness of `seq`.
+check that the container is still alive; the phases are near-verbatim copies
+of one another rather than one parameterised function, so what each varies has
+to be found by eye -- and there are six of them now, not the three this entry
+counted, so that cost has doubled rather than been paid off; and the stub's own
+Go tests cover neither the never-closes property nor the uniqueness of `seq`.
 
 **The local kind flow needs a `Service` nothing creates.** A pod dials
 `spawnery-operator.<ns>.svc:9443`. When the operator runs outside the cluster —
