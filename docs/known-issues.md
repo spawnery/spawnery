@@ -1698,6 +1698,17 @@ kubectl get servergroup <name> -n <namespace> \
   -o jsonpath='{range .status.conditions[*]}{.type}{"\n"}{end}' | grep -n Ready
 ```
 
+*Checked against the only installation there is, 2026-08-22.* It runs one
+`ServerGroup`, `minecraft/lobby`, of type `Ephemeral`, whose conditions are
+`Accepted`, `NodeDraining`, `ScalingLimited`, `BackingOff` and `Degraded` —
+no `Ready` among them — and it holds no `Persistent` group at all. Installed
+at v0.1.0 on 2026-08-20, milestones after 5a, so no older operator ever wrote
+the condition here. This is the third hazard in this file about upgrading
+across a rename or a removal, beside `GroupConfigMapName` under 3a/3b and the
+PodDisruptionBudget under 4c-3, and all three describe the same installation
+nobody has: one that predates the change and was carried across it. Keep them
+for whoever finds one; none is a task for anybody here.
+
 `ReasonNotImplemented` (`api/v1alpha1/common_types.go`) has no user left in the
 codebase after this milestone: grepping `.go` and `.yaml` finds the identifier
 only at its own definition, and the string `NotImplementedInThisVersion` only
