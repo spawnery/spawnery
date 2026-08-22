@@ -2695,11 +2695,21 @@ to be an `ipBlock` covering the Service CIDR instead — which the operator
 cannot discover from inside the cluster. The design (§6) declined to assert
 which side any particular CNI falls on, exactly because that is the class of
 claim this project keeps catching itself making from memory. The pod-selector
-form is what ships. **Nothing has tested it**, and it cannot be tested where
-the CNI enforces nothing: on kindnet an egress rule that matches and one that
-does not are the same green. If backends stop reaching the operator on a real
-CNI, this is the first thing to check, and the symptom would be every agent
-failing to connect at once while the objects all look correct.
+form is what ships. It cannot be tested where the CNI enforces nothing: on
+kindnet an egress rule that matches and one that does not are the same green.
+If backends stop reaching the operator on a real CNI, this is the first thing
+to check, and the symptom would be every agent failing to connect at once
+while the objects all look correct.
+
+*Settled for one CNI, 2026-08-22.* The RKE2 cluster runs Cilium, carries
+`production-backends` in `minecraft` — the per-`Network` policy, selecting
+`role=server` — and its backend `lobby-hktx` reports `Ready`, which the design
+only grants once that server's agent has connected to the operator. So on
+Cilium the pod-selector egress rule does match traffic addressed to the
+Service ClusterIP: policy is evaluated on a side where the selector still
+resolves. That is one CNI, not the class. The operator still cannot discover
+which side any other CNI falls on, and the `ipBlock`-over-Service-CIDR
+fallback this entry names is still what a CNI on the other side would need.
 
 **The DNS rule has the same exposure, and its symptom looks nothing like the
 one above.** A backend resolves through the cluster DNS `Service`, whose
@@ -2713,6 +2723,12 @@ operator hop failing looks like agents that never register, while DNS failing
 looks like nothing resolving at all, including the operator's own name, so the
 agent failure is a downstream effect and the first thing to check is the wrong
 one.
+
+*Settled by the same observation, 2026-08-22, and by the same limit.* A
+backend that reaches `Ready` on Cilium has resolved the operator's name to
+dial it, so the `kube-system` namespace-selector rule admits the resolver
+query there too. Both rules therefore work on that one CNI, and neither is
+established for any other.
 
 **The peerless rule is the widest-open thing 6b writes, and one unit test is
 all that stands behind it.** The operator's own `NetworkPolicy` (`config/deploy/networkpolicy.yaml`
