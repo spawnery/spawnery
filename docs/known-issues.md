@@ -2020,32 +2020,6 @@ edit does not heal a broken ordinal, and an operator watching for a stall
 should not read a non-zero count as "nothing happened" — but it means the reset
 an ephemeral group gets in full, a persistent one gets only most of.
 
-**Fixed: a persistent group's failure counter used to freeze on any spec
-edit.** `CountFailures`'s call site (`internal/controller/servergroup_controller.go:231-238`)
-used to filter every group's views through `ofGeneration`, which keeps only
-servers whose `spec.groupGeneration` equals the group's current
-`metadata.generation`. `Server.spec.groupGeneration` is stamped once at
-creation and never updated, and `DecidePersistentSize` is generation-blind by
-design, so any spec edit on a persistent group bumped `metadata.generation`
-and the filter then discarded every one of that group's servers —
-`CountFailures` saw an empty slice, counted nothing, and
-`status.consecutiveFailures` froze wherever it stood. A pre-existing defect
-inherited from 5a, invisible until 5b gave persistent failures somewhere to
-accumulate toward. Fixed by reading `ofGeneration` for an ephemeral group only
-and passing the unfiltered views for a persistent one, and pinned by
-`TestAPersistentGroupCountsAFailureAfterItsGenerationMoves`.
-
-**Fixed: a squatter used to be able to stall a whole group's takedowns, not
-only its own ordinal.** Gate A (`takedownInFlight`,
-`internal/controller/persistent.go:222`) now skips any view whose `Ordinal` is
-nil, the same as every other pass over `in.Views` in `persistent.go`. Without
-that skip, an object squatting on a persistent ordinal's name without carrying
-`spec.ordinal` — already recorded above, under "From milestone 5a", as
-stalling *its own* ordinal — would also have held Gate A open forever, since
-`leaving()` on such an object never resolves. That would have blocked every
-takedown for the whole group, updates and scale-downs alike, indefinitely and
-silently, rather than only the one ordinal the squatter occupies.
-
 ## From milestone 5c (detecting forwarding secret rotation)
 
 5c is detection and reporting only: the Network controller reads the forwarding
