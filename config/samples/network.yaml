@@ -2,10 +2,12 @@
 # one gateway group of Velocity proxies. The servers come up, their agent
 # reports in and they reach phase Ready; the ProxyGroup is accepted, gets its
 # NodePort Service, and its pods pull the Velocity image milestone 3b built
-# and start the proxy process with online-mode=true and modern forwarding
-# configured. What is still missing is milestone 3c's Velocity agent: nothing
-# binds the readiness port a proxy pod is probed on (design §6.6), so a proxy
-# pod never turns Ready and no player is routed through it yet.
+# and start the proxy process with modern forwarding configured. Its agent
+# binds the readiness port the pod is probed on (design §6.6) and opens the
+# gate on the first server list, so the proxy turns Ready and routes players
+# to the lobby group. `online-mode` is the ProxyGroup's own
+# spec.config.onlineMode, defaulting true; the backends run with it off, which
+# is what the Network's NetworkPolicy exists to bound.
 apiVersion: v1
 kind: Namespace
 metadata:

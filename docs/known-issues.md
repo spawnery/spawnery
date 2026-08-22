@@ -723,11 +723,6 @@ proxy and not necessarily across the network — `Router` counts only the
 players Velocity itself can see, not what any other proxy in the same
 `ProxyGroup` is carrying.
 
-**Proxy drain still needs a lowerable readiness** in
-`internal/agent/registry.go`. That is a milestone 2a contract change and
-belongs to milestone 4, which owns proxy drain — see
-`docs/handover-milestone-4.md` for what the change has to do.
-
 **The NetworkPolicy is overdue, not deferred.** With `online-mode=false` on
 the backends and forwarding now actually working, a Paper server
 authenticates no one and trusts whatever completes the handshake with the
@@ -735,12 +730,17 @@ right secret — and nothing restricts who may attempt it. Milestone 6 owns
 NetworkPolicies as a group. This entry is the one most likely to be read as a
 formality; it is not.
 
-*Milestone 6b wrote the policy; nothing has watched it refuse a connection.*
-The longer form of the same amendment is under the milestone 3 preconditions
-above, and the measurement it rests on is in "From milestone 6b" below. The
-short version: the object exists in every accepted `Network`'s namespace, and
-whether it does anything is a property of the cluster's CNI that no run in
-this repository has tested.
+*Milestone 6b wrote the policy, and it has since been watched doing its
+work.* Measured on 2026-08-21 against a real CNI and recorded at
+`internal/podspec/netpol.go`: a pod carrying the managed-by, network and
+role=proxy labels reached a backend on 25565, while the same pod without
+labels timed out. What that measurement also established is the limit — the
+ingress peer is a podSelector over labels any pod's creator chooses, so the
+policy defends against a co-tenant that cannot create pods in the namespace
+and against nothing else. The same day, mounting `velocity-forwarding-secret`
+from an unlabelled pod showed why closing that would buy little. The boundary
+is the namespace, not this policy, and the longer form is under "From
+milestone 6b" below.
 
 **Smaller ones**, each worth a sentence: phase 5 of `hack/agent-test.sh`
 reuses phase 2's window constants declared 400 lines
@@ -760,11 +760,7 @@ version and the backend's actual version agree — true of every pinned pair
 this repository ships and not guaranteed generally; `internal/mcjoin`'s own
 package comment names the failure mode (a loud "Outdated client!" naming the
 version to fix it to), so it fails loud rather than silent, but the runbook
-that depends on this tool inherits the same assumption. And
-`config/samples/network.yaml`'s own top comment still describes a `ProxyGroup`
-whose pod never turns `Ready` because "milestone 3c's Velocity agent" does not
-exist — false as of this milestone; nobody has updated the sample's comment
-to match.
+that depends on this tool inherits the same assumption.
 
 ## From the milestone 3c evidence run (2026-08-12)
 
