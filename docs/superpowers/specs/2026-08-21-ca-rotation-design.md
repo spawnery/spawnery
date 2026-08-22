@@ -195,9 +195,11 @@ on anything, the rotation is only waiting on a second, correctly spelled
 annotation), `RotationRequestRefused` for a request that was understood and
 not carried out, `RotationSlotDiscarded` for a rotation slot whose certificate
 stopped parsing, which the operator clears because every byte of a published
-slot reaches every agent's trust store, and `RotationSlotTruncated` for the one
-such slot it can repair instead — one holding more than one PEM block, cut back
-to the first, which is the block the operator already signs with. The last two
+slot reaches every agent's trust store, and `RotationSlotTruncated` for a slot it can repair
+instead — one whose first PEM block *is* a certificate but which is not exactly
+that block, cut back to it. That covers a pasted chain, a second certificate,
+and stray bytes before or after; the kept block is the one the operator already
+signs with. The last two
 are reasons of their own because none of the six above describes them: nothing
 was refused and nothing was misspelled — a hand-edited slot is not a request at
 all — no gate is holding, and the phase a discard clears on the way past is the

@@ -268,6 +268,16 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 			continue
 		}
 		if errors.Is(reason, errNotOnlyTheFirstBlock) {
+			// Both halves from the secret, not from the bundle in hand: the
+			// secret is what AdvanceRotation re-read, and pairing its
+			// certificate with an older key would be permanent rather than
+			// transient, because applyStep replaces Data wholesale. The edge
+			// this gives up: a hand edit that damages the certificate into a
+			// repairable shape and deletes the key in the same breath now
+			// stores an empty key, where reading the key from the bundle
+			// would have healed it. That slot publishes a CA that cannot
+			// sign, which parseCA refuses loudly on the next transition --
+			// the opposite ordering was silent, and one of the two had to go.
 			slot.setPair(&fresh, firstPEMBlock(certPEM), stored.Data[slot.keyKey])
 			// The gate runs only while `since` is empty (drivePhase), and it
 			// has already run against bytes that are not the bytes now in the

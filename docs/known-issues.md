@@ -4142,6 +4142,17 @@ block a certificate?**
   rotation carries on. It is not cosmetic: a surplus block that happens to be a
   valid certificate is loaded by every agent as another CA it will accept the
   operator's identity from, and nothing else would ever say so.
+
+  It also fires on a difference you would not call damage. The test is
+  byte-exact, so a certificate that is merely re-wrapped to a different column,
+  saved with CRLF line endings, or left with a blank line at the end is
+  repaired too — same warning, same record, and while `distributing` the same
+  restarted window. One rule covers stray bytes and a surplus certificate
+  because separating them would mean trusting that stray bytes never happen to
+  contain a PEM header, which is not a property worth resting a fleet on. The
+  operator's own writes are always canonical, so this only ever follows a hand
+  edit, and it happens once: the repaired slot is canonical and is not touched
+  again.
 - **No — not PEM at all, or a PEM envelope around something that is not a
   certificate: the slot is cleared**, with a `RotationSlotDiscarded` warning.
   The bytes are gone; they are kept nowhere. What becomes of the rotation then
