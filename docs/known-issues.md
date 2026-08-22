@@ -3818,6 +3818,36 @@ its `RotationRequestUnrecognised` event fires on **every** tick for as long as
 the value sits on the secret — every 30 seconds while a rotation is in flight.
 Correcting or deleting the annotation is what stops it.
 
+**All of the above has been driven once, end to end, on `paulwtf`, on
+2026-08-22.** There is no `docs/runbook-…-evidence.md` for it; this paragraph
+is the record. `start` → `distributing` with both CAs published while the
+serving certificate still chained to the old one → the gate passed → the
+operator switched on its own → the hold → `drop-old` by hand. The end state,
+re-read from the cluster the same day:
+
+- `spawnery-agent-tls` carries exactly four keys — `ca.crt`, `ca.key`,
+  `tls.crt`, `tls.key` — and **no annotations at all**, so `drop-old` cleared
+  the slots and all three rotation annotations as described.
+- `ca.crt` is the CA minted at `start`: `notBefore 2026-08-22T15:19:55Z`,
+  subject `CN=spawnery-agent-ca`, ten-year lifetime.
+- The serving certificate was re-signed at the switch —
+  `notBefore 2026-08-22T15:32:31Z` — and its Authority Key Identifier equals
+  the new CA's Subject Key Identifier byte for byte
+  (`27:A3:51:…:D1:E1`), which is the check that distinguishes a real switch
+  from a re-published old certificate.
+- `minecraft`'s `spawnery-ca` ConfigMap holds exactly one certificate, so the
+  overlap is closed everywhere the bundle reaches.
+- **The three agent pods in `minecraft` have `restartCount` 0 and start times
+  of 2026-08-20** — older than the rotation by two days and unrestarted
+  through all of it. That is the whole point of the overlap, measured rather
+  than argued: `gateway-mcv4`, `gateway-pmmy` and `lobby-hktx` re-read `ca.crt`
+  from their projected volume across session deadlines and never noticed.
+
+One rotation is one rotation. What it establishes is that the sequence
+completes and that agents survive it; it establishes nothing about a fleet
+larger than three pods, about a gate that actually blocks, or about any of the
+refusal and slot-repair paths above, none of which were exercised here.
+
 **The operator repairs or throws away a hand-edited rotation slot, and it can
 end the rotation while doing so.** On every tick, *before* it looks at
 `rotate-ca` at all, `AdvanceRotation` re-reads `ca-next.crt` and
