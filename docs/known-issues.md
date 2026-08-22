@@ -810,12 +810,25 @@ probe keeps succeeding, and the endpoint never goes away. The deadline bounds
 the damage and the event names it; nothing prevents it.
 
 **So: upgrade the proxy images before the operator, until something
-version-gates the message.** Nothing in the session says which agent build is
-on the other end — `Hello` carries no version — so the operator cannot detect
-this case, and there is no condition and no event that tells "old agent" apart
-from "busy proxy". The other order is the safe one, and so is rolling the
-operator back on its own: an agent that supports `SetReady` and never receives
-one behaves exactly as 3c's did, because `ProxyRole`'s latch starts at
+version-gates the message.** There is no condition and no event that tells
+"old agent" apart from "busy proxy", so nothing an operator can see
+distinguishes them, and the other order is the safe one.
+
+> **Corrected 2026-08-22, and the correction matters more than the entry.**
+> This paragraph used to say the operator *cannot* detect the case, because
+> "`Hello` carries no version". That is false, and was when it was written:
+> `Hello` has carried `string version = 1` since the original gRPC contract on
+> 2026-08-08, the agent fills it from its plugin metadata, and the operator
+> already reads it — `internal/agentserver/server.go:454` logs `"proxy
+> connected", "version", m.Hello.GetVersion()` at V(1). So the wire carries
+> exactly what a version gate would need and nothing has to be added to the
+> protocol; what is missing is only that nobody acts on it. The advice above
+> stands, because today nothing does act on it. The task it defers to is much
+> smaller than this entry implied.
+
+Rolling the operator back on its own is safe too: an agent that supports
+`SetReady` and never receives one behaves exactly as 3c's did, because
+`ProxyRole`'s latch starts at
 `asserted = null` and its first `FullSync` opens the gate unless a `false` was
 asserted — `ProxyRole.kt`'s `Latch(synced = false, asserted = null)` and, in
 its `FULL_SYNC` branch, `if (!previous.synced && previous.asserted != false)
@@ -894,16 +907,24 @@ fixed in them:
   `set_ready_sent` is already non-zero — a sub-second window on a correct
   agent.
 
-**Two facts about the machine this milestone was built on, measured
-2026-08-14.** `docker` here is a symlink into `podman-docker-compat`, so the
-`Makefile`'s `CONTAINER ?= docker` default already runs Podman and
-`CONTAINER=podman` changes nothing; and `/tmp` is not a tmpfs (part of root,
-649 G free), so the `TMPDIR` prerequisite a small tmpfs would make necessary
-does not apply here. Both are stated conditionally where they matter —
-`docs/runbook-milestone-3-evidence.md` §0 always did, and
-`docs/handover-milestone-4b.md` was corrected during this milestone — because a
-machine where either is false still needs the override. Neither is a property
-of the repository, which is the reason to date them.
+**Two facts about the machine this milestone was built on — both have since
+flipped, which is the point.** Measured 2026-08-14: `docker` was a symlink
+into `podman-docker-compat`, so `CONTAINER ?= docker` already ran Podman and
+`CONTAINER=podman` changed nothing; and `/tmp` was not a tmpfs, so the
+`TMPDIR` prerequisite did not apply.
+
+Re-measured 2026-08-22, and both are now the opposite. There is no `docker` in
+the PATH at all, so `CONTAINER=podman` is required rather than inert; and
+`/tmp` is a 3.9 G tmpfs, so `TMPDIR` on a disk-backed path is required for
+anything that extracts an image archive. Both overrides are what this
+repository's own image and agent runs use today.
+
+The entry was right to date these and right to say they are not properties of
+the repository. What it shows is that dating is necessary and not sufficient:
+nothing re-reads a dated fact, and a stale one about the machine is acted on
+rather than merely read. `docs/runbook-milestone-3-evidence.md` §0 states both
+conditionally, which is why nothing downstream broke while this paragraph was
+wrong.
 
 **An unchecked question about milestone 3's runbook, which must not be repeated
 as a finding.** Measured 2026-08-14 against Go 1.26.5 in this repository's
