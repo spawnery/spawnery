@@ -3612,17 +3612,44 @@ stand-in, which left a node port allocated that nobody dialled and made
 
 The rest of this entry is not a claim about that cluster on that day.
 `type: ClusterIP` with a required `clusterIP.address` was built after the
-rollout, and unlike everything else in this section it has been driven
-against no cluster at all — only envtest and the E2E kind cluster, where no
-proxy image resolves and no player has ever connected. It is what the
-operator does, not something observed working: the operator creates the
-Service the fronting thing routes to, publishes the address it was given —
-once a proxy pod of the group is ready, and nothing before then, the same
-gate every other strategy's address is behind — and creates no routing object
-and verifies no address. Whether Traefik actually routes to that Service is
-the next rollout's finding, not this one's. See
+rollout, and when this was written it had been driven against no cluster at
+all — only envtest and the E2E kind cluster, where no proxy image resolves and
+no player has ever connected. What the operator does is narrow and unchanged:
+it creates the Service the fronting thing routes to, publishes the address it
+was given — once a proxy pod of the group is ready, and nothing before then,
+the same gate every other strategy's address is behind — and creates no
+routing object and verifies no address. See
 `docs/superpowers/specs/2026-08-20-clusterip-expose-design.md` §4 for why each
 of those refusals is a refusal rather than an omission.
+
+**It has since been driven, and players have played on it.** Measured on
+`paulwtf` on 2026-08-22, with the group `minecraft/gateway` `Ready` since
+2026-08-20T10:47:30Z:
+
+- `spec.expose` is `{"type":"ClusterIP","clusterIP":{"address":"mc.paul.wtf"}}`
+  and `status.address` is `mc.paul.wtf`, two ready replicas.
+- The routing object the operator refuses to create exists, written by hand:
+  `IngressRouteTCP/spawnery-gateway` in `minecraft`, entryPoint `minecraft`,
+  matching `HostSNI(*)`, to `Service/gateway` port 25565 with
+  `proxyProtocol.version: 2`.
+- `mc.paul.wtf` resolves to Traefik's three LoadBalancer addresses, whose
+  Service publishes `25565:30561/TCP`, and `Service/gateway`'s EndpointSlice
+  carries both proxy pod IPs `ready`.
+- Both proxy pods have served real joins. Three distinct names appear in the
+  logs the pods still hold — `WildesDomi`, `anweisen`, `DomiIRL` — each
+  reaching `lobby-hktx` through the proxy and disconnecting cleanly; the most
+  recent connect is 2026-08-22T16:57:35+02:00. That is what the pods' current
+  logs carry, not necessarily every join since the group came up.
+
+So the answer to "whether Traefik actually routes to that Service" is yes, for
+this one fronting proxy in this one configuration. Two things ride along with
+it. The client addresses in those logs are public ones
+(`/95.89.220.159`, `/79.198.252.14`), not pod IPs, which means the PROXY v2
+header Traefik sends is being honoured — the entry below about
+`haproxy-protocol` under `[advanced]` is what makes that work, and this is its
+confirmation from the other end. And the operator's refusal to verify the
+address is unchanged by any of this: nothing in the chain above was checked by
+the operator, and every link of it is the cluster owner's to keep.
 
 **A `configOverlay` key in the wrong TOML table is silently ignored, and looks
 right in the rendered file.** Velocity's `haproxy-protocol` lives under
