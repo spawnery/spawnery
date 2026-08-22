@@ -727,52 +727,6 @@ present the same way from outside — the changeover stopped — and the differe
 is that the first one names itself on the group's conditions and the second
 does not.
 
-**The cold-start loop is only half-closed.** A broken new image fails, drops
-out of `countsTowardSize`, and would be re-created every five-second pass
-forever; 4b suppresses the cold start while a `Failed` server of the current
-generation is retained, so the interval becomes `failedRetentionSeconds` (an
-hour by default) instead of five seconds. Two things have to agree for that to
-hold, and the second is easy to lose: the retention cap keeps one failure
-(`maxRetainedFailures = 1`), so it has to keep *that* one.
-`selectFailedForPruning` therefore prefers the newest generation, then the
-oldest failure within it — an oldest-first rule alone always kept an inherited
-older corpse and pruned the current generation's, which is the only one doing
-the suppressing, on the same reconcile that observed it, and the loop ran at
-time-to-fail. Anyone changing that ordering is changing this interval from an
-hour back to a minute.
-
-The suppression is a guard on 4b's own door, not backoff — it does nothing for
-the floor rule, which has the identical loop and keeps it.
-`maxRetainedFailures = 1` still caps only the footprint of the failure, not the
-rate at which the group tries again. Real per-group exponential backoff with
-the `Degraded` condition (master design §7) belongs to its own spec, which is
-next.
-
-*Met* by milestone 4d's per-group backoff, which subsumes this suppression
-rather than fixing its ordering further. `CountFailures` and `DecideBackoff`
-(`internal/controller/backoff.go`) count consecutive failures on
-`ServerGroupStatus` and gate the create call site in
-`ServerGroupReconciler.size()` with a window that starts at ten seconds and
-doubles, rather than this suppression's flat `failedRetentionSeconds` hour
-after any single failure. The `coldStart` branch this entry describes — the
-one counting a retained current-generation `Failed` server — is removed,
-along with the tests that pinned it, and the loop it closed is now closed by
-the backoff instead: `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`
-holds a group with a permanently broken new generation to at most 3 servers
-across 10 five-second passes, and fails without the backoff gate (20
-servers built against that bound) — the mutation was run, not assumed.
-Restoring the removed suppression itself was also tried, and fails only the
-rewritten tail of `TestOccupiedServerSurvivesAContinuousScaleDown`, so that
-test is what now pins the removal.
-`maxRetainedFailures = 1` stays, and still bounds only the footprint — one
-corpse retained for diagnosis — not the rate; the rate is what the backoff
-now bounds. `selectFailedForPruning`'s newest-generation-first ordering,
-which this entry's own fix made load-bearing for the suppression, stays too,
-for the reason it always had independent of the suppression: the first
-failure after a generation bump is the one that says what broke, and the
-previous generation's corpse says nothing about the new image. See
-`docs/superpowers/specs/2026-08-13-per-group-backoff-design.md`.
-
 ## From milestone 4d
 
 **A group whose `minReplicas` is 6 or more gives up after a single round of
