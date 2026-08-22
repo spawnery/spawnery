@@ -3675,10 +3675,10 @@ indistinguishable from a correct one until something downstream behaves
 strangely. Half a day was spent on this one, most of it suspecting the reverse
 proxy.
 
-**`syncOccupiedLabel` runs, and the entry below can be closed.** The "On the
-RBAC audit" list records that `required.go`'s `Why` for `pods: patch` names
-`syncOccupiedLabel` — the Server controller's, singular — while
-`ProxyGroupReconciler.syncOccupiedLabels` is what runs on every pass. Both were
+**`syncOccupiedLabel` runs.** The "On the RBAC audit" list used to record that
+`required.go`'s `Why` for `pods: patch` named `syncOccupiedLabel` — the Server
+controller's, singular — while `ProxyGroupReconciler.syncOccupiedLabels` is
+what runs on every pass. That entry is gone: the `Why` now names both. Both were
 driven by hand-labelling pods `spawnery.cloud/occupied=true` and watching the
 operator remove the label, which is the same `Patch` call the grant exists for:
 `rest_client_requests_total{method="PATCH"}` moved 1→3 for the two proxy pods
@@ -4021,44 +4021,9 @@ intentional — the following points each concern only one of the two halves.
   with `readManifest`; their floor-not-exact-value assertions are otherwise
   unchanged.
 - **Nothing enforces that `Why` is filled in and `Required` is free of
-  duplicates.** `Compare` collects duplicates, and the last one wins.
-- **The `configmaps` grant's `Why` no longer names everything that uses it.**
-  `internal/rbacaudit/required.go` documents `get`/`list`/`watch`/`create`/
-  `update` on `configmaps` as `Bootstrapper.Ensure`'s CA ConfigMap alone.
-  Since milestone 3b, `ServerGroupReconciler` and `ProxyGroupReconciler`
-  create and update the same kind of object under the same grant. The
-  permission itself is correct — the group ConfigMaps and the CA ConfigMap
-  really do share one verb set — only the documentation trailed behind the
-  second consumer.
-- **The `pods: patch` grant's `Why` names the one call site this harness never
-  reaches. — the call site is now measured; the `Why` is still short by one.**
-  Driven on 2026-08-20 by hand-labelling pods `spawnery.cloud/occupied=true`
-  and watching the operator take the label off again, which is the same
-  `r.Patch` call: the counter moved 1→3 for the two proxy pods, then 3→4 for
-  the lobby's server pod — the named singular site. A real join later drove
-  both directions, 8→12, with the labels appearing on their own and going away
-  on disconnect. So the `Why` names something real. What remains is smaller and
-  still true: the grant has **two** call sites and the `Why` names one, so a
-  reader tracing the permission from the audit finds the site the harness
-  cannot reach and not the one that runs on every pass. Same shape as the entry above it, found by milestone 6a's Task 8
-  while measuring what the driven run does and does not exercise.
-  `internal/rbacaudit/required.go` documents `pods: patch` as
-  "syncOccupiedLabel patches the occupied label" — that is
-  `ServerReconciler.syncOccupiedLabel`, whose guard runs through `isOccupied`
-  and needs `wasRegistered` to be true, which needs an agent to have registered,
-  which never happens in a harness where no image resolves. The grant is
-  nevertheless exercised on every run, by a second call site the `Why` does not
-  name: `ProxyGroupReconciler.syncOccupiedLabels`
-  (`internal/controller/proxygroup_controller.go`), whose rule is
-  `proxyOccupiedForBudget` — a proxy pod the registry has never heard from
-  counts as occupied until `phase.StreamDownGrace` (15s) has passed, whatever
-  its readiness, so every proxy pod gets the label patched on and then off
-  again within its first fifteen seconds. Twenty denials naming
-  `cannot patch resource "pods" ... "controller":"proxygroup"` were observed in
-  the mutation run, which is what makes this measured rather than reasoned.
-  The permission itself is correct and belongs in the table; only its `Why` is
-  incomplete, and nobody should read "`pods: patch` was exercised" as evidence
-  that occupied-label sync for *Servers* has ever run here.
+  duplicates.** `Compare` collects duplicates, and the last one wins. This is
+  what let two `Why` lines go stale unnoticed until someone read them against
+  the code; both are corrected now, and nothing stops the next one.
 
 ## Small things
 

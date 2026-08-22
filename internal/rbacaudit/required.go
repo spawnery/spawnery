@@ -106,12 +106,14 @@ var RequiredCluster = []Permission{
 
 	// Namespace bootstrap — Bootstrapper.Ensure keeps the CA ConfigMap and
 	// the server and proxy ServiceAccounts current in every namespace that
-	// runs pods.
-	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure reads the CA ConfigMap, and Store.namespaceHasCA reads it again in every namespace with a Network while a CA rotation's gate is checking who has caught up"},
-	{Group: "", Resource: "configmaps", Verb: "list", Why: "the restricted cache over the CA ConfigMaps"},
-	{Group: "", Resource: "configmaps", Verb: "watch", Why: "the restricted cache over the CA ConfigMaps"},
-	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure creates the CA ConfigMap"},
-	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure carries a changed CA forward"},
+	// runs pods. The configmaps grant is shared: each group reconciler writes
+	// its own ConfigMap under the same verbs, which is why the Why lines below
+	// name both consumers rather than the bootstrapper alone.
+	{Group: "", Resource: "configmaps", Verb: "get", Why: "Bootstrapper.Ensure reads the CA ConfigMap, CreateOrUpdate in ServerGroupReconciler.reconcileConfigMap and ProxyGroupReconciler.reconcileConfigMap reads the group's, and Store.namespaceHasCA reads the CA ConfigMap again in every namespace with a Network while a CA rotation's gate is checking who has caught up"},
+	{Group: "", Resource: "configmaps", Verb: "list", Why: "the restricted cache over the CA ConfigMaps and the group ConfigMaps, both of which carry the managed-by label the cache selects on"},
+	{Group: "", Resource: "configmaps", Verb: "watch", Why: "the restricted cache over the CA ConfigMaps and the group ConfigMaps, both of which carry the managed-by label the cache selects on"},
+	{Group: "", Resource: "configmaps", Verb: "create", Why: "Bootstrapper.Ensure creates the CA ConfigMap, and CreateOrUpdate in ServerGroupReconciler.reconcileConfigMap and ProxyGroupReconciler.reconcileConfigMap creates the group's"},
+	{Group: "", Resource: "configmaps", Verb: "update", Why: "Bootstrapper.Ensure carries a changed CA forward, and the same two reconcileConfigMap calls carry a changed group config forward"},
 
 	{Group: "", Resource: "serviceaccounts", Verb: "get", Why: "Bootstrapper.ensureServiceAccounts checks the server and proxy ServiceAccounts"},
 	{Group: "", Resource: "serviceaccounts", Verb: "list", Why: "the restricted cache over the server and proxy ServiceAccounts"},
