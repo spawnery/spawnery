@@ -13,67 +13,6 @@ decisions live in
 `superpowers/specs/2026-08-10-velocity-image-design.md` and in
 `superpowers/specs/2026-08-11-velocity-agent-design.md`.
 
-## Preconditions for milestone 2c (the Kotlin agent) — met
-
-The three obligations below are discharged. They are kept rather than deleted,
-because the reasoning behind each is what a second agent — Velocity, in
-milestone 3 — has to satisfy all over again, and only the reasoning makes that
-legible.
-
-**The Kotlin agent must reconnect with overlap.** On connect the operator
-announces with `SessionDeadline{renewAfterSeconds, hardDeadlineSeconds}` when it
-will close the stream hard (480/600 seconds today). If the agent does not open a
-new stream before `renewAfterSeconds` while the old one is still running, every
-server drops out of `Ready` on the rhythm of the hard deadline, deregisters from
-the proxies and collects a readiness loss — a home-made flap counter (design,
-section 7.1). `internal/agentserver` only supplies the operator half of this
-(`Registry.Supersede` carries the readiness of a superseding stream over);
-without an agent that actually reconnects before the deadline it has no effect.
-
-*Met* by `SessionLoop`, which opens the replacement stream and only retires
-the outgoing one once the operator has answered on the replacement. It lived
-in `agent/paper/src/main/kotlin` when this precondition was written; milestone
-3c's Gradle split moved it to `agent/common/src/main/kotlin` so the Velocity
-agent could run the identical loop rather than a copy of it, and every claim
-below about its behaviour still holds of the shared class. That last clause is not decoration: an earlier
-version retired on the local `Hello` call, which travels an established
-connection and therefore beats a greeting that still needs TCP and TLS, so the
-operator saw `leave()` then `enter()` — a `Disconnect` followed by a `Connect`
-rather than a `Supersede` — and every server would have dropped out of `Ready`
-on every renewal. Phase 1 of `make agent-test` is the standing proof, on the
-operator's side of the wire.
-
-**`Hello{ready:false}` cannot lower a readiness that was once set.**
-`registry.MarkReady` is only called on `Hello{ready:true}` and on the standalone
-`Ready` message; `Hello{ready:false}` is a no-op for the registry. So an agent
-cannot report itself as "connected, but no longer ready" without dropping the
-connection — only a real break or a supersede lowers readiness. It gets sharper
-in a second place: if a stream really breaks before its teardown path runs, and a
-new one supersedes it in the meantime, `Supersede` carries the old readiness
-forward — possibly that of a process that has since restarted. For the Kotlin
-agent that means: "briefly not ready, but still connected" cannot be expressed
-with this contract.
-
-*Met* by not needing it: the Paper agent latches readiness once the server is
-up and never lowers it, so the gap in the contract is never reached. A Velocity
-agent that wants to express "draining, still connected" will reach it.
-
-**The interceptor reads `Bearer ` character for character, and `RoleForMethod`
-matches the method on its suffix.** `internal/grpcauth/interceptor.go`
-recognizes the prefix `"Bearer "` exactly like that — not `bearer`, not `Bearer`
-with two spaces — and the method mapping looks at the end of the full gRPC method
-name (`.../ServerSession`). Both fail closed: a mismatched spelling leads to "no
-token", an unknown method to no role at all and therefore to `Unimplemented`
-before the handler runs. That is not a hole, but the first half is an obligation
-on the Kotlin agent's side, exactly like the overlapping reconnect: whoever
-assembles the header themselves has to set it character for character, or every
-session is rejected without the cause being visible in the error.
-
-*Met* by `BearerCredentials`, and checked twice: once in the plugin's own unit
-tests, and once byte for byte by the stub operator in `make agent-test`, which
-compares the header it received against the literal string rather than parsing
-it.
-
 ## From milestone 2b (the base image)
 
 **The Darwin machine cannot build the image.** A Linux image needs a Linux
