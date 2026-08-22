@@ -12,9 +12,17 @@
 #
 # Exit status:
 #   0  the ci.yml run for <sha> on master, triggered by the push event,
-#      concluded success.
-#   1  anything else: no such run exists, it concluded something other than
-#      success, or it never finished within CI_WAIT_LIMIT.
+#      concluded success. Nothing else exits 0.
+#   1  every refusal this script decides for itself: wrong argument count, no
+#      such run, a run count that is not a number, a conclusion other than
+#      success, or a run still unfinished at CI_WAIT_LIMIT.
+#   *  whatever a tool it runs exited with, propagated by `set -e -o pipefail`
+#      rather than translated into 1. Measured: `jq` exits 5 on stdout that is
+#      not JSON, and a missing `jq` or `gh` exits 127; a failing `gh api` exits
+#      with gh's own status. These are not enumerated because the list belongs
+#      to those tools rather than to this script -- what this script promises
+#      is only the first line, that no path out of here except an explicit
+#      success returns 0.
 #
 # It queries /actions/workflows/ci.yml/runs and reads the *run's* conclusion,
 # never a job's. ci.yml has four jobs -- test, lint, deps and e2e -- and a run
@@ -37,10 +45,15 @@
 #   GH_TOKEN        read by `gh` itself, the same as every other script here
 #                    that shells out to it.
 #   CI_WAIT_LIMIT    seconds to keep polling a run that has not completed.
-#                    Default 1200 (20 minutes), because that is roughly what
-#                    the slowest job here (e2e, timeout-minutes: 45) takes on
-#                    a warm runner; see ci.yml's own timeout-minutes comments
-#                    for where the individual job budgets come from.
+#                    Default 1200 (20 minutes): roughly three times the
+#                    longest ci.yml run observed, which the design measured at
+#                    four to seven minutes. That leaves room for a queued
+#                    runner without letting a wedged run hold a release job
+#                    open indefinitely. Deliberately not sized against
+#                    ci.yml's timeout-minutes (e2e budgets 45 for a run that
+#                    takes single-digit minutes): those are numbers chosen to
+#                    stop a wedged job, not durations, and waiting a released
+#                    tag out on one would be waiting on the wrong quantity.
 #   CI_RUNS_CMD      **the seam, not a configuration knob.** When set, it
 #                    replaces the `gh api` call below -- its own stdout is
 #                    read as the run list, and no network request is made.
@@ -48,12 +61,18 @@
 #                    this script a fixture: an in-progress run cannot
 #                    otherwise be produced against live history, since a
 #                    passing CI run finishes before a test could observe it
-#                    still polling. It follows hack/e2e.sh, which for the
-#                    same reason takes its cluster provider from the
-#                    environment rather than hard-coding one: "the script
-#                    deliberately hard-codes neither the scope nor the
-#                    provider; it reads them from the environment." A caller
-#                    outside the test has no reason to ever set this.
+#                    still polling. hack/e2e.sh is the nearest precedent --
+#                    "kind runs under rootless podman, which needs both an
+#                    environment variable and a systemd scope. The script
+#                    deliberately hard-codes neither" -- but it is a weaker
+#                    one than it looks: everything e2e.sh takes from the
+#                    environment is a *value* (CLUSTER, E2E_KEEP, DEADLINE,
+#                    KIND_EXPERIMENTAL_PROVIDER), never a command to run.
+#                    This variable is a command, which is a step further than
+#                    anything else in hack/ goes, and the reason it is
+#                    defensible here is the paragraph above and not the
+#                    precedent. A caller outside the test has no reason to
+#                    ever set this.
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
@@ -70,9 +89,9 @@ while true; do
 	# ${CI_RUNS_CMD:-gh api ...}: unquoted and unset by default, so bash
 	# expands it to nothing and the words that follow (the real `gh api`
 	# invocation) run as normal. When the test sets it, it is a command name
-	# -- e.g. `cat /path/to/fixture.json` -- split on whitespace the same way
-	# hack/e2e.sh's own environment-provided commands are; not `eval`, which
-	# would let a fixture's content reinterpret shell metacharacters.
+	# -- e.g. `cat /path/to/fixture.json` -- split on whitespace by the same
+	# unquoted expansion; not `eval`, which would let a fixture's content
+	# reinterpret shell metacharacters.
 	runs="$(${CI_RUNS_CMD:-gh api "/repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&branch=master&per_page=1"})"
 	count="$(printf '%s' "${runs}" | jq '.workflow_runs | length')"
 	if [ "${count}" -eq 0 ]; then
