@@ -872,21 +872,6 @@ gone, and a `Server` whose group is gone — and neither is this one. The other
 four entries that stood in this section are closed and removed; see the commit
 that removed them for what closed each.
 
-## Closed by milestone 4a
-
-**Nothing bounded the reported `slots` against the group's `maxPlayers`.**
-`internal/agent/registry.go` rejected a player count above the reported
-`slots`, but checked `slots` itself against nothing, even though the operator
-knows the upper bound and handed it to the pod itself as `SPAWNERY_MAX_PLAYERS`.
-Once `slots` started feeding a scaling decision this milestone, a compromised
-pod reporting `slots: 1000000` at zero players could have made its whole group
-look permanently spacious and suppressed every scale-up for all of its
-servers — exactly the effect across pod boundaries that milestone 2a otherwise
-rules out. Closed by `clampReport` in `internal/controller/candidates.go`: the
-reported `slots` is clamped to the group's `maxPlayers`, and the reported
-`players` is clamped to the (possibly lower) result, before either reaches
-`DecideSize`.
-
 ## From milestone 4a
 
 **`status.freeSlots` and the scaler's own figure are two numbers.**
