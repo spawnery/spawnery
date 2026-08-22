@@ -2217,28 +2217,19 @@ blocked status update for a confident wrong report.
 
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 
-**`spawnery-system` is hard-wired into the RBAC markers.** The
-`+kubebuilder:rbac` markers for the TLS secret (`internal/certs/store.go`) and
-for the leases (`internal/controller/setup.go`) carry `namespace=spawnery-system`
-as a literal. If the operator runs in another namespace, `controller-gen` still
-produces a `Role` that binds in `spawnery-system` — the actual namespace stays
-without secret and lease permissions, and the operator fails at its first
-`certs.Ensure` or during leader election, without RBAC itself ever reporting
-where the problem is. The Helm chart has to parameterize the namespace here, not
-only in the object names.
-
-*Closed by milestone 6d, for the namespace the operator actually runs in.*
-`hack/chart-templates.sh` rewrites the generated Role's `namespace:` field to
-`{{ .Release.Namespace }}` in `charts/spawnery/templates/rbac.yaml`. The two
-markers themselves are unchanged — controller-gen needs *some* namespace to
-emit a Role at all — but each now carries a comment saying the literal is a
-placeholder the render step replaces, not a statement about where the
-operator runs. See "From milestone 6d" below.
-
 **Completeness of the permission table.** The audit in `internal/rbacaudit`
 catches drift between table and role. If a permission is missing from both, it
 stays green — only the operator running under its ServiceAccount in a real
 cluster proves that (level B of the E2E design).
+
+*That run has happened, twice over, and the blind spot is now bounded rather
+than open.* `make e2e` runs the operator as a Deployment under
+`spawnery-operator` in a kind cluster, and a real installation has run under
+the same ServiceAccount on RKE2 since 2026-08-20 — through a CA rotation,
+among other things. What those two prove is exactly the paths they exercise:
+a permission missing from both table and role on a path neither touches is
+still green here and still absent there. So the entry is not closed; it is
+narrowed to the code the driven runs do not reach.
 
 **No `--leader-election-namespace`.** With the default flags, a local run
 outside the cluster fails; `--leader-elect=false` is required.
