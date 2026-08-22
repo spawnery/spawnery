@@ -3916,6 +3916,50 @@ branch, so it too is a one-time post-merge check for whoever owns this
 repository: `gh workflow run release.yml`, once, and read what it says it
 would push.
 
+**CI builds one of the three image derivations the release publishes, so a
+stale Paper or Velocity hash is green all the way to the tag.** Recorded
+while writing the 2026-08-22 green-CI gate, whose design had claimed the
+opposite. `hack/e2e.sh` runs `nix build .#operator-image`, and that is the
+only image derivation any job in `ci.yml` reaches: `make test` and `make
+lint` enter Nix at all only through `nix develop`, and the `deps` job's
+`make agent-deps` builds `.#agents.mitmCache.updateScript` and nothing else.
+`make image-test`, `make velocity-image-test` and `make image-repro` — the
+targets that do build `.#paper-image` and `.#velocity-image` — are in no CI
+job, and the Makefile says so of each in its own comment. Verified by
+`make -n` on all four CI targets in the dev shell, and by `nix path-info
+--derivation -r .#operator-image`, whose 1431-derivation closure contains
+`spawnery-operator` and no `paper`, `velocity` or `agents` derivation at
+all.
+
+What that leaves uncovered is not hypothetical: `nix/paper.nix` carries two
+fixed-output `hash =` values (the paperclip launcher and Mojang's server
+jar) and `nix/velocity.nix` a third, and nothing outside a release ever
+fetches against them. `flake.nix`'s five `vendorHash` copies are covered,
+but only accidentally — they all hold the same value, and one of the five is
+`spawnery-operator`'s, which is why the `e2e` job caught the 2026-08-22
+mismatch. Move a Paper or Velocity download instead and the first thing to
+notice is `hack/publish.sh` on a runner, after a `v*` tag has been pushed
+and the release has therefore already been announced. That is the 2026-08-22
+failure exactly, one derivation over, and the green-CI gate does not close
+it: the gate asks whether CI passed, and CI passing is the premise of this
+entry rather than a defence against it.
+
+One thing does build all three, on a slower clock: `nightly.yml` runs `make
+image-repro` at 03:17 UTC, and that target builds `.#paper-image`,
+`.#velocity-image`, `.#operator-image` and `.#agents`, each twice. So a
+stale Paper or Velocity hash would go red there within a day. But its own
+comment says it "does not block a pull request", nothing consults it at tag
+time — the green-CI gate deliberately does not, because a nightly's signal
+is not per-commit and would need its own staleness rule — and a nightly is
+precisely the kind of standing red this repository has already let run three
+times unread. Whether a red nightly gets noticed is the open question, and
+it is the same question, not a different one.
+
+Closing the gap properly means building all three per push: minutes of
+runner time on every commit for derivations that change a handful of times a
+year. Nobody has made that trade, which is why this is an entry and not a
+commit.
+
 ## From the RKE2 rollout (milestone 6, driven 2026-08-20)
 
 Driven against `paulwtf`; the evidence is `docs/runbook-milestone-6-rollout.md`

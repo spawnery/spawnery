@@ -27,9 +27,12 @@ commit whose CI run is not green.**
 
 ## 2. What this is not, and why it is this small
 
-Two other gaps were proposed alongside this one. Both dissolved when the code
-was read rather than remembered, and recording that is what keeps this design
-from growing.
+Two other gaps were proposed alongside this one. One dissolved when the code
+was read rather than remembered. The other shrank instead of dissolving — the
+first reading of it was itself made from one pass over the code, and a second
+pass found the smaller thing that is genuinely there — and what is left of it
+is recorded outside this design. Keeping both accounts, and being explicit
+about which is which, is what keeps this design one step.
 
 **"The tag guard accepts a match against either version, so a stale image can
 ride along."** The preflight at `release.yml:89` does accept a tag that equals
@@ -41,14 +44,26 @@ published at the versions flake.nix names, so <tag> releases nothing. Bump
 imageVersion or operatorVersion in flake.nix and tag again.` The hole was in
 reading the preflight in isolation, not in the workflow.
 
-**"CI does not build the Nix derivations the release path builds."** It does,
-in the `e2e` job, and the table above is the proof. `make test` genuinely does
-not — it runs `go test` and never enters Nix — but the conclusion that nothing
-catches it was wrong.
+**"CI does not build the Nix derivations the release path builds."** It builds
+one of the three. The `e2e` job runs `hack/e2e.sh`, which runs `nix build
+.#operator-image`, and the table above is the proof that this is what had
+already caught the 2026-08-22 `vendorHash` mismatch. It is also the only image
+derivation any CI job reaches: `make test` and `make lint` enter Nix only
+through `nix develop`, and the release publishes `paper-image` and
+`velocity-image` beside the operator's.
 
-So the remaining gap is not machinery that is missing. It is that a signal the
-repository already produces is only consulted by a human, and on the one day it
-mattered it was not.
+So the original claim was too broad and this dissolution of it, as first
+written, was too generous. What is true is narrower: the derivation the
+incident happened to be about is covered, and the two carrying their own
+fixed-output hashes are not. **That leftover gap is real and outlives this
+branch, so it is recorded where it will be found rather than restated here:
+`docs/known-issues.md`, under "From milestone 6e (CI)".** It is out of scope
+for this design for the reason the rest of this section is about — closing it
+is machinery, and this design is one step.
+
+The remaining gap this design *does* close is not machinery that is missing.
+It is that a signal the repository already produces is only consulted by a
+human, and on the one day it mattered it was not.
 
 **What this does not do:** it adds no check beyond the tagged commit. It does
 not consult `nightly.yml`, whose signal is not per-commit and would need its
