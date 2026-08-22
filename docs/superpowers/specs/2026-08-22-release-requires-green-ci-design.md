@@ -155,6 +155,32 @@ The workflow's `permissions` block gains `actions: read`, which is what reading
 another workflow's runs requires. It keeps `contents: write` and
 `packages: write`.
 
+**And it makes an existing exemption more reachable, which is the one cost
+that is not paid in runner minutes.** `release.yml`'s publishes-nothing guard
+disarms itself when `GITHUB_RUN_ATTEMPT > 1`, and its comment explains why: on
+a re-run, "all three images are already on the registry" is the normal state
+rather than the mistake, and failing there would stop a recovery attempt
+before it reached the digest and Release steps it was re-run for.
+
+This design adds a *designed-in* first-attempt failure whose documented remedy
+is a re-run — CI slower than `ciWaitLimit`, the gate times out, the owner
+clicks Re-run. On that second attempt the publishes-nothing guard is disarmed,
+so a tag that bumps nothing in `flake.nix` gets a `::notice::` and a GitHub
+Release where on a first attempt it would have got the loud refusal and "Bump
+imageVersion or operatorVersion in flake.nix and tag again".
+
+Nothing about that is new — any transient failure on attempt 1 has always had
+the same effect — but this is the first change that raises how often attempt 2
+happens, and it raises it on purpose. **No code change is proposed here.**
+Narrowing the exemption, say by keying it on whether an earlier attempt
+actually published something rather than on the attempt number alone, is a
+change to a guard §2 promises to leave exactly where it is, and making it as a
+side effect of adding a wait is the scope creep §2 exists to refuse. What this
+paragraph is for is that the two are now coupled: whoever next touches
+`ciWaitLimit` or that exemption should read this and the comment on
+`release.yml`'s publish loop together, because neither one's reasoning is
+complete without the other's.
+
 ## 6. How it is proven
 
 This is a workflow step, so the levels available to it are reading and running
