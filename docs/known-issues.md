@@ -3215,6 +3215,16 @@ underlying flake having changed. A red `test` job in CI's first weeks, on
 this test specifically, is a measurement of how often the flake already
 happened to occur, not a regression CI introduced.
 
+Two days of that rhythm have now run, and the flake has not taken any of the
+chances. Measured 2026-08-22 over every `ci.yml` run the API lists — 61 runs
+since 2026-08-20T08:35Z, 47 from pushes to `master` and 14 from pull
+requests — **the `test` job has never concluded `failure`.** The ten red runs
+are all elsewhere: five `e2e` (the Nix `vendorHash` mismatch of 2026-08-22 and
+its predecessors) and five `lint`/`deps` on milestone 6e's own branch. So this
+entry is still one data point, but it is one data point against roughly sixty
+further executions of the suite rather than against nothing, and the next
+person to meet it should weight it accordingly.
+
 ## From milestone 6e (CI)
 
 GitHub Actions now runs three workflows: `.github/workflows/ci.yml` blocks
