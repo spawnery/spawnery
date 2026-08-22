@@ -137,7 +137,7 @@
             pname = "spawnery-slp";
             version = "0.1.0";
             src = ./.;
-            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
             subPackages = [ "cmd/spawnery-slp" ];
             # Static, because the image carries no libc of its own for it.
             env.CGO_ENABLED = 0;
@@ -151,7 +151,7 @@
             pname = "spawnery-stubop";
             version = "0.2.0";
             src = ./.;
-            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
             subPackages = [ "cmd/spawnery-stubop" ];
             env.CGO_ENABLED = 0;
           };
@@ -166,7 +166,7 @@
             pname = "spawnery-join";
             version = "0.2.0";
             src = ./.;
-            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
             subPackages = [ "cmd/spawnery-join" ];
             env.CGO_ENABLED = 0;
           };
@@ -178,7 +178,7 @@
             pname = "spawnery-config";
             version = "0.1.0";
             src = ./.;
-            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
             subPackages = [ "cmd/spawnery-config" ];
             # Static, because neither image carries a libc of its own for it.
             env.CGO_ENABLED = 0;
@@ -201,7 +201,7 @@
             pname = "spawnery-operator";
             version = operatorVersion;
             src = ./.;
-            vendorHash = "sha256-wFmml1cI2CocLj3ggu6PrirliDB6nSOBK6rQptMcYF0=";
+            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
             subPackages = [ "cmd/spawnery-operator" ];
             # Static, because the image carries no libc of its own for it.
             env.CGO_ENABLED = 0;
