@@ -84,6 +84,30 @@ sha="$2"
 
 CI_WAIT_LIMIT="${CI_WAIT_LIMIT:-1200}"
 
+# Every refusal below goes through here, and every refusal ends in an
+# instruction. release.yml's other guards already do this -- "Bump Chart.yaml's
+# version", "Bump imageVersion or operatorVersion in flake.nix and tag again" --
+# and the three messages this script used to print stopped at the state they
+# found, leaving the reader to work out what to do about it at whatever hour a
+# release goes wrong.
+#
+# ::error:: rather than plain stderr, because that is what puts the line on the
+# run's summary page. A message only in a job log is a message somebody has to
+# already be looking for; this file's own subject is a signal nobody read.
+# release.yml already speaks this dialect (::notice:: in the publish loop).
+#
+# On stdout, not stderr: workflow commands are documented as being read from a
+# step's stdout, and there is no reason to gamble an annotation on stderr also
+# being scanned. Under any other caller the prefix is nine characters in front
+# of a sentence that still reads.
+#
+# One line per refusal, because ::error:: takes one line -- and a message read
+# under time pressure should fit on one regardless.
+refuse() {
+	echo "::error::$*"
+	exit 1
+}
+
 waited=0
 while true; do
 	# ${CI_RUNS_CMD:-gh api ...}: unquoted and unset by default, so bash
@@ -92,7 +116,17 @@ while true; do
 	# -- e.g. `cat /path/to/fixture.json` -- split on whitespace by the same
 	# unquoted expansion; not `eval`, which would let a fixture's content
 	# reinterpret shell metacharacters.
-	runs="$(${CI_RUNS_CMD:-gh api "/repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&branch=master&per_page=1"})"
+	gh_status=0
+	runs="$(${CI_RUNS_CMD:-gh api "/repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${sha}&event=push&branch=master&per_page=1"})" || gh_status=$?
+	if [ "${gh_status}" -ne 0 ]; then
+		# Left to set -e this exited with gh's status and this script said
+		# nothing at all, so the owner got gh's raw error -- often a bare
+		# HTTP 404 -- and no hint that it is this step's permission that is
+		# usually missing rather than the run. The status is passed through
+		# rather than flattened to 1, per the exit contract in the header.
+		echo "::error::could not ask GitHub for ci.yml's runs on ${sha}; gh exited ${gh_status} and its own error is above. Check GH_TOKEN is set and that the token carries actions: read on ${repo} -- release.yml grants exactly that, so a 404 here is usually the token rather than a missing run."
+		exit "${gh_status}"
+	fi
 	count="$(printf '%s' "${runs}" | jq '.workflow_runs | length')"
 	if [ "${count}" -eq 0 ]; then
 		# Absence is not permission. A tag on a commit CI never saw is exactly
@@ -100,8 +134,7 @@ while true; do
 		# script exists not to fall into is treating this case as green
 		# because jq's .conclusion on an empty list is the *string* "null",
 		# which a careless `!= failure` would pass straight through.
-		echo "no ci.yml run for ${sha} on master (event=push): CI never ran on this commit" >&2
-		exit 1
+		refuse "no ci.yml run for ${sha} on master (event=push): CI never ran on this commit, so nothing has checked it. Push the commit to master, let ci.yml finish, and tag the commit whose run went green."
 	fi
 
 	status="$(printf '%s' "${runs}" | jq -r '.workflow_runs[0].status')"
@@ -115,8 +148,7 @@ while true; do
 			# it has not answered yet. A release owner acts on those two
 			# facts differently, and folding this into "ci.yml ... concluded
 			# ..." below would report a conclusion that was never reached.
-			echo "ci.yml on ${sha} did not complete within ${CI_WAIT_LIMIT}s (still ${status}): ${url}" >&2
-			exit 1
+			refuse "ci.yml on ${sha} did not complete within ${CI_WAIT_LIMIT}s (still ${status}): ${url} -- CI has not answered yet, which is not the same as CI being red. Watch that run, and re-run this job once it is green."
 		fi
 		sleep 15
 		waited=$((waited + 15))
@@ -131,6 +163,5 @@ while true; do
 	if [ "${conclusion}" = "success" ]; then
 		exit 0
 	fi
-	echo "ci.yml on ${sha} concluded ${conclusion}, not success: ${url}" >&2
-	exit 1
+	refuse "ci.yml on ${sha} concluded ${conclusion}, not success: ${url}. Fix what that run found, push the fix to master, and tag the commit whose run is green."
 done
