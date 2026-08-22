@@ -859,70 +859,18 @@ actual `kubectl delete` on an actual held connection forced the question.
 
 ## Preconditions for milestone 4 (scaling and drain)
 
-**The PodDisruptionBudget has no counterpart.** Milestone 1 delivers the
-protection of occupied pods, but not the detection of nodes that have become
-`unschedulable` along with a proactive drain, as foreseen in spec 5.1 and 7.
-Until then the operator can block a node drain without being able to release it
-again. Both belong in one milestone: 4c, which owns node drain.
-
-**Terminating pods count as "process gone".** `isOccupied` treats a pod with a
-set `deletionTimestamp` as free of sessions, even though the process is still
-running during the grace period and players may still be connected. As a result
-`minAvailable` drops by one for the duration of the grace period while the pod's
-label still matches the selector. Not reproducible in envtest, because there is
-no kubelet there — this needs a real cluster. Belongs to 4c, alongside node
-drain, which needs the same real cluster to prove.
-
-**Exponential backoff per group.** Spec 7 requires it along with the condition
-`Degraded`/`CrashLoopBackoff` and stopping further attempts. Milestone 1 instead
-has only an upper bound of one retained failure per group. Belongs to 4b,
-alongside its per-group backoff on rolling-update failures.
-
-*Met* by milestone 4d's `CountFailures` and `DecideBackoff`
-(`internal/controller/backoff.go`): a counter on `ServerGroupStatus`
-(`consecutiveFailures`, `lastFailureAt`) tracks the streak, `ConditionBackingOff`
-reports the wait with the count and the remaining time in its message, and at
-six consecutive failures the group sets `Degraded` with reason
-`CrashLoopBackoff` and creates nothing further until `metadata.generation`
-moves. It shipped as its own sub-milestone rather than folded into 4b — cut out
-during 4b's own brainstorm on the measurement that it shares no code with the
-rolling update — but it is the same backoff this entry pointed at. The bound
-this entry named, "an upper bound of one retained failure per group," is
-`maxRetainedFailures = 1` and it stays: it still caps the footprint of a
-failure, not the rate of retrying after one, which is now bounded separately.
-See `docs/superpowers/specs/2026-08-13-per-group-backoff-design.md`.
-
-**`ProxyGroupReconciler.pods()` has no expectations tracking — half of this is
-now closed.** The `ServerGroup` side is: `internal/controller/expectations.go`
-gives `ServerGroupReconciler` create and delete reservations keyed by name, so
-a reconcile its own create event triggers no longer reads a stale cache, sees
-the group still short, and creates a second server. `ProxyGroupReconciler.pods()`
-is untouched — it still lists pods through the manager's plain cached `List`,
-with no reservation for a create it just issued, so a reconcile the group's own
-pod-create event triggers can still create a second pod and have the next
-reconcile delete the surplus once the cache catches up. This now belongs to
-4c, the milestone that makes proxy replica counts move: the mechanism to copy
-already exists in `expectations.go`, so 4c does not have to design it again.
-
-*Met* by milestone 4c-2, which copied it rather than designing it again, as
-this entry expected. `ProxyGroupReconciler` now carries an `Expectations`
-field, `pods()` observes the group's live pod list through
-`expectations.observePods` — a second, narrow method beside `observe`, because
-a proxy has no per-pod CR and therefore no retire reservation to model — and
-`reconcileReplicas` subtracts what is already reserved from `DecideRollout`'s
-create count and reserves each create and delete it carries out. The
-subtraction is arithmetic rather than a bare gate, matching what
-`ServerGroupReconciler.size` does through `DecideSize`: capping at zero the
-moment anything is pending would also block a create the group still
-legitimately needs beyond the one already reserved. 4c-2 is also what made the
-race ordinary rather than rare, since a rollout creates a pod per replacement
-instead of only at scale-up.
-
 **Orphaned `Server`s without a pod.** The sweep covers "pod without CR" and
 "server without group", but not "CR without pod": that is handled by the state
 machine through `PodLost`, which only applies once `status.podName` has been
 written. A server that never got a pod would stay in `Pending` and occupy its
 slot. Belongs to 4c.
+
+*4c came and went without it, and this is now the only unmet precondition
+milestone 4 left behind.* Checked on 2026-08-22: `OrphanReconciler`'s own doc
+still names the two directions it sweeps — a managed pod whose `Server` is
+gone, and a `Server` whose group is gone — and neither is this one. The other
+four entries that stood in this section are closed and removed; see the commit
+that removed them for what closed each.
 
 ## Closed by milestone 4a
 
