@@ -988,6 +988,18 @@ around:
   rendered pod, so the group's namespace and name, the `Network`'s name, and
   the operator's own `--operator-namespace` (see the next bullet) all reach it,
   and a comparison run under different ones tells you nothing about your fleet.
+
+  There is a cheap *negative* filter to run first, and 2026-08-22's upgrade is
+  what showed it is worth having. The operator went from v0.1.2 to v0.2.0 on a
+  live cluster and nothing rolled: both proxies kept `pod-hash
+  2dd6593373a4ffd2` and 46 hours of uptime. `git diff v0.1.2..v0.2.0 --
+  internal/podspec/` explains why — one file moved, `netpol.go`, and only its
+  comments; that file renders a NetworkPolicy, not a pod. So if nothing in the
+  pod-render path changed between two builds, the digest cannot have moved and
+  no scratch cluster is needed. Note what it does not cover: the digest also
+  takes the group's namespace and name, the `Network`'s name and the agent
+  endpoint, so a clean diff rules out the code trigger only, never the
+  namespace one in the entry below.
 - **`spec.drain.timeoutSeconds` is the knob that bounds the damage**, and it is
   read from the current spec on every pass, so raising it on a group already
   rolling extends the drains still in flight. Raising it does not prevent a
