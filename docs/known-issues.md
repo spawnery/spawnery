@@ -791,11 +791,12 @@ drain logic itself:
   finishes the configuration phase Paper is waiting for. So the Paper agent
   reports zero players, and `Server.status.players` reads zero for a
   connection the proxy is actively holding open.
-- The drain's own exit condition is `internal/phase/phase.go:224`, inside the
-  `Draining` case: `if !in.Occupied() { ... Reason: ReasonDrained, Message:
-  "no players left" ... }`. `Occupied()` (`internal/phase/phase.go:146`) is
-  `in.PlayersStale || in.PlayersOnline > 0` — and with a stale-held client
-  Paper never counted, `PlayersOnline` is exactly zero.
+- The drain's own exit condition is inside the `Draining` case:
+  `if !in.Occupied() { ... Reason: ReasonDrained, Message: "no players left"
+  ... }` (`internal/phase/phase.go:247` and `:282` as of 2026-08-22).
+  `Occupied()` (`:166`) is `in.PlayersStale || in.PlayersOnline > 0` — and
+  with a stale-held client Paper never counted, `PlayersOnline` is exactly
+  zero.
 - Measured directly, in one `kubectl get` against the running cluster:
   `proxygroup/gateway-auto` showed `PLAYERS 1` in the same instant
   `server/lobby-bsvg` showed `PLAYERS 0`. Same player, same second, two
@@ -838,6 +839,13 @@ under a player the proxy was still counting.
    visible. Small is not the same as absent, and milestone 4 owns drain, so
    this is the milestone to decide whether `Occupied()` should ever
    incorporate what the proxy side reports.
+
+   *Milestone 4 finished without deciding it.* Checked on 2026-08-22:
+   `Occupied()` is still `in.PlayersStale || in.PlayersOnline > 0`, and
+   nothing in 4a through 4d consults the proxy side. The window is therefore
+   exactly as open as this entry described it, and it no longer has a
+   milestone assigned — whoever next touches drain inherits the question
+   rather than finding it already owned.
 
 **None of this branch's many reviews caught this**, and it is worth saying
 plainly why not, rather than filing it away as bad luck. The whole-branch
