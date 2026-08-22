@@ -16,10 +16,12 @@
 #   1  every refusal this script decides for itself: wrong argument count, no
 #      such run, a run count that is not a number, a conclusion other than
 #      success, or a run still unfinished at CI_WAIT_LIMIT.
-#   *  whatever a tool it runs exited with, propagated by `set -e -o pipefail`
-#      rather than translated into 1. Measured: `jq` exits 5 on stdout that is
-#      not JSON, and a missing `jq` or `gh` exits 127; a failing `gh api` exits
-#      with gh's own status. These are not enumerated because the list belongs
+#   *  whatever a tool it runs exited with, rather than translated into 1.
+#      Measured: `jq` exits 5 on stdout that is not JSON, and a missing `jq`
+#      or `gh` exits 127 -- both carried out by `set -e -o pipefail`. A
+#      failing `gh api` exits with gh's own status, and that one is explicit:
+#      the fetch ends in `|| gh_status=$?`, which set -e does not see, so the
+#      status is re-raised by hand a few lines further down. These are not enumerated because the list belongs
 #      to those tools rather than to this script -- what this script promises
 #      is only the first line, that no path out of here except an explicit
 #      success returns 0.

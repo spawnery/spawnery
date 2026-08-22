@@ -132,9 +132,14 @@ fi
 # but twenty minutes and a nonsense reason.
 #
 # So the assertion is on the speed as much as on the exit code. CI_WAIT_LIMIT
-# is left at its 1200s default on purpose: a short limit here would pass
-# whether the guard exists or not, and the point is that the script must not
-# reach the wait loop at all.
+# is left at its 1200s default because the case has to fail the way the
+# defect would be met in production -- but be clear about what that costs: a
+# short limit would catch a regression here just as well. Measured against
+# the pre-guard script, CI_WAIT_LIMIT=20 gives 31s elapsed, which trips the
+# >= 14 assertion, and the "integer expected" assertion trips at any limit at
+# all. What the default buys is nothing; what it costs is that a regression
+# hangs this test for twenty minutes instead of failing in forty seconds. If
+# that ever bites, lower it -- the assertions do the work, not the wait.
 # ---------------------------------------------------------------------------
 : >"$workdir/empty.txt"
 

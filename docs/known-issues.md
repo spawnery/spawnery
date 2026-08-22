@@ -3923,9 +3923,12 @@ opposite. `hack/e2e.sh` runs `nix build .#operator-image`, and that is the
 only image derivation any job in `ci.yml` reaches: `make test` and `make
 lint` enter Nix at all only through `nix develop`, and the `deps` job's
 `make agent-deps` builds `.#agents.mitmCache.updateScript` and nothing else.
-`make image-test`, `make velocity-image-test` and `make image-repro` — the
-targets that do build `.#paper-image` and `.#velocity-image` — are in no CI
-job, and the Makefile says so of each in its own comment. Verified by
+`make image-test`, `make velocity-image-test` and `make image-repro` — among
+the targets that do build `.#paper-image` and `.#velocity-image` — are in no
+CI job. Only `image-repro` and `agent-test` say as much in their own comments,
+and what they say is that they are not part of `test` or `all`, which is a
+narrower claim than this one: CI runs `make test`, `lint`, `agent-deps` and
+`e2e`, and never `make all`. Verified by
 `make -n` on all four CI targets in the dev shell, and by `nix path-info
 --derivation -r .#operator-image`, whose 1431-derivation closure contains
 `spawnery-operator` and no `paper`, `velocity` or `agents` derivation at
