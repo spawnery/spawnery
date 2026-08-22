@@ -1820,34 +1820,46 @@ It is benign, and that is the problem. The mechanism, as far as the evidence
 actually reaches:
 
 - The recreate path deletes the `Server` object at
-  `internal/controller/server_controller.go:348` and releases its finalizer at
-  `:340`, after which the object is genuinely gone.
+  `internal/controller/server_controller.go:389` and releases its finalizer at
+  `:381`, after which the object is genuinely gone. (Line numbers re-anchored
+  2026-08-22; they were `:348` and `:340` when this was written.)
 - A reconcile that fetched the object before that point — the reconciler reads
   through the manager's informer cache, which can hand back an object the API
   server has already removed — then writes to it and gets `NotFound` back.
 - Whichever write it was, the error escapes unwrapped and `Reconcile` returns
   it. controller-runtime logs it at `error` with a stacktrace and requeues; the
-  requeued pass fetches the `Server` at `:116`, where
+  requeued pass fetches the `Server` at `:144`, where
   `client.IgnoreNotFound(err)` treats the absence as ordinary, and returns
   cleanly. Nothing retries into a loop and no object ends up wrong — the
   2026-08-16 run's `Server` was recreated within a second of the delete and
   reached `Ready` 22 seconds later, with the error line in between.
 
 **Which write produced it is not determined by the log, and this entry does not
-guess.** Three writes on this path can land on a vanished object, and **none of
-the three tolerates `NotFound`**: the `Status().Update` after pod creation
-(`:319`), the `Update` that releases the finalizer (`:340`), and
-`applyDecision`'s closing `Status().Update` (`:685`, returned through `:333`).
-The last is the likeliest, being the write most reconciles of a live server
-reach — `:319` returns early on the pass that creates a pod, so it is not on
-this path at all unless a pod was just created — but the log carries no line
-number and nothing here distinguishes them. Anyone fixing this should reproduce it with a line-level log or a
+guess.** **Four** writes on this path can land on a vanished object, and **none
+of them tolerates `NotFound`**: the `Status().Update` after pod creation
+(`:360`), the `Update` that releases the finalizer (`:381`), the
+`Status().Update` that persists the registration intent (`:767`), and
+`applyDecision`'s closing `Status().Update` (`:871`). The last is the
+likeliest, being the write most reconciles of a live server reach — `:360`
+returns early on the pass that creates a pod, so it is not on this path at all
+unless a pod was just created — but the log carries no line number and nothing
+here distinguishes them.
+
+*It was three when this entry was written, and the fourth arrived by a route
+worth noticing.* `:767` is milestone 3a's own fix: `WasRegistered` is
+persisted with its own `Status().Update` before `Registrar.Register`, so a
+crash between the two finds the intent durable. That change was correct and
+carefully argued, and it added a write to this path without anybody connecting
+it to this entry — which is how the count in a document goes stale while every
+individual change is right. `ensureFinalizer`'s `Update` (`:563`) is a fifth
+write in this file and is **not** on this path; it runs on the way in, not on
+the way out. Anyone fixing this should reproduce it with a line-level log or a
 breakpoint first rather than trusting this paragraph's ordering.
 
 **The asymmetry worth noticing is between the deletes and the writes.** Both
 `Delete` calls on this path carry an explicit `&& !apierrors.IsNotFound(err)`
-— the pod delete at `:671` and the `Server` delete at `:348` — and none of the
-three writes carries the equivalent. That reads as an oversight rather than a
+— the pod delete at `:857` and the `Server` delete at `:389` — and none of
+the four writes carries the equivalent. That reads as an oversight rather than a
 decision; nothing in the surrounding comments argues for the difference.
 
 **Why this is worth an entry rather than a shrug.**
