@@ -23,11 +23,51 @@ rotates has to behave exactly as before. From there the bytes travel
 the `spawnery-ca` ConfigMap of every namespace.
 
 The consumer is `OperatorChannel.trustManager`, which parses the whole bundle
-with `CertificateFactory.generateCertificates` and **throws** on input that is
-not a certificate — its own test asserts that. So one bad byte in
-`ca-next.crt` does not cost a rotation; it costs every agent in every namespace
-its entire trust store. Compare the same damage to `ca.crt`, which `Ensure`'s
-`Validate`/`reissueOrIssue` path repairs by itself.
+with `CertificateFactory.generateCertificates`. So a bad `ca-next.crt` does not
+cost a rotation; it costs every agent in every namespace its entire trust
+store — the CA that is still signing included, because the failure is for the
+stream and not for the block. Compare the same damage to `ca.crt`, which
+`Ensure`'s `Validate`/`reissueOrIssue` path repairs by itself.
+
+> **Corrected after review, and measured.** This section, `parsableCert`'s doc
+> and the Go tests' failure messages all used to say that
+> `generateCertificates` "throws for the whole stream rather than skipping the
+> offending block" on anything that is not a certificate. Run against the
+> OpenJDK in this repository's devshell, mirroring `trustManager` exactly, that
+> is wrong in both directions:
+>
+> | second half of `good ca.crt ‖ slot` | result |
+> |---|---|
+> | plain garbage, no five-hyphen run | **OK**, n=1 |
+> | good certificate + trailing garbage | **OK**, n=2 |
+> | leading garbage line + good certificate | **OK**, n=2 |
+> | `-- this is not a certificate --` (two hyphens) | **OK**, n=1 |
+> | good certificate + a *second valid* certificate | **OK**, n=3 — all three trusted |
+> | PEM envelope around a non-certificate | **throws** |
+> | second block with malformed base64 | **throws** |
+> | a bare `-----not a header-----` line | **throws** |
+> | `-----BEGIN CERTIFICATE-----` with no footer | **throws** |
+> | a valid `EC PRIVATE KEY` block | **throws** |
+>
+> `X509Factory.readOneBlock` skips everything before the first line beginning
+> with a five-hyphen run and returns null at end of stream rather than
+> throwing. What kills the stream is **a line beginning with a five-hyphen run
+> that does not open a complete, decodable certificate block**; other stray
+> bytes are stepped over, and anything already parsed is kept. (A stream in
+> which *nothing* parsed and which was not empty throws "No certificate data
+> found", which is why `trustManager`'s own "not a certificate" test passes.)
+>
+> Every treatment in this design was and remains conservative, so none of them
+> changed because of this — but the reasoning left for the next maintainer was
+> false, and one Go fixture (`-- this is not a certificate --`) named an
+> outage the agent does not in fact suffer. §6 now requires a fixture that
+> genuinely throws, and `agent/common`'s own test pins the claim in Kotlin.
+>
+> The last row is the one that changes an *argument* rather than a fixture:
+> the multi-block mode §3 repairs is not an outage in the agent at all. It is
+> a **silent trust expansion** — every extra block a hand-edit pasted is
+> loaded into every agent's trust store as a CA. §3 is corrected accordingly;
+> the treatment is unchanged, and the reason for it is now the stronger one.
 
 Only a hand-edited secret produces it today. That is why it was Minor, and it
 is also why it is worth closing: the blast radius is the whole fleet and the
@@ -59,9 +99,18 @@ matters: `SwitchToNext` and `RestorePrevious` both route through `Reissue` →
 `parseCA`, which refuses a key that does not parse or does not match its
 certificate.
 
-The check is `pem.Decode` **and** `x509.ParseCertificate`, because
-`CertificateFactory.generateCertificates` throws on both a non-PEM blob and a
-PEM envelope around something that is not a certificate.
+The check is `pem.Decode` **and** `x509.ParseCertificate`, because a PEM
+envelope around something that is not a certificate satisfies the first and
+throws in the agent all the same.
+
+**And it is deliberately stricter than the agent.** The table above says the
+agent tolerates stray bytes that carry no five-hyphen run, and this check does
+not. That tolerance is a property of one JDK's block scanner rather than of
+the format, it is invisible in the bytes a human pastes, and a single `-----`
+anywhere in them flips it. Publishing on the strength of it would mean the
+fleet's trust store depends on whether a pasted comment line happened to use
+five dashes. So the rule is the narrow one — exactly the PEM encoding of one
+certificate — and §3 repairs or clears everything else.
 
 ## 3. The cleanup, and why it is not symmetric
 
@@ -70,10 +119,82 @@ part belongs — and it is the only place that decides a rotation's phase.
 (`Ensure` writes the slots too, via `carryRotation`, but only to carry forward
 what a renewal would otherwise drop; it never decides anything about the
 sequence.)
-Finding an unparseable certificate slot, it clears that slot, records what it
-discarded (§4), fires a `Warning`, and leaves the rotation in a state that does
-not advance on its own. What that state is depends on which slot broke, and the
-two cases are not mirror images.
+Finding a certificate slot an agent could not parse, it repairs the slot where
+it can and clears it where it cannot, records what it did (§4), fires a
+`Warning`, and leaves the rotation in a state that does not advance on its own.
+Which of the two, and what that state is, turns on one question first and on
+the slot second.
+
+**The question is: is the slot's first PEM block a certificate?** One
+predicate, two outcomes, the same for either slot — and it is `parsableCert`'s
+own rule read backwards, since `parsableCert` accepts exactly a slot that *is*
+that block and nothing more.
+
+> **Revised after review.** This read "the failure mode decides", over a list
+> of three modes. The list was both longer than it needed to be and short by
+> one case: a slot with junk pasted *in front of* the certificate passed
+> `parsableCert` outright, because `pem.Decode` skips it and the leftover
+> `rest` the check looked at came back empty. Built on `firstPEMBlock`
+> instead — the slot must be byte-identical to its own first block — the rule
+> is one comparison, the hole is closed, and leading junk lands where trailing
+> junk always did: repaired.
+
+**If it is a certificate, the slot is repairable.** `parseCA` decodes the first
+block and ignores everything around it, so a `ca-previous.crt` holding a
+certificate with a chain pasted after it — a restore that carried an
+intermediate along — still signs: `RestorePrevious` → `Reissue` → `parseCA`
+succeeds on exactly those bytes.
+
+What `trustManager` does with them is *not* to object — the measurement above
+settles it: a stream of three valid blocks loads three CAs. That is worse than
+an outage and not better, because it is silent. Every block a paste buffer
+carried in becomes a certificate authority every agent in the fleet will accept
+an operator identity from, and nothing anywhere says so. So that slot is
+truncated to its first block instead of being thrown away. The first block is
+precisely the one `parseCA` was already using, so the repair makes publication
+and signing agree again — and their disagreement is the whole of the defect.
+Nothing usable is lost, no phase moves, and the rotation carries on. This keys
+on the predicate and not on the slot: `ca-next.crt` gets the same treatment for
+the same reason.
+
+**Repairing `ca-next` while `distributing` also deletes
+`spawnery.cloud/ca-rotation-since`, so the gate runs once more.** The gate is
+evaluated only while that annotation is empty (§5 of the rotation design: it
+must not be re-run every tick, or a cluster where networks are created
+regularly would never switch). So a `ca-next` hand-edited in *after* the window
+was stamped would otherwise be repaired and the rotation would carry straight
+on to its switch — and if the block the repair keeps is a different CA from the
+one that was distributed, that switch promotes a CA no namespace ever received
+and every agent fails its next handshake. Tearing the window up puts the
+question back to the namespaces. **The cost is accepted**: a benign repair
+restarts a quarter of an hour of waiting.
+
+Only for `ca-next` and only while `distributing`. A `ca-previous` repair
+happens at `switched`, where there is no window to restart and `since` means
+something else entirely — how long the outgoing CA has been waiting for a
+human.
+
+**Both halves of a repaired slot come from the secret.** The certificate is
+read from there because that is the copy that has to stop being published; the
+*key* has to come from there too, and for a sharper reason. A hand-edit that
+pastes in a whole incoming CA replaces `ca-next.crt` and `ca-next.key`
+together, and `Ensure`'s read of the bundle may predate it. Keeping the
+certificate from the secret beside the key from the bundle would produce a pair
+that cannot sign — and `applyStep` rewrites the whole of `Data` from the
+bundle, so the newer key is overwritten and does not come back. Every later
+tick would then die inside `SwitchToNext` → `Reissue` → `parseCA` with
+"CA key does not match", visible only in the operator's log.
+
+**If it is not a certificate — not PEM at all, or a PEM envelope around
+something that is not one — the slot is unusable.** `parseCA` fails on that
+same first block, so it is unusable in fact and not only in publication. Those
+slots are cleared, and only for them does the phase decide an end state.
+
+The two outcomes stay distinct even though one predicate now selects between
+them, because the reasoning behind them is different: a repair asserts that
+something usable is still there, and a clearance asserts that nothing is. A
+single "throw it away" would be simpler and would destroy rollbacks that work
+(see the corrected paragraph below).
 
 **`ca-next.crt`, while `distributing`: abandon the rotation.** It never
 distributed anything usable — no agent can have come to trust a certificate
@@ -86,24 +207,36 @@ the operator performing `drop-old` unasked — the branch's one irreversible ste
 and the whole reason the sequence holds at `switched`. It is not. The hold has
 exactly one purpose, which is that a rollback remains possible, and a rollback
 signs with the previous CA: `RestorePrevious` → `Reissue` → `parseCA`, on those
-very bytes. The moment they stopped parsing the rollback became impossible.
-Clearing the slot takes away no ability; it records that the ability is already
-gone. Nobody is stranded either — at `switched` the serving certificate chains
-to the new CA, which every agent trusts, so narrowing the published bundle to
-the new CA alone changes nothing they depend on.
+very bytes. A slot only reaches this branch when `parseCA` fails on the same
+first block `parsableCert` rejected, so the rollback was already impossible. Clearing the slot takes away no ability; it records that the
+ability is already gone. Nobody is stranded either — at `switched` the serving
+certificate chains to the new CA, which every agent trusts, so narrowing the
+published bundle to the new CA alone changes nothing they depend on.
+
+> **Corrected after review.** This paragraph read "the moment they stopped
+> parsing the rollback became impossible", without qualification, and that was
+> false wherever `parseCA` reads only the first block and signs perfectly
+> happily. Completing the drop there would have
+> destroyed a rollback that worked, while the warning told the operator it had
+> already been impossible. Nor could that be answered by clearing the slot and
+> holding the phase: clearing kills the rollback whatever the reason, so the
+> hold would then advertise a choice nobody could act on, which is worse than
+> either alternative. Repairing every slot whose first block is a certificate
+> is what makes the sentence above true of everything that now reaches it.
 
 **With no phase set at all:** clear the slot and say so. A leftover
 unparseable slot on an idle secret has nothing to abandon and nothing to
 complete; it simply must not be published, and the annotation of §4 is what
 tells whoever left it there.
 
-**The rule keys on the slot, the phase only decides the end state.** Every
-unparseable certificate slot is cleared and recorded, always. The rotation is
-abandoned or completed only when the slot that broke is the one the current
-phase depends on — so a `ca-previous` slot occupying a `distributing` secret,
-which is a state no transition produces, is cleared and reported without
-disturbing the rotation, and two broken slots are two cleanups under the same
-rule.
+**The rule keys on the predicate, then on the slot; the phase only decides the
+end state.** Every certificate slot that is not exactly the PEM encoding of one
+certificate is repaired or cleared, and recorded, always. Only a *cleared* slot ends anything,
+and only when it is the one the current phase depends on — so a `ca-previous`
+slot occupying a `distributing` secret, which is a state no transition
+produces, is cleared and reported without disturbing the rotation, and two
+broken slots are two changes under the same rule, which may well be one repair
+and one clearance in the same step.
 
 ## 4. What survives the cleanup
 
@@ -113,20 +246,33 @@ expires after about an hour. That cost is paid off cheaply without keeping the
 bytes:
 
 ```
-spawnery.cloud/ca-rotation-discarded   ca-next.crt: certificate is not PEM (2026-08-21T14:02:11Z)
+spawnery.cloud/ca-rotation-discarded   ca-next.crt: not PEM (2026-08-21T14:02:11Z)
+spawnery.cloud/ca-rotation-discarded   ca-previous.crt: more than its first PEM block; truncated to that block (2026-08-21T14:02:11Z)
 ```
 
-The slot, the parse error and the time — which is what a diagnosis needs; the
-raw bytes are not. It is written in the same `applyStep` as the cleanup, so it
-cannot land without the cleanup or the cleanup without it. It is cleared by the
-next accepted `start`, so it never narrates an old failure beside a running
-rotation.
+The slot, the parse error, what became of the slot, and the time — which is
+what a diagnosis needs; the raw bytes are not. It is written in the same
+`applyStep` as the cleanup, so it cannot land without the cleanup or the
+cleanup without it. It is cleared by the next accepted `start`, so it never
+narrates an old failure beside a running rotation. **One annotation for both
+outcomes**, as the two lines above show: it is the single durable answer to
+"what happened to my slots", its own wording says which of the two happened,
+and one key is one thing to clear and one thing for a reader to know about.
+Two slots touched in one step are two entries in one value.
 
 The event is `Warning`, on the secret, with the existing
 `ReasonRotationRequestRefused`'s neighbours — a seventh reason,
 `RotationSlotDiscarded`, because none of the six describes this: nothing was
 refused, nothing was unrecognised, no gate is holding, and the phase change is
 a consequence rather than the news.
+
+The repair gets an eighth, `RotationSlotTruncated`, rather than sharing the
+seventh with a note that says otherwise. The reason is the field a human
+triages on, and nothing is discarded in a repair: the slot is still in the
+secret, still in the rotation, and now usable. A `RotationSlotDiscarded` that
+had to be read to the end before one could tell that nothing had been
+discarded would teach a reader to distrust the reason on the events that mean
+what they say. The annotation is shared; the reason is not.
 
 ## 5. The second: the conflict retry has no behavioural test
 
@@ -160,14 +306,51 @@ effect, then let the second through.
 
 ## 6. How it is proven
 
-- **A slot that is not PEM, and a PEM envelope around something that is not a
-  certificate**, are both omitted from `PublishedCA()`. Two cases, because the
-  agent throws on both and only one of them is caught by `pem.Decode`.
+- **Four slot shapes are omitted from `PublishedCA()`**: a PEM header whose
+  body is not base64, a PEM envelope around something that is not a
+  certificate, a valid certificate followed by a stray header, and a stray
+  header *before* a valid certificate. Each is a shape the agent genuinely
+  throws on, checked against the real parser rather than asserted (§2) — the
+  fixture this list opened with, `-- this is not a certificate --`, was not.
+  The four are not interchangeable: `pem.Decode` alone catches only the first,
+  and the last is the one a "decode, then inspect the leftovers" check waves
+  through, because there are no leftovers to inspect.
+- **The repairable case is repaired, and the ability it would have cost is
+  shown to be real**: a `ca-previous.crt` holding a certificate followed by a
+  second block is truncated to the first, the phase stays `switched`, and a
+  `rollback` issued afterwards succeeds and puts the original CA back in charge
+  of signing. That last step is the finding itself: without it the test would
+  assert the new behaviour without showing why the old one was wrong. The same
+  repair on `ca-next.crt`, after which the rotation still reaches its switch,
+  pins that the rule keys on the predicate and not on the slot.
+- **A `ca-next` repair while `distributing` re-opens the gate**: with the
+  window already stamped, a different CA pasted in front of the one being
+  distributed is repaired, `since` is gone, and the switch then *does not*
+  happen however long the clock is advanced — the gate names the namespace in
+  `ca-rotation-blocked-on` instead, and the rotation only finishes once that
+  namespace has the repaired certificate. Asserting the outcome and not only
+  the missing annotation is the point: the annotation is the mechanism, the
+  un-promoted CA is the finding. The narrowing has its own assertion, on the
+  `ca-previous` repair at `switched`, where `since` must survive.
+- **A repair keeps the secret's own key with the certificate it kept**: a
+  hand-edit replacing both halves of `ca-next` with a wholly different CA, the
+  certificate carrying a second block, is repaired to that CA's first block
+  *and* that CA's key — proven by the switch afterwards signing with the pair.
+  Taking the key from the bundle instead turns the test red, which is the
+  failure being guarded: it is permanent and its only signal is a log line.
 - **Each of the three cleanup outcomes**, asserted on the secret read back:
   `ca-next` while `distributing` leaves no rotation and no phase; `ca-previous`
   while `switched` leaves no rotation and no phase; a slot with no phase set
   leaves the secret otherwise untouched. All three assert the discarded
   annotation names the slot and the reason.
+- **The record carries the slot, the reason and the time**, the time asserted
+  against the store's own clock rather than merely for being present.
+- **Two broken slots in one call** — one cleared and one truncated — are one
+  step, two entries in the record and two events of the right two reasons. With
+  both cleared at `switched`, the "the drop was completed" clause appears only
+  on the `ca-previous` event: it is a claim about the slot the hold existed
+  for, and on the other event it would send a reader after a rollback that had
+  nothing to do with it.
 - **The discarded annotation is cleared by the next accepted `start`**, so it
   cannot narrate an old failure beside a live rotation.
 - **`Ensure` still does not fail** on a corrupt slot — asserted directly,
@@ -176,7 +359,10 @@ effect, then let the second through.
 - **The conflict**, as §5 describes it: `start` lands, `rollback` survives.
 
 Each of the first two groups gets a mutation: publishing the slot anyway, and
-skipping the cleanup, must each turn its own test red.
+skipping the cleanup, must each turn its own test red. So do the three the
+cleanup adds — discarding the repairable mode with the other two, dropping the
+time from the record, and writing the outcome clause per call instead of per
+slot.
 
 **No `hack/agent-test.sh` phase.** The claim that the agent throws on a
 malformed bundle is already the agent's own test, and the fix is that such a
@@ -189,12 +375,19 @@ bundle never leaves the operator — which is a Go-side property.
 2. `Ensure` does not fail because of it, and the operator starts normally.
 3. An unparseable `ca-next.crt` while `distributing` abandons the rotation,
    leaving the state `rollback` out of `distributing` already produces.
-4. An unparseable `ca-previous.crt` while `switched` completes the drop, and
-   the design says why that is not the operator performing `drop-old` unasked.
+4. A `ca-previous.crt` while `switched` whose first PEM block `parseCA` also
+   fails on completes the drop, and the design says why that is not the
+   operator performing `drop-old` unasked. A slot that fails only for holding
+   more than that block is instead truncated to it —
+   the block `parseCA` already signs with — whichever of the two slots it is;
+   no phase moves, and a `rollback` after the repair still works. The numbering
+   here is unchanged from the original list: this criterion gained its second
+   half rather than a criterion being inserted.
 5. An unparseable slot with no phase set is cleared and nothing else changes.
-6. Every cleanup writes `spawnery.cloud/ca-rotation-discarded` naming the slot,
-   the parse error and the time, in the same update as the cleanup, and fires a
-   `RotationSlotDiscarded` warning.
+6. Every repair and every cleanup writes `spawnery.cloud/ca-rotation-discarded`
+   naming the slot, the parse error, what became of the slot and the time, in
+   the same update as the change, and fires a `RotationSlotDiscarded` or
+   `RotationSlotTruncated` warning accordingly.
 7. The next accepted `start` clears that annotation.
 8. A conflict on `applyStep`'s update, with a competing writer replacing
    `rotate-ca` between the read and the write, leaves the competing value in

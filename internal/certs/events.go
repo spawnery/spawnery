@@ -23,8 +23,9 @@ import (
 
 // Event reasons recorded on the TLS secret, so that a rotation is visible
 // without reading logs. The first four are the design's own vocabulary
-// (docs/superpowers/specs/2026-08-21-ca-rotation-design.md §4); the last two
-// name the two ways a request ends without a transition.
+// (docs/superpowers/specs/2026-08-21-ca-rotation-design.md §4); the next two
+// name the two ways a request ends without a transition, and the last two the
+// two things the operator does to a slot nobody asked it to touch.
 //
 // ReasonRotationRequestUnrecognised covers a case §4 deliberately does not
 // route through ReasonRotationBlocked: a spawnery.cloud/rotate-ca value the
@@ -55,6 +56,34 @@ import (
 // likeliest of all -- says which phase refused it and why, and leaves the
 // remedy to the entry in docs/known-issues.md, which is where somebody
 // running the procedure is already reading.
+//
+// ReasonRotationSlotDiscarded is the seventh, and it is the only one that
+// reports the operator undoing part of a rotation on its own. A rotation slot
+// whose certificate does not parse is cleared, because every byte of it
+// reaches every agent's trust store through PublishedCA, where a five-hyphen
+// run that does not open a valid certificate block makes
+// CertificateFactory.generateCertificates throw for the whole stream -- the
+// CA that was signing included. None of the six above says that: nothing was
+// refused and nothing was unrecognised, since a hand-edited slot is not a
+// request; no gate is holding, so a reader triaging a RotationBlocked would
+// go looking for a namespace that is not there; and the phase change that
+// follows is the consequence, not the news -- RotationCompleted would report
+// a drop-old somebody performed, when what happened is that the rollback the
+// hold existed for had already become impossible. The note names the slot and
+// the parse error, and says what became of the rotation; the durable copy is
+// AnnotationRotationDiscarded, because an event expires after about an hour.
+//
+// ReasonRotationSlotTruncated is the eighth, and it is deliberately not the
+// seventh with a different note. It reports the one parse failure the
+// operator repairs instead of discarding: a slot holding more than one PEM
+// block is truncated to the first, which is the block parseCA already signs
+// with, so nothing usable is lost and no phase moves. The reason is the field
+// a human triages on -- a RotationSlotDiscarded that had to be read to the
+// end before one could tell that nothing had in fact been discarded would
+// train a reader to distrust the reason on the ones that mean what they say.
+// The durable record shares AnnotationRotationDiscarded with the discards,
+// because that annotation answers "what happened to my slots" and its own
+// wording distinguishes the two.
 const (
 	ReasonRotationStarted             = "RotationStarted"
 	ReasonRotationBlocked             = "RotationBlocked"
@@ -62,6 +91,8 @@ const (
 	ReasonRotationCompleted           = "RotationCompleted"
 	ReasonRotationRequestUnrecognised = "RotationRequestUnrecognised"
 	ReasonRotationRequestRefused      = "RotationRequestRefused"
+	ReasonRotationSlotDiscarded       = "RotationSlotDiscarded"
+	ReasonRotationSlotTruncated       = "RotationSlotTruncated"
 )
 
 // Event actions, in the shape internal/controller/events.go established:
@@ -81,6 +112,8 @@ const (
 	actionCompleteRotation          = "CompleteRotation"
 	actionReportUnrecognisedRequest = "ReportUnrecognisedRequest"
 	actionRefuseRotationRequest     = "RefuseRotationRequest"
+	actionDiscardRotationSlot       = "DiscardRotationSlot"
+	actionTruncateRotationSlot      = "TruncateRotationSlot"
 )
 
 // event records an event on the TLS secret, or does nothing if no recorder is

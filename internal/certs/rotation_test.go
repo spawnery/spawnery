@@ -19,6 +19,7 @@ package certs_test
 import (
 	"bytes"
 	"encoding/pem"
+	"slices"
 	"testing"
 	"time"
 
@@ -132,5 +133,128 @@ func TestThePublishedBundleCarriesBothCAsWhileRotating(t *testing.T) {
 	}
 	if got := count(switched.WithoutRotation()); got != 1 {
 		t.Errorf("after drop-old the bundle publishes %d certificates, want 1", got)
+	}
+}
+
+// A rotation slot the agent could not parse is never published.
+//
+// PublishedCA's output travels Provider.Set -> Provider.CABundle ->
+// Bootstrapper.CA -> the spawnery-ca ConfigMap of every namespace, and the
+// consumer is OperatorChannel.trustManager, which parses the whole bundle with
+// CertificateFactory.generateCertificates. A five-hyphen run in the slot that
+// does not open a valid certificate block throws for the whole stream, taking
+// the CA that was signing with it -- so a slot that does not parse does not
+// cost a rotation; it costs every agent in every namespace its entire trust
+// store. Only a hand-edited secret produces one, which is why this is a guard
+// rather than a repair -- the repair is AdvanceRotation's, and it runs a tick
+// later.
+//
+// Every fixture below is a shape the agent genuinely rejects, verified against
+// the OpenJDK in this repository's devshell (design section 2). That matters:
+// the shape this test used to open with, "-- this is not a certificate --",
+// has only two hyphens, and the agent steps straight over it -- so the test
+// named an outage it was not in fact demonstrating.
+//
+// The guard is here, at the one function whose output reaches an agent, rather
+// than at a call site: a later path that publishes the bundle from somewhere
+// else is exactly how this would come back.
+func TestAnUnparseableSlotIsNotPublished(t *testing.T) {
+	now := time.Date(2026, 8, 21, 12, 0, 0, 0, time.UTC)
+	dnsNames := certs.ServingDNSNames("spawnery-operator", "spawnery-system")
+
+	signing, err := certs.Issue(now, dnsNames)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	good, _, err := certs.IssueCA(now)
+	if err != nil {
+		t.Fatalf("IssueCA: %v", err)
+	}
+
+	// Three shapes, because pem.Decode alone only catches the first two:
+	// a header whose body is not base64 at all, a PEM envelope around
+	// something that is not a certificate, and a well-formed certificate with
+	// a stray header trailing it -- exactly what a hand-edit that appends
+	// rather than replaces produces. parsableCert's contract is "exactly one
+	// PEM block", not "at least one", precisely for that last shape.
+	notPEM := []byte("-----BEGIN CERTIFICATE-----\n!!! not base64 !!!\n-----END CERTIFICATE-----\n")
+	pemButNotACert := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("nonsense")})
+	pemPlusTrailingJunk := slices.Concat(good, []byte("-----not a header-----\n"))
+	// The mirror image, and the one a check phrased as "decode, then look at
+	// what is left" waves through: pem.Decode skips whatever precedes the
+	// first block, so `rest` comes back empty and the junk is invisible to it
+	// -- while the bytes that reach the agent still carry the five-hyphen run
+	// that throws.
+	junkPlusPEM := slices.Concat([]byte("-----not a header-----\n"), good)
+
+	for _, tc := range []struct {
+		name string
+		bad  []byte
+	}{
+		{"a PEM header whose body is not base64", notPEM},
+		{"a PEM envelope around nonsense", pemButNotACert},
+		{"a valid certificate followed by a stray header", pemPlusTrailingJunk},
+		{"a stray header before a valid certificate", junkPlusPEM},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := &certs.Bundle{
+				CACertPEM:      signing.CACertPEM,
+				CAKeyPEM:       signing.CAKeyPEM,
+				ServingCertPEM: signing.ServingCertPEM,
+				ServingKeyPEM:  signing.ServingKeyPEM,
+				NextCACertPEM:  tc.bad,
+			}
+			if got := next.PublishedCA(); !bytes.Equal(got, signing.CACertPEM) {
+				t.Errorf("an unparseable ca-next was published; the bundle every agent "+
+					"pins would have %d bytes of it, and a five-hyphen run that opens no "+
+					"valid block throws for the whole stream -- the signing CA included",
+					len(tc.bad))
+			}
+
+			prev := &certs.Bundle{
+				CACertPEM:         signing.CACertPEM,
+				CAKeyPEM:          signing.CAKeyPEM,
+				ServingCertPEM:    signing.ServingCertPEM,
+				ServingKeyPEM:     signing.ServingKeyPEM,
+				PreviousCACertPEM: tc.bad,
+			}
+			if got := prev.PublishedCA(); !bytes.Equal(got, signing.CACertPEM) {
+				t.Error("an unparseable ca-previous was published")
+			}
+		})
+	}
+
+	// And the good case still publishes two, so the guard has not simply
+	// disabled the feature.
+	ok := &certs.Bundle{
+		CACertPEM:      signing.CACertPEM,
+		CAKeyPEM:       signing.CAKeyPEM,
+		ServingCertPEM: signing.ServingCertPEM,
+		ServingKeyPEM:  signing.ServingKeyPEM,
+		NextCACertPEM:  good,
+	}
+	if got := ok.PublishedCA(); !bytes.Equal(got, slices.Concat(signing.CACertPEM, good)) {
+		t.Error("a well-formed incoming CA was dropped from the published bundle")
+	}
+
+	// A bad Next does not suppress a good Previous. Next and Previous are
+	// never both populated in a legitimate rotation -- they belong to
+	// sequential phases, not concurrent ones -- so this shape only arises
+	// from a corrupted bundle. But PublishedCA already documents a bad slot
+	// as "treated as absent", and the switch's own case order falls through
+	// from Next to Previous, so the safer reading -- the one that keeps
+	// publishing a CA agents may still need for a rollback, rather than
+	// silently narrowing to just the signing CA -- is that the fallback
+	// still fires.
+	badNextGoodPrevious := &certs.Bundle{
+		CACertPEM:         signing.CACertPEM,
+		CAKeyPEM:          signing.CAKeyPEM,
+		ServingCertPEM:    signing.ServingCertPEM,
+		ServingKeyPEM:     signing.ServingKeyPEM,
+		NextCACertPEM:     notPEM,
+		PreviousCACertPEM: good,
+	}
+	if got := badNextGoodPrevious.PublishedCA(); !bytes.Equal(got, slices.Concat(signing.CACertPEM, good)) {
+		t.Error("a bad Next suppressed a well-formed Previous instead of falling back to it")
 	}
 }

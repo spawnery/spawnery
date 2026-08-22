@@ -21,6 +21,7 @@ limitations under the License.
 package certs
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -28,6 +29,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"math/big"
 	"slices"
@@ -171,14 +173,106 @@ func Reissue(now time.Time, b *Bundle, dnsNames []string) (*Bundle, error) {
 // holding. Order does not matter to the agent -- OperatorChannel.trustManager
 // loads every certificate in the stream -- but it is deterministic so that a
 // phase which has not changed produces a ConfigMap write that is a no-op.
+//
+// A slot that fails parsableCert is treated as absent rather than surfaced as
+// an error: this function is pure and keeps no logger, because a mistyped
+// annotation reaching here must not take the operator down, and the report is
+// a later concern's, not this one's.
 func (b *Bundle) PublishedCA() []byte {
 	switch {
-	case len(b.NextCACertPEM) > 0:
+	case parsableCert(b.NextCACertPEM) == nil:
 		return slices.Concat(b.CACertPEM, b.NextCACertPEM)
-	case len(b.PreviousCACertPEM) > 0:
+	case parsableCert(b.PreviousCACertPEM) == nil:
 		return slices.Concat(b.CACertPEM, b.PreviousCACertPEM)
 	}
 	return b.CACertPEM
+}
+
+// errNotOnlyTheFirstBlock is the one parsableCert verdict a caller can repair
+// instead of throwing the slot away, and it is a sentinel rather than a
+// message so that the caller keys on the verdict rather than on this file's
+// wording.
+//
+// It says: the first PEM block is a certificate, and the slot is more than
+// that block alone. Which is exactly the case where parsableCert and parseCA
+// disagree -- parseCA decodes the first block and ignores everything else, so
+// the slot still signs perfectly well -- and therefore exactly the case where
+// truncating to the first block costs nothing and settles the disagreement.
+//
+// What the agent does with the surplus depends on what the surplus is, and
+// neither answer is one to publish on. A trailing five-hyphen run that opens
+// no valid block throws for the whole stream, taking the signing CA with it.
+// A trailing *valid* block does not throw at all: it is loaded as another CA,
+// silently widening the fleet's trust store. Leading junk is the same two
+// cases with the certificate after it rather than before.
+var errNotOnlyTheFirstBlock = errors.New("more than its first PEM block")
+
+// parsableCert reports whether pemBytes is something an agent's trust store
+// will accept: exactly the PEM encoding of one certificate.
+//
+// **What the agent actually rejects, measured rather than assumed.**
+// OperatorChannel.trustManager parses with CertificateFactory.generateCertificates.
+// OpenJDK's X509Factory.readOneBlock skips everything before the first line
+// beginning with a five-hyphen run and returns null at end of stream instead
+// of throwing, so stray bytes carrying no such line are stepped over: a good
+// ca.crt followed by "this is not a certificate" still yields the good CA.
+// What kills the stream is a line that begins with a five-hyphen run and does
+// not open a complete, decodable certificate block -- a PEM envelope around
+// something that is not a certificate, a block whose base64 is malformed, a
+// header with no matching footer, or a bare "-----x-----" line. Then nothing
+// already parsed survives; the whole bundle throws.
+//
+// **This check is deliberately stricter than that.** "Stray bytes that happen
+// to contain no five-hyphen run" is not a property worth depending on: it
+// belongs to one JDK's block scanner rather than to the format, it is
+// invisible in the bytes a human pastes, and a single "-----" anywhere in
+// them flips it. So the rule is the narrow one -- exactly the PEM encoding of
+// one certificate -- and everything else is repaired or cleared by
+// AdvanceRotation rather than published on the strength of that property.
+//
+// **One rule, not a list of failure modes.** The slot must be byte-identical
+// to firstPEMBlock of itself, and that block must be a certificate. Phrased
+// as "decode, then look at what is left over" it would have three modes and a
+// hole: pem.Decode skips whatever precedes the first block, so `rest` comes
+// back empty for a slot with junk pasted in front of the certificate and the
+// junk is invisible to the check -- while the bytes that reach the agent
+// still carry it.
+func parsableCert(pemBytes []byte) error {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return fmt.Errorf("not PEM")
+	}
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return fmt.Errorf("parse certificate: %w", err)
+	}
+	// firstPEMBlock is DER-faithful and idempotent, so a slot the operator
+	// wrote itself compares equal here and nothing happens to it. Anything
+	// else -- leading junk, trailing junk, a second block, or merely a
+	// different encoding of the same certificate -- is what a hand-edit
+	// produces, and the caller can repair every one of them the same way.
+	if !bytes.Equal(pemBytes, firstPEMBlock(pemBytes)) {
+		return errNotOnlyTheFirstBlock
+	}
+	return nil
+}
+
+// firstPEMBlock re-encodes the first PEM block of pemBytes and drops whatever
+// surrounded it.
+//
+// Re-encoded rather than sliced out, because pem.Decode reports neither where
+// the block began nor where it ended, and slicing from what it does report
+// would carry any preceding junk along. The DER inside is untouched, so this
+// is the same certificate parseCA reads out of these bytes.
+//
+// nil for input with no PEM block at all, which is how parsableCert's
+// comparison stays correct without a second decode of its own: pemBytes is
+// never nil there, having already decoded.
+func firstPEMBlock(pemBytes []byte) []byte {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil
+	}
+	return pem.EncodeToMemory(block)
 }
 
 // NeedsRenewal is true once less than a third of the lifetime is left.

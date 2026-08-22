@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -47,6 +48,18 @@ const (
 	AnnotationRotationPhase     = "spawnery.cloud/ca-rotation-phase"
 	AnnotationRotationSince     = "spawnery.cloud/ca-rotation-since"
 	AnnotationRotationBlockedOn = "spawnery.cloud/ca-rotation-blocked-on"
+
+	// AnnotationRotationDiscarded is what is left of a rotation slot whose
+	// certificate would not parse: the slot's name, the reason, whether the
+	// slot was cleared or merely truncated to its first PEM block, and when.
+	// Discarded bytes are not kept -- they are the one thing that must stop
+	// being published -- so this is the whole of what a diagnosis has, and it
+	// outlives the Warning event, which expires after about an hour. One key
+	// for both outcomes, because a reader asking what became of their slots
+	// should not have to know two annotations to find out, and both are
+	// cleared by the same next accepted start, so neither ever narrates an
+	// old failure beside a running rotation.
+	AnnotationRotationDiscarded = "spawnery.cloud/ca-rotation-discarded"
 
 	RequestStart    = "start"
 	RequestDropOld  = "drop-old"
@@ -111,6 +124,22 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 	}
 
 	phase := secret.Annotations[AnnotationRotationPhase]
+
+	// Before any request, because a slot nobody can parse is the one thing
+	// here that is already doing damage -- every byte of it reaches every
+	// agent's trust store -- and because a request acted on in the same call
+	// would be acted on against a state that is about to change under it.
+	// This is the step this call takes when it takes it: a request stays
+	// where it is and is picked up on the next tick, by which time the slots
+	// it would work from are the repaired or cleared ones.
+	cleaned, inFlight, err := s.repairOrDiscardSlots(ctx, current, phase, secret)
+	if err != nil {
+		return nil, false, err
+	}
+	if cleaned != nil {
+		return cleaned, inFlight, nil
+	}
+
 	switch request := secret.Annotations[AnnotationRotateRequest]; request {
 	case "":
 	case RequestStart, RequestDropOld, RequestRollback:
@@ -139,6 +168,243 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 	}
 	return s.drivePhase(ctx, current, phase, secret.Annotations[AnnotationRotationSince],
 		secret.Annotations[AnnotationRotationBlockedOn])
+}
+
+// repairOrDiscardSlots puts every rotation slot an agent could not parse back
+// into a state it can, records what it did, and ends the rotation when a slot
+// it had to throw away is the one the current phase depends on.
+//
+// It returns a nil bundle when there was nothing wrong, which is every
+// ordinary call; anything else is a step taken, and AdvanceRotation returns
+// on it.
+//
+// **One question decides repair or discard, and it decides it the same way
+// for either slot: is the slot's first PEM block a certificate?**
+//
+// If it is, the slot is repairable, because that block is precisely the one
+// parseCA was already using -- a certificate with a chain pasted after it, or
+// a header pasted in front of it, still signs perfectly well. Truncating to
+// it makes publication and signing agree again, which is the whole of the
+// defect; nothing usable is lost, no phase moves, and the rotation carries
+// on. (If the slot already *is* that block, parsableCert returns nil and this
+// function never sees it.)
+//
+// If it is not -- not PEM at all, or a PEM envelope around something that is
+// not a certificate -- then parseCA fails on that same first block, so the
+// slot is unusable in fact and not only in publication, and it is cleared.
+//
+// **For a cleared slot the phase decides the end state.** The rotation is
+// abandoned (`distributing`, whose next step is to promote ca-next) or the
+// drop completed (`switched`, whose only remaining step is a rollback signed
+// with ca-previous) only when the cleared slot is the one that step needs.
+// Anything else -- a ca-previous occupying a `distributing` secret, which no
+// transition produces -- is cleared and reported without disturbing a
+// sequence that does not depend on it.
+//
+// Completing the drop is not the operator performing drop-old unasked, and
+// the repair above is what makes that true. The hold at `switched` exists so
+// a rollback stays possible, and a rollback signs with these very bytes
+// (RestorePrevious -> Reissue -> parseCA). A slot only reaches this branch
+// when parseCA fails on the same first block parsableCert rejected, so the
+// rollback was already impossible and clearing the slot records that rather
+// than causing it. Every slot on which the rollback would still have worked
+// is repaired instead -- which matters because clearing kills a rollback
+// whatever the reason, and "clear it but hold the phase" would advertise a
+// hold nobody could act on. Nobody is stranded either: the
+// serving certificate chains to the new CA, which every agent came to trust
+// during the overlap.
+//
+// A repaired slot takes **both** its halves from the secret, not from
+// current: AdvanceRotation re-reads the secret precisely because it has two
+// writers, and current may predate the hand-edit. Pairing the secret's
+// certificate with current's older key would produce a slot that cannot sign,
+// and applyStep rewrites the whole of Data from the bundle, so the newer key
+// would be gone -- SwitchToNext would then fail on every tick, with parseCA's
+// "CA key does not match" reaching nobody but the log.
+func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase string, stored *corev1.Secret) (*Bundle, bool, error) {
+	slots := []struct {
+		certKey        string
+		keyKey         string
+		dependentPhase string
+		clear          func(*Bundle)
+		setPair        func(*Bundle, []byte, []byte)
+	}{
+		// Only the certificate halves are judged, because they are what gets
+		// published. A malformed key reaches no agent and already fails
+		// loudly at the moment it matters, in parseCA. The key is dropped
+		// with its certificate all the same: secretFor writes a slot's two
+		// keys only while its certificate is occupied.
+		{keyNextCACert, keyNextCAKey, PhaseDistributing,
+			func(b *Bundle) { b.NextCACertPEM, b.NextCAKeyPEM = nil, nil },
+			func(b *Bundle, cert, key []byte) { b.NextCACertPEM, b.NextCAKeyPEM = cert, key }},
+		{keyPreviousCACert, keyPreviousCAKey, PhaseSwitched,
+			func(b *Bundle) { b.PreviousCACertPEM, b.PreviousCAKeyPEM = nil, nil },
+			func(b *Bundle, cert, key []byte) { b.PreviousCACertPEM, b.PreviousCAKeyPEM = cert, key }},
+	}
+
+	// One entry per slot this call touched: what it was called, why, and
+	// whether the slot survived. record is the annotation's wording and
+	// outcome the event's closing clause, which is per slot rather than per
+	// call -- two broken slots on one secret produce two records, and a
+	// sentence about the drop belongs only to the slot the drop was about.
+	type change struct {
+		certKey  string
+		record   string
+		reason   string
+		outcome  string
+		repaired bool
+	}
+	var changes []change
+	fresh := *current
+	endsRotation := false
+	restartWindow := false
+	for _, slot := range slots {
+		certPEM := stored.Data[slot.certKey]
+		if len(certPEM) == 0 {
+			continue
+		}
+		reason := parsableCert(certPEM)
+		if reason == nil {
+			continue
+		}
+		if errors.Is(reason, errNotOnlyTheFirstBlock) {
+			// Both halves from the secret, not from the bundle in hand: the
+			// secret is what AdvanceRotation re-read, and pairing its
+			// certificate with an older key would be permanent rather than
+			// transient, because applyStep replaces Data wholesale. The edge
+			// this gives up: a hand edit that damages the certificate into a
+			// repairable shape and deletes the key in the same breath now
+			// stores an empty key, where reading the key from the bundle
+			// would have healed it. That slot publishes a CA that cannot
+			// sign, which parseCA refuses loudly on the next transition --
+			// the opposite ordering was silent, and one of the two had to go.
+			slot.setPair(&fresh, firstPEMBlock(certPEM), stored.Data[slot.keyKey])
+			// The gate runs only while `since` is empty (drivePhase), and it
+			// has already run against bytes that are not the bytes now in the
+			// slot. If the block kept here is a different CA from the one
+			// that was distributed -- which is exactly what pasting a
+			// certificate in front of or after the real one can do -- the
+			// switch would promote a CA no namespace ever received, and every
+			// agent would fail its next handshake. So the window is torn up
+			// and the gate re-run against the repaired bytes. The cost is
+			// accepted: a benign repair restarts a quarter of an hour of
+			// waiting. Only for ca-next and only while distributing -- a
+			// ca-previous repair at `switched` has no window to restart.
+			restartWindow = restartWindow ||
+				(slot.certKey == keyNextCACert && phase == PhaseDistributing)
+			changes = append(changes, change{
+				certKey:  slot.certKey,
+				record:   fmt.Sprintf("%s: %.150s; truncated to that block", slot.certKey, reason),
+				repaired: true,
+			})
+			continue
+		}
+		slot.clear(&fresh)
+		dependent := phase == slot.dependentPhase
+		endsRotation = endsRotation || dependent
+		changes = append(changes, change{
+			certKey: slot.certKey,
+			record:  fmt.Sprintf("%s: %.150s", slot.certKey, reason),
+			reason:  reason.Error(),
+			outcome: discardOutcome(phase, dependent),
+		})
+	}
+	if len(changes) == 0 {
+		return nil, false, nil
+	}
+
+	records := make([]string, 0, len(changes))
+	for _, c := range changes {
+		records = append(records, c.record)
+	}
+	// The slot, the reason and the time, which is what a diagnosis needs; the
+	// bytes are the one thing that must not survive a discard. One annotation
+	// for both outcomes, because it is the single durable answer to "what
+	// happened to my slots", it is cleared by the same start, and its own
+	// wording says which of the two happened. Written in the same applyStep
+	// as the repair or the cleanup, so the record cannot land without the
+	// change or the change without the record.
+	record := fmt.Sprintf("%s (%s)", strings.Join(records, "; "),
+		s.Clock().UTC().Format(time.RFC3339))
+	err := s.applyStep(ctx, &fresh, func(secret *corev1.Secret) {
+		setAnnotation(secret, AnnotationRotationDiscarded, record)
+		if restartWindow {
+			delete(secret.Annotations, AnnotationRotationSince)
+		}
+		if endsRotation {
+			clearRotationAnnotations(secret)
+		}
+	})
+	if err != nil {
+		return nil, false, err
+	}
+
+	remaining := phase
+	if endsRotation {
+		remaining = ""
+		// Both gauges, as drop-old and rollback do: with no rotation left,
+		// nothing is blocked on anything.
+		RotationBlockedNamespaces.Set(0)
+	}
+	// drivePhase's hoisted Set is not reached on this path, and the phase
+	// gauge is only self-healing across a restart if every tick that reads
+	// the annotation writes it.
+	setRotationPhase(remaining)
+
+	// After the write, unlike refuse's event: a refusal is a fact the moment
+	// it is decided, but these are claims about the secret, and an applyStep
+	// that failed leaves every slot exactly where it was.
+	for _, c := range changes {
+		if c.repaired {
+			// Its own reason rather than a RotationSlotDiscarded whose note
+			// says otherwise: the reason is the field a human triages on, and
+			// nothing was discarded here -- the slot is still in the secret,
+			// still in the rotation, and now usable. No bound is needed: the
+			// note is 178 bytes of literal ASCII plus a slot name of at most
+			// 15, so 193 against the same 1024-byte limit.
+			s.event(corev1.EventTypeWarning, ReasonRotationSlotTruncated, actionTruncateRotationSlot,
+				"%s held more than its first PEM block and has been truncated to that block, "+
+					"which is the one the operator already signs with: nothing usable was "+
+					"lost and the slot stays where it is", c.certKey)
+			continue
+		}
+		// %.150s: reason carries x509's own wording, which embeds the
+		// structure it choked on, so the bound has to hold for text this
+		// package did not write. fmt counts a string precision in runes, so
+		// the cut lands on a rune boundary by construction and 150 runes are
+		// at most 600 bytes; the fixed text is 61, the longer slot name 15
+		// and the longest outcome 127, for 803 bytes worst case -- inside the
+		// 1024 internal/controller/events.go documents, having probed that
+		// limit against a real API server and found it counted in bytes even
+		// though the API server's own message says characters.
+		s.event(corev1.EventTypeWarning, ReasonRotationSlotDiscarded, actionDiscardRotationSlot,
+			"%s could not be parsed and has been cleared from the secret: %.150s; %s",
+			c.certKey, c.reason, c.outcome)
+	}
+	return &fresh, remaining != "", nil
+}
+
+// discardOutcome is what the event says became of the rotation, for one
+// cleared slot. Per slot and not per call: with two slots broken at once, a
+// clause about the drop belongs to the slot the drop was about and would read
+// as a claim about the other one.
+func discardOutcome(phase string, dependent bool) string {
+	switch {
+	case !dependent:
+		// Deliberately says nothing about where the sequence ended up: the
+		// other slot may have ended it in this same call, and this clause has
+		// to stay true either way.
+		return "no rotation depended on this slot, so nothing about the sequence turns on it"
+	case phase == PhaseSwitched:
+		return "the drop was completed: a rollback would have signed with these bytes, " +
+			"so the hold at switched was already impossible to act on"
+	default:
+		// dependent is only true for the two phases above, so this is
+		// `distributing`: the incoming CA was the whole of what it had left
+		// to do.
+		return "the rotation was abandoned, and ca.crt is published alone -- " +
+			"nothing usable was ever distributed"
+	}
 }
 
 // applyRequest performs the step a human asked for, or refuses it.
@@ -186,6 +452,12 @@ func (s *Store) applyRequest(ctx context.Context, current *Bundle, request, phas
 			setAnnotation(secret, AnnotationRotationPhase, PhaseDistributing)
 			delete(secret.Annotations, AnnotationRotationSince)
 			delete(secret.Annotations, AnnotationRotationBlockedOn)
+			// In the same mutate as the phase, because the two are read
+			// together: a discarded record left beside a phase of
+			// `distributing` describes the rotation that is running, and it
+			// does not -- it is about a slot that was thrown away before this
+			// one started.
+			delete(secret.Annotations, AnnotationRotationDiscarded)
 			consume(secret)
 		})
 		if err != nil {

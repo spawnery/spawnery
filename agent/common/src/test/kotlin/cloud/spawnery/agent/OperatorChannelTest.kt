@@ -14,6 +14,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.security.KeyStore
 import java.security.cert.Certificate
+import java.util.Base64
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
@@ -39,6 +40,40 @@ class OperatorChannelTest {
     fun `rejects a bundle with no certificate in it`() {
         assertThrows(IllegalArgumentException::class.java) {
             OperatorChannel.trustManager("not a certificate".toByteArray())
+        }
+    }
+
+    /**
+     * The claim the operator's own guard is built on, pinned here rather than
+     * left as prose in a Go comment.
+     *
+     * `internal/certs`' `parsableCert` refuses to publish a rotation slot that
+     * is anything other than the PEM encoding of one certificate, and the
+     * reason recorded for it was "the agent throws for the whole stream rather
+     * than skipping the offending block". That was measured and found wrong in
+     * both directions: `X509Factory.readOneBlock` steps over stray bytes that
+     * do not begin a line with five hyphens, so a good CA followed by plain
+     * garbage parses fine — while a five-hyphen run that opens no valid block
+     * kills the stream, taking the certificates already read with it.
+     *
+     * This is the second half, and the half the guard exists for: a *good*
+     * `ca.crt` followed by a PEM envelope around something that is not a
+     * certificate leaves the agent with no trust store at all, not with the
+     * one good CA. A slot like this reaching the bundle is a fleet-wide
+     * outage, which is why the operator repairs or clears it rather than
+     * publishing it.
+     */
+    @Test
+    fun `a PEM envelope around a non-certificate kills the whole bundle`() {
+        val good = newTestCa("operator-ca")
+        val envelope = (
+            "-----BEGIN CERTIFICATE-----\n" +
+                Base64.getEncoder().encodeToString("this is not a DER certificate".toByteArray()) +
+                "\n-----END CERTIFICATE-----\n"
+            ).toByteArray()
+
+        assertThrows(IllegalArgumentException::class.java) {
+            OperatorChannel.trustManager(good.pem() + envelope)
         }
     }
 
