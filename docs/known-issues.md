@@ -2990,32 +2990,35 @@ dropping a live entry.
 
 ## From milestone 6c (the LoadBalancer and HostPort expose strategies)
 
-**`HostPort` and CIS `restricted` cannot both hold in one namespace, and the
-RKE2 rollout at the end of milestone 6 is currently promised both.** 6a's
-handover §6 lists CIS `restricted` pod security and `HostPort` under the
-cluster's real CNI among what that rollout owes
-(`docs/handover-milestone-6.md`). Pod Security `baseline` — which
-`restricted` inherits, per the Kubernetes Pod Security Standards rather than
-anything measured here — disallows a container `hostPort` outright, so a
-namespace enforcing either policy refuses every `HostPort` pod's create, and
-`ProxyGroupReconciler` reports the refusal on the group's own `Degraded`
-condition (`ReasonProxyPodRejected`) rather than ever admitting one. This
-refusal is the one thing 6c observed being enforced: `baseline`, not
-`restricted`, against a real API server, in both envtest
+**`HostPort` and CIS `restricted` cannot both hold in one namespace.** Pod
+Security `baseline` — which `restricted` inherits, per the Kubernetes Pod
+Security Standards rather than anything measured here — disallows a container
+`hostPort` outright, so a namespace enforcing either policy refuses every
+`HostPort` pod's create, and `ProxyGroupReconciler` reports the refusal on the
+group's own `Degraded` condition (`ReasonProxyPodRejected`) rather than ever
+admitting one. This refusal is the one thing 6c observed being enforced:
+`baseline`, not `restricted`, against a real API server, in both envtest
 (`internal/controller/expose_test.go`,
 `TestARejectedProxyPodIsReportedOnTheGroup`) and `make e2e`
 (`test/e2e/expose_test.go`, `aForbiddenHostPortIsReportedOnTheGroup`).
-`restricted` was not itself driven anywhere in this milestone; it is named
-here because it inherits every restriction `baseline` sets, and `baseline`'s
-`hostPort` restriction is not one it relaxes.
 
-Milestone 6c makes the refusal legible on the object; it cannot make the two
-requirements compatible, and nothing in the code should try to. The remedy
-is the runbook's to take, not the code's: give the namespace running the
-`HostPort` `ProxyGroup` a relaxed Pod Security label (or a namespace of its
-own, separate from the `restricted` namespaces the rest of the network runs
-in), or drop the `HostPort` leg of the rollout and expose only through
-`NodePort` or `LoadBalancer` where CIS `restricted` is required everywhere.
+6a's handover §6 listed CIS `restricted` pod security and `HostPort` under the
+cluster's real CNI among what the RKE2 rollout owed
+(`docs/handover-milestone-6.md`), and this entry was written to say the two
+could not both be honoured in one namespace. That rollout has since happened,
+and it did not have to choose. Measured on `paulwtf` on 2026-08-22: the
+`minecraft` namespace enforces `restricted` (`enforce` and `warn` both), and
+the one `ProxyGroup` in it exposes `ClusterIP` with two ready replicas beside a
+`Ready` `Server`, all of it up for over two days. So `restricted` against a
+game server namespace is driven and holds; `HostPort` under the real CNI is the
+leg that went undriven rather than the leg that conflicted, and nothing in the
+cluster is standing in this incompatibility today.
+
+It stays recorded because the code cannot make the two compatible and the trap
+is waiting for whoever picks `HostPort` later. The remedy is the runbook's to
+take: give the namespace running the `HostPort` `ProxyGroup` a relaxed Pod
+Security label, or a namespace of its own, separate from the `restricted`
+namespaces the rest of the network runs in.
 
 **`status.address` can go on advertising a Service that has been deleted, and
 6c made that reachable through its own headline path.** `Reconcile` returns
