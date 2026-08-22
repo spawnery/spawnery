@@ -3484,20 +3484,31 @@ one that changed": a `v0.1.1` that bumps only `operatorVersion` would have
 stopped on Paper's existing tag and never published the operator. The
 workflow now invokes the script once per image and the script's refusal
 carries exit status 3, distinct from 1, so "already there" is separable
-from "I could not tell" without a second copy of the guard in YAML. Neither
-fix has run either. A third defect in the same file was found by the
-re-review of that fix and closed the same way: with the loop above, a
-re-run of a tag that already published finds all three tags present, and
+from "I could not tell" without a second copy of the guard in YAML. A third
+defect in the same file was found by the re-review of that fix and closed
+the same way: with the loop above, a re-run of a tag that already published
+finds all three tags present, and
 the "this tag releases nothing" guard would have failed the job before it
 reached the digest and Release steps — which are exactly what a re-run
 after a transient failure there is for, and whose remedy text ("bump and
 tag again") would have been actively wrong. The guard now exempts
 `github.run_attempt > 1`, keeping its teeth on the attempt where a tag
-pushed without a version bump is actually possible. What is verified about the first tag is only what the
-review could check from outside: authenticated, GHCR answers `manifest
-unknown` for a repository that does not exist, so the guard proceeds rather
-than falsely aborting; and `gh api /orgs/spawnery/packages?package_type=container`
-returns `[]`, so the first tag is a clean-slate publish.
+pushed without a version bump is actually possible.
+
+When this was written, none of these fixes had run, and what was verified
+about the first tag was only what the review could check from outside:
+authenticated, GHCR answers `manifest unknown` for a repository that does
+not exist, so the guard proceeds rather than falsely aborting; and `gh api
+/orgs/spawnery/packages?package_type=container` returned `[]`.
+
+They have since run on a runner, repeatedly. Measured 2026-08-22:
+`release.yml` has five successful runs from tag pushes (`v0.1.0` through
+`v0.2.0`, the last of them the retag after the `vendorHash` fix), and that
+same API call now returns `paper`, `velocity` and `spawnery-operator`. So the
+`REGISTRY_AUTH_FILE` path authenticates on a hosted runner, and the
+once-per-image invocation publishes a release that bumps only one of the three.
+The clean-slate premise is spent; every future tag meets tags that are already
+there, which is the case the exit-status-3 separation was written for.
 
 **`release.yml` can now be dry-run without a tag, which it could not
 before.** It has a `workflow_dispatch` trigger that runs the job with
@@ -3507,9 +3518,10 @@ so the button cannot become an accidental publish. This is the mechanism
 the design's §5 already claimed existed ("`DRY_RUN=1` … is how the workflow
 gets exercised before a real tag exists") and did not; §5 now says so. Like
 `nightly.yml`'s, the dispatch cannot fire until the file is on the default
-branch, so it too is a one-time post-merge check for whoever owns this
+branch, so it too was a one-time post-merge check for whoever owns this
 repository: `gh workflow run release.yml`, once, and read what it says it
-would push.
+would push. **Done — 2026-08-20T08:45Z**, the one `workflow_dispatch` run in
+this workflow's history, concluded `success`.
 
 **CI builds one of the three image derivations the release publishes, so a
 stale Paper or Velocity hash is green all the way to the tag.** Recorded
@@ -3550,8 +3562,25 @@ comment says it "does not block a pull request", nothing consults it at tag
 time — the green-CI gate deliberately does not, because a nightly's signal
 is not per-commit and would need its own staleness rule — and a nightly is
 precisely the kind of standing red this repository has already let run three
-times unread. Whether a red nightly gets noticed is the open question, and
+times unread. Whether a red nightly gets noticed was the open question, and
 it is the same question, not a different one.
+
+**It has been answered, in the worst way available, by this entry's own
+incident.** `nightly.yml` ran at 2026-08-22T03:56Z and concluded `failure`,
+its `make image-repro` step being the one that failed. That is eleven hours
+before the `v0.2.0` release died at 15:07Z on the stale `vendorHash`, and
+`image-repro` builds `.#operator-image`, so the nightly was standing red on
+the release's own cause while the tag was being prepared. Nobody read it — it
+was found on 2026-08-22 only because this entry was being triaged. The run's
+log is no longer retrievable through the API, so the cause is inferred from
+what `master` carried at that hour rather than read from the output; the
+conclusion and the failing step are read directly.
+
+The green-CI gate would not have helped here either, for the reason above:
+`ci.yml`'s `e2e` job was red on the same commit, and the gate catches that.
+What the nightly adds is the two derivations `e2e` does not build — and this
+run is the demonstration that adding a signal is not the same as adding a
+reader.
 
 Closing the gap properly means building all three per push: minutes of
 runner time on every commit for derivations that change a handful of times a
