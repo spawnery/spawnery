@@ -14,6 +14,7 @@ on:
 permissions:
   contents: write
   packages: write
+  actions: read
 
 jobs:
   publish:
@@ -30,6 +31,31 @@ jobs:
           # before it, which needs more than the shallow clone actions/checkout
           # takes by default.
           fetch-depth: 0
+
+      # ci.yml's e2e job had already failed on the same Nix hash mismatch
+      # three times -- on two merges to master and on this release commit
+      # itself -- before a tag was pushed anyway. Each failure was visible in
+      # its own place and nobody read it; the tag was the fourth place the
+      # repository said so, and the first place anybody looked. This step is
+      # the read that should have happened automatically: it asks GitHub for
+      # ci.yml's own verdict on GITHUB_SHA and refuses to publish on anything
+      # but an explicit success. hack/require-green-ci.sh carries the rest of
+      # that reasoning -- why it reads the run's conclusion and not a job's,
+      # and why it filters on the push event rather than head_sha alone.
+      #
+      # First among the steps that can fail, and placed after checkout rather
+      # than before it only because the script above is not on disk until
+      # checkout has run. That costs seconds; cachix/install-nix-action below
+      # costs minutes, and this is what stands between a red or missing run
+      # and ever starting it. Fetching the script by some other means ahead of
+      # checkout would spend effort avoiding a cost that is already small, so
+      # it waits the one step it has to.
+      - name: CI, on the commit this tag points at
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/require-green-ci.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
+
       - name: Install Nix
         uses: cachix/install-nix-action@v31
         with:

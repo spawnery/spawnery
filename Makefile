@@ -192,6 +192,26 @@ image-repro:
 	nix build .#agents --no-link
 	nix build .#agents --rebuild --no-link
 
+# hack/require-green-ci-test.sh: three cases against this repository's live run
+# history through `gh`, two against a fixture through CI_RUNS_CMD. Deliberately
+# not a prerequisite of `test` or `all`, and not a CI job either: it needs
+# network access and an authenticated
+# `gh`, neither of which `make test` has ever required, and a unit suite that
+# fails on an expired token or an api.github.com outage stops being a signal
+# about this repository.
+#
+# It has an expiry date, which is the price of testing a gate against real
+# evidence. Its green and red cases name two commit shas and assert on the
+# ci.yml runs GitHub still holds for them; GitHub retains workflow runs for
+# about 90 days, so from roughly 2026-11-20 those two cases start failing with
+# nothing in this repository having changed. When they do, the fix is to point
+# GREEN_SHA and RED_SHA at a green and a red run that still exist -- the
+# script's own header records the `gh run list` invocation that confirms a
+# candidate -- and not to soften what they assert.
+.PHONY: require-green-ci-test
+require-green-ci-test:
+	hack/require-green-ci-test.sh
+
 # Not part of `all`: it contacts a registry and needs a token. DRY_RUN=1 still
 # builds every image it was asked for -- on this machine that is the expensive
 # part -- and then prints what it would copy where instead of copying it, so
