@@ -1208,6 +1208,16 @@ group. `kubectl delete pdb <name> -n <namespace>` removes it; the group's
 protection continues uninterrupted through the new-named object, which
 `reconcilePDB` has been maintaining all along.
 
+*Checked against the only installation there is, 2026-08-22.* `kubectl get pdb
+-n minecraft` returns `gateway-proxy-pdb` and `lobby-server-pdb` and nothing
+at a bare group name: that cluster was installed at v0.1.0 on 2026-08-20,
+milestones after this rename, so it never wrote the old object. Like the
+`GroupConfigMapName` rename recorded under milestones 3a and 3b, this hazard
+now describes a cluster nobody has — one installed before 4c-3 and upgraded
+across it. Keep it for whoever finds such an installation; the selector
+analysis above is what makes it worth finding, and it is not a pending task
+for anyone here.
+
 **A group in create-backoff, or one with a broken Network, condemns without
 replacing.** `size()` (`internal/controller/servergroup_controller.go`) gates
 only the create loop behind `backoff.MayCreate` — `condemn()`, which runs
