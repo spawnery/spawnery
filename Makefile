@@ -228,6 +228,17 @@ require-green-ci-test:
 require-no-red-nightly-test:
 	hack/require-no-red-nightly-test.sh
 
+# hack/image-derivations-changed-test.sh: six cases, all against this
+# repository's own git history. Unlike the two targets above it needs no
+# network and no token, and unlike require-green-ci-test it has no expiry date
+# -- it asserts about commits rather than about workflow runs, and git does not
+# drop reachable history the way GitHub drops runs after ninety days. It is
+# still out of `test` and `all`: it is about a CI job's decision, not about the
+# operator, and ci.yml exercises the decision itself on every push.
+.PHONY: image-derivations-changed-test
+image-derivations-changed-test:
+	hack/image-derivations-changed-test.sh
+
 # Not part of `all`: it contacts a registry and needs a token. DRY_RUN=1 still
 # builds every image it was asked for -- on this machine that is the expensive
 # part -- and then prints what it would copy where instead of copying it, so

@@ -106,6 +106,75 @@ jobs:
       - name: make lint
         run: nix develop -c make lint
 
+  # The Paper and Velocity images, built only when something that defines them
+  # moved.
+  #
+  # docs/known-issues.md, "From milestone 6e (CI)": this workflow builds one of
+  # the three image derivations the release publishes. The e2e job runs
+  # `nix build .#operator-image` and that is the only image any job here
+  # reaches, so nix/paper.nix's two fixed-output hashes and nix/velocity.nix's
+  # third are fetched against by nothing on the commit loop. Move one and the
+  # first thing to notice is hack/publish.sh on a runner, after a v* tag has
+  # been pushed and the release has therefore already been announced.
+  #
+  # That entry weighed building all three on every push -- minutes of runner
+  # time on every commit for derivations that change a handful of times a year
+  # -- and concluded nobody had made that trade. This is the trade nobody
+  # wrote down: build them when the files that define them change, which is
+  # exactly when a hash can move, and on every other push spend one `git diff`.
+  #
+  # It lives in ci.yml rather than in a workflow of its own on purpose.
+  # hack/require-green-ci.sh reads *this* workflow's run conclusion and never a
+  # job's, so a job added here is inside the release gate for free, and a red
+  # one stops a tag. A separate workflow would be outside it.
+  #
+  # What it does not cover, and the nightly still does: a hash breaks when the
+  # bytes at a URL change, and upstream can do that without a line of this
+  # repository moving. nightly.yml builds all four derivations unconditionally
+  # and opens an issue when they fail. This job narrows the window between a
+  # bad commit and 03:17 the next morning; it does not replace the thing
+  # watching for changes that arrive from outside.
+  images:
+    runs-on: ubuntu-latest
+    # Measured against nightly.yml, which builds four derivations twice each in
+    # eight to ten minutes on a cold runner. Two derivations once is a small
+    # fraction of that; twenty-five is the same allowance the test job gets and
+    # is here to stop a wedged run rather than to describe one.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The decision below diffs against a base commit, which needs more
+          # than the default shallow clone.
+          fetch-depth: 0
+
+      - name: Which files moved
+        id: changed
+        env:
+          # For a pull request, the branch point. For a push, the commit the
+          # branch was at before it -- all zeros on a branch's first push,
+          # which the script reads as "cannot tell" and builds.
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: hack/image-derivations-changed.sh "${BASE}" "${GITHUB_SHA}"
+
+      - name: Install Nix
+        if: steps.changed.outputs.build == 'true'
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # Not `make image-test`: that loads them into a kind cluster and runs a
+      # server, which is the e2e job's business. The question here is narrower
+      # and is the one the fixed-output hashes answer to -- do these two
+      # derivations still build, which means do their downloads still hash to
+      # what the files say.
+      - name: Build the Paper and Velocity images
+        if: steps.changed.outputs.build == 'true'
+        run: |
+          nix build .#paper-image --no-link
+          nix build .#velocity-image --no-link
+
   deps:
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -3687,8 +3687,41 @@ reader.
 
 Closing the gap properly means building all three per push: minutes of
 runner time on every commit for derivations that change a handful of times a
-year. Nobody has made that trade, which is why this is an entry and not a
+year. Nobody had made that trade, which is why this was an entry and not a
 commit.
+
+**The trade nobody had written down, taken 2026-08-23.** There is a third
+option between "every push" and "never": build them when the files that define
+them move, which is exactly when a hash in this repository can move, and spend
+one `git diff` on every other push. `ci.yml` gained an `images` job whose first
+step is `hack/image-derivations-changed.sh`, and the two `nix build` steps
+behind it carry `if: steps.changed.outputs.build == 'true'`.
+
+Three things about its shape are deliberate and are the reasons it is worth
+more than it looks:
+
+- **It is a job in `ci.yml`, not a workflow of its own.**
+  `hack/require-green-ci.sh` reads this workflow's *run* conclusion and never a
+  named job's, precisely so a job added later is inside the release gate for
+  free. A separate `images.yml` would have been outside it, and a red one would
+  not have stopped a tag.
+- **Every uncertainty builds.** An all-zeros base on a branch's first push, an
+  empty base, a base the clone does not contain, a `git diff` that fails —
+  each answers `true`. The wrong answer that costs runner minutes is always
+  preferred to the wrong answer that costs coverage, and skipping is the exact
+  failure the job exists to prevent. Its test drives all three not-knowing
+  cases, because none of them is reachable in the ordinary run anybody would
+  check by hand.
+- **The path list is `nix/` entire**, plus `flake.nix`, `flake.lock` and the
+  two files that decide this. Naming only the four files that carry hashes
+  would be a list somebody has to remember to extend.
+
+**It does not replace the nightly, and the entry above is still true of the
+part it cannot reach.** A fixed-output hash breaks when the bytes at a URL
+change, and upstream can do that without a line of this repository moving. This
+job narrows the window between a bad commit and 03:17 the next morning; only
+`nightly.yml`, which builds all four derivations unconditionally, watches for
+the breakage that arrives from outside.
 
 **What was made instead, on 2026-08-23: the nightly got a reader and the
 release got a gate.** The gap above is unchanged — `ci.yml` still builds one
