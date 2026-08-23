@@ -193,6 +193,21 @@ func TestProxyAddressPerStrategy(t *testing.T) {
 			},
 		}
 	}
+	// readyPodBindingHostPort is readyPod plus the one fact proxyAddress's
+	// HostPort arm now requires: the container itself declaring the port,
+	// not just a ready pod on the node. A bare readyPod() here would be the
+	// fabrication case internal/controller/proxyaddress_test.go exists to
+	// catch -- a ready pod that proves nothing about this strategy.
+	readyPodBindingHostPort := func(hostPort int32) corev1.Pod {
+		pod := readyPod()
+		pod.Spec.Containers = []corev1.Container{{
+			Ports: []corev1.ContainerPort{{
+				Name:     podspec.MinecraftPortName,
+				HostPort: hostPort,
+			}},
+		}}
+		return pod
+	}
 	notReadyPod := func() corev1.Pod {
 		return corev1.Pod{
 			Status: corev1.PodStatus{
@@ -217,13 +232,18 @@ func TestProxyAddressPerStrategy(t *testing.T) {
 		want   string
 	}{
 		{
+			// The svc here carries the allocation, not the spec's request --
+			// proxyAddress no longer reads group.Spec.Expose.NodePort at all.
 			name: "NodePort publishes the node's address",
 			expose: spawneryv1alpha1.ExposeSpec{
 				Type:     spawneryv1alpha1.ExposeNodePort,
 				NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30001},
 			},
 			pods: []corev1.Pod{readyPod()},
-			svc:  &corev1.Service{},
+			svc: &corev1.Service{Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{
+				Name:     podspec.MinecraftPortName,
+				NodePort: 30001,
+			}}}},
 			want: "10.0.0.7:30001",
 		},
 		{
@@ -232,7 +252,7 @@ func TestProxyAddressPerStrategy(t *testing.T) {
 				Type:     spawneryv1alpha1.ExposeHostPort,
 				HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
 			},
-			pods: []corev1.Pod{readyPod()},
+			pods: []corev1.Pod{readyPodBindingHostPort(25565)},
 			svc:  nil,
 			want: "10.0.0.7:25565",
 		},
@@ -287,12 +307,16 @@ func TestProxyAddressPerStrategy(t *testing.T) {
 			want: "",
 		},
 		{
+			// svc must be present too: this strategy publishes a name that
+			// something outside the cluster routes to the Service, so without
+			// the Service the name goes nowhere.
 			name: "ClusterIP publishes the configured address",
 			expose: spawneryv1alpha1.ExposeSpec{
 				Type:      spawneryv1alpha1.ExposeClusterIP,
 				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
 			},
 			pods: []corev1.Pod{readyPod()},
+			svc:  &corev1.Service{},
 			want: "mc.example.test",
 		},
 		{
@@ -305,6 +329,17 @@ func TestProxyAddressPerStrategy(t *testing.T) {
 				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
 			},
 			pods: []corev1.Pod{notReadyPod()},
+			svc:  &corev1.Service{},
+			want: "",
+		},
+		{
+			name: "ClusterIP publishes nothing without the Service to route to",
+			expose: spawneryv1alpha1.ExposeSpec{
+				Type:      spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
+			},
+			pods: []corev1.Pod{readyPod()},
+			svc:  nil,
 			want: "",
 		},
 	} {

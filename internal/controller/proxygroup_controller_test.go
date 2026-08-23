@@ -312,9 +312,14 @@ func TestProxyGroupAddressComesFromAReadyPodsHostIP(t *testing.T) {
 
 	group := f.proxyGroup("gateway")
 	// The host half is the hostIP markProxyPodReady puts on the pod; the port
-	// half is the group's nodePort. Both sides of the address are read back
-	// from where they were written, not hardcoded twice.
-	want := fmt.Sprintf("%s:%d", proxyPodHostIP, f.proxyGroup("gateway").Spec.Expose.NodePort.Port)
+	// half is the node port the API server allocated, read off the Service
+	// because that is now where proxyAddress reads it. Both sides are read
+	// back from where they were written, not hardcoded twice.
+	svc := &corev1.Service{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "gateway", Namespace: f.ns}, svc); err != nil {
+		t.Fatalf("get the group's Service: %v", err)
+	}
+	want := fmt.Sprintf("%s:%d", proxyPodHostIP, allocatedNodePort(svc))
 	if group.Status.Address != want {
 		t.Errorf("status.address = %q, want %s", group.Status.Address, want)
 	}
