@@ -255,8 +255,62 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	obs, res, err := r.reconcileObserved(ctx, network, group)
+	// The status is written wherever the pods and the Service were actually
+	// read, and nowhere else. Both halves of that are deliberate.
+	//
+	// Wherever: before this, setStatus was the last call before the successful
+	// return and eleven error returns stood in front of it, so a pass that
+	// failed partway through kept whatever the last successful pass had
+	// published. A group switched into a strategy the API server refuses went
+	// on advertising the node port of a Service that reconcileService had
+	// already deleted, and no later pass corrected it because no later pass
+	// could get any further.
+	//
+	// And nowhere else: Reconcile also returns before any of this, on a
+	// missing or unaccepted Network and on an unimplemented expose type. The
+	// address is untouched there on purpose. Nothing about the serving world
+	// has changed on those paths -- the pods are running, the Service is
+	// there, people are connected through it -- and blanking a working address
+	// because a different object went missing would be a regression caused by
+	// this fix rather than a part of it.
+	if obs.observed {
+		r.setStatus(group, obs.pods, obs.svc)
+		if werr := r.writeStatus(ctx, group); werr != nil {
+			if err == nil {
+				return res, werr
+			}
+			// The reconcile's own error is the cause and the one worth backing
+			// off on; the failed write is reported rather than substituted.
+			log.FromContext(ctx).Error(werr, "recording the group's status")
+		}
+	}
+	return res, err
+}
+
+// proxyObservation is what one pass of reconcileObserved saw. observed is a
+// flag and not a nil check on svc: HostPort creates no Service at all, so a
+// nil svc is that strategy's normal state and cannot stand in for "this pass
+// never looked".
+type proxyObservation struct {
+	observed bool
+	pods     []corev1.Pod
+	svc      *corev1.Service
+}
+
+// reconcileObserved does everything from the namespace bootstrap onward and
+// returns what it saw, so that its caller can record the status however this
+// returns. Its result carries the RequeueAfter the successful path has always
+// returned; the caller adds nothing to it.
+func (r *ProxyGroupReconciler) reconcileObserved(
+	ctx context.Context,
+	network *spawneryv1alpha1.Network,
+	group *spawneryv1alpha1.ProxyGroup,
+) (proxyObservation, ctrl.Result, error) {
+	var obs proxyObservation
+
 	if err := r.Bootstrap.Ensure(ctx, group.Namespace); err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
 	// Rendered here, beside Bootstrap.Ensure and before reconcileReplicas can
 	// create the first proxy pod: that pod's projected volume names this
@@ -264,56 +318,44 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// stops the reconcile before reconcileReplicas runs — the guarantee is
 	// the early return, not the order these lines happen to be written in.
 	if err := r.reconcileConfigMap(ctx, group); err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
 	svc, err := r.reconcileService(ctx, group)
 	if err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
-
-	// A snapshot from before this pass's own creates: reconcileReplicas may
-	// create pods below, but pods itself is not refreshed to include them, so
-	// its per-pod logic -- the readiness assertion loop and the divergence
-	// check riding along with it -- sees a newly created pod for the first
-	// time on the pass after this one, not this one.
 	pods, err := r.pods(ctx, group)
 	if err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
+	// From here the pass has seen both, so every return below carries an
+	// observation the caller will record.
+	obs = proxyObservation{observed: true, pods: pods, svc: svc}
+
 	if err := r.reconcileReplicas(ctx, network, group, pods); err != nil {
-		// A create the API server refused is the group's business and not
-		// only the log's. IsForbidden covers both ways it happens: a Pod
-		// Security profile that forbids the pod's shape -- which is how every
-		// HostPort group in a baseline or restricted namespace ends -- and an
-		// RBAC grant the operator does not have. IsInvalid covers a pod the
-		// API server rejects outright, a quota or a webhook among them.
-		//
-		// The status write is on the error path deliberately: without it the
-		// reconcile returns having recorded nothing, and the group sits at
-		// Pending with no conditions, indistinguishable from one no reconcile
-		// has ever touched. A failure to write the status is reported by
-		// returning the original error regardless -- the create failure is
-		// the cause and the one worth backing off on.
 		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
 			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodRejected, err.Error()) {
 				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
 					actionCreateProxyPod, "%s",
 					eventNote("the API server refused a proxy pod: %s", err.Error()))
 			}
-			group.Status.Phase = "Degraded"
-			if werr := r.writeStatus(ctx, group); werr != nil {
-				log.FromContext(ctx).Error(werr, "recording a refused proxy pod on the group")
-			}
+			// The phase is not set here and the status is not written here.
+			// setStatus derives Degraded from the condition this branch just
+			// set, and the caller writes on every path that got this far.
 		}
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
 
 	// Re-read after the changes, so the status describes what is there rather
-	// than what was there when the reconcile started.
-	pods, err = r.pods(ctx, group)
-	if err != nil {
-		return ctrl.Result{}, err
+	// than what was there when the reconcile started. A failure here leaves
+	// the earlier snapshot in place: a status describing the last observation
+	// that succeeded is a weaker statement than this pass meant to make and a
+	// far stronger one than none.
+	if pods, err = r.pods(ctx, group); err != nil {
+		return obs, ctrl.Result{}, err
 	}
+	obs.pods = pods
+
 	// Before setStatus: setStatus reads the Degraded condition to derive the
 	// phase, so whether a pod this group asked for failed to come into
 	// existence has to be known before that read.
@@ -321,10 +363,9 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Before setStatus: the budget's selector has to find the label already on
 	// the pods it is sizing minAvailable for, on the same pass.
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
-	r.setStatus(group, pods, svc)
-	return ctrl.Result{RequeueAfter: resyncInterval}, r.writeStatus(ctx, group)
+	return obs, ctrl.Result{RequeueAfter: resyncInterval}, nil
 }
 
 // refuse is the shared tail of the three paths that give up before

@@ -648,6 +648,141 @@ func TestARejectedProxyPodIsReportedOnTheGroup(t *testing.T) {
 	}
 }
 
+// TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress is the
+// scenario docs/known-issues.md's milestone 6c entry describes, driven rather
+// than reasoned: a NodePort group publishing an address is switched to
+// HostPort in a namespace that forbids host ports, reconcileService deletes
+// the Service, the replacement pods are refused, and before this test existed
+// Reconcile returned before setStatus and left status.address naming the node
+// port of a Service that no longer existed -- for as long as the namespace
+// label stood, which is forever.
+func TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 1
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeNodePort,
+			NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30765},
+		}
+	})
+
+	// Bring the group up and get an address on it.
+	f.reconcileProxyGroup(r, "gateway")
+	pods := f.proxyPods("gateway")
+	if len(pods) != 1 {
+		t.Fatalf("proxy pods = %d, want 1", len(pods))
+	}
+	f.markProxyPodReady(t, &pods[0])
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyGroup("gateway").Status.Address
+	if before == "" {
+		t.Fatal("the group published no address before the switch, so this test " +
+			"cannot show one being withdrawn")
+	}
+
+	// Now forbid host ports and ask for them.
+	f.enforcePodSecurity(t, "baseline")
+	group := f.proxyGroup("gateway")
+	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+		Type:     spawneryv1alpha1.ExposeHostPort,
+		HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
+	}
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("switch the group to HostPort: %v", err)
+	}
+
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
+	}); err == nil {
+		t.Fatal("the reconcile succeeded in a namespace that forbids host ports")
+	}
+
+	// The premise: an old ready pod is still there. Without this, an empty
+	// address might only mean "no pod is ready", which is a different and much
+	// weaker statement than the one this test is making.
+	stillReady := 0
+	for _, p := range f.proxyPods("gateway") {
+		if isPodReady(&p) {
+			stillReady++
+		}
+	}
+	if stillReady == 0 {
+		t.Skip("no ready pod survived the switch, so this run cannot distinguish " +
+			"the address guard from the readiness gate; see the plan's note")
+	}
+
+	after := f.proxyGroup("gateway")
+	if after.Status.Address != "" {
+		t.Errorf("status.address = %q, want it empty. It was %q before the switch, "+
+			"and the Service that node port belonged to has been deleted -- a player "+
+			"dialing it reaches nothing", after.Status.Address, before)
+	}
+	// The empty address on its own would be its own defect: a group with no
+	// address and no reason is indistinguishable from one that has not come up
+	// yet.
+	cond := meta.FindStatusCondition(after.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("Degraded = %+v, want True beside the empty address", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonProxyPodRejected {
+		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonProxyPodRejected)
+	}
+	if after.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded", after.Status.Phase)
+	}
+}
+
+// TestABrokenNetworkLeavesAWorkingAddressAlone pins the other half of the
+// rule. Reconcile returns on a missing Network before it reads a single pod or
+// Service, and the address must survive that: the proxies are still running,
+// the Service is still there, and people are still connected through it. A
+// deleted Network does not make an address wrong, and clearing it here would
+// be a regression caused by the fix rather than a part of it.
+func TestABrokenNetworkLeavesAWorkingAddressAlone(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 1
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeNodePort,
+			NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30766},
+		}
+	})
+	f.reconcileProxyGroup(r, "gateway")
+	pods := f.proxyPods("gateway")
+	if len(pods) != 1 {
+		t.Fatalf("proxy pods = %d, want 1", len(pods))
+	}
+	f.markProxyPodReady(t, &pods[0])
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyGroup("gateway").Status.Address
+	if before == "" {
+		t.Fatal("no address to preserve, so this test cannot show it being preserved")
+	}
+
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete Network: %v", err)
+	}
+
+	// This path returns cleanly with a requeue, so reconcileProxyGroup is the
+	// right helper.
+	f.reconcileProxyGroup(r, "gateway")
+
+	after := f.proxyGroup("gateway")
+	if after.Status.Address != before {
+		t.Errorf("status.address = %q, want it left at %q — the pods and the Service "+
+			"are untouched by a missing Network, so the address still works",
+			after.Status.Address, before)
+	}
+	cond := meta.FindStatusCondition(after.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Errorf("Accepted = %+v, want False — the refusal still has to be legible", cond)
+	}
+}
+
 // With hostPort the kube-scheduler places at most one pod of a group per
 // node, so replicas is capped by the node count -- the likeliest HostPort
 // mistake there is. The surplus pod exists and stays Pending, and the
