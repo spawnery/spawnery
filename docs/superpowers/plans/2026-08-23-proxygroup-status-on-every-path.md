@@ -525,7 +525,7 @@ output from Step 7.
 
 **Files:**
 - Modify: `internal/controller/proxygroup_controller.go:178-327`
-- Modify: `internal/controller/expose_test.go` (append three tests)
+- Modify: `internal/controller/expose_test.go` (append two tests)
 - Modify: `docs/known-issues.md` (the 6c entry)
 
 **Interfaces:**

@@ -324,6 +324,11 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err != nil {
 		return obs, ctrl.Result{}, err
 	}
+	// A snapshot from before this pass's own creates: reconcileReplicas may
+	// create pods below, but pods itself is not refreshed to include them, so
+	// its per-pod logic -- the readiness assertion loop and the divergence
+	// check riding along with it -- sees a newly created pod for the first
+	// time on the pass after this one, not this one.
 	pods, err := r.pods(ctx, group)
 	if err != nil {
 		return obs, ctrl.Result{}, err
@@ -333,6 +338,12 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	obs = proxyObservation{observed: true, pods: pods, svc: svc}
 
 	if err := r.reconcileReplicas(ctx, network, group, pods); err != nil {
+		// A create the API server refused is the group's business and not
+		// only the log's. IsForbidden covers both ways it happens: a Pod
+		// Security profile that forbids the pod's shape -- which is how every
+		// HostPort group in a baseline or restricted namespace ends -- and an
+		// RBAC grant the operator does not have. IsInvalid covers a pod the
+		// API server rejects outright, a quota or a webhook among them.
 		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
 			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodRejected, err.Error()) {
 				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
