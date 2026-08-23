@@ -72,6 +72,30 @@ existing guard — the version preflight, the chart-version guard and the
 publishes-nothing guard all stay exactly where they are and keep catching what
 they catch.
 
+> **Corrected 2026-08-23: `release.yml` now does consult `nightly.yml`, and
+> the staleness rule this paragraph asked for turned out to be a person.** The
+> leftover gap §2 hands to `docs/known-issues.md` — that `.#paper-image` and
+> `.#velocity-image` carry fixed-output hashes no CI job builds against —
+> stopped being hypothetical in the same week it was written: `nightly.yml`
+> went red on 2026-08-22 at 03:56Z, nobody read it, and eleven hours later
+> `v0.2.0` died on the cause it had already found. A second step, `The nightly
+> reproducibility build`, now stands beside the one this design adds.
+>
+> It does not read the nightly's runs, which is what this paragraph was right
+> to refuse: a run's verdict is about the night it ran and ages in both
+> directions, and a red one in particular stands until 03:17 the next morning
+> — so a rule reading it would have blocked the very retag that fixed the
+> 2026-08-22 failure. It reads an **issue** that `nightly.yml` opens on failure
+> and closes on success. An issue is a state a person can end, and ending it is
+> the whole override: no flag, no environment variable, nothing that skips the
+> gate without leaving a trace of who decided to. That is the staleness rule —
+> not a duration, but somebody saying the cause is fixed, with tomorrow's
+> nightly to contradict them if they were wrong.
+>
+> `hack/require-no-red-nightly.sh` carries the rest, including why the absence
+> of an issue is permission there while the absence of a CI run is a refusal in
+> §3's table below.
+
 ## 3. The check
 
 A step named for what it asserts, first in the `publish` job, before the

@@ -3587,6 +3587,34 @@ runner time on every commit for derivations that change a handful of times a
 year. Nobody has made that trade, which is why this is an entry and not a
 commit.
 
+**What was made instead, on 2026-08-23: the nightly got a reader and the
+release got a gate.** The gap above is unchanged — `ci.yml` still builds one
+of the three, and a stale Paper or Velocity hash still goes green through
+every pull request. What changed is that the nightly's verdict no longer stops
+at a run nobody opens. `nightly.yml` opens an issue labelled `nightly-red` when
+`make image-repro` fails and closes it when a later nightly passes, and
+`release.yml`'s publish job refuses to start while such an issue is open
+(`hack/require-no-red-nightly.sh`, beside the green-CI gate).
+
+The rule is deliberately a person rather than a duration, and the reason is
+this entry's own incident read the other way round. A nightly's verdict is
+about the night it ran: "the last one was green" says nothing about a commit
+pushed this morning, and "the last one was red" stands until 03:17 the next
+morning even after the cause is fixed at noon. A gate reading the run would
+therefore have refused the 2026-08-22 retag that fixed the `vendorHash` — it
+would have blocked its own remedy. A gate reading an issue refuses until
+somebody closes it, and closing it is a claim that the cause is fixed, with the
+next nightly free to contradict them. **The override is the act of reading,
+which is precisely what was missing.**
+
+Two things this does not do. It does not make CI build the two derivations, so
+the window between a bad merge and 03:17 the next morning is as open as it
+was. And it cannot help a repository where the nightly never runs at all — a
+disabled schedule leaves no issue to find, and the gate reads that as
+permission, by the same rule that makes "no issue" the ordinary state.
+`docs/superpowers/specs/2026-08-22-release-requires-green-ci-design.md` §2
+carries the correction to the design that had refused this.
+
 ## From the RKE2 rollout (milestone 6, driven 2026-08-20)
 
 Driven against `paulwtf`; the evidence is `docs/runbook-milestone-6-rollout.md`

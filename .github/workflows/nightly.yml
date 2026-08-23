@@ -8,6 +8,13 @@ on:
     - cron: "17 3 * * *"
   workflow_dispatch:
 
+# issues: write is what the two reporting steps below need. contents: read is
+# the checkout. Nothing here publishes anything, so nothing here gets
+# packages: write.
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   image-repro:
     runs-on: ubuntu-latest
@@ -17,6 +24,12 @@ jobs:
     # pull request, because a nightly failure says nothing about the code
     # somebody proposed today.
     timeout-minutes: 90
+    env:
+      # One name, read by both steps below and by
+      # hack/require-no-red-nightly.sh, which defaults to the same string.
+      # They are two files and this is the seam between them, so changing it
+      # means changing both -- the script does not read this variable.
+      NIGHTLY_LABEL: nightly-red
     steps:
       - uses: actions/checkout@v4
       - name: Install Nix
@@ -26,3 +39,109 @@ jobs:
             experimental-features = nix-command flakes
       - name: make image-repro
         run: nix develop -c make image-repro
+
+      # The two steps below exist because on 2026-08-22 this workflow went red
+      # at 03:56Z and nobody read it. Eleven hours later a release died on the
+      # same cause -- a stale vendorHash that .#operator-image would not build
+      # against. This job is also the only thing in the repository that builds
+      # .#paper-image and .#velocity-image at all, so for those two it is not
+      # merely the earliest signal, it is the only one.
+      #
+      # A signal nobody reads is not a signal, so the failure now lands
+      # somewhere with a state: an open issue, which hack/require-no-red-nightly.sh
+      # refuses to release over.
+      #
+      # Neither step fires on a cancelled or timed-out run: failure() is false
+      # for a cancellation, and that is right. A cancelled run found nothing,
+      # and reporting it would put an issue in front of somebody that says
+      # only that a job was interrupted.
+      - name: Report the failure where somebody will meet it
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # Idempotent, and only ever run on a night that is already failing,
+          # so it costs a green nightly nothing. It exists so that a fresh
+          # clone or a fork does not have its first failure swallowed by
+          # `gh issue create` refusing a label that was never created by hand.
+          gh label create "${NIGHTLY_LABEL}" \
+            --color b60205 \
+            --description "The nightly reproducibility build is failing. Closing this is how you say the cause is fixed." \
+            2>/dev/null || true
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty')"
+
+          cat >/tmp/nightly-body.md <<EOF
+          \`make image-repro\` failed on the nightly run.
+
+          | | |
+          |---|---|
+          | latest failing run | ${RUN_URL} |
+          | commit | \`${GITHUB_SHA}\` |
+          | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
+
+          This job builds \`.#paper-image\`, \`.#velocity-image\`,
+          \`.#operator-image\` and \`.#agents\`, each twice, and compares. It is
+          the only job in this repository that builds the Paper and Velocity
+          images at all — \`ci.yml\`'s \`e2e\` job builds
+          \`.#operator-image\` and nothing else — so a stale fixed-output hash
+          in \`nix/paper.nix\` or \`nix/velocity.nix\` is visible here and
+          nowhere else until \`hack/publish.sh\` meets it on a runner, after a
+          tag has been pushed and the release has already been announced.
+
+          **\`hack/require-no-red-nightly.sh\` refuses a release while this
+          issue is open.** Closing it is the whole override, and closing it is
+          a claim that the cause is fixed. If the claim is wrong, tomorrow's
+          nightly opens a new one and the release after that stops again.
+
+          Opened automatically by \`.github/workflows/nightly.yml\`.
+          EOF
+
+          if [ -n "${existing}" ]; then
+            # Edited rather than commented on. A red state that lasts a
+            # fortnight is one issue, not fourteen notifications, and the body
+            # is the place a reader looks first -- so it carries the newest
+            # failing run rather than the oldest.
+            gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
+              --body-file /tmp/nightly-body.md
+            echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "Nightly: make image-repro failed" \
+              --label "${NIGHTLY_LABEL}" \
+              --body-file /tmp/nightly-body.md
+          fi
+
+      - name: Close the report if there is one
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # No label yet means no failure has ever been reported, which is the
+          # state this repository was in when these steps were written. `gh
+          # issue list` on a label that does not exist is an error rather than
+          # an empty list, so the query is allowed to fail and is read as
+          # "nothing to close" -- the opposite reading from the one
+          # hack/require-no-red-nightly.sh takes of the same failure, and
+          # deliberately so: there, not being able to look must not permit a
+          # release; here, not being able to look can only fail to close
+          # something, which the next green run tries again.
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty' 2>/dev/null || true)"
+
+          if [ -z "${existing}" ]; then
+            exit 0
+          fi
+
+          gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
+            --comment "Closed by the nightly run that passed: ${RUN_URL}"
+          echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"

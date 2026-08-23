@@ -15,6 +15,10 @@ permissions:
   contents: write
   packages: write
   actions: read
+  # issues: read, for the nightly gate below. Read and not write: this
+  # workflow asks whether a report is open and never touches one. Closing it
+  # is the release owner's act, which is the whole point of that gate.
+  issues: read
 
 jobs:
   publish:
@@ -55,6 +59,36 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: hack/require-green-ci.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
+
+      # The gate above asks ci.yml, and ci.yml builds .#operator-image and no
+      # other image derivation. .#paper-image and .#velocity-image carry three
+      # fixed-output hashes between them that nothing on the commit loop ever
+      # fetches against, and nightly.yml is the only job in this repository
+      # that does -- so for those two it is not the earliest signal, it is the
+      # only one. Without this step a stale Paper or Velocity hash is green
+      # through CI, green through the gate above, and first meets somebody in
+      # hack/publish.sh below, on a runner, after the tag has been pushed and
+      # the release has therefore already been announced.
+      #
+      # It reads an issue rather than nightly.yml's own runs, and that is the
+      # staleness rule rather than a shortcut around one. A nightly's verdict
+      # is about the night it ran, not about this commit, so "the last one was
+      # green" and "the last one was red" both age badly on their own -- the
+      # red one especially, since a cause fixed at noon leaves a red run
+      # standing until 03:17 the next morning and would block its own fix. An
+      # issue is a state somebody can end, and ending it is what this gate is
+      # for: on 2026-08-22 the nightly went red, nobody read it, and eleven
+      # hours later a release died on the same cause. Closing the issue is the
+      # reader arriving.
+      #
+      # docs/superpowers/specs/2026-08-22-release-requires-green-ci-design.md
+      # §2 says this workflow does not consult nightly.yml. That was true when
+      # it was written and this step changes it; §2 carries the correction.
+      - name: The nightly reproducibility build
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: hack/require-no-red-nightly.sh "${GITHUB_REPOSITORY}"
 
       - name: Install Nix
         uses: cachix/install-nix-action@v31

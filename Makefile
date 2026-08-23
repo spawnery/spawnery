@@ -212,6 +212,22 @@ image-repro:
 require-green-ci-test:
 	hack/require-green-ci-test.sh
 
+# hack/require-no-red-nightly-test.sh: one case against the live repository
+# through `gh`, four against fixtures through NIGHTLY_ISSUES_CMD. Not a
+# prerequisite of `test` or `all`, for the same reason as the target above --
+# it needs the network and an authenticated gh.
+#
+# Unlike that target this one has no expiry date, because it asserts about
+# issues rather than about workflow runs: GitHub expires runs after about 90
+# days and expires nothing about an issue. Its live case asserts the ordinary
+# state -- no open nightly-red issue -- so it starts failing exactly when the
+# nightly is red and somebody has not dealt with it yet, which is a true
+# statement about this repository rather than a stale fixture. If it fails,
+# read the issue it is telling you about before touching this file.
+.PHONY: require-no-red-nightly-test
+require-no-red-nightly-test:
+	hack/require-no-red-nightly-test.sh
+
 # Not part of `all`: it contacts a registry and needs a token. DRY_RUN=1 still
 # builds every image it was asked for -- on this machine that is the expensive
 # part -- and then prints what it would copy where instead of copying it, so
