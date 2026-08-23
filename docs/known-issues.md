@@ -3837,13 +3837,38 @@ addresses and a shared address.
 
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
-**A CA rotation is asked for, never scheduled.** `CALifetime`
-(`internal/certs/bundle.go`) is still ten years, and nothing in the operator
-watches a certificate's remaining lifetime. The procedure below exists and
-works, but it only runs because a human annotates the operator's own TLS
-secret, `spawnery-agent-tls`; nothing triggers it on its own. Design:
-`docs/superpowers/specs/2026-08-21-ca-rotation-design.md`, built on the
-distribution guarantee
+**A CA rotation is asked for, never scheduled — but its clock is now
+visible.** `CALifetime` (`internal/certs/bundle.go`) is still ten years, and
+nothing in the operator *starts* a rotation on its own. What changed on
+2026-08-23 is that the remaining life stopped being invisible:
+`spawnery_ca_expiry_timestamp_seconds` and
+`spawnery_serving_cert_expiry_timestamp_seconds` are published from
+`Provider.Set`, so every path that changes what the operator serves updates
+them. The chart ships an optional `PrometheusRule`
+(`metrics.prometheusRule.enabled`) whose `SpawneryCAExpiringSoon` fires at 90
+days by default. The operator still
+holds no threshold of its own: how many days should worry somebody is a fact
+about a cluster, not about this code.
+
+**And the gauges could not be scraped at all until the same day, which made
+this file's own advice unfollowable.** The operator has served metrics on
+`:8080` since it existed, and the NetworkPolicy has admitted that port from
+anywhere with a comment naming "a metrics scrape" — but
+`templates/service.yaml` exposed only the agent port, so nothing could route to
+it, and no `ServiceMonitor` existed to ask. The entry below tells a reader to
+"alert on the gauge, not on the event" because the events expire out of the API
+within the hour; as installed, there was no address at which those gauges could
+be reached. The Service now carries the port the Deployment had always
+declared, and `metrics.serviceMonitor.enabled` renders the object that scrapes
+it. Both monitoring templates default to off, because their kinds come from the
+Prometheus Operator's CRDs and a chart that renders them unasked fails `helm
+install` on every cluster without them.
+
+Nothing in the operator watches a certificate's remaining lifetime. The
+procedure below exists and works, but it only runs because a human annotates
+the operator's own TLS secret, `spawnery-agent-tls`; nothing triggers it on its
+own. Design: `docs/superpowers/specs/2026-08-21-ca-rotation-design.md`, built
+on the distribution guarantee
 `docs/superpowers/specs/2026-08-21-ca-bundle-distribution-design.md`
 established — that a new CA reaches every namespace holding a `Network`
 without waiting for a pod restart, because `NetworkReconciler` calls

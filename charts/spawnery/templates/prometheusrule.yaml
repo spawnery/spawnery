@@ -1,0 +1,97 @@
+{{- if .Values.metrics.prometheusRule.enabled }}
+# Off by default for the same reason as the ServiceMonitor beside it: the kind
+# comes from the Prometheus Operator's CRDs.
+#
+# These four rules are the whole answer to "a CA rotation is asked for, never
+# scheduled" and "a RotationBlocked event does not repeat", both in
+# docs/known-issues.md. Every one of them alerts on a gauge rather than on an
+# event, because a Kubernetes event expires out of the API within the hour and
+# the gauges do not.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: spawnery-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spawnery.labels" . | nindent 4 }}
+    {{- with .Values.metrics.prometheusRule.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: spawnery-ca
+      rules:
+        # The one this file exists for. Nothing in the operator watches the
+        # CA's remaining life: CALifetime is ten years, and the rotation
+        # procedure runs only because a human annotates the operator's secret.
+        # Ten years is not urgent and that is exactly the danger -- it is far
+        # enough away that nobody will think of it until something stops
+        # handshaking.
+        - alert: SpawneryCAExpiringSoon
+          expr: |
+            (spawnery_ca_expiry_timestamp_seconds - time())
+              < {{ mul .Values.metrics.prometheusRule.caExpiryWarningDays 86400 }}
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: The spawnery agent CA expires in under {{ .Values.metrics.prometheusRule.caExpiryWarningDays }} days.
+            description: >-
+              Rotating it is a deliberate multi-step procedure with a hold in
+              the middle that waits for a person, so start it with time in
+              hand. Annotate the operator's TLS secret with
+              spawnery.cloud/rotate-ca=start and follow
+              docs/known-issues.md's "On the agent channel" section. Note that
+              a start annotation can sit unread for up to an hour on an idle
+              cluster, because the operator only re-reads it on its slow tick.
+
+        # The serving certificate renews itself at a third of its life
+        # remaining, so this does not fire on the ordinary path at all. It
+        # fires when renewal has stopped working, which nothing else reports.
+        - alert: SpawneryServingCertificateNotRenewing
+          expr: (spawnery_serving_cert_expiry_timestamp_seconds - time()) < 86400
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: The spawnery operator's serving certificate expires within a day.
+            description: >-
+              This certificate renews on its own once a third of its life is
+              left, so reaching one day means the renewal path has stopped.
+              Every agent handshake fails when it expires.
+
+        # docs/known-issues.md: a RotationBlocked event fires only when the
+        # list of blocked namespaces changes, and Kubernetes expires it within
+        # the hour, so a gate blocked for days is silent everywhere except
+        # here and the annotation on the secret.
+        - alert: SpawneryCARotationBlocked
+          expr: spawnery_ca_rotation_blocked_namespaces > 0
+          for: 6h
+          labels:
+            severity: warning
+          annotations:
+            summary: A spawnery CA rotation has been waiting on namespaces for six hours.
+            description: >-
+              Read spawnery.cloud/ca-rotation-blocked-on on the operator's TLS
+              secret for the names. A namespace with leftover agent pods and no
+              Network blocks the gate by design; the remedy is to delete or
+              drain those groups.
+
+        # "Stuck in distributing for two days" is the failure the rotation
+        # design most plausibly produces. A rotation that has not reached its
+        # own hold within a day is one nobody is driving.
+        - alert: SpawneryCARotationStalled
+          expr: spawnery_ca_rotation_phase{phase="distributing"} == 1
+          for: 24h
+          labels:
+            severity: warning
+          annotations:
+            summary: A spawnery CA rotation has been distributing for a day.
+            description: >-
+              The gate waits for every namespace to show the incoming CA and
+              then for a projection margin plus the agent session deadline --
+              a quarter of an hour in total, not a day. Check
+              spawnery.cloud/ca-rotation-blocked-on, and
+              spawnery.cloud/ca-rotation-discarded for a slot the operator
+              repaired or threw away.
+{{- end }}

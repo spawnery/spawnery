@@ -38,9 +38,60 @@ var (
 		Name: "spawnery_ca_rotation_blocked_namespaces",
 		Help: "Namespaces holding a Network whose CA ConfigMap does not yet carry the incoming CA.",
 	})
+
+	// CAExpiry and ServingCertExpiry exist because a CA rotation is asked for
+	// and never scheduled. CALifetime is ten years and nothing in the operator
+	// watches what is left of it: the procedure runs only when a human
+	// annotates the secret, and nothing anywhere says when that should happen.
+	// A ten-year clock is not urgent, but it is invisible, and invisible is
+	// what makes it arrive as a surprise rather than as a plan.
+	//
+	// Exported as an absolute timestamp rather than a remaining duration,
+	// which is the convention for expiry metrics: a gauge counting down is
+	// wrong the moment scraping stops, while a timestamp stays true and lets
+	// the query say `... - time() < 90 * 24 * 3600`. That is also why there is
+	// no threshold in this code -- the number of days that should worry
+	// somebody belongs to whoever runs the cluster, not to the operator.
+	CAExpiry = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "spawnery_ca_expiry_timestamp_seconds",
+		Help: "NotAfter of the CA currently signing the serving certificate, in Unix seconds.",
+	})
+
+	// ServingCertExpiry is the cheaper sibling and guards a different thing.
+	// The serving certificate renews on its own -- Bundle.NeedsRenewal fires
+	// at a third of its life remaining -- so this gauge is not a countdown
+	// anybody has to act on. It is a check on the renewal path itself: if this
+	// stops moving forward, renewal has stopped working, and nothing else in
+	// the operator would say so.
+	ServingCertExpiry = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "spawnery_serving_cert_expiry_timestamp_seconds",
+		Help: "NotAfter of the operator's serving certificate, in Unix seconds.",
+	})
 )
 
-func init() { metrics.Registry.MustRegister(RotationPhase, RotationBlockedNamespaces) }
+func init() {
+	metrics.Registry.MustRegister(
+		RotationPhase, RotationBlockedNamespaces, CAExpiry, ServingCertExpiry,
+	)
+}
+
+// observeExpiry publishes both certificates' NotAfter from a bundle the
+// operator has just accepted.
+//
+// A parse failure leaves the gauge at whatever it last held rather than
+// zeroing it, and that is deliberate: zero is a timestamp in 1970, so an alert
+// written the obvious way would read a parse failure as "expired fifty years
+// ago" and page somebody at four in the morning for a bundle that is fine. A
+// bundle that will not parse cannot reach here in the first place -- Provider.Set
+// fails on it before this is called -- so the stale value is the honest one.
+func observeExpiry(b *Bundle) {
+	if ca, _, err := b.parseCA(); err == nil {
+		CAExpiry.Set(float64(ca.NotAfter.Unix()))
+	}
+	if serving, err := b.parseServing(); err == nil {
+		ServingCertExpiry.Set(float64(serving.NotAfter.Unix()))
+	}
+}
 
 // phaseNone is RotationPhase's label value for "no rotation in progress" --
 // the state a cluster that has never rotated starts in, and the state

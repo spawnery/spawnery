@@ -238,6 +238,11 @@ func (p *Provider) Set(b *Bundle) error {
 		return err
 	}
 	p.current.Store(&snapshot{cert: cert, ca: b.PublishedCA()})
+	// Here rather than in the tick loop: every path that changes what the
+	// operator serves goes through this one call -- the startup pass, each
+	// renewal, and every step of a rotation -- so a gauge set here cannot fall
+	// behind the certificate it describes.
+	observeExpiry(b)
 	return nil
 }
 

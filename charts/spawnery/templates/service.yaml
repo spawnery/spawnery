@@ -13,3 +13,15 @@ spec:
       port: 9443
       targetPort: agent
       protocol: TCP
+    # The Deployment has declared a named `metrics` container port since the
+    # chart existed, and the operator's NetworkPolicy admits 8080 from anywhere
+    # with a comment naming "a metrics scrape" -- but nothing ever routed to
+    # it, so `spawnery_ca_rotation_phase` and
+    # `spawnery_ca_rotation_blocked_namespaces` were unreachable from any
+    # Prometheus. docs/known-issues.md tells a reader to alert on those gauges
+    # rather than on the events, which was advice the installed chart could not
+    # carry out.
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP

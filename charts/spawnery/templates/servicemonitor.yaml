@@ -1,0 +1,38 @@
+{{- if .Values.metrics.serviceMonitor.enabled }}
+# Off by default, and the default is not timidity: this object's kind comes
+# from the Prometheus Operator's CRDs, so rendering it on a cluster without
+# them fails the install with "no matches for kind ServiceMonitor" -- a message
+# about an unknown kind, at apply time, on a cluster whose owner never asked
+# for monitoring at all.
+#
+# What it is for: the operator has served metrics on :8080 since it existed and
+# nothing has ever scraped them. Two of those metrics are the CA rotation's
+# only durable signals -- docs/known-issues.md says in as many words to "alert
+# on the gauge, not on the event", because the events expire out of the API
+# within the hour -- and until templates/service.yaml grew a metrics port there
+# was no address to scrape even if something had wanted to.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: spawnery-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spawnery.labels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    matchLabels:
+      {{- include "spawnery.selectorLabels" . | nindent 6 }}
+  endpoints:
+    # By port name rather than number, so this keeps working if the port ever
+    # moves. The name is the Service's, not the container's -- they happen to
+    # agree here, and a ServiceMonitor reads the Service.
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+{{- end }}

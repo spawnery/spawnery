@@ -47,6 +47,30 @@ networkPolicy:
   # measured of the CNI in this repository's own end-to-end harness.
   enabled: true
 
+metrics:
+  # Both objects below need the Prometheus Operator's CRDs, which most clusters
+  # do not have, so both default to off. A chart that renders a
+  # ServiceMonitor unasked fails `helm install` on every cluster without
+  # monitoring.coreos.com -- and fails it at apply time, with a message about
+  # an unknown kind rather than about monitoring.
+  serviceMonitor:
+    enabled: false
+    # Left empty so the ServiceMonitor inherits the release's own labels. A
+    # Prometheus instance usually selects ServiceMonitors by a label it names
+    # itself (kube-prometheus-stack uses `release: <its own release>`), and
+    # that label is a fact about the monitoring installation rather than about
+    # this one, so it cannot be defaulted here.
+    additionalLabels: {}
+    interval: 30s
+  prometheusRule:
+    enabled: false
+    additionalLabels: {}
+    # Days of CA lifetime left below which caExpiringSoon fires. The default is
+    # generous on purpose: the rotation it warns about is a deliberate,
+    # multi-step procedure with a hold in the middle that waits for a human,
+    # not something to be started the week it expires.
+    caExpiryWarningDays: 90
+
 operator:
   # The production value. hack/e2e.sh overrides it for its own run.
   startupDeadline: 5m
