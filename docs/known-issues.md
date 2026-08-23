@@ -3120,21 +3120,27 @@ single pass, since the next pass's first `pods` read no longer sees it, and
 it is no worse than the address the code published before this design — but
 it is a case the design does not name.
 
-**`TestProxyAddressPerStrategy` (`internal/controller/expose_test.go`) and
-`proxyaddress_test.go`'s `TestProxyAddressPublishesOnlyWhatIsObservablyRealised`
-now cover mostly the same ground, and two of the older table's subtests are
-not duplicated anywhere else.** Both drive `proxyAddress` across all four
-strategies with a table of pods and a `Service`. But
-`TestProxyAddressPublishesOnlyWhatIsObservablyRealised` has no not-ready case
-for `LoadBalancer` or for `ClusterIP` — only for `HostPort` and one generic
-"no ready pod, whatever the strategy" case built on `NodePort`. So
-`TestProxyAddressPerStrategy`'s "LoadBalancer with an assigned address but no
-ready proxy" and "ClusterIP publishes nothing until a proxy is ready" are the
-whole test coverage for those two combinations, and `test/e2e/expose_test.go`
-names `TestProxyAddressPerStrategy` in a comment as the backing for the
-readiness gate it does not itself drive. A consolidation that moves only one
-of the two subtests across, on the assumption the tables are interchangeable,
-would silently delete the e2e comment's stated backing for the other.
+**The two tables of `proxyAddress` have been merged, and the trap in doing so
+was real. — CLOSED 2026-08-23.** `TestProxyAddressPerStrategy`
+(`internal/controller/expose_test.go`) and
+`TestProxyAddressPublishesOnlyWhatIsObservablyRealised`
+(`internal/controller/proxyaddress_test.go`) both drove `proxyAddress` across
+all four strategies, and nine of the older table's ten subtests were
+behavioural duplicates of the newer one. Two were not, and the first triage of
+this said one — the correction is the part worth keeping. The newer table had
+no not-ready case for `LoadBalancer` or for `ClusterIP`, only for `HostPort`
+plus a generic "no ready pod, whatever the strategy" built on `NodePort`, so
+the older table's "LoadBalancer with an assigned address but no ready proxy"
+and "ClusterIP publishes nothing until a proxy is ready" were the whole
+coverage for those two combinations. `test/e2e/expose_test.go` named the older
+test in a comment as the backing for a readiness gate it does not itself drive,
+and that comment's actual subject is the `ClusterIP` case — not the
+`LoadBalancer` one a hurried reading would reach for.
+
+Both moved first, then the older table was deleted, and the e2e comment now
+names the surviving test and says which case is its backing. A consolidation
+that had moved only one would have passed every test in the tree while
+deleting the thing a comment in another package claimed to rely on.
 
 **A side effect worth naming rather than hiding: `status.observedGeneration`
 now advances on a pass that failed, not only one that succeeded.**

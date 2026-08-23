@@ -153,6 +153,23 @@ func TestProxyAddressPublishesOnlyWhatIsObservablyRealised(t *testing.T) {
 			why:  "no pod in existence binds 25565 on that node",
 		},
 		{
+			// The CRD makes this unreachable -- HostPortSpec.Port is required
+			// with Minimum=1 -- so the only caller that can produce it is a
+			// test like this one. Without the guard, zero matches every pod
+			// declaring no host port, which is every pod of every other
+			// strategy, and the helper would hand back a node address for
+			// `host:0`: the exact inversion of its purpose.
+			name: "HostPort with a zero port publishes nothing rather than host:0",
+			spec: spawneryv1alpha1.ExposeSpec{
+				Type:     spawneryv1alpha1.ExposeHostPort,
+				HostPort: &spawneryv1alpha1.HostPortSpec{Port: 0},
+			},
+			pods: []corev1.Pod{readyProxyPod("192.168.1.10", 0)},
+			svc:  nil,
+			want: "",
+			why:  "zero is not a port anything binds",
+		},
+		{
 			name: "HostPort ignores a pod that binds the port but is not ready",
 			spec: hostPort,
 			pods: []corev1.Pod{notReadyProxyPod("192.168.1.10", 25565)},
@@ -207,6 +224,33 @@ func TestProxyAddressPublishesOnlyWhatIsObservablyRealised(t *testing.T) {
 			svc:  nodePortService(30765),
 			want: "",
 			why:  "test/e2e/expose_test.go rests on exactly this",
+		},
+		{
+			// The readiness gate has to be stated for this strategy rather
+			// than inherited: a LoadBalancer's address comes from the Service,
+			// which knows nothing about readiness, so without the gate
+			// status.address would point somewhere the moment a load balancer
+			// answered -- including for a group whose every pod is in
+			// ImagePullBackOff.
+			name: "LoadBalancer with an assigned address but no ready proxy",
+			spec: loadBalancer,
+			pods: []corev1.Pod{notReadyProxyPod("192.168.1.10", 0)},
+			svc:  loadBalancerService("192.0.2.10", ""),
+			want: "",
+			why:  "an assigned address is not a serving proxy",
+		},
+		{
+			// Same shape one strategy over, and the one test/e2e/expose_test.go
+			// names as its backing: it asserts nothing about the ClusterIP
+			// group's address, because no image resolves there and asserting an
+			// empty string would be asserting the image tag rather than the
+			// strategy.
+			name: "ClusterIP publishes nothing until a proxy is ready",
+			spec: clusterIP,
+			pods: []corev1.Pod{notReadyProxyPod("192.168.1.10", 0)},
+			svc:  clusterIPService(),
+			want: "",
+			why:  "the echoed name goes nowhere until something serves behind it",
 		},
 	}
 

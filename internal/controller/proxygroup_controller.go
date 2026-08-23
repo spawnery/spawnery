@@ -1776,6 +1776,16 @@ func readyHostIP(pods []corev1.Pod) string {
 // pod from any other generation carries zero here and is skipped, which makes
 // the distinction a fact about the pod rather than a rule to remember.
 func readyHostIPBindingPort(pods []corev1.Pod, hostPort int32) string {
+	// Zero matches every pod that declares no host port at all, which is every
+	// pod of every other strategy -- so without this the helper would invert
+	// its own purpose and hand back a node address for `host:0`. No object
+	// reaching here can carry it: HostPortSpec.Port is a required non-pointer
+	// field with +kubebuilder:validation:Minimum=1. The guard is for the
+	// callers validation does not stand in front of, which is what this
+	// package's own tests are.
+	if hostPort == 0 {
+		return ""
+	}
 	for i := range pods {
 		if !isPodReady(&pods[i]) || pods[i].Status.HostIP == "" {
 			continue
