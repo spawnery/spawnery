@@ -1000,6 +1000,23 @@ around:
   takes the group's namespace and name, the `Network`'s name and the agent
   endpoint, so a clean diff rules out the code trigger only, never the
   namespace one in the entry below.
+
+  *The code trigger now answers for itself, since 2026-08-23.*
+  `internal/podspec/hash_golden_test.go` pins `DesiredProxyHash` and
+  `DesiredServerHash` over frozen fixtures, so a change to either render path
+  fails on the pull request that makes it rather than waiting to be noticed
+  during a release — and it cannot be fooled the way the diff above can,
+  because it does not guess which files belong to the render path, it runs the
+  render. The manual diff is still the cheaper first look when comparing two
+  builds after the fact; the golden tests are what stops a change reaching a
+  build unremarked. Both remain silent about the two triggers that live outside
+  the code: the group's own names, and the agent endpoint in the entry below.
+
+  A failure there is not a defect, and the test says so. Rolling the fleet is
+  sometimes what a change is for. What it must not be is a discovery made by
+  players — so the test asks for the constant to be updated *and* for the
+  commit to say it, because the release notes need the sentence more than the
+  code does.
 - **`spec.drain.timeoutSeconds` is the knob that bounds the damage**, and it is
   read from the current spec on every pass, so raising it on a group already
   rolling extends the drains still in flight. Raising it does not prevent a
