@@ -1413,3 +1413,83 @@ func TestSwitchingFromHostPortToClusterIPCreatesTheService(t *testing.T) {
 		t.Errorf("type = %s, want ClusterIP", stored.Spec.Type)
 	}
 }
+
+// TestAGroupSaysWhenItsPodsNoLongerMatchWhatTheOperatorRenders is the outward
+// half of docs/known-issues.md's milestone 4c-2 entry: "upgrading the operator
+// can roll every proxy in the cluster, with nobody having edited a spec." The
+// roll itself was already implemented and already correct. What was missing was
+// any way to tell from the objects that it was happening — pods churning and
+// readyReplicas dipping is what a dozen unrelated faults look like too.
+func TestAGroupSaysWhenItsPodsNoLongerMatchWhatTheOperatorRenders(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 1
+	})
+	f.reconcileProxyGroup(r, "gateway")
+	pods := f.proxyPods("gateway")
+	if len(pods) != 1 {
+		t.Fatalf("proxy pods = %d, want 1", len(pods))
+	}
+	f.markProxyPodReady(t, &pods[0])
+	f.reconcileProxyGroup(r, "gateway")
+
+	settled := meta.FindStatusCondition(
+		f.proxyGroup("gateway").Status.Conditions, spawneryv1alpha1.ConditionChangingOver)
+	if settled == nil || settled.Status != metav1.ConditionFalse {
+		t.Fatalf("ChangingOver = %+v on a settled group, want False: a condition that is "+
+			"never False cannot mark the transition into True either", settled)
+	}
+	if settled.Reason != spawneryv1alpha1.ReasonPodShapeCurrent {
+		t.Errorf("reason = %q, want %q", settled.Reason, spawneryv1alpha1.ReasonPodShapeCurrent)
+	}
+
+	// What an operator upgrade does, reduced to its effect on one group: the
+	// shape the operator renders moves, so the running pod's stamped hash stops
+	// matching. Editing the label is how a unit-level test reaches that state
+	// without rebuilding the operator — the controller compares the label
+	// against what it renders now, and does not care which side moved.
+	stale := &pods[0]
+	stale.Labels[podspec.LabelPodHash] = "0000000000000000"
+	if err := f.c.Update(f.ctx, stale); err != nil {
+		t.Fatalf("age the pod's hash: %v", err)
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	rolling := meta.FindStatusCondition(
+		f.proxyGroup("gateway").Status.Conditions, spawneryv1alpha1.ConditionChangingOver)
+	if rolling == nil || rolling.Status != metav1.ConditionTrue {
+		t.Fatalf("ChangingOver = %+v while a pod carries a shape the operator no longer "+
+			"renders, want True", rolling)
+	}
+	if rolling.Reason != spawneryv1alpha1.ReasonPodShapeChanged {
+		t.Errorf("reason = %q, want %q", rolling.Reason, spawneryv1alpha1.ReasonPodShapeChanged)
+	}
+	// The count is the half an event could not carry, and the sentence about a
+	// whole cluster saying this at once is the half a reader needs to tell an
+	// upgrade from an edit.
+	for _, want := range []string{"1 of", "operator upgrade"} {
+		if !strings.Contains(rolling.Message, want) {
+			t.Errorf("message = %q, want it to contain %q", rolling.Message, want)
+		}
+	}
+
+	// It must clear on its own once the replacement carries the current shape,
+	// or it would be a condition that latches and stops meaning anything.
+	f.reconcileProxyGroup(r, "gateway")
+	for _, p := range f.proxyPods("gateway") {
+		if p.Labels[podspec.LabelPodHash] == "0000000000000000" {
+			if err := f.c.Delete(f.ctx, &p); err != nil {
+				t.Fatalf("delete the aged pod: %v", err)
+			}
+		}
+	}
+	f.reconcileProxyGroup(r, "gateway")
+
+	cleared := meta.FindStatusCondition(
+		f.proxyGroup("gateway").Status.Conditions, spawneryv1alpha1.ConditionChangingOver)
+	if cleared == nil || cleared.Status != metav1.ConditionFalse {
+		t.Errorf("ChangingOver = %+v once no pod carries an old shape, want False: a "+
+			"condition that latches reports the upgrade forever", cleared)
+	}
+}

@@ -773,6 +773,12 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// under-report a group where a second departing node appears while the
 	// condition is already True.
 	r.reportNodeDraining(group, pods, nodeGoing)
+	// Counted from the labels rather than from views[i].Stale, which folds the
+	// node-draining reason in with the hash one. Keeping them apart is the
+	// point: a group replacing a pod because its node is leaving and a group
+	// replacing every pod because a release changed the render are different
+	// events, and only the second is a fact about the whole installation.
+	reportChangingOver(group, pods, wantHash)
 
 	decision := DecideRollout(views, group.Spec.Replicas)
 
@@ -1212,6 +1218,44 @@ func (r *ProxyGroupReconciler) reportNodeDraining(group *spawneryv1alpha1.ProxyG
 		}
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, drainingCondition(names))
+}
+
+// reportChangingOver sets ConditionChangingOver from how many of the group's
+// live pods carry a hash this operator no longer renders.
+//
+// No event accompanies it, for the reason reportNodeDraining gives about its
+// own condition: an event tied to a condition's transition under-reports, since
+// a group that is already True and then has more pods fall stale produces no
+// second transition to fire on. The condition carries the count, so it says the
+// second thing where the event could not.
+//
+// A pod with no hash label at all counts as stale. Nothing this operator
+// creates lacks one -- podspec stamps it on every proxy pod -- so the only way
+// to be here is a pod somebody else made under this group's name, and a pod
+// whose shape cannot be compared is not a pod whose shape agrees.
+func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, wantHash string) {
+	stale := 0
+	for i := range pods {
+		if pods[i].Labels[podspec.LabelPodHash] != wantHash {
+			stale++
+		}
+	}
+	cond := metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionChangingOver,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonPodShapeCurrent,
+		Message: "every proxy pod carries the shape this operator renders",
+	}
+	if stale > 0 {
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = spawneryv1alpha1.ReasonPodShapeChanged
+		cond.Message = fmt.Sprintf(
+			"%d of %d proxy pods carry a shape this operator no longer renders and are "+
+				"being replaced one at a time; if every group in the cluster says this at "+
+				"once, an operator upgrade changed the pod render rather than anyone "+
+				"editing a spec", stale, len(pods))
+	}
+	meta.SetStatusCondition(&group.Status.Conditions, cond)
 }
 
 // drainingSince reads the annotation markDraining writes. ok is false when

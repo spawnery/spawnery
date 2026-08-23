@@ -49,6 +49,24 @@ const (
 	// group's phase, and a group waiting ten seconds after a single hiccup
 	// would then be indistinguishable from one with a real fault.
 	ConditionBackingOff = "BackingOff"
+	// ConditionChangingOver is true while a ProxyGroup holds pods whose
+	// rendered shape this operator no longer produces, and says how many.
+	//
+	// It exists because that state was invisible on the object. An operator
+	// upgrade whose pod render changed moves the digest for every group in
+	// every namespace at once, so every one of them begins replacing its pods
+	// with nobody having edited a spec -- and until this condition, the only
+	// outward sign was pods churning and readyReplicas dipping, which is what
+	// a dozen unrelated faults also look like. Seeing it True on every group
+	// simultaneously is the fingerprint of that upgrade; seeing it on one is
+	// somebody having edited that group.
+	//
+	// It reports the hash half of staleness only. A pod being replaced because
+	// its node is going away is ConditionNodeDraining's subject, and folding
+	// the two together would lose the distinction the reader needs most: one
+	// is local and expected, the other is fleet-wide and arrived with a
+	// release.
+	ConditionChangingOver = "ChangingOver"
 	// ConditionNodeDraining is true while this group has pods on nodes that
 	// are on their way out of service, and names them. It reports; the
 	// removals it describes are decided elsewhere.
@@ -98,6 +116,8 @@ const (
 	ReasonReadinessAgrees      = "ReadinessAgrees"
 	ReasonNodeDraining         = "NodeDraining"
 	ReasonNoNodesDraining      = "NoNodesDraining"
+	ReasonPodShapeChanged      = "PodShapeChanged"
+	ReasonPodShapeCurrent      = "PodShapeCurrent"
 	ReasonStorageResized       = "StorageResized"
 	ReasonStorageResizeRefused = "StorageResizeRefused"
 

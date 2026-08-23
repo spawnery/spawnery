@@ -1017,6 +1017,27 @@ around:
   players — so the test asks for the constant to be updated *and* for the
   commit to say it, because the release notes need the sentence more than the
   code does.
+- **The group now says it is happening, since 2026-08-23.** Everything above
+  is about finding out *before*; this is about the objects saying so *while*.
+  `ConditionChangingOver` is True on a `ProxyGroup` holding pods whose rendered
+  shape the operator no longer produces, and its message carries the count and
+  the sentence that distinguishes the two causes: **if every group in the
+  cluster says it at once, an operator upgrade changed the render rather than
+  anyone editing a spec.** Until it existed the only outward sign was pods
+  churning and `readyReplicas` dipping, which is what a dozen unrelated faults
+  look like.
+
+  It reports the hash half of staleness and not the node-draining half, which
+  `ConditionNodeDraining` already has. Folding them together would lose exactly
+  the distinction a reader needs most — one is local and expected, the other
+  arrived with a release — and a test drives the merged version and fails.
+
+  No event accompanies it, for the reason `reportNodeDraining` gives about its
+  own condition: an event tied to a transition under-reports, because a group
+  already True that has more pods fall stale produces no second transition to
+  fire on. The condition carries the count, so it says the second thing where
+  an event could not.
+
 - **`spec.drain.timeoutSeconds` is the knob that bounds the damage**, and it is
   read from the current spec on every pass, so raising it on a group already
   rolling extends the drains still in flight. Raising it does not prevent a
