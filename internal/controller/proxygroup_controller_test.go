@@ -198,6 +198,24 @@ func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
 	return group
 }
 
+// watchThroughGrace runs the passes a real operator would run across one
+// readinessDivergenceGrace: a reconcile every resyncInterval, which is what
+// ProxyGroupReconciler requeues at on its successful path.
+//
+// It exists because readinessDivergence measures *watched* time. A single
+// clock.Advance past the grace followed by one reconcile is a minute during
+// which nothing observed the group, and the tracker declines to count that --
+// deliberately, since the alternative is a Warning about a stretch nobody saw.
+// Before it did, this shortcut passed, which means these tests would also have
+// passed had the divergence gone entirely unobserved for the whole grace.
+func (f *fixture) watchThroughGrace(t *testing.T, r *ProxyGroupReconciler, name string) {
+	t.Helper()
+	for elapsed := time.Duration(0); elapsed <= readinessDivergenceGrace; elapsed += resyncInterval {
+		f.clock.Advance(resyncInterval)
+		f.reconcileProxyGroup(r, name)
+	}
+}
+
 // proxyPodHostIP is the node address markProxyPodReady puts on a ready proxy
 // pod, named so the one test that reads it back out of status.address does not
 // have to repeat the literal.
@@ -1732,8 +1750,7 @@ func TestAProxyThatIgnoresItsWithdrawalIsReported(t *testing.T) {
 		t.Fatal("reported before the grace period elapsed")
 	}
 
-	f.clock.Advance(readinessDivergenceGrace + time.Second)
-	f.reconcileProxyGroup(r, "gateway")
+	f.watchThroughGrace(t, r, "gateway")
 
 	g = f.proxyGroup("gateway")
 	if !meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionReadinessDiverged) {
@@ -1839,8 +1856,7 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 
 	// The clock did restart, not just fail to fire early: a full grace
 	// period measured from the *second* mismatch does report it.
-	f.clock.Advance(readinessDivergenceGrace + time.Second)
-	f.reconcileProxyGroup(r, "gateway")
+	f.watchThroughGrace(t, r, "gateway")
 
 	g = f.proxyGroup("gateway")
 	if !meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionReadinessDiverged) {
@@ -1879,8 +1895,9 @@ func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
 	// Neither pod is ever marked ready, and neither is asked to drain: both
 	// replicas are still wanted, so this is purely "still starting up," with
 	// no withdrawal anywhere in the picture.
-	f.clock.Advance(readinessDivergenceGrace + time.Second)
-	f.reconcileProxyGroup(r, "gateway")
+	// Every pass a real operator would make, not one: a pod that never diverges
+	// must stay unreported however many times it is looked at.
+	f.watchThroughGrace(t, r, "gateway")
 
 	g := f.proxyGroup("gateway")
 	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionReadinessDiverged) {

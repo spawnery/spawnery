@@ -38,54 +38,75 @@ import (
 // it.
 //
 // An entry measures how long a pod has been diverging *while something was
-// watching*. Observation is what starts and sustains that clock, and
-// Reconcile does not call observe on every pass for a group that still
-// exists. Two of its steady-state early returns handle that themselves --
-// NetworkNotFound and NetworkNotAccepted both return before reconcileReplicas
-// runs, the group is not gone in either of them so the earlier forget calls
-// (which fire only when the ProxyGroup itself is gone or being deleted) do
-// not catch them, and each calls forget explicitly instead. ExposeNotImplemented
-// shares the same path and the same forget call, but the CRD's enum is closed
-// and exposeImplemented agrees with it, so no object reaching this reconciler
-// can take that branch; it is named here for the reader who greps for the
-// reason, not as a case this steady state actually sees.
+// watching*, and it is the type that enforces that rather than the caller.
+// Each entry carries when it was last observed as well as when it first
+// diverged, and an entry not observed for longer than divergenceObservationStep
+// is void: the next observation restarts it. Time nothing watched is time this
+// measurement does not spend.
 //
-// Read that as two cases handled, not as the whole of the gap. Every error
-// return above reconcileReplicas has the identical shape and does not forget
-// -- a failed read, the status write, Bootstrap.Ensure, the ConfigMap, the
-// Service, the first pods() call -- and the next early return added here will
-// not forget either unless somebody remembers this rule. known-issues.md
-// files the count and declines to maintain it, which is the right way round.
+// That rule exists because Reconcile does not call observe on every pass for a
+// group that still exists. Every error return above reconcileReplicas returns
+// without it -- a failed ProxyGroup or Network read, the status write,
+// Bootstrap.Ensure, the ConfigMap, the Service, the first pods() call -- and
+// so will the next early return somebody adds. Before the rule, an entry stored
+// only when the divergence was first seen and nothing advanced it, so a pod
+// still diverging across a five-minute Bootstrap.Ensure outage was measured
+// from before the outage: now.Sub(since) was 300s on the first pass that
+// resumed, the grace was cleared on that pass, and a Warning fired for a
+// divergence nobody had watched.
 //
-// What that costs is worth stating exactly, because it is not only an entry
-// that outlives its usefulness. Nothing advances since: it is written once,
-// when the pod is first seen diverging, and read on every later call. So a
-// pod still diverging across a five-minute Bootstrap.Ensure outage is
-// measured from before the outage, now.Sub(since) is 300s on the first pass
-// that resumes, the grace is cleared on that pass, and a Warning fires for a
-// divergence nobody watched. That is a false positive, and it is precisely
-// the outcome rejecting a TTL was meant to prevent -- a TTL would let a stale
-// first-seen timestamp survive a gap and fire the instant observation
-// resumes -- arriving through the door the un-forgotten returns leave open.
+// The cost of the rule is the same one forgetting has always had and it runs
+// the safe way: a genuine, continuous divergence that spans a gap restarts its
+// clock and reports up to one grace period later than it might have. The
+// failure mode of getting divergenceObservationStep *too small* is the quiet
+// one -- ordinary jitter would void a real divergence on every pass and it
+// would never report -- which is why that constant is four resync intervals
+// against a sixty-second grace rather than something tight.
 //
-// Forgetting is the honest response where it is done: the measurement is
-// void, so it restarts, and the cost runs the safe way -- a Network briefly
-// unaccepted delays a genuine report by at most one grace period. The fix
-// that would close the rest is structural rather than more forget calls, and
-// known-issues.md carries it: have the entry record when it was last
-// observed, and treat one unobserved on the previous pass as void. The type
-// would then enforce the property instead of each exit remembering to.
+// NetworkNotFound and NetworkNotAccepted still call forget explicitly, and
+// that is now belt to this braces rather than the mechanism: those two paths
+// know the measurement is void a pass earlier than the gap rule would work it
+// out, and saying so where it is known costs nothing. ExposeNotImplemented
+// shares the same path and the same call; the CRD's enum is closed and
+// exposeImplemented agrees with it, so no object reaching this reconciler can
+// take that branch. It is named here for the reader who greps for the reason.
 //
 // Safe for concurrent use: one instance is shared by every reconcile of
 // every group, the same guarantee expectations makes.
 type readinessDivergence struct {
 	mu      sync.Mutex
 	now     func() time.Time
-	byGroup map[string]map[types.UID]time.Time
+	byGroup map[string]map[types.UID]divergenceEntry
 }
 
+// divergenceEntry accumulates watched time rather than storing a start.
+// watched only ever grows by what one pass can account for, so wall-clock time
+// during which nothing observed this group cannot enter it.
+type divergenceEntry struct {
+	watched      time.Duration
+	lastObserved time.Time
+}
+
+// divergenceObservationStep is the most a single pass may contribute.
+//
+// A ProxyGroup requeues every resyncInterval on its successful path, so in
+// steady state each pass contributes that; four times it absorbs a slow pass
+// and scheduler jitter. What it bounds is the other case: an outage during
+// which nothing observed, after which the first pass back would otherwise
+// contribute the whole outage.
+//
+// Capping rather than discarding is deliberate, and the alternative was tried
+// first. Voiding an entry whose last observation was too long ago has a failure
+// mode that is silent: if passes ever drift further apart than the bound --
+// a loaded operator, a raised resync interval -- every entry is voided on every
+// pass and a real divergence is never reported at all. Capping has no such
+// cliff. Passes 25 seconds apart still contribute 20 each, so the report
+// arrives late rather than never, and the worst an outage can do is overcount
+// by one step against a sixty-second grace instead of by its whole length.
+const divergenceObservationStep = 4 * resyncInterval
+
 func newReadinessDivergence(now func() time.Time) *readinessDivergence {
-	return &readinessDivergence{now: now, byGroup: make(map[string]map[types.UID]time.Time)}
+	return &readinessDivergence{now: now, byGroup: make(map[string]map[types.UID]divergenceEntry)}
 }
 
 // observe records the current agreement for every pod in diverging -- true
@@ -115,15 +136,28 @@ func (d *readinessDivergence) observe(group string, diverging map[types.UID]bool
 			continue
 		}
 		if m == nil {
-			m = make(map[types.UID]time.Time)
+			m = make(map[types.UID]divergenceEntry)
 			d.byGroup[group] = m
 		}
-		since, tracked := m[uid]
+		e, tracked := m[uid]
 		if !tracked {
-			m[uid] = now
+			// The pass that first sees a divergence has watched none of it
+			// yet, so it contributes nothing and cannot report.
+			m[uid] = divergenceEntry{lastObserved: now}
 			continue
 		}
-		if now.Sub(since) >= grace {
+		// The whole point of this type is on this line: a pass accounts for
+		// the time since the previous pass, and for no more than one pass's
+		// worth of it. Time during which nothing looked at this group cannot
+		// enter the measurement, however much of it there was.
+		step := now.Sub(e.lastObserved)
+		if step > divergenceObservationStep {
+			step = divergenceObservationStep
+		}
+		e.watched += step
+		e.lastObserved = now
+		m[uid] = e
+		if e.watched >= grace {
 			expired = append(expired, uid)
 		}
 	}

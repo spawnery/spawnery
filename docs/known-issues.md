@@ -1131,37 +1131,55 @@ of `Reconcile` does not have this property — it re-lists deliberately, so the
 published counts describe what is there rather than what was there when the
 pass began.
 
-**A deferred structural fix to `readinessDivergence`, recorded so that it is a
-decision rather than an omission.** An entry in that map measures how long a
-pod has been diverging *while something was watching*, so a pass that does not
-call `observe` for a group must not leave a first-seen timestamp behind to fire
-the moment observation resumes. Two of `Reconcile`'s steady-state early
-returns handle that by calling `forget` explicitly — `NetworkNotFound` and
-`NetworkNotAccepted`, both of which return before `reconcileReplicas` runs
-while the group itself still exists. A third path shares the same `forget`
-call — the guard at `internal/controller/proxygroup_controller.go:229`,
-`if !exposeImplemented(group.Spec.Expose.Type)` — but since milestone 6c it is
-unreachable rather than merely unlikely: all three strategies the CRD's enum
-has always named (`NodePort`, `LoadBalancer`, `HostPort`) are implemented, and
-the `+kubebuilder:validation:Enum=LoadBalancer;NodePort;HostPort` marker on
-`ExposeType` itself (`api/v1alpha1/proxygroup_types.go:27`) keeps any object
-carrying a fourth, unrecognised value from ever reaching the API server, so
-the branch is a guard for the day a fourth `expose.type` is added without a
-branch to serve it, not a path a live `ProxyGroup` takes today. Every error
-return above `reconcileReplicas` leaves the identical shape and does not
-forget: a `ProxyGroup` read that failed for any reason other than the object
-being gone, a failed `Network` read, the status write, `Bootstrap.Ensure`, the
-ConfigMap, the `Service`, and the first `pods()` call — seven at the time of
-writing, which is the point rather than a figure worth maintaining. Those are
-transient by nature and the cost is bounded the same way — a report delayed
-or, in the other
-direction, a stretch of unwatched time counted as if it had been watched, up to
-one grace period. The better fix is structural and was deliberately not made
-mid-milestone: have the entry carry when it was *last observed* rather than
-only when it first diverged, and treat an entry unobserved on the previous pass
-as void. The property is then enforced by the type instead of by remembering to
-call `forget` at each new exit, and the next person to add an early return to
-`ProxyGroupReconciler.Reconcile` does not have to know this rule exists.
+**A deferred structural fix to `readinessDivergence`. — TAKEN 2026-08-23.** An
+entry in that map measures how long a pod has been diverging *while something
+was watching*, so a pass that does not call `observe` for a group must not
+leave a first-seen timestamp behind to fire the moment observation resumes.
+Two of `Reconcile`'s steady-state early returns handled that by calling
+`forget` explicitly — `NetworkNotFound` and `NetworkNotAccepted`, both of
+which return before `reconcileReplicas` runs while the group still exists. A
+third path shares the same `forget` call, the `exposeImplemented` guard, and it
+is a guard for the day a fifth `expose.type` is added without a branch to serve
+it rather than a path a live `ProxyGroup` takes. Every error return above
+`reconcileReplicas` had the identical shape and did not forget: a `ProxyGroup`
+read that failed for any reason other than the object being gone, a failed
+`Network` read, the status write, `Bootstrap.Ensure`, the ConfigMap, the
+`Service`, and the first `pods()` call.
+
+The property is now enforced by the type. `divergenceEntry` accumulates
+*watched* time instead of storing a start: each pass adds the interval since
+the previous pass, capped at `divergenceObservationStep`, so wall-clock time
+during which nothing observed cannot enter the measurement. The next person to
+add an early return to `ProxyGroupReconciler.Reconcile` does not have to know
+the rule exists.
+
+**The mechanism this entry proposed was built first and then replaced, and the
+reason is worth more than the fix.** The proposal was to treat an entry
+unobserved on the previous pass as void. That was implemented, and it has a
+failure mode that is *silent*: if passes ever drift further apart than the
+bound — a loaded operator, a raised resync interval — every entry is voided
+on every pass and a real divergence is never reported at all. Not a false
+alarm; no alarm. Capping has no such cliff: passes 25 seconds apart still
+contribute 20 each, so a report arrives late rather than never, and an outage
+overcounts by one step against a sixty-second grace instead of by its whole
+length. Capping
+also keeps what was already watched rather than throwing it away.
+
+Three things worth keeping from doing it:
+
+- **The defect was reproducible and was reproduced first.** A pod seen
+  diverging once, then a five-minute gap, then one pass: before the change that
+  pass reported it, having measured a stretch nobody watched.
+- **Two existing tests were making the same shortcut the production code was.**
+  Both advanced the fake clock past the grace and reconciled once, so both
+  would have passed had the divergence gone entirely unobserved for that minute
+  — the very false positive the fix removes. They now run the thirteen passes
+  a real operator would (grace 60s, `resyncInterval` 5s). A test that jumps a
+  clock is asserting about wall-clock time; this measurement is not about
+  wall-clock time.
+- **The two `forget` calls stay**, and are now belt to this braces rather than
+  the mechanism. Those two paths know the measurement is void one pass earlier
+  than the cap works it out, and saying so where it is known costs nothing.
 
 ## From milestone 4c-3 (node drain)
 
