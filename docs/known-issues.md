@@ -3118,6 +3118,8 @@ names `TestProxyAddressPerStrategy` in a comment as the backing for the
 readiness gate it does not itself drive. A consolidation that moves only one
 of the two subtests across, on the assumption the tables are interchangeable,
 would silently delete the e2e comment's stated backing for the other.
+
+**A side effect worth naming rather than hiding: `status.observedGeneration`
 now advances on a pass that failed, not only one that succeeded.**
 `setStatus` writes it alongside the address, and `setStatus` is now reached
 on every path that observed the pods and the Service, so a group
