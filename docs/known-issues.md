@@ -3325,6 +3325,33 @@ guess and nothing has reproduced it since. Recorded because an unrecorded
 flake is rediscovered from scratch by whoever meets it next; if it recurs,
 this entry is the second data point rather than the first.
 
+**Hunted on 2026-08-23, not caught — and the failure is now made to explain
+itself, which is the part that will matter.** What was tried: sixty runs of the
+test in isolation, and five full-package runs, all green. What was ruled out
+rather than assumed: **it is not cache lag.** `internal/testenv`'s `Client` is
+`client.New`, a direct client with no informer behind it, so "the controller's
+cache still shows the terminating pod" — the first hypothesis anyone reaches
+for with envtest — cannot be the mechanism here.
+
+What is left is genuinely unknown, and one occurrence with no captured output
+is close to no information at all. So the assertion that failed now prints what
+it saw: the `Accepted` condition, every pod in the namespace with its
+`deletionTimestamp` and node, and whether the pod holding the name is still the
+predecessor's. Those three separate the candidates — a lingering predecessor
+means the force delete did not take; `PodNameTerminating` with no such pod
+present means the controller decided against a pod that was already gone; an
+empty namespace with a clean condition means something else refused the create
+entirely.
+
+**The UID, not the name**, and finding out why is the reason to write this
+down: the ordinal's pod name is reused across generations, so "is a pod called
+`survival-0` present" is true both while the predecessor lingers and once the
+successor exists — the two states the failure has to tell apart. The first
+draft asked by name and reported "predecessor still present: true" about a
+perfectly healthy successor. It was caught only because the message was made to
+fire on purpose and read, which is worth doing to any diagnostic before
+trusting it.
+
 **What milestone 6e adds to this entry: frequency, not a diagnosis.**
 `go test -race ./...` now runs on every pull request through `ci.yml`'s
 `test` job, which means this suite runs on the rhythm of how often somebody

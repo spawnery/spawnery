@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -1909,6 +1910,46 @@ func TestARecreatedOrdinalWaitsForItsPredecessorsPod(t *testing.T) {
 	}
 }
 
+// describePods lists every pod in the fixture's namespace with the two fields
+// that decide this test, for a failure message rather than for an assertion.
+func describePods(f *fixture) string {
+	pods := &corev1.PodList{}
+	if err := f.c.List(f.ctx, pods, client.InNamespace(f.ns)); err != nil {
+		return "could not list: " + err.Error()
+	}
+	if len(pods.Items) == 0 {
+		return "none"
+	}
+	out := make([]string, 0, len(pods.Items))
+	for i := range pods.Items {
+		deleting := "live"
+		if !pods.Items[i].DeletionTimestamp.IsZero() {
+			deleting = "terminating since " + pods.Items[i].DeletionTimestamp.String()
+		}
+		out = append(out, fmt.Sprintf("%s (%s, node %q)",
+			pods.Items[i].Name, deleting, pods.Items[i].Spec.NodeName))
+	}
+	return strings.Join(out, "; ")
+}
+
+// podUnderNameIsStill answers whether the pod holding a name is still the one
+// with this UID.
+//
+// The UID and not the name, because in this test they are the same name: the
+// ordinal's pod name is reused across generations, so "is a pod called
+// survival-0 present" is true both when the predecessor is lingering and when
+// the successor has been created — the two states the failure has to tell
+// apart. A first draft of this asked by name and reported "predecessor still
+// present: true" about a healthy successor, which would have sent the next
+// reader in exactly the wrong direction.
+func podUnderNameIsStill(f *fixture, name string, uid types.UID) bool {
+	pod := &corev1.Pod{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Namespace: f.ns, Name: name}, pod); err != nil {
+		return false
+	}
+	return pod.UID == uid
+}
+
 // TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone is the other half:
 // the wait ends by itself, and ends with a pod this controller really did
 // create. Without it the fix above would be indistinguishable from a Server
@@ -1923,7 +1964,27 @@ func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
 
 	got := f.server("survival-0")
 	if got.Status.PodName != "survival-0" {
-		t.Fatalf("status.podName = %q once the predecessor's pod is gone, want survival-0", got.Status.PodName)
+		// This is the one assertion in this file that has been seen to fail
+		// without explanation: docs/known-issues.md records it flaking once
+		// during milestone 6d, passing in isolation and on a full rerun, and
+		// nothing was captured. Sixty runs in isolation and five full-package
+		// runs on 2026-08-23 did not reproduce it either.
+		//
+		// So the failure prints what it saw. Whatever the mechanism is, the
+		// three facts below separate the candidates: a lingering predecessor
+		// says the force delete did not take, a Server carrying
+		// PodNameTerminating with no such pod present says the controller
+		// decided against a pod that is no longer there, and an empty
+		// namespace with a clean condition says something else entirely
+		// refused the create. A second occurrence should be a diagnosis, not
+		// another data point.
+		t.Fatalf("status.podName = %q once the predecessor's pod is gone, want survival-0\n"+
+			"  Accepted condition: %+v\n"+
+			"  pods in the namespace: %s\n"+
+			"  the pod under that name is still the predecessor: %t",
+			got.Status.PodName,
+			meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted),
+			describePods(f), podUnderNameIsStill(f, terminating.Name, terminating.UID))
 	}
 	if _, ok := f.pod("survival-0"); !ok {
 		t.Error("no pod once the name was free")
