@@ -255,8 +255,62 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	obs, res, err := r.reconcileObserved(ctx, network, group)
+	// The status is written wherever the pods and the Service were actually
+	// read, and nowhere else. Both halves of that are deliberate.
+	//
+	// Wherever: before this, setStatus was the last call before the successful
+	// return and eleven error returns stood in front of it, so a pass that
+	// failed partway through kept whatever the last successful pass had
+	// published. A group switched into a strategy the API server refuses went
+	// on advertising the node port of a Service that reconcileService had
+	// already deleted, and no later pass corrected it because no later pass
+	// could get any further.
+	//
+	// And nowhere else: Reconcile also returns before any of this, on a
+	// missing or unaccepted Network and on an unimplemented expose type. The
+	// address is untouched there on purpose. Nothing about the serving world
+	// has changed on those paths -- the pods are running, the Service is
+	// there, people are connected through it -- and blanking a working address
+	// because a different object went missing would be a regression caused by
+	// this fix rather than a part of it.
+	if obs.observed {
+		r.setStatus(group, obs.pods, obs.svc)
+		if werr := r.writeStatus(ctx, group); werr != nil {
+			if err == nil {
+				return res, werr
+			}
+			// The reconcile's own error is the cause and the one worth backing
+			// off on; the failed write is reported rather than substituted.
+			log.FromContext(ctx).Error(werr, "recording the group's status")
+		}
+	}
+	return res, err
+}
+
+// proxyObservation is what one pass of reconcileObserved saw. observed is a
+// flag and not a nil check on svc: HostPort creates no Service at all, so a
+// nil svc is that strategy's normal state and cannot stand in for "this pass
+// never looked".
+type proxyObservation struct {
+	observed bool
+	pods     []corev1.Pod
+	svc      *corev1.Service
+}
+
+// reconcileObserved does everything from the namespace bootstrap onward and
+// returns what it saw, so that its caller can record the status however this
+// returns. Its result carries the RequeueAfter the successful path has always
+// returned; the caller adds nothing to it.
+func (r *ProxyGroupReconciler) reconcileObserved(
+	ctx context.Context,
+	network *spawneryv1alpha1.Network,
+	group *spawneryv1alpha1.ProxyGroup,
+) (proxyObservation, ctrl.Result, error) {
+	var obs proxyObservation
+
 	if err := r.Bootstrap.Ensure(ctx, group.Namespace); err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
 	// Rendered here, beside Bootstrap.Ensure and before reconcileReplicas can
 	// create the first proxy pod: that pod's projected volume names this
@@ -264,13 +318,12 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// stops the reconcile before reconcileReplicas runs — the guarantee is
 	// the early return, not the order these lines happen to be written in.
 	if err := r.reconcileConfigMap(ctx, group); err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
 	svc, err := r.reconcileService(ctx, group)
 	if err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
-
 	// A snapshot from before this pass's own creates: reconcileReplicas may
 	// create pods below, but pods itself is not refreshed to include them, so
 	// its per-pod logic -- the readiness assertion loop and the divergence
@@ -278,8 +331,12 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// time on the pass after this one, not this one.
 	pods, err := r.pods(ctx, group)
 	if err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
+	// From here the pass has seen both, so every return below carries an
+	// observation the caller will record.
+	obs = proxyObservation{observed: true, pods: pods, svc: svc}
+
 	if err := r.reconcileReplicas(ctx, network, group, pods); err != nil {
 		// A create the API server refused is the group's business and not
 		// only the log's. IsForbidden covers both ways it happens: a Pod
@@ -287,33 +344,29 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// HostPort group in a baseline or restricted namespace ends -- and an
 		// RBAC grant the operator does not have. IsInvalid covers a pod the
 		// API server rejects outright, a quota or a webhook among them.
-		//
-		// The status write is on the error path deliberately: without it the
-		// reconcile returns having recorded nothing, and the group sits at
-		// Pending with no conditions, indistinguishable from one no reconcile
-		// has ever touched. A failure to write the status is reported by
-		// returning the original error regardless -- the create failure is
-		// the cause and the one worth backing off on.
 		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
 			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodRejected, err.Error()) {
 				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
 					actionCreateProxyPod, "%s",
 					eventNote("the API server refused a proxy pod: %s", err.Error()))
 			}
-			group.Status.Phase = "Degraded"
-			if werr := r.writeStatus(ctx, group); werr != nil {
-				log.FromContext(ctx).Error(werr, "recording a refused proxy pod on the group")
-			}
+			// The phase is not set here and the status is not written here.
+			// setStatus derives Degraded from the condition this branch just
+			// set, and the caller writes on every path that got this far.
 		}
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
 
 	// Re-read after the changes, so the status describes what is there rather
-	// than what was there when the reconcile started.
-	pods, err = r.pods(ctx, group)
-	if err != nil {
-		return ctrl.Result{}, err
+	// than what was there when the reconcile started. A failure here leaves
+	// the earlier snapshot in place: a status describing the last observation
+	// that succeeded is a weaker statement than this pass meant to make and a
+	// far stronger one than none.
+	if pods, err = r.pods(ctx, group); err != nil {
+		return obs, ctrl.Result{}, err
 	}
+	obs.pods = pods
+
 	// Before setStatus: setStatus reads the Degraded condition to derive the
 	// phase, so whether a pod this group asked for failed to come into
 	// existence has to be known before that read.
@@ -321,10 +374,9 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Before setStatus: the budget's selector has to find the label already on
 	// the pods it is sizing minAvailable for, on the same pass.
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
-		return ctrl.Result{}, err
+		return obs, ctrl.Result{}, err
 	}
-	r.setStatus(group, pods, svc)
-	return ctrl.Result{RequeueAfter: resyncInterval}, r.writeStatus(ctx, group)
+	return obs, ctrl.Result{RequeueAfter: resyncInterval}, nil
 }
 
 // refuse is the shared tail of the three paths that give up before
@@ -1698,6 +1750,71 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 	}
 }
 
+// readyHostIP is the node address of the first ready pod that has one. It is
+// the readiness gate every strategy shares: nothing is published for a group
+// whose pods cannot answer, which is what test/e2e/expose_test.go rests on --
+// no image resolves there, so no pod is ready, so no address appears.
+func readyHostIP(pods []corev1.Pod) string {
+	for i := range pods {
+		if isPodReady(&pods[i]) && pods[i].Status.HostIP != "" {
+			return pods[i].Status.HostIP
+		}
+	}
+	return ""
+}
+
+// readyHostIPBindingPort is the node address of the first ready pod whose
+// container actually declares hostPort.
+//
+// This exists because a group's pods outlive the spec that created them. A
+// group switched from NodePort to HostPort keeps its NodePort pods running and
+// Ready until they are replaced -- and if the replacement is refused, forever.
+// Asking only "is some pod ready" and then appending the spec's port published
+// an address whose host was real, whose port was real, and which no process on
+// that node was listening on. podspec.BuildProxyPod sets the container's
+// HostPort only under the HostPort strategy (internal/podspec/proxy.go), so a
+// pod from any other generation carries zero here and is skipped, which makes
+// the distinction a fact about the pod rather than a rule to remember.
+func readyHostIPBindingPort(pods []corev1.Pod, hostPort int32) string {
+	for i := range pods {
+		if !isPodReady(&pods[i]) || pods[i].Status.HostIP == "" {
+			continue
+		}
+		for _, c := range pods[i].Spec.Containers {
+			for _, p := range c.Ports {
+				if p.HostPort == hostPort {
+					return pods[i].Status.HostIP
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// allocatedNodePort is the node port the API server assigned, read back off
+// the Service rather than taken from the spec.
+//
+// The spec's port is only ever a request, and reconcileService's own
+// NodePort case writes it straight into the Service it creates or updates —
+// NodePortSpec.Port is required and `+kubebuilder:validation:Minimum=1`, so
+// the API server never has to allocate one on the spec's behalf. What can
+// happen is the Service itself being gone: a spec still naming a port proves
+// nothing about whether anything is listening on it once the Service that
+// carried it has been deleted, and the Service is the only place that says
+// so. Matched by name, because that is what reconcileService sets and a
+// group's Service carries exactly one port.
+func allocatedNodePort(svc *corev1.Service) int32 {
+	if svc == nil {
+		return 0
+	}
+	for _, p := range svc.Spec.Ports {
+		if p.Name == podspec.MinecraftPortName {
+			return p.NodePort
+		}
+	}
+	return 0
+}
+
 // proxyAddress is where players connect.
 //
 // Every branch publishes an address only while a proxy is demonstrably
@@ -1713,6 +1830,15 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 // status string would be the same trade the bootstrapper refused when it
 // declined the update verb on ServiceAccounts to restore a cosmetic label.
 //
+// "A ready pod" is not the same claim as "a ready pod serving this
+// strategy", and the two arms below no longer conflate them. HostPort asks
+// readyHostIPBindingPort for a pod whose own container declares the port in
+// question, not merely any ready pod -- see that function's comment for why
+// a pod can be ready and still prove nothing about this strategy. NodePort
+// asks allocatedNodePort for the port the Service actually carries, not
+// group.Spec.Expose.NodePort.Port, because the spec is a request and the
+// Service is what reconcileService and the API server made of it.
+//
 // For LoadBalancer the address comes from the Service instead, and the
 // readiness gate has to be stated rather than inherited -- the Service knows
 // nothing about whether anything is serving, so without the gate this would
@@ -1724,41 +1850,30 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 // thing that owns it -- an ingress controller's TCP entry point, a gateway, a
 // tunnel, a DNS record -- lives under an API this operator does not read.
 //
-// That arm is still behind the gate above, and that is the surprising part,
-// because it reads neither of the things the gate tests. The gate needs a pod
-// that is both Ready and carrying a non-empty hostIP, so a ClusterIP group
-// publishes nothing while its pods are in ImagePullBackOff -- and also
-// nothing for a pod that is Ready but whose hostIP has not been reported yet,
-// a value this arm would never have used.
+// That arm is still behind a readiness gate, and that is the surprising
+// part, because it reads neither of the things the gate tests. The gate
+// needs a pod that is both Ready and carrying a non-empty hostIP, so a
+// ClusterIP group publishes nothing while its pods are in ImagePullBackOff
+// -- and also nothing for a pod that is Ready but whose hostIP has not been
+// reported yet, a value this arm would never have used.
 //
 // This is deliberate, and is the same promise every other branch makes:
 // status.address means "players can connect here now", not "this is what was
 // configured". The configured value is already readable at
 // spec.expose.clusterIP.address, so publishing it unconditionally would add
 // no information while breaking the one invariant the field has. The
-// consequence to accept is that this arm's answer is gated on two facts about
-// a pod that it never reads.
+// consequence to accept is that this arm's answer is gated on facts about a
+// pod that it never reads.
 //
 // net.JoinHostPort rather than a format string: a node with an IPv6 hostIP
 // needs brackets, and the old formatting produced an address no client could
 // use. For an IPv4 address the two are identical.
 func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *corev1.Service) string {
-	hostIP := ""
-	for i := range pods {
-		if isPodReady(&pods[i]) && pods[i].Status.HostIP != "" {
-			hostIP = pods[i].Status.HostIP
-			break
-		}
-	}
-	if hostIP == "" {
-		return ""
-	}
-
 	port := func(p int32) string { return strconv.Itoa(int(p)) }
 
 	switch group.Spec.Expose.Type {
 	case spawneryv1alpha1.ExposeLoadBalancer:
-		if svc == nil {
+		if svc == nil || readyHostIP(pods) == "" {
 			return ""
 		}
 		for _, ing := range svc.Status.LoadBalancer.Ingress {
@@ -1774,20 +1889,34 @@ func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *co
 		if group.Spec.Expose.HostPort == nil {
 			return ""
 		}
+		hostIP := readyHostIPBindingPort(pods, group.Spec.Expose.HostPort.Port)
+		if hostIP == "" {
+			return ""
+		}
 		return net.JoinHostPort(hostIP, port(group.Spec.Expose.HostPort.Port))
 	case spawneryv1alpha1.ExposeClusterIP:
 		// Echoed, not composed: no port is appended, because a Minecraft
 		// client defaults to 25565 and "mc.example.test" is the whole of what
 		// a player types. An operator who needs another port writes it in.
-		if group.Spec.Expose.ClusterIP == nil {
+		//
+		// The Service is required even though the address does not come from
+		// it: this strategy publishes a name that something outside the
+		// cluster routes to the Service, so without the Service the name goes
+		// nowhere.
+		if svc == nil || group.Spec.Expose.ClusterIP == nil || readyHostIP(pods) == "" {
 			return ""
 		}
 		return group.Spec.Expose.ClusterIP.Address
 	case spawneryv1alpha1.ExposeNodePort:
-		if group.Spec.Expose.NodePort == nil {
+		nodePort := allocatedNodePort(svc)
+		if nodePort == 0 {
 			return ""
 		}
-		return net.JoinHostPort(hostIP, port(group.Spec.Expose.NodePort.Port))
+		hostIP := readyHostIP(pods)
+		if hostIP == "" {
+			return ""
+		}
+		return net.JoinHostPort(hostIP, port(nodePort))
 	default:
 		// See reconcileService's default: for why this is written out rather
 		// than folded into the NodePort arm.

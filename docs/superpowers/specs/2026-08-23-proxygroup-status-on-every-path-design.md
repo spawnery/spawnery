@@ -184,9 +184,13 @@ the condition and the event, which are the things only it knows.
 
 The `NodePort` row changes the source of the port as well as adding a
 condition. `reconcileService` writes `port.NodePort` from the spec (`:1320`),
-and the API server allocates one when the spec asks for none; reading it back
-from the Service is therefore both the honest value and the only one that is
-right when the spec does not name a port.
+and `NodePortSpec.Port` is required with `+kubebuilder:validation:Minimum=1`,
+so the spec never asks for none and the API server never has to allocate one
+on its behalf. The spec's port is only a request, though, and the Service is
+the only place that says whether anything is still listening on it — a
+deleted Service means there is nothing to dial whatever the spec asks for.
+Reading the port back from the Service is therefore the honest value, and the
+`svc != nil` condition is what makes the deleted case say so.
 
 The ready-pod requirement stays for every strategy. It is what
 `test/e2e/expose_test.go` already relies on — no image resolves in that
