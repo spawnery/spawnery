@@ -4170,10 +4170,23 @@ intentional — the following points each concern only one of the two halves.
   in Task 3's rewrite and read the rendered chart now, not a file decoded
   with `readManifest`; their floor-not-exact-value assertions are otherwise
   unchanged.
-- **Nothing enforces that `Why` is filled in and `Required` is free of
-  duplicates.** `Compare` collects duplicates, and the last one wins. This is
-  what let two `Why` lines go stale unnoticed until someone read them against
-  the code; both are corrected now, and nothing stops the next one.
+- **Nothing enforced that `Why` was filled in or that `Required` was free of
+  duplicates. — CLOSED 2026-08-23, and the third check was the one nobody had
+  asked for.** `Compare` keys on the permission and keeps the last, so a
+  duplicate pair whose two `Why` lines disagree resolved to whichever was
+  written lower in the file. `internal/rbacaudit/table_test.go` now walks all
+  three tables and refuses an empty `Why`, a repeated key within a table,
+  and — the case neither of the first two can see — a namespaced entry
+  duplicating a cluster-scoped one, which the ClusterRole already grants
+  everywhere and which nobody would later dare delete without a test saying so.
+
+  It does not resurrect what was actually lost. Nothing here can tell that a
+  `Why` naming one of three call sites is short by two; that is a claim about
+  the code, and both instances of it were found by a person reading the table
+  against the tree, months apart. What these checks hold is the floor: a
+  permission with no argument at all, and an argument that a duplicate would
+  silently overwrite. One table added later and not listed in `tables()` is
+  outside all three, and that file's own comment says so.
 
 ## Small things
 
