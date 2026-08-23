@@ -3079,16 +3079,45 @@ an unimplemented `expose.type` — the address is left exactly as it was,
 because nothing about the serving world changed on those paths.
 `TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress`
 (`internal/controller/expose_test.go`) drives this entry's own scenario end
-to end; `TestABrokenNetworkLeavesAWorkingAddressAlone` beside it is the guard
-against the fix becoming the regression the paragraph above warned about —
-an address must survive a failure in something the pass never looked at.
+to end; `TestAFailureInsideReconcileObservedLeavesTheAddressAlone` beside it
+is the guard against the fix becoming the regression the paragraph above
+warned about — a group that stays `NodePort` and hits an unrelated failure
+while its live Service and ready pods keep serving must keep its address.
+`TestABrokenNetworkLeavesAWorkingAddressAlone` shows a different half of the
+same rule: a path that returns before `reconcileObserved` is ever
+called — here, a missing `Network` — leaves the address alone because the
+pass never looked at the pods or the Service at all.
 
 Both are envtest, and that is the limit worth stating plainly: `HostPort` is
 exercised in envtest and unit tests only, never against a real kubelet.
 `paulwtf` runs one `ProxyGroup`, on `ClusterIP`, so no cluster has driven the
 `HostPort` or `NodePort` rows this work changed most.
 
-**A side effect worth naming rather than hiding: `status.observedGeneration`
+A staleness the design's §5 does not cover, because that section justifies
+only the second `pods` read: if `reconcileReplicas` deletes a pod and then
+fails, `reconcileObserved` returns without ever attempting that second read,
+so `obs.pods` is still the read taken *before* `reconcileReplicas` ran — the
+deleted pod included. If that pod was `Ready`, `setStatus` can publish its
+`HostIP` for the one pass in which the failure happened. It is bounded to a
+single pass, since the next pass's first `pods` read no longer sees it, and
+it is no worse than the address the code published before this design — but
+it is a case the design does not name.
+
+**`TestProxyAddressPerStrategy` (`internal/controller/expose_test.go`) and
+`proxyaddress_test.go`'s `TestProxyAddressPublishesOnlyWhatIsObservablyRealised`
+now cover mostly the same ground, and two of the older table's subtests are
+not duplicated anywhere else.** Both drive `proxyAddress` across all four
+strategies with a table of pods and a `Service`. But
+`TestProxyAddressPublishesOnlyWhatIsObservablyRealised` has no not-ready case
+for `LoadBalancer` or for `ClusterIP` — only for `HostPort` and one generic
+"no ready pod, whatever the strategy" case built on `NodePort`. So
+`TestProxyAddressPerStrategy`'s "LoadBalancer with an assigned address but no
+ready proxy" and "ClusterIP publishes nothing until a proxy is ready" are the
+whole test coverage for those two combinations, and `test/e2e/expose_test.go`
+names `TestProxyAddressPerStrategy` in a comment as the backing for the
+readiness gate it does not itself drive. A consolidation that moves only one
+of the two subtests across, on the assumption the tables are interchangeable,
+would silently delete the e2e comment's stated backing for the other.
 now advances on a pass that failed, not only one that succeeded.**
 `setStatus` writes it alongside the address, and `setStatus` is now reached
 on every path that observed the pods and the Service, so a group

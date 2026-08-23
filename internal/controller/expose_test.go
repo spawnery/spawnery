@@ -783,6 +783,81 @@ func TestABrokenNetworkLeavesAWorkingAddressAlone(t *testing.T) {
 	}
 }
 
+// TestAFailureInsideReconcileObservedLeavesTheAddressAlone is the other half
+// of what TestABrokenNetworkLeavesAWorkingAddressAlone leaves unproven: that
+// test drives a missing Network, which refuses before reconcileObserved is
+// ever called, so obs.observed is never set at all. This drives a failure
+// *inside* reconcileObserved -- one that happens after the group's Service
+// and ready pod already exist -- and checks that obs.observed staying false
+// still leaves status.address alone.
+//
+// The failure is reconcileService's own SetControllerReference call refusing
+// to proceed: reconcileService ends with
+// controllerutil.SetControllerReference(group, svc, r.Scheme), and that
+// returns an AlreadyOwnedError once the Service already carries a controller
+// owner reference naming something else. Giving the Service such a reference
+// by hand touches nothing this test cares about keeping intact -- not the
+// group, not its pods, not the Service's ports or selector -- and
+// CreateOrUpdate aborts the mutate before ever calling Update, so the
+// Service on the server is not changed by the failing pass either. The only
+// effect is that reconcileService, and therefore reconcileObserved, returns
+// an error before setting observed.
+func TestAFailureInsideReconcileObservedLeavesTheAddressAlone(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Replicas = 1
+		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{
+			Type:     spawneryv1alpha1.ExposeNodePort,
+			NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30767},
+		}
+	})
+	f.reconcileProxyGroup(r, "gateway")
+	pods := f.proxyPods("gateway")
+	if len(pods) != 1 {
+		t.Fatalf("proxy pods = %d, want 1", len(pods))
+	}
+	f.markProxyPodReady(t, &pods[0])
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyGroup("gateway").Status.Address
+	if before == "" {
+		t.Fatal("the group published no address before the failure, so this test " +
+			"cannot show one surviving it")
+	}
+
+	var svc corev1.Service
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
+		t.Fatalf("get the Service: %v", err)
+	}
+	svc.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: "v1",
+		Kind:       "ConfigMap",
+		Name:       "somebody-elses-controller",
+		UID:        types.UID("11111111-1111-1111-1111-111111111111"),
+		Controller: ptr.To(true),
+	}}
+	if err := f.c.Update(f.ctx, &svc); err != nil {
+		t.Fatalf("give the Service a foreign controller reference: %v", err)
+	}
+
+	// reconcileProxyGroup is the wrong helper here for the same reason it is
+	// wrong in TestARejectedProxyPodIsReportedOnTheGroup: it fails the test on
+	// any error, and an error is exactly what this pass must return.
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
+	}); err == nil {
+		t.Fatal("the reconcile succeeded despite the Service already having a foreign controller")
+	}
+
+	after := f.proxyGroup("gateway")
+	if after.Status.Address != before {
+		t.Errorf("status.address = %q, want it left at %q — reconcileService failed "+
+			"before reconcileObserved's observation completed, and the group's Service "+
+			"and ready pod are untouched", after.Status.Address, before)
+	}
+}
+
 // With hostPort the kube-scheduler places at most one pod of a group per
 // node, so replicas is capped by the node count -- the likeliest HostPort
 // mistake there is. The surplus pod exists and stays Pending, and the

@@ -1794,11 +1794,15 @@ func readyHostIPBindingPort(pods []corev1.Pod, hostPort int32) string {
 // allocatedNodePort is the node port the API server assigned, read back off
 // the Service rather than taken from the spec.
 //
-// reconcileService writes spec.expose.nodePort.port into the Service and the
-// API server allocates one when the spec names none, so the Service is both
-// the honest value and the only one that exists in the second case. Matched by
-// name, because that is what reconcileService sets and a group's Service
-// carries exactly one port.
+// The spec's port is only ever a request, and reconcileService's own
+// NodePort case writes it straight into the Service it creates or updates —
+// NodePortSpec.Port is required and `+kubebuilder:validation:Minimum=1`, so
+// the API server never has to allocate one on the spec's behalf. What can
+// happen is the Service itself being gone: a spec still naming a port proves
+// nothing about whether anything is listening on it once the Service that
+// carried it has been deleted, and the Service is the only place that says
+// so. Matched by name, because that is what reconcileService sets and a
+// group's Service carries exactly one port.
 func allocatedNodePort(svc *corev1.Service) int32 {
 	if svc == nil {
 		return 0

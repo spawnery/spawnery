@@ -135,6 +135,31 @@ that observes a generation newer than `status.observedGeneration` clears both
 fields — `status.consecutiveFailures` and `status.lastFailureAt`. The next
 attempt is then immediate, because the counter is zero.
 
+**A caution for whoever extends this to `ProxyGroup` (§7 defers exactly
+that).** `ServerGroupReconciler` writes `status.observedGeneration` in exactly
+one place, at the very end of a pass that ran all the way through
+(`servergroup_controller.go:573`); a pass that returns early on an error never
+reaches it, so the field only ever advances alongside a reconcile this
+controller is willing to call settled. The clear check at §3.5 leans on
+that: `observedGeneration` stays behind `generation` for as long as the group
+keeps failing for reasons unrelated to the spec, and a permanently-refused
+group's counter is never touched by the field at all.
+`docs/superpowers/specs/2026-08-23-proxygroup-status-on-every-path-design.md`
+does not give `ProxyGroupReconciler` the same property: its
+`status.observedGeneration` now advances on every pass that reached
+`reconcileObserved` and got as far as observing the pods and the Service,
+including a pass that then failed — a group permanently refused by Pod
+Security, say, still writes `observedGeneration == generation` on every one
+of those failing passes (this is already recorded above, for a different
+reason). A `ProxyGroup` backoff built on this milestone's exact check —
+comparing `status.observedGeneration` against `metadata.generation` to decide
+whether the spec changed — cannot assume the field lags while the group is
+stuck; it does not lag here, and a permanently-refused group would look to
+that check exactly like a group that just finished a clean pass. Whatever
+signals "the spec changed enough to deserve a fresh attempt" for `ProxyGroup`
+has to be something else, or has to be read before this design's own
+`reconcileObserved` write touches it within the same pass.
+
 **The conditions are not removed; they are republished as `False` with reason
 `NoRecentFailures` on that same pass.** The `BackingOff`/`Degraded` switch
 below — the one whose first case is `!sized` — builds both conditions
