@@ -3293,24 +3293,23 @@ func TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt(t *testing.T) {
 	}
 }
 
-// TestTheProxyPlayerLimitIsDecidedTheSameWayTwice closes the shape behind
-// milestone 3a/3b's one Critical finding, which docs/known-issues.md records as
-// still open: "the proxy player-limit default is still spelled out twice…
-// nothing asserts the two decisions agree."
+// TestTheProxyPlayerLimitIsDecidedTheSameWayTwice guards the shape behind
+// milestone 3a/3b's one Critical finding.
 //
 // podspec.BuildProxyPod writes SPAWNERY_PLAYER_LIMIT on the container;
 // proxyConfigValues writes playerLimit into the ConfigMap the same pod mounts.
-// They share podspec.DefaultPlayerLimit but not the predicate in front of it,
-// and the two are read by different halves of the same running proxy.
+// Both now call podspec.ProxyPlayerLimit, so they cannot disagree — but that
+// is a property of two call sites, and a call site is a thing somebody can
+// stop using. This asserts the outcome rather than the mechanism, so inlining
+// either one back into its caller fails here rather than the next time
+// somebody edits one of the two.
 //
-// The disagreement is not hypothetical — it happened. The controller used to
-// leave the ConfigMap's playerLimit nil whenever spec.config was nil while the
-// env var already defaulted to 500, so a ProxyGroup with no spec.config came up
-// Accepted, with its Service, and every pod crash-looped forever on
-// `config.yaml: playerLimit is not set` with nothing on the CR saying why.
-//
-// This asserts the two produce the same number across the shapes spec.config
-// can take, which is the property neither side can hold alone.
+// The disagreement is not hypothetical — it happened, back when the predicate
+// was written out on both sides. The controller left the ConfigMap's
+// playerLimit nil whenever spec.config was nil while the env var already
+// defaulted to 500, so a ProxyGroup with no spec.config came up Accepted, with
+// its Service, and every pod crash-looped forever on `config.yaml: playerLimit
+// is not set` with nothing on the CR saying why.
 func TestTheProxyPlayerLimitIsDecidedTheSameWayTwice(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -1578,10 +1578,7 @@ func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *sp
 // defaulted, renders an authenticating proxy rather than an open one.
 func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 	var values render.Values
-	limit := podspec.DefaultPlayerLimit
-	if cfg := group.Spec.Config; cfg != nil && cfg.PlayerLimit > 0 {
-		limit = cfg.PlayerLimit
-	}
+	limit := podspec.ProxyPlayerLimit(group)
 	values.PlayerLimit = &limit
 	onlineMode := true
 	if cfg := group.Spec.Config; cfg != nil && cfg.OnlineMode != nil {

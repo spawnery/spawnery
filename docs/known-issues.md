@@ -266,39 +266,6 @@ reconciler is therefore still adoptable. The rename traded a plausible
 collision (bare group name) for an implausible one (the exact rendered
 name, pre-labelled); it did not remove the shape.
 
-**The proxy player-limit default is still spelled out twice, and since
-2026-08-24 something checks that the two agree.** `podspec.BuildProxyPod`
-(`internal/podspec/proxy.go`) and `proxyConfigValues`
-(`internal/controller/proxygroup_controller.go`) each write the same guard,
-`cfg != nil && cfg.PlayerLimit > 0`, before falling back to
-`podspec.DefaultPlayerLimit`. They share the constant but not the predicate,
-so the shape that lets them disagree is still there. It is worth recording
-because the disagreement between exactly these two code paths *was* this
-milestone's one Critical finding: the controller used to leave the ConfigMap's
-`playerLimit` nil whenever `spec.config` was nil, while the pod's own
-`SPAWNERY_PLAYER_LIMIT` environment variable already defaulted to 500 — so a
-`ProxyGroup` with no `spec.config` came up Accepted, with its Service, and
-every pod crash-looped forever reading `config.yaml: playerLimit is not set`,
-with nothing on the CR explaining why. That specific disagreement is fixed and
-pinned by `TestProxyGroupWithNoConfigStillStartsAProxy`, which carries the
-reconciler's own ConfigMap through `render.Velocity` the way `spawnery-config`
-actually reads it. The shape is unchanged — the default is still decided in
-two places by two copies of the same condition — but it is no longer
-unwatched. `TestTheProxyPlayerLimitIsDecidedTheSameWayTwice` builds the pod
-and the config values from one `ProxyGroup` and asserts they carry the same
-number across the shapes `spec.config` can take: absent, present but empty, an
-explicit zero, a real limit, and a limit that happens to equal the default.
-
-The two mutations are worth naming because the first is this milestone's own
-Critical, rebuilt: putting `proxyConfigValues` back to leaving `playerLimit`
-nil when `spec.config` is nil fails three of the five cases. The test would
-have caught the bug that shipped. The second — moving one side's default to a
-different number while the other keeps `DefaultPlayerLimit` — is the drift the
-entry was actually worried about, and it fails the same three.
-
-Unifying the two remains the thing nobody has done, and this does not do it. It
-makes the divergence loud instead of silent, which is the cheaper half.
-
 ## From milestone 3c (the Velocity agent)
 
 Design `2026-08-11-velocity-agent-design.md` §11 named five of these before
