@@ -431,13 +431,6 @@ way this one did.
 `playerLimit` defect milestone 3b found and fixed, in a place where the
 operator has nothing to write to.
 
-**`SPAWNERY_FALLBACK_GROUPS` is a third spelling of the fallback list**,
-after the CRD field `ProxyGroup.spec.routing.fallbackGroups` and
-`DrainPlayers.toGroups`. `internal/podspec.BuildProxyPod` builds the
-environment variable from the same CRD field the operator's own
-`DrainPlayers` sender reads, so it cannot disagree today; nothing pins that
-it will not.
-
 **Per-proxy load balancing.** With several proxies, placement is even per
 proxy and not necessarily across the network — `Router` counts only the
 players Velocity itself can see, not what any other proxy in the same

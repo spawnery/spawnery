@@ -18,6 +18,7 @@ package proxyreg_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -27,6 +28,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/proxyreg"
 )
 
@@ -690,5 +692,70 @@ func TestResyncAssertsNoReadinessOnASessionNeverTold(t *testing.T) {
 	got := drain(t, s)
 	if len(got) != 1 || got[0].GetFullSync() == nil {
 		t.Fatalf("the resync sent %d messages, want the FullSync alone", len(got))
+	}
+}
+
+// The fallback list has three spellings: the CRD field
+// ProxyGroup.spec.routing.fallbackGroups, the SPAWNERY_FALLBACK_GROUPS the pod
+// spec hands the agent at start, and the DrainPlayers.toGroups the operator
+// sends over the channel while a server empties. A proxy that resolves a join
+// against one and a drain against the other moves players onto a group it has
+// no server for.
+//
+// They cannot disagree today — internal/podspec.BuildProxyPod and Fleet's own
+// fallbacks() both read Spec.Routing.FallbackGroups — and nothing pinned that.
+// This is the only place the two are compared; it lives here rather than in
+// internal/podspec because podspec deliberately imports no other internal
+// package, and the comparison has to happen on the side that can see both.
+func TestTheFallbackListHasOneSourceForJoinAndForDrain(t *testing.T) {
+	// More than one entry, and deliberately not in sorted order: a single
+	// element would pass whether or not order survived, and this is an
+	// ordered try-list.
+	fallbacks := []string{"zulu", "alpha", "mike"}
+	pg := proxyGroup(fallbacks...)
+	f := newFleet(t, pg)
+
+	session, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	recv(t, session) // the FullSync
+
+	srv := registered("lobby-drain", "10.0.0.40:25565")
+	srv.Status.Phase = "Draining"
+	if err := f.Drain(context.Background(), srv); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	drainMsg := recv(t, session).GetDrainPlayers()
+	if drainMsg == nil {
+		t.Fatal("the session did not receive a DrainPlayers")
+	}
+
+	pod, err := podspec.BuildProxyPod(
+		&spawneryv1alpha1.Network{ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: ns}},
+		pg, group+"-0", "spawnery-operator.spawnery-system.svc:9443", nil)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+	env, found := "", false
+	for _, c := range pod.Spec.Containers {
+		for _, e := range c.Env {
+			if e.Name == podspec.EnvFallbackGroups {
+				env, found = e.Value, true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the proxy pod carries no %s at all", podspec.EnvFallbackGroups)
+	}
+
+	if want := strings.Join(drainMsg.GetToGroups(), ","); env != want {
+		t.Errorf("%s = %q but DrainPlayers.toGroups = %v; a join and a drain would resolve "+
+			"against different lists", podspec.EnvFallbackGroups, env, drainMsg.GetToGroups())
+	}
+	// Against the CRD too, so the two cannot agree by being equally wrong.
+	if want := strings.Join(fallbacks, ","); env != want {
+		t.Errorf("%s = %q, spec.routing.fallbackGroups = %v", podspec.EnvFallbackGroups, env, fallbacks)
 	}
 }
