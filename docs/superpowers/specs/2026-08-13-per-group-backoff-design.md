@@ -545,10 +545,22 @@ rather than trusting a green run.
   scaling-knob edit also clears a `Degraded` a broken image caused. That is
   harmless — the retry it permits is exactly one — but it is worth knowing
   before someone treats `Degraded` as sticky.
-- **The threshold counts failed servers, not failed rounds** (§3.6), so a
-  group's six attempts become `⌈6 / minReplicas⌉` rounds and a group at
-  `minReplicas 6` or above gives up after one. Whether the schedule should be
-  per-round, or the threshold should scale with the floor, is the design
+- **The threshold counted failed servers, not failed rounds** (§3.6), so a
+  group's six attempts became `⌈6 / minReplicas⌉` rounds and a group at
+  `minReplicas 6` or above gave up after one. Whether the schedule should be
+  per-round, or the threshold should scale with the floor, was the design
   decision this milestone did not make.
+
+  **Decided 2026-08-24: per round.** `CountFailures` adds one per pass that
+  sees a new failure, however many corpses that pass sees, so the schedule §3.6
+  narrates — one free attempt and five growing waits — is what every group gets
+  rather than what only a group with a floor of one gets.
+
+  It was worse than this paragraph said. `DecideSize` runs a group *above* its
+  floor to cover `spareSlots`, so even at `minReplicas 1` a recovery builds two
+  servers and loses two: measured across the ten passes of
+  `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`, the count ran 1, 3, 5
+  where the schedule wants 1, 2, 3. The budget was being spent at double speed
+  at the very floor this design narrates, not only at six.
 - **Milestone 4c**: proxy drain, node drain, and the readiness contract
   `internal/agent/registry.go` still cannot express.

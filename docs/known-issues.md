@@ -322,25 +322,6 @@ reconciler is therefore still adoptable. The rename traded a plausible
 collision (bare group name) for an implausible one (the exact rendered
 name, pre-labelled); it did not remove the shape.
 
-**The adoption comment in `internal/podspec/labels.go` overstated how the
-collision actually presents. — CORRECTED 2026-08-24.** `GroupConfigMapName`'s
-doc comment said that without the role suffix "the operator would silently
-adopt the user's ConfigMap, inject config.yaml into it, and delete it on the
-group's own deletion." That is only true when the user's ConfigMap already
-carries `podspec.LabelManagedBy`: `cmd/spawnery-operator/main.go` narrows the
-manager's ConfigMap cache to that label specifically so it does not have to
-hold every ConfigMap in the cluster, so an *unlabelled* ConfigMap of the
-colliding name is invisible to `CreateOrUpdate`'s `Get` — the reconciler
-instead attempts a plain `Create`, which fails with `AlreadyExists`, and the
-reconcile loops on that error rather than adopting anything. Nothing is silent
-about it; it just does not say why on the CR. The comment's other half, about
-`AlreadyOwnedError` on a cross-kind name collision (a `ServerGroup` and a
-`ProxyGroup` sharing a bare name), is accurate — the operator's own sibling
-controller writes the label, so the cache does see that object. The comment now
-scopes the "silently adopt" clause to the labelled case and names the other
-outcome beside it: not destruction, but a group that never comes up while the
-CR does not say why.
-
 **The proxy player-limit default is still spelled out twice, and since
 2026-08-24 something checks that the two agree.** `podspec.BuildProxyPod`
 (`internal/podspec/proxy.go`) and `proxyConfigValues`
@@ -457,32 +438,6 @@ critical keys (`enabled`, `online-mode`, `secret`) are reasserted over the
 overlay, so it is defensible — but it is the one path a `secret-key`-shaped
 key can still take, and nothing would catch a second one arriving the same
 way this one did.
-
-**The ready port is spelled in two languages — and something compares them
-now. — CLOSED 2026-08-24.** `internal/podspec.ProxyReadyPort` and a Kotlin
-constant in
-`agent/velocity/src/main/kotlin/cloud/spawnery/agent/velocity/AgentPlugin.kt`.
-Only the level-2 harness (`hack/agent-test.sh`, phase four) caught a
-divergence, and only when it ran, which is not on the commit loop.
-
-A Go test cannot import Kotlin, but it can read it — the technique this
-repository already uses on `cmd/spawnery-operator/main.go`, where an AST pin
-asserts a wiring no compiler checks.
-`internal/podspec/kotlin_agreement_test.go` reads the declaration and compares
-the number.
-
-It anchors on `const val READY_PORT = <number>` rather than searching for the
-digits, because searching would pass for the wrong reason: 8081 also appears a
-hundred lines above, in a comment about `hack/velocity-image-test.sh`. Both
-mutations are driven — moving the number fails with both values named, and
-renaming the constant fails with a message saying which of the two has
-happened.
-
-What a divergence costs is why this earned a source-reading test rather than a
-request to be careful: `podspec` puts this port on the pod as the kubelet's
-readiness probe target and the agent binds it. Disagree and the probe dials a
-port nothing is listening on, so the pod never goes `Ready`, so the proxy never
-joins the `Service` — and nothing anywhere says the two numbers differ.
 
 **A proxy that cannot bind its ready port is silent on the CR.** It stays
 `Pending` with the reason only in the container log
@@ -768,59 +723,6 @@ is that the first one names itself on the group's conditions and the second
 does not.
 
 ## From milestone 4d
-
-**A group whose `minReplicas` is 6 or more gave up after a single round of
-failures, with no retry at all. — CLOSED 2026-08-24: the count is rounds
-now.** The backoff's threshold
-(`backoffGiveUpAt = 6`, `internal/controller/backoff.go`) counts failed
-*servers*, not failed rounds. `size()` creates the whole shortfall in one pass
-— for a group starting from nothing the floor term `minReplicas - alive` is
-the entire floor at once — and `CountFailures` then counts every `Failed` view
-in a single pass. So the budget of six is spent in `⌈6 / minReplicas⌉` rounds:
-three attempts at `minReplicas 2`, two at 3, and exactly one at 6 or above.
-Verified rather than reasoned about:
-`DecideSize({MinReplicas: 6, MaxReplicas: 10, SpareSlots: 10, MaxPlayers: 100})`
-returns `Create: 6`, `CountFailures` over those six same-instant `Failed` views
-returns 6, and `DecideBackoff` turns that straight into
-`GaveUp: true, MayCreate: false`.
-
-The operational consequence is what matters here, because giving up is
-terminal: a transient scheduler, registry or quota problem that fails a whole
-floor's worth of servers at once takes a large group straight to
-`Degraded`/`CrashLoopBackoff`, and design §3.5 makes the way back a spec edit
-by a human — the group will not recover on its own however long the problem
-lasted or how quickly it cleared. Nothing is lost and no player is
-disconnected by this on its own; the group simply stays at zero new servers
-until somebody touches it. If a group with a floor above one is found
-`Degraded` shortly after a cluster-wide hiccup, this is very likely why, and
-any spec change clears it (a `metadata.generation` bump is all the reconciler
-looks at).
-
-Design §3.6 and §5 are both narrated at `minReplicas 1`, where the schedule was
-meant to be one free attempt plus five growing waits. §3.6 says so explicitly
-and §11 carried the open design question — whether the schedule should count
-rounds, or the threshold should scale with the floor. Neither was decided in
-4d.
-
-**Decided 2026-08-24: count rounds.** `CountFailures` adds one per pass that
-sees a new failure, however many corpses that pass sees. At `minReplicas 1` the
-old and new rules would be the same number if a round were one server — and the
-measurement that this fix is built on is that it is not.
-
-**The defect was never confined to large floors, which this entry did not
-know.** `DecideSize` runs a group *above* its floor to cover `spareSlots`, so
-even at `minReplicas 1` a recovery builds two servers and loses two. Probed
-across the ten passes of
-`TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`: the group goes 1 → 3 → 5
-servers at passes 2 and 7, and the count under the old rule ran 1, 3, 5 where
-the design's schedule wants 1, 2, 3. So the budget was being spent at double
-speed at the very floor §3.6 narrates, not only at six.
-
-That test's own comment had the same blind spot and reached the right bound by
-the wrong route — it read "two windows at one server each" where the run was
-one window at two servers. Both factors are now written down with the
-measurement behind them, because the next person to move `backoffBase`,
-`spareSlots` or `resyncInterval` will recompute from that comment.
 
 **Which message an operator sees first when a group has both given up and a
 dead `Network` is unpinned.** The `BackingOff`/`Degraded` switch in
@@ -1233,56 +1135,6 @@ asserting against a snapshot that predates it. Note that the status at the end
 of `Reconcile` does not have this property — it re-lists deliberately, so the
 published counts describe what is there rather than what was there when the
 pass began.
-
-**A deferred structural fix to `readinessDivergence`. — TAKEN 2026-08-23.** An
-entry in that map measures how long a pod has been diverging *while something
-was watching*, so a pass that does not call `observe` for a group must not
-leave a first-seen timestamp behind to fire the moment observation resumes.
-Two of `Reconcile`'s steady-state early returns handled that by calling
-`forget` explicitly — `NetworkNotFound` and `NetworkNotAccepted`, both of
-which return before `reconcileReplicas` runs while the group still exists. A
-third path shares the same `forget` call, the `exposeImplemented` guard, and it
-is a guard for the day a fifth `expose.type` is added without a branch to serve
-it rather than a path a live `ProxyGroup` takes. Every error return above
-`reconcileReplicas` had the identical shape and did not forget: a `ProxyGroup`
-read that failed for any reason other than the object being gone, a failed
-`Network` read, the status write, `Bootstrap.Ensure`, the ConfigMap, the
-`Service`, and the first `pods()` call.
-
-The property is now enforced by the type. `divergenceEntry` accumulates
-*watched* time instead of storing a start: each pass adds the interval since
-the previous pass, capped at `divergenceObservationStep`, so wall-clock time
-during which nothing observed cannot enter the measurement. The next person to
-add an early return to `ProxyGroupReconciler.Reconcile` does not have to know
-the rule exists.
-
-**The mechanism this entry proposed was built first and then replaced, and the
-reason is worth more than the fix.** The proposal was to treat an entry
-unobserved on the previous pass as void. That was implemented, and it has a
-failure mode that is *silent*: if passes ever drift further apart than the
-bound — a loaded operator, a raised resync interval — every entry is voided
-on every pass and a real divergence is never reported at all. Not a false
-alarm; no alarm. Capping has no such cliff: passes 25 seconds apart still
-contribute 20 each, so a report arrives late rather than never, and an outage
-overcounts by one step against a sixty-second grace instead of by its whole
-length. Capping
-also keeps what was already watched rather than throwing it away.
-
-Three things worth keeping from doing it:
-
-- **The defect was reproducible and was reproduced first.** A pod seen
-  diverging once, then a five-minute gap, then one pass: before the change that
-  pass reported it, having measured a stretch nobody watched.
-- **Two existing tests were making the same shortcut the production code was.**
-  Both advanced the fake clock past the grace and reconciled once, so both
-  would have passed had the divergence gone entirely unobserved for that minute
-  — the very false positive the fix removes. They now run the thirteen passes
-  a real operator would (grace 60s, `resyncInterval` 5s). A test that jumps a
-  clock is asserting about wall-clock time; this measurement is not about
-  wall-clock time.
-- **The two `forget` calls stay**, and are now belt to this braces rather than
-  the mechanism. Those two paths know the measurement is void one pass earlier
-  than the cap works it out, and saying so where it is known costs nothing.
 
 ## From milestone 4c-3 (node drain)
 
@@ -1803,9 +1655,10 @@ in it; it is never recreated, because the ordinal is taken; and it goes on
 running its own pod, mounting the claim named after *its own* name. If that
 name is not `<group>-<ordinal>` the claim is a second world nobody is looking
 at; if it is, two pods contend for one `ReadWriteOnce` volume, which hangs on
-the volume rather than failing cleanly. This is the mirror of the squatter
-entry below — there an object holds the *name* without the ordinal, here it
-holds the *ordinal* without being reachable. The tell is the same shape:
+the volume rather than failing cleanly. It is the mirror of the case
+`ConditionOrdinalBlocked` reports — there an object holds the *name* without
+the ordinal; here it holds the *ordinal* without being reachable, which nothing
+reports. The tell is the same shape:
 
 ```bash
 kubectl get server -n <namespace> -l spawnery.cloud/group=<group> \
@@ -1868,29 +1721,6 @@ The constant is kept rather than deleted: it costs a line, and it is the exact
 string an operator meets on the stale condition above, so removing it would
 make that string unsearchable in the repository it came from.
 
-**A `Persistent` group with `replicas: 0` reported `Pending` forever. —
-CLOSED 2026-08-24.** `derivePhase`
-(`internal/controller/servergroup_controller.go`) returned `Ready`
-only when `readyReplicas >= DesiredReplicas()` **and** `readyReplicas > 0`, so a
-group that has been asked for zero servers, and correctly has zero, never
-reaches `Ready`. The shape predates this milestone — it is the same arithmetic
-an ephemeral group with `minReplicas: 0` meets — but 5a is what makes zero a
-deliberate operator action: `spec.replicas: 0` is the accepted way to park a
-persistent group and keep its claims, since deleting the group would leave the
-claims behind but take the ordinals' `Server` objects with it. Such a group
-publishes `Accepted: True`, `Degraded: False`, `replicas: 0`,
-`readyReplicas: 0` and `phase: Pending`, which is the truth about every field
-except the phase. Nothing else is affected: no condition depends on the phase,
-and the group is sized, PDB'd and reconciled as normal.
-
-The `&& readyReplicas > 0` clause is gone, and dropping it changes exactly one
-state: a group short of its target still fails `readyReplicas >=
-DesiredReplicas()`, so zero ready against five wanted is not suddenly `Ready`.
-The only pair that clause was deciding was zero against zero. Two tests fence
-it from both sides, and each is mutated against the other's direction —
-restoring the clause fails the parked case, and making the branch
-unconditional fails the short case.
-
 **An ordinal waits, visibly, for a pod that a dead node will never finish
 terminating.** As of the branch review closing this milestone, the Server
 controller refuses to create a pod while a pod of the same name still exists,
@@ -1925,48 +1755,6 @@ Confirm the node is really gone first.
 ```bash
 kubectl delete pod <group>-<ordinal> -n <namespace> --force --grace-period=0
 ```
-
-**A squatter could stall an ordinal silently. — CLOSED 2026-08-24.**
-`DecidePersistentSize` decides which ordinal is missing by reading
-`ServerView.Ordinal`, sourced from `spec.ordinal` — never by parsing the
-candidate name. If some other object already holds a persistent ordinal's
-exact name (`<group>-<ordinal>`) without carrying `spec.ordinal` — created by
-hand, or left over from something else — that object never appears in
-`DecidePersistentSize`'s `held` map, so the group goes on believing the
-ordinal is missing forever. `createPersistentServer`
-(`internal/controller/servergroup_controller.go`) then retries the `Create`
-every pass, gets `AlreadyExists`, and returns success without an error,
-without an event ("No event: nothing was created here", by its own comment)
-and without a log line. The reservation this creates
-(`Expectations.expectCreated`) does not save the next pass either: `observe`
-clears a create reservation the instant the name is `present` in the group's
-own view list, and the squatter is present from the very first pass onward —
-so the reservation never survives past the pass that made it, and the group
-retries at its ordinary five-second resync cadence, forever. Nothing on the
-group's conditions, events or logs distinguishes this from an ordinary
-transient collision. The tell was `kubectl get server <group>-<ordinal> -o
-jsonpath='{.spec.ordinal}'` returning empty on an object that exists.
-
-The group now carries `ConditionOrdinalBlocked`, whose message names the object
-and what is wrong with it. The condition is set from each pass's own finding
-and published `False` before the creates run, so it cannot latch — a condition
-that only ever goes True stops meaning anything the first time it fires.
-
-**The distinction between the two causes of `AlreadyExists` is the whole fix,
-and it was the part nothing pinned.** A cache that has not yet shown this
-reconciler its own creation raises the same error as a squatter and needs the
-opposite answer: reporting it would put a condition on the group for something
-already fixed, which is the sort of alarm that teaches an operator to ignore the
-condition. `reportSquatter` separates them on `spec.ordinal` — the same field
-`DecidePersistentSize` reads — and treats a matching one as its own object seen
-late.
-
-Three mutations were run and the second one escaped: making the transient cause
-report as a squatter broke no test at all. It went unpinned because a reconcile
-cannot reach that branch — the fixture's client is direct, so the sizing and the
-create see the same objects and the group never asks for an ordinal that already
-carries its own number. The test that closes it drives `reportSquatter` itself,
-and the mutation fails it now.
 
 **`spec.replicas` is now required for `Persistent`.** A CEL rule —
 `self.type != 'Persistent' || has(self.replicas)`
@@ -3291,28 +3079,6 @@ single pass, since the next pass's first `pods` read no longer sees it, and
 it is no worse than the address the code published before this design — but
 it is a case the design does not name.
 
-**The two tables of `proxyAddress` have been merged, and the trap in doing so
-was real. — CLOSED 2026-08-23.** `TestProxyAddressPerStrategy`
-(`internal/controller/expose_test.go`) and
-`TestProxyAddressPublishesOnlyWhatIsObservablyRealised`
-(`internal/controller/proxyaddress_test.go`) both drove `proxyAddress` across
-all four strategies, and nine of the older table's ten subtests were
-behavioural duplicates of the newer one. Two were not, and the first triage of
-this said one — the correction is the part worth keeping. The newer table had
-no not-ready case for `LoadBalancer` or for `ClusterIP`, only for `HostPort`
-plus a generic "no ready pod, whatever the strategy" built on `NodePort`, so
-the older table's "LoadBalancer with an assigned address but no ready proxy"
-and "ClusterIP publishes nothing until a proxy is ready" were the whole
-coverage for those two combinations. `test/e2e/expose_test.go` named the older
-test in a comment as the backing for a readiness gate it does not itself drive,
-and that comment's actual subject is the `ClusterIP` case — not the
-`LoadBalancer` one a hurried reading would reach for.
-
-Both moved first, then the older table was deleted, and the e2e comment now
-names the surviving test and says which case is its backing. A consolidation
-that had moved only one would have passed every test in the tree while
-deleting the thing a comment in another package claimed to rely on.
-
 **A side effect worth naming rather than hiding: `status.observedGeneration`
 now advances on a pass that failed, not only one that succeeded.**
 `setStatus` writes it alongside the address, and `setStatus` is now reached
@@ -3440,60 +3206,6 @@ refuses a tag whose `charts/` differ from the previous tag's while
 `Chart.yaml`'s version does not — simulated against `v0.1.1` in a worktree,
 where it exits 1. **`v0.1.1` remains a release whose chart no cluster can
 receive**; a tag cannot be moved.
-
-**The chart had no `values.schema.json`, so a wrong value was rejected by the
-operator's flag parser rather than by Helm. — WRITTEN 2026-08-24.** Helm
-validates `values.yaml` and every `--set` against a `values.schema.json` if the
-chart ships one, and this chart shipped none, so `--set` accepted anything that
-was valid YAML. Three examples, all measured in this repository's shell before
-the schema existed:
-
-- `--set operator.startupDeadline=30` — no unit. Renders fine, the container
-  gets `--startup-deadline=30`, and the binary exits at startup with `invalid
-  value "30" for flag -startup-deadline: parse error`.
-- `--set operator.leaderElect=yes` — YAML string, not a bool. Renders fine,
-  and the binary exits with `invalid boolean value "yes" for -leader-elect:
-  parse error`.
-- `--set image.tag=""` with no digest set. Fails at render, but as `Error:
-  YAML parse error on spawnery/templates/deployment.yaml: error converting
-  YAML to JSON: yaml: line 45: mapping values are not allowed in this
-  context` — a message about the template, naming neither the value nor the
-  key that is empty.
-
-In the first two cases the container exits before it does anything, so a
-cluster shows a `CrashLoopBackOff` and nothing that names the value; that last
-step is reasoning from the exits above, not an install anyone drove here. A
-schema would turn all three into a named message at `helm install` time.
-It was deferred during the whole-branch review because it is a new
-install-time validation surface that needs its own tests, and because
-`hack/e2e.sh` passes four `--set` values (`image.repository`, `image.tag`,
-`image.pullPolicy=Never`, `operator.startupDeadline=20s`) that a schema written
-slightly wrong would break "in a target nobody runs on the commit loop".
-
-**That reason expired when milestone 6e put `e2e` on the commit loop**, and the
-other half is answered by writing the tests the deferral asked for:
-`internal/rbacaudit/values_schema_test.go` drives fifteen cases through `helm
-template`, eight that must be accepted and seven that must be refused. The
-accepted half pins `hack/e2e.sh`'s own values, so a schema that would break
-that install fails here in under a second rather than there in forty minutes.
-
-Each refusal asserts twice, and the second assertion is the one worth having:
-that helm refuses, **and that its message names the key**. A refusal that does
-not say which of a dozen values is wrong has moved the problem earlier without
-making it easier — which is exactly what the empty-tag case did, failing
-inside `deployment.yaml`.
-
-Two catches beyond the three above. A digest without its algorithm prefix,
-because a bare hex string is the shape somebody reaches for first. And **a
-mistyped `--set` key**: `additionalProperties` is false on every block the
-chart owns, so `operator.startupDeadlien=5m` is refused instead of silently
-doing nothing while the operator runs with the default the user believed they
-had overridden.
-
-What it deliberately does not model: `resources`, `nodeSelector`,
-`tolerations`, `affinity` and the two `additionalLabels` maps. Those are passed
-through unchanged, and a schema that is wrong about them fails an install that
-would have worked — the hazard the deferral named, kept rather than dismissed.
 
 **`TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` flaked once.**
 `internal/controller/server_controller_test.go`. It failed once during
@@ -4390,88 +4102,6 @@ one file based against the hand-maintained table, one through
 `SubjectAccessReview` against the real authorizer in envtest. The redundancy is
 intentional — the following points each concern only one of the two halves.
 
-- **`apply()` obscured sources of error. — CLOSED 2026-08-24.** It tolerates
-  `AlreadyExists` so the tests can share the cluster-wide objects, which is
-  what made a second caller asking for a *different* object under a taken name
-  get the first one silently and then audit it. Every test in this package
-  exists to check a rendered ClusterRole against a table, so auditing a stale
-  one is the failure that matters most here and looked exactly like success.
-  `apply` now compares the rules of an existing `ClusterRole` or `Role` against
-  the one being asked for and fails naming both. Deliberately not a
-  create-or-update: several objects here carry fields the API server assigns
-  and forbids changing — a Service's `clusterIP` among them — so updating
-  generically would trade a silent staleness for a noisy failure about
-  something else entirely.
-- **`ExpandRules` ignored `rule.ResourceNames`. — CLOSED 2026-08-24, and the
-  reason it was left open had a hole in it.** A name-restricted rule folded
-  into an unrestricted permission. The original reasoning was that
-  controller-gen never produces one and the `SubjectAccessReview` direction
-  would catch it. The first half holds; the second is the wrong way round.
-  Every other thing this function cannot model — a wildcard group, resource,
-  verb or subresource, a non-resource URL — is *refused*, because expanding it
-  would claim more than the rule grants. `resourceNames` is the same defect
-  pointing the same way: the `Permission` carries no name, so the rule reads as
-  unrestricted and `Compare` reports the requirement satisfied for every object
-  when it holds for one. It is now refused like its five neighbours, naming the
-  restriction it found.
-
-  It was never hypothetical. This file records, under milestone 5c, that the
-  master design asks for `resourceNames` on the forwarding-secret reader Role.
-  Whoever takes that up now gets an error instead of an audit that quietly
-  stops meaning what it says.
-- **The flags in the Deployment are unchecked.** `sigs.k8s.io/yaml` is not
-  strict, so a mistyped key disappears silently. The spec requires
-  `--startup-deadline=20s` for level B; no test guards that so far.
-
-  *Closed by milestone 6a, and the required value above was wrong by the time
-  it was.* `config/deploy/deployment.yaml` was, at 6a, a manifest a person
-  installs rather than scaffolding, so the value it had to carry was the
-  production one: `--startup-deadline=5m`, `cmd/spawnery-operator/main.go`'s
-  own default. `hack/e2e.sh` appended a second `--startup-deadline=20s` for
-  its own run and Go's `flag` package took the last occurrence, so level B
-  got its short deadline without the installed manifest carrying a test
-  value. The check was `TestTheOperatorDeploymentCarriesProductionFlags`
-  (`internal/rbacaudit/deploy_envtest_test.go`), which parses the container's
-  args, rejects any flag it was not told about, and asserts a **floor** of at
-  least five minutes rather than an exact string — a longer deadline is a
-  legitimate operator choice and 20s is not. `readManifest` in that file
-  decoded with `yaml.UnmarshalStrict`, so a mistyped *key* was an error there
-  rather than a silent zero value.
-  `TestTheOperatorImageIsNotAMutableTag` beside it guards what the manifest
-  points at.
-
-  *Superseded by milestone 6d, in mechanism as well as in path.* Both halves
-  of this note describe machinery milestone 6d deleted rather than moved.
-  `config/deploy/deployment.yaml` no longer exists; the production default
-  now lives in `charts/spawnery/values.yaml`'s `operator.startupDeadline`
-  (`5m`), rendered into `charts/spawnery/templates/deployment.yaml`. And
-  `hack/e2e.sh` no longer appends a second, competing flag — Task 4 deleted
-  that mechanism outright and replaced it with a single Helm value,
-  `--set operator.startupDeadline=20s`, so there is only ever one
-  `--startup-deadline` argument on the container, not two resolved by flag
-  precedence. `TestTheOperatorDeploymentCarriesProductionFlags` and
-  `TestTheOperatorImageIsNotAMutableTag` both moved onto `renderedManifest`
-  in Task 3's rewrite and read the rendered chart now, not a file decoded
-  with `readManifest`; their floor-not-exact-value assertions are otherwise
-  unchanged.
-- **Nothing enforced that `Why` was filled in or that `Required` was free of
-  duplicates. — CLOSED 2026-08-23, and the third check was the one nobody had
-  asked for.** `Compare` keys on the permission and keeps the last, so a
-  duplicate pair whose two `Why` lines disagree resolved to whichever was
-  written lower in the file. `internal/rbacaudit/table_test.go` now walks all
-  three tables and refuses an empty `Why`, a repeated key within a table,
-  and — the case neither of the first two can see — a namespaced entry
-  duplicating a cluster-scoped one, which the ClusterRole already grants
-  everywhere and which nobody would later dare delete without a test saying so.
-
-  It does not resurrect what was actually lost. Nothing here can tell that a
-  `Why` naming one of three call sites is short by two; that is a claim about
-  the code, and both instances of it were found by a person reading the table
-  against the tree, months apart. What these checks hold is the floor: a
-  permission with no argument at all, and an argument that a duplicate would
-  silently overwrite. One table added later and not listed in `tables()` is
-  outside all three, and that file's own comment says so.
-
 ## Small things
 
 - `ObjectRef` is a non-pointer struct without `omitempty`, so a `required`
@@ -4491,68 +4121,6 @@ intentional — the following points each concern only one of the two halves.
   check belongs to the loop. The API server catches both, but as a rejected pod
   create that reaches a user as a `Degraded` condition quoting an apimachinery
   message about an index in an array.
-- **"Keep the oldest failure of the newest generation" did not carry when two
-  failures of one generation shared a `creationTimestamp`. — CLOSED
-  2026-08-24.** A `creationTimestamp` has second resolution, and the tiebreak
-  fell to the name — which ends in a random suffix, so which corpse survived
-  to be diagnosed from was a coin toss. Sharing a second is the ordinary case
-  rather than the exotic one: a group whose replicas all fail on the same
-  broken image creates them together and they fail together, so the rule
-  `selectFailedForPruning` documents held about half the time.
-  `status.failedAt` is now the tiebreak, which is the quantity the rule is
-  actually about. The name remains the last resort, because the sort still has
-  to be total. A mutation removing the new stage prunes the *earlier* failure
-  and keeps the later one.
-- **The status of a rejected `Network` froze and kept reporting old numbers,
-  and the ordinary case was worse than freezing. — CLOSED 2026-08-24.** The
-  refusal returned before the counting, so a Network created second — refused
-  from its very first pass, before it had counted anything — reported zero
-  however many groups were later pointed at it. The count is precisely how
-  somebody sees what is stranded behind the refusal, so reporting zero there is
-  the least useful moment to go quiet.
-  `countGroups` is now called on the refusal path as well as the accepting one.
-  A `List` error there is logged rather than returned: the condition is the more
-  important of the two things that pass has to say, so the refusal is written
-  either way. The `NetworkRef` filter is load-bearing and mutated — without it
-  a refused Network is credited with the groups pointed at its rival, which is
-  a state the duplicate rule refuses rather than prevents.
-- **A rejected `Network` produced no Kubernetes event, only a condition, and
-  the recovery from one took about ninety seconds. — BOTH CLOSED 2026-08-24.**
-  The duplicate-network refusal is the one a user is most likely to cause by
-  hand, and it was the only refusal this reconciler made silently: the other
-  two paths already emitted events. It now emits one as well, gated on the
-  transition like its neighbours, because the branch runs on every pass for as
-  long as the duplicate stands and a Warning per minute forever buries the one
-  that mattered.
-
-  `NetworkReconciler.Clock` is gone rather than used. It was declared, wired in
-  `setup.go` and `main.go`, assigned in two test fixtures, and read nowhere.
-
-  The ninety seconds were two requeues stacked — the loser's minute and the
-  group's thirty seconds — and both are watches now. `NetworkReconciler`
-  gained a second `Watches` on its own type, mapping to the *siblings* of the
-  object an event names — `For()` enqueues only the subject, and deleting the
-  winner is what changes the verdict for every loser. Both group reconcilers
-  gained `Watches(&Network{})` mapping to the groups in that namespace which
-  name it — filtered on `NetworkRef`, which is not a formality even under
-  one-network-per-namespace, since a namespace holding a loser beside a winner
-  is precisely what the duplicate rule creates.
-
-  Both mappers swallow a `List` error and return nothing. They shorten a wait
-  the resync would end anyway, so losing one costs latency and never
-  correctness.
-- **The `deletionTimestamp` skip in `Sweep` was covered by no test, and what
-  needed covering turned out to be the line above it. — CLOSED 2026-08-24.**
-  The skip itself is as harmless as this entry said: a second `Delete` on an
-  already-terminating pod costs an API call. What is not harmless is the
-  ordering it sits in. `liveUIDs` records the pod *before* the skip, and a UID
-  missing from `liveUIDs` has its agent forgotten at the bottom of `Sweep`. A
-  terminating pod is exactly the pod a drain is running on, still serving the
-  people the drain is waiting for, and recording it after the skip would throw
-  away the registry entry that is the operator's whole knowledge of them.
-  `TestSweepKeepsTheAgentOfADrainingPod` pins it, the two lines swapped make it
-  fail with `Known:false`, and `orphan.go` now says why the order is what it
-  is.
 - **`make -j image-test` can load the wrong image.** `image` and
   `velocity-image` (`Makefile`) both run `nix build` with no `--out-link`, so
   both land in the same default `./result` symlink, and `image-load` /
@@ -4576,35 +4144,3 @@ intentional — the following points each concern only one of the two halves.
   itself is not gone from the tree — `make agent` still runs `nix build
   .#agents` with no `--out-link` — it is only no longer shared between two
   builds one command can start together.
-- **`record.FakeRecorder`'s buffered channel blocked its writer once full. —
-  CLOSED 2026-08-24, in the fixture, as this entry asked.** The buffer was per
-  call site rather than a package constant: seventeen sites asked for 100,
-  three for 10, one for 20. A reconciler that emitted one event past the
-  buffer did not drop it or error — it blocked inside the send. The test did
-  not fail, it hung, and the only symptom was the package's ten-minute
-  `go test` timeout with nothing in the output naming the recorder or the
-  channel, so a mutant that should take a second to disprove looked like a
-  wedge. Milestone 4d met it once, in
-  `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`, and worked around it
-  with a local `drainRecorder`.
-
-  This entry said the real fix belonged in the fixture, "the next time someone
-  touches `record.NewFakeRecorder`'s call sites in this package". Adding an
-  event to the Network reconciler was that time.
-
-  `nonBlockingRecorder` is a slice under a mutex: no buffer to overrun, and no
-  test has to budget against one. Substitution was possible at all because
-  `Recorder` is an `events.EventRecorder` field — an interface — rather than
-  the concrete fake. The format string is copied from `events.FakeRecorder`
-  verbatim, dropping `action` exactly as it does, so every existing assertion
-  about an event's text still means what it meant.
-
-  Demonstrated rather than argued, in a throwaway test: the old recorder
-  blocks on the fourth event into a buffer of three; the new one takes ten
-  thousand without blocking.
-
-  `drainRecorder` stays and is now a different helper than it was, which its
-  comment says. It was written to prevent the wedge, which can no longer
-  happen; what it still does is reset the recorder between passes, so a count
-  taken after one pass is about that pass rather than about every pass since
-  the fixture was built.
