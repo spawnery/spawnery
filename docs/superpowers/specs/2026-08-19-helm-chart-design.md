@@ -398,3 +398,14 @@ would show. Everything the paragraph above says about the README stands, and
 statement lives in `docs/handover-milestone-6d.md`
 §2 and §4 and in `docs/known-issues.md`'s "From
 milestone 6d" section.
+
+**Amended 2026-08-24: it is no longer silent.** `readForwardingSecret` now
+carries the API server's own error out beside the condition message, and
+`network_controller.go` logs it and records a `Warning` on the `Network` on
+entering the state. The condition message is written for a person and quotes
+no API server, so it carries no `is forbidden:` substring — which is exactly
+what `test/e2e`'s `theOperatorWasNeverDenied` greps the operator's log for,
+and why a broken grant escaped the one check written to catch a denial the
+RBAC audit cannot. Everything else above stands: `Accepted` is untouched, the
+groups keep scheduling, and what breaks is still only rotation detection for
+that namespace.

@@ -79,13 +79,17 @@ into any game namespace.** Get this wrong and the failure will not say
 `ForwardingSecretResolved=Unknown/SecretReadForbidden` with a message that
 names the *secret* it could not read and the `kubectl apply` line that fixes
 it — never the RoleBinding subject at line 65 that is actually wrong. A
-reader chasing that message looks at the secret, not at this file. The
+reader chasing that message looks at the secret, not at this file. Since
+2026-08-24 the operator also logs the API server's own refusal once, when it
+first sees it, and that line is the one worth reading: it names the
+ServiceAccount the operator actually runs as, so a namespace that does not
+match line 65 is visible there rather than deducible. The
 practical effect is narrower than a first read suggests: `ServerGroup`s and
 `ProxyGroup`s in that namespace keep scheduling normally — milestone 5c built
 forwarding-secret rotation detection as reporting only, and it stays reporting
 only here — but that namespace's `Network` can never detect a rotation of its
-forwarding secret, silently, for as long as the RoleBinding names the wrong
-namespace.
+forwarding secret, for as long as the RoleBinding names the wrong namespace —
+with nothing on any group's status to show for it.
 
 ## The values
 
