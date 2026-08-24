@@ -42,6 +42,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/yaml"
@@ -1084,8 +1085,30 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 		t.Fatal("no peerless ingress rule: the kubelet's probe to the health " +
 			"port is denied, and the operator goes NotReady")
 	}
+	// Refused rather than modelled, for the same reason ExpandRules refuses a
+	// rule it cannot represent. IntValue() discards its Atoi error and returns
+	// 0 for a named port, so `port: metrics` here used to report as "admits
+	// port 0" -- safe, because 0 is never a declared container port and the
+	// reverse check below rejects it either way, but a message about a port
+	// nobody wrote. A named port is legal in a NetworkPolicy and Kubernetes
+	// resolves it against the pod's own port names; comparing it here would
+	// mean resolving it the same way, which this check does not do. A nil port
+	// is the other unmodellable shape: it admits every port on the pod, and an
+	// empty admitted set would then pass the reverse direction by having
+	// nothing to check.
 	admitted := map[int]bool{}
 	for _, p := range probeRule.Ports {
+		switch {
+		case p.Port == nil:
+			t.Fatalf("the peerless ingress rule has a port entry with no port, which admits "+
+				"every port on the operator pod from anywhere; this check models numbered "+
+				"ports only: %+v", p)
+		case p.Port.Type == intstr.String:
+			t.Fatalf("the peerless ingress rule admits the named port %q. That is legal, and "+
+				"Kubernetes resolves it against the pod's own port names -- but this check "+
+				"compares numbers and does not resolve names, so it would have reported it "+
+				"as port 0 rather than measured it", p.Port.StrVal)
+		}
 		admitted[p.Port.IntValue()] = true
 	}
 	if len(deploy.Spec.Template.Spec.Containers) != 1 {

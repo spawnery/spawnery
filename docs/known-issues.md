@@ -2720,10 +2720,6 @@ dropping a live entry.
 - The e2e scenario's owner-reference check asserts only `len(...) == 1`, not
   the referenced Kind, Name or UID. The unit test asserts all of them; the
   cluster-level one only counts.
-- `intstr.IntOrString.IntValue()` discards its `Atoi` error and returns 0 for a
-  named port, so a hypothetical `port: metrics` in the peerless rule records as
-  0. It fails safe — 0 is never a declared port, so the reverse check rejects
-  it — but the message reads "admits port 0".
 - The token-review cache does not coalesce concurrent misses on the same token:
   two goroutines both call `reviewToken` and both store. Benign, and it means
   the cache does not itself deduplicate a hot token.
