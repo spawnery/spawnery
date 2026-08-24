@@ -2150,21 +2150,6 @@ after a rotation starts on whatever the kubelet has since refreshed onto that
 file, and a pod that crash-looped and then recovered — leaving `podTerminal`,
 and counted again — is reported stale while its process runs the new secret.
 
-**A pod `List` failure blocks the `Accepted=True` status write.**
-`internal/controller/network_controller.go:146-149` returns the error before
-`Status().Update` at `:153`, so nothing written earlier in the reconcile is
-persisted — including the `Accepted` condition set at `:86-91`, which design
-§4.3 keeps deliberately clear of secret problems because
-`internal/controller/servergroup_controller.go:132` and
-`internal/controller/proxygroup_controller.go:203` derive `networkUsable` from
-it. A secret-detection concern therefore now sits on the path that publishes
-`Accepted`. The List is served from the manager's cache and effectively cannot
-fail, which is why this is recorded rather than fixed. Decoupling it — log the
-error, carry on with an empty stamp set — was considered and rejected: an empty
-set makes `rotationCondition` report `ForwardingSecretInSync` with no pod
-examined (`internal/controller/forwardingsecret.go:186-189`), trading a rare
-blocked status update for a confident wrong report.
-
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 
 **Completeness of the permission table.** The audit in `internal/rbacaudit`

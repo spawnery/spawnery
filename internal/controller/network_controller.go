@@ -143,24 +143,6 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		Message: "this network owns its namespace",
 	})
 
-	// The policy, before anything else this reconcile does. A Forbidden here
-	// is a security control failing to land, and it must not pass silently:
-	// returning the error logs it and requeues. It deliberately does not
-	// become a condition on the Network — the design's §2.4 argues that this
-	// shape needs no report, and an error that appears only under an RBAC
-	// misconfiguration is a fact about the installation rather than about
-	// this object.
-	if err := r.reconcileNetworkPolicy(ctx, network); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconcile the network policy: %w", err)
-	}
-
-	if err := r.countGroups(ctx, network); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// The forwarding secret. This sits after the Accepted branch above returns,
-	// so a Network that does not own its namespace never reads a secret it does
-	// not manage.
 	// announce holds an event until the status write that records the state it
 	// announces has landed.
 	//
@@ -180,6 +162,59 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// round: the event describes a state that was not recorded.
 	var announce []func()
 
+	// commit persists what this pass decided and, only if that landed,
+	// announces it.
+	commit := func() error {
+		if err := r.Status().Update(ctx, network); err != nil {
+			return err
+		}
+		for _, fire := range announce {
+			fire()
+		}
+		return nil
+	}
+
+	// record commits before requeuing on err. Everything below here has
+	// already decided that this Network is accepted, and the condition saying
+	// so is set above and not yet written -- so returning an error straight
+	// out took Accepted down with it, and nothing the pass had decided was
+	// persisted. Both group controllers derive networkUsable from that
+	// condition (servergroup_controller.go, proxygroup_controller.go), which
+	// put a secret-detection concern on the path that publishes Accepted: a
+	// List that fails stopped every group in the namespace, with a log line as
+	// the only trace. The verdict is written; the error still requeues.
+	//
+	// A failing write is logged rather than returned: err is what says why the
+	// pass ended, and replacing it with the write's error would hide that.
+	record := func(err error) (ctrl.Result, error) {
+		if writeErr := commit(); writeErr != nil {
+			log.FromContext(ctx).Error(writeErr,
+				"recording the status of a network whose reconcile failed")
+		}
+		return ctrl.Result{}, err
+	}
+
+	// The policy, before anything else this reconcile does, and the one
+	// failure below that deliberately does not go through record. A Forbidden
+	// here is a security control failing to land, and it must not pass
+	// silently: returning the error logs it and requeues. Recording
+	// Accepted=True alongside it would release every group in the namespace to
+	// create the pods the policy was meant to fence, so this one stays
+	// fail-closed. It deliberately does not become a condition on the Network
+	// either -- the design's §2.4 argues that this shape needs no report, and
+	// an error that appears only under an RBAC misconfiguration is a fact
+	// about the installation rather than about this object.
+	if err := r.reconcileNetworkPolicy(ctx, network); err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconcile the network policy: %w", err)
+	}
+
+	if err := r.countGroups(ctx, network); err != nil {
+		return record(err)
+	}
+
+	// The forwarding secret. This sits after the Accepted branch above returns,
+	// so a Network that does not own its namespace never reads a secret it does
+	// not manage.
 	read := readForwardingSecret(ctx, r.SecretReader, network)
 	if read.Hash != "" {
 		if previous := network.Status.ForwardingSecretHash; previous != "" && previous != read.Hash {
@@ -206,19 +241,23 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	meta.SetStatusCondition(&network.Status.Conditions, resolvedCondition(read))
 
+	// A failure here leaves the rotation condition exactly as the last
+	// successful pass left it, rather than computing one from an empty stamp
+	// set: an empty set makes rotationCondition report ForwardingSecretInSync
+	// with no pod examined (forwardingsecret.go), which would trade a rare
+	// blocked status update for a confident wrong report. Absent, on a Network
+	// that has never had a successful pass, is the honest answer -- not yet
+	// determined -- and everything else this pass decided is still recorded.
 	pods := &corev1.PodList{}
 	if err := r.List(ctx, pods, client.InNamespace(network.Namespace),
 		client.MatchingLabels(podspec.ManagedSelector(network.Name))); err != nil {
-		return ctrl.Result{}, err
+		return record(err)
 	}
 	meta.SetStatusCondition(&network.Status.Conditions,
 		rotationCondition(read, forwardingStamps(pods.Items)))
 
-	if err := r.Status().Update(ctx, network); err != nil {
+	if err := commit(); err != nil {
 		return ctrl.Result{}, err
-	}
-	for _, fire := range announce {
-		fire()
 	}
 
 	// The bootstrap runs after acceptance, after the policy, and last of all

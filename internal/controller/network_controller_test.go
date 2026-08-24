@@ -36,6 +36,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/testenv"
 )
 
 func networkReconciler(f *fixture) *NetworkReconciler {
@@ -1024,5 +1025,88 @@ func TestARotationIsAnnouncedOnlyOnceTheStatusWriteLands(t *testing.T) {
 	if ev := drainEvents(rec); containsEvent(ev, spawneryv1alpha1.EventForwardingSecretRotated) {
 		t.Errorf("events = %v on a pass with nothing changed, want the rotation announced "+
 			"exactly once", ev)
+	}
+}
+
+// failingPodList is a client whose pod List always fails and whose every other
+// List is served normally. The Network controller lists three kinds — Networks,
+// to find the namespace owner; the two group kinds, to count them; and pods, to
+// compare forwarding-secret stamps — and only the last is the concern under
+// test here.
+type failingPodList struct {
+	client.Client
+	err error
+}
+
+func (f failingPodList) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*corev1.PodList); ok {
+		return f.err
+	}
+	return f.Client.List(ctx, list, opts...)
+}
+
+// TestAPodListFailureStillRecordsAcceptance closes the entry in
+// docs/known-issues.md: `a pod List failure blocks the Accepted=True status
+// write`.
+//
+// The List that gathers forwarding-secret stamps sat between the Accepted
+// condition being set and the status update that would have persisted it, so
+// its failure discarded everything the pass had decided. Design §4.3 keeps
+// Accepted deliberately clear of secret problems because both group
+// controllers derive networkUsable from it — and this put a secret-detection
+// concern on the path that publishes it.
+//
+// The entry recorded a rejected alternative: carrying on with an empty stamp
+// set, which makes rotationCondition report ForwardingSecretInSync with no pod
+// examined. The second assertion below is what distinguishes the fix from that
+// alternative — the rotation condition is left alone, not computed from
+// nothing.
+func TestAPodListFailureStillRecordsAcceptance(t *testing.T) {
+	f := newFixture(t)
+	r, _ := networkReconcilerWithEvents(f)
+
+	// Its own Network in its own namespace, so that "Accepted has never been
+	// written" is the real starting state rather than one arranged by hand.
+	ns := testenv.Namespace(t, f.ctx, f.c)
+	if err := f.c.Create(f.ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "velocity-forwarding-secret", Namespace: ns},
+		Data:       map[string][]byte{podspec.ForwardingSecretKey: []byte("first")},
+	}); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	network := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "velocity-forwarding-secret"},
+		},
+	}
+	if err := f.c.Create(f.ctx, network); err != nil {
+		t.Fatalf("create Network: %v", err)
+	}
+
+	broken := *r
+	broken.Client = failingPodList{Client: f.c, err: errors.New("no pod lists today")}
+	if _, err := broken.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: network.Name, Namespace: ns},
+	}); err == nil {
+		t.Fatal("the reconcile succeeded with a client that refuses pod lists")
+	}
+
+	got := &spawneryv1alpha1.Network{}
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(network), got); err != nil {
+		t.Fatalf("get network: %v", err)
+	}
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
+		t.Errorf("Accepted = %+v after a failed pod List, want True. Both group controllers "+
+			"derive networkUsable from this condition, so a secret-detection concern that "+
+			"takes it down with it stops every group in the namespace, with a log line as "+
+			"the only trace",
+			meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted))
+	}
+	if c := meta.FindStatusCondition(got.Status.Conditions,
+		spawneryv1alpha1.ConditionForwardingSecretRotationPending); c != nil {
+		t.Errorf("RotationPending = %+v after a failed pod List, want it unset. Deriving it "+
+			"from an empty stamp set trades a rare blocked status write for a confident "+
+			"wrong report: ForwardingSecretInSync with no pod examined", c)
 	}
 }
