@@ -371,6 +371,12 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	// phase, so whether a pod this group asked for failed to come into
 	// existence has to be known before that read.
 	r.reportBlockedProxies(group, pods)
+	// This group's own answer about the forwarding secret. The Network carries
+	// the fleet sum and names which groups are behind, in a message; this is
+	// the group saying it for itself, so a per-group watch reads a condition.
+	// On the re-read pods rather than the ones reconcileReplicas saw, so a
+	// replacement created this pass counts as of this pass.
+	reportGroupRotation(&group.Status.Conditions, network.Status.ForwardingSecretHash, pods)
 	// Before setStatus: the budget's selector has to find the label already on
 	// the pods it is sizing minAvailable for, on the same pass.
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {

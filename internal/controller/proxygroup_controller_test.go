@@ -3477,3 +3477,50 @@ func TestTheDeadlineIsAnnouncedOnlyOnceThePodIsGone(t *testing.T) {
 		t.Errorf("events = %v once the pod could be deleted, want the deadline announced", ev)
 	}
 }
+
+// The proxy half of the same report. It costs no list of its own — the pods
+// are already in hand — but the wiring can still be wrong in the way that
+// matters most quietly: a digest taken from the wrong place would leave every
+// group permanently in sync or permanently pending, and both read as a
+// working report.
+func TestAProxyGroupReportsItsOwnRotationState(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+
+	// A digest before the pods exist, so they are built carrying it. Without
+	// this they carry no stamp at all and the group reports
+	// PodsPredateTracking — true, and not what this is about.
+	publishDigest := func(hash string) {
+		t.Helper()
+		net := f.getNetwork(t, f.network.Name)
+		net.Status.ForwardingSecretHash = hash
+		if err := f.c.Status().Update(f.ctx, net); err != nil {
+			t.Fatalf("publish a forwarding digest on the network: %v", err)
+		}
+	}
+	publishDigest("aaaaaaaaaaaaaaaa")
+
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+	if got := len(f.proxyPods("gateway")); got == 0 {
+		t.Fatal("no proxy pods were created")
+	}
+
+	// A rotation, from those pods' point of view.
+	publishDigest("bbbbbbbbbbbbbbbb")
+
+	f.reconcileProxyGroup(r, "gateway")
+	got := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionForwardingSecretRotationPending)
+	if got == nil {
+		t.Fatal("the group carries no ForwardingSecretRotationPending condition at all")
+	}
+	// True/RotationPending exactly, not merely "not False": a digest taken from
+	// the wrong place reads as Unknown/SecretUnresolved, which is also not
+	// False and is also wrong.
+	if got.Status != metav1.ConditionTrue || got.Reason != spawneryv1alpha1.ReasonRotationPending {
+		t.Errorf("condition = %s/%s, want True/%s — every pod of this group was stamped before "+
+			"the digest the network now publishes",
+			got.Status, got.Reason, spawneryv1alpha1.ReasonRotationPending)
+	}
+}

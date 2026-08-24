@@ -4542,3 +4542,63 @@ func TestAGroupAboveItsFloorIsReadyAndStillProgressing(t *testing.T) {
 			cond, spawneryv1alpha1.ReasonServersStarting)
 	}
 }
+
+// The group finds its own pods and answers for them.
+//
+// The unit test beside groupRotationCondition covers the decision; this covers
+// the parts it cannot reach — the selector matching real pods, the list, and
+// the digest coming off the Network. A selector that matched nothing would
+// pass every case of that unit test by having no stamps to judge, and report a
+// group mid-rotation as being in sync.
+func TestAServerGroupReportsItsOwnRotationState(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	net := f.getNetwork(t, f.network.Name)
+	net.Status.ForwardingSecretHash = "aaaaaaaaaaaaaaaa"
+	if err := f.c.Status().Update(f.ctx, net); err != nil {
+		t.Fatalf("publish a forwarding digest on the network: %v", err)
+	}
+
+	labels := podspec.ServerLabels(f.network.Name, "lobby", "lobby-x7k2")
+	labels[podspec.LabelForwardingHash] = "0000000000000000"
+	if err := f.c.Create(f.ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-x7k2", Namespace: f.ns, Labels: labels},
+		Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "paper", Image: "img:1"}}},
+	}); err != nil {
+		t.Fatalf("create a stale-stamped pod: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	group := f.reloadGroup(t)
+	got := meta.FindStatusCondition(group.Status.Conditions,
+		spawneryv1alpha1.ConditionForwardingSecretRotationPending)
+	if got == nil {
+		t.Fatal("the group carries no ForwardingSecretRotationPending condition at all")
+	}
+	if got.Status != metav1.ConditionTrue || got.Reason != spawneryv1alpha1.ReasonRotationPending {
+		t.Errorf("condition = %s/%s, want True/%s — this group holds a pod on the previous "+
+			"secret, and until now the only place that said so was a message on the Network",
+			got.Status, got.Reason, spawneryv1alpha1.ReasonRotationPending)
+	}
+
+	// Rolled: the stamp catches up and so does the group.
+	pod := &corev1.Pod{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, pod); err != nil {
+		t.Fatalf("get the pod: %v", err)
+	}
+	pod.Labels[podspec.LabelForwardingHash] = "aaaaaaaaaaaaaaaa"
+	if err := f.c.Update(f.ctx, pod); err != nil {
+		t.Fatalf("restamp the pod: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+	got = meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions,
+		spawneryv1alpha1.ConditionForwardingSecretRotationPending)
+	if got == nil || got.Status != metav1.ConditionFalse ||
+		got.Reason != spawneryv1alpha1.ReasonForwardingSecretInSync {
+		t.Errorf("condition = %+v once the pod carries the current stamp, want False/%s",
+			got, spawneryv1alpha1.ReasonForwardingSecretInSync)
+	}
+}

@@ -1908,16 +1908,6 @@ and `ForwardingSecretRotationPending=False/ForwardingSecretInSync`. So the
 nobody opened reports, and the opened case now has a witness rather than only
 tests.
 
-**No per-group condition.** Which group is still stale is in the Network
-condition's message and nowhere else: `staleSummary`
-(`internal/controller/forwardingsecret.go:197`) renders the counts as
-`role/group=count`, server entries before proxy entries, into the
-`ForwardingSecretRotationPending` message, and nothing writes either forwarding
-condition onto a `ServerGroup` or a `ProxyGroup`. That is the information the
-runbook needs and it is in one place; the cost is that `kubectl get servergroup`
-says nothing about a rotation, and a per-group watch or alert has to parse a
-message string rather than read a condition.
-
 **The reader Role does not carry `resourceNames`, and the master design asks
 that it should.** §8 of
 `docs/superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md:776-779`

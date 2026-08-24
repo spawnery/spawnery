@@ -593,6 +593,19 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// questions and neither is allowed to move the other. See
 	// ConditionProgressing and reportProgressing.
 	reportProgressing(group, views)
+	// This group's own answer about the forwarding secret. Unlike the proxy
+	// side, this controller works in Servers and holds no pods, so it costs a
+	// list of its own -- label-scoped to this group, over the manager's warm
+	// cache. A failure leaves the condition exactly as the last successful
+	// pass left it and does not fail the pass: this is a report about a
+	// rotation, and losing the rest of the status to it would trade a
+	// five-second-stale report for no report at all.
+	if pods, err := r.groupPods(ctx, group); err != nil {
+		log.FromContext(ctx).Error(err, "listing this group's pods for the rotation report",
+			"group", group.Name, "namespace", group.Namespace)
+	} else {
+		reportGroupRotation(&group.Status.Conditions, network.Status.ForwardingSecretHash, pods)
+	}
 
 	return ctrl.Result{RequeueAfter: requeue}, r.Status().Update(ctx, group)
 }
@@ -919,6 +932,25 @@ func derivePhase(group *spawneryv1alpha1.ServerGroup, totals GroupTotals) string
 		return string(phase.Ready)
 	}
 	return string(phase.Pending)
+}
+
+// groupPods lists this group's server pods.
+//
+// Terminating pods are kept, unlike ProxyGroupReconciler.pods which drops
+// them: the only caller is the rotation report, and forwardingStamps already
+// drops exactly the pods that report has no business counting -- one on its
+// way out, and one whose process is finished. Filtering here as well would put
+// that rule in two places.
+func (r *ServerGroupReconciler) groupPods(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+) ([]corev1.Pod, error) {
+	list := &corev1.PodList{}
+	if err := r.List(ctx, list, client.InNamespace(group.Namespace),
+		client.MatchingLabels(podspec.ServerGroupSelector(group.Spec.NetworkRef.Name, group.Name))); err != nil {
+		return nil, err
+	}
+	return list.Items, nil
 }
 
 // reportProgressing says whether the group has arrived where it decided to be.

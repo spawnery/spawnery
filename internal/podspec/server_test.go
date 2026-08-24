@@ -1041,3 +1041,36 @@ func TestTwoUserMountsCannotCollideWithEachOther(t *testing.T) {
 		})
 	}
 }
+
+// The group selector has to keep matching the pods ServerLabels writes.
+//
+// A selector naming a label that had gone would match no pods at all — and a
+// group with no pods reads as a group with nothing wrong with it, which is the
+// worst way for a report to fail. Its only caller is
+// ServerGroupReconciler.groupPods, which feeds the forwarding-secret rotation
+// report.
+func TestTheServerGroupSelectorIsASubsetOfServerLabels(t *testing.T) {
+	full := ServerLabels("production", "lobby", "lobby-x7k2")
+	selector := ServerGroupSelector("production", "lobby")
+
+	for key, want := range selector {
+		got, ok := full[key]
+		if !ok {
+			t.Errorf("the selector names %q, which ServerLabels does not write", key)
+			continue
+		}
+		if got != want {
+			t.Errorf("the selector wants %s=%q, ServerLabels writes %q", key, want, got)
+		}
+	}
+	// The one label that must not be in it: it names a single server, so a
+	// selector carrying it would match one pod and report the whole group on
+	// that one.
+	if _, ok := selector[LabelServer]; ok {
+		t.Errorf("the selector carries %s, which differs per pod", LabelServer)
+	}
+	if len(selector) != len(full)-1 {
+		t.Errorf("the selector has %d labels and ServerLabels %d; they differ by more than %s",
+			len(selector), len(full), LabelServer)
+	}
+}

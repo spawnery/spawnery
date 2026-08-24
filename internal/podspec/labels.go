@@ -126,6 +126,24 @@ func ProxyLabels(network, group string) map[string]string {
 	}
 }
 
+// ServerGroupSelector matches every server pod of one group. It is
+// ServerLabels without LabelServer, which is the one label of that set that
+// differs per pod.
+//
+// A function rather than a literal at the call site, so the two cannot drift:
+// a selector naming a label ServerLabels had stopped writing would match no
+// pods at all, and a group with no pods reads as a group with nothing wrong
+// with it. TestTheServerGroupSelectorIsASubsetOfServerLabels holds them
+// together.
+func ServerGroupSelector(network, group string) map[string]string {
+	return map[string]string{
+		LabelManagedBy: ManagedByValue,
+		LabelNetwork:   network,
+		LabelGroup:     group,
+		LabelRole:      RoleServer,
+	}
+}
+
 // GroupConfigMapName is the ConfigMap a group's controller renders its
 // configuration into, per design section 4.6 — owned by the group, so
 // deletion cascades without a name derived by convention.

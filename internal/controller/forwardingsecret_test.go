@@ -7,6 +7,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -278,5 +279,94 @@ func TestRotationMessageListsServersBeforeProxies(t *testing.T) {
 	}
 	if !strings.Contains(got.Message, rotationRunbook) {
 		t.Errorf("message = %q, want it to name %s", got.Message, rotationRunbook)
+	}
+}
+
+// A group answering for itself, in the same vocabulary its Network uses.
+//
+// The Network carries the fleet sum and names which groups are behind, in a
+// message; until now that message was the only place the information existed,
+// so `kubectl get servergroup` said nothing about a rotation and a per-group
+// alert had to parse a string. This is the group's own answer, and it follows
+// the same precedence for the same reason — a known problem outranks an
+// unknown one.
+func TestAGroupAnswersForItsOwnPods(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		networkHash string
+		pods        []corev1.Pod
+		wantStatus  metav1.ConditionStatus
+		wantReason  string
+	}{
+		{
+			// Strictly downstream of the Network's own report: the group
+			// controllers hold no reader for the secret and no grant on it, so
+			// a network that published no digest leaves every group in it
+			// saying so rather than guessing.
+			name:        "no digest published means the group cannot tell",
+			networkHash: "",
+			pods:        []corev1.Pod{stampPod("lobby", podspec.RoleServer, "bbbb", false)},
+			wantStatus:  metav1.ConditionUnknown,
+			wantReason:  spawneryv1alpha1.ReasonSecretUnresolved,
+		},
+		{
+			name:        "a stale pod outranks an unstamped one",
+			networkHash: "aaaa",
+			pods: []corev1.Pod{
+				stampPod("lobby", podspec.RoleServer, "bbbb", false),
+				stampPod("lobby", podspec.RoleServer, "", false),
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: spawneryv1alpha1.ReasonRotationPending,
+		},
+		{
+			name:        "an unstamped pod alone is unknown, never pending",
+			networkHash: "aaaa",
+			pods:        []corev1.Pod{stampPod("lobby", podspec.RoleServer, "", false)},
+			wantStatus:  metav1.ConditionUnknown,
+			wantReason:  spawneryv1alpha1.ReasonPodsPredateTracking,
+		},
+		{
+			name:        "every pod current",
+			networkHash: "aaaa",
+			pods:        []corev1.Pod{stampPod("lobby", podspec.RoleServer, "aaaa", false)},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  spawneryv1alpha1.ReasonForwardingSecretInSync,
+		},
+		{
+			// A group with no pods at all is in sync by having nothing that
+			// is not: a parked persistent group must not read as pending.
+			name:        "no pods at all",
+			networkHash: "aaaa",
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  spawneryv1alpha1.ReasonForwardingSecretInSync,
+		},
+		{
+			// forwardingStamps drops it, and this is here so that rule is
+			// pinned on the group path too: a pod on its way out must not hold
+			// the report open after the replacement that fixes it exists.
+			name:        "a terminating pod does not hold the report open",
+			networkHash: "aaaa",
+			pods: []corev1.Pod{
+				stampPod("lobby", podspec.RoleServer, "aaaa", false),
+				stampPod("lobby", podspec.RoleServer, "bbbb", true),
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: spawneryv1alpha1.ReasonForwardingSecretInSync,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var conditions []metav1.Condition
+			reportGroupRotation(&conditions, tc.networkHash, tc.pods)
+			got := meta.FindStatusCondition(conditions,
+				spawneryv1alpha1.ConditionForwardingSecretRotationPending)
+			if got == nil {
+				t.Fatal("no ForwardingSecretRotationPending condition was set at all")
+			}
+			if got.Status != tc.wantStatus || got.Reason != tc.wantReason {
+				t.Errorf("condition = %s/%s, want %s/%s: %s",
+					got.Status, got.Reason, tc.wantStatus, tc.wantReason, got.Message)
+			}
+		})
 	}
 }

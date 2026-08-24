@@ -204,6 +204,78 @@ func rotationCondition(read forwardingRead, stamps []forwardingStamp) metav1.Con
 	return cond
 }
 
+// groupRotationCondition decides one group's own
+// ForwardingSecretRotationPending from the digest its Network published and
+// the stamps on that group's own pods.
+//
+// The same condition type as the Network's, deliberately: it is the same
+// question at a different scope, and a second name would make an operator
+// reading a group and an operator reading its network learn two vocabularies
+// for one fact. The Network's is the fleet sum and names which groups are
+// behind, in a message; this one is a group answering for itself, so
+// `kubectl get servergroup -o json` and a per-group alert have a condition to
+// read rather than a string to parse.
+//
+// It reads the digest off Network.status rather than reading the secret. The
+// group controllers hold no uncached reader for one and deliberately no grant
+// on secrets outside the operator's own namespace, so this is strictly
+// downstream of the Network's own report: a network that cannot read its
+// secret publishes no digest, and every group in it says so too rather than
+// guessing.
+//
+// The precedence is rotationCondition's, for the same reason -- a known
+// problem outranks an unknown one.
+func groupRotationCondition(networkHash string, stamps []forwardingStamp) metav1.Condition {
+	cond := metav1.Condition{Type: spawneryv1alpha1.ConditionForwardingSecretRotationPending}
+
+	if networkHash == "" {
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = spawneryv1alpha1.ReasonSecretUnresolved
+		cond.Message = "this group's network has published no forwarding-secret digest, so " +
+			"whether a rotation is pending here cannot be told; the network's own " +
+			"ForwardingSecretResolved condition says why"
+		return cond
+	}
+
+	stale, untracked := 0, 0
+	for _, s := range stamps {
+		switch {
+		case s.Hash == "":
+			untracked++
+		case s.Hash != networkHash:
+			stale++
+		}
+	}
+
+	switch {
+	case stale > 0:
+		cond.Status = metav1.ConditionTrue
+		cond.Reason = spawneryv1alpha1.ReasonRotationPending
+		cond.Message = fmt.Sprintf("%d pod(s) of this group still run on the previous forwarding "+
+			"secret; roll the server groups first, then the proxy groups — see %s",
+			stale, rotationRunbook)
+	case untracked > 0:
+		cond.Status = metav1.ConditionUnknown
+		cond.Reason = spawneryv1alpha1.ReasonPodsPredateTracking
+		cond.Message = fmt.Sprintf("%d pod(s) of this group carry no forwarding stamp, so whether "+
+			"they run on the current secret cannot be told; they were created before this "+
+			"operator stamped it and clear as pods turn over", untracked)
+	default:
+		cond.Status = metav1.ConditionFalse
+		cond.Reason = spawneryv1alpha1.ReasonForwardingSecretInSync
+		cond.Message = "every pod of this group runs on the current forwarding secret"
+	}
+	return cond
+}
+
+// reportGroupRotation writes groupRotationCondition onto whichever group kind
+// is asking. A *[]metav1.Condition rather than the object, because a
+// ServerGroup and a ProxyGroup have nothing else in common here and one
+// function beats two that must agree.
+func reportGroupRotation(conditions *[]metav1.Condition, networkHash string, pods []corev1.Pod) {
+	meta.SetStatusCondition(conditions, groupRotationCondition(networkHash, forwardingStamps(pods)))
+}
+
 // staleSummary renders the stale counts as role/group=count, every server entry
 // before every proxy entry and each sorted by name. The order is the runbook's:
 // whoever reads this message is about to do the work it lists.
