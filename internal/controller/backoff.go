@@ -31,10 +31,14 @@ const (
 )
 
 // CountFailures folds this pass's views into the group's running count of
-// consecutive failures, and returns the newest failure timestamp it counted.
+// consecutive failed *rounds*, and returns the newest failure timestamp it
+// counted.
 //
-// A failure counts once, identified by its own status.failedAt being newer
-// than the newest one already counted. That test is what makes the count
+// Rounds rather than servers: see the comment on the counting loop below for
+// why, and for what it does not change.
+//
+// A round counts once, identified by at least one server's status.failedAt
+// being newer than the newest one already counted. That test is what makes the count
 // idempotent: without it a five-second resync would re-count the same corpse
 // forever. The window also runs from failedAt rather than from now, because
 // stamping the observation would extend the window on every pass and the
@@ -104,15 +108,39 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 		count, from = 0, lastSuccess
 	}
 
+	// One per *round*, not one per corpse, and that is the whole of what
+	// milestone 4d left undecided.
+	//
+	// Counting servers spent the budget in ceil(backoffGiveUpAt / floor)
+	// rounds, because size() creates the whole shortfall in one pass: three
+	// attempts at minReplicas 2, two at 3, and exactly one at 6 or above. A
+	// transient scheduler, registry or quota problem that failed a whole
+	// floor's worth of servers at once therefore took a large group straight
+	// to a terminal give-up that only a spec edit clears, however briefly the
+	// problem lasted.
+	//
+	// At minReplicas 1 nothing changes -- one server fails per round, so
+	// rounds and servers are the same number -- which is the schedule design
+	// §3.6 and §5 narrate: one free attempt and five growing waits.
+	//
+	// A pass counts at most one round however many corpses it sees. Two passes
+	// that each see new failures are two rounds, which is the conservative
+	// reading when one creation round fails in two batches: the operator
+	// observed twice, and spending two of six is far from the six it used to
+	// spend.
 	newest := since
+	sawNewFailure := false
 	for _, v := range views {
 		if v.Phase != phase.Failed || !v.FailedAt.After(from) {
 			continue
 		}
-		count++
+		sawNewFailure = true
 		if v.FailedAt.After(newest) {
 			newest = v.FailedAt
 		}
+	}
+	if sawNewFailure {
+		count++
 	}
 	return count, newest
 }

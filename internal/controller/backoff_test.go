@@ -39,16 +39,35 @@ func TestCountFailuresCountsANewCorpseOnce(t *testing.T) {
 	}
 }
 
-func TestCountFailuresCountsTwoInOnePass(t *testing.T) {
+// TestCountFailuresCountsOneRoundHoweverManyFailInIt is the rule milestone 4d
+// left undecided and 2026-08-24 decided: the count is rounds, not corpses.
+//
+// Counting corpses spent the budget of six in ceil(6 / servers-per-round)
+// rounds, and servers-per-round is not one even at minReplicas 1 — DecideSize
+// runs the group above its floor to cover spareSlots, so a real group builds
+// two and loses two. A transient scheduler, registry or quota problem that
+// failed a whole round at once therefore took the group most of the way to a
+// terminal give-up that only a spec edit clears.
+func TestCountFailuresCountsOneRoundHoweverManyFailInIt(t *testing.T) {
 	base := time.Now()
 	views := []ServerView{failedAt("a", base), failedAt("b", base.Add(time.Second))}
 
 	got, newest := CountFailures(views, 0, time.Time{}, 0)
-	if got != 2 {
-		t.Errorf("count = %d, want 2", got)
+	if got != 1 {
+		t.Errorf("count = %d for two servers failing in one round, want 1", got)
 	}
 	if !newest.Equal(base.Add(time.Second)) {
 		t.Error("newest is not the newer of the two failures")
+	}
+
+	// A later round still counts, and counts once: the watermark is what keeps
+	// the first round's corpses from being counted again, so a second round is
+	// distinguishable from re-observing the first.
+	later := base.Add(time.Minute)
+	views = append(views, failedAt("c", later), failedAt("d", later.Add(time.Second)))
+	got, _ = CountFailures(views, got, newest, 0)
+	if got != 2 {
+		t.Errorf("count = %d after a second round of two, want 2", got)
 	}
 }
 

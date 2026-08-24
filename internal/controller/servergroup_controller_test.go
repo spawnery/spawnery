@@ -2593,8 +2593,8 @@ func TestBackingOffConditionNamesTheCountAndTheWait(t *testing.T) {
 	if c.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
 		t.Errorf("reason = %q, want %q", c.Reason, spawneryv1alpha1.ReasonCrashLoopBackoff)
 	}
-	if !strings.Contains(c.Message, "1 server") || !strings.Contains(c.Message, "next attempt in") {
-		t.Errorf("message = %q, want the count and the remaining wait", c.Message)
+	if !strings.Contains(c.Message, "1 round") || !strings.Contains(c.Message, "next attempt in") {
+		t.Errorf("message = %q, want the round count and the remaining wait", c.Message)
 	}
 	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
 		t.Error("Degraded is true after a single failure")
@@ -3038,20 +3038,33 @@ func drainRecorder(rec *nonBlockingRecorder) { drainEvents(rec) }
 // would count no failures at all.
 //
 // The bound is read off the backoff schedule rather than set at one more than
-// the cold start built. Ten passes move the clock fifty seconds:
-// passes * resyncInterval = 10 * 5s = 50s. backoffDelay(n) = backoffBase *
-// backoffFactor^(n-1) gives windows of 10s, 20s, 40s for n = 1, 2, 3
-// (backoffBase = 10s, backoffFactor = 2, both in backoff.go). Two windows'
-// worth fit inside 50s (10s, then 20s more — 30s elapsed) and the third does
-// not (40s more would need 70s), so two replacements are legitimately built
-// on top of the cold start's own server: bound = 1 + 2 = 3. A group
-// rebuilding every pass would have built eleven. Changing passes,
-// backoffBase, backoffFactor or resyncInterval moves this arithmetic and
-// will turn this red — that is a fixture change, not a backoff regression.
+// the cold start built, and the arithmetic has two factors rather than one.
+//
+// Ten passes move the clock fifty seconds: passes * resyncInterval = 10 * 5s.
+// backoffDelay(n) = backoffBase * backoffFactor^(n-1) gives windows of 10s,
+// 20s, 40s for n = 1, 2, 3 (backoffBase = 10s, backoffFactor = 2, both in
+// backoff.go). Since 2026-08-24 the count is rounds rather than corpses, so it
+// climbs 1, 2, 3 here: the first window opens at t=15s and the second at
+// t=40s, both inside 50s, and the third would need t=85s. Two windows fire.
+//
+// **Each window builds two servers, not one**, and that is the factor the
+// earlier version of this comment did not have. DecideSize runs the group
+// above its floor to cover spareSlots, so even at minReplicas 1 a recovery
+// builds two. The old comment reached its bound of 3 by a route that happened
+// to give the right number for the wrong reason — it read two windows at one
+// server each, where the run was one window at two servers. Measured, not
+// reasoned: a probe over these ten passes shows the group going 1 -> 3 -> 5
+// servers at passes 2 and 7.
+//
+// So bound = 1 (the cold start's own server) + 2 windows * 2 servers = 5. A
+// group rebuilding every pass would have built about twenty, so the test still
+// separates the two by a wide margin. Changing passes, backoffBase,
+// backoffFactor, resyncInterval or spareSlots moves this arithmetic and will
+// turn this red — that is a fixture change, not a backoff regression.
 func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	const (
 		passes = 10
-		bound  = 3
+		bound  = 5
 	)
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4154,19 +4167,32 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// A whole floor's worth of servers failing at once, which is the exact
-	// shape the milestone 4d entry above describes: size() creates the shortfall
-	// in one pass, so a group with a floor of six spends its whole budget of six
-	// in a single round.
-	f.setMinReplicas(t, backoffGiveUpAt)
-	f.reconcileGroup(t, r)
-	names := f.serverNamesOfGroup(t, "lobby")
-	if int32(len(names)) != backoffGiveUpAt {
-		t.Fatalf("the group created %d servers, want %d; this test needs a whole floor to "+
-			"fail at once", len(names), backoffGiveUpAt)
+	// backoffGiveUpAt rounds, each one failing whatever the group built.
+	//
+	// A whole floor failing at once used to be enough on its own, which is what
+	// the milestone 4d entry above is about: the count was corpses, so one
+	// round at minReplicas 6 spent the entire budget. Since the count became
+	// rounds it takes six of them, and building the give-up that way is also
+	// the honest construction — it is what a genuinely broken image does.
+	// failServerNeverReady rather than failServer: the latter walks a server up
+	// to Ready first, and a success ends the streak this test is building.
+	// Never-ready is also the broken-image shape the backoff exists for.
+	f.setMinReplicas(t, 1)
+	for round := int32(0); round < backoffGiveUpAt; round++ {
+		f.reconcileGroup(t, r)
+		for _, name := range f.serverNamesOfGroup(t, "lobby") {
+			if f.server(name).Status.Phase != string(phase.Failed) {
+				f.failServerNeverReady(t, name)
+			}
+		}
+		// Past the window this round earned, or the next pass creates nothing
+		// and there is no next round to fail.
+		f.clock.Advance(10 * time.Minute)
 	}
-	for _, name := range names {
-		f.failServer(t, name)
+	f.reconcileGroup(t, r)
+	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got < backoffGiveUpAt {
+		t.Fatalf("consecutiveFailures = %d after %d rounds, want at least %d; this test "+
+			"needs a group that has actually given up", got, backoffGiveUpAt, backoffGiveUpAt)
 	}
 
 	// And then the Network is taken away underneath it. Deleted rather than

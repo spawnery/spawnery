@@ -513,7 +513,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// reason here would be a lie, so it carries the real one.
 		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
 		backingOff.Message = fmt.Sprintf(
-			"not retrying: %d servers failed to start in a row; change the group's spec to try again",
+			"not retrying: %d rounds of server starts failed in a row; change the group's spec to try again",
 			group.Status.ConsecutiveFailures)
 		degraded.Status = metav1.ConditionTrue
 		degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
@@ -532,7 +532,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		backingOff.Status = metav1.ConditionTrue
 		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
 		backingOff.Message = fmt.Sprintf(
-			"%d server(s) failed to start in a row; next attempt in %s",
+			"%d round(s) of server starts failed in a row; next attempt in %s",
 			group.Status.ConsecutiveFailures, backoff.RetryAfter.Round(time.Second))
 	default:
 		// Nothing has failed this streak. Only reachable with a non-nil

@@ -26,6 +26,9 @@ spec:
     - jsonPath: .status.readyReplicas
       name: Ready
       type: integer
+    - jsonPath: .status.replicas
+      name: Replicas
+      type: integer
     - jsonPath: .status.onlinePlayers
       name: Players
       type: integer
@@ -1501,8 +1504,11 @@ spec:
                 x-kubernetes-list-type: map
               consecutiveFailures:
                 description: |-
-                  ConsecutiveFailures counts servers that failed to start with no success
-                  since. It lives on the CR rather than in the operator's memory because a
+                  ConsecutiveFailures counts *rounds* in which at least one server failed
+                  to start, with no success since. One pass adds one however many servers
+                  it saw fail: counting servers meant a group with a floor of six spent
+                  its whole budget in a single round, because the scaler creates the
+                  shortfall in one pass. It lives on the CR rather than in the operator's memory because a
                   restart must not reset it: that would restart the create loop it exists
                   to bound. This is the opposite of the choice made for the empty-since
                   clock in milestone 4a, where a reset delays a scale-down and so errs
@@ -1533,8 +1539,26 @@ spec:
                 format: int32
                 type: integer
               phase:
-                description: Phase is derived from the servers and conditions of this
-                  group.
+                description: |-
+                  Phase says whether players can join, and that is narrower than it
+                  sounds: Ready means the group's *floor* is met -- spec.replicas for a
+                  persistent group, spec.scaling.minReplicas for an ephemeral one -- not
+                  that every server the scaler decided to run is up.
+
+                  The distinction is real and used to be invisible. An ephemeral group
+                  scaled above its floor to cover spareSlots reports Ready as soon as the
+                  floor is covered, with the rest still starting. Compare readyReplicas
+                  against replicas to see that; both are printed columns for exactly this
+                  reason.
+
+                  It is deliberately not "every decided server is up". A group scaling up
+                  under load would then flip to Pending while thousands of players were
+                  connected, and a group whose cluster has no capacity left for its
+                  scaled target would sit at Pending forever while serving perfectly.
+                  Ready answering "can somebody join" is the more useful of the two, and
+                  this comment exists because the meaning of DesiredReplicas changed
+                  underneath this field once already, in milestone 4a, without anything
+                  saying so.
                 type: string
               readyReplicas:
                 description: ReadyReplicas is the number of servers in phase Ready.

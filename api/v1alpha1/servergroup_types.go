@@ -189,7 +189,25 @@ type ServerGroupSpec struct {
 
 // ServerGroupStatus is the observed state of a ServerGroup.
 type ServerGroupStatus struct {
-	// Phase is derived from the servers and conditions of this group.
+	// Phase says whether players can join, and that is narrower than it
+	// sounds: Ready means the group's *floor* is met -- spec.replicas for a
+	// persistent group, spec.scaling.minReplicas for an ephemeral one -- not
+	// that every server the scaler decided to run is up.
+	//
+	// The distinction is real and used to be invisible. An ephemeral group
+	// scaled above its floor to cover spareSlots reports Ready as soon as the
+	// floor is covered, with the rest still starting. Compare readyReplicas
+	// against replicas to see that; both are printed columns for exactly this
+	// reason.
+	//
+	// It is deliberately not "every decided server is up". A group scaling up
+	// under load would then flip to Pending while thousands of players were
+	// connected, and a group whose cluster has no capacity left for its
+	// scaled target would sit at Pending forever while serving perfectly.
+	// Ready answering "can somebody join" is the more useful of the two, and
+	// this comment exists because the meaning of DesiredReplicas changed
+	// underneath this field once already, in milestone 4a, without anything
+	// saying so.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
@@ -214,8 +232,11 @@ type ServerGroupStatus struct {
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
-	// ConsecutiveFailures counts servers that failed to start with no success
-	// since. It lives on the CR rather than in the operator's memory because a
+	// ConsecutiveFailures counts *rounds* in which at least one server failed
+	// to start, with no success since. One pass adds one however many servers
+	// it saw fail: counting servers meant a group with a floor of six spent
+	// its whole budget in a single round, because the scaler creates the
+	// shortfall in one pass. It lives on the CR rather than in the operator's memory because a
 	// restart must not reset it: that would restart the create loop it exists
 	// to bound. This is the opposite of the choice made for the empty-since
 	// clock in milestone 4a, where a reset delays a scale-down and so errs
@@ -242,6 +263,10 @@ type ServerGroupStatus struct {
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
+// Replicas beside Ready, so the printed row carries a denominator. Without it
+// `kubectl get servergroup` showed "Phase Ready, Ready 1" for a group running
+// five, and nothing in the row said the other four were still starting.
+// +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Players",type=integer,JSONPath=`.status.onlinePlayers`
 // +kubebuilder:printcolumn:name="Free Slots",type=integer,JSONPath=`.status.freeSlots`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

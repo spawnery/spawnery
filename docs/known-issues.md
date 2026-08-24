@@ -757,8 +757,9 @@ does not.
 
 ## From milestone 4d
 
-**A group whose `minReplicas` is 6 or more gives up after a single round of
-failures, with no retry at all.** The backoff's threshold
+**A group whose `minReplicas` is 6 or more gave up after a single round of
+failures, with no retry at all. — CLOSED 2026-08-24: the count is rounds
+now.** The backoff's threshold
 (`backoffGiveUpAt = 6`, `internal/controller/backoff.go`) counts failed
 *servers*, not failed rounds. `size()` creates the whole shortfall in one pass
 — for a group starting from nothing the floor term `minReplicas - alive` is
@@ -783,11 +784,31 @@ until somebody touches it. If a group with a floor above one is found
 any spec change clears it (a `metadata.generation` bump is all the reconciler
 looks at).
 
-Design §3.6 and §5 are both narrated at `minReplicas 1`, where the schedule is
-the intended one free attempt plus five growing waits. §3.6 now says so
-explicitly and §11 carries the open design question — whether the schedule
-should count rounds, or the threshold should scale with the floor. Neither was
-decided in 4d, and changing it is a behaviour change, not a fix.
+Design §3.6 and §5 are both narrated at `minReplicas 1`, where the schedule was
+meant to be one free attempt plus five growing waits. §3.6 says so explicitly
+and §11 carried the open design question — whether the schedule should count
+rounds, or the threshold should scale with the floor. Neither was decided in
+4d.
+
+**Decided 2026-08-24: count rounds.** `CountFailures` adds one per pass that
+sees a new failure, however many corpses that pass sees. At `minReplicas 1` the
+old and new rules would be the same number if a round were one server — and the
+measurement that this fix is built on is that it is not.
+
+**The defect was never confined to large floors, which this entry did not
+know.** `DecideSize` runs a group *above* its floor to cover `spareSlots`, so
+even at `minReplicas 1` a recovery builds two servers and loses two. Probed
+across the ten passes of
+`TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`: the group goes 1 → 3 → 5
+servers at passes 2 and 7, and the count under the old rule ran 1, 3, 5 where
+the design's schedule wants 1, 2, 3. So the budget was being spent at double
+speed at the very floor §3.6 narrates, not only at six.
+
+That test's own comment had the same blind spot and reached the right bound by
+the wrong route — it read "two windows at one server each" where the run was
+one window at two servers. Both factors are now written down with the
+measurement behind them, because the next person to move `backoffBase`,
+`spareSlots` or `resyncInterval` will recompute from that comment.
 
 **Which message an operator sees first when a group has both given up and a
 dead `Network` is unpinned.** The `BackingOff`/`Degraded` switch in
