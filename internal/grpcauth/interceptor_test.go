@@ -18,7 +18,9 @@ package grpcauth_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -109,4 +111,51 @@ func TestInterceptorMapsRejectionToUnauthenticatedCode(t *testing.T) {
 		t.Errorf("code = %v, want %v", code, codes.Unauthenticated)
 	}
 	// The pod checker must never be reached — the review already refused it.
+}
+
+// The rate limit's one externally observable effect is the gRPC code the
+// interceptor returns for it, and nothing exercised that mapping until this.
+// The limiter's own tests all call Authenticate directly and read isExhausted,
+// an unexported predicate, so replacing codes.ResourceExhausted in the
+// interceptor with codes.Unauthenticated broke nothing — and an agent that
+// cannot tell "your credentials are wrong" from "you are asking too fast"
+// gives up where it should have backed off.
+func TestInterceptorMapsARateLimitToResourceExhausted(t *testing.T) {
+	// Frozen, so the peer's bucket never refills mid-loop.
+	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	a := &grpcauth.Authenticator{
+		Reviews:  rejectingReviewer{},
+		Pods:     refusingPodChecker{},
+		Audience: podspec.AgentTokenAudience,
+		Cache:    grpcauth.NewReviewCache(clock),
+		Limiter:  grpcauth.NewPeerLimiter(clock),
+	}
+
+	// Every token is distinct, so every call is a genuine cache miss and
+	// reaches the limiter. The limiter is consulted before the TokenReview, so
+	// the first PeerBurst calls spend the bucket and come back Unauthenticated
+	// from the reviewer; the one after that is the limiter's own refusal, and
+	// its code is what this is about.
+	for i := 0; i < grpcauth.PeerBurst+2; i++ {
+		err := a.StreamInterceptor()(nil,
+			&fakeServerStream{ctx: streamCtxWithToken(fmt.Sprintf("distinct-token-%d", i))},
+			&grpc.StreamServerInfo{FullMethod: "/spawnery.agent.v1alpha1.AgentService/ServerSession"},
+			func(any, grpc.ServerStream) error {
+				t.Fatal("handler ran for a token the API server refused")
+				return nil
+			})
+		if err == nil {
+			t.Fatalf("call %d was accepted although every token is refused", i)
+		}
+		switch code := status.Code(err); code {
+		case codes.Unauthenticated:
+			continue
+		case codes.ResourceExhausted:
+			return
+		default:
+			t.Fatalf("call %d came back %v, want Unauthenticated or ResourceExhausted", i, code)
+		}
+	}
+	t.Fatalf("%d calls from one peer and the limiter never engaged", grpcauth.PeerBurst+2)
 }

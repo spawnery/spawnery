@@ -2750,9 +2750,6 @@ dropping a live entry.
   claims now reports "token is not bound to a pod" rather than the role
   message. No refusal was dropped and no error type changed, and `TokenRequest`
   cannot mint that combination.
-- Nothing tests the interceptor's new `codes.ResourceExhausted` mapping end to
-  end, and that mapping is the one externally observable part of the rate
-  limit.
 - `evictFullLocked` is not a hard cap: with `maxBuckets` peers all
   simultaneously active nothing is evictable and the map grows past it. That is
   the many-compromised-pods case the design ruled out of scope, recorded so the
