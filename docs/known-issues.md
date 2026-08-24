@@ -4232,14 +4232,35 @@ one file based against the hand-maintained table, one through
 `SubjectAccessReview` against the real authorizer in envtest. The redundancy is
 intentional — the following points each concern only one of the two halves.
 
-- **`apply()` obscures sources of error.** It tolerates `AlreadyExists` so the
-  tests can share the cluster-wide objects. That makes the call in the manifest
-  test effectively a no-op, because the permission test runs first and creates
-  the objects. Anyone applying a *changed* ClusterRole silently gets the old
-  one.
-- **`ExpandRules` ignores `rule.ResourceNames`.** A name-restricted rule folds
-  into an unrestricted permission. controller-gen never produces such a thing,
-  and the SAR direction would catch it — hence deliberately left open.
+- **`apply()` obscured sources of error. — CLOSED 2026-08-24.** It tolerates
+  `AlreadyExists` so the tests can share the cluster-wide objects, which is
+  what made a second caller asking for a *different* object under a taken name
+  get the first one silently and then audit it. Every test in this package
+  exists to check a rendered ClusterRole against a table, so auditing a stale
+  one is the failure that matters most here and looked exactly like success.
+  `apply` now compares the rules of an existing `ClusterRole` or `Role` against
+  the one being asked for and fails naming both. Deliberately not a
+  create-or-update: several objects here carry fields the API server assigns
+  and forbids changing — a Service's `clusterIP` among them — so updating
+  generically would trade a silent staleness for a noisy failure about
+  something else entirely.
+- **`ExpandRules` ignored `rule.ResourceNames`. — CLOSED 2026-08-24, and the
+  reason it was left open had a hole in it.** A name-restricted rule folded
+  into an unrestricted permission. The original reasoning was that
+  controller-gen never produces one and the `SubjectAccessReview` direction
+  would catch it. The first half holds; the second is the wrong way round.
+  Every other thing this function cannot model — a wildcard group, resource,
+  verb or subresource, a non-resource URL — is *refused*, because expanding it
+  would claim more than the rule grants. `resourceNames` is the same defect
+  pointing the same way: the `Permission` carries no name, so the rule reads as
+  unrestricted and `Compare` reports the requirement satisfied for every object
+  when it holds for one. It is now refused like its five neighbours, naming the
+  restriction it found.
+
+  It was never hypothetical. This file records, under milestone 5c, that the
+  master design asks for `resourceNames` on the forwarding-secret reader Role.
+  Whoever takes that up now gets an error instead of an audit that quietly
+  stops meaning what it says.
 - **The flags in the Deployment are unchecked.** `sigs.k8s.io/yaml` is not
   strict, so a mistyped key disappears silently. The spec requires
   `--startup-deadline=20s` for level B; no test guards that so far.

@@ -80,6 +80,28 @@ func ExpandRules(rules []rbacv1.PolicyRule) ([]Permission, error) {
 		if len(rule.NonResourceURLs) > 0 {
 			return nil, fmt.Errorf("rule %d uses non-resource URLs, which this audit cannot model", i)
 		}
+		// Refused rather than ignored, which is what this used to do.
+		//
+		// A Permission has no name field, so a rule restricted to particular
+		// object names would expand into one that reads as unrestricted --
+		// and it would read that way in the *permissive* direction: Compare
+		// would find the required permission granted when in truth it is
+		// granted for one name only. That is the wrong way for an audit to be
+		// wrong.
+		//
+		// controller-gen emits no resourceNames, so nothing generated reaches
+		// this. What does reach it is hand-written RBAC, and there is a live
+		// invitation to write some: docs/known-issues.md records that the
+		// master design asks for resourceNames on the forwarding-secret
+		// reader Role. Whoever takes that up gets this error rather than an
+		// audit that quietly stops meaning what it says.
+		if len(rule.ResourceNames) > 0 {
+			return nil, fmt.Errorf(
+				"rule %d is restricted to resourceNames %v, which this audit cannot model: "+
+					"a Permission carries no name, so this rule would expand into one that "+
+					"reads as unrestricted and Compare would report it satisfied for every "+
+					"object rather than for these", i, rule.ResourceNames)
+		}
 		for _, group := range rule.APIGroups {
 			if group == rbacv1.APIGroupAll {
 				return nil, fmt.Errorf("rule %d grants every API group", i)

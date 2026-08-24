@@ -19,12 +19,14 @@ package rbacaudit_test
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"os"
 	"os/exec"
+	"reflect"
 	"regexp"
 	"slices"
 	"sort"
@@ -418,14 +420,70 @@ func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 // apply creates objects that several tests in this package share. The cluster
 // scoped ones — ClusterRole and ClusterRoleBinding — outlive a single test in
 // the shared control plane, so creating them twice is normal and not a failure.
+//
+// Tolerating AlreadyExists is what makes the sharing work and is also what used
+// to hide a real hazard: a second caller asking for a *different* object under
+// a name already taken got the first one, silently, and then audited it. Every
+// test in this package exists to check a rendered ClusterRole against a table,
+// so auditing a stale one is the failure mode that matters most here and would
+// have looked exactly like success.
+//
+// So the object that is already there is now checked against the one being
+// asked for, and only for the two types where the difference changes what an
+// audit means. Deliberately not a create-or-update: several of the objects
+// here carry fields the API server assigns and forbids changing — a Service's
+// clusterIP among them — so updating generically would trade a silent staleness
+// for a noisy failure that has nothing to do with what is being tested.
 func apply(t *testing.T, objs ...client.Object) {
 	t.Helper()
 	c, ctx := testenv.Client(t)
 	for _, obj := range objs {
-		if err := c.Create(ctx, obj); err != nil && !apierrors.IsAlreadyExists(err) {
+		err := c.Create(ctx, obj)
+		if err == nil {
+			continue
+		}
+		if !apierrors.IsAlreadyExists(err) {
 			t.Fatalf("create %T %s: %v", obj, obj.GetName(), err)
 		}
+		assertSameRules(t, c, ctx, obj)
 	}
+}
+
+// assertSameRules fails when a ClusterRole or Role already in the cluster
+// carries different rules from the one a test just tried to create. Anything
+// else is left alone: a namespace, a ServiceAccount and a binding carry no
+// rules, and a Deployment or Service that already exists is scenery for these
+// tests rather than their subject.
+func assertSameRules(t *testing.T, c client.Client, ctx context.Context, want client.Object) {
+	t.Helper()
+	key := client.ObjectKeyFromObject(want)
+	switch desired := want.(type) {
+	case *rbacv1.ClusterRole:
+		var existing rbacv1.ClusterRole
+		if err := c.Get(ctx, key, &existing); err != nil {
+			t.Fatalf("get the ClusterRole %s that already exists: %v", key.Name, err)
+		}
+		diffRules(t, "ClusterRole", key.Name, desired.Rules, existing.Rules)
+	case *rbacv1.Role:
+		var existing rbacv1.Role
+		if err := c.Get(ctx, key, &existing); err != nil {
+			t.Fatalf("get the Role %s that already exists: %v", key.Name, err)
+		}
+		diffRules(t, "Role", key.Name, desired.Rules, existing.Rules)
+	}
+}
+
+func diffRules(t *testing.T, kind, name string, want, got []rbacv1.PolicyRule) {
+	t.Helper()
+	if reflect.DeepEqual(want, got) {
+		return
+	}
+	t.Fatalf("%s %s already exists in the shared control plane with different rules than "+
+		"this test asked for, so everything below would audit an object nobody wrote.\n"+
+		"  in the cluster: %v\n  asked for:      %v\n"+
+		"Two tests in this package are rendering different roles under one name; the "+
+		"control plane is shared and nothing cleans it between tests, so whichever ran "+
+		"first wins and the other silently audits it.", kind, name, got, want)
 }
 
 // TestDeployManifestsAreAcceptedAndConsistent applies the deployment manifests

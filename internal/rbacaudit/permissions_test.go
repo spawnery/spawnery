@@ -17,6 +17,7 @@ limitations under the License.
 package rbacaudit
 
 import (
+	"strings"
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -321,4 +322,35 @@ func TestCompare(t *testing.T) {
 			t.Errorf("extra = %v, want %v in that exact order", keys(d.Extra), wantExtra)
 		}
 	})
+}
+
+// TestExpandRulesRejectsResourceNames guards the same failure mode as the
+// wildcard rejection, from the opposite direction. A wildcard grants more than
+// the table can express and is refused as an over-grant. A resourceNames
+// restriction grants *less* than the table can express, and expanding it
+// anyway is the more dangerous of the two: the Permission carries no name, so
+// the rule reads as unrestricted and Compare reports the requirement satisfied
+// for every object when it holds for one.
+//
+// controller-gen emits no resourceNames, which is why this went unnoticed. But
+// docs/known-issues.md records that the master design asks for resourceNames on
+// the forwarding-secret reader Role, so the case is not hypothetical — it is
+// waiting for somebody to follow that advice.
+func TestExpandRulesRejectsResourceNames(t *testing.T) {
+	rule := rbacv1.PolicyRule{
+		APIGroups:     []string{""},
+		Resources:     []string{"secrets"},
+		Verbs:         []string{"get"},
+		ResourceNames: []string{"one-particular-secret"},
+	}
+	got, err := ExpandRules([]rbacv1.PolicyRule{rule})
+	if err == nil {
+		t.Fatalf("a resourceNames restriction was accepted and expanded to %v; it has to be "+
+			"refused, because that expansion claims a grant on every secret", got)
+	}
+	// The message has to name the restriction, or whoever meets it cannot tell
+	// which rule to look at in a file with a dozen.
+	if !strings.Contains(err.Error(), "one-particular-secret") {
+		t.Errorf("error = %q, want it to name the resourceNames it refused", err)
+	}
 }
