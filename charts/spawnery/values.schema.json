@@ -1,0 +1,83 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "spawnery",
+  "description": "Helm validates values.yaml and every --set against this before rendering. It exists because without it a wrong value was rejected by the operator's flag parser instead: the container exited at startup with `invalid value \"30\" for flag -startup-deadline`, which reaches a cluster as CrashLoopBackOff and names neither the value nor the key. What is validated here is what has actually gone wrong, plus types; the pass-through values (resources, nodeSelector, tolerations, affinity, additionalLabels) are deliberately left open, because a schema that is wrong about them fails an install that would have worked.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["image", "operator"],
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "digest": {
+          "type": "string",
+          "description": "Empty, or an algorithm-prefixed digest. A bare hex string is the shape somebody reaches for first and it is not what a container reference takes.",
+          "pattern": "^$|^[a-z0-9]+:[a-f0-9]{32,}$"
+        },
+        "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+      },
+      "anyOf": [
+        { "properties": { "tag": { "minLength": 1 } }, "required": ["tag"] },
+        { "properties": { "digest": { "minLength": 1 } }, "required": ["digest"] }
+      ],
+      "description": "One of tag or digest has to name something. With both empty the templates render an image reference ending in a colon, and helm's own error is a YAML parse failure pointing at deployment.yaml rather than at the value that is missing."
+    },
+    "resources": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "serviceMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "additionalLabels": { "type": "object" },
+            "interval": {
+              "type": "string",
+              "description": "A Prometheus duration, which is not a Go one: no fractions and no compound units.",
+              "pattern": "^[0-9]+(ms|s|m|h|d|w|y)$"
+            }
+          }
+        },
+        "prometheusRule": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "additionalLabels": { "type": "object" },
+            "caExpiryWarningDays": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "operator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "startupDeadline": {
+          "type": "string",
+          "description": "A Go duration, so it carries a unit: 5m, 20s, 1h30m. A bare number is accepted by YAML and refused by the flag parser at container start, which is the failure this whole file exists for.",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+        },
+        "leaderElect": {
+          "type": "boolean",
+          "description": "A bool, not a YAML string. `yes` is a string here, and the flag parser refuses it at container start."
+        }
+      }
+    }
+  }
+}

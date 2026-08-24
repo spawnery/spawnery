@@ -3309,11 +3309,12 @@ refuses a tag whose `charts/` differ from the previous tag's while
 where it exits 1. **`v0.1.1` remains a release whose chart no cluster can
 receive**; a tag cannot be moved.
 
-**The chart has no `values.schema.json`, so a wrong value is rejected by the
-operator's flag parser rather than by Helm.** Helm validates `values.yaml`
-against a `values.schema.json` if the chart ships one; this chart does not, so
-`--set` accepts anything that is valid YAML. Three examples, all measured in
-this repository's shell:
+**The chart had no `values.schema.json`, so a wrong value was rejected by the
+operator's flag parser rather than by Helm. — WRITTEN 2026-08-24.** Helm
+validates `values.yaml` and every `--set` against a `values.schema.json` if the
+chart ships one, and this chart shipped none, so `--set` accepted anything that
+was valid YAML. Three examples, all measured in this repository's shell before
+the schema existed:
 
 - `--set operator.startupDeadline=30` — no unit. Renders fine, the container
   gets `--startup-deadline=30`, and the binary exits at startup with `invalid
@@ -3331,11 +3332,36 @@ In the first two cases the container exits before it does anything, so a
 cluster shows a `CrashLoopBackOff` and nothing that names the value; that last
 step is reasoning from the exits above, not an install anyone drove here. A
 schema would turn all three into a named message at `helm install` time.
-Deliberately not written during the whole-branch review: it is a new
-install-time validation surface that needs its own tests, and `hack/e2e.sh`
-passes four `--set` values (`image.repository`, `image.tag`,
-`image.pullPolicy=Never`, `operator.startupDeadline=20s`) that a schema
-written slightly wrong would break in a target nobody runs on the commit loop.
+It was deferred during the whole-branch review because it is a new
+install-time validation surface that needs its own tests, and because
+`hack/e2e.sh` passes four `--set` values (`image.repository`, `image.tag`,
+`image.pullPolicy=Never`, `operator.startupDeadline=20s`) that a schema written
+slightly wrong would break "in a target nobody runs on the commit loop".
+
+**That reason expired when milestone 6e put `e2e` on the commit loop**, and the
+other half is answered by writing the tests the deferral asked for:
+`internal/rbacaudit/values_schema_test.go` drives fifteen cases through `helm
+template`, eight that must be accepted and seven that must be refused. The
+accepted half pins `hack/e2e.sh`'s own values, so a schema that would break
+that install fails here in under a second rather than there in forty minutes.
+
+Each refusal asserts twice, and the second assertion is the one worth having:
+that helm refuses, **and that its message names the key**. A refusal that does
+not say which of a dozen values is wrong has moved the problem earlier without
+making it easier — which is exactly what the empty-tag case did, failing
+inside `deployment.yaml`.
+
+Two catches beyond the three above. A digest without its algorithm prefix,
+because a bare hex string is the shape somebody reaches for first. And **a
+mistyped `--set` key**: `additionalProperties` is false on every block the
+chart owns, so `operator.startupDeadlien=5m` is refused instead of silently
+doing nothing while the operator runs with the default the user believed they
+had overridden.
+
+What it deliberately does not model: `resources`, `nodeSelector`,
+`tolerations`, `affinity` and the two `additionalLabels` maps. Those are passed
+through unchanged, and a schema that is wrong about them fails an install that
+would have worked — the hazard the deferral named, kept rather than dismissed.
 
 **`TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` flaked once.**
 `internal/controller/server_controller_test.go`. It failed once during
