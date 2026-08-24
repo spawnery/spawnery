@@ -909,3 +909,44 @@ func TestSiblingNetworksWakesTheLosersAndNotTheWinner(t *testing.T) {
 			"the object that event names", f.network.Name, names)
 	}
 }
+
+// TestARefusedNetworkStillCountsWhatPointsAtIt closes "the status of a rejected
+// Network freezes and keeps reporting old numbers" in docs/known-issues.md.
+//
+// The ordinary case is worse than freezing. A Network created second is refused
+// on its very first pass, before it has counted anything, so it reported zero
+// however many groups were later pointed at it — and the count is precisely how
+// somebody sees what is stranded behind the refusal.
+func TestARefusedNetworkStillCountsWhatPointsAtIt(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+
+	loser := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: f.ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "fwd"},
+		},
+	}
+	if err := f.c.Create(f.ctx, loser); err != nil {
+		t.Fatalf("create the second Network: %v", err)
+	}
+	// Two groups behind the loser, and one behind the winner that must not be
+	// credited to it: a namespace holding two Networks is what the duplicate
+	// rule refuses, not what it prevents.
+	f.createProxyGroup("stranded-proxy", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.NetworkRef = spawneryv1alpha1.ObjectRef{Name: "staging"}
+	})
+	f.createProxyGroup("the-winners-proxy")
+
+	f.reconcileNetwork(t, r, "staging")
+
+	got := f.getNetwork(t, "staging")
+	if !meta.IsStatusConditionFalse(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
+		t.Fatalf("Accepted = %+v, want False; this test is about a refused Network",
+			meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted))
+	}
+	if got.Status.ProxyGroups != 1 {
+		t.Errorf("status.proxyGroups = %d on a refused Network, want 1. The refusal is not a "+
+			"reason to stop saying how much is waiting behind it", got.Status.ProxyGroups)
+	}
+}

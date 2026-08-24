@@ -92,8 +92,19 @@ func (r *OrphanReconciler) Sweep(ctx context.Context) error {
 	liveUIDs := make(map[string]bool, len(pods.Items))
 	for i := range pods.Items {
 		pod := &pods.Items[i]
+		// Before the skip below, and that order is load-bearing. A UID missing
+		// from liveUIDs has its agent forgotten at the bottom of this function,
+		// and a pod with a deletion timestamp is exactly the pod a drain is
+		// running on -- still there, still serving the people the drain is
+		// waiting for. Recording it after the skip would forget the registry
+		// entry that is the operator's whole knowledge of those players, which
+		// is what occupancy, the disruption budget and the drain's own end
+		// condition are computed from.
 		liveUIDs[string(pod.UID)] = true
 
+		// The pod is already on its way out, so there is nothing to sweep. A
+		// second Delete would be harmless; not making it is the only thing
+		// this skip is for.
 		if !pod.DeletionTimestamp.IsZero() {
 			continue
 		}

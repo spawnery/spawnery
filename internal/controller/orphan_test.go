@@ -332,3 +332,60 @@ func TestSweepAndServerControllerConverge(t *testing.T) {
 		}
 	}
 }
+
+// TestSweepKeepsTheAgentOfADrainingPod pins an ordering docs/known-issues.md
+// files as "the deletionTimestamp skip in Sweep is covered by no test; it
+// concerns only an already-deleting orphaned pod, where a second Delete is
+// harmless."
+//
+// The skip is indeed harmless. What is not harmless is the line above it:
+// liveUIDs records the pod *before* the skip, and a UID missing from liveUIDs
+// has its agent forgotten at the bottom of Sweep. A terminating proxy pod is
+// exactly the pod that is still serving people — a drain is a pod with a
+// deletion timestamp and players still on it — so forgetting its agent would
+// throw away the operator's knowledge of those players, which is what decides
+// occupancy, the disruption budget, and when the drain may end.
+//
+// So the test is not about the skip. It is about the two lines being in this
+// order, which nothing said and nothing checked.
+func TestSweepKeepsTheAgentOfADrainingPod(t *testing.T) {
+	f := newFixture(t)
+	o := orphanReconciler(f)
+	f.createProxyGroup("gateway")
+	uid := f.createProxyPod("gateway-abcd", "gateway")
+	f.agents.Connect(uid, agent.RoleProxy)
+
+	// A pod bound to a node keeps its deletion timestamp: the API server waits
+	// for a kubelet's confirmation and envtest runs none. That is what a
+	// draining proxy looks like from here.
+	pod := &corev1.Pod{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Namespace: f.ns, Name: "gateway-abcd"}, pod); err != nil {
+		t.Fatalf("get the pod: %v", err)
+	}
+	pod.Spec.NodeName = "node-a"
+	if err := f.c.SubResource("binding").Create(f.ctx, pod, &corev1.Binding{
+		ObjectMeta: metav1.ObjectMeta{Namespace: f.ns, Name: pod.Name},
+		Target:     corev1.ObjectReference{Kind: "Node", Name: "node-a"},
+	}); err != nil {
+		t.Fatalf("bind the pod: %v", err)
+	}
+	if err := f.c.Delete(f.ctx, pod); err != nil {
+		t.Fatalf("delete the pod: %v", err)
+	}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Namespace: f.ns, Name: "gateway-abcd"}, pod); err != nil {
+		t.Fatalf("the pod did not survive its own deletion, so it is not terminating: %v", err)
+	}
+	if pod.DeletionTimestamp.IsZero() {
+		t.Fatal("the pod has no deletion timestamp, so this test is not about a draining pod")
+	}
+
+	if err := o.Sweep(f.ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	if snap := f.agents.Lookup(uid); !snap.Known {
+		t.Errorf("the sweep forgot the agent of a pod that is terminating but still there: %+v. "+
+			"A draining proxy has players on it until the drain ends, and this registry entry "+
+			"is what the operator knows about them", snap)
+	}
+}

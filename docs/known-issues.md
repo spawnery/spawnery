@@ -4357,7 +4357,19 @@ intentional — the following points each concern only one of the two halves.
 - "Keep the oldest failure of the newest generation" does not carry when two
   failures of one generation share a `creationTimestamp` (second resolution);
   the tiebreak falls to the random suffix instead of `status.failedAt`.
-- The status of a rejected `Network` freezes and keeps reporting old numbers.
+- **The status of a rejected `Network` froze and kept reporting old numbers,
+  and the ordinary case was worse than freezing. — CLOSED 2026-08-24.** The
+  refusal returned before the counting, so a Network created second — refused
+  from its very first pass, before it had counted anything — reported zero
+  however many groups were later pointed at it. The count is precisely how
+  somebody sees what is stranded behind the refusal, so reporting zero there is
+  the least useful moment to go quiet.
+  `countGroups` is now called on the refusal path as well as the accepting one.
+  A `List` error there is logged rather than returned: the condition is the more
+  important of the two things that pass has to say, so the refusal is written
+  either way. The `NetworkRef` filter is load-bearing and mutated — without it
+  a refused Network is credited with the groups pointed at its rival, which is
+  a state the duplicate rule refuses rather than prevents.
 - **A rejected `Network` produced no Kubernetes event, only a condition, and
   the recovery from one took about ninety seconds. — BOTH CLOSED 2026-08-24.**
   The duplicate-network refusal is the one a user is most likely to cause by
@@ -4383,8 +4395,18 @@ intentional — the following points each concern only one of the two halves.
   Both mappers swallow a `List` error and return nothing. They shorten a wait
   the resync would end anyway, so losing one costs latency and never
   correctness.
-- The `deletionTimestamp` skip in `Sweep` is covered by no test; it concerns only
-  an already-deleting orphaned pod, where a second `Delete` is harmless.
+- **The `deletionTimestamp` skip in `Sweep` was covered by no test, and what
+  needed covering turned out to be the line above it. — CLOSED 2026-08-24.**
+  The skip itself is as harmless as this entry said: a second `Delete` on an
+  already-terminating pod costs an API call. What is not harmless is the
+  ordering it sits in. `liveUIDs` records the pod *before* the skip, and a UID
+  missing from `liveUIDs` has its agent forgotten at the bottom of `Sweep`. A
+  terminating pod is exactly the pod a drain is running on, still serving the
+  people the drain is waiting for, and recording it after the skip would throw
+  away the registry entry that is the operator's whole knowledge of them.
+  `TestSweepKeepsTheAgentOfADrainingPod` pins it, the two lines swapped make it
+  fail with `Known:false`, and `orphan.go` now says why the order is what it
+  is.
 - **`make -j image-test` can load the wrong image.** `image` and
   `velocity-image` (`Makefile`) both run `nix build` with no `--out-link`, so
   both land in the same default `./result` symlink, and `image-load` /

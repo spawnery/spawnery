@@ -32,6 +32,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -87,6 +88,20 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	if owner != network.Name {
+		// Counted even though this Network is being refused, because the
+		// numbers are about what points at it and not about whether it is
+		// serving. A refused Network used to report whatever it last counted,
+		// which for the ordinary case -- created second, refused from its very
+		// first pass -- was zero forever, however many groups were later
+		// pointed at it. The count is how you see what is stranded behind the
+		// refusal.
+		//
+		// A failure here is not allowed to swallow the refusal: the condition
+		// below is the more important of the two things this pass has to say,
+		// so a List error is logged and the refusal is written anyway.
+		if err := r.countGroups(ctx, network); err != nil {
+			log.FromContext(ctx).Error(err, "counting the groups behind a refused network")
+		}
 		message := fmt.Sprintf(
 			"namespace %q is already served by network %q; put staging and production in separate namespaces",
 			network.Namespace, owner)
@@ -134,33 +149,9 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("reconcile the network policy: %w", err)
 	}
 
-	serverGroups := &spawneryv1alpha1.ServerGroupList{}
-	if err := r.List(ctx, serverGroups, client.InNamespace(network.Namespace)); err != nil {
+	if err := r.countGroups(ctx, network); err != nil {
 		return ctrl.Result{}, err
 	}
-	proxyGroups := &spawneryv1alpha1.ProxyGroupList{}
-	if err := r.List(ctx, proxyGroups, client.InNamespace(network.Namespace)); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	var serverGroupCount, players int32
-	for _, g := range serverGroups.Items {
-		if g.Spec.NetworkRef.Name != network.Name {
-			continue
-		}
-		serverGroupCount++
-		players += g.Status.OnlinePlayers
-	}
-	var proxyGroupCount int32
-	for _, g := range proxyGroups.Items {
-		if g.Spec.NetworkRef.Name == network.Name {
-			proxyGroupCount++
-		}
-	}
-
-	network.Status.ServerGroups = serverGroupCount
-	network.Status.ProxyGroups = proxyGroupCount
-	network.Status.OnlinePlayers = players
 
 	// The forwarding secret. This sits after the Accepted branch above returns,
 	// so a Network that does not own its namespace never reads a secret it does
@@ -328,6 +319,44 @@ func (r *NetworkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.siblingNetworks)).
 		Named("network").
 		Complete(r)
+}
+
+// countGroups writes the three counts a Network's status carries: the groups
+// in its namespace that name it, and the players those server groups report.
+//
+// Both directions of the filter matter. A namespace can hold more than one
+// Network -- that is what the duplicate rule refuses, not what it prevents --
+// so counting every group in the namespace would credit this Network with
+// groups pointed at its rival.
+func (r *NetworkReconciler) countGroups(ctx context.Context, network *spawneryv1alpha1.Network) error {
+	serverGroups := &spawneryv1alpha1.ServerGroupList{}
+	if err := r.List(ctx, serverGroups, client.InNamespace(network.Namespace)); err != nil {
+		return err
+	}
+	proxyGroups := &spawneryv1alpha1.ProxyGroupList{}
+	if err := r.List(ctx, proxyGroups, client.InNamespace(network.Namespace)); err != nil {
+		return err
+	}
+
+	var serverGroupCount, players int32
+	for _, g := range serverGroups.Items {
+		if g.Spec.NetworkRef.Name != network.Name {
+			continue
+		}
+		serverGroupCount++
+		players += g.Status.OnlinePlayers
+	}
+	var proxyGroupCount int32
+	for _, g := range proxyGroups.Items {
+		if g.Spec.NetworkRef.Name == network.Name {
+			proxyGroupCount++
+		}
+	}
+
+	network.Status.ServerGroups = serverGroupCount
+	network.Status.ProxyGroups = proxyGroupCount
+	network.Status.OnlinePlayers = players
+	return nil
 }
 
 // siblingNetworks maps a Network event onto the other Networks in its
