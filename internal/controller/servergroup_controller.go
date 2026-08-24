@@ -756,6 +756,7 @@ func (r *ServerGroupReconciler) size(
 	// persistent one, which builds identities. At most one of them is ever
 	// non-empty -- the switch above ran one branch, and neither rule fills the
 	// other's field -- and neither loop needs to know that.
+	clearOrdinalBlocked(group)
 	if backoff.MayCreate {
 		for i := int32(0); i < decision.Create; i++ {
 			name, err := r.createServer(ctx, group, podHash)
@@ -1104,11 +1105,83 @@ func (r *ServerGroupReconciler) createPersistentServer(
 		if !apierrors.IsAlreadyExists(err) {
 			return "", err
 		}
-		return srv.Name, nil
+		// Which of the two causes this is, since they need opposite answers.
+		// A cache catching up resolves itself in a pass or two and deserves
+		// the silence it has always had. A squatter never resolves, and used
+		// to get the same silence: the retry ran at the resync cadence
+		// forever with nothing on the group saying why the ordinal stayed
+		// missing.
+		return srv.Name, r.reportSquatter(ctx, group, srv.Name, ordinal)
 	}
 	r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, "ServerCreated", actionCreateServer,
 		"created server %s", srv.Name)
 	return srv.Name, nil
+}
+
+// reportSquatter decides whether an AlreadyExists on a derived ordinal name is
+// a cache catching up or an object that will hold the name forever, and says so
+// on the group when it is the second.
+//
+// The test is spec.ordinal, the same field DecidePersistentSize reads. An
+// object holding the name *with* the ordinal this pass wanted is this
+// reconciler's own creation seen through a cache that has not caught up, which
+// is transient by construction. Anything else -- a Server without the field, a
+// Server carrying a different ordinal, or a read that fails -- cannot become a
+// member of the group on its own, so the ordinal stays missing until a person
+// removes the object.
+//
+// It returns no error for the collision itself: the group's other work, its
+// status and its PodDisruptionBudget, should not stop because one ordinal is
+// blocked. The condition is the report.
+func (r *ServerGroupReconciler) reportSquatter(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	name string,
+	ordinal int32,
+) error {
+	existing := &spawneryv1alpha1.Server{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: group.Namespace, Name: name}, existing)
+	switch {
+	case apierrors.IsNotFound(err):
+		// Gone between the failed create and this read: nothing holds the name
+		// now, so the next pass creates it.
+		return nil
+	case err != nil:
+		return err
+	case existing.Spec.Ordinal != nil && *existing.Spec.Ordinal == ordinal:
+		// This reconciler's own object, one cache generation behind.
+		return nil
+	}
+
+	held := "no spec.ordinal at all"
+	if existing.Spec.Ordinal != nil {
+		held = fmt.Sprintf("spec.ordinal %d", *existing.Spec.Ordinal)
+	}
+	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+		Type:   spawneryv1alpha1.ConditionOrdinalBlocked,
+		Status: metav1.ConditionTrue,
+		Reason: spawneryv1alpha1.ReasonOrdinalNameTaken,
+		Message: fmt.Sprintf(
+			"ordinal %d cannot be created: %q already exists with %s, so it is not a member "+
+				"of this group and the ordinal stays missing until that object is removed",
+			ordinal, name, held),
+	})
+	return nil
+}
+
+// clearOrdinalBlocked publishes the condition's False side.
+//
+// Called on every pass before the creates, so the True set by reportSquatter is
+// this pass's own finding rather than one that latched. A condition that can
+// only go True is a condition that stops meaning anything the first time it
+// fires.
+func clearOrdinalBlocked(group *spawneryv1alpha1.ServerGroup) {
+	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+		Type:    spawneryv1alpha1.ConditionOrdinalBlocked,
+		Status:  metav1.ConditionFalse,
+		Reason:  spawneryv1alpha1.ReasonOrdinalsAvailable,
+		Message: "no ordinal's name is held by an object outside this group",
+	})
 }
 
 func (r *ServerGroupReconciler) deleteServer(

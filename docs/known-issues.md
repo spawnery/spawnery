@@ -1902,13 +1902,14 @@ Confirm the node is really gone first.
 kubectl delete pod <group>-<ordinal> -n <namespace> --force --grace-period=0
 ```
 
-**A squatter can stall an ordinal silently.** `DecidePersistentSize` decides
-which ordinal is missing by reading `ServerView.Ordinal`, sourced from
-`spec.ordinal` — never by parsing the candidate name. If some other object
-already holds a persistent ordinal's exact name (`<group>-<ordinal>`) without
-carrying `spec.ordinal` — created by hand, or left over from something else —
-that object never appears in `DecidePersistentSize`'s `held` map, so the group
-goes on believing the ordinal is missing forever. `createPersistentServer`
+**A squatter could stall an ordinal silently. — CLOSED 2026-08-24.**
+`DecidePersistentSize` decides which ordinal is missing by reading
+`ServerView.Ordinal`, sourced from `spec.ordinal` — never by parsing the
+candidate name. If some other object already holds a persistent ordinal's
+exact name (`<group>-<ordinal>`) without carrying `spec.ordinal` — created by
+hand, or left over from something else — that object never appears in
+`DecidePersistentSize`'s `held` map, so the group goes on believing the
+ordinal is missing forever. `createPersistentServer`
 (`internal/controller/servergroup_controller.go`) then retries the `Create`
 every pass, gets `AlreadyExists`, and returns success without an error,
 without an event ("No event: nothing was created here", by its own comment)
@@ -1919,8 +1920,29 @@ own view list, and the squatter is present from the very first pass onward —
 so the reservation never survives past the pass that made it, and the group
 retries at its ordinary five-second resync cadence, forever. Nothing on the
 group's conditions, events or logs distinguishes this from an ordinary
-transient collision. The tell, today, is `kubectl get server <group>-<ordinal>
--o jsonpath='{.spec.ordinal}'` returning empty on an object that exists.
+transient collision. The tell was `kubectl get server <group>-<ordinal> -o
+jsonpath='{.spec.ordinal}'` returning empty on an object that exists.
+
+The group now carries `ConditionOrdinalBlocked`, whose message names the object
+and what is wrong with it. The condition is set from each pass's own finding
+and published `False` before the creates run, so it cannot latch — a condition
+that only ever goes True stops meaning anything the first time it fires.
+
+**The distinction between the two causes of `AlreadyExists` is the whole fix,
+and it was the part nothing pinned.** A cache that has not yet shown this
+reconciler its own creation raises the same error as a squatter and needs the
+opposite answer: reporting it would put a condition on the group for something
+already fixed, which is the sort of alarm that teaches an operator to ignore the
+condition. `reportSquatter` separates them on `spec.ordinal` — the same field
+`DecidePersistentSize` reads — and treats a matching one as its own object seen
+late.
+
+Three mutations were run and the second one escaped: making the transient cause
+report as a squatter broke no test at all. It went unpinned because a reconcile
+cannot reach that branch — the fixture's client is direct, so the sizing and the
+create see the same objects and the group never asks for an ordinal that already
+carries its own number. The test that closes it drives `reportSquatter` itself,
+and the mutation fails it now.
 
 **`spec.replicas` is now required for `Persistent`.** A CEL rule —
 `self.type != 'Persistent' || has(self.replicas)`
@@ -2146,14 +2168,21 @@ operator's answer to whatever broke. For a persistent group the very same pass
 now counts failures over the *unfiltered* view list (`ofGeneration` is
 ephemeral-only as of 5b — see below), so a stale-generation `Failed` corpse
 still holding its ordinal is counted right back in on the same reconcile: the
-count returns to the number of corpses the group is holding rather than to 0.
+count returns to 1 rather than to 0.
+
+*It returned to the number of corpses until 2026-08-24*, when the count became
+rounds rather than servers (see milestone 4d). Four held ordinals used to put
+the group four-sixths of the way to a terminal give-up on the very pass the
+operator's spec edit was meant to answer for them. They are one round however
+many of them there are, so it is one now, pinned by
+`TestAGenerationResetLeavesOneRoundNotOnePerCorpse`.
 `pruneFailed` does not run for a persistent group, and each corpse keeps its
 own ordinal until its failed retention elapses, so with `replicas > 1` that is
 one per ordinal that has one, bounded by `spec.replicas`
 (`internal/controller/servergroup_controller.go:251-258`). Defensible — a spec
 edit does not heal a broken ordinal, and an operator watching for a stall
 should not read a non-zero count as "nothing happened" — but it means the reset
-an ephemeral group gets in full, a persistent one gets only most of.
+an ephemeral group gets in full, a persistent one gets all but one round of.
 
 ## From milestone 5c (detecting forwarding secret rotation)
 

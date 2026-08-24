@@ -4281,3 +4281,139 @@ func TestAGroupShortOfItsTargetIsStillPending(t *testing.T) {
 			got.Status.Phase, phase.Pending)
 	}
 }
+
+// TestASquatterOnAnOrdinalNameSaysSoOnTheGroup closes the entry in
+// docs/known-issues.md: "a squatter can stall an ordinal silently."
+//
+// A persistent ordinal's name is derived, <group>-<ordinal>, so anything
+// created by hand under that name takes it. DecidePersistentSize reads
+// spec.ordinal rather than parsing names, so the squatter never enters its held
+// map and the group goes on believing the ordinal is missing; the create then
+// returns AlreadyExists, which the reconciler treats as success because that is
+// the right answer for the other cause of the same error — a cache one
+// generation behind. So the group retried every five seconds forever, and
+// nothing on its conditions, events or logs distinguished that from an
+// ordinary transient collision. The tell was a kubectl jsonpath on the object.
+func TestASquatterOnAnOrdinalNameSaysSoOnTheGroup(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// Something else holds the name a persistent ordinal will want, without
+	// carrying the ordinal that would make it a member.
+	squatter := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "held-0", Namespace: f.ns},
+		// GroupRef and nothing else. spec.ordinal is what makes an object a
+		// member of a persistent group, and its absence is the whole point.
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "held"},
+		},
+	}
+	if err := f.c.Create(f.ctx, squatter); err != nil {
+		t.Fatalf("create the squatter: %v", err)
+	}
+	f.createPersistentGroup(t, "held", 1)
+
+	f.reconcilePersistentGroup(t, r, "held")
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "held", Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get the group: %v", err)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionOrdinalBlocked)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("OrdinalBlocked = %+v, want True. The group will retry this ordinal every "+
+			"five seconds until somebody removes that object, and used to say nothing", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonOrdinalNameTaken {
+		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonOrdinalNameTaken)
+	}
+	// The message has to name the object and say what is wrong with it, or a
+	// reader is back to the kubectl jsonpath this replaces.
+	for _, want := range []string{"held-0", "spec.ordinal"} {
+		if !strings.Contains(cond.Message, want) {
+			t.Errorf("message = %q, want it to contain %q", cond.Message, want)
+		}
+	}
+}
+
+// TestAGroupWithNoSquatterSaysTheOrdinalsAreAvailable is the False side. A
+// condition that can only go True stops meaning anything the first time it
+// fires, and this one is set from each pass's own finding rather than latched.
+func TestAGroupWithNoSquatterSaysTheOrdinalsAreAvailable(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "clear", 1)
+
+	f.reconcilePersistentGroup(t, r, "clear")
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "clear", Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get the group: %v", err)
+	}
+	cond := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionOrdinalBlocked)
+	if cond == nil || cond.Status != metav1.ConditionFalse {
+		t.Errorf("OrdinalBlocked = %+v on a group whose ordinals are free, want False", cond)
+	}
+}
+
+// TestACacheOneGenerationBehindIsNotReportedAsASquatter is the distinction the
+// whole fix turns on, and it went unpinned until a mutation showed it: treating
+// the transient cause as the permanent one broke no test.
+//
+// AlreadyExists on a derived ordinal name has two causes needing opposite
+// answers. A squatter holds the name forever and must be reported. A cache that
+// has not yet shown this reconciler its own creation resolves itself in a pass
+// or two, and reporting it would put a condition on the group for something
+// that is already fixed — the sort of alarm that teaches an operator to ignore
+// the condition.
+//
+// Driven against reportSquatter directly. Through a reconcile it is not
+// reachable at all: the fixture's client is direct, so DecidePersistentSize and
+// the Create see the same objects and the group never tries to create an
+// ordinal that already carries its own number.
+func TestACacheOneGenerationBehindIsNotReportedAsASquatter(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	group := f.createPersistentGroup(t, "lagging", 1)
+
+	// This reconciler's own object, as it would look once the cache catches up.
+	ordinal := int32(0)
+	mine := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "lagging-0", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "lagging"},
+			Ordinal:  &ordinal,
+		},
+	}
+	if err := f.c.Create(f.ctx, mine); err != nil {
+		t.Fatalf("create the server: %v", err)
+	}
+
+	if err := r.reportSquatter(f.ctx, group, "lagging-0", ordinal); err != nil {
+		t.Fatalf("reportSquatter: %v", err)
+	}
+	if c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionOrdinalBlocked); c != nil {
+		t.Errorf("OrdinalBlocked = %+v for an object carrying the very ordinal this pass "+
+			"wanted, want no condition at all: that is this reconciler's own creation seen "+
+			"through a cache one generation behind, and it resolves itself", c)
+	}
+
+	// And an object carrying a *different* ordinal is a squatter, not a lagging
+	// cache — the field matching is what separates them, not its presence.
+	other := int32(7)
+	mine.Spec.Ordinal = &other
+	if err := f.c.Update(f.ctx, mine); err != nil {
+		t.Fatalf("move the ordinal: %v", err)
+	}
+	if err := r.reportSquatter(f.ctx, group, "lagging-0", ordinal); err != nil {
+		t.Fatalf("reportSquatter: %v", err)
+	}
+	c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionOrdinalBlocked)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("OrdinalBlocked = %+v for an object holding the name under a different "+
+			"ordinal, want True", c)
+	}
+	if !strings.Contains(c.Message, "spec.ordinal 7") {
+		t.Errorf("message = %q, want it to name the ordinal the squatter carries", c.Message)
+	}
+}

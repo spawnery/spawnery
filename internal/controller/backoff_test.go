@@ -369,3 +369,40 @@ func TestBackoffDelayIsCapped(t *testing.T) {
 		t.Errorf("backoffDelay(20) = %v, want the cap %v", got, backoffCap)
 	}
 }
+
+// TestAGenerationResetLeavesOneRoundNotOnePerCorpse pins what the milestone 5b
+// entry in docs/known-issues.md describes, and what changed under it on
+// 2026-08-24.
+//
+// The reset in servergroup_controller.go zeroes the count whenever
+// metadata.generation moves, because a spec edit is the operator's answer to
+// whatever broke. For a persistent group the same pass then counts over the
+// *unfiltered* views — ofGeneration is ephemeral-only since 5b — so
+// stale-generation corpses still holding their ordinals are counted straight
+// back in on the same reconcile. The reset an ephemeral group gets in full, a
+// persistent one gets only most of.
+//
+// What changed: while the count was corpses, the reset returned to however many
+// corpses the group was holding, bounded by spec.replicas. Now it returns to
+// one, because the corpses are one round however many of them there are. The
+// group still does not pretend they are absent — a spec edit does not heal a
+// broken ordinal — but it starts from one round of penalty rather than from
+// four.
+func TestAGenerationResetLeavesOneRoundNotOnePerCorpse(t *testing.T) {
+	base := time.Now()
+	corpses := []ServerView{
+		failedAt("lobby-0", base),
+		failedAt("lobby-1", base.Add(time.Second)),
+		failedAt("lobby-2", base.Add(2*time.Second)),
+		failedAt("lobby-3", base.Add(3*time.Second)),
+	}
+
+	// prev = 0 and since = zero: exactly what the generation reset leaves
+	// behind, a moment before the same pass counts.
+	got, _ := CountFailures(corpses, 0, time.Time{}, 4)
+	if got != 1 {
+		t.Errorf("count = %d immediately after a generation reset with four corpses held, "+
+			"want 1. They are one round however many of them there are; returning four "+
+			"spends most of the budget on servers the operator has just answered for", got)
+	}
+}

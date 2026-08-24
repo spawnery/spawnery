@@ -49,6 +49,21 @@ const (
 	// group's phase, and a group waiting ten seconds after a single hiccup
 	// would then be indistinguishable from one with a real fault.
 	ConditionBackingOff = "BackingOff"
+	// ConditionOrdinalBlocked is true while a persistent ServerGroup cannot
+	// create one of its ordinals because something else already holds that
+	// exact name without being a member of the group.
+	//
+	// It exists because that state was permanent and completely silent. The
+	// name of a persistent ordinal is derived, `<group>-<ordinal>`, so anything
+	// created by hand under that name — or left behind by something else —
+	// takes it. DecidePersistentSize reads spec.ordinal rather than parsing
+	// names, so the squatter never enters its held map and the group believes
+	// the ordinal is still missing; the create then returns AlreadyExists,
+	// which the reconciler treats as success because that is the right answer
+	// for the *other* cause of the same error, a cache that has not caught up
+	// yet. So the group retried every five seconds, forever, with nothing on
+	// its conditions, events or logs to say so.
+	ConditionOrdinalBlocked = "OrdinalBlocked"
 	// ConditionChangingOver is true while a ProxyGroup holds pods whose
 	// rendered shape this operator no longer produces, and says how many.
 	//
@@ -118,6 +133,8 @@ const (
 	ReasonNoNodesDraining      = "NoNodesDraining"
 	ReasonPodShapeChanged      = "PodShapeChanged"
 	ReasonPodShapeCurrent      = "PodShapeCurrent"
+	ReasonOrdinalNameTaken     = "OrdinalNameTaken"
+	ReasonOrdinalsAvailable    = "OrdinalsAvailable"
 	ReasonStorageResized       = "StorageResized"
 	ReasonStorageResizeRefused = "StorageResizeRefused"
 
