@@ -2445,3 +2445,49 @@ func TestReconcileReportsAPodTheAPIServerRefused(t *testing.T) {
 			meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted))
 	}
 }
+
+// fallbackGroup is what a Server runs on when its own group is gone, and it
+// used to stamp Ephemeral on every one of them — milestone 5's last open
+// precondition. A unit test rather than an envtest because the type is what is
+// under test, and the one branch it decides in Reconcile (!IsEphemeral) reaches
+// only calls that are no-ops without a storage spec: driving it through the API
+// server would prove the no-ops, not the type.
+func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
+	ephemeral := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-x7k2", Namespace: "minecraft"},
+		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
+	}
+	if got := fallbackGroup(ephemeral); !got.IsEphemeral() {
+		t.Errorf("a Server with no spec.ordinal falls back to %q, want Ephemeral", got.Spec.Type)
+	}
+
+	persistent := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "survival-0", Namespace: "minecraft"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "survival"},
+			Ordinal:  ptr.To[int32](0),
+		},
+	}
+	if got := fallbackGroup(persistent); got.IsEphemeral() {
+		t.Errorf("a Server carrying spec.ordinal falls back to %q, want Persistent. "+
+			"createPersistentServer is the only thing that sets that field, so it is "+
+			"what identifies the type of a group that is no longer there to ask",
+			got.Spec.Type)
+	}
+
+	// Ordinal 0 is the one that matters: a value check rather than a nil check
+	// would read the first ordinal of every persistent group as ephemeral, and
+	// ordinal 0 is the one that exists in every persistent group there is.
+	if got := fallbackGroup(persistent); *persistent.Spec.Ordinal != 0 || got.IsEphemeral() {
+		t.Errorf("ordinal 0 read as ephemeral: %q", got.Spec.Type)
+	}
+
+	// The timings do not move with the type, which is what the precondition
+	// this closes actually claimed they did.
+	if a, b := fallbackGroup(ephemeral), fallbackGroup(persistent); a.DrainTimeout() != b.DrainTimeout() ||
+		a.FailedRetention() != b.FailedRetention() || a.UpdateMaxStale() != b.UpdateMaxStale() {
+		t.Errorf("the fallback timings differ by type: ephemeral %v/%v/%v, persistent %v/%v/%v",
+			a.DrainTimeout(), a.FailedRetention(), a.UpdateMaxStale(),
+			b.DrainTimeout(), b.FailedRetention(), b.UpdateMaxStale())
+	}
+}

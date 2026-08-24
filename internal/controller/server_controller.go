@@ -705,13 +705,33 @@ func (r *ServerReconciler) collectInputs(
 // defaults, so a Server that outlives its group still drains and cleans up on
 // sane timings instead of freezing. It is never used to build a pod.
 func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
+	// The type is read off the Server rather than assumed. spec.ordinal is set
+	// by createPersistentServer and by nothing else, and Server's own API doc
+	// says it is unset for ephemeral servers, so the ordinal is what identifies
+	// the type of a group that is no longer there to ask.
+	//
+	// Stamping Ephemeral unconditionally was milestone 5's last open
+	// precondition. Its stated reason -- that a persistent server would then
+	// run on the wrong deadlines -- turned out not to be what the code does:
+	// DrainTimeout, FailedRetention and UpdateMaxStale all read fields this
+	// function fills with the CRD's own defaults, and none of the three looks
+	// at the type. What the type actually decides on this path is the
+	// !IsEphemeral() branch in Reconcile, so a persistent server whose group
+	// had gone stopped refreshing status.storageResizeError -- growClaim
+	// already returns on nil storage, and the branch that builds a claim needs
+	// the group anyway, so there is nothing here for the truthful answer to
+	// break.
+	groupType := spawneryv1alpha1.ServerGroupEphemeral
+	if srv.Spec.Ordinal != nil {
+		groupType = spawneryv1alpha1.ServerGroupPersistent
+	}
 	return &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      srv.Spec.GroupRef.Name,
 			Namespace: srv.Namespace,
 		},
 		Spec: spawneryv1alpha1.ServerGroupSpec{
-			Type:                   spawneryv1alpha1.ServerGroupEphemeral,
+			Type:                   groupType,
 			Drain:                  &spawneryv1alpha1.DrainSpec{TimeoutSeconds: defaultDrainTimeoutSeconds},
 			FailedRetentionSeconds: defaultFailedRetentionSeconds,
 			Update:                 &spawneryv1alpha1.UpdateSpec{MaxUnavailable: 1, MaxStaleSeconds: 0},

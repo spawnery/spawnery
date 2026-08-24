@@ -1369,14 +1369,6 @@ operator relying on a taint to drain a node should confirm independently, with
 `kubectl describe node`, that the taint is present with an effect this
 operator honours; there is no warning if it is not.
 
-## Preconditions for milestone 5 (persistent groups)
-
-If a server's `ServerGroup` is missing, the server controller carries on with
-ephemeral fallback timings. For a persistent server those are the wrong
-deadlines. 5a did not touch `fallbackGroup` (`internal/controller/server_controller.go`),
-which still stamps `Type: ServerGroupEphemeral` unconditionally; this
-precondition is therefore still open.
-
 ## From milestone 5a (persistent groups exist)
 
 5a gives a `Persistent` group ordinals, a `PersistentVolumeClaim` per ordinal
