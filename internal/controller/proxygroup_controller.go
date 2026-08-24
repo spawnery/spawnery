@@ -547,6 +547,32 @@ func proxyOccupied(snap agent.Snapshot) bool {
 	return snap.Players != 0 || snap.PlayersStale || !snap.Connected
 }
 
+// proxyPlayerNote says what is known about who is on a proxy the deadline is
+// about to disconnect.
+//
+// A phrase rather than a number, because the number is not a measurement.
+// Registry.Lookup hands back the last report and nothing else: a proxy whose
+// agent died with seven players on it reads as seven for as long as it exists,
+// and one whose agent never connected at all reads as zero -- which is how
+// "0 player(s) still connected" came to appear inside a Warning about
+// disconnecting people. The three cases the snapshot can actually distinguish
+// are named instead, and the two uncertain ones say they are uncertain.
+//
+// Nothing but this event's text reads any of it, which is what keeps a wrong
+// number cosmetic today and is exactly why it is worth correcting before the
+// first reader -- a metric, a condition, a decision -- turns it into a wrong
+// input.
+func proxyPlayerNote(snap agent.Snapshot) string {
+	switch {
+	case !snap.Known:
+		return "no agent ever reported from it, so who was on it is unknown"
+	case snap.PlayersStale:
+		return fmt.Sprintf("its last report, already stale, said %d player(s)", snap.Players)
+	default:
+		return fmt.Sprintf("%d player(s) still connected", snap.Players)
+	}
+}
+
 // proxyOccupiedForBudget is proxyOccupied asked by the two consumers that have
 // no deadline behind them: the podspec.LabelOccupied label, and the
 // PodDisruptionBudget whose minAvailable is counted from it.
@@ -1103,7 +1129,6 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		}
 		pod := &pods[i]
 		snap := r.Agents.Lookup(string(pod.UID))
-		players := snap.Players
 		// A pod with no readable stamp has no deadline. It is not a dead end:
 		// the assertion loop above has already re-stamped every surplus pod
 		// that lacked one, this pod included, so the deadline starts on this
@@ -1111,22 +1136,40 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		since, dated := drainingSince(pod)
 		expired := dated && r.Clock().Sub(since) >= group.DrainTimeout()
 
+		// Held until the delete lands, for the reason the Network
+		// controller's announce slice carries: the event describes a
+		// disconnection, and a pass that did not manage to delete the pod
+		// disconnected nobody. Emitting first meant a failed delete
+		// re-announced on the next pass, and a NotFound announced lost
+		// sessions for a pod that was already gone.
+		var announce func()
 		switch {
 		case !proxyOccupied(snap):
 			// Known empty: nobody is on it, so removing it costs nothing.
 		case expired:
 			// The one path in this milestone that disconnects anybody. It is
 			// configured rather than accidental, so it says so loudly and
-			// names the cost.
-			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyDrainTimeout", actionDrainProxy,
-				"deleting proxy %s after %s with %d player(s) still connected",
-				pod.Name, group.DrainTimeout(), players)
+			// names what it cost.
+			announce = func() {
+				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyDrainTimeout", actionDrainProxy,
+					"deleting proxy %s after %s: %s",
+					pod.Name, group.DrainTimeout(), proxyPlayerNote(snap))
+			}
 		default:
 			// Still draining. Nothing to do; the next pass looks again.
 			continue
 		}
-		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
-			return err
+		if err := r.Delete(ctx, pod); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+			// Already gone. The reservation below still stands -- the pod is
+			// not there, which is what it records -- but nothing this pass did
+			// disconnected anybody, so there is nothing to announce.
+			announce = nil
+		}
+		if announce != nil {
+			announce()
 		}
 		// Reserved after the Delete succeeds (or the pod was already gone),
 		// matching ServerGroupReconciler.size's expectDeleted -- and, like the

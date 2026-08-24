@@ -763,27 +763,9 @@ warns about and is not. The agents derivation builds from `src = ../agent`
 either way the source is the git tree. `git add` before the build, not just
 before the commit — staging is enough, nothing has to be committed.
 
-**Smaller ones**, each carried out of this milestone's task reviews rather than
-fixed in them:
+**One smaller thing**, carried out of this milestone's task reviews rather than
+fixed in them. Three others stood here and are closed:
 
-- The drain-deadline event reports the *last known* player count, which is a
-  floor and not a measurement. `Registry.Lookup` hands back a stale snapshot's
-  numbers, so a proxy whose agent died with seven players on it is announced
-  with whatever it last reported, and one whose agent never connected at all is
-  announced as `0 player(s)` inside a `Warning` about disconnecting people.
-  Nothing reads that number today, which is what keeps it cosmetic; the first
-  reader — a metric, a condition, a decision — turns it into a wrong input.
-  "up to N", or no number at all, are the two rewrites on offer.
-- `drainingSince`'s parse error aborts the whole `Reconcile`, on every pass,
-  over one pod's corrupt annotation, while every neighbour in the same loop
-  tolerates a single pod's bad state: `Create` tolerates `AlreadyExists`,
-  `Delete` and `markDraining`'s patch tolerate `NotFound`, and `Fleet.SetReady`
-  returns nil for a pod it has no session for. Nobody writes that annotation
-  but the operator, so reaching it takes a hand edit; the objection is the
-  blast radius, not the likelihood.
-- The deadline event is emitted before the `Delete`, so a failed delete
-  re-announces it on the next pass, and a `NotFound` announces lost sessions
-  for a pod that was already gone.
 - Two assertions in `hack/agent-test.sh` are argued rather than demonstrated:
   the control probe on 25565 that follows the closed-gate assertion, which
   needs the container to die mid-phase to be shown failing, and the post-loop

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -3369,5 +3370,110 @@ func TestTheProxyPlayerLimitIsDecidedTheSameWayTwice(t *testing.T) {
 				t.Errorf("both say %s, want %d", fromConfig, tc.want)
 			}
 		})
+	}
+}
+
+// The number in a drain-deadline event is not a measurement, and until now it
+// read like one.
+//
+// Registry.Lookup hands back the last report and nothing else, so a proxy whose
+// agent died with players on it reads as that count forever, and one whose
+// agent never connected reads as zero — "0 player(s) still connected" inside a
+// Warning about disconnecting people. Nothing but the event's text reads any of
+// it, which is what keeps a wrong number cosmetic; the first reader turns it
+// into a wrong input.
+func TestTheDeadlineEventSaysWhatItActuallyKnows(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		snap agent.Snapshot
+		want string
+	}{
+		{
+			"an agent that never connected",
+			agent.Snapshot{Known: false, PlayersStale: true},
+			"unknown",
+		},
+		{
+			"a report that has gone stale",
+			agent.Snapshot{Known: true, Players: 7, PlayersStale: true},
+			"already stale, said 7 player(s)",
+		},
+		{
+			"a current report",
+			agent.Snapshot{Known: true, Connected: true, Players: 7},
+			"7 player(s) still connected",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := proxyPlayerNote(tc.snap); !strings.Contains(got, tc.want) {
+				t.Errorf("proxyPlayerNote = %q, want it to contain %q", got, tc.want)
+			}
+		})
+	}
+
+	// The unknown case must not name a count at all. Asserting the absence
+	// separately, because a phrase that both says "unknown" and prints a zero
+	// would satisfy the table above.
+	if got := proxyPlayerNote(agent.Snapshot{PlayersStale: true}); strings.Contains(got, "0 player") {
+		t.Errorf("proxyPlayerNote = %q for a pod no agent ever reported from; it must not "+
+			"name a count, least of all zero", got)
+	}
+}
+
+// refusingPodDeleter refuses to delete pods and does everything else normally.
+type refusingPodDeleter struct {
+	client.Client
+	err error
+}
+
+func (r refusingPodDeleter) Delete(ctx context.Context, obj client.Object, opts ...client.DeleteOption) error {
+	if _, ok := obj.(*corev1.Pod); ok {
+		return r.err
+	}
+	return r.Client.Delete(ctx, obj, opts...)
+}
+
+// A drain-deadline event describes a disconnection, so a pass that did not
+// manage to delete the pod has nothing to announce. Emitting before the Delete
+// meant a failed delete re-announced the same lost sessions on every pass for
+// as long as the refusal stood.
+func TestTheDeadlineIsAnnouncedOnlyOnceThePodIsGone(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := newRecorder()
+	r.Recorder = rec
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	before := f.proxyPods("gateway")
+	if len(before) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(before))
+	}
+	sortPodsOldestFirst(before)
+	f.reportProxyPlayers(t, before[1], 3)
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+	drainEvents(rec)
+
+	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
+
+	broken := *r
+	broken.Client = refusingPodDeleter{Client: f.c, err: errors.New("no pod deletes today")}
+	if _, err := broken.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
+	}); err == nil {
+		t.Fatal("the reconcile succeeded with a client that refuses pod deletes")
+	}
+	if ev := drainEvents(rec); containsEvent(ev, "ProxyDrainTimeout") {
+		t.Errorf("events = %v after a refused delete, want no ProxyDrainTimeout. The pod is "+
+			"still there and still serving; announcing the disconnection now means "+
+			"announcing it again on every pass until the refusal is lifted", ev)
+	}
+
+	// And once the delete can land, exactly the one event.
+	f.reconcileProxyGroup(r, "gateway")
+	if ev := drainEvents(rec); !containsEvent(ev, "ProxyDrainTimeout") {
+		t.Errorf("events = %v once the pod could be deleted, want the deadline announced", ev)
 	}
 }
