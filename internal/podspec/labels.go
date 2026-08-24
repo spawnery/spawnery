@@ -143,9 +143,18 @@ func ProxyLabels(network, group string) map[string]string {
 // nothing wrong. The role suffix also keeps a
 // user's own ConfigMap named after their group — their configOverlay
 // ConfigMap being the likeliest way to do that — from ever coinciding with
-// the one the operator owns and deletes when the group goes: without it, the
-// operator would silently adopt the user's ConfigMap, inject config.yaml
-// into it, and delete it on the group's own deletion.
+// the one the operator owns and deletes when the group goes.
+//
+// What that collision costs depends on one thing, and this comment used to
+// state the worse half as though it were universal. If the user's ConfigMap
+// carries podspec.LabelManagedBy, the operator adopts it silently: injects
+// config.yaml into it and deletes it with the group. If it does not — which is
+// the ordinary case, since nothing asks a user to apply that label —
+// cmd/spawnery-operator/main.go narrows the manager's ConfigMap cache to that
+// label, so the object is invisible to CreateOrUpdate's Get. The reconciler
+// attempts a plain Create, gets AlreadyExists, and loops on that error instead
+// of adopting anything. Nothing is destroyed; the group simply never comes up,
+// and the CR does not say why.
 //
 // BuildServerPod and BuildProxyPod call this to know what to project into
 // ConfigVolumeName; the group controllers call it to know what to write, so

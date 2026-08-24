@@ -322,23 +322,24 @@ reconciler is therefore still adoptable. The rename traded a plausible
 collision (bare group name) for an implausible one (the exact rendered
 name, pre-labelled); it did not remove the shape.
 
-**The adoption comment in `internal/podspec/labels.go` overstates how the
-collision actually presents.** `GroupConfigMapName`'s doc comment says that
-without the role suffix "the operator would silently adopt the user's
-ConfigMap, inject config.yaml into it, and delete it on the group's own
-deletion." That is only true when the user's ConfigMap already carries
-`podspec.LabelManagedBy`: `cmd/spawnery-operator/main.go` narrows the
+**The adoption comment in `internal/podspec/labels.go` overstated how the
+collision actually presents. — CORRECTED 2026-08-24.** `GroupConfigMapName`'s
+doc comment said that without the role suffix "the operator would silently
+adopt the user's ConfigMap, inject config.yaml into it, and delete it on the
+group's own deletion." That is only true when the user's ConfigMap already
+carries `podspec.LabelManagedBy`: `cmd/spawnery-operator/main.go` narrows the
 manager's ConfigMap cache to that label specifically so it does not have to
 hold every ConfigMap in the cluster, so an *unlabelled* ConfigMap of the
 colliding name is invisible to `CreateOrUpdate`'s `Get` — the reconciler
 instead attempts a plain `Create`, which fails with `AlreadyExists`, and the
-reconcile loops on that error rather than adopting anything. Nothing is
-silent about it; it just does not say why on the CR. The comment's other
-half, about `AlreadyOwnedError` on a cross-kind name collision (a
-`ServerGroup` and a `ProxyGroup` sharing a bare name), is accurate — the
-operator's own sibling controller writes the label, so the cache does see
-that object. Whoever next edits the comment should scope the "silently
-adopt" clause to the labelled case instead of stating it as universal.
+reconcile loops on that error rather than adopting anything. Nothing is silent
+about it; it just does not say why on the CR. The comment's other half, about
+`AlreadyOwnedError` on a cross-kind name collision (a `ServerGroup` and a
+`ProxyGroup` sharing a bare name), is accurate — the operator's own sibling
+controller writes the label, so the cache does see that object. The comment now
+scopes the "silently adopt" clause to the labelled case and names the other
+outcome beside it: not destruction, but a group that never comes up while the
+CR does not say why.
 
 **The proxy player-limit default is still spelled out twice.**
 `podspec.BuildProxyPod` (`internal/podspec/proxy.go`) and
@@ -683,12 +684,20 @@ happened silently. 4b's rolling update, which needs to say "the new generation
 is up" as something other than "one server somewhere is," will want the
 distinction this milestone left unmade.
 
-*4b came and went without making it.* Checked on 2026-08-22:
-`servergroup_controller.go:883` is still `totals.ReadyReplicas >=
-group.DesiredReplicas() && totals.ReadyReplicas > 0`, so a group running above
-its floor for spare slots still publishes `Ready` off the first server up. The
-rolling update found its own answer rather than changing this one, and the
-mismatch between what the field says and what it once meant is still here.
+*4b came and went without making it, and the line has since moved for an
+unrelated reason.* Checked on 2026-08-22 the comparison was
+`totals.ReadyReplicas >= group.DesiredReplicas() && totals.ReadyReplicas > 0`.
+On 2026-08-24 the `&& > 0` was removed, but for the parked-group entry under
+milestone 5a rather than for this one: it made a group asked for zero servers
+report `Pending` forever. The comparison against `DesiredReplicas()` — the
+part *this* entry is about — is untouched, so a group running above its floor
+for spare slots still publishes `Ready` off the first server up.
+
+Deliberately untouched. 4b's rolling update found its own answer to "the new
+generation is up" rather than changing this comparison, so redefining the phase
+now would move a field 4b is not reading and might disagree with the answer it
+did build. That is a behaviour change wanting its own decision, not a repair to
+fold into a neighbouring fix.
 
 ## From milestone 4b
 
