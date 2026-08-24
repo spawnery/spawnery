@@ -447,10 +447,23 @@ func occupiedPods(views []ServerView) int32 {
 }
 
 // GroupTotals is the aggregated status of a group.
+//
+// Three of these four ignore the generation and one does not, and the split is
+// deliberate rather than an oversight -- it was mistaken for one on
+// 2026-08-24, which is why it is written down here. Replicas, ReadyReplicas
+// and OnlinePlayers are the "what is there" trio: they answer how much of this
+// group is serving right now, which is the question a printed column should
+// answer, and during a changeover the servers being replaced are still
+// serving. FreeSlots is the odd one because it is the scaler's own input that
+// happens to be published, and the scaler is asking a different question.
+//
+// What a changeover costs that trio -- readyReplicas standing on the strength
+// of servers about to go -- is said beside them by ConditionProgressing rather
+// than by making one number mean two things.
 type GroupTotals struct {
-	// Replicas is the number of Server objects.
+	// Replicas is the number of Server objects, of whatever generation.
 	Replicas int32
-	// ReadyReplicas is how many are in phase Ready.
+	// ReadyReplicas is how many are in phase Ready, of whatever generation.
 	ReadyReplicas int32
 	// OnlinePlayers is the sum of players, whatever their generation.
 	OnlinePlayers int32

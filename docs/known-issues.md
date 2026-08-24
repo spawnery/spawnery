@@ -96,29 +96,6 @@ regardless of what a user mounts there. A user mount that names
 `/data/plugins` — permitted, since `checkMountCollision` does not single it
 out either — still breaks the start with the same bare `cp:` message.
 
-**The operator's hard-deadline rescue is armed after its first two `Send`s, and
-moving it up is necessary but not sufficient.** `internal/agentserver/server.go`
-arms `time.AfterFunc(s.opts.HardDeadline, …)` at `:218`, below the `ReportInterval`
-and `SessionDeadline` sends. An operator that stalls *before* its first `Send`
-therefore never arms its own rescue, and the stream stays open forever. Moving
-the `time.AfterFunc` above both `Send`s is worth doing — and it does not close
-the case on its own, because `sessions.cancel` cancels the context *derived*
-from the stream's (`streams.go:104-113`), not `stream.Context()`, so a handler
-blocked inside `Send` never observes it. The agent no longer depends on either:
-since milestone 2c it bounds an unanswered session itself, with the operator's
-own `hardDeadlineSeconds` once it knows it and a finite fallback until then.
-This is milestone 2a code and was deliberately left untouched by 2c.
-
-**An operator that answers once and then stalls leaves a session with no
-future.** The agent's answer bound is discharged by *any* first message, but
-only a `SessionDeadline` gives the session a renewal. An operator that completes
-the `ReportInterval` send (`server.go:200`) and then stalls before the
-`SessionDeadline` send (`:207`) leaves the agent with an answered session, no
-renewal scheduled, `hardDeadlineMillis` still zero — and, per the entry above,
-its own `AfterFunc` never armed either. Narrow, but it is the one hole the
-milestone's three-phase harness does not cover, because the stub either answers
-fully or not at all.
-
 **The relocation is not proven on the give-up path.** The cast to
 `ClientCallStreamObserver` that the cancel needs sits inside a `runCatching`,
 which catches `Throwable` — so a `NoClassDefFoundError` from a shading
@@ -519,15 +496,19 @@ taken on purpose — `True` here means "has not arrived" and nothing else, so a
 group that has given up stays `True` and `Degraded`/`GaveUp` beside it says it
 has stopped trying.
 
-**What is still open is one field further along: `GroupTotals.ReadyReplicas`
-counts servers of every generation.** `AggregateGroup`
+**One field further along, `GroupTotals.ReadyReplicas` counts servers of every
+generation — and that is a decision too, taken the same day after it was first
+mistaken for an oversight.** `AggregateGroup`
 (`internal/controller/candidates.go`) filters `FreeSlots` on the current
 generation, with a comment saying why, and does not filter `ReadyReplicas` two
-lines above it. So a group mid-changeover whose new servers are all still
-starting reports `readyReplicas` on the strength of the servers being replaced
-— and that number is a printed column. `ConditionProgressing` now says the true
-thing beside it, which is why this is recorded rather than urgent; changing the
-column is a change to a published field and wants its own ruling.
+lines above it. The asymmetry is the point: `replicas`, `readyReplicas` and
+`onlinePlayers` are the "what is there" trio and answer how much of the group
+is serving right now, which is what a printed column should answer — and during
+a changeover the servers being replaced *are* still serving. `freeSlots` is the
+odd one because it is the scaler's own input that happens to be published, and
+the scaler is asking a different question. What the trio cannot say during a
+changeover, `ConditionProgressing` now says beside it, rather than one number
+being made to mean two things.
 
 ## From milestone 4b
 

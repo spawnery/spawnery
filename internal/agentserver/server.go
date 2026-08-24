@@ -273,6 +273,42 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 	}
 }
 
+// sendBounded runs a session's opening sends under a bound of its own, and
+// gives up on them by returning rather than by cancelling anything.
+//
+// stream.Send blocks on the client's flow-control window and observes no
+// context at all: an agent that opens a stream, completes the handshake and
+// then stops reading holds this goroutine, and the only thing that ends a
+// blocked Send is the handler returning, which closes the stream. Nothing
+// bounded that.
+//
+// docs/known-issues.md carried this as "the operator's hard-deadline rescue is
+// armed after its first two Sends", with moving the time.AfterFunc above them
+// as the fix that was necessary but not sufficient. Reading it again on
+// 2026-08-24: it is neither. sessions.cancel does reach a handler once the
+// handler is in its loop -- ServerSession and ProxySession both select on
+// ctx.Done() there -- and it reaches none inside Send, whichever order the
+// timer is armed in. The window is the send itself, so the bound belongs on
+// the send.
+//
+// The channel is buffered by one so the goroutine cannot leak on the timeout
+// path: the blocked Send returns as soon as the handler's return closes the
+// stream, and its result goes into the buffer with nobody left listening.
+// That one character is reasoned rather than tested, and deliberately -- see
+// TestTheOpeningSendsAreBounded for why no assertion in this package can
+// observe it without a goroutine count that would make the suite flaky.
+func sendBounded(deadline time.Duration, send func() error) error {
+	sent := make(chan error, 1)
+	go func() { sent <- send() }()
+	select {
+	case err := <-sent:
+		return err
+	case <-time.After(deadline):
+		return status.Errorf(codes.DeadlineExceeded,
+			"the agent did not read its opening messages within %s", deadline)
+	}
+}
+
 // sessionPrologue is everything a session does before its main loop, and
 // everything ServerSession and ProxySession would otherwise both write out by
 // hand: authenticate the stream, register it with make-before-break semantics
@@ -329,7 +365,7 @@ func (s *Server) sessionPrologue(streamCtx context.Context, role agent.Role, sen
 	}
 	OpenStreams.WithLabelValues(string(role)).Inc()
 
-	if err := sendFixed(); err != nil {
+	if err := sendBounded(s.opts.HardDeadline, sendFixed); err != nil {
 		OpenStreams.WithLabelValues(string(role)).Dec()
 		leave()
 		return grpcauth.Identity{}, logr.Logger{}, nil, nil, err
