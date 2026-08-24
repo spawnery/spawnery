@@ -768,13 +768,34 @@ group whose `Network` died while it was also six failures deep gets "backoff
 is not being decided: the group's network is not usable" rather than "not
 retrying: change the group's spec to try again" — even though the failure
 count that produced `GaveUp` is computed from the views before `sized` is
-known, and does not depend on the `Network` at all. Moving the `!sized` case
-after `GaveUp` in the switch leaves the whole suite green: both messages are
-true of a group in that state, which is likely why nothing distinguishes
-them, but which one an operator should see first is a real question and
-nothing checked in answers it. Worth a deliberate ruling, and a test that
-pins whichever order is chosen, rather than leaving the switch's current
-order as an accident of how it was written.
+known, and does not depend on the `Network` at all.
+
+**Ruled and pinned 2026-08-24: `GaveUp` goes first.**
+
+Both messages are true, which is why nothing distinguished them. They are not
+equally useful. The Network's unusability is transient and *already* has a
+condition of its own — `Accepted: False` — which the `!sized` case's own
+comment observes; repeating it on `BackingOff` and `Degraded` spends the only
+two conditions that can carry the give-up on a fact reported elsewhere anyway.
+And giving up is terminal: it needs a spec edit, so an operator who reads only
+"the group's network is not usable", fixes the Network and walks away has been
+told the truth and left with a group that still creates nothing.
+
+`TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead` pins it, and restoring
+the old order fails it. The test also asserts `Accepted` is still `False`, so
+the ruling cannot quietly turn into hiding the Network rather than declining to
+repeat it.
+
+**Writing that test surfaced something the entry did not know, and it is worth
+more than the ruling.** The obvious construction — point the group's
+`networkRef` at something missing — cannot reach this state at all, because
+editing the group is a spec change and a spec change deliberately clears the
+failure streak ("the operator's answer to whatever broke",
+`servergroup_controller.go`). So the scenario is only reachable when the
+`Network` becomes unusable *without* the group being touched: the object
+deleted, or made unaccepted by a rival. Any future test about a group that has
+given up while its `Network` is broken has to break the `Network`, never the
+group.
 
 ## From milestone 4c-1 (the proxy readiness contract)
 

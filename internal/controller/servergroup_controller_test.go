@@ -4146,3 +4146,65 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 		t.Fatal("a storage class that cannot expand is not a degraded group")
 	}
 }
+
+// TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead pins the ruling
+// docs/known-issues.md's milestone 4d entry asked for: when a group has both
+// given up and lost its Network, which of two true messages an operator sees
+// first.
+//
+// Both are true. They are not equally useful. The Network's unusability is
+// transient and already carried by Accepted: False, so repeating it here spends
+// the only two conditions that can report the give-up on a fact reported
+// elsewhere. Giving up is terminal — it takes a spec edit — so an operator who
+// reads only "the group's network is not usable", fixes the Network and walks
+// away has been told the truth and left with a group that still creates
+// nothing.
+func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// A whole floor's worth of servers failing at once, which is the exact
+	// shape the milestone 4d entry above describes: size() creates the shortfall
+	// in one pass, so a group with a floor of six spends its whole budget of six
+	// in a single round.
+	f.setMinReplicas(t, backoffGiveUpAt)
+	f.reconcileGroup(t, r)
+	names := f.serverNamesOfGroup(t, "lobby")
+	if int32(len(names)) != backoffGiveUpAt {
+		t.Fatalf("the group created %d servers, want %d; this test needs a whole floor to "+
+			"fail at once", len(names), backoffGiveUpAt)
+	}
+	for _, name := range names {
+		f.failServer(t, name)
+	}
+
+	// And then the Network is taken away underneath it. Deleted rather than
+	// re-pointed, and that is not a stylistic choice: editing the group's
+	// NetworkRef is a spec change, and a spec change deliberately clears the
+	// failure streak — "the operator's answer to whatever broke". A test that
+	// broke the Network by editing the group would therefore destroy the very
+	// state it is about, and did, on the first attempt at writing it.
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete the Network: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	got := f.reloadGroup(t)
+	degraded := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
+	if degraded == nil || degraded.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Fatalf("Degraded = %+v, want reason %s. The give-up outlives the Network problem "+
+			"and needs a spec edit; the Network's own trouble is on Accepted",
+			degraded, spawneryv1alpha1.ReasonCrashLoopBackoff)
+	}
+	if !strings.Contains(degraded.Message, "change the group's spec") {
+		t.Errorf("message = %q, want it to name the remedy the operator actually has to apply",
+			degraded.Message)
+	}
+	// And the Network's trouble is still reported, on the condition that owns it.
+	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse {
+		t.Errorf("Accepted = %+v, want False: moving the give-up first must not hide the "+
+			"Network, only stop repeating it", accepted)
+	}
+}

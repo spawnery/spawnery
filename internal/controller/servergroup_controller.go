@@ -491,16 +491,23 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Message: "servers are starting normally",
 	}
 	switch {
-	case !sized:
-		// Nothing was decided this pass, so the False above is the
-		// absence of a verdict rather than one — the same reasoning
-		// ScalingLimited's own !sized case gives above. The counting two
-		// blocks up runs whether or not the Network is usable, so
-		// without this case a group with a dead Network would advertise
-		// a wait (or a give-up) it is not serving, beside an Accepted:
-		// False that already explains the same standstill differently.
-		backingOff.Message = "backoff is not being decided: the group's network is not usable"
-		degraded.Message = "backoff is not being decided: the group's network is not usable"
+	// Before !sized, deliberately, and docs/known-issues.md's milestone 4d
+	// entry asked for the choice to be a ruling with a test rather than an
+	// accident of how the switch was written.
+	//
+	// Both messages are true of a group that has given up while its Network is
+	// also dead. They are not equally useful. The Network's unusability is
+	// transient and already has a condition of its own — Accepted: False says
+	// it, which is what the !sized case's own comment observes — so putting it
+	// here as well spends the only two conditions that can carry the give-up
+	// on a fact that is reported elsewhere anyway. And giving up is terminal:
+	// it needs a spec edit, so an operator who reads only "the group's network
+	// is not usable", fixes the Network and walks away has been told something
+	// true and left with a group that will still create nothing.
+	//
+	// The count that produces GaveUp is computed from the views before sized
+	// is known and does not depend on the Network at all, so saying it here is
+	// not a guess about a pass that decided nothing.
 	case backoff.GaveUp:
 		// No pending retry, so BackingOff is false — but an all-clear
 		// reason here would be a lie, so it carries the real one.
@@ -511,6 +518,16 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		degraded.Status = metav1.ConditionTrue
 		degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
 		degraded.Message = backingOff.Message
+	case !sized:
+		// Nothing was decided this pass, so the False above is the
+		// absence of a verdict rather than one — the same reasoning
+		// ScalingLimited's own !sized case gives above. The counting two
+		// blocks up runs whether or not the Network is usable, so
+		// without this case a group with a dead Network would advertise
+		// a wait it is not serving, beside an Accepted: False that
+		// already explains the same standstill differently.
+		backingOff.Message = "backoff is not being decided: the group's network is not usable"
+		degraded.Message = "backoff is not being decided: the group's network is not usable"
 	case backoff.RetryAfter > 0:
 		backingOff.Status = metav1.ConditionTrue
 		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
