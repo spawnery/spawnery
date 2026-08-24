@@ -152,23 +152,6 @@ adds Velocity and faces the same question with the same answer, so derive it
 once, there, for both images — see the image-size entry under milestone 2b for
 what it buys.
 
-**Two toolchain versions are pinned twice each, and a nixpkgs bump moves only
-one half.** `protoc-gen-grpc-java` comes from nixpkgs (1.83.1 at this pin) while
-the grpc-java runtime artifacts come from `deps.json`; `protoc` comes from
-nixpkgs while `protobuf-java` (4.35.1, tracking protoc 35.1 one for one) comes
-from `deps.json`. In both cases a nixpkgs bump moves the generator without the
-runtime, and the symptom is a generated stub that does not match the library it
-runs against. The failure is loud — `compileProtoJava` fails with "cannot find
-symbol" — but it appears nowhere near the pin that caused it. `flake.nix` now
-names the coupling at both edit sites, which is the cheapest half; the standing
-check still does not exist, and belongs with the `deps.json` guard above.
-
-**Not closed by milestone 6e.** Nothing in this milestone's scope built the
-standing check this entry asks for, and `.github/workflows/ci.yml` runs no
-such check. Read the neighbouring entry's closure as scoped to the
-`deps.json` guard alone — this entry's own coupling is exactly as open as it
-was when milestone 2c wrote it.
-
 **The level-2 harness has rough edges milestone 3 inherits.** `hack/agent-test.sh`
 and `cmd/spawnery-stubop` are exactly what a Velocity agent will be tested with,
 so what they do not check is worth writing down: stream indices `0` and `1` are

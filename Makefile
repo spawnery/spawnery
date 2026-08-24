@@ -71,8 +71,30 @@ vet:
 #
 # It is not a substitute for reasoning about concurrency. The peer rate limit's
 # key was wrong for a whole milestone and -race would never have said so.
-test: manifests generate fmt vet chart-lint
+test: manifests generate fmt vet chart-lint toolchain-lint
 	go test -race ./... -coverprofile cover.out
+
+# The standing check docs/known-issues.md has asked for since milestone 2c.
+# protoc and protoc-gen-grpc-java are pinned in flake.nix, protobuf-java and
+# the io.grpc:grpc-* artifacts in agent/common/build.gradle.kts and
+# agent/deps.json, and a `nix flake update` moves only the first of each pair.
+#
+# A prerequisite of `test` rather than a target beside it, for the reason the
+# -race comment above gives: an unrun check is indistinguishable from an absent
+# one, and this one costs two process spawns and four greps. The failure it
+# prevents is a Gradle build that takes minutes to reach "cannot find symbol",
+# in a file nobody edited, about a pin in a file they did.
+.PHONY: toolchain-lint
+toolchain-lint:
+	hack/toolchain-pins-agree.sh
+
+# hack/toolchain-pins-agree-test.sh drives the check above through the
+# disagreements this tree does not contain. Out of `test` for the same reason
+# image-derivations-changed-test is: it is about the check, not about the
+# operator, and `test` exercises the check itself on every run.
+.PHONY: toolchain-lint-test
+toolchain-lint-test:
+	hack/toolchain-pins-agree-test.sh
 
 .PHONY: chart-lint
 chart-lint:
