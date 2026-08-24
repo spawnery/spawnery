@@ -332,7 +332,7 @@ name, pre-labelled); it did not remove the shape.
 (`internal/controller/proxygroup_controller.go`) each write the same guard,
 `cfg != nil && cfg.PlayerLimit > 0`, before falling back to
 `podspec.DefaultPlayerLimit`. They share the constant but not the predicate,
-and nothing asserts the two decisions agree. That gap is worth recording
+so the shape that lets them disagree is still there. It is worth recording
 because the disagreement between exactly these two code paths *was* this
 milestone's one Critical finding: the controller used to leave the ConfigMap's
 `playerLimit` nil whenever `spec.config` was nil, while the pod's own
