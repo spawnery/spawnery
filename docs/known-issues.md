@@ -1529,19 +1529,31 @@ around.
 **The taint list is trusted, not validated.** `-drain-taint` accepts any
 string, and `IsDeparting` matches it only against a taint whose effect is
 `NoSchedule` or `NoExecute` — deliberately, per §3.1's own reasoning: a
-`PreferNoSchedule` taint does not stop the scheduler putting a replacement
-pod straight back on the same node, so matching on it would condemn a pod,
-rebuild it in place, and condemn it again next pass. That correctness comes
-at a cost this operator never reports: a key configured with an effect it
-ignores — a real taint on a real node, `PreferNoSchedule` or any future
-effect Kubernetes adds — simply never matches, silently, with nothing on any
-group's conditions or events distinguishing "this taint does not apply" from
-"there is no such taint at all". Nor is the key itself checked against
-anything — a typo in `-drain-taint` is indistinguishable from a taint key
-that legitimately does not exist in this cluster. An operator relying on a
-taint to drain a node should confirm independently, with `kubectl describe
-node`, that the taint is present with an effect this operator honours; there
-is no warning if it is not.
+`PreferNoSchedule` taint does not stop the scheduler putting a replacement pod
+straight back on the same node, so matching on it would condemn a pod, rebuild
+it in place, and condemn it again next pass. That correctness comes at a cost
+this operator never reports: a key configured with an effect it ignores — a
+real taint on a real node, `PreferNoSchedule` or any future effect Kubernetes
+adds — simply never matches, silently, with nothing on any group's conditions
+or events distinguishing "this taint does not apply" from "there is no such
+taint at all". *The key is checked as of 2026-08-24, for the half of that
+which is checkable.* `-drain-taint` now refuses a value that is not a bare
+qualified name, using `validation.IsQualifiedName` — the same check Kubernetes
+validates a taint key with, so it refuses exactly what the API server would
+and nothing more.
+
+The mistake this catches is the one to expect. Taints are written
+`key=value:Effect` nearly everywhere a person meets them — `kubectl taint`,
+node manifests, every tutorial — so passing the whole taint is the likely slip,
+and it was the one this operator survived worst: such a key matches no taint
+that exists, so the flag was accepted, nothing ever drained, and nothing said
+why. It is now a refusal at startup whose message shows what the flag takes.
+
+A well-formed key that is simply absent from the cluster still cannot be told
+from a typo. Nothing can tell those apart, and this does not pretend to. An
+operator relying on a taint to drain a node should confirm independently, with
+`kubectl describe node`, that the taint is present with an effect this
+operator honours; there is no warning if it is not.
 
 ## Preconditions for milestone 5 (persistent groups)
 

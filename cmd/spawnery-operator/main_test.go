@@ -17,6 +17,7 @@ limitations under the License.
 package main
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -109,5 +110,63 @@ func TestTaintKeysSetRejectsEmpty(t *testing.T) {
 	}
 	if got, want := keys.String(), "node.kubernetes.io/unreachable"; got != want {
 		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+// TestTaintKeysSetRejectsAWholeTaint closes the half of the milestone 4c-3
+// entry in docs/known-issues.md that can be closed: "nor is the key itself
+// checked against anything — a typo in -drain-taint is indistinguishable from
+// a taint key that legitimately does not exist in this cluster."
+//
+// A well-formed key that is simply absent still cannot be told from a typo, and
+// nothing can tell those apart. What can be caught is the mistake to expect:
+// taints are written key=value:Effect nearly everywhere a person meets one, so
+// passing the whole taint is the likely slip — and it was the one this operator
+// survived worst. Such a key matches no taint that exists, so the flag was
+// accepted, nothing ever drained, and nothing said why.
+func TestTaintKeysSetRejectsAWholeTaint(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{"a whole taint", "node.kubernetes.io/unreachable=true:NoExecute"},
+		{"a key and an effect", "node.kubernetes.io/unreachable:NoExecute"},
+		{"a key and a value", "node.kubernetes.io/unreachable=true"},
+		{"a key with a space", "node.kubernetes.io/un reachable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var keys taintKeys
+			err := keys.Set(tc.value)
+			if err == nil {
+				t.Fatalf("Set(%q) was accepted; it matches no taint that exists, so the "+
+					"operator would never drain and never say why", tc.value)
+			}
+			// The message has to show what a key looks like, or a reader who
+			// wrote the taint out has no way to see what is wrong with it.
+			if !strings.Contains(err.Error(), "takes the key alone") {
+				t.Errorf("error = %q, want it to say what this flag takes", err)
+			}
+			if len(keys) != 0 {
+				t.Errorf("keys = %v after a refusal, want none kept", keys)
+			}
+		})
+	}
+}
+
+// TestTaintKeysSetAcceptsRealKeys is the other half. Refusing too much would be
+// worse than refusing nothing: an operator whose cluster uses a legitimate key
+// this validation happens to dislike cannot drain at all.
+func TestTaintKeysSetAcceptsRealKeys(t *testing.T) {
+	for _, value := range []string{
+		"node.kubernetes.io/unreachable",
+		"node.kubernetes.io/unschedulable",
+		"ToBeDeletedByClusterAutoscaler",
+		"cloud.google.com/impending-node-termination",
+		"a",
+	} {
+		var keys taintKeys
+		if err := keys.Set(value); err != nil {
+			t.Errorf("Set(%q) was refused: %v. That is a taint key a real cluster uses", value, err)
+		}
 	}
 }

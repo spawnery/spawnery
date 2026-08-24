@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -93,6 +94,28 @@ func (t *taintKeys) String() string { return strings.Join(*t, ",") }
 func (t *taintKeys) Set(value string) error {
 	if value == "" {
 		return fmt.Errorf("an empty taint key would match nothing")
+	}
+	// A *key*, not a taint. Taints are written key=value:Effect nearly
+	// everywhere a person meets them -- `kubectl taint`, node manifests, every
+	// tutorial -- so passing the whole thing here is the mistake to expect, and
+	// it is the one this operator was worst at surviving: a key with a colon or
+	// an equals sign in it matches no taint that exists, so the flag would be
+	// accepted, nothing would ever drain, and nothing would say why.
+	// docs/known-issues.md records the shape under milestone 4c-3: "a typo in
+	// -drain-taint is indistinguishable from a taint key that legitimately does
+	// not exist in this cluster."
+	//
+	// IsQualifiedName is what Kubernetes itself validates a taint key with, so
+	// this refuses exactly what the API server would refuse and nothing more. A
+	// key that is well-formed but simply absent from the cluster still cannot
+	// be told from a typo -- nothing can tell those apart -- and this does not
+	// pretend to.
+	if errs := validation.IsQualifiedName(value); len(errs) > 0 {
+		return fmt.Errorf(
+			"%q is not a taint key: %s. This flag takes the key alone -- `node.kubernetes.io/unreachable`, "+
+				"not `node.kubernetes.io/unreachable=true:NoExecute` -- because the effect is read "+
+				"from the node's own taint and the value is not compared at all",
+			value, strings.Join(errs, "; "))
 	}
 	*t = append(*t, value)
 	return nil
