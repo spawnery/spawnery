@@ -2973,29 +2973,40 @@ other four's annotations) and that `rbac.yaml` carries exactly one
 because the shape of the mistake — a guard that checks its input rather than
 its outcome — recurred three times in this milestone.
 
-**The forwarding-secret grant's failure is invisible to `test/e2e` by
-design, and narrower than the design document claims.**
-`readForwardingSecret` folds a `403` into a condition message with no
-`is forbidden:` substring and logs nothing
-(`test/e2e/e2e_test.go:187-193`), so no scenario in the harness would ever
-notice a broken `config/rbac/forwarding-secret-reader.yaml` grant. Separately,
-`docs/superpowers/specs/2026-08-19-helm-chart-design.md` §9 and this
-milestone's own Task 6 brief both state that a misconfigured grant leaves
-"every group in the namespace refuses with `NetworkNotAccepted`."
-`internal/controller/network_controller.go`'s `Reconcile` sets
-`ConditionAccepted` `True` and persists it before the forwarding secret is
-ever read, and nothing on the forwarding-secret path can prevent that persist.
-Not *unconditionally* in the literal sense — the milestone 6b entry above ("A
-`Forbidden` on the policy write stops the whole namespace") records the one
-path that does return before it, the NetworkPolicy write at
-`network_controller.go:107` — but unconditionally as regards this failure; the read's outcome only ever reaches
+**The design's claim about the forwarding-secret grant is wrong, and the real
+consequence is quieter.** `docs/superpowers/specs/2026-08-19-helm-chart-design.md`
+§9 and milestone 6d's own Task 6 brief both state that a misconfigured grant
+leaves "every group in the namespace refuses with `NetworkNotAccepted`." It
+does not. `internal/controller/network_controller.go`'s `Reconcile` sets
+`ConditionAccepted` `True` before the forwarding secret is read, and nothing on
+the read's path can clear it: the read's outcome only ever reaches
 `ConditionForwardingSecretResolved` and
-`ConditionForwardingSecretRotationPending`, never `Accepted`. The real
-consequence of the missing or misdirected grant is narrower and quieter:
+`ConditionForwardingSecretRotationPending`. Since 2026-08-24 that holds more
+firmly than it did, because a failure below the condition now writes the status
+before it requeues rather than discarding it. The one path that does return
+before the write is the NetworkPolicy, recorded under milestone 6b above. So
 `ServerGroup`s and `ProxyGroup`s in the affected namespace keep scheduling
-normally, and only forwarding-secret rotation detection breaks, silently,
-for that namespace. `charts/spawnery/README.md` states the narrower,
-grep-verified consequence.
+normally, and only forwarding-secret rotation detection breaks, for that
+namespace. `charts/spawnery/README.md` states the narrower, grep-verified
+consequence.
+
+**It used to break silently, and that half is closed.** `readForwardingSecret`
+folded the `403` into a condition message written for a person — "the operator
+may not read secret X; grant it with `kubectl apply` …" — which quotes no API
+server and therefore carries no `is forbidden:` substring, and the controller
+made no logger call at all. That substring is exactly what `test/e2e`'s
+`theOperatorWasNeverDenied` greps the operator's log for, so a broken
+`config/rbac/forwarding-secret-reader.yaml` grant was invisible to the one
+check in this repository written to catch a denial the RBAC audit cannot — not
+through the cache, the way that check's other blind spot works, but through an
+error the code handled instead of surfacing. The read now carries the API
+server's error out beside the message, and the controller logs it and records a
+`Warning` on the Network. Both are gated on entering the state, like the
+forwarding-secret events beside them: at `resyncInterval` an ungated report is
+twelve a minute per Network, forever. The residue that gate leaves is worth
+knowing — an operator restarted into an already-refused state finds the
+condition already set and says nothing more, so the log line reports the
+transition and the condition is the durable record.
 
 **`v0.1.1` is a release whose chart no cluster can receive, and a tag cannot
 be moved.** The four CRDs sit in `charts/spawnery/templates/` with

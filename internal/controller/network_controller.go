@@ -230,12 +230,37 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	// Both events fire on entering a state, so the condition as it stands
 	// before SetStatusCondition below is what says whether this is an entry.
-	if read.Reason == spawneryv1alpha1.ReasonSecretNotFound &&
-		!hasConditionReason(network.Status.Conditions,
-			spawneryv1alpha1.ConditionForwardingSecretResolved, read.Reason) {
+	entering := !hasConditionReason(network.Status.Conditions,
+		spawneryv1alpha1.ConditionForwardingSecretResolved, read.Reason)
+	if read.Reason == spawneryv1alpha1.ReasonSecretNotFound && entering {
 		announce = append(announce, func() {
 			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
 				spawneryv1alpha1.EventForwardingSecretNotFound, actionSyncStatus, "%s",
+				eventNote("%s", read.Message))
+		})
+	}
+	// A read the API server refused, said out loud. The condition alone was
+	// the whole report, and its message is written for a person rather than
+	// quoting the API server -- so it carries no `is forbidden:` substring,
+	// and test/e2e's theOperatorWasNeverDenied, which greps the operator's log
+	// for exactly that, could not see a broken
+	// config/rbac/forwarding-secret-reader.yaml grant at all. The consequence
+	// is quiet rather than loud (groups keep scheduling; only rotation
+	// detection breaks, for that namespace), which is precisely why it needs
+	// saying.
+	//
+	// Gated on the transition, like the events beside it: this branch runs on
+	// every pass for as long as the refusal stands, and at resyncInterval that
+	// is a line every five seconds per Network. The cost of the gate is that
+	// an operator restarted into an already-refused state finds the condition
+	// already set and says nothing more; the condition itself is the durable
+	// report, and this line is the one that reaches a log grep.
+	if read.Err != nil && entering {
+		log.FromContext(ctx).Error(read.Err, "reading the forwarding secret",
+			"network", network.Name, "namespace", network.Namespace)
+		announce = append(announce, func() {
+			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
+				read.Reason, actionSyncStatus, "%s",
 				eventNote("%s", read.Message))
 		})
 	}

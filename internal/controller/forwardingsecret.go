@@ -49,6 +49,17 @@ type forwardingRead struct {
 	Status  metav1.ConditionStatus
 	Reason  string
 	Message string
+	// Err is the API server's own error on the two branches that have one, and
+	// it is carried out rather than dropped for one reason: Message is written
+	// for a person reading `kubectl describe network` and says what to do
+	// about it, so it deliberately does not quote the API server. That means
+	// it carries no `is forbidden:` substring, which is the exact string
+	// test/e2e's theOperatorWasNeverDenied greps the operator's log for. A 403
+	// on this read was therefore invisible to the one check in this repository
+	// that exists to catch a denial the RBAC audit cannot -- not through the
+	// cache, the way that check's other blind spot works, but through an error
+	// the code handled instead of surfacing. The caller logs this.
+	Err error
 }
 
 // readForwardingSecret fetches the Network's forwarding secret and digests it.
@@ -70,6 +81,7 @@ func readForwardingSecret(ctx context.Context, reader client.Reader, net *spawne
 		}
 	case apierrors.IsForbidden(err):
 		return forwardingRead{
+			Err:    err,
 			Status: metav1.ConditionUnknown,
 			Reason: spawneryv1alpha1.ReasonSecretReadForbidden,
 			Message: fmt.Sprintf("the operator may not read secret %q in namespace %q; grant it with "+
@@ -78,6 +90,7 @@ func readForwardingSecret(ctx context.Context, reader client.Reader, net *spawne
 		}
 	case err != nil:
 		return forwardingRead{
+			Err:     err,
 			Status:  metav1.ConditionUnknown,
 			Reason:  spawneryv1alpha1.ReasonSecretReadFailed,
 			Message: fmt.Sprintf("reading secret %q in namespace %q failed: %v", name, net.Namespace, err),

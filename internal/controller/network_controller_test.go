@@ -30,6 +30,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -1108,5 +1109,72 @@ func TestAPodListFailureStillRecordsAcceptance(t *testing.T) {
 		t.Errorf("RotationPending = %+v after a failed pod List, want it unset. Deriving it "+
 			"from an empty stamp set trades a rare blocked status write for a confident "+
 			"wrong report: ForwardingSecretInSync with no pod examined", c)
+	}
+}
+
+// refusingSecretReader answers every Get with the API server's own 403.
+type refusingSecretReader struct {
+	client.Reader
+	err error
+}
+
+func (r refusingSecretReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return r.err
+}
+
+// A forwarding-secret read the API server refuses has to reach the operator's
+// log carrying the API server's own words, and has to say so on the Network.
+//
+// The condition's message is written for a person — "the operator may not read
+// secret X; grant it with kubectl apply …" — so it deliberately does not quote
+// the API server, and therefore carries no `is forbidden:` substring. That is
+// the exact string test/e2e's theOperatorWasNeverDenied greps the operator's
+// log for, and network_controller.go made no logger call at all, so a broken
+// config/rbac/forwarding-secret-reader.yaml grant was invisible to the one
+// check in this repository written to catch a denial the RBAC audit cannot.
+func TestARefusedSecretReadIsSaidOutLoud(t *testing.T) {
+	f := newFixture(t)
+	r, rec := networkReconcilerWithEvents(f)
+	forbidden := apierrors.NewForbidden(
+		schema.GroupResource{Resource: "secrets"}, "velocity-forwarding-secret",
+		errors.New(`User "system:serviceaccount:spawnery-system:spawnery-operator" cannot get resource "secrets"`))
+	r.SecretReader = refusingSecretReader{Reader: f.c, err: forbidden}
+
+	// The error the read carries out is what the log line is built from, and
+	// it is the half the condition cannot carry.
+	read := readForwardingSecret(f.ctx, r.SecretReader, f.network)
+	if read.Err == nil {
+		t.Fatal("a refused read carried no error out; the log line has nothing to say")
+	}
+	if !strings.Contains(read.Err.Error(), "is forbidden:") {
+		t.Errorf("read.Err = %q, want the API server's own text. `is forbidden:` is what "+
+			"theOperatorWasNeverDenied greps for", read.Err)
+	}
+	if strings.Contains(read.Message, "is forbidden:") {
+		t.Errorf("the condition message quotes the API server: %q. It is written for a person "+
+			"and says what to do; the error belongs in the log", read.Message)
+	}
+
+	f.reconcileNetwork(t, r, f.network.Name)
+	ev := drainEvents(rec)
+	if n := countEvents(ev, spawneryv1alpha1.ReasonSecretReadForbidden); n != 1 {
+		t.Errorf("events = %v, want exactly one naming %s",
+			ev, spawneryv1alpha1.ReasonSecretReadForbidden)
+	}
+
+	// And not again on the next pass: at resyncInterval an ungated report is
+	// twelve a minute per Network, forever.
+	f.reconcileNetwork(t, r, f.network.Name)
+	if n := countEvents(drainEvents(rec), spawneryv1alpha1.ReasonSecretReadForbidden); n != 0 {
+		t.Errorf("the refusal was announced again on an unchanged pass, %d time(s)", n)
+	}
+
+	// Accepted is untouched by any of it, which is the property design §4.3
+	// keeps deliberately: both group controllers derive networkUsable from it,
+	// and a namespace whose grant is missing must keep scheduling.
+	got := f.getNetwork(t, f.network.Name)
+	if !meta.IsStatusConditionTrue(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
+		t.Errorf("Accepted = %+v with the secret read refused, want True",
+			meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted))
 	}
 }

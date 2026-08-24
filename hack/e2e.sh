@@ -167,15 +167,18 @@ fi
 # left permanently unresolved, on a denial that would be nobody's bug but this
 # script's.
 #
-# Note what does NOT happen without it, because an earlier version of this
-# comment claimed it did: test/e2e's denial check does not fire.
+# What happens without it, as of 2026-08-24: test/e2e's denial check DOES
+# fire. It did not until then, and why is worth keeping, because it is a
+# second and quite different way a denied read escapes that check -- not the
+# cache, just an error the code handled instead of surfacing.
 # readForwardingSecret (internal/controller/forwardingsecret.go) folds the 403
-# into a condition whose message says "the operator may not read secret ..."
-# and carries no `is forbidden:` substring, the read sits after the Accepted
-# branch has already returned so no scenario fails either, and
-# network_controller.go makes no logger call at all. That is a second and
-# quite different way a denied read escapes the check -- not the cache, just
-# an error the code handles instead of surfacing.
+# into a condition whose message says "the operator may not read secret ...",
+# written for a person and quoting no API server, so it carries no
+# `is forbidden:` substring; the read sits after the Accepted branch has
+# already returned, so no scenario fails either; and network_controller.go
+# made no logger call at all. The read now carries the API server's own error
+# out beside the message and the controller logs it, once per entry into the
+# state, which is the line theOperatorWasNeverDenied greps for.
 #
 # The namespace is created here rather than by the test manifest so the grant
 # can exist before the operator ever looks; applyManifest tolerates the
