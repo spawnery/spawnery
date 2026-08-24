@@ -460,3 +460,35 @@ func TestVelocityEscapesAMotdThatCannotBeALiteralString(t *testing.T) {
 		t.Errorf("motd round-tripped as %q, want %q\n%s", decoded.Motd, m, rendered)
 	}
 }
+
+// A [servers] or [forced-hosts] an overlay turned into something other than a
+// table is refused, not skipped.
+//
+// servers is the one that had teeth: the type assertion above the try
+// re-defaulting used to fail quietly, so the empty try list this renderer
+// exists to keep alive was dropped, go-toml marshalled `servers = "x"` without
+// complaint, and the whole report was Velocity refusing to start — about a key
+// the user had spelled right in a shape they had got wrong, with nothing
+// anywhere naming the overlay. forced-hosts had a presence check that could
+// never fire and would have been satisfied by a string in any case.
+func TestVelocityRefusesAMisshapenServersTable(t *testing.T) {
+	for _, tc := range []struct{ name, overlay, key string }{
+		{"servers", "servers = \"lobby\"\n", "servers"},
+		{"forced-hosts", "forced-hosts = 3\n", "forced-hosts"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Velocity(velocityValues(), testSecretPath, map[string]string{
+				"velocity.toml": tc.overlay,
+			})
+			if err == nil {
+				t.Fatalf("an overlay whose %s is not a table was accepted", tc.key)
+			}
+			if !strings.Contains(err.Error(), tc.key) {
+				t.Errorf("error = %q, want it to name %q", err, tc.key)
+			}
+			if !strings.Contains(err.Error(), "want a table") {
+				t.Errorf("error = %q, want it to name the shape problem, not just the key", err)
+			}
+		})
+	}
+}

@@ -142,25 +142,29 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 	// try is not the same as an empty one to Velocity, which falls back to
 	// try = ["lobby"] and reopens the exact startup refusal the base case
 	// above exists to close, this time through an ordinary configOverlay.
-	if servers, ok := doc["servers"].(map[string]any); ok {
-		if _, hasTry := servers["try"]; !hasTry {
-			servers["try"] = []string{}
-		}
+	//
+	// A servers that is not a table is refused rather than skipped, the way
+	// paperGlobal refuses a wrong-shaped proxies.velocity. It used to fail
+	// this type assertion, skip the re-defaulting in silence, and marshal
+	// cleanly — go-toml writes servers = "x" without complaint — so the
+	// report a user got was Velocity refusing to start, about a key they had
+	// spelled right in a shape they had got wrong, with nothing anywhere
+	// naming the overlay.
+	servers, ok := doc["servers"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("velocity.toml: servers is a %T, want a table", doc["servers"])
 	}
-	// forced-hosts has no such subkey to lose, and this branch can never
-	// actually fire: the base doc above always sets the key, and doc[k] = val
-	// in the overlay loop can only overwrite an existing key, never delete
-	// one — so hasForcedHosts is true by construction on every call. It is
-	// only a presence check, too, not a check that the value is still a
-	// table; a malformed overlay that replaced forced-hosts with a string
-	// would satisfy it and fail later at toml.Marshal instead. Left in place
-	// as the same defensive shape as the try check just above, which is not
-	// dead in the same way — an overlay's own [servers] table can drop try
-	// as a subkey without removing servers itself — and because the two
-	// reading the same at a glance is worth more than the few bytes saved by
-	// deleting the one that cannot fire.
-	if _, hasForcedHosts := doc["forced-hosts"]; !hasForcedHosts {
-		doc["forced-hosts"] = map[string]any{}
+	if _, hasTry := servers["try"]; !hasTry {
+		servers["try"] = []string{}
+	}
+	// forced-hosts has no such subkey to lose, so there is nothing to
+	// re-default — but it takes the same shape check for the same reason.
+	// What stood here was a presence check that could never fire: the base
+	// doc above always sets the key and the overlay loop can only overwrite
+	// an existing key, never delete one, so it was true by construction on
+	// every call, and a string would have satisfied it anyway.
+	if _, ok := doc["forced-hosts"].(map[string]any); !ok {
+		return "", fmt.Errorf("velocity.toml: forced-hosts is a %T, want a table", doc["forced-hosts"])
 	}
 
 	// Reasserted last: whatever the overlay said about these four keys is

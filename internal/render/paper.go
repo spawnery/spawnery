@@ -141,36 +141,53 @@ func valueOr(s *string, fallback string) string {
 // while their override never applied.
 //
 // This applies base, then overlay, then critical by hand instead of calling
-// Layer: Layer is typed map[string]string, and proxies.velocity is a nested
+// Layer: Layer is typed map[string]string, and paper-global.yml is a nested
 // document that would need flattening to dotted keys and re-nesting to use
 // it, which the plan declined in favour of duplicating the three-step order
 // here. The two implementations must be kept in the same order — see the
 // note on Layer.
+//
+// The overlay is the base document. It used to be read for its
+// proxies.velocity keys and nothing else: the rendered file was built from
+// scratch as {proxies: {velocity: ...}}, so every other key an overlay set —
+// every part of paper-global.yml that is not the Velocity block — was parsed,
+// dropped, and never written, while paperOverlayKeys advertised the file as
+// one an overlay may set and checkOverlayFiles' own comment called a silently
+// dropped overlay key worse than an error. Nothing said so anywhere, and no
+// test looked outside proxies.velocity, so an override for, say,
+// chunk-loading.autoconfig-send-distance rendered a file that did not contain
+// it and a server that came up looking healthy.
 func paperGlobal(secret, overlay string) (string, error) {
-	// proxies.velocity is the only nested structure this file writes, so the
-	// overlay is applied at exactly that depth rather than through a generic
-	// deep merge: three keys do not earn a nester.
-	velocity := map[string]any{}
+	doc := map[string]any{}
 	if strings.TrimSpace(overlay) != "" {
-		var fragment map[string]any
-		if err := yaml.Unmarshal([]byte(overlay), &fragment); err != nil {
+		if err := yaml.Unmarshal([]byte(overlay), &doc); err != nil {
 			return "", fmt.Errorf("paper-global.yml: overlay does not parse as YAML: %w", err)
 		}
-		if raw, ok := fragment["proxies"]; ok {
-			proxies, ok := raw.(map[string]any)
-			if !ok {
-				return "", fmt.Errorf("paper-global.yml: proxies is a %T, want a mapping", raw)
-			}
-			if raw, ok := proxies["velocity"]; ok {
-				v, ok := raw.(map[string]any)
-				if !ok {
-					return "", fmt.Errorf("paper-global.yml: proxies.velocity is a %T, want a mapping", raw)
-				}
-				for k, val := range v {
-					velocity[k] = val
-				}
-			}
+		// An overlay of "null" or "---" parses to a nil map rather than an
+		// error, and writing into that would panic.
+		if doc == nil {
+			doc = map[string]any{}
 		}
+	}
+
+	// The two shapes below are refused rather than treated as an absent
+	// overlay, for the reason above the function: an overlay that silently
+	// does nothing looks exactly like one that took effect.
+	proxies := map[string]any{}
+	if raw, ok := doc["proxies"]; ok {
+		p, ok := raw.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("paper-global.yml: proxies is a %T, want a mapping", raw)
+		}
+		proxies = p
+	}
+	velocity := map[string]any{}
+	if raw, ok := proxies["velocity"]; ok {
+		v, ok := raw.(map[string]any)
+		if !ok {
+			return "", fmt.Errorf("paper-global.yml: proxies.velocity is a %T, want a mapping", raw)
+		}
+		velocity = v
 	}
 
 	// Reasserted last: whatever the overlay said about these three keys is
@@ -192,13 +209,16 @@ func paperGlobal(secret, overlay string) (string, error) {
 	velocity["online-mode"] = true
 	velocity["secret"] = secret
 
-	out, err := yaml.Marshal(map[string]any{
-		"proxies": map[string]any{"velocity": velocity},
-	})
+	proxies["velocity"] = velocity
+	doc["proxies"] = proxies
+
+	out, err := yaml.Marshal(doc)
 	if err != nil {
-		// The document is built entirely from strings, bools and maps of the
-		// same, which yaml.Marshal always accepts — there is no input that
-		// reaches this branch.
+		// Nothing reaches this branch. The document is the overlay's own
+		// value tree with three keys asserted over it, and sigs.k8s.io/yaml
+		// unmarshals through JSON — so every value in it is a string, bool,
+		// float64, nil, []any or map[string]any, and yaml.Marshal accepts all
+		// of them. A user cannot smuggle an unmarshalable value in here.
 		panic(fmt.Sprintf("paperGlobal: marshalling a known-good document failed: %v", err))
 	}
 	return string(out), nil

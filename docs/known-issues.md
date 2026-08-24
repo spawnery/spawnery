@@ -265,29 +265,33 @@ What follows is what 3b discovered while closing its own two preconditions,
 and what 3c inherits as a result.
 
 **The overlay's "refuse rather than guess" philosophy covers a parse failure
-and a couple of named shapes, not the whole surface.** Both flavours refuse
-an overlay that does not parse — bad YAML, bad TOML — and `paperGlobal`
-refuses one whose `proxies` or `proxies.velocity` key parses to something
-other than a mapping, "rather than treating either as an absent overlay" (its
-own doc comment). Two shapes still slip through silently:
+and the named shapes, not the whole surface.** Both flavours refuse an overlay
+that does not parse — bad YAML, bad TOML; `paperGlobal` refuses one whose
+`proxies` or `proxies.velocity` key parses to something other than a mapping,
+and `velocityToml` refuses the same of `servers` and `forced-hosts`, "rather
+than treating either as an absent overlay" (`paperGlobal`'s own doc comment).
+What still slips through is the key nobody reads. A `paper-global.yml` overlay
+with `proxies` misspelled, or carrying any other key Paper does not declare,
+is valid YAML and now reaches the rendered file — where Paper ignores it,
+keeps its own default for the field the author meant, and writes the stray key
+back out on the next save, so the document on disk still looks like the
+override took. `server.properties` has the symmetric gap by construction:
+`parseProperties` accepts any `key=value` line, so a mistyped key just adds an
+unused one. `velocity.toml` is the same again, and its `[advanced]` table is
+where the RKE2 rollout actually met this — see "A `configOverlay` key in the
+wrong TOML table is silently ignored" below.
 
-- A `paper-global.yml` overlay with `proxies` present but misspelled, or any
-  other unrecognized top-level key, is valid YAML, matches nothing in
-  `paperGlobal`, and does nothing. `server.properties` has the symmetric gap
-  by construction: `parseProperties` accepts any `key=value` line, so a
-  mistyped key just adds an unused one instead of being refused.
-- A `velocity.toml` overlay whose `servers` key parses to something other
-  than a table fails the `doc["servers"].(map[string]any)` type assertion in
-  `velocityToml` and silently skips the `try` re-defaulting, rather than
-  refusing the way `paperGlobal` refuses an equivalent wrong-shaped
-  `proxies.velocity`.
-
-In both cases the operator believes the override applied and the rendered
-file does not reflect it — the exact failure this design's refusal exists to
-rule out, just not ruled out everywhere it could be. No agent-side code in 3c
-depends on this, so nothing forces a fix now; whoever next touches
-`internal/render`'s overlay contract should close it with a real key check
-rather than assume the existing refusals already cover it.
+In every case the operator believes the override applied and the running
+server does not reflect it — the exact failure this design's refusal exists to
+rule out, just not ruled out everywhere it could be. Closing it needs a real
+key check against each flavour's own declared keys. The lists exist: the
+fixtures `TestPaperWritesTheKeysPaperItselfReads` and
+`TestVelocityWritesTheKeysVelocityItselfReads` already read them out of the
+pinned jars. Compiling one into the renderer is the part nobody has taken,
+because it makes a Paper or Velocity bump refuse a legitimate override for a
+newly added key until the fixture and the constant are updated together —
+a real cost, against a class of mistake that has cost this project two
+outages.
 
 **The rendered ConfigMap's name changed, and nothing migrates the old
 one.** `podspec.GroupConfigMapName` used to return the group's own bare

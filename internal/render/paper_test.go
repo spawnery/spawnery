@@ -317,3 +317,38 @@ func keysOf(m map[string][]byte) []string {
 	}
 	return out
 }
+
+// An overlay key outside proxies.velocity has to reach the rendered file, and
+// until this test nothing looked. paperGlobal built the document from scratch
+// as {proxies: {velocity: ...}} and read the overlay only for its Velocity
+// keys, so every other part of paper-global.yml an overlay set was parsed and
+// dropped -- while paperOverlayKeys advertises the file as one an overlay may
+// set, and checkOverlayFiles' own comment calls a silently dropped overlay key
+// worse than an error. The two keys below are Paper's, chosen from opposite
+// ends of its document so that neither could pass by sitting near the block
+// the renderer already writes.
+func TestPaperOverlayReachesTheRestOfPaperGlobal(t *testing.T) {
+	files, err := Paper(paperValues(), "s3cret", map[string]string{
+		"paper-global.yml": "misc:\n  max-joins-per-tick: 5\nchunk-loading:\n  autoconfig-send-distance: false\n",
+	})
+	if err != nil {
+		t.Fatalf("Paper: %v", err)
+	}
+	global := string(files["config/paper-global.yml"])
+	for _, want := range []string{"max-joins-per-tick: 5", "autoconfig-send-distance: false"} {
+		if !strings.Contains(global, want) {
+			t.Errorf("paper-global.yml does not contain %q; an overlay outside proxies.velocity "+
+				"was accepted and then dropped, which is the failure checkOverlayFiles refuses "+
+				"one level up:\n%s", want, global)
+		}
+	}
+	// And the Velocity block is still asserted over whatever the overlay
+	// carried, which is the half that must not be traded away for the half
+	// above.
+	for _, want := range []string{"enabled: true", "online-mode: true", "secret: s3cret"} {
+		if !strings.Contains(global, want) {
+			t.Errorf("paper-global.yml does not contain %q, the critical Velocity block did not "+
+				"survive an overlay that carries the rest of the document:\n%s", want, global)
+		}
+	}
+}
