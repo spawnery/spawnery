@@ -82,6 +82,28 @@ const (
 	// is local and expected, the other is fleet-wide and arrived with a
 	// release.
 	ConditionChangingOver = "ChangingOver"
+	// ConditionProgressing is true while a ServerGroup has not arrived where it
+	// decided to be: a server of the current generation is still coming up, or
+	// a server of an earlier one is still there.
+	//
+	// It exists because status.phase does not answer that and is deliberately
+	// not being made to. Ready there means the group is serving, which is true
+	// as soon as one server is up, and that is the useful thing for a printed
+	// column to say. Whether the group has *arrived* is a second question, and
+	// two states make the difference visible: an ephemeral group runs above
+	// spec.scaling.minReplicas to cover spareSlots, so one ready server out of
+	// five decided-upon satisfies the phase; and readyReplicas counts servers
+	// of every generation, so a group mid-changeover whose new servers are all
+	// still starting is Ready on the strength of the ones being replaced.
+	//
+	// This is the split a Deployment makes between Available and Progressing,
+	// for the same reason, with one difference taken on purpose: True here
+	// means "has not arrived" and nothing else. A group that has given up has
+	// not arrived, so this stays True and Degraded/GaveUp beside it says it has
+	// stopped trying. A Progressing that also went False for "stuck" -- the
+	// reading a Deployment's ProgressDeadlineExceeded produces -- is the one
+	// nobody can act on without reading a second field anyway.
+	ConditionProgressing = "Progressing"
 	// ConditionNodeDraining is true while this group has pods on nodes that
 	// are on their way out of service, and names them. It reports; the
 	// removals it describes are decided elsewhere.
@@ -135,6 +157,9 @@ const (
 	ReasonPodShapeCurrent      = "PodShapeCurrent"
 	ReasonOrdinalNameTaken     = "OrdinalNameTaken"
 	ReasonOrdinalsAvailable    = "OrdinalsAvailable"
+	ReasonServersStarting      = "ServersStarting"
+	ReasonReplacingServers     = "ReplacingServers"
+	ReasonAtDesiredState       = "AtDesiredState"
 	ReasonStorageResized       = "StorageResized"
 	ReasonStorageResizeRefused = "StorageResizeRefused"
 

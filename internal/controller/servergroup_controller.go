@@ -589,6 +589,10 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	group.Status.FreeSlots = totals.FreeSlots
 	group.Status.ObservedGeneration = group.Generation
 	group.Status.Phase = derivePhase(group, totals)
+	// After derivePhase and independent of it: the two answer different
+	// questions and neither is allowed to move the other. See
+	// ConditionProgressing and reportProgressing.
+	reportProgressing(group, views)
 
 	return ctrl.Result{RequeueAfter: requeue}, r.Status().Update(ctx, group)
 }
@@ -915,6 +919,67 @@ func derivePhase(group *spawneryv1alpha1.ServerGroup, totals GroupTotals) string
 		return string(phase.Ready)
 	}
 	return string(phase.Pending)
+}
+
+// reportProgressing says whether the group has arrived where it decided to be.
+//
+// derivePhase above answers a different question and keeps answering it: Ready
+// there means the group is serving, true as soon as one server is up, which is
+// what a printed column should say. Two states make the gap visible. An
+// ephemeral group runs above spec.scaling.minReplicas to cover spareSlots, and
+// DesiredReplicas() is only that floor -- so a group DecideSize took to five
+// satisfies the phase with one server ready. And GroupTotals.ReadyReplicas
+// counts every generation, unlike FreeSlots beside it, so a group whose new
+// servers are all still starting is Ready on the strength of the old ones.
+//
+// Outstanding is counted two ways because they are two different waits, and an
+// operator acts on them differently: a server of the current generation that
+// has not come up yet is this group starting, and a server of an earlier one
+// still present is this group replacing. Both mean "not arrived"; only the
+// first is fixed by waiting.
+//
+// One pass behind on a scale-up, and deliberately not fixed here: the views
+// this reads are collected before the creates of the same pass, so a server
+// just ordered is first counted by the next one. Every other field on this
+// status has the same lag for the same reason, and closing it for one of them
+// would mean a second List that says nothing the five-second resync does not.
+//
+// Draining, Terminating and Failed servers of the current generation are not
+// counted. The first two are being shed on purpose -- a scale-down has arrived,
+// it is just tidying -- and a Failed one is replaced by a Pending one that this
+// counts on the next pass, with Degraded saying meanwhile what went wrong.
+func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) {
+	var starting, older int32
+	for _, v := range views {
+		if v.Generation != group.Generation {
+			older++
+			continue
+		}
+		if v.Phase == phase.Pending || v.Phase == phase.Starting {
+			starting++
+		}
+	}
+
+	condition := metav1.Condition{Type: spawneryv1alpha1.ConditionProgressing}
+	switch {
+	case starting > 0:
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = spawneryv1alpha1.ReasonServersStarting
+		condition.Message = fmt.Sprintf("%d server(s) of generation %d are not ready yet",
+			starting, group.Generation)
+		if older > 0 {
+			condition.Message += fmt.Sprintf("; %d of an earlier generation are still being replaced", older)
+		}
+	case older > 0:
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = spawneryv1alpha1.ReasonReplacingServers
+		condition.Message = fmt.Sprintf("%d server(s) of an earlier generation are still being replaced", older)
+	default:
+		condition.Status = metav1.ConditionFalse
+		condition.Reason = spawneryv1alpha1.ReasonAtDesiredState
+		condition.Message = fmt.Sprintf("every server is of generation %d and ready", group.Generation)
+	}
+	meta.SetStatusCondition(&group.Status.Conditions, condition)
 }
 
 // collectViews reads every Server of the group plus its live player count.

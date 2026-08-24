@@ -4417,3 +4417,128 @@ func TestACacheOneGenerationBehindIsNotReportedAsASquatter(t *testing.T) {
 		t.Errorf("message = %q, want it to name the ordinal the squatter carries", c.Message)
 	}
 }
+
+// reportProgressing is a pure function of the group and its views, so its
+// whole vocabulary fits in a table. The states below are the ones an operator
+// meets; the two that matter most are the last two, which the phase cannot
+// tell apart from the first.
+func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
+	const gen = 7
+	view := func(p phase.Phase, generation int64) ServerView {
+		return ServerView{Phase: p, Generation: generation}
+	}
+	for _, tc := range []struct {
+		name   string
+		views  []ServerView
+		status metav1.ConditionStatus
+		reason string
+		says   string
+	}{
+		{
+			"nothing at all", nil,
+			metav1.ConditionFalse, spawneryv1alpha1.ReasonAtDesiredState, "",
+		},
+		{
+			"every server ready and current",
+			[]ServerView{view(phase.Ready, gen), view(phase.Ready, gen)},
+			metav1.ConditionFalse, spawneryv1alpha1.ReasonAtDesiredState, "",
+		},
+		{
+			"one up, one still coming",
+			[]ServerView{view(phase.Ready, gen), view(phase.Starting, gen)},
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of generation 7",
+		},
+		{
+			"a pending server counts as coming",
+			[]ServerView{view(phase.Ready, gen), view(phase.Pending, gen)},
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of generation 7",
+		},
+		{
+			"the new generation is up but the old one is still here",
+			[]ServerView{view(phase.Ready, gen), view(phase.Ready, gen-1)},
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonReplacingServers, "earlier generation",
+		},
+		{
+			"both waits at once say both",
+			[]ServerView{view(phase.Starting, gen), view(phase.Ready, gen-1)},
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "still being replaced",
+		},
+		{
+			// Being shed on purpose. A scale-down has arrived, it is tidying.
+			"a draining server of the current generation",
+			[]ServerView{view(phase.Ready, gen), view(phase.Draining, gen)},
+			metav1.ConditionFalse, spawneryv1alpha1.ReasonAtDesiredState, "",
+		},
+		{
+			// Degraded is what says this, and its replacement will be Pending
+			// on the next pass, which this counts then.
+			"a failed server of the current generation",
+			[]ServerView{view(phase.Ready, gen), view(phase.Failed, gen)},
+			metav1.ConditionFalse, spawneryv1alpha1.ReasonAtDesiredState, "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			group := &spawneryv1alpha1.ServerGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: gen},
+			}
+			reportProgressing(group, tc.views)
+			got := meta.FindStatusCondition(group.Status.Conditions,
+				spawneryv1alpha1.ConditionProgressing)
+			if got == nil {
+				t.Fatal("no Progressing condition was set at all")
+			}
+			if got.Status != tc.status || got.Reason != tc.reason {
+				t.Errorf("Progressing = %s/%s, want %s/%s: %s",
+					got.Status, got.Reason, tc.status, tc.reason, got.Message)
+			}
+			if tc.says != "" && !strings.Contains(got.Message, tc.says) {
+				t.Errorf("message = %q, want it to contain %q", got.Message, tc.says)
+			}
+		})
+	}
+}
+
+// The sentence docs/known-issues.md carried since milestone 4a, driven.
+//
+// An ephemeral group runs above spec.scaling.minReplicas to keep spareSlots
+// free, and DesiredReplicas() is only that floor — so a group DecideSize has
+// taken to two satisfies the phase with one server ready while the other is
+// still starting. The phase is not wrong about what it says (the group is
+// serving); it just cannot say this. Progressing can.
+func TestAGroupAboveItsFloorIsReadyAndStillProgressing(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+	first := f.listServers(t)
+	if len(first) != 1 {
+		t.Fatalf("got %d servers, want minReplicas = 1", len(first))
+	}
+	// Ready, and busy enough that the 40 spare slots this group wants are no
+	// longer free — so the next pass orders another server it has not got.
+	f.markReadyWithPlayers(t, first[0].Name, 70)
+
+	f.reconcileGroup(t, r)
+	if got := len(f.listServers(t)); got != 2 {
+		t.Fatalf("got %d servers, want a second one ordered for the spare slots", got)
+	}
+
+	// A third pass, because the views this status is built from are collected
+	// before the creates of the same pass — so the server just ordered is
+	// first seen by the next one. reportProgressing says so in its own
+	// comment; it is the property every other field here already has.
+	f.reconcileGroup(t, r)
+
+	group := f.reloadGroup(t)
+	if got := group.Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase = %q, want %q. This is not the bug — the group is serving, and the "+
+			"phase saying so is the useful thing for a printed column", got, phase.Ready)
+	}
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+	if cond == nil || cond.Status != metav1.ConditionTrue ||
+		cond.Reason != spawneryv1alpha1.ReasonServersStarting {
+		t.Errorf("Progressing = %+v, want True/%s. One ready server out of two decided upon "+
+			"is serving and not arrived, and nothing on this object said the second half",
+			cond, spawneryv1alpha1.ReasonServersStarting)
+	}
+}

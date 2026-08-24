@@ -495,34 +495,39 @@ group with a server too few costs joins. `isOccupied` has carried the same lag
 for the same reason since before 4b; what 4b changed is that a scaling
 decision now reads it too.
 
-**`derivePhase` still measures readiness against `DesiredReplicas()`, and that
-field's meaning changed under it this milestone.** Before 4a,
+**`derivePhase` measures readiness against `DesiredReplicas()`, which is only
+the floor — and that is now a decision rather than a leftover.** Before 4a,
 `DesiredReplicas()` in `api/v1alpha1/servergroup_types.go` was the size the
-group ran at, so "ready replicas have reached it" meant the group was fully
-up. Now it is only the group's floor: `DecideSize` can and does run the group
-above it to cover `spareSlots`. `derivePhase` in
-`internal/controller/servergroup_controller.go` never changed its comparison,
-so a group scaled to five for spare slots with one server up and four still
-starting publishes `status.phase: Ready` off that one. Defensible — the group
-is serving — but it is no longer what the field used to mean, and the change
-happened silently. 4b's rolling update, which needs to say "the new generation
-is up" as something other than "one server somewhere is," will want the
-distinction this milestone left unmade.
+group ran at, so "ready replicas have reached it" meant the group was fully up.
+Since 4a it is the group's floor: `DecideSize` can and does run an ephemeral
+group above it to cover `spareSlots`. `derivePhase` never changed its
+comparison, so a group scaled to five for spare slots with one server up and
+four still starting publishes `status.phase: Ready` off that one. 4b's rolling
+update, which needs to say "the new generation is up" as something other than
+"one server somewhere is," found its own answer rather than changing this.
 
-*4b came and went without making it, and the line has since moved for an
-unrelated reason.* Checked on 2026-08-22 the comparison was
-`totals.ReadyReplicas >= group.DesiredReplicas() && totals.ReadyReplicas > 0`.
-On 2026-08-24 the `&& > 0` was removed, but for the parked-group entry under
-milestone 5a rather than for this one: it made a group asked for zero servers
-report `Pending` forever. The comparison against `DesiredReplicas()` — the
-part *this* entry is about — is untouched, so a group running above its floor
-for spare slots still publishes `Ready` off the first server up.
+*Ruled 2026-08-24: the phase keeps its meaning and the missing question got a
+field of its own.* `Ready` there means the group is serving, which is true as
+soon as one server is up and is the useful thing for a printed column to say;
+redefining it would have traded a true statement for a different true statement
+and made the column flicker on every scale-up. `ConditionProgressing`
+(`reportProgressing`, `internal/controller/servergroup_controller.go`) carries
+the other half: true while a server of the current generation is still coming
+up, or while one of an earlier generation is still there. That is the split a
+Deployment makes between `Available` and `Progressing`, with one difference
+taken on purpose — `True` here means "has not arrived" and nothing else, so a
+group that has given up stays `True` and `Degraded`/`GaveUp` beside it says it
+has stopped trying.
 
-Deliberately untouched. 4b's rolling update found its own answer to "the new
-generation is up" rather than changing this comparison, so redefining the phase
-now would move a field 4b is not reading and might disagree with the answer it
-did build. That is a behaviour change wanting its own decision, not a repair to
-fold into a neighbouring fix.
+**What is still open is one field further along: `GroupTotals.ReadyReplicas`
+counts servers of every generation.** `AggregateGroup`
+(`internal/controller/candidates.go`) filters `FreeSlots` on the current
+generation, with a comment saying why, and does not filter `ReadyReplicas` two
+lines above it. So a group mid-changeover whose new servers are all still
+starting reports `readyReplicas` on the strength of the servers being replaced
+— and that number is a printed column. `ConditionProgressing` now says the true
+thing beside it, which is why this is recorded rather than urgent; changing the
+column is a change to a published field and wants its own ruling.
 
 ## From milestone 4b
 
