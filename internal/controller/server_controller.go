@@ -413,7 +413,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	in := r.collectInputs(srv, group, pod, podFound)
+	in := r.collectInputs(srv, group, pod, podFound, nameStillHeld || nameConflict)
 	current := phase.Phase(srv.Status.Phase)
 	if current == "" {
 		current = phase.Pending
@@ -650,6 +650,7 @@ func (r *ServerReconciler) collectInputs(
 	group *spawneryv1alpha1.ServerGroup,
 	pod *corev1.Pod,
 	podFound bool,
+	nameTaken bool,
 ) phase.Inputs {
 	now := r.Clock()
 
@@ -694,15 +695,29 @@ func (r *ServerReconciler) collectInputs(
 	if srv.Status.StartedAt != nil && (podFound || srv.Status.PodName != "") {
 		in.StartupDeadlineReached = now.Sub(srv.Status.StartedAt.Time) > r.StartupDeadline
 	}
-	// The wait a Server with no pod at all is allowed. Derived from the group
-	// rather than configured, because the two are coupled: drain.timeoutSeconds
-	// is exactly how long a persistent ordinal's successor legitimately waits
-	// for its predecessor's pod to finish terminating (nameStillHeld above), so
-	// any fixed bound below it would fail a Server that is doing the right
-	// thing -- and the same fixed bound would then fail its replacement, and
-	// its replacement's replacement. The startup deadline on top is the slack
-	// every other attempt gets.
-	if srv.Status.StartedAt != nil && !podFound && srv.Status.PodName == "" {
+	// The wait a Server with no pod at all is allowed.
+	//
+	// Not while its pod's *name* is held by another pod -- a predecessor still
+	// terminating, or somebody else's pod on a derived ordinal name. Failing
+	// there makes things worse rather than better: for a persistent ordinal
+	// the replacement is derived from the same name and hits the same wall, a
+	// Failed server holds its ordinal (DecidePersistentSize's held map) and
+	// pruneFailed does not run for a persistent group, so the object stays for
+	// its full failedRetentionSeconds -- an hour by default -- even after
+	// somebody force-deletes the stuck pod that caused it. Before this bound
+	// existed, that Server recovered the moment the name came free. Both cases
+	// already name the obstacle on the object, PodNameTerminating and
+	// PodNameConflict, so nothing is silent here either.
+	//
+	// The bound itself is derived from the group rather than configured:
+	// drain.timeoutSeconds is how long a predecessor's termination may take,
+	// and the startup deadline on top is the slack every other attempt gets.
+	// With the guard above that is margin rather than the mechanism -- the
+	// clock does not run during the wait at all -- and it is kept as the
+	// second line: if nameTaken were ever computed wrongly, a bound sized
+	// below a legitimate termination would fail Servers that are doing the
+	// right thing.
+	if srv.Status.StartedAt != nil && !podFound && !nameTaken && srv.Status.PodName == "" {
 		in.PodCreationDeadlineReached =
 			now.Sub(srv.Status.StartedAt.Time) >= group.DrainTimeout()+r.StartupDeadline
 	}

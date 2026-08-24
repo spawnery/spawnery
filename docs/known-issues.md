@@ -690,8 +690,8 @@ nothing would have caught it.
 **Kept because the trap is general, not because the bug survives.** A guard
 can go on compiling, passing its tests and reading sensibly while the meaning
 of the state it filters on moves underneath it. The 4a entry above records the
-same shape on `derivePhase` and `DesiredReplicas()`, and that one is still
-open. Both were found by reading a comment or description against what the
+same shape on `derivePhase` and `DesiredReplicas()`, which stood open until
+2026-08-24 and was then ruled rather than repaired. Both were found by reading a comment or description against what the
 code had come to do — not by any test.
 
 **`nix build` filters the source tree through the git index, so an untracked
@@ -1553,9 +1553,20 @@ it.
 
 The `Server` says so rather than sitting silent — `Accepted: False` with reason
 `PodNameTerminating` and the pod's name in the message — and it says nothing
-else, because no pod means no `status.startedAt`, so the startup deadline never
-arms, the server never reaches `Failed`, and the per-group backoff never counts
-it. The phase stays `Pending`.
+else: the server never reaches `Failed`, the per-group backoff never counts it,
+and the phase stays `Pending` for as long as the wait lasts.
+
+That used to be an accident and is a decision since 2026-08-24.
+`status.startedAt` is now stamped when the operator accepts a Server rather than
+beside its pod, so a Server with no pod does have a clock — and the deadline
+that clock drives is deliberately not run while the pod's *name* is held by
+another pod. Failing here would make the situation worse than the wait: the
+replacement is derived from the same ordinal name and meets the same pod, a
+`Failed` server holds its ordinal in `DecidePersistentSize`'s held map, and
+`pruneFailed` does not run for a persistent group — so the object would stay for
+its full `failedRetentionSeconds`, an hour by default, **including after
+somebody force-deletes the stuck pod below.** The wait, by contrast, ends the
+moment the name comes free.
 
 ```bash
 kubectl get server <group>-<ordinal> -n <namespace> \

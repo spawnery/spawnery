@@ -1510,7 +1510,7 @@ func TestMaxStaleZeroNeverForcesADrain(t *testing.T) {
 	// The default. A retiring server with players waits indefinitely, which
 	// is the promise the whole feature makes.
 	in := collectInputsReconciler(time.Now).
-		collectInputs(retiringFor(time.Hour*24), groupWithMaxStale(0), nil, false)
+		collectInputs(retiringFor(time.Hour*24), groupWithMaxStale(0), nil, false, false)
 	if in.MaxStaleReached {
 		t.Error("MaxStaleReached with maxStaleSeconds = 0")
 	}
@@ -1518,7 +1518,7 @@ func TestMaxStaleZeroNeverForcesADrain(t *testing.T) {
 
 func TestMaxStaleFiresOnceTheWaitExceedsIt(t *testing.T) {
 	in := collectInputsReconciler(time.Now).
-		collectInputs(retiringFor(2*time.Minute), groupWithMaxStale(60), nil, false)
+		collectInputs(retiringFor(2*time.Minute), groupWithMaxStale(60), nil, false, false)
 	if !in.MaxStaleReached {
 		t.Error("MaxStaleReached is false after twice the configured wait")
 	}
@@ -2553,5 +2553,40 @@ func TestAServerWhosePodIsNeverCreatedFailsAtItsOwnDeadline(t *testing.T) {
 	if c := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionReady); c == nil ||
 		c.Reason != phase.ReasonPodNeverCreated {
 		t.Errorf("Ready = %+v, want reason %s", c, phase.ReasonPodNeverCreated)
+	}
+}
+
+// The creation deadline must not run while the pod's *name* is held by another
+// pod, and this is the case that made it matter.
+//
+// An ordinal waiting on a predecessor whose node has gone NotReady waits
+// without a bound — the API server keeps the pod object until a kubelet
+// confirms the kill, and there is no kubelet. Failing the Server there makes
+// the situation worse rather than better: the replacement is derived from the
+// same ordinal name and meets the same pod, a Failed server holds its ordinal
+// in DecidePersistentSize's held map, and pruneFailed does not run for a
+// persistent group — so the object stays for its full failedRetentionSeconds,
+// an hour by default, even after somebody force-deletes the stuck pod. Before
+// the deadline existed this Server recovered the moment the name came free.
+func TestAnOrdinalWaitingOnItsPredecessorIsNotFailedForHavingNoPod(t *testing.T) {
+	f := newFixture(t)
+	recreateOrdinalOverATerminatingPod(t, f)
+
+	f.reconcile("survival-0")
+	// Far past any bound derived from this group: the point is that the clock
+	// does not run here at all, not that it runs slowly.
+	f.clock.Advance(2 * time.Hour)
+	f.reconcile("survival-0")
+
+	got := f.server("survival-0")
+	if got.Status.Phase == string(phase.Failed) {
+		t.Errorf("phase = %q while the predecessor's pod is still terminating. The wait is "+
+			"somebody else's to end, and failing into it costs an hour of retention on an "+
+			"ordinal nothing else can take", got.Status.Phase)
+	}
+	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Reason != ReasonPodNameTerminating {
+		t.Errorf("Accepted = %+v, want reason %s still — the object must go on naming the "+
+			"obstacle for as long as it stands", accepted, ReasonPodNameTerminating)
 	}
 }
