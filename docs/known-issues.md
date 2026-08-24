@@ -2066,11 +2066,13 @@ Network's secret is renamed; and the operator holds `pods: create` cluster-wide
 namespaces into a pod it creates, which makes a name-scoped `get` defence in
 depth rather than a boundary. Milestone 6's Helm chart, where a per-namespace
 value renders the list, is where it becomes cheap. **The audit that guards this
-manifest cannot see the difference**: `rbacaudit.Permission` has no
-`ResourceNames` field (`internal/rbacaudit/permissions.go:35-48`), so both
-directions of the comparison against `rbacaudit.RequiredNetworkNamespace` pass
-whether the rule names objects or not — adding `resourceNames` later will not
-be caught by a failing test, and neither would removing it again.
+manifest refuses rather than models it.** `rbacaudit.Permission` still carries
+no name, so a rule restricted to particular objects cannot be represented — but
+since 2026-08-24 `ExpandRules` fails on such a rule instead of expanding it
+into one that reads as unrestricted, which is the direction that matters: the
+silent version had `Compare` reporting the permission satisfied for every
+object when it was satisfied for one. Whoever takes the narrowing up gets an
+error naming the names.
 
 **The mis-stamp window is not confined to failed reads.** The two entries above
 document what a *failed* read does to the stamp; the successful path has a
@@ -3307,7 +3309,8 @@ formats first, truncates on a rune boundary, and appends a marker pointing
 at the condition for the untruncated text; applied at all six.
 
 **What is still not covered anywhere, and is now at least recorded: the
-`action` the events API takes at all twenty-three call sites.**
+`action` the events API takes at every one of this package's `Eventf` call
+sites.**
 `events.FakeRecorder` renders an event as `eventtype + " " + reason + " " +
 note` (client-go v0.36.0, `tools/events/fake.go:36-38`) and drops `action`
 entirely, so no assertion reading a fake recorder in this repository can
@@ -3333,7 +3336,7 @@ because the obvious one alone was weaker than it looked — both found by the
 re-review of the fix that added it. It matches the action argument by
 *identifier name* and resolves no types, so `actionCreatePod := ""`
 declared above a call site passed; it now also requires that no local
-anywhere in the package shadows one of the nine constant names, which is
+anywhere in the package shadows one of the constant names, which is
 what makes matching by name mean anything (a package-level redeclaration is
 a compile error, so the two together pin the identifier to the constant
 without a type checker). And it logged the number of call sites rather than

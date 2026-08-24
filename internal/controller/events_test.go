@@ -257,11 +257,11 @@ const wantEventfSites = 26
 // nothing on the reconciled object says an event was lost. A new call site
 // that passes "" would go green through unit tests, envtest and e2e alike.
 //
-// A source-level check rather than twenty-four assertions: what needs
+// A source-level check rather than one assertion per call site: what needs
 // guarding is a property of every call site, not the particular string any one
-// of them passes, and a table restating twenty-four literals would be a
-// second copy of the code that goes stale the first time somebody adds a
-// twenty-fifth. This reads whatever is there.
+// of them passes, and a table restating every literal would be a second copy
+// of the code that goes stale the first time somebody adds a call site. This
+// reads whatever is there.
 //
 // Three assertions, and the second and third exist because the first alone was
 // weaker than it looked. It requires every Eventf's action argument to be an
