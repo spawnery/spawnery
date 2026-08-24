@@ -2110,9 +2110,6 @@ a permission missing from both table and role on a path neither touches is
 still green here and still absent there. So the entry is not closed; it is
 narrowed to the code the driven runs do not reach.
 
-**No `--leader-election-namespace`.** With the default flags, a local run
-outside the cluster fails; `--leader-elect=false` is required.
-
 **Milestone 2a's isolation promise does not cover availability.** The promise of
 the agent channel reads: a compromised game server pod cannot harm any other.
 For identity and confidentiality it holds — the token is audience-bound and not

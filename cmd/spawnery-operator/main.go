@@ -140,6 +140,77 @@ func leaderReadyCheck(elected <-chan struct{}) healthz.Checker {
 	}
 }
 
+// managerFlags are the command-line values managerOptions reads. A struct
+// rather than a run of same-typed parameters, so that a call site cannot
+// silently swap two of them.
+type managerFlags struct {
+	metricsAddr       string
+	probeAddr         string
+	leaderElect       bool
+	watchNamespace    string
+	operatorNamespace string
+}
+
+// managerOptions builds the manager's configuration.
+//
+// Split out of main so the two decisions below can be asserted. Everything
+// else here is a value handed straight through.
+func managerOptions(f managerFlags) manager.Options {
+	opts := manager.Options{
+		Scheme:                 scheme,
+		Metrics:                metricsserver.Options{BindAddress: f.metricsAddr},
+		HealthProbeBindAddress: f.probeAddr,
+		LeaderElection:         f.leaderElect,
+		LeaderElectionID:       "spawnery-operator.spawnery.cloud",
+		// Left empty, controller-runtime reads the namespace out of the
+		// ServiceAccount mount, which exists only inside a pod -- so a local
+		// `go run` failed at startup and had to be told --leader-elect=false,
+		// which is what every runbook in docs/ passes. The lease belongs in
+		// the operator's own namespace either way, and --operator-namespace
+		// already carries it (POD_NAMESPACE in the chart, from
+		// metadata.namespace), so naming it here changes nothing in a cluster
+		// and lets a local run keep leader election on.
+		LeaderElectionNamespace: f.operatorNamespace,
+	}
+	if f.watchNamespace != "" {
+		opts.Cache.DefaultNamespaces = map[string]cache.Config{f.watchNamespace: {}}
+	}
+	// The bootstrap touches exactly two kinds of object, one per namespace,
+	// and both carry our label. Without this restriction the cache would hold
+	// every ConfigMap in the cluster — kube-root-ca.crt from every namespace
+	// included — for the sake of one per namespace that is ours.
+	managed := labels.SelectorFromSet(labels.Set{podspec.LabelManagedBy: podspec.ManagedByValue})
+	// Per-kind cache restrictions; see the comment on each entry for why it is
+	// there.
+	opts.Cache.ByObject = map[client.Object]cache.ByObject{
+		&corev1.ConfigMap{}:      {Label: managed},
+		&corev1.ServiceAccount{}: {Label: managed},
+		// A persistent server's world claim carries the same label, and there
+		// is one per server. Since 5b the Server controller reads claims back
+		// as well as creating them — growClaim and readResizePending
+		// (internal/controller/server_controller.go) — and both go through
+		// this cache, so a claim missing the label is invisible to them: it
+		// never grows and never reports a pending filesystem resize. Without
+		// the restriction those reads would start an informer holding every
+		// claim in every watched namespace, ours and everybody else's, for the
+		// sake of the one they asked for.
+		&corev1.PersistentVolumeClaim{}: {Label: managed},
+		// The node cache exists for one bool per node — cordoned, or tainted to
+		// repel. status.images is tens of kilobytes per node and nothing here
+		// reads it, so it is dropped on the way in, for the same reason the
+		// ConfigMap restriction above exists.
+		&corev1.Node{}: {
+			Transform: func(obj any) (any, error) {
+				if node, ok := obj.(*corev1.Node); ok {
+					node.Status.Images = nil
+				}
+				return obj, nil
+			},
+		},
+	}
+	return opts
+}
+
 func main() {
 	var (
 		metricsAddr          string
@@ -195,50 +266,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	mgrOptions := manager.Options{
-		Scheme:                 scheme,
-		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
-		HealthProbeBindAddress: probeAddr,
-		LeaderElection:         leaderElect,
-		LeaderElectionID:       "spawnery-operator.spawnery.cloud",
-	}
-	if watchNamespace != "" {
-		mgrOptions.Cache.DefaultNamespaces = map[string]cache.Config{watchNamespace: {}}
-	}
-	// The bootstrap touches exactly two kinds of object, one per namespace,
-	// and both carry our label. Without this restriction the cache would hold
-	// every ConfigMap in the cluster — kube-root-ca.crt from every namespace
-	// included — for the sake of one per namespace that is ours.
-	managed := labels.SelectorFromSet(labels.Set{podspec.LabelManagedBy: podspec.ManagedByValue})
-	// Per-kind cache restrictions; see the comment on each entry for why it is
-	// there.
-	mgrOptions.Cache.ByObject = map[client.Object]cache.ByObject{
-		&corev1.ConfigMap{}:      {Label: managed},
-		&corev1.ServiceAccount{}: {Label: managed},
-		// A persistent server's world claim carries the same label, and there
-		// is one per server. Since 5b the Server controller reads claims back
-		// as well as creating them — growClaim and readResizePending
-		// (internal/controller/server_controller.go) — and both go through
-		// this cache, so a claim missing the label is invisible to them: it
-		// never grows and never reports a pending filesystem resize. Without
-		// the restriction those reads would start an informer holding every
-		// claim in every watched namespace, ours and everybody else's, for the
-		// sake of the one they asked for.
-		&corev1.PersistentVolumeClaim{}: {Label: managed},
-		// The node cache exists for one bool per node — cordoned, or tainted to
-		// repel. status.images is tens of kilobytes per node and nothing here
-		// reads it, so it is dropped on the way in, for the same reason the
-		// ConfigMap restriction above exists.
-		&corev1.Node{}: {
-			Transform: func(obj any) (any, error) {
-				if node, ok := obj.(*corev1.Node); ok {
-					node.Status.Images = nil
-				}
-				return obj, nil
-			},
-		},
-	}
-
+	mgrOptions := managerOptions(managerFlags{
+		metricsAddr:       metricsAddr,
+		probeAddr:         probeAddr,
+		leaderElect:       leaderElect,
+		watchNamespace:    watchNamespace,
+		operatorNamespace: operatorNamespace,
+	})
 	restConfig := ctrl.GetConfigOrDie()
 	mgr, err := ctrl.NewManager(restConfig, mgrOptions)
 	if err != nil {

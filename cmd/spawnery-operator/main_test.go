@@ -170,3 +170,40 @@ func TestTaintKeysSetAcceptsRealKeys(t *testing.T) {
 		}
 	}
 }
+
+// The leader-election Lease goes in the operator's own namespace, named rather
+// than derived.
+//
+// Left empty, controller-runtime reads the namespace out of the ServiceAccount
+// mount, which exists only inside a pod. A local `go run` therefore died at
+// startup unless it was told --leader-elect=false, which is what every runbook
+// under docs/ passes and what docs/known-issues.md carried as an open
+// precondition for milestone 6. In a cluster the value is the same one
+// controller-runtime would have derived — the chart sets POD_NAMESPACE from
+// metadata.namespace and --operator-namespace defaults to it — so this moves
+// no lease and needs no new grant.
+func TestTheLeaderElectionLeaseLandsInTheOperatorNamespace(t *testing.T) {
+	opts := managerOptions(managerFlags{operatorNamespace: "spawnery-system"})
+	if opts.LeaderElectionNamespace != "spawnery-system" {
+		t.Errorf("LeaderElectionNamespace = %q, want the operator's own namespace. Empty is "+
+			"what makes a local run fail at startup: controller-runtime then looks for a "+
+			"ServiceAccount mount that only exists in a pod",
+			opts.LeaderElectionNamespace)
+	}
+
+	// --namespace is a different question and must not be confused with it: it
+	// narrows what the cache watches, not where the lock lives.
+	scoped := managerOptions(managerFlags{operatorNamespace: "spawnery-system", watchNamespace: "minecraft"})
+	if scoped.LeaderElectionNamespace != "spawnery-system" {
+		t.Errorf("LeaderElectionNamespace = %q with --namespace set, want the operator's own",
+			scoped.LeaderElectionNamespace)
+	}
+	if _, ok := scoped.Cache.DefaultNamespaces["minecraft"]; !ok {
+		t.Errorf("cache namespaces = %v, want minecraft; --namespace stopped reaching the cache",
+			scoped.Cache.DefaultNamespaces)
+	}
+	if len(opts.Cache.DefaultNamespaces) != 0 {
+		t.Errorf("cache namespaces = %v with no --namespace, want the whole cluster",
+			opts.Cache.DefaultNamespaces)
+	}
+}

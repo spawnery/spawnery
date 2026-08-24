@@ -834,6 +834,12 @@ systemd-run --scope --user --property=Delegate=yes \
   nix develop -c kind load docker-image ghcr.io/spawnery/paper:26.2-0.2.0 --name spawnery-dev
 nix develop -c kubectl apply -f config/crd/bases
 nix develop -c kubectl apply -f config/samples/network.yaml
+# --leader-elect=false is no longer needed to *start* -- the lease goes in
+# --operator-namespace since 2026-08-24, so a local run no longer looks for a
+# ServiceAccount mount it does not have. It is still what you want here: with
+# leader election on, a local run contends for the same lease as an operator
+# already installed in that namespace and waits out its lease before doing
+# anything.
 nix develop -c go run ./cmd/spawnery-operator --leader-elect=false --operator-namespace minecraft &
 
 # Rootless Podman only. With a real Docker daemon, skip this and use
