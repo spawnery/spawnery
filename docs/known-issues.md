@@ -355,24 +355,6 @@ entry was actually worried about, and it fails the same three.
 Unifying the two remains the thing nobody has done, and this does not do it. It
 makes the divergence loud instead of silent, which is the cheaper half.
 
-**`TestConfigPathsAgreeWithRender` pins three of the four path constants
-`internal/podspec` and `internal/render` each name independently, not all
-four.** The independence is deliberate — `podspec` must stay free of a
-dependency on `internal/render` so building a pod spec never touches the
-filesystem — and the test exists precisely because the two sides can only
-agree by construction, not by sharing code. It asserts `configOverlayDir ==
-render.OverlayDir`, `configSecretFile == render.SecretFile` and
-`ConfigMountPath == render.ConfigDir`, but never `podspec.ConfigValuesKey
-== render.ValuesFile`; the test's own doc comment still says "the three
-places" where there are four literal pairs today. Both constants happen to
-be `"config.yaml"` right now, so nothing is broken. A divergence here would
-fail loudly — `spawnery-config` would refuse to start reading
-`/etc/spawnery` with `config.yaml: not found` — rather than silently, which
-is why this is a gap and not a hole; it is the same class of duplication as
-`configOverlayDir`, whose divergence the test's own comment already
-documents as silent. Closing it is a one-line addition to the existing
-test.
-
 ## From milestone 3c (the Velocity agent)
 
 Design `2026-08-11-velocity-agent-design.md` §11 named five of these before
