@@ -28,48 +28,6 @@ that share immediately. Neither `ServerGroup` nor `Network` is required to set
 `resources`, and no CEL rule demands it; the sample manifest sets 2Gi and
 nothing makes anyone else do so.
 
-**`fsGroup` was missing — closed in 5a, before the first persistent server
-shipped.** For ephemeral groups this never bit: the kubelet creates an
-`emptyDir` world-writable, so uid 10001 writes into `/data` fine. A PVC
-arrives owned by root, and uid 10001 does not. This entry tracked the gap
-from milestone 2b, when only ephemeral groups existed and the risk was
-theoretical, through milestone 5a, the first milestone that could create a
-persistent server — the fix landed inside 5a rather than after it, so no
-persistent server has ever shipped without it.
-
-`BuildServerPod`'s `PodSecurityContext` (`internal/podspec/server.go`) now
-sets `FSGroup` to `10001` — `nix/oci-common.nix`'s `uid` and `gid` for the
-image, both the same value — and `FSGroupChangePolicy` to
-`OnRootMismatch` rather than the kubelet's own default of `Always`: `Always`
-walks and `chown`s the entire volume on every pod start, a real cost against
-a large Minecraft world, where `OnRootMismatch` pays that cost only when the
-volume's top-level directory ownership doesn't already match, which is
-precisely the case a freshly bound, root-owned PVC starts in. It is set for
-every server pod, ephemeral groups included, rather than only persistent
-ones: one `PodSecurityContext` shape for both group types is one fewer thing
-to keep in sync, and the kubelet's ownership check costs nothing extra
-against an empty, freshly created `emptyDir`.
-
-What this closes: on a storage class that hands back a claim owned by root at
-a narrower mode than world-writable — most CSI drivers backing a real cloud
-volume — uid 10001 can now write into `/data`, where before this fix it could
-not, and Paper would fail to start with nothing on the `Server` object saying
-why beyond a generic startup-deadline failure.
-
-What this does not close, and cannot from `internal/podspec` alone:
-`envtest` runs no kubelet, so nothing at that layer observes the ownership
-change actually happening — `internal/podspec/server_test.go`'s assertions
-confirm only that the pod spec asks for it, which is as much as that layer
-can ever show. Confirming the chown itself takes a real cluster and a
-storage class that does not already hand back a world-writable directory:
-`kind`'s default local-path provisioner runs `mkdir -m 0777 -p "$VOL_DIR"`
-when it provisions a volume (verified against
-`rancher/local-path-provisioner`'s own `local-path-storage.yaml`), which
-means a `kind` cluster can never exercise this fix — the directory it hands
-back is already writable by any uid regardless of `fsGroup`. That
-verification has not happened yet and belongs to whichever run first tries
-this against a storage class that does not do that.
-
 **Following Paper upstream is manual.** A new build means new hashes in
 `nix/paper.nix`, by hand, including the Mojang hash out of the new jar's
 `META-INF/download-context`. The automated image pipeline is project 3 in the
@@ -114,7 +72,6 @@ CI half of this: `ci.yml`'s `e2e` job runs `make e2e` on a GitHub runner,
 which has a real Docker daemon and needs none of the above. What the entry
 still says is about this machine and machines like it — the local flow needs
 kind that way, and the README documents it.
-
 
 ## From milestone 2c (the Paper agent)
 
@@ -2416,7 +2373,6 @@ second one: the first has no per-resource label, and the second stood at 38,607
 across every client on the cluster. See `docs/runbook-milestone-6-rollout.md`,
 scenario 7.
 
-
 **The E2E cluster is a single node, so a whole class of behaviour is
 untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
 single-node topology. Nothing in the run can reach node drain and its taint
@@ -2827,23 +2783,6 @@ dropping a live entry.
 - The e2e scenario's owner-reference check asserts only `len(...) == 1`, not
   the referenced Kind, Name or UID. The unit test asserts all of them; the
   cluster-level one only counts.
-- The manifest test's `podSelector` match loop validates only the keys the
-  policy declares, so a selector narrowed to one of the two operator labels
-  would still pass. *Closed by 6b's final fix wave*, together with the entry
-  below: the same test now compares the policy's selector to
-  `podspec.OperatorPodLabels()` by length as well as by key.
-- Nothing ties `podspec.OperatorPodLabels()`'s literal value to
-  `config/deploy/deployment.yaml`'s actual pod labels — the per-`Network`
-  policy's egress peer uses the former and the manifest test compares against
-  the latter. Pre-existing, and now load-bearing in a second place. *Closed by
-  6b's final fix wave.* Renaming the Deployment's pod labels, narrowing the
-  manifest's selector and changing `OperatorPodLabels()` are each red now.
-- `config/deploy/networkpolicy.yaml`'s `policyTypes` was never asserted, in a
-  file where adding `Egress` with no egress rules default-denies the operator's
-  own outbound traffic, so wherever a CNI enforces it cannot reach the API
-  server. *Closed by
-  6b's final fix wave*, with the guard the per-`Network` policy has carried
-  since Task 1.
 - `intstr.IntOrString.IntValue()` discards its `Atoi` error and returns 0 for a
   named port, so a hypothetical `port: metrics` in the peerless rule records as
   0. It fails safe — 0 is never a declared port, so the reverse check rejects
@@ -2889,19 +2828,6 @@ dropping a live entry.
   consulted on every request; what it costs is that the seam has to be tested
   deliberately, which
   `TestTheRateLimitKeysOnThePodRatherThanTheConnection` now does.
-- **`make test` runs no `-race`**, and 6b is the milestone that added two
-  mutex-guarded, concurrently-used types to the operator (`ReviewCache`,
-  `PeerLimiter`). Both were run under `-race` by hand during review, and the
-  cache was additionally hammered with 50 concurrent goroutines in a throwaway
-  test that is not in the tree; neither is a standing check, and the `Makefile`
-  has no `-race` anywhere in it. *Closed by 6b's final fix wave:* `make test`
-  now passes `-race`, on the target everybody already runs rather than in a
-  second one beside it, since an unrun check is indistinguishable from an
-  absent one. Cost measured on this suite: 89.8s to 109.2s wall, because the
-  run is dominated by envtest control-plane startup rather than by anything the
-  detector instruments. It is not a substitute for reasoning about
-  concurrency — see the rate-limit key entry above, which `-race` would never
-  have found.
 - `newAuthFixture` (`internal/grpcauth/auth_envtest_test.go`) wires neither the
   cache nor the limiter, which is legal because both types' methods are
   nil-safe — and it means the package's existing envtest suite exercises the
@@ -3127,15 +3053,14 @@ normally, and only forwarding-secret rotation detection breaks, silently,
 for that namespace. `charts/spawnery/README.md` states the narrower,
 grep-verified consequence.
 
-**No `helm upgrade` has run anywhere in this milestone. — CLOSED 2026-08-20,
-and the upgrade half failed the first time it mattered.** The four CRDs sit in
-`charts/spawnery/templates/` with `helm.sh/resource-policy: keep`, so that an
-upgrade would carry a CRD schema change through and an `uninstall` would not
-destroy every custom resource in the cluster. Only the second half had been
-observed.
+**`v0.1.1` is a release whose chart no cluster can receive, and a tag cannot
+be moved.** The four CRDs sit in `charts/spawnery/templates/` with
+`helm.sh/resource-policy: keep`, so an upgrade carries a CRD schema change
+through and an `uninstall` does not destroy every custom resource in the
+cluster. The uninstall half was the half that had been observed; the upgrade
+half failed the first time it mattered, and that failure is the useful one.
 
-The first half has now been observed twice, in both directions, and the
-failure is the useful one. `v0.1.1` added a fourth `expose` strategy to the
+`v0.1.1` added a fourth `expose` strategy to the
 `ProxyGroup` CRD's enum. The upgrade ran, the operator's image moved — and the
 cluster's CRD never learned the new value. Flux names a packaged chart after
 `Chart.yaml`'s `version`, that number had stayed at `0.1.0`, so the artifact
@@ -3151,8 +3076,7 @@ Two guards were added rather than a note: `internal/rbacaudit`'s
 `values.yaml`'s tag to `flake.nix`'s `operatorVersion`, and `release.yml`
 refuses a tag whose `charts/` differ from the previous tag's while
 `Chart.yaml`'s version does not — simulated against `v0.1.1` in a worktree,
-where it exits 1. **`v0.1.1` remains a release whose chart no cluster can
-receive**; a tag cannot be moved.
+where it exits 1. Neither reaches back: the tag stands as it was published.
 
 **`TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` flaked once.**
 `internal/controller/server_controller_test.go`. It failed once during
@@ -3346,30 +3270,17 @@ line; nothing retries it and nothing on the reconciled object says an event
 was lost. Measured directly against envtest's real API server: 512
 em-dashes is 512 *characters* and 1536 *bytes*, and is refused, despite the
 API server's own error text saying "characters" — a rune-counting helper
-would have been the wrong fix. Five sites build their note from text this
+would have been the wrong fix. Six sites build their note from text this
 operator did not write — an admission refusal, a scheduler explanation, a
-divergence list, a bootstrap error, a secret-resolution message — and the
+divergence list, a bootstrap error, a secret-resolution message and a CSI
+driver's resize error — and the
 sharpest case is the one milestone 6c built on purpose: a PodSecurity
 `restricted` refusal is exactly the kind of API server text that runs past 1
 KB, and before this fix it would have been dropped from `kubectl get
 events` entirely while the `Degraded` condition (which allows 32 KB) kept
 the full text. `internal/controller/events.go`'s `eventNote` helper now
 formats first, truncates on a rune boundary, and appends a marker pointing
-at the condition for the untruncated text; applied at those five sites.
-**A sixth site of the same shape. — FIXED in the same milestone; this heading said otherwise for a day.**
-`internal/controller/servergroup_controller.go:437` builds its note from
-`resize.Message`, which traces through `storageResizeCondition` →
-`worst.ResizeError` → `resizeConditionError` (`server_controller.go:471`) to
-a `PersistentVolumeClaimControllerResizeError`/`NodeResizeError` condition
-message an external CSI driver writes — text this operator does not
-control, structurally identical to the PodSecurity case that motivated the
-fix, and open.
-
-*Closed by this milestone's final fix wave*, with the one line the paragraph
-above predicted: the site now passes `eventNote("%s", resize.Message)`, the
-same shape as its sibling at `proxygroup_controller.go:1130`. That is all
-six, and the review that found it confirmed independently that there is no
-seventh.
+at the condition for the untruncated text; applied at all six.
 
 **What is still not covered anywhere, and is now at least recorded: the
 `action` the events API takes at all twenty-three call sites.**
@@ -3426,17 +3337,28 @@ ever exercises the podman path again. CI proves Docker; the author's machine
 proves podman; neither proves the other, and a change that only breaks under
 one container runtime can now sit green in CI indefinitely.
 
-**Two workflow paths exist only on paper. — CLOSED 2026-08-20.** Both have
-now run in the shape that ships.
+**The nightly's red path has never been driven.** Two workflow paths once
+existed only on paper here, and both have since run in the shape that ships —
+including the `schedule` trigger, which this entry carried as a residue for
+four days and which has now fired on its own on four consecutive nights,
+2026-08-21 through 2026-08-24, on `master`. What has not run is the issue a
+failure opens.
+
+`9a25874` gave `nightly.yml` an `if: failure()` step that opens or edits a
+`nightly-red` issue, an `if: success()` step that closes it, and
+`hack/require-no-red-nightly.sh`, which refuses a release while one stands.
+The one red nightly this project has had was run 32550359170 on 2026-08-22 —
+the day before that step landed. So the opening path has never executed, the
+closing path has only ever run against a repository with no such issue, and
+the release gate has only ever measured an absence. That gate is the one where
+absence means *permission* rather than refusal — so the branch nothing has
+exercised is the branch that would stop a release.
 
 `nightly.yml` was driven once before the merge, but not in its merged shape: it
 needed a temporary `pull_request:` trigger, because GitHub will not run
 `workflow_dispatch` on a workflow that has never reached the default branch,
 and that trigger was removed before merging. Run 32350280041 is the merged
-file, dispatched from `master`: `image-repro: success`. The `schedule` trigger
-has still never been observed firing on its own — it is the same file and the
-same job, so this is a small residue rather than an open question, but it is
-not the same as having seen it.
+file, dispatched from `master`: `image-repro: success`.
 
 `release.yml` has now run four times: once dispatched with `DRY_RUN=1` before
 any tag existed, which is what that trigger is for, and three times on real
@@ -4068,26 +3990,3 @@ intentional — the following points each concern only one of the two halves.
   check belongs to the loop. The API server catches both, but as a rejected pod
   create that reaches a user as a `Degraded` condition quoting an apimachinery
   message about an index in an array.
-- **`make -j image-test` can load the wrong image.** `image` and
-  `velocity-image` (`Makefile`) both run `nix build` with no `--out-link`, so
-  both land in the same default `./result` symlink, and `image-load` /
-  `velocity-image-load` each read `< result` right after their own build.
-  Plain `make image-test` is safe because `make` orders the two prerequisites
-  left to right, but `image-test: image-load velocity-image-load` is what
-  makes both reachable from one command, and a parallel `make -jN` is free to
-  run the two `nix build` invocations at the same time — the two `load`
-  steps that follow can then each read whichever build most recently swapped
-  the shared symlink, up to a half-written one mid-swap. `nix build
-  --out-link` with two distinct names (e.g. `result-paper` and
-  `result-velocity`) closes it; nothing does that today.
-
-  *Closed by milestone 6a, with the fix this entry named.* `image` builds to
-  `result-paper`, `velocity-image` to `result-velocity` and the new
-  `operator-image` to `result-operator`, each `*-load` target reading its own
-  link (`Makefile`). The race is closed: no two targets that a parallel `make
-  -jN` can run at the same time write the same symlink any more, so the
-  left-to-right ordering that made plain `make image-test` safe is no longer
-  what makes it correct, and a third image did not reopen it. `./result`
-  itself is not gone from the tree — `make agent` still runs `nix build
-  .#agents` with no `--out-link` — it is only no longer shared between two
-  builds one command can start together.
