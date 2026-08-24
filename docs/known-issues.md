@@ -3991,13 +3991,6 @@ does not bring that hash along; it has to be updated separately for Darwin, or
 the two development environments run different `kube-apiserver` versions against
 the same suite with nothing indicating it.
 
-## On the RBAC audit (`internal/rbacaudit`)
-
-The audit checks the ClusterRole and the namespace-local Role in two directions:
-one file based against the hand-maintained table, one through
-`SubjectAccessReview` against the real authorizer in envtest. The redundancy is
-intentional — the following points each concern only one of the two halves.
-
 ## Small things
 
 - `ObjectRef` is a non-pointer struct without `omitempty`, so a `required`

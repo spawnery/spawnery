@@ -20,6 +20,13 @@ limitations under the License.
 //
 // The table is maintained by hand on purpose. Deriving it from the kubebuilder
 // markers would only prove that the role grants what the role grants.
+//
+// Two independent checks stand on that table, and the redundancy is
+// deliberate: the file-based comparison in this package against the rendered
+// ClusterRole and Role, and the envtest suite beside it, which asks the real
+// authorizer the same questions through SubjectAccessReview. A rule this
+// package expands wrongly and a rule the authorizer reads differently are
+// separate mistakes, and neither check can see the other's.
 package rbacaudit
 
 import (
