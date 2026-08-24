@@ -971,3 +971,64 @@ func TestGroupConfigMapNameIsScopedByRoleAsWellAsGroup(t *testing.T) {
 		t.Errorf("server=%q proxy=%q, want both to still carry the group name", server, proxy)
 	}
 }
+
+// TestTwoUserMountsCannotCollideWithEachOther closes the last clause of the
+// mount item in docs/known-issues.md: "it still does not check for two user
+// mounts sharing a name — the API server catches that, but with a generic
+// message instead of a clear operator error."
+//
+// checkMountCollision takes one mount, so a collision between two of them is
+// structurally invisible to it; the check belongs to the loop. Both shapes are
+// caught by the API server as an invalid pod, which reaches a user as a
+// Degraded condition quoting an apimachinery message about an index in an
+// array — technically complete and unreadable.
+func TestTwoUserMountsCannotCollideWithEachOther(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mounts []spawneryv1alpha1.Mount
+		says   string
+	}{
+		{
+			name: "two mounts sharing a name",
+			mounts: []spawneryv1alpha1.Mount{
+				{Name: "extra", MountPath: "/data/plugins/a", ConfigMap: &corev1.ConfigMapVolumeSource{}},
+				{Name: "extra", MountPath: "/data/plugins/b", ConfigMap: &corev1.ConfigMapVolumeSource{}},
+			},
+			says: "declared twice",
+		},
+		{
+			name: "two mounts sharing a path",
+			mounts: []spawneryv1alpha1.Mount{
+				{Name: "one", MountPath: "/data/plugins/x", ConfigMap: &corev1.ConfigMapVolumeSource{}},
+				{Name: "two", MountPath: "/data/plugins/x", ConfigMap: &corev1.ConfigMapVolumeSource{}},
+			},
+			says: "already targets",
+		},
+		{
+			// The same path written two ways. checkMountCollision cleans before
+			// comparing against the reserved paths, so this loop has to as
+			// well or the two checks disagree about what one path is.
+			name: "the same path spelled differently",
+			mounts: []spawneryv1alpha1.Mount{
+				{Name: "one", MountPath: "/data/plugins/x", ConfigMap: &corev1.ConfigMapVolumeSource{}},
+				{Name: "two", MountPath: "/data/plugins/x/", ConfigMap: &corev1.ConfigMapVolumeSource{}},
+			},
+			says: "already targets",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			net, group := serverHashFixtures(t)
+			group.Spec.Mounts = tc.mounts
+			_, err := BuildServerPod(net, group, &spawneryv1alpha1.Server{
+				ObjectMeta: metav1.ObjectMeta{Name: "lobby-aaaa", Namespace: group.Namespace},
+			}, "spawnery.invalid:0")
+			if err == nil {
+				t.Fatal("the pod was built; the API server would refuse it later with a " +
+					"message about an index in an array")
+			}
+			if !strings.Contains(err.Error(), tc.says) {
+				t.Errorf("error = %q, want it to say %q", err, tc.says)
+			}
+		})
+	}
+}

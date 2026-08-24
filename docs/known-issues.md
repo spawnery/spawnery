@@ -4351,12 +4351,26 @@ intentional — the following points each concern only one of the two halves.
   nested underneath, **or an ancestor of it** (`checkMountCollision`). The
   asymmetry is intentional — mounting under `/data` is the documented way to add
   extra files, whereas mounting under or above the agent mount would shadow the
-  token the agent reads its identity from. It still does not check for two user
-  mounts sharing a name — the API server catches that, but with a generic
-  message instead of a clear operator error.
-- "Keep the oldest failure of the newest generation" does not carry when two
-  failures of one generation share a `creationTimestamp` (second resolution);
-  the tiebreak falls to the random suffix instead of `status.failedAt`.
+  token the agent reads its identity from. **Since 2026-08-24 it also refuses
+  two user mounts that collide with each other**, by name or by path —
+  including the same path spelled two ways, since the loop cleans before
+  comparing exactly as `checkMountCollision` does. `checkMountCollision` sees one mount at a time, so
+  a collision *between* two of them is structurally invisible to it and the
+  check belongs to the loop. The API server catches both, but as a rejected pod
+  create that reaches a user as a `Degraded` condition quoting an apimachinery
+  message about an index in an array.
+- **"Keep the oldest failure of the newest generation" did not carry when two
+  failures of one generation shared a `creationTimestamp`. — CLOSED
+  2026-08-24.** A `creationTimestamp` has second resolution, and the tiebreak
+  fell to the name — which ends in a random suffix, so which corpse survived
+  to be diagnosed from was a coin toss. Sharing a second is the ordinary case
+  rather than the exotic one: a group whose replicas all fail on the same
+  broken image creates them together and they fail together, so the rule
+  `selectFailedForPruning` documents held about half the time.
+  `status.failedAt` is now the tiebreak, which is the quantity the rule is
+  actually about. The name remains the last resort, because the sort still has
+  to be total. A mutation removing the new stage prunes the *earlier* failure
+  and keeps the later one.
 - **The status of a rejected `Network` froze and kept reporting old numbers,
   and the ordinary case was worse than freezing. — CLOSED 2026-08-24.** The
   refusal returned before the counting, so a Network created second — refused

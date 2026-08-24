@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -508,5 +509,40 @@ func TestClampReport(t *testing.T) {
 					gotPlayers, gotSlots, tc.wantPlayers, tc.wantSlots)
 			}
 		})
+	}
+}
+
+// TestPruningKeepsTheFirstFailureWhenTwoShareASecond closes the tiebreak item
+// in docs/known-issues.md: "keep the oldest failure of the newest generation
+// does not carry when two failures of one generation share a creationTimestamp
+// (second resolution); the tiebreak falls to the random suffix instead of
+// status.failedAt."
+//
+// Sharing a second is the ordinary case rather than the exotic one: a group
+// whose replicas all fail on the same broken image creates them together and
+// they fail together. With the name as tiebreak, which corpse survived to be
+// diagnosed from was decided by a random suffix — so the rule this selector
+// documents held only by luck, half the time.
+func TestPruningKeepsTheFirstFailureWhenTwoShareASecond(t *testing.T) {
+	sameSecond := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
+
+	// zzz failed first; aaa failed a moment later. Named so that a name-based
+	// tiebreak keeps the wrong one, which is what makes this test able to fail.
+	views := []ServerView{
+		{
+			Name: "lobby-aaa", Phase: phase.Failed, Generation: 7,
+			CreatedAt: sameSecond, FailedAt: sameSecond.Add(30 * time.Second),
+		},
+		{
+			Name: "lobby-zzz", Phase: phase.Failed, Generation: 7,
+			CreatedAt: sameSecond, FailedAt: sameSecond.Add(5 * time.Second),
+		},
+	}
+
+	pruned := selectFailedForPruning(views, maxRetainedFailures)
+	if !slices.Equal(pruned, []string{"lobby-aaa"}) {
+		t.Errorf("pruned = %v, want [lobby-aaa]: lobby-zzz failed twenty-five seconds "+
+			"earlier and is the one that says what broke. Keeping lobby-aaa means the "+
+			"tiebreak is the random suffix rather than status.failedAt", pruned)
 	}
 }

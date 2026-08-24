@@ -405,6 +405,21 @@ func selectFailedForPruning(views []ServerView, keep int) []string {
 		if !failed[i].CreatedAt.Equal(failed[j].CreatedAt) {
 			return failed[i].CreatedAt.Before(failed[j].CreatedAt)
 		}
+		// A creationTimestamp has second resolution, so two servers created in
+		// the same second are indistinguishable by it -- which is the ordinary
+		// case for a group whose replicas all fail at once. Without this the
+		// tiebreak fell to the name, and a name ends in a random suffix, so
+		// which corpse survived to be diagnosed from was a coin toss rather
+		// than the rule this function documents. failedAt is the quantity the
+		// rule is actually about: the first failure after a change is the one
+		// that says what broke.
+		if !failed[i].FailedAt.Equal(failed[j].FailedAt) {
+			return failed[i].FailedAt.Before(failed[j].FailedAt)
+		}
+		// Last resort, and now genuinely a last resort: two servers of one
+		// generation created in the same second and failing at the same instant
+		// have nothing left to tell them apart, and the sort still has to be
+		// total or the result depends on map iteration order.
 		return failed[i].Name < failed[j].Name
 	})
 

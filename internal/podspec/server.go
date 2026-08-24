@@ -303,10 +303,31 @@ func BuildServerPod(
 		})
 	}
 
+	// checkMountCollision sees one mount at a time, so a collision *between*
+	// two user mounts is structurally invisible to it. The API server catches
+	// both of these -- duplicate volume names and duplicate mount paths are
+	// invalid -- but it catches them as a rejected pod create, which reaches
+	// the user as a Degraded condition carrying an apimachinery validation
+	// message about an index in an array. Refusing here names the mount and
+	// the reason, and does it before anything is sent.
+	seenNames := make(map[string]bool, len(group.Spec.Mounts))
+	seenPaths := make(map[string]bool, len(group.Spec.Mounts))
 	for _, m := range group.Spec.Mounts {
 		if err := checkMountCollision(m); err != nil {
 			return nil, err
 		}
+		if seenNames[m.Name] {
+			return nil, fmt.Errorf("mount %q is declared twice; two mounts of one group cannot share a name", m.Name)
+		}
+		seenNames[m.Name] = true
+		// Cleaned before comparing, so "/plugins" and "/plugins/" are one
+		// path -- the same normalisation checkMountCollision applies before
+		// comparing against the reserved paths.
+		clean := path.Clean(m.MountPath)
+		if seenPaths[clean] {
+			return nil, fmt.Errorf("mount %q targets %q, which another mount of this group already targets; one path can hold one mount", m.Name, m.MountPath)
+		}
+		seenPaths[clean] = true
 		volumes = append(volumes, corev1.Volume{
 			Name: m.Name,
 			VolumeSource: corev1.VolumeSource{
