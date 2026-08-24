@@ -66,6 +66,12 @@ const ReasonNamespaceNotBootstrapped = "NamespaceNotBootstrapped"
 // Server does not control; this one is about a pod its own predecessor left.
 const ReasonPodNameTerminating = "PodNameTerminating"
 
+// ReasonServerPodRejected marks a Server whose pod the API server refused. It
+// is the Server-level twin of ReasonProxyPodRejected on a ProxyGroup, and it
+// exists for the same reason: the remedy is at the namespace's policy or
+// quota, not at anything this operator can retry its way out of.
+const ReasonServerPodRejected = "ServerPodRejected"
+
 // defaultDrainTimeoutSeconds and defaultFailedRetentionSeconds mirror the
 // kubebuilder defaults on ServerGroupSpec. They are what a Server falls back to
 // when its group is gone, so drain and cleanup keep sane timings.
@@ -342,25 +348,58 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		if err := r.Create(ctx, built); err != nil && !apierrors.IsAlreadyExists(err) {
-			return ctrl.Result{}, err
-		}
-		r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, "PodCreated", actionCreatePod,
-			"created pod %s", built.Name)
+		err = r.Create(ctx, built)
+		switch {
+		case err == nil, apierrors.IsAlreadyExists(err):
+			r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, "PodCreated", actionCreatePod,
+				"created pod %s", built.Name)
 
-		srv.Status.PodName = built.Name
-		now := metav1.NewTime(r.Clock())
-		srv.Status.StartedAt = &now
-		// A fresh pod has never been registered and carries no flap history.
-		srv.Status.WasRegistered = false
-		srv.Status.ReadinessLosses = 0
-		if srv.Status.Phase == "" {
-			srv.Status.Phase = string(phase.Pending)
-		}
-		if err := r.Status().Update(ctx, srv); err != nil {
+			srv.Status.PodName = built.Name
+			now := metav1.NewTime(r.Clock())
+			srv.Status.StartedAt = &now
+			// A fresh pod has never been registered and carries no flap history.
+			srv.Status.WasRegistered = false
+			srv.Status.ReadinessLosses = 0
+			if srv.Status.Phase == "" {
+				srv.Status.Phase = string(phase.Pending)
+			}
+			if err := r.Status().Update(ctx, srv); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{RequeueAfter: resyncInterval}, nil
+
+		case apierrors.IsForbidden(err), apierrors.IsInvalid(err):
+			// A create the API server refused is the Server's business and not
+			// only the log's, and this is the same branch
+			// proxygroup_controller.go takes one layer up for the same two
+			// error kinds: IsForbidden covers a Pod Security profile that
+			// forbids the pod's shape and an RBAC grant the operator does not
+			// have, IsInvalid a pod the API server rejects outright, a quota
+			// or a webhook among them.
+			//
+			// Returning the error alone left nothing on the object at all.
+			// status.podName stays empty, so the pod-lost path never applies;
+			// status.startedAt is only set beside a pod that exists, so
+			// StartupDeadlineReached can never fire; and the Server therefore
+			// sat in Pending with an empty condition and no event for as long
+			// as the refusal stood, while still counting against its group's
+			// replicas. That is the same silence the namespace-bootstrap
+			// branch above was given a condition for, arriving through the
+			// call one line further down.
+			//
+			// Falling through rather than returning: the tail writes the
+			// status, and the resync requeue there lets this recover by itself
+			// once the obstacle is gone.
+			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, ReasonServerPodRejected,
+				actionCreatePod, "%s",
+				eventNote("the API server refused this server's pod: %v", err))
+			setAccepted(srv, false, ReasonServerPodRejected,
+				fmt.Sprintf("the API server refused this server's pod: %v; "+
+					"the remedy is the namespace's policy or quota, not a retry", err))
+
+		default:
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: resyncInterval}, nil
 	}
 
 	in := r.collectInputs(srv, group, pod, podFound)

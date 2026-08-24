@@ -2363,3 +2363,85 @@ func TestDeletingAPersistentServerLeavesItsClaim(t *testing.T) {
 		t.Fatal("the claim went with the server; the world is gone")
 	}
 }
+
+// refusingPodCreator refuses to create pods and creates everything else
+// normally. The reconcile under test also writes a CA ConfigMap, two
+// ServiceAccounts and — for a persistent group — a PVC, and a client that
+// refused all of those would stop the pass long before it reached the pod.
+type refusingPodCreator struct {
+	client.Client
+	err error
+}
+
+func (r refusingPodCreator) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*corev1.Pod); ok {
+		return r.err
+	}
+	return r.Client.Create(ctx, obj, opts...)
+}
+
+// A pod the API server refuses is the shape milestone 4's last unmet
+// precondition described: a Server that never got a pod, sitting in Pending
+// and occupying its group's slot.
+//
+// Returning the error alone left nothing on the object. status.podName stays
+// empty, so the pod-lost path never applies; status.startedAt is only written
+// beside a pod that exists, so StartupDeadlineReached can never fire; and the
+// Server therefore sat there for as long as the refusal stood with a log line
+// as its only trace — the same silence TestReconcileReportsANamespaceItCannot
+// Bootstrap closed for the branch one call earlier.
+func TestReconcileReportsAPodTheAPIServerRefused(t *testing.T) {
+	f := newFixture(t)
+	rec := newRecorder()
+	f.reconc.Recorder = rec
+	f.reconc.Client = refusingPodCreator{
+		Client: f.c,
+		err: apierrors.NewForbidden(
+			schema.GroupResource{Resource: "pods"}, "lobby-r4t9",
+			errors.New(`violates PodSecurity "restricted:latest"`)),
+	}
+
+	f.createServer("lobby-r4t9")
+	// Fatals if the reconcile returns an error, which is half the point: a
+	// refusal the namespace's policy causes is not something to retry with
+	// backoff and no report.
+	f.reconcile("lobby-r4t9")
+
+	if _, ok := f.pod("lobby-r4t9"); ok {
+		t.Fatal("a pod exists although the client refused to create one")
+	}
+	got := f.server("lobby-r4t9")
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionFalse, ReasonServerPodRejected) {
+		t.Errorf("conditions = %+v, want Accepted=False with reason %s — a Server whose pod "+
+			"the API server refuses has nothing else that would ever say so",
+			got.Status.Conditions, ReasonServerPodRejected)
+	}
+	if got.Status.PodName != "" {
+		t.Errorf("status.podName = %q after a refused create, want it empty", got.Status.PodName)
+	}
+
+	recorded := drainEvents(rec)
+	found := false
+	for _, ev := range recorded {
+		if strings.Contains(ev, ReasonServerPodRejected) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("events = %q, want one naming %s", recorded, ReasonServerPodRejected)
+	}
+
+	// A report, not a verdict: the resync requeue recovers on its own once the
+	// namespace's policy stops refusing.
+	f.reconc.Client = f.c
+	f.reconcile("lobby-r4t9")
+	if _, ok := f.pod("lobby-r4t9"); !ok {
+		t.Fatal("no pod after the refusal was lifted; the condition became a dead end")
+	}
+	if got := f.server("lobby-r4t9"); !meta.IsStatusConditionTrue(
+		got.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
+		t.Errorf("Accepted = %+v once the pod was created, want True",
+			meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted))
+	}
+}
