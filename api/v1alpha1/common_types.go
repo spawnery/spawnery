@@ -169,6 +169,15 @@ const (
 // Event reasons. Separate from the condition reasons above because these name
 // a transition rather than a state: both are emitted on entering a condition,
 // never once per resync.
+//
+// "On entering" is a property of the write, not only of the emit, and until
+// 2026-08-24 it held only usually. Whether a pass is an entry is decided by the
+// condition still in etcd, so emitting before the status update meant that
+// anything failing in between — a pod List, a conflict, a refused write — left
+// the old status behind and the retry announced the same transition again.
+// NetworkReconciler now holds both events until the update lands, so a pass
+// whose write fails announces nothing and the retry is entitled to announce it
+// then. That is what makes this comment true rather than usual.
 const (
 	// EventForwardingSecretRotated fires when status.forwardingSecretHash
 	// moves from a non-empty value to a different one. Empty to a value is

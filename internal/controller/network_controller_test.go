@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"errors"
 	"slices"
 	"sort"
 	"strings"
@@ -947,5 +949,80 @@ func TestARefusedNetworkStillCountsWhatPointsAtIt(t *testing.T) {
 	if got.Status.ProxyGroups != 1 {
 		t.Errorf("status.proxyGroups = %d on a refused Network, want 1. The refusal is not a "+
 			"reason to stop saying how much is waiting behind it", got.Status.ProxyGroups)
+	}
+}
+
+// failingStatusWriter is a client whose status writes always fail. It exists
+// for one property that cannot be observed any other way: an event must not be
+// emitted when the write recording what it announces did not land.
+type failingStatusWriter struct {
+	client.Client
+	err error
+}
+
+func (f failingStatusWriter) Status() client.SubResourceWriter {
+	return failingSubResource{SubResourceWriter: f.Client.Status(), err: f.err}
+}
+
+type failingSubResource struct {
+	client.SubResourceWriter
+	err error
+}
+
+func (f failingSubResource) Update(context.Context, client.Object, ...client.SubResourceUpdateOption) error {
+	return f.err
+}
+
+// TestARotationIsAnnouncedOnlyOnceTheStatusWriteLands closes the entry in
+// docs/known-issues.md: `"exactly one event per transition" holds only if the
+// status write lands`.
+//
+// Both forwarding-secret events fire on *entering* a state, and whether a pass
+// is an entry is decided by the condition still in etcd. Emitting before the
+// write meant anything failing in between — the pod List that returns on error,
+// a conflict, a refused write — left the old status behind, so the retry found
+// the same transition and announced it again. A rotation could be reported
+// twice, or without end under a persistently failing update, while three places
+// stated the property unconditionally: the runbook's §5 step 3, the event-reason
+// comments, and design §4.4.
+func TestARotationIsAnnouncedOnlyOnceTheStatusWriteLands(t *testing.T) {
+	f := newFixture(t)
+	r, rec := networkReconcilerWithEvents(f)
+
+	// A rotation to announce: a hash on the status that the secret no longer
+	// matches.
+	putForwardingSecret(t, f, "first-value")
+	f.reconcileNetwork(t, r, f.network.Name)
+	drainEvents(rec)
+	putForwardingSecret(t, f, "second-value")
+
+	// The write cannot land. The reconcile fails, and nothing may be announced:
+	// the state the event describes was not recorded, so the retry will find
+	// the same transition and is entitled to announce it then.
+	broken := *r
+	broken.Client = failingStatusWriter{Client: f.c, err: errors.New("no status writes today")}
+	if _, err := broken.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: f.network.Name, Namespace: f.ns},
+	}); err == nil {
+		t.Fatal("the reconcile succeeded with a client that refuses status writes")
+	}
+	if ev := drainEvents(rec); len(ev) != 0 {
+		t.Errorf("events = %v after a failed status write, want none. Announcing a rotation "+
+			"the status does not record is how the same rotation gets announced again on "+
+			"every retry", ev)
+	}
+
+	// The write lands: announced, once.
+	f.reconcileNetwork(t, r, f.network.Name)
+	ev := drainEvents(rec)
+	if !containsEvent(ev, spawneryv1alpha1.EventForwardingSecretRotated) {
+		t.Fatalf("events = %v, want the rotation announced once the write landed", ev)
+	}
+
+	// And not again on the next pass, which is the property this is all for.
+	f.reconcileNetwork(t, r, f.network.Name)
+	if ev := drainEvents(rec); containsEvent(ev, spawneryv1alpha1.EventForwardingSecretRotated) {
+		t.Errorf("events = %v on a pass with nothing changed, want the rotation announced "+
+			"exactly once", ev)
 	}
 }

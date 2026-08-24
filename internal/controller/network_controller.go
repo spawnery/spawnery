@@ -116,19 +116,24 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		// this branch runs on every pass for as long as the duplicate stands,
 		// and an event per minute forever is not a report, it is noise that
 		// buries the one that mattered.
-		if !hasConditionReason(network.Status.Conditions,
-			spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonDuplicateNetwork) {
-			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
-				spawneryv1alpha1.ReasonDuplicateNetwork, actionSyncStatus, "%s",
-				eventNote("%s", message))
-		}
+		entering := !hasConditionReason(network.Status.Conditions,
+			spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonDuplicateNetwork)
 		meta.SetStatusCondition(&network.Status.Conditions, metav1.Condition{
 			Type:    spawneryv1alpha1.ConditionAccepted,
 			Status:  metav1.ConditionFalse,
 			Reason:  spawneryv1alpha1.ReasonDuplicateNetwork,
 			Message: message,
 		})
-		return ctrl.Result{RequeueAfter: time.Minute}, r.Status().Update(ctx, network)
+		if err := r.Status().Update(ctx, network); err != nil {
+			return ctrl.Result{}, err
+		}
+		// After the write, for the reason the announce slice below carries.
+		if entering {
+			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
+				spawneryv1alpha1.ReasonDuplicateNetwork, actionSyncStatus, "%s",
+				eventNote("%s", message))
+		}
+		return ctrl.Result{RequeueAfter: time.Minute}, nil
 	}
 
 	meta.SetStatusCondition(&network.Status.Conditions, metav1.Condition{
@@ -156,13 +161,34 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// The forwarding secret. This sits after the Accepted branch above returns,
 	// so a Network that does not own its namespace never reads a secret it does
 	// not manage.
+	// announce holds an event until the status write that records the state it
+	// announces has landed.
+	//
+	// Both of these fire on *entering* a state, and whether this pass is an
+	// entry is decided by the condition as it stands before SetStatusCondition
+	// below -- that is, by what is still in etcd. Emitting before the write
+	// meant that anything failing between the two -- the pod List that returns
+	// on error just below, a conflict on the update, a refused write -- left
+	// the old status in etcd, so the retry found the same transition and
+	// announced it again. A rotation could be reported twice, or without end
+	// under a persistently failing update, and three places state "exactly one
+	// event per transition" unconditionally: the runbook's §5 step 3, the
+	// event-reason comments in api/v1alpha1/common_types.go, and design §4.4.
+	//
+	// Holding them here makes the property true rather than usual. The cost is
+	// that a pass whose write fails announces nothing, which is the right way
+	// round: the event describes a state that was not recorded.
+	var announce []func()
+
 	read := readForwardingSecret(ctx, r.SecretReader, network)
 	if read.Hash != "" {
 		if previous := network.Status.ForwardingSecretHash; previous != "" && previous != read.Hash {
-			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
-				spawneryv1alpha1.EventForwardingSecretRotated, actionSyncStatus,
-				"the forwarding secret changed; roll the server groups first, then the proxy groups — see %s",
-				rotationRunbook)
+			announce = append(announce, func() {
+				r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
+					spawneryv1alpha1.EventForwardingSecretRotated, actionSyncStatus,
+					"the forwarding secret changed; roll the server groups first, then the proxy groups — see %s",
+					rotationRunbook)
+			})
 		}
 		// Only on a successful read: see NetworkStatus.ForwardingSecretHash.
 		network.Status.ForwardingSecretHash = read.Hash
@@ -172,9 +198,11 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if read.Reason == spawneryv1alpha1.ReasonSecretNotFound &&
 		!hasConditionReason(network.Status.Conditions,
 			spawneryv1alpha1.ConditionForwardingSecretResolved, read.Reason) {
-		r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
-			spawneryv1alpha1.EventForwardingSecretNotFound, actionSyncStatus, "%s",
-			eventNote("%s", read.Message))
+		announce = append(announce, func() {
+			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
+				spawneryv1alpha1.EventForwardingSecretNotFound, actionSyncStatus, "%s",
+				eventNote("%s", read.Message))
+		})
 	}
 	meta.SetStatusCondition(&network.Status.Conditions, resolvedCondition(read))
 
@@ -188,6 +216,9 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	if err := r.Status().Update(ctx, network); err != nil {
 		return ctrl.Result{}, err
+	}
+	for _, fire := range announce {
+		fire()
 	}
 
 	// The bootstrap runs after acceptance, after the policy, and last of all

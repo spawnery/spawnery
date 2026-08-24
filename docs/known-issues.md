@@ -2122,23 +2122,6 @@ directions of the comparison against `rbacaudit.RequiredNetworkNamespace` pass
 whether the rule names objects or not — adding `resourceNames` later will not
 be caught by a failing test, and neither would removing it again.
 
-**"Exactly one event per transition" holds only if the status write lands.**
-Both events are emitted before the status update that records the state they
-announce: the rotation event at
-`internal/controller/network_controller.go:126-131`, the not-found event at
-`:137-142`, and `Status().Update` at `:153`. Between them sits a pod `List`
-that returns on error (`:146-149`), and the update itself can conflict or fail.
-Any of those makes the reconcile retry with the old status still in etcd, and
-the retry finds the same transition and emits the event again. So a rotation
-can be announced twice, or more, under a persistently failing update. The
-property is stated unconditionally in three places — the runbook's §5 step 3
-(`docs/runbook-milestone-5c-secret-rotation.md:184`), the event-reason comments
-(`api/v1alpha1/common_types.go:124-138`) and design §4.4. The structural fix is
-to emit only after a successful update, which means holding the decision across
-the write and reshaping the tail of `Reconcile`; it is deliberately not in this
-milestone. In practice a duplicate `Warning` event on a Network is noise in a
-place an operator is already reading, not a wrong report.
-
 **The mis-stamp window is not confined to failed reads.** The two entries above
 document what a *failed* read does to the stamp; the successful path has a
 narrower version of the same gap, and nothing in the code or the runbook says
