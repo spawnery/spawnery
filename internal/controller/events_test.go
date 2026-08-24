@@ -14,7 +14,6 @@ import (
 	eventsv1 "k8s.io/api/events/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/tools/events"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -160,7 +159,7 @@ func TestTheRealAPIServerAcceptsATruncatedNoteAndRefusesAnUntruncatedOne(t *test
 // of the five the review named -- with a message far over the limit, and reads
 // what the recorder was actually handed.
 func TestAnUnschedulableProxyPodsEventStaysWithinTheNoteLimit(t *testing.T) {
-	rec := events.NewFakeRecorder(10)
+	rec := newRecorder()
 	r := &ProxyGroupReconciler{Recorder: rec}
 	group := &spawneryv1alpha1.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "gateway", Namespace: "spawnery-test"},
@@ -179,12 +178,11 @@ func TestAnUnschedulableProxyPodsEventStaysWithinTheNoteLimit(t *testing.T) {
 
 	r.reportBlockedProxies(group, pods)
 
-	var got string
-	select {
-	case got = <-rec.Events:
-	default:
+	recorded := drainEvents(rec)
+	if len(recorded) == 0 {
 		t.Fatal("no event was recorded")
 	}
+	got := recorded[0]
 	// FakeRecorder emits "<type> <reason> <note>", so the note is what follows
 	// the second space -- the part the API server length-checks.
 	prefix := "Warning ProxyPodBlocked "

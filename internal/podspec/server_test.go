@@ -532,7 +532,7 @@ func TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey(t *testing.T) 
 	}
 }
 
-// TestConfigPathsAgreeWithRender guards the three places podspec and
+// TestConfigPathsAgreeWithRender guards the four places podspec and
 // internal/render each name the same path or file independently — by design,
 // per the comments on configSecretFile and configOverlayDir: podspec must
 // stay free of a dependency on internal/render so that building a pod spec
@@ -551,6 +551,15 @@ func TestConfigPathsAgreeWithRender(t *testing.T) {
 	}
 	if ConfigMountPath != render.ConfigDir {
 		t.Errorf("podspec.ConfigMountPath = %q, render.ConfigDir = %q, want them equal", ConfigMountPath, render.ConfigDir)
+	}
+	// The fourth pair, which this test's own doc comment used to say did not
+	// exist by calling itself "the three places". Its divergence is the loud
+	// kind rather than the silent one -- spawnery-config refuses to start with
+	// `config.yaml: not found` instead of quietly dropping an override, which
+	// is why it went unnoticed -- but a pair that agrees only by construction
+	// is a pair this test exists to hold, whichever way it would fail.
+	if ConfigValuesKey != render.ValuesFile {
+		t.Errorf("podspec.ConfigValuesKey = %q, render.ValuesFile = %q, want them equal", ConfigValuesKey, render.ValuesFile)
 	}
 }
 

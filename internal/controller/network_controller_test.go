@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -45,8 +44,8 @@ func networkReconciler(f *fixture) *NetworkReconciler {
 // networkReconcilerWithEvents hands back the recorder too, which the forwarding
 // secret tests need: the events are emitted on entering a state, so proving
 // "exactly once" means reading the channel rather than the object.
-func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *events.FakeRecorder) {
-	rec := events.NewFakeRecorder(100)
+func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *nonBlockingRecorder) {
+	rec := newRecorder()
 	return &NetworkReconciler{
 		Client:   f.c,
 		Scheme:   f.reconc.Scheme,

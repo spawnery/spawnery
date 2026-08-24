@@ -19,6 +19,9 @@ package controller
 import (
 	"context"
 	"fmt"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
+	"k8s.io/klog/v2"
 	"os"
 	"slices"
 	"strings"
@@ -30,7 +33,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -217,7 +219,7 @@ func newFixture(t *testing.T) *fixture {
 		reconc: &ServerReconciler{
 			Client:               c,
 			Scheme:               testenv.Scheme(t),
-			Recorder:             events.NewFakeRecorder(100),
+			Recorder:             newRecorder(),
 			Agents:               agents,
 			Clock:                clock.Now,
 			StartupDeadline:      5 * time.Minute,
@@ -245,7 +247,7 @@ func newFixture(t *testing.T) *fixture {
 	netReconciler := &NetworkReconciler{
 		Client:       c,
 		Scheme:       testenv.Scheme(t),
-		Recorder:     events.NewFakeRecorder(100),
+		Recorder:     newRecorder(),
 		SecretReader: c,
 		Bootstrap:    bootstrap,
 	}
@@ -411,3 +413,41 @@ func (f *fixture) ensureNode(t *testing.T, name string, unschedulable bool) *cor
 	t.Cleanup(func() { _ = f.c.Delete(f.ctx, node) })
 	return node
 }
+
+// nonBlockingRecorder is events.FakeRecorder with the channel taken out.
+//
+// docs/known-issues.md records what the channel costs: FakeRecorder's buffer is
+// per call site rather than a package constant — this package had sites asking
+// for 10, 20 and 100 — and a reconciler that emits one event more than the
+// buffer holds does not drop it or error, it *blocks inside Eventf*. The test
+// then does not fail; it hangs, and the only symptom is the package's
+// ten-minute go test timeout with nothing in the output naming the recorder or
+// the channel. A mutant that should take a second to disprove looks like a
+// wedge instead.
+//
+// Milestone 4d worked around one instance of that with a drainRecorder helper
+// beside the test that hit it. The entry says the real fix belongs in the
+// fixture, and this is it: a slice under a mutex has no buffer to overrun, so
+// no test in this package has to budget against one and no future event-heavy
+// test can meet the wall unwarned.
+//
+// The format string is copied from events.FakeRecorder deliberately, dropping
+// `action` exactly as it does, so every existing assertion about an event's
+// text keeps meaning what it meant.
+type nonBlockingRecorder struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func newRecorder() *nonBlockingRecorder { return &nonBlockingRecorder{} }
+
+func (r *nonBlockingRecorder) Eventf(
+	regarding runtime.Object, related runtime.Object,
+	eventtype, reason, action, note string, args ...interface{},
+) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.events = append(r.events, fmt.Sprintf(eventtype+" "+reason+" "+note, args...))
+}
+
+func (r *nonBlockingRecorder) WithLogger(klog.Logger) events.EventRecorderLogger { return r }

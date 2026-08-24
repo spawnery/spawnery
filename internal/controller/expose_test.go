@@ -27,7 +27,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -768,7 +767,7 @@ func TestAGroupWithItsPodsIsNotDegraded(t *testing.T) {
 func TestARecoveredProxyGroupFiresAnEventOnlyOnTheFlank(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
 		g.Spec.Expose = spawneryv1alpha1.ExposeSpec{

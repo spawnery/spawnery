@@ -4465,30 +4465,35 @@ intentional — the following points each concern only one of the two halves.
   itself is not gone from the tree — `make agent` still runs `nix build
   .#agents` with no `--out-link` — it is only no longer shared between two
   builds one command can start together.
-- **`record.FakeRecorder`'s buffered channel blocks its writer once full.**
-  Most fixtures in `internal/controller` build their recorder with
-  `record.NewFakeRecorder(100)`, but the buffer is per call site and not a
-  package-wide constant. Counted across the package's test files: seventeen
-  call sites ask for 100, three ask for **10**, and one — in
-  `server_controller_test.go` — asks for 20. The
-  channel holds exactly as many events as its own call site asked for,
-  and a reconciler that emits one more blocks inside the `Send` call instead of
-  dropping it or erroring. Budget against the buffer the test in front of you
-  actually built, not against 100. A test that walks enough lifecycle to cross that
-  line does not fail — it hangs, and the only symptom is the package's
-  ten-minute `go test` timeout, with nothing in the output naming the
-  recorder or the channel; a mutant that should take a second to disprove can
-  look like a wedge instead. Milestone 4d hit this once, in
-  `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`
-  (`internal/controller/servergroup_controller_test.go`), which fails a
-  server on every one of ten passes and, unguarded, produces more than 100
-  events across the two recorders it shares. The fix there is local: a
-  `drainRecorder` helper next to the test empties both recorders once per
-  pass, a workaround for that one test, not of the fixture. Nothing stops the
-  next event-heavy test from hitting the same wall unwarned — milestone 4c's
-  proxy-drain and node-drain suites are the likeliest next hit, being the
-  same shape, many servers walked through many lifecycle events in one test.
-  The real fix belongs in the fixture itself, a recorder that grows or drops
-  past its buffer instead of blocking, the next time someone touches
-  `record.NewFakeRecorder`'s call sites in this package rather than adding a
-  second local drain.
+- **`record.FakeRecorder`'s buffered channel blocked its writer once full. —
+  CLOSED 2026-08-24, in the fixture, as this entry asked.** The buffer was per
+  call site rather than a package constant: seventeen sites asked for 100,
+  three for 10, one for 20. A reconciler that emitted one event past the
+  buffer did not drop it or error — it blocked inside the send. The test did
+  not fail, it hung, and the only symptom was the package's ten-minute
+  `go test` timeout with nothing in the output naming the recorder or the
+  channel, so a mutant that should take a second to disprove looked like a
+  wedge. Milestone 4d met it once, in
+  `TestGroupWithABrokenNewImageDoesNotRebuildEveryPass`, and worked around it
+  with a local `drainRecorder`.
+
+  This entry said the real fix belonged in the fixture, "the next time someone
+  touches `record.NewFakeRecorder`'s call sites in this package". Adding an
+  event to the Network reconciler was that time.
+
+  `nonBlockingRecorder` is a slice under a mutex: no buffer to overrun, and no
+  test has to budget against one. Substitution was possible at all because
+  `Recorder` is an `events.EventRecorder` field — an interface — rather than
+  the concrete fake. The format string is copied from `events.FakeRecorder`
+  verbatim, dropping `action` exactly as it does, so every existing assertion
+  about an event's text still means what it meant.
+
+  Demonstrated rather than argued, in a throwaway test: the old recorder
+  blocks on the fourth event into a buffer of three; the new one takes ten
+  thousand without blocking.
+
+  `drainRecorder` stays and is now a different helper than it was, which its
+  comment says. It was written to prevent the wedge, which can no longer
+  happen; what it still does is reset the recorder between passes, so a count
+  taken after one pass is about that pass rather than about every pass since
+  the fixture was built.

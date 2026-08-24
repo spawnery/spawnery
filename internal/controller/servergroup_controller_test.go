@@ -31,7 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/events"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -60,7 +59,7 @@ func groupReconciler(f *fixture) *ServerGroupReconciler {
 	return &ServerGroupReconciler{
 		Client:       f.c,
 		Scheme:       f.reconc.Scheme,
-		Recorder:     events.NewFakeRecorder(100),
+		Recorder:     newRecorder(),
 		Agents:       f.agents,
 		Clock:        f.clock.Now,
 		Expectations: newExpectations(f.clock.Now),
@@ -71,18 +70,14 @@ func groupReconciler(f *fixture) *ServerGroupReconciler {
 // reason. It matched the reason as a substring of the whole rendered line until
 // milestone 6e's final review, which is a match a mutated, longer reason walks
 // straight through -- see eventHasReason, which is what it compares with now.
-func scalingEvents(rec *events.FakeRecorder, reason string) int {
+func scalingEvents(rec *nonBlockingRecorder, reason string) int {
 	n := 0
-	for {
-		select {
-		case e := <-rec.Events:
-			if eventHasReason(e, reason) {
-				n++
-			}
-		default:
-			return n
+	for _, e := range drainEvents(rec) {
+		if eventHasReason(e, reason) {
+			n++
 		}
 	}
+	return n
 }
 
 func (f *fixture) reconcileGroup(t *testing.T, r *ServerGroupReconciler) {
@@ -1496,7 +1491,7 @@ func TestServerGroupConfigMapWrittenBeforeTheServer(t *testing.T) {
 	r := &ServerGroupReconciler{
 		Client:       recorder,
 		Scheme:       f.reconc.Scheme,
-		Recorder:     events.NewFakeRecorder(100),
+		Recorder:     newRecorder(),
 		Agents:       f.agents,
 		Clock:        f.clock.Now,
 		Expectations: newExpectations(f.clock.Now),
@@ -1609,7 +1604,7 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 			t.Fatalf("ReportPlayers: %v", err)
 		}
 	}
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 	f.reconcileGroup(t, r)
 
@@ -1652,7 +1647,7 @@ func TestGroupRecordsWhatItIssued(t *testing.T) {
 func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 
 	f.group.Spec.Scaling.MaxReplicas = 1
@@ -1742,7 +1737,7 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 func TestGroupSaysColdStartIsBlockedByTheCeiling(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 
 	f.group.Spec.Scaling.MaxReplicas = 1
@@ -1860,7 +1855,7 @@ func TestGroupPatchesRetireOntoTheNominatedServer(t *testing.T) {
 func TestGroupRetireServerGuardsAgainstARepeatCall(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 
 	f.reconcileGroup(t, r)
@@ -2772,7 +2767,7 @@ func TestGroupGivesUpOnServersThatNeverBecomeReady(t *testing.T) {
 func TestBackingOffEventFiresOnTheFlankOnly(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 	f.setMinReplicas(t, 1)
 	f.reconcileGroup(t, r)
@@ -2805,7 +2800,7 @@ func TestBackingOffEventFiresOnTheFlankOnly(t *testing.T) {
 func TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 	f.setMinReplicas(t, 1)
 	f.reconcileGroup(t, r)
@@ -2856,7 +2851,7 @@ func TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff(t *testing.T) {
 func TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 	f.setMinReplicas(t, 1)
 	for i := int32(0); i < backoffGiveUpAt; i++ {
@@ -3010,20 +3005,16 @@ func TestBackingOffIsNotDecidedWithoutAUsableNetwork(t *testing.T) {
 }
 
 // drainRecorder empties a FakeRecorder's buffer and throws the events away.
-// The channel is bounded and blocks its writer once full, and nothing in this
-// suite drains it, so a test that walks many servers through a whole lifecycle
-// wedges the reconciler mid-event rather than reaching its assertion. Only a
-// test that deliberately drives that much lifecycle needs this; scalingEvents
-// above drains as a side effect of counting, which is enough everywhere else.
-func drainRecorder(rec *events.FakeRecorder) {
-	for {
-		select {
-		case <-rec.Events:
-		default:
-			return
-		}
-	}
-}
+// It was written for a hazard that no longer exists: FakeRecorder's channel
+// blocked its writer once full, so a test walking many servers through a whole
+// lifecycle wedged the reconciler mid-event rather than reaching its assertion,
+// and this drained between passes to stop that. nonBlockingRecorder has no
+// buffer to overrun, so nothing wedges anywhere now.
+//
+// It stays because the second thing it did is still wanted: it resets the
+// recorder between passes, so a count taken after one pass is about that pass
+// rather than about every pass since the fixture was built.
+func drainRecorder(rec *nonBlockingRecorder) { drainEvents(rec) }
 
 // TestGroupWithABrokenNewImageDoesNotRebuildEveryPass is the loop milestone
 // 4b's cold-start suppression was a stopgap for: a broken new image fails,
@@ -3078,8 +3069,8 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 		// Both recorders, every pass: a group that rebuilt every pass — the
 		// failure this test exists to catch — produces ten servers' worth of
 		// lifecycle events, which is more than a FakeRecorder holds.
-		drainRecorder(f.reconc.Recorder.(*events.FakeRecorder))
-		drainRecorder(r.Recorder.(*events.FakeRecorder))
+		drainRecorder(f.reconc.Recorder.(*nonBlockingRecorder))
+		drainRecorder(r.Recorder.(*nonBlockingRecorder))
 		f.clock.Advance(resyncInterval)
 		for _, s := range f.serversOfGeneration(t, generation) {
 			if s.Status.Phase != string(phase.Failed) {
@@ -3101,7 +3092,7 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	rec := r.Recorder.(*events.FakeRecorder)
+	rec := r.Recorder.(*nonBlockingRecorder)
 
 	// Two servers, both Ready, one occupied so the test also proves that
 	// having players does not exempt a server from a node that is leaving.
@@ -3185,7 +3176,7 @@ func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 func TestAFailedServerOnACordonedNodeGoesAwayOnce(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	rec := r.Recorder.(*events.FakeRecorder)
+	rec := r.Recorder.(*nonBlockingRecorder)
 
 	f.setMinReplicas(t, 2)
 	f.reconcileGroup(t, r)
@@ -3504,7 +3495,7 @@ func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
 	// The values are tabled in persistent_test.go; what this asserts is that
 	// size() carries one through to deleteServer instead of falling back to
 	// the ephemeral rule's ServerRemoved.
-	rec := events.NewFakeRecorder(100)
+	rec := newRecorder()
 	r.Recorder = rec
 
 	f.setPersistentReplicas(t, "survival", 2)
@@ -3574,7 +3565,7 @@ func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 	// five-second pass, for as long as the object sits there
 	// (docs/known-issues.md). What fires per pass is the difference between a
 	// quiet wait and an event stream nobody can read past.
-	if n := scalingEvents(r.Recorder.(*events.FakeRecorder), "ServerCreated"); n != 0 {
+	if n := scalingEvents(r.Recorder.(*nonBlockingRecorder), "ServerCreated"); n != 0 {
 		t.Errorf("ServerCreated events = %d, want none: the object was already there, "+
 			"and this collision repeats every pass for as long as it lasts", n)
 	}
