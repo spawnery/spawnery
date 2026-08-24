@@ -128,8 +128,8 @@ var RequiredCluster = []Permission{
 
 	// The operator's own resources.
 	{Group: "spawnery.cloud", Resource: "networks", Verb: "get", Why: "resolving networkRef"},
-	{Group: "spawnery.cloud", Resource: "networks", Verb: "list", Why: "NetworkReconciler.namespaceOwner, and Store.namespacesMissingCA, which lists them again to find the namespaces a CA rotation's gate has to wait for"},
-	{Group: "spawnery.cloud", Resource: "networks", Verb: "watch", Why: "NetworkReconciler For(&Network{})"},
+	{Group: "spawnery.cloud", Resource: "networks", Verb: "list", Why: "NetworkReconciler.namespaceOwner and its siblingNetworks mapper, and Store.namespacesMissingCA, which lists them again to find the namespaces a CA rotation's gate has to wait for"},
+	{Group: "spawnery.cloud", Resource: "networks", Verb: "watch", Why: "NetworkReconciler For(&Network{}) and its Watches on the same type for siblings, and both group reconcilers Watches(&Network{}) so a refused group hears its Network come back"},
 	// No entry for networks/status:get. Status().Update issues a PUT against
 	// the status subresource and reads nothing first; the status itself is read
 	// off the object returned by a plain Get on the resource. The same holds for
@@ -137,7 +137,7 @@ var RequiredCluster = []Permission{
 	{Group: "spawnery.cloud", Resource: "networks", Subresource: "status", Verb: "update", Why: "NetworkReconciler writes conditions and counts"},
 
 	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "get", Why: "resolving groupRef"},
-	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "list", Why: "NetworkReconciler counts groups"},
+	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "list", Why: "NetworkReconciler counts groups, and ServerGroupReconciler.groupsOfNetwork lists them again to find the ones a changed Network should wake"},
 	{Group: "spawnery.cloud", Resource: "servergroups", Verb: "watch", Why: "ServerGroupReconciler For(&ServerGroup{})"},
 	{Group: "spawnery.cloud", Resource: "servergroups", Subresource: "status", Verb: "update", Why: "ServerGroupReconciler writes the aggregate and the conditions"},
 	// Needed for the same reason as servers/finalizers below: createServer and
@@ -166,7 +166,7 @@ var RequiredCluster = []Permission{
 	// Two things fetch a single ProxyGroup as of this milestone: the
 	// reconciler itself, and the fan-out reading a group's fallback list.
 	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "get", Why: "ProxyGroupReconciler.Reconcile and proxyreg.fallbacks"},
-	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "list", Why: "NetworkReconciler counts proxy groups"},
+	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "list", Why: "NetworkReconciler counts proxy groups, and ProxyGroupReconciler.groupsOfNetwork lists them again to find the ones a changed Network should wake"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Verb: "watch", Why: "ProxyGroupReconciler For(&ProxyGroup{})"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "status", Verb: "update", Why: "ProxyGroupReconciler writes replicas, address and conditions"},
 	{Group: "spawnery.cloud", Resource: "proxygroups", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod, Service and PodDisruptionBudget owner references"},

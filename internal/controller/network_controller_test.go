@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +51,6 @@ func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *events.FakeRe
 		Client:   f.c,
 		Scheme:   f.reconc.Scheme,
 		Recorder: rec,
-		Clock:    f.clock.Now,
 		// Matches what config/deploy/ installs; the NetworkPolicy tests need
 		// this non-empty, and no other test cares what it is.
 		OperatorNamespace: "spawnery-system",
@@ -825,5 +826,86 @@ func TestABootstrapFailureStillWritesTheStatus(t *testing.T) {
 	if !containsEvent(recorded, ReasonNamespaceNotBootstrapped) {
 		t.Errorf("events = %q, want one naming %s — a log line is the only other trace "+
 			"a refused ConfigMap write leaves", recorded, ReasonNamespaceNotBootstrapped)
+	}
+}
+
+// TestARefusedNetworkSaysSoAsAnEventToo closes the "a rejected Network
+// produces no Kubernetes event, only a condition" item in
+// docs/known-issues.md. A duplicate is the refusal a user is most likely to
+// cause by hand — two Networks in one namespace — and it was the only one this
+// reconciler made silently.
+func TestARefusedNetworkSaysSoAsAnEventToo(t *testing.T) {
+	f := newFixture(t)
+	r, rec := networkReconcilerWithEvents(f)
+
+	// f.network already owns the namespace; this one arrives second.
+	loser := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: f.ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "fwd"},
+		},
+	}
+	if err := f.c.Create(f.ctx, loser); err != nil {
+		t.Fatalf("create the second Network: %v", err)
+	}
+	f.reconcileNetwork(t, r, "staging")
+
+	ev := drainEvents(rec)
+	if !containsEvent(ev, spawneryv1alpha1.ReasonDuplicateNetwork) {
+		t.Fatalf("events = %v, want one naming %s: a Network refused into an occupied "+
+			"namespace did nothing observable unless somebody described that object",
+			ev, spawneryv1alpha1.ReasonDuplicateNetwork)
+	}
+	if !containsEventType(ev, "Warning") {
+		t.Errorf("events = %v, want it recorded as a Warning", ev)
+	}
+
+	// Once per transition, not once per pass. This branch runs for as long as
+	// the duplicate stands, and a Warning every minute forever buries the one
+	// that mattered instead of reporting it.
+	f.reconcileNetwork(t, r, "staging")
+	if ev := drainEvents(rec); len(ev) != 0 {
+		t.Errorf("events = %v on a second pass with nothing changed, want none", ev)
+	}
+}
+
+// TestSiblingNetworksWakesTheLosersAndNotTheWinner covers the mapper behind the
+// second watch on Network. docs/known-issues.md measures recovery after
+// deleting the winning Network at roughly ninety seconds and names the cause:
+// two requeues stacked, the loser's minute and the group's thirty seconds.
+// This mapper removes the first.
+//
+// For() already enqueues the object an event is about, so the mapper must
+// return the *others* — returning the subject too would be a second, pointless
+// pass on every Network event in the cluster.
+func TestSiblingNetworksWakesTheLosersAndNotTheWinner(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+
+	for _, name := range []string{"staging", "canary"} {
+		loser := &spawneryv1alpha1.Network{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+			Spec: spawneryv1alpha1.NetworkSpec{
+				ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "fwd"},
+			},
+		}
+		if err := f.c.Create(f.ctx, loser); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+
+	got := r.siblingNetworks(f.ctx, f.network)
+	names := make([]string, 0, len(got))
+	for _, req := range got {
+		if req.Namespace != f.ns {
+			t.Errorf("request %v is outside the fixture's namespace", req)
+		}
+		names = append(names, req.Name)
+	}
+	sort.Strings(names)
+	if !slices.Equal(names, []string{"canary", "staging"}) {
+		t.Errorf("siblingNetworks(%s) = %v, want [canary staging]: the winner's own "+
+			"deletion is what changes the verdict for every loser, and none of them is "+
+			"the object that event names", f.network.Name, names)
 	}
 }

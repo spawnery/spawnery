@@ -3265,3 +3265,34 @@ func TestAHashMismatchMarkDoesNotFireANodeDrainingEvent(t *testing.T) {
 		t.Error("NodeDraining event fired for a mark caused by a hash mismatch, not a departing node")
 	}
 }
+
+// TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt covers the mapper behind the
+// Watches(&Network{}) both group reconcilers now carry. A group refused because
+// its Network is missing or unaccepted has no way of hearing that the Network
+// came back — it is not an owner, and nothing about the group itself changes —
+// so it waited out the resync. docs/known-issues.md measures the pair of waits
+// at roughly ninety seconds.
+//
+// The filter on NetworkRef is not a formality even under one-network-per-
+// namespace: a namespace holding a loser as well as a winner is exactly the
+// state this operator's own duplicate rule creates, and a group pointed at the
+// loser has no business being woken by the winner.
+func TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+
+	f.createProxyGroup("gateway")
+	f.createProxyGroup("elsewhere", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.NetworkRef = spawneryv1alpha1.ObjectRef{Name: "some-other-network"}
+	})
+
+	got := r.groupsOfNetwork(f.ctx, f.network)
+	names := make([]string, 0, len(got))
+	for _, req := range got {
+		names = append(names, req.Name)
+	}
+	if !slices.Equal(names, []string{"gateway"}) {
+		t.Errorf("groupsOfNetwork(%s) = %v, want [gateway] only: a group naming a different "+
+			"Network must not be woken by this one", f.network.Name, names)
+	}
+}

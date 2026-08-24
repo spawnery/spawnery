@@ -2032,6 +2032,36 @@ func (r *ProxyGroupReconciler) writeStatus(ctx context.Context, group *spawneryv
 	return r.Status().Update(ctx, group)
 }
 
+// groupsOfNetwork maps a Network event onto the ProxyGroups in its namespace that
+// name it.
+//
+// Namespace-scoped and filtered by NetworkRef rather than enqueueing every
+// group: one-network-per-namespace means the filter is nearly always a
+// formality, but a namespace holding a loser as well as a winner is exactly
+// the state this repository's own duplicate-network rule creates, and a group
+// pointed at the loser has no business being woken by the winner.
+//
+// A List error returns nothing rather than failing. This shortens a wait that
+// the resync would end anyway, so losing it costs latency and never
+// correctness.
+func (r *ProxyGroupReconciler) groupsOfNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &spawneryv1alpha1.ProxyGroupList{}
+	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	out := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		if list.Items[i].Spec.NetworkRef.Name != obj.GetName() {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{
+			Namespace: list.Items[i].Namespace,
+			Name:      list.Items[i].Name,
+		}})
+	}
+	return out
+}
+
 // groupsOnNode maps a Node event onto the ProxyGroups with pods on that node.
 //
 // Mirrors ServerGroupReconciler.groupsOnNode: the five-second resync would
@@ -2109,5 +2139,13 @@ func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
+		// A group refused because its Network is missing or unaccepted has no
+		// way of hearing that the Network came back: it is not an owner, and
+		// nothing about the group itself changes when the Network does. It
+		// waited out the resync. This is the watch docs/known-issues.md asks
+		// for under milestone 4b -- the recovery it measures at roughly ninety
+		// seconds is two requeues stacked, and this removes the second.
+		Watches(&spawneryv1alpha1.Network{},
+			handler.EnqueueRequestsFromMapFunc(r.groupsOfNetwork)).
 		Complete(r)
 }

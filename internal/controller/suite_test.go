@@ -246,7 +246,6 @@ func newFixture(t *testing.T) *fixture {
 		Client:       c,
 		Scheme:       testenv.Scheme(t),
 		Recorder:     events.NewFakeRecorder(100),
-		Clock:        clock.Now,
 		SecretReader: c,
 		Bootstrap:    bootstrap,
 	}

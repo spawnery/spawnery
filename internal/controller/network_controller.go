@@ -26,10 +26,13 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
@@ -41,9 +44,6 @@ type NetworkReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
-
-	// Clock is injectable so the time rules are testable.
-	Clock func() time.Time
 
 	// SecretReader reads the Network's forwarding secret. It must be an
 	// uncached reader — mgr.GetAPIReader(), which setup.go supplies: a cached
@@ -87,13 +87,31 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	if owner != network.Name {
+		message := fmt.Sprintf(
+			"namespace %q is already served by network %q; put staging and production in separate namespaces",
+			network.Namespace, owner)
+		// The condition alone was the whole report until now, which meant a
+		// Network created into an occupied namespace did nothing observable
+		// unless somebody thought to describe that particular object. Everything
+		// else this reconciler refuses -- a missing forwarding secret, a
+		// namespace it could not bootstrap -- says so as an event too, and this
+		// is the refusal a user is most likely to cause by hand.
+		//
+		// Gated on the transition, like the forwarding-secret events beside it:
+		// this branch runs on every pass for as long as the duplicate stands,
+		// and an event per minute forever is not a report, it is noise that
+		// buries the one that mattered.
+		if !hasConditionReason(network.Status.Conditions,
+			spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonDuplicateNetwork) {
+			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
+				spawneryv1alpha1.ReasonDuplicateNetwork, actionSyncStatus, "%s",
+				eventNote("%s", message))
+		}
 		meta.SetStatusCondition(&network.Status.Conditions, metav1.Condition{
-			Type:   spawneryv1alpha1.ConditionAccepted,
-			Status: metav1.ConditionFalse,
-			Reason: spawneryv1alpha1.ReasonDuplicateNetwork,
-			Message: fmt.Sprintf(
-				"namespace %q is already served by network %q; put staging and production in separate namespaces",
-				network.Namespace, owner),
+			Type:    spawneryv1alpha1.ConditionAccepted,
+			Status:  metav1.ConditionFalse,
+			Reason:  spawneryv1alpha1.ReasonDuplicateNetwork,
+			Message: message,
 		})
 		return ctrl.Result{RequeueAfter: time.Minute}, r.Status().Update(ctx, network)
 	}
@@ -300,6 +318,39 @@ func (r *NetworkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.Network{}).
 		Owns(&networkingv1.NetworkPolicy{}).
+		// For() enqueues the Network the event is about. This enqueues its
+		// siblings, which is a different question and the one that was going
+		// unanswered: pickNamespaceOwner decides between the Networks in a
+		// namespace, so deleting the winner changes the verdict for every
+		// loser -- and none of them is the object the delete event names.
+		// Without this they waited out the one-minute requeue below.
+		Watches(&spawneryv1alpha1.Network{},
+			handler.EnqueueRequestsFromMapFunc(r.siblingNetworks)).
 		Named("network").
 		Complete(r)
+}
+
+// siblingNetworks maps a Network event onto the other Networks in its
+// namespace.
+//
+// It excludes the object the event is about, because For() already has that
+// one and enqueueing it twice buys nothing. A List error returns nothing
+// rather than failing: this is an optimisation over the requeue, so losing it
+// costs a minute of latency and never correctness.
+func (r *NetworkReconciler) siblingNetworks(ctx context.Context, obj client.Object) []reconcile.Request {
+	list := &spawneryv1alpha1.NetworkList{}
+	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
+		return nil
+	}
+	out := make([]reconcile.Request, 0, len(list.Items))
+	for i := range list.Items {
+		if list.Items[i].Name == obj.GetName() {
+			continue
+		}
+		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{
+			Namespace: list.Items[i].Namespace,
+			Name:      list.Items[i].Name,
+		}})
+	}
+	return out
 }

@@ -157,7 +157,6 @@ func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
 		Recorder:          mgr.GetEventRecorder("network"),
-		Clock:             opts.Clock,
 		OperatorNamespace: opts.OperatorNamespace,
 		// Uncached, for the reason SecretReader's own comment gives. The
 		// Bootstrapper takes the same reader for the same reason.

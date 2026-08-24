@@ -4358,20 +4358,31 @@ intentional — the following points each concern only one of the two halves.
   failures of one generation share a `creationTimestamp` (second resolution);
   the tiebreak falls to the random suffix instead of `status.failedAt`.
 - The status of a rejected `Network` freezes and keeps reporting old numbers.
-- After deleting the winning `Network`, recovery takes up to roughly 90 seconds,
-  because the loser retries every minute and the group every 30 seconds. A watch
-  mapping `ServerGroup → Network` would solve both.
-- **A rejected `Network` produces no Kubernetes event, only a condition** —
-  and the reconciler does have a recorder to produce one with. When this was
-  written both `NetworkReconciler.Recorder` and `Clock` were unused; that is
-  half true now. `Recorder` has three call sites
-  (`internal/controller/network_controller.go`, at the forwarding secret's
-  rotation, its absence, and a failed namespace bootstrap), and the
-  duplicate-network branch is still not one of them: it sets
-  `Accepted=False`/`ReasonDuplicateNetwork` and returns
-  (`network_controller.go:89-99`). So the silence is now a gap in one path
-  rather than a missing dependency. `Clock` is still declared, still assigned
-  `time.Now` in `main.go`, and still read nowhere in the file.
+- **A rejected `Network` produced no Kubernetes event, only a condition, and
+  the recovery from one took about ninety seconds. — BOTH CLOSED 2026-08-24.**
+  The duplicate-network refusal is the one a user is most likely to cause by
+  hand, and it was the only refusal this reconciler made silently: the other
+  two paths already emitted events. It now emits one as well, gated on the
+  transition like its neighbours, because the branch runs on every pass for as
+  long as the duplicate stands and a Warning per minute forever buries the one
+  that mattered.
+
+  `NetworkReconciler.Clock` is gone rather than used. It was declared, wired in
+  `setup.go` and `main.go`, assigned in two test fixtures, and read nowhere.
+
+  The ninety seconds were two requeues stacked — the loser's minute and the
+  group's thirty seconds — and both are watches now. `NetworkReconciler`
+  gained a second `Watches` on its own type, mapping to the *siblings* of the
+  object an event names — `For()` enqueues only the subject, and deleting the
+  winner is what changes the verdict for every loser. Both group reconcilers
+  gained `Watches(&Network{})` mapping to the groups in that namespace which
+  name it — filtered on `NetworkRef`, which is not a formality even under
+  one-network-per-namespace, since a namespace holding a loser beside a winner
+  is precisely what the duplicate rule creates.
+
+  Both mappers swallow a `List` error and return nothing. They shorten a wait
+  the resync would end anyway, so losing one costs latency and never
+  correctness.
 - The `deletionTimestamp` skip in `Sweep` is covered by no test; it concerns only
   an already-deleting orphaned pod, where a second `Delete` is harmless.
 - **`make -j image-test` can load the wrong image.** `image` and
