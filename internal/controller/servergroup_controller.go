@@ -897,7 +897,20 @@ func derivePhase(group *spawneryv1alpha1.ServerGroup, totals GroupTotals) string
 	if meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
 		return "Degraded"
 	}
-	if totals.ReadyReplicas >= group.DesiredReplicas() && totals.ReadyReplicas > 0 {
+	// No `&& ReadyReplicas > 0`. A group asked for nothing and running nothing
+	// has exactly what it was asked for, and the extra clause made that state
+	// report Pending forever -- the truth about every field except the phase.
+	//
+	// It matters because zero is a deliberate operator action rather than an
+	// edge: `spec.replicas: 0` is the accepted way to park a persistent group
+	// and keep its claims, since deleting the group would leave the claims
+	// behind but take the ordinals' Server objects with it.
+	//
+	// Dropping the clause changes exactly one state. A group short of its
+	// target still fails `ReadyReplicas >= DesiredReplicas()` -- zero ready
+	// against five wanted is not suddenly Ready -- so the only pair the clause
+	// was deciding was zero against zero.
+	if totals.ReadyReplicas >= group.DesiredReplicas() {
 		return string(phase.Ready)
 	}
 	return string(phase.Pending)

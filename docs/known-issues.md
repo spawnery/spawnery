@@ -445,12 +445,31 @@ overlay, so it is defensible — but it is the one path a `secret-key`-shaped
 key can still take, and nothing would catch a second one arriving the same
 way this one did.
 
-**The ready port is spelled in two languages** —
-`internal/podspec.ProxyReadyPort` and a Kotlin constant in
-`agent/velocity/src/main/kotlin/cloud/spawnery/agent/velocity/AgentPlugin.kt`
-— with no test that can compare them. Only the level-2 harness
-(`hack/agent-test.sh`, phase four) catches a divergence, and only when it
-runs.
+**The ready port is spelled in two languages — and something compares them
+now. — CLOSED 2026-08-24.** `internal/podspec.ProxyReadyPort` and a Kotlin
+constant in
+`agent/velocity/src/main/kotlin/cloud/spawnery/agent/velocity/AgentPlugin.kt`.
+Only the level-2 harness (`hack/agent-test.sh`, phase four) caught a
+divergence, and only when it ran, which is not on the commit loop.
+
+A Go test cannot import Kotlin, but it can read it — the technique this
+repository already uses on `cmd/spawnery-operator/main.go`, where an AST pin
+asserts a wiring no compiler checks.
+`internal/podspec/kotlin_agreement_test.go` reads the declaration and compares
+the number.
+
+It anchors on `const val READY_PORT = <number>` rather than searching for the
+digits, because searching would pass for the wrong reason: 8081 also appears a
+hundred lines above, in a comment about `hack/velocity-image-test.sh`. Both
+mutations are driven — moving the number fails with both values named, and
+renaming the constant fails with a message saying which of the two has
+happened.
+
+What a divergence costs is why this earned a source-reading test rather than a
+request to be careful: `podspec` puts this port on the pod as the kubelet's
+readiness probe target and the agent binds it. Disagree and the probe dials a
+port nothing is listening on, so the pod never goes `Ready`, so the proxy never
+joins the `Service` — and nothing anywhere says the two numbers differ.
 
 **A proxy that cannot bind its ready port is silent on the CR.** It stays
 `Pending` with the reason only in the container log
@@ -1795,8 +1814,9 @@ The constant is kept rather than deleted: it costs a line, and it is the exact
 string an operator meets on the stale condition above, so removing it would
 make that string unsearchable in the repository it came from.
 
-**A `Persistent` group with `replicas: 0` reports `Pending` forever.**
-`derivePhase` (`internal/controller/servergroup_controller.go`) returns `Ready`
+**A `Persistent` group with `replicas: 0` reported `Pending` forever. —
+CLOSED 2026-08-24.** `derivePhase`
+(`internal/controller/servergroup_controller.go`) returned `Ready`
 only when `readyReplicas >= DesiredReplicas()` **and** `readyReplicas > 0`, so a
 group that has been asked for zero servers, and correctly has zero, never
 reaches `Ready`. The shape predates this milestone — it is the same arithmetic
@@ -1808,6 +1828,14 @@ publishes `Accepted: True`, `Degraded: False`, `replicas: 0`,
 `readyReplicas: 0` and `phase: Pending`, which is the truth about every field
 except the phase. Nothing else is affected: no condition depends on the phase,
 and the group is sized, PDB'd and reconciled as normal.
+
+The `&& readyReplicas > 0` clause is gone, and dropping it changes exactly one
+state: a group short of its target still fails `readyReplicas >=
+DesiredReplicas()`, so zero ready against five wanted is not suddenly `Ready`.
+The only pair that clause was deciding was zero against zero. Two tests fence
+it from both sides, and each is mutated against the other's direction —
+restoring the clause fails the parked case, and making the branch
+unconditional fails the short case.
 
 **An ordinal waits, visibly, for a pod that a dead node will never finish
 terminating.** As of the branch review closing this milestone, the Server

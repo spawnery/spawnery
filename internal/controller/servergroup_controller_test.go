@@ -4199,3 +4199,59 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 			"Network, only stop repeating it", accepted)
 	}
 }
+
+// TestAParkedPersistentGroupIsReadyRatherThanPending closes the entry in
+// docs/known-issues.md: "a Persistent group with replicas: 0 reports Pending
+// forever."
+//
+// Zero is a deliberate operator action rather than an edge case. spec.replicas:
+// 0 is the accepted way to park a persistent group and keep its claims, because
+// deleting the group would leave the claims behind but take the ordinals'
+// Server objects with it. Such a group published Accepted: True,
+// Degraded: False, replicas: 0, readyReplicas: 0 — and phase: Pending, which
+// was the only field that was not true.
+func TestAParkedPersistentGroupIsReadyRatherThanPending(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "parked", 0)
+
+	f.reconcilePersistentGroup(t, r, "parked")
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "parked", Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get the group: %v", err)
+	}
+	if got.Status.ReadyReplicas != 0 {
+		t.Fatalf("readyReplicas = %d, want 0; this test is about a group that has been "+
+			"asked for nothing", got.Status.ReadyReplicas)
+	}
+	if got.Status.Phase != string(phase.Ready) {
+		t.Errorf("phase = %q, want %q. A group asked for nothing and running nothing has "+
+			"exactly what it was asked for; Pending says something is still coming",
+			got.Status.Phase, phase.Ready)
+	}
+}
+
+// TestAGroupShortOfItsTargetIsStillPending is the other half, and it is what
+// says the change above decided one pair rather than loosening the rule. The
+// clause that was removed also read on a group with zero ready and several
+// wanted, and that group must still be Pending.
+func TestAGroupShortOfItsTargetIsStillPending(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "wanting", 2)
+
+	f.reconcilePersistentGroup(t, r, "wanting")
+
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "wanting", Namespace: f.ns}, got); err != nil {
+		t.Fatalf("get the group: %v", err)
+	}
+	if got.Status.ReadyReplicas != 0 {
+		t.Fatalf("readyReplicas = %d, want 0 for this test's premise", got.Status.ReadyReplicas)
+	}
+	if got.Status.Phase != string(phase.Pending) {
+		t.Errorf("phase = %q, want %q: two servers were asked for and none is ready",
+			got.Status.Phase, phase.Pending)
+	}
+}
