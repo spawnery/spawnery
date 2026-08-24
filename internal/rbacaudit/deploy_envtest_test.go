@@ -1120,3 +1120,104 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 		}
 	}
 }
+
+// chartClusterScopedKinds are the kinds this chart renders that carry no
+// namespace at all. Everything else it renders is namespaced, and an object of
+// a namespaced kind with an empty namespace is exactly the failure below.
+var chartClusterScopedKinds = map[string]bool{
+	"ClusterRole":              true,
+	"ClusterRoleBinding":       true,
+	"CustomResourceDefinition": true,
+}
+
+// chartNamespacedObjects is every namespaced object the chart renders with the
+// optional templates switched on. Listed rather than counted so that a
+// template which stops rendering fails here instead of passing vacuously; a
+// template that is *added* fails too, which is the point — a new object with a
+// namespace nobody checked is what this test exists to stop.
+var chartNamespacedObjects = []string{
+	"Deployment/spawnery-operator",
+	"NetworkPolicy/spawnery-operator-agent",
+	"PrometheusRule/spawnery-operator",
+	"Role/spawnery-operator",
+	"RoleBinding/spawnery-operator",
+	"Service/spawnery-operator",
+	"ServiceAccount/spawnery-operator",
+	"ServiceMonitor/spawnery-operator",
+}
+
+// TestEveryRenderedObjectLandsInTheReleaseNamespace closes the entry in
+// docs/known-issues.md: "`make chart-lint` does not catch a chart that renders
+// with an empty namespace."
+//
+// A typo'd `{{ .Release.Namspace }}` is not a render failure. Helm resolves an
+// unknown `.Release` field to the empty string, so `helm lint` and `helm
+// template` both exit 0 and `make chart-lint` sees nothing. The literal scan in
+// TestTheChartRendersIntoTheNamespaceItIsGiven does not see it either — an
+// empty namespace contains no "spawnery-system" to find — and that test reads
+// the namespace of two objects out of nine. What caught it was
+// TestAgentServiceReachesTheOperatorPods, incidentally, because envtest's API
+// server refuses to create a Service with an empty namespace; nothing caught it
+// for the six objects that test does not apply.
+//
+// This reads every object instead. It renders with the optional templates
+// enabled so the ServiceMonitor and the PrometheusRule are covered too: both
+// are off by default, so the ordinary render never sees them at all.
+func TestEveryRenderedObjectLandsInTheReleaseNamespace(t *testing.T) {
+	chart := testenv.RepoPath(t, "charts/spawnery")
+	cmd := exec.Command("helm", "template", "spawnery", chart,
+		"--namespace", renderNamespace,
+		"--set", "metrics.serviceMonitor.enabled=true",
+		"--set", "metrics.prometheusRule.enabled=true")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("helm template with the optional templates on: %v\n%s", err, stderr.String())
+	}
+	docs, err := splitRendered(out)
+	if err != nil {
+		t.Fatalf("split the rendered chart: %v", err)
+	}
+
+	seen := map[string]bool{}
+	for key, doc := range docs {
+		var obj struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+		}
+		if err := yaml.Unmarshal(doc, &obj); err != nil {
+			t.Fatalf("%s does not parse: %v", key, err)
+		}
+		if chartClusterScopedKinds[obj.Kind] {
+			if obj.Metadata.Namespace != "" {
+				t.Errorf("%s is cluster-scoped but renders with namespace %q",
+					key, obj.Metadata.Namespace)
+			}
+			continue
+		}
+		seen[key] = true
+		if obj.Metadata.Namespace != renderNamespace {
+			t.Errorf("%s renders with namespace %q, want %q. An empty one here is what a "+
+				"typo'd .Release field produces: helm resolves it to \"\", lint and template "+
+				"both exit 0, and the object installs into whatever namespace kubectl "+
+				"happens to default to", key, obj.Metadata.Namespace, renderNamespace)
+		}
+	}
+
+	for _, want := range chartNamespacedObjects {
+		if !seen[want] {
+			t.Errorf("the chart renders no %s; this test's coverage is the list it checks, "+
+				"so an object that stops rendering has to fail here rather than pass by "+
+				"being absent", want)
+		}
+	}
+	for key := range seen {
+		if !slices.Contains(chartNamespacedObjects, key) {
+			t.Errorf("the chart renders %s, which chartNamespacedObjects does not list — "+
+				"add it, so the next object to appear is checked rather than assumed", key)
+		}
+	}
+}

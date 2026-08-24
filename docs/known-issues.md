@@ -3005,22 +3005,32 @@ is unproven for the other. Caught by mutation during the milestone; the
 report that held the transcript was in the deleted SDD workspace, so this
 paragraph is the record.
 
-**`make chart-lint` does not catch a chart that renders with an empty
-namespace.** The plan justified `chart-lint`'s `helm template` line by a
-chart that lints but does not render. Measured directly with a typo'd
-`{{ .Release.Namspace }}` in a template: Helm v4.2.3 renders an unresolved
-`.Release` field as empty rather than erroring, so both `helm lint` and
-`helm template` exit 0.
-`internal/rbacaudit`'s `TestTheChartRendersIntoTheNamespaceItIsGiven` does
-not catch it either — it asserts only the Deployment's and the Role's
-namespaces, never the Service's. What catches it is
-`TestAgentServiceReachesTheOperatorPods`
-(`internal/rbacaudit/deploy_envtest_test.go:538`), incidentally: it applies
-the rendered Service into envtest's real API server, which refuses to
-create a `Service` with an empty `namespace`. `chart-lint` still catches a
-template that fails to render at all; it does not catch this class. Measured
-by mutation during the milestone; the report that held the transcript was in
-the deleted SDD workspace, so this paragraph is the record.
+**`make chart-lint` cannot catch a chart that renders with an empty
+namespace, and that is a property of Helm rather than of the target.** The
+plan justified `chart-lint`'s `helm template` line by a chart that lints but
+does not render. Measured directly with a typo'd `{{ .Release.Namspace }}` in
+a template, and measured again on 2026-08-24 against the same Helm v4.2.3 the
+flake pins: an unresolved `.Release` field renders as the empty string rather
+than erroring, so both `helm lint` and `helm template` exit 0. Nothing at the
+lint step can see it; `chart-lint` still catches a template that fails to
+render at all, which is a different class.
+
+What used to catch it was `TestAgentServiceReachesTheOperatorPods`
+(`internal/rbacaudit/deploy_envtest_test.go`), incidentally, because it
+applies the rendered Service into envtest's real API server and that refuses
+a `Service` with an empty `namespace` — so the one object that test happens to
+apply was covered and the other eight were not.
+`TestTheChartRendersIntoTheNamespaceItIsGiven` did not close the gap either:
+its literal scan looks for `spawnery-system`, and an empty namespace contains
+no literal to find, and it reads the namespace of two objects out of nine.
+
+Since 2026-08-24 `TestEveryRenderedObjectLandsInTheReleaseNamespace` reads
+every object instead, with the optional templates switched on so the
+ServiceMonitor and the PrometheusRule — both off by default, so the ordinary
+render never sees them — are covered too. It carries the list of namespaced
+objects it expects rather than a count, so a template that stops rendering
+fails rather than passing by being absent, and one that is added fails until
+somebody lists it.
 
 **`hack/chart-templates.sh` now checks its outcomes as well as its inputs.**
 Its two original guards (`grep -q` on `config/rbac/role.yaml` and on each
