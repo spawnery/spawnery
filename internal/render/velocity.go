@@ -129,6 +129,13 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 		if err := toml.Unmarshal([]byte(overlay), &fragment); err != nil {
 			return "", fmt.Errorf("velocity.toml: overlay does not parse as TOML: %w", err)
 		}
+		// Before the merge, so a key Velocity does not read never reaches the
+		// document. See checkDeclaredKeys for the trade this takes -- and note
+		// that the RKE2 rollout's haproxy-protocol, written at the top level
+		// instead of under [advanced], is exactly this.
+		if err := checkDeclaredKeys(velocityDeclared, fragment, "velocity.toml"); err != nil {
+			return "", err
+		}
 		for k, val := range fragment {
 			doc[k] = val
 		}

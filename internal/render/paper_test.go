@@ -84,7 +84,7 @@ func TestPaperEnablesVelocityForwarding(t *testing.T) {
 //	mkdir /tmp/paper-defaults && cd /tmp/paper-defaults && echo eula=true >eula.txt
 //	"$JAVA" -Xmx1g -DbundlerRepoDir="$REPO" -jar "$JAR" --nogui
 //	# wait for config/paper-global.yml to appear, then stop the server
-//	cp config/paper-global.yml "$OLDPWD"/internal/render/testdata/paper-global.default.yml
+//	cp config/paper-global.yml "$OLDPWD"/internal/render/defaults/paper-global.default.yml
 //
 // (The dev shell's JDK is older than the 25 Paper 26.2 refuses to start
 // without, hence the separate jdk25_headless — the same one nix/paper.nix
@@ -96,7 +96,7 @@ func TestPaperEnablesVelocityForwarding(t *testing.T) {
 // measured it. It is also not the only guard: hack/image-test.sh boots the
 // pinned Paper against a rendered file and reads back what Paper made of it,
 // which needs no fixture to be refreshed and fails on a rename by itself.
-const paperGlobalDefault = "testdata/paper-global.default.yml"
+const paperGlobalDefault = defaultsDir + "/paper-global.default.yml"
 
 // The keys this renderer writes have to be keys Paper declares.
 //
@@ -250,21 +250,27 @@ func TestPaperOverlayCannotMoveVelocityCriticalKeys(t *testing.T) {
 	}
 }
 
-// A well-formed overlay field that this file does not model on its own must
-// still reach the output, the paper-global.yml analogue of
-// TestPaperOverlayReachesAnUnmodelledField — otherwise the malformed-overlay
-// refusal below could be masking a fix that never actually lets a legitimate
-// overlay through.
-func TestPaperOverlayReachesPaperGlobal(t *testing.T) {
-	files, err := Paper(paperValues(), "s3cret", map[string]string{
-		"paper-global.yml": "proxies:\n  velocity:\n    announce-forwarding: true\n",
+// The key that cost milestone 3c its first end-to-end join, arriving the other
+// way round. render.Paper wrote proxies.velocity.secret-key for a reader that
+// wanted secret; that spelling is fixed and pinned, and an overlay was the one
+// remaining path by which a second one could still have got in.
+//
+// Paper declares exactly three keys in that block and this operator writes all
+// three, so nothing an overlay puts there could ever have applied: it is either
+// overwritten here or ignored by Paper. Refusing says so at render time, where
+// the alternative said nothing at all in a cluster.
+func TestPaperRefusesAVelocityKeyPaperDoesNotDeclare(t *testing.T) {
+	_, err := Paper(paperValues(), "s3cret", map[string]string{
+		"paper-global.yml": "proxies:\n  velocity:\n    secret-key: s3cret\n",
 	})
-	if err != nil {
-		t.Fatalf("Paper: %v", err)
+	if err == nil {
+		t.Fatal("an overlay setting proxies.velocity.secret-key was accepted")
 	}
-	global := string(files["config/paper-global.yml"])
-	if !strings.Contains(global, "announce-forwarding: true") {
-		t.Errorf("the overlay did not reach paper-global.yml:\n%s", global)
+	if !strings.Contains(err.Error(), "secret-key") {
+		t.Errorf("error = %q, want it to name the key", err)
+	}
+	if !strings.Contains(err.Error(), "secret") {
+		t.Errorf("error = %q, want it to name what Paper does declare there", err)
 	}
 }
 
@@ -329,13 +335,13 @@ func keysOf(m map[string][]byte) []string {
 // the renderer already writes.
 func TestPaperOverlayReachesTheRestOfPaperGlobal(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
-		"paper-global.yml": "misc:\n  max-joins-per-tick: 5\nchunk-loading:\n  autoconfig-send-distance: false\n",
+		"paper-global.yml": "misc:\n  max-joins-per-tick: 5\nwatchdog:\n  early-warning-delay: 12000\n",
 	})
 	if err != nil {
 		t.Fatalf("Paper: %v", err)
 	}
 	global := string(files["config/paper-global.yml"])
-	for _, want := range []string{"max-joins-per-tick: 5", "autoconfig-send-distance: false"} {
+	for _, want := range []string{"max-joins-per-tick: 5", "early-warning-delay: 12000"} {
 		if !strings.Contains(global, want) {
 			t.Errorf("paper-global.yml does not contain %q; an overlay outside proxies.velocity "+
 				"was accepted and then dropped, which is the failure checkOverlayFiles refuses "+

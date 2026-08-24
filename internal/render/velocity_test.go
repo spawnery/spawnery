@@ -56,7 +56,7 @@ func containsTOMLString(rendered, key, value string) bool {
 // as a jar resource. Reproduce it with:
 //
 //	JAR=$(nix build .#velocity-jar --no-link --print-out-paths)
-//	cd internal/render/testdata && jar xf "$JAR" default-velocity.toml
+//	cd internal/render/defaults && jar xf "$JAR" default-velocity.toml
 //	mv default-velocity.toml velocity.default.toml
 //
 // (default-velocity.toml sits at the jar root, not under META-INF; `unzip` is
@@ -65,9 +65,9 @@ func containsTOMLString(rendered, key, value string) bool {
 // pin.)
 //
 // A Velocity bump therefore has to re-run this and update the file, exactly
-// the way a Paper bump has to re-run internal/render/testdata's
+// the way a Paper bump has to re-run internal/render/defaults'
 // paper-global.default.yml.
-const velocityDefault = "testdata/velocity.default.toml"
+const velocityDefault = defaultsDir + "/velocity.default.toml"
 
 // The keys this renderer writes have to be keys Velocity declares.
 //
@@ -490,5 +490,78 @@ func TestVelocityRefusesAMisshapenServersTable(t *testing.T) {
 				t.Errorf("error = %q, want it to name the shape problem, not just the key", err)
 			}
 		})
+	}
+}
+
+// The RKE2 rollout's half day, made into a render-time error.
+//
+// Velocity's haproxy-protocol lives under [advanced]. Set at the top level it
+// reached the rendered /data/velocity.toml — where it read exactly as intended
+// — and Velocity behaved as though it were false: no PROXY header required,
+// and a connection carrying one dropped without a log line. Nothing in the
+// operator knew Velocity's schema, so a misplaced key was indistinguishable
+// from a correct one until something downstream behaved strangely.
+//
+// The error has to say where the key does live, because that is the shape both
+// of this project's overlay outages took: a real key at the wrong depth, not
+// an invented one.
+func TestVelocityRefusesAKeyAtTheWrongDepth(t *testing.T) {
+	_, err := Velocity(velocityValues(), testSecretPath, map[string]string{
+		"velocity.toml": "haproxy-protocol = true\n",
+	})
+	if err == nil {
+		t.Fatal("an overlay setting haproxy-protocol at the top level was accepted")
+	}
+	if !strings.Contains(err.Error(), "advanced.haproxy-protocol") {
+		t.Errorf("error = %q, want it to say where the key is actually declared — "+
+			"a list of top-level keys leaves the author to spot it", err)
+	}
+}
+
+// The same key in the right place is the overlay a real cluster runs, so it
+// must keep working. Without this the test above would be satisfied by a check
+// that refuses everything.
+func TestVelocityAcceptsTheSameKeyWhereItBelongs(t *testing.T) {
+	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
+		"velocity.toml": "[advanced]\nhaproxy-protocol = true\n",
+	})
+	if err != nil {
+		t.Fatalf("Velocity: %v", err)
+	}
+	if !strings.Contains(string(files["velocity.toml"]), "haproxy-protocol = true") {
+		t.Errorf("the overlay did not reach velocity.toml:\n%s", files["velocity.toml"])
+	}
+}
+
+// [servers] and [forced-hosts] are keyed by names somebody chose, so the check
+// must not measure those against the fixture's three example servers.
+func TestVelocityAcceptsNamesTheUserChose(t *testing.T) {
+	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
+		"velocity.toml": "[servers]\nsurvival = \"10.0.0.5:25565\"\n" +
+			"[forced-hosts]\n\"survival.example.com\" = [\"survival\"]\n",
+	})
+	if err != nil {
+		t.Fatalf("Velocity: %v", err)
+	}
+	rendered := string(files["velocity.toml"])
+	for _, want := range []string{"survival", "survival.example.com"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("the overlay did not reach velocity.toml, %q missing:\n%s", want, rendered)
+		}
+	}
+}
+
+// A key that is nowhere in the document at all gets the other half of the
+// message: what the level it was written at does declare.
+func TestVelocityRefusesAKeyItHasNeverHeardOf(t *testing.T) {
+	_, err := Velocity(velocityValues(), testSecretPath, map[string]string{
+		"velocity.toml": "[advanced]\nhaproxy-protokol = true\n",
+	})
+	if err == nil {
+		t.Fatal("an overlay setting a misspelt key under [advanced] was accepted")
+	}
+	if !strings.Contains(err.Error(), "haproxy-protocol") {
+		t.Errorf("error = %q, want the keys [advanced] does declare, which is how a "+
+			"misspelling is spotted", err)
 	}
 }

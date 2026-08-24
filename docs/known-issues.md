@@ -204,34 +204,29 @@ different thing and outlived its milestone.
 What follows is what 3b discovered while closing its own two preconditions,
 and what 3c inherits as a result.
 
-**The overlay's "refuse rather than guess" philosophy covers a parse failure
-and the named shapes, not the whole surface.** Both flavours refuse an overlay
-that does not parse — bad YAML, bad TOML; `paperGlobal` refuses one whose
-`proxies` or `proxies.velocity` key parses to something other than a mapping,
-and `velocityToml` refuses the same of `servers` and `forced-hosts`, "rather
-than treating either as an absent overlay" (`paperGlobal`'s own doc comment).
-What still slips through is the key nobody reads. A `paper-global.yml` overlay
-with `proxies` misspelled, or carrying any other key Paper does not declare,
-is valid YAML and now reaches the rendered file — where Paper ignores it,
-keeps its own default for the field the author meant, and writes the stray key
-back out on the next save, so the document on disk still looks like the
-override took. `server.properties` has the symmetric gap by construction:
-`parseProperties` accepts any `key=value` line, so a mistyped key just adds an
-unused one. `velocity.toml` is the same again, and its `[advanced]` table is
-where the RKE2 rollout actually met this — see "A `configOverlay` key in the
-wrong TOML table is silently ignored" below.
+**The overlay's "refuse rather than guess" philosophy now covers the nested
+documents, and still not `server.properties`.** Both flavours refuse an
+overlay that does not parse — bad YAML, bad TOML; `paperGlobal` refuses one
+whose `proxies` or `proxies.velocity` key parses to something other than a
+mapping, and `velocityToml` refuses the same of `servers` and `forced-hosts`,
+"rather than treating either as an absent overlay" (`paperGlobal`'s own doc
+comment). Since 2026-08-24 they also refuse a key the receiving program does
+not declare, at any depth, measured against that program's own default
+configuration (`internal/render/declared.go`, `internal/render/defaults/`).
+That was the class that had cost this project two outages, and the trade it
+takes is stated where it is taken: a Paper or Velocity bump refuses a
+legitimate override for a newly added key until the default file is
+regenerated.
 
-In every case the operator believes the override applied and the running
-server does not reflect it — the exact failure this design's refusal exists to
-rule out, just not ruled out everywhere it could be. Closing it needs a real
-key check against each flavour's own declared keys. The lists exist: the
-fixtures `TestPaperWritesTheKeysPaperItselfReads` and
-`TestVelocityWritesTheKeysVelocityItselfReads` already read them out of the
-pinned jars. Compiling one into the renderer is the part nobody has taken,
-because it makes a Paper or Velocity bump refuse a legitimate override for a
-newly added key until the fixture and the constant are updated together —
-a real cost, against a class of mistake that has cost this project two
-outages.
+What is left is `server.properties`, and it is left by construction rather
+than by omission. `parseProperties` accepts any `key=value` line, so a mistyped
+key adds an unused one — and there is no fixture to check against, because
+Paper's `server.properties` is Minecraft's own and this repository has never
+measured it the way it measures `paper-global.yml` and `velocity.toml`. The
+four keys the operator relies on there are in the critical layer and no
+overlay can move them (`internal/render/paper.go`), so what a typo can reach
+is the author's own settings and nothing this operator depends on. Closing it
+would mean a third default file and a third regeneration step.
 
 **The rendered ConfigMap's name changed, and nothing migrates the old
 one.** `podspec.GroupConfigMapName` used to return the group's own bare
@@ -323,14 +318,6 @@ stops authenticating players.
 (`PAPER_VELOCITY_SECRET`), so the plaintext need not be written into
 `/data/config/paper-global.yml` in the writable layer at all. Not done; a
 smaller attack surface for whoever next opens the Paper renderer.
-
-**A `configOverlay` can still inject unknown keys** into `proxies.velocity`.
-`TestPaperWritesTheKeysPaperItselfReads` renders with a nil overlay, so the
-"keys Paper reads" invariant is asserted for the base render only. The three
-critical keys (`enabled`, `online-mode`, `secret`) are reasserted over the
-overlay, so it is defensible — but it is the one path a `secret-key`-shaped
-key can still take, and nothing would catch a second one arriving the same
-way this one did.
 
 **A proxy that cannot bind its ready port is silent on the CR.** It stays
 `Pending` with the reason only in the container log
@@ -3573,8 +3560,8 @@ confirmation from the other end. And the operator's refusal to verify the
 address is unchanged by any of this: nothing in the chain above was checked by
 the operator, and every link of it is the cluster owner's to keep.
 
-**A `configOverlay` key in the wrong TOML table is silently ignored, and looks
-right in the rendered file.** Velocity's `haproxy-protocol` lives under
+**A `configOverlay` key in the wrong TOML table used to be silently ignored,
+and looked right in the rendered file.** Velocity's `haproxy-protocol` lives under
 `[advanced]`. Set at the top level it reaches the rendered
 `/data/velocity.toml` — where it reads exactly as intended — and Velocity acts
 as though it were `false`: no PROXY header is required, and a connection
@@ -3590,12 +3577,21 @@ no reverse proxy involved:
 The overlay mechanism itself is sound and this is the first end-to-end
 confirmation that it works: `internal/render/velocity.go` assigns whole
 top-level keys from the fragment, the operator writes no `[advanced]` table of
-its own, and Velocity fills the rest of that table from its defaults. What the
-mechanism cannot do is tell an author that a key is in the wrong place —
-nothing in the operator knows Velocity's schema, so a misplaced key is
-indistinguishable from a correct one until something downstream behaves
-strangely. Half a day was spent on this one, most of it suspecting the reverse
-proxy.
+its own, and Velocity fills the rest of that table from its defaults. Half a
+day was spent on this one, most of it suspecting the reverse proxy, and the
+reason it could be spent that way was that nothing in the operator knew
+Velocity's schema — a misplaced key was indistinguishable from a correct one
+until something downstream behaved strangely.
+
+Since 2026-08-24 it does know, and this exact overlay is what the check was
+built around. `internal/render/declared.go` measures an overlay against
+Velocity's own `default-velocity.toml`, refuses a key it does not declare, and
+says where the key is actually declared when it is declared somewhere —
+`haproxy-protocol` at the top level names `advanced.haproxy-protocol` in the
+error. The measurement above is kept because it is the evidence the check
+rests on: it is what establishes that Velocity ignores the misplaced key
+rather than failing on it, which is the whole reason a render-time refusal is
+worth its cost.
 
 **`syncOccupiedLabel` runs.** The "On the RBAC audit" list used to record that
 `required.go`'s `Why` for `pods: patch` named `syncOccupiedLabel` — the Server

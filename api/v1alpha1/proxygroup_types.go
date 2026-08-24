@@ -212,6 +212,17 @@ type ProxyGroupSpec struct {
 	// name-based convention is invisible until someone picks that name by
 	// accident. It outranks the rendered defaults and is outranked by the
 	// operationally critical fields, which nothing can reach.
+	//
+	// A key the receiving program does not declare is refused rather than
+	// written. Paper and Velocity both keep their own default for a key they
+	// do not read and write the stray one straight back out, so the rendered
+	// file goes on looking like the override took while the setting never
+	// applies -- which is the failure this refusal exists to prevent, and
+	// which has cost this project two outages. The declared keys are measured
+	// from each program's own default configuration, so a Paper or Velocity
+	// bump can refuse a legitimately new key until that measurement is
+	// retaken. server.properties is the exception: it has no such
+	// measurement, so a mistyped key there is still only an unused one.
 	// +optional
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 }

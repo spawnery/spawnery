@@ -168,6 +168,12 @@ func paperGlobal(secret, overlay string) (string, error) {
 		if doc == nil {
 			doc = map[string]any{}
 		}
+		// Before the shape checks below, so a key Paper does not read is
+		// reported as the key it is rather than as whatever the shape check
+		// makes of it. See checkDeclaredKeys for the trade this takes.
+		if err := checkDeclaredKeys(paperDeclared, doc, "paper-global.yml"); err != nil {
+			return "", err
+		}
 	}
 
 	// The two shapes below are refused rather than treated as an absent
