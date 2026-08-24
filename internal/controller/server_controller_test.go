@@ -2491,3 +2491,67 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 			b.DrainTimeout(), b.FailedRetention(), b.UpdateMaxStale())
 	}
 }
+
+// The other half of a refused pod: after the report comes the reclaim.
+//
+// A Server whose pod the API server refuses has an empty status.podName, so
+// PodLost never applies, and until 2026-08-24 status.startedAt was written
+// only beside a pod — so it had no clock at all and sat in Pending occupying
+// its group's slot for as long as the refusal stood. It now fails at a
+// deadline derived from the group: drain.timeoutSeconds plus the startup
+// deadline.
+//
+// The middle step is the one worth having. Between the startup deadline and
+// the creation deadline the server must stay Pending and must not be reported
+// as "did not become ready in time": it never had a pod, so it never failed to
+// become ready, and the remedy is at whatever refused the create.
+func TestAServerWhosePodIsNeverCreatedFailsAtItsOwnDeadline(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Recorder = newRecorder()
+	f.reconc.Client = refusingPodCreator{
+		Client: f.c,
+		err: apierrors.NewForbidden(
+			schema.GroupResource{Resource: "pods"}, "lobby-q8n4",
+			errors.New(`violates PodSecurity "restricted:latest"`)),
+	}
+
+	f.createServer("lobby-q8n4")
+	f.reconcile("lobby-q8n4")
+
+	srv := f.server("lobby-q8n4")
+	if srv.Status.StartedAt == nil {
+		t.Fatal("status.startedAt is unset after a pass that accepted the Server; without it " +
+			"nothing can ever put a clock on a pod that is never created")
+	}
+	if srv.Status.PodName != "" {
+		t.Fatalf("status.podName = %q, want empty", srv.Status.PodName)
+	}
+
+	// Past the startup deadline, short of the creation deadline.
+	f.clock.Advance(f.reconc.StartupDeadline + time.Second)
+	f.reconcile("lobby-q8n4")
+	srv = f.server("lobby-q8n4")
+	if got := srv.Status.Phase; got != string(phase.Pending) {
+		t.Errorf("phase = %q past the startup deadline, want %q. A server that never had a "+
+			"pod did not fail to become ready — the startup deadline is not its question",
+			got, phase.Pending)
+	}
+	if c := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionReady); c != nil &&
+		c.Reason == phase.ReasonStartupTimeout {
+		t.Errorf("Ready = %+v, want any reason but %s", c, phase.ReasonStartupTimeout)
+	}
+
+	// Past the creation deadline: drain.timeoutSeconds plus the startup
+	// deadline, measured from the pass that accepted the Server.
+	f.clock.Advance(f.group.DrainTimeout() + time.Second)
+	f.reconcile("lobby-q8n4")
+	srv = f.server("lobby-q8n4")
+	if got := srv.Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q past the creation deadline, want %q — nothing else would ever "+
+			"have failed this server, so its slot was held for good", got, phase.Failed)
+	}
+	if c := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionReady); c == nil ||
+		c.Reason != phase.ReasonPodNeverCreated {
+		t.Errorf("Ready = %+v, want reason %s", c, phase.ReasonPodNeverCreated)
+	}
+}

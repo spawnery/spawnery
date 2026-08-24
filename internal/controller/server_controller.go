@@ -185,6 +185,17 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	// The clock starts when this operator began trying, which is this pass --
+	// not when a pod appeared. Stamped only beside the pod, as it was until
+	// 2026-08-24, a Server whose pod is refused had no clock at all: nothing
+	// could fail it, so it sat in Pending occupying its group's slot for as
+	// long as the refusal stood. The pod-creation branch below re-stamps it,
+	// so the ordinary path still measures from the pod.
+	if srv.Status.StartedAt == nil && srv.DeletionTimestamp.IsZero() {
+		started := metav1.NewTime(r.Clock())
+		srv.Status.StartedAt = &started
+	}
+
 	switch {
 	case !groupFound:
 		logger.Info("server group not found, running on the CRD defaults", "group", srv.Spec.GroupRef.Name)
@@ -675,8 +686,25 @@ func (r *ServerReconciler) collectInputs(
 	in.PlayersStale = snap.PlayersStale
 	in.Slots = snap.Slots
 
-	if srv.Status.StartedAt != nil {
+	// Only once a pod has existed. The stamp is written on acceptance now, so
+	// without this guard the startup deadline would fire for a Server whose
+	// pod was refused and report it as "did not become ready in time" -- a
+	// server that never had a pod did not fail to become ready. That case is
+	// the one below, with its own bound and its own reason.
+	if srv.Status.StartedAt != nil && (podFound || srv.Status.PodName != "") {
 		in.StartupDeadlineReached = now.Sub(srv.Status.StartedAt.Time) > r.StartupDeadline
+	}
+	// The wait a Server with no pod at all is allowed. Derived from the group
+	// rather than configured, because the two are coupled: drain.timeoutSeconds
+	// is exactly how long a persistent ordinal's successor legitimately waits
+	// for its predecessor's pod to finish terminating (nameStillHeld above), so
+	// any fixed bound below it would fail a Server that is doing the right
+	// thing -- and the same fixed bound would then fail its replacement, and
+	// its replacement's replacement. The startup deadline on top is the slack
+	// every other attempt gets.
+	if srv.Status.StartedAt != nil && !podFound && srv.Status.PodName == "" {
+		in.PodCreationDeadlineReached =
+			now.Sub(srv.Status.StartedAt.Time) >= group.DrainTimeout()+r.StartupDeadline
 	}
 	if srv.Status.ReadySince != nil {
 		in.ReadyFor = now.Sub(srv.Status.ReadySince.Time)

@@ -576,3 +576,47 @@ func TestOccupiedServerIsNeverDeletedWithoutDeadline(t *testing.T) {
 		}
 	}
 }
+
+// A server whose pod was never created has no other way out.
+//
+// status.podName stays empty so PodLost never applies, and the startup
+// deadline asks whether a pod that exists became playable — which is a
+// different question with a different remedy. Without this transition such a
+// server stayed Pending for as long as whatever refused the create stood,
+// counting against its group's replicas the whole time.
+func TestAPodThatWasNeverCreatedFailsAtItsDeadline(t *testing.T) {
+	got := Decide(Pending, Inputs{PodCreationDeadlineReached: true})
+	if got.Next != Failed {
+		t.Errorf("next = %s, want %s", got.Next, Failed)
+	}
+	if got.Reason != ReasonPodNeverCreated {
+		t.Errorf("reason = %s, want %s — a server that never had a pod did not fail to "+
+			"become ready, it failed to be created, and the remedy is somewhere else",
+			got.Reason, ReasonPodNeverCreated)
+	}
+	// Nothing was ever registered and nobody is on it, so there is nobody to
+	// move and nothing to withdraw.
+	if got.StartDrain {
+		t.Error("a drain was started for a server that never had a pod")
+	}
+	if got.Deregister {
+		t.Error("a deregistration was sent for a server that was never registered")
+	}
+	if got.DeletePod {
+		t.Error("a pod delete was ordered for a server that never had a pod")
+	}
+}
+
+// The deadline must not outrank a pod that has since turned up. It is
+// computed from "no pod, and none named in the status", so the controller
+// stops setting it the moment one exists — but a stale input reaching Decide
+// must not undo the transition either.
+func TestAPodThatArrivedOutranksTheCreationDeadline(t *testing.T) {
+	got := Decide(Pending, Inputs{
+		PodExists: true, PodRunning: true, PodCreationDeadlineReached: true,
+	})
+	if got.Next != Starting {
+		t.Errorf("next = %s, want %s: the pod is running, whatever the deadline says",
+			got.Next, Starting)
+	}
+}

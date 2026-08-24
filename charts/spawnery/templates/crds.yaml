@@ -4473,11 +4473,16 @@ spec:
               startedAt:
                 description: |-
                   StartedAt is when this server last began trying to become playable: the
-                  pod creation, and then every entry into phase Starting. It drives the
-                  startup deadline, which therefore bounds the current attempt rather than
-                  the age of the pod — a long-lived server that loses readiness gets a full
-                  deadline to recover in, and is failed if it does not. Do not change this
-                  back to pod-creation time.
+                  first pass that accepted it, then the pod creation, and then every entry
+                  into phase Starting. It drives the startup deadline, which therefore
+                  bounds the current attempt rather than the age of the pod — a long-lived
+                  server that loses readiness gets a full deadline to recover in, and is
+                  failed if it does not. Do not change this back to pod-creation time.
+
+                  The acceptance stamp is what gives a Server whose pod is never created a
+                  clock at all. Written only beside the pod, it left such a Server without
+                  one: nothing could fail it, so it sat in Pending occupying its group's
+                  slot for as long as whatever refused the pod stood.
                 format: date-time
                 type: string
               storageResizeError:

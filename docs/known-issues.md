@@ -464,35 +464,6 @@ read? The two counts live in different structs, are populated by different
 agents, and were never checked against each other until an
 actual `kubectl delete` on an actual held connection forced the question.
 
-## Preconditions for milestone 4 (scaling and drain)
-
-**A `Server` that never got a pod occupies its slot indefinitely.** The sweep
-covers "pod without CR" and "server without group", but not "CR without pod":
-that one is handled by the state machine through `PodLost`, which only applies
-once `status.podName` has been written. A `Server` whose pod was never created
-has an empty `status.podName` and an empty `status.startedAt`, so neither
-`PodLost` nor `StartupDeadlineReached` can fire; it stays `Pending` while still
-counting against its group's replicas. Belongs to 4c.
-
-*4c came and went without it, and this is now the only unmet precondition
-milestone 4 left behind.* Checked on 2026-08-22: `OrphanReconciler`'s own doc
-still names the two directions it sweeps — a managed pod whose `Server` is
-gone, and a `Server` whose group is gone — and neither is this one. The other
-four entries that stood in this section are closed and removed; see the commit
-that removed them for what closed each.
-
-**Since 2026-08-24 both ways it happens say so on the CR**, which makes the
-rest diagnosable rather than fixing it. A namespace the operator cannot
-bootstrap sets `Accepted=False`/`NamespaceNotBootstrapped`; a pod the API
-server refuses — a Pod Security profile, a quota, an admission webhook — now
-sets `Accepted=False`/`ServerPodRejected` and emits an event, where returning
-the error left the object saying `Accepted=True` beside a
-`Ready=False`/`PodPending` "waiting for the pod" that would never arrive. The
-reclaim is what is still open: nothing removes such a `Server`, so a group in
-a namespace that refuses its pods sits at its replica count with servers that
-will never exist, and lowering `replicas` is the only thing that frees the
-slots.
-
 ## From milestone 4a
 
 **`status.freeSlots` and the scaler's own figure are two numbers.**

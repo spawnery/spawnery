@@ -74,6 +74,7 @@ const (
 	ReasonDrained           = "Drained"
 	ReasonDrainTimeout      = "DrainTimeout"
 	ReasonPodLost           = "PodLost"
+	ReasonPodNeverCreated   = "PodNeverCreated"
 	ReasonPodTerminal       = "PodTerminal"
 	ReasonRetiring          = "Retiring"
 	ReasonMaxStaleElapsed   = "MaxStaleElapsed"
@@ -113,6 +114,20 @@ type Inputs struct {
 	// the pod: a long-lived server that loses readiness gets a full deadline to
 	// recover in, and is failed if it does not.
 	StartupDeadlineReached bool
+
+	// PodCreationDeadlineReached is true if no pod was ever created for this
+	// server and the wait for one has run out. It is a different question from
+	// StartupDeadlineReached, which asks whether a pod that exists became
+	// playable, and it needs a different answer: a server that never had a pod
+	// did not fail to become ready, it failed to be created, and the remedy is
+	// at whatever refused the create rather than at the server.
+	//
+	// Without it such a server had no clock at all. status.podName stays empty
+	// so PodLost never applies, and the startup deadline's stamp used to be
+	// written beside the pod — so a Server in a namespace whose policy or
+	// quota refuses its pods stayed Pending for as long as the refusal stood,
+	// counting against its group's replicas the whole time.
+	PodCreationDeadlineReached bool
 
 	// AgentReady is true if the in-game agent reported readiness on a live
 	// stream.
@@ -377,6 +392,18 @@ func Decide(current Phase, in Inputs) Decision {
 	case Pending:
 		if in.PodExists && in.PodRunning {
 			return Decision{Next: Starting, Reason: ReasonPodRunning, Message: "pod is running"}
+		}
+		if in.PodCreationDeadlineReached {
+			// No drain and no deregistration: a server that never had a pod
+			// was never registered and nobody is on it. Failed rather than
+			// Terminating, so the group's backoff counts it and the object
+			// stays for its retention as the record of what happened -- the
+			// condition set beside it names what refused the create.
+			return Decision{
+				Next:    Failed,
+				Reason:  ReasonPodNeverCreated,
+				Message: "no pod was ever created for this server",
+			}
 		}
 		return Decision{Next: Pending, Reason: ReasonPodPending, Message: "waiting for the pod"}
 
