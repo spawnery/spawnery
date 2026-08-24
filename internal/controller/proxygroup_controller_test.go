@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -3289,5 +3290,85 @@ func TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt(t *testing.T) {
 	if !slices.Equal(names, []string{"gateway"}) {
 		t.Errorf("groupsOfNetwork(%s) = %v, want [gateway] only: a group naming a different "+
 			"Network must not be woken by this one", f.network.Name, names)
+	}
+}
+
+// TestTheProxyPlayerLimitIsDecidedTheSameWayTwice closes the shape behind
+// milestone 3a/3b's one Critical finding, which docs/known-issues.md records as
+// still open: "the proxy player-limit default is still spelled out twice…
+// nothing asserts the two decisions agree."
+//
+// podspec.BuildProxyPod writes SPAWNERY_PLAYER_LIMIT on the container;
+// proxyConfigValues writes playerLimit into the ConfigMap the same pod mounts.
+// They share podspec.DefaultPlayerLimit but not the predicate in front of it,
+// and the two are read by different halves of the same running proxy.
+//
+// The disagreement is not hypothetical — it happened. The controller used to
+// leave the ConfigMap's playerLimit nil whenever spec.config was nil while the
+// env var already defaulted to 500, so a ProxyGroup with no spec.config came up
+// Accepted, with its Service, and every pod crash-looped forever on
+// `config.yaml: playerLimit is not set` with nothing on the CR saying why.
+//
+// This asserts the two produce the same number across the shapes spec.config
+// can take, which is the property neither side can hold alone.
+func TestTheProxyPlayerLimitIsDecidedTheSameWayTwice(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  *spawneryv1alpha1.ProxyConfigSpec
+		want int32
+	}{
+		{"no config block at all", nil, podspec.DefaultPlayerLimit},
+		{"a config block that sets nothing", &spawneryv1alpha1.ProxyConfigSpec{}, podspec.DefaultPlayerLimit},
+		{"an explicit zero", &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 0}, podspec.DefaultPlayerLimit},
+		{"a real limit", &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: 40}, 40},
+		{"a limit that happens to equal the default", &spawneryv1alpha1.ProxyConfigSpec{PlayerLimit: podspec.DefaultPlayerLimit}, podspec.DefaultPlayerLimit},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			group := &spawneryv1alpha1.ProxyGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "gateway", Namespace: "ns"},
+				Spec: spawneryv1alpha1.ProxyGroupSpec{
+					NetworkRef: spawneryv1alpha1.ObjectRef{Name: "net"},
+					Replicas:   1,
+					Image:      "ghcr.io/spawnery/velocity:test",
+					Expose: spawneryv1alpha1.ExposeSpec{
+						Type:     spawneryv1alpha1.ExposeNodePort,
+						NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30000},
+					},
+					Routing: spawneryv1alpha1.RoutingSpec{FallbackGroups: []string{"lobby"}},
+					Config:  tc.cfg,
+				},
+			}
+			net := &spawneryv1alpha1.Network{ObjectMeta: metav1.ObjectMeta{Name: "net", Namespace: "ns"}}
+
+			pod, err := podspec.BuildProxyPod(net, group, "gateway-aaaa", "spawnery.invalid:0", nil)
+			if err != nil {
+				t.Fatalf("BuildProxyPod: %v", err)
+			}
+			var fromPod string
+			for _, e := range pod.Spec.Containers[0].Env {
+				if e.Name == podspec.EnvPlayerLimit {
+					fromPod = e.Value
+				}
+			}
+			if fromPod == "" {
+				t.Fatalf("the pod carries no %s at all", podspec.EnvPlayerLimit)
+			}
+
+			values := proxyConfigValues(group)
+			if values.PlayerLimit == nil {
+				t.Fatal("the ConfigMap's playerLimit is nil; the proxy refuses to start on that, " +
+					"and this is exactly the shape that crash-looped every pod of a group with " +
+					"no spec.config")
+			}
+
+			fromConfig := strconv.FormatInt(int64(*values.PlayerLimit), 10)
+			if fromPod != fromConfig {
+				t.Errorf("SPAWNERY_PLAYER_LIMIT = %s but the ConfigMap says playerLimit: %s. "+
+					"The same proxy reads both", fromPod, fromConfig)
+			}
+			if fromConfig != strconv.FormatInt(int64(tc.want), 10) {
+				t.Errorf("both say %s, want %d", fromConfig, tc.want)
+			}
+		})
 	}
 }
