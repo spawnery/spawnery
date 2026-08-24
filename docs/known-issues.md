@@ -2970,8 +2970,9 @@ because the shape of the mistake — a guard that checks its input rather than
 its outcome — recurred three times in this milestone.
 
 **The design's claim about the forwarding-secret grant is wrong, and the real
-consequence is quieter.** `docs/superpowers/specs/2026-08-19-helm-chart-design.md`
-§9 and milestone 6d's own Task 6 brief both state that a misconfigured grant
+consequence is quieter.** §9 of
+`docs/superpowers/specs/2026-08-19-helm-chart-design.md`
+and milestone 6d's own Task 6 brief both state that a misconfigured grant
 leaves "every group in the namespace refuses with `NetworkNotAccepted`." It
 does not. `internal/controller/network_controller.go`'s `Reconcile` sets
 `ConditionAccepted` `True` before the forwarding secret is read, and nothing on
@@ -3930,8 +3931,8 @@ the same suite with nothing indicating it.
   token the agent reads its identity from. **Since 2026-08-24 it also refuses
   two user mounts that collide with each other**, by name or by path —
   including the same path spelled two ways, since the loop cleans before
-  comparing exactly as `checkMountCollision` does. `checkMountCollision` sees one mount at a time, so
-  a collision *between* two of them is structurally invisible to it and the
-  check belongs to the loop. The API server catches both, but as a rejected pod
+  comparing exactly as `checkMountCollision` does. That function sees one
+  mount at a time, so a collision *between* two of them is structurally
+  invisible to it and the check belongs to the loop. The API server catches both, but as a rejected pod
   create that reaches a user as a `Degraded` condition quoting an apimachinery
   message about an index in an array.
