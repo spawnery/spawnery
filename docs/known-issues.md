@@ -3516,16 +3516,33 @@ absence means *permission* rather than refusal — so the branch nothing has
 exercised is the branch that would stop a release. It measured an absence
 once more on 2026-08-25, on the way to `v0.2.1`, and let it through.
 
-Narrow it to what is actually untested, though: the *script* is not the
-untested part. `hack/require-no-red-nightly-test.sh` drives its refusal four
-ways through a seam, and its own header says why the refusing case must be a
-fixture rather than a live call — it would need an open issue in the tracker
-it is testing. What has never executed is the workflow wiring on either side
-of the script: the `if: failure()` step writing the issue, and the
-`if: success()` step closing one that exists. The cheapest way to drive the
-closing half without a red run is to open a `nightly-red` issue by hand and
-let the next green nightly close it, which costs one issue and blocks
-releases until that nightly runs.
+Narrow it to what was actually untested: the *script* never was.
+`hack/require-no-red-nightly-test.sh` drives its refusal four ways through a
+seam, and its own header says why the refusing case must be a fixture rather
+than a live call — it would need an open issue in the tracker it is testing.
+What had never executed is the workflow wiring on either side of it.
+
+Half of that was driven on 2026-08-25, deliberately, by standing in for the
+failure rather than causing one. `spawnery/spawnery#2` was opened by hand
+carrying the `nightly-red` label — which is the only thing any of the three
+pieces looks at — and the label itself had to be created, because until then
+no failure had ever reported one. Then, in order:
+
+- `hack/require-no-red-nightly.sh spawnery/spawnery` refused, exit 1, naming
+  the issue. That is the first time the refusing branch has run against the
+  live repository rather than a fixture, and it is the branch whose silence
+  would have been permission.
+- A dispatched `nightly.yml` run (32850128806) passed, and its `if: success()`
+  step closed the issue with "Closed by the nightly run that passed", logging
+  `::notice::closed spawnery/spawnery#2`.
+- The gate then returned exit 0.
+
+So the closing half and the release gate's refusal are both driven. What is
+still on paper is the `if: failure()` step that *writes* the issue: driving it
+needs a genuinely red nightly, and the one red night this project has had
+(2026-08-22) came the day before that step existed. Standing in for it is what
+the drill above did, which tests everything downstream of it and nothing of
+the step itself.
 
 `nightly.yml` was driven once before the merge, but not in its merged shape: it
 needed a temporary `pull_request:` trigger, because GitHub will not run
