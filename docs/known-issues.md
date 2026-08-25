@@ -276,117 +276,29 @@ cluster. Criterion 7 (a player can join, automated) is now proven — see
 player rather than disconnecting them) was not, and the reason why is the most
 important finding of this run.
 
-**Read the rest of this entry as a finding about `spawnery-join`, not as an
-open criterion.** Criterion 9 was proven manually the next day, 2026-08-13,
-with a real client on a live account — recorded in
-`docs/handover-milestone-4.md` under "The manual session". Of the two
-findings below, the first is closed for the milestone's purposes and stays
-here because it still describes the tool's limits; the second is open and
-belongs to milestone 4.
+**A player connected at the proxy but not yet counted by the backend sits
+outside the drain's protection, and no milestone owns the question.**
+`Occupied()` (`internal/phase/phase.go`) is `in.PlayersStale ||
+in.PlayersOnline > 0` — what the *backend* has reported — and the proxy's own
+count is not consulted at all. Checked again 2026-08-22: nothing in 4a through
+4d changed it, so the window is exactly as open as when it was found and it no
+longer has a milestone assigned. Whoever next touches drain inherits it rather
+than finding it owned.
 
-**Deleting a `Server` with a `spawnery-join --hold` player on it disconnected
-the player instead of moving them.** The diagnosis is measured end to end,
-and the defect sits in the evidence tool's fit for this criterion, not in the
-drain logic itself:
+In production the window is real but small: a real client completes the
+configuration phase within the same round trip. It was found because
+`spawnery-join --hold` freezes a connection there deliberately, which made a
+`kubectl delete` on a held player disconnect them rather than move them —
+`internal/mcjoin`'s `holdOpen` now carries what a held connection is and is
+not, and what closing that gap would take.
 
-- `--hold` stops the join one packet after `Login Acknowledged`, in the
-  configuration state — `internal/mcjoin`'s own package comment documents
-  this as deliberate, because that is as far as Velocity itself needs before
-  it dials a backend.
-- Paper's `getOnlinePlayers()` never contains such a client, because it never
-  finishes the configuration phase Paper is waiting for. So the Paper agent
-  reports zero players, and `Server.status.players` reads zero for a
-  connection the proxy is actively holding open.
-- The drain's own exit condition is inside the `Draining` case:
-  `if !in.Occupied() { ... Reason: ReasonDrained, Message: "no players left"
-  ... }` (`internal/phase/phase.go:247` and `:282` as of 2026-08-22).
-  `Occupied()` (`:166`) is `in.PlayersStale || in.PlayersOnline > 0` — and
-  with a stale-held client Paper never counted, `PlayersOnline` is exactly
-  zero.
-- Measured directly, in one `kubectl get` against the running cluster:
-  `proxygroup/gateway-auto` showed `PLAYERS 1` in the same instant
-  `server/lobby-bsvg` showed `PLAYERS 0`. Same player, same second, two
-  different counts, and the drain reads the one that says nobody is there.
-- The Kubernetes events, all in the same second, show the operator acting on
-  the wrong count rather than hanging or erroring:
-
-  ```
-  DeletionRequested  server/lobby-5wv2  phase Ready -> Draining: deletion requested, moving players off
-  Killing            pod/lobby-5wv2     Stopping container minecraft
-  PodDeleted         server/lobby-5wv2  deleted pod lobby-5wv2: no players left
-  Drained            server/lobby-5wv2  phase Draining -> Terminating: no players left
-  ```
-
-- Velocity then reported `disconnected while connecting to lobby-5wv2: An
-  internal server connection error occurred.` — the player lost the
-  connection Velocity itself was still holding, because the pod it was about
-  to be moved off was already gone.
-
-So: the operator concluded the server was empty and deleted the pod out from
-under a player the proxy was still counting.
-
-**This is two separable findings, and they should stay separate:**
-
-1. **Criterion 9 is not provable with `spawnery-join` as it stands.** Closing
-   this needs the client to play the configuration phase through to the point
-   Paper starts counting it. The whole-branch review scoped that as "two
-   packet-id constants and one `case` in `holdOpen`, not a rewrite".
-
-   *Measured on the wire 2026-08-25, against a local Paper 26.2 (protocol
-   776), and the scoping was wrong in the way that matters: the client has to
-   **drive**, not react.* After Login Acknowledged the server sends Plugin
-   Message `0x01` (`minecraft:brand`, "Paper"), Feature Flags `0x0c`
-   (`minecraft:vanilla`) and Select Known Packs `0x0e` (`minecraft:core
-   26.2`) — and then nothing but Keep Alive `0x04`, for as long as the client
-   waits. It never sends Finish Configuration unprompted, so a `case` that
-   answers one packet would wait for a packet that never comes.
-
-   What actually moves it, each step confirmed by the server's own next move
-   rather than by a remembered constant:
-
-   - serverbound **Known Packs `0x07`** with an empty list — the server
-     answers with 29 Registry Data `0x07` packets and Update Tags `0x0d`,
-     35 KB of them, rather than assuming the client already has the registry;
-   - clientbound **Finish Configuration `0x03`**, empty payload, once that is
-     done;
-   - serverbound **Acknowledge Finish Configuration `0x03`**, empty — after
-     which the server logs `probeplayer joined the game` and counts the
-     player, which is the whole point;
-   - and the hold then sits in the play state, where Keep Alive is `0x2c`
-     carrying a millisecond timestamp, not the configuration state's `0x04`.
-
-   So it is four constants and a small state machine that leads the exchange,
-   not two constants and a `case`. Until that lands, criterion 9 can only be
-   proven manually, with a real client — see
-   `docs/runbook-milestone-3-evidence.md` §10 for that session — or not at
-   all.
-2. **A narrower product finding, and this half belongs to milestone 4, not
-   to the evidence tool.** A player who is connected at the proxy but not yet
-   counted by the backend sits outside the drain's protection: `Occupied()`
-   only sees what the backend has reported, and the proxy's own count is not
-   consulted at all. In production this window is real but small — a real
-   client completes the configuration phase within the same round trip, well
-   under the second `--hold` freezes it at deliberately to make the gap
-   visible. Small is not the same as absent, and milestone 4 owns drain, so
-   this is the milestone to decide whether `Occupied()` should ever
-   incorporate what the proxy side reports.
-
-   *Milestone 4 finished without deciding it.* Checked on 2026-08-22:
-   `Occupied()` is still `in.PlayersStale || in.PlayersOnline > 0`, and
-   nothing in 4a through 4d consults the proxy side. The window is therefore
-   exactly as open as this entry described it, and it no longer has a
-   milestone assigned — whoever next touches drain inherits the question
-   rather than finding it already owned.
-
-**None of this branch's many reviews caught this**, and it is worth saying
-plainly why not, rather than filing it away as bad luck. The whole-branch
-review correctly predicted that a held connection would be *counted* — on
-the proxy side, in `status.connectedPlayers`, which is exactly right and is
-what §6 of the runbook now proves. Nobody in any of those reviews asked the
-complementary question: which side does the *drain's own* exit condition
-read? The two counts live in different structs, are populated by different
-agents, and were never checked against each other until an
-actual `kubectl delete` on an actual held connection forced the question.
+None of this branch's reviews caught it, and why is the transferable part. The
+whole-branch review correctly predicted that a held connection would be
+*counted* on the proxy side, in `status.connectedPlayers`. Nobody asked the
+complementary question: which side does the drain's own exit condition read?
+The two counts live in different structs, are populated by different agents,
+and were never checked against each other until an actual delete on an actual
+held connection forced it.
 
 ## From milestone 4a
 
@@ -418,44 +330,6 @@ safer of the two directions: a group with a server too many costs money, a
 group with a server too few costs joins. `isOccupied` has carried the same lag
 for the same reason since before 4b; what 4b changed is that a scaling
 decision now reads it too.
-
-**`derivePhase` measures readiness against `DesiredReplicas()`, which is only
-the floor — and that is now a decision rather than a leftover.** Before 4a,
-`DesiredReplicas()` in `api/v1alpha1/servergroup_types.go` was the size the
-group ran at, so "ready replicas have reached it" meant the group was fully up.
-Since 4a it is the group's floor: `DecideSize` can and does run an ephemeral
-group above it to cover `spareSlots`. `derivePhase` never changed its
-comparison, so a group scaled to five for spare slots with one server up and
-four still starting publishes `status.phase: Ready` off that one. 4b's rolling
-update, which needs to say "the new generation is up" as something other than
-"one server somewhere is," found its own answer rather than changing this.
-
-*Ruled 2026-08-24: the phase keeps its meaning and the missing question got a
-field of its own.* `Ready` there means the group is serving, which is true as
-soon as one server is up and is the useful thing for a printed column to say;
-redefining it would have traded a true statement for a different true statement
-and made the column flicker on every scale-up. `ConditionProgressing`
-(`reportProgressing`, `internal/controller/servergroup_controller.go`) carries
-the other half: true while a server of the current generation is still coming
-up, or while one of an earlier generation is still there. That is the split a
-Deployment makes between `Available` and `Progressing`, with one difference
-taken on purpose — `True` here means "has not arrived" and nothing else, so a
-group that has given up stays `True` and `Degraded`/`GaveUp` beside it says it
-has stopped trying.
-
-**One field further along, `GroupTotals.ReadyReplicas` counts servers of every
-generation — and that is a decision too, taken the same day after it was first
-mistaken for an oversight.** `AggregateGroup`
-(`internal/controller/candidates.go`) filters `FreeSlots` on the current
-generation, with a comment saying why, and does not filter `ReadyReplicas` two
-lines above it. The asymmetry is the point: `replicas`, `readyReplicas` and
-`onlinePlayers` are the "what is there" trio and answer how much of the group
-is serving right now, which is what a printed column should answer — and during
-a changeover the servers being replaced *are* still serving. `freeSlots` is the
-odd one because it is the scaler's own input that happens to be published, and
-the scaler is asking a different question. What the trio cannot say during a
-changeover, `ConditionProgressing` now says beside it, rather than one number
-being made to mean two things.
 
 ## From milestone 4b
 

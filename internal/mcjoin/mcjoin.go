@@ -372,6 +372,36 @@ func JoinAndHold(ctx context.Context, host string, port int, username string, ho
 // holdOpen reads until the connection's deadline expires, which is how a
 // successful hold ends: there is nothing this client wants from those packets
 // except the two it has to act on.
+//
+// # What a held connection is not
+//
+// It stops one packet after Login Acknowledged, in the configuration state,
+// which is as far as Velocity needs before it dials a backend. Paper's
+// getOnlinePlayers() never contains such a client, because it never finishes
+// the configuration phase Paper is waiting for -- so the Paper agent reports
+// zero players and Server.status.players reads zero for a connection the
+// proxy is actively holding open. A held player therefore cannot stand in for
+// a real one wherever the *backend's* count is what is read.
+//
+// Closing that needs this client to drive the exchange rather than answer it,
+// which is the part a reading of the protocol gets wrong. Measured on the
+// wire 2026-08-25 against Paper 26.2, protocol 776: after Login Acknowledged
+// the server sends Plugin Message 0x01 (minecraft:brand), Feature Flags 0x0c
+// and Select Known Packs 0x0e -- and then nothing but Keep Alive 0x04, for as
+// long as the client waits. It never sends Finish Configuration unprompted,
+// so a case that answers one packet waits for a packet that never comes. What
+// moves it, each step confirmed by the server's own next move:
+//
+//   - serverbound Known Packs 0x07 with an empty list, after which the server
+//     sends 29 Registry Data 0x07 packets and Update Tags 0x0d, 35 KB of them
+//   - clientbound Finish Configuration 0x03, empty payload
+//   - serverbound Acknowledge Finish Configuration 0x03, empty -- after which
+//     the server logs "<name> joined the game" and counts the player
+//
+// The hold then sits in the play state, where Keep Alive is 0x2c carrying a
+// millisecond timestamp rather than the configuration state's 0x04. So it is
+// four constants and a small state machine that leads, not two constants and
+// a case.
 func (c *framedConn) holdOpen() error {
 	for {
 		id, payload, err := c.readPacket()
