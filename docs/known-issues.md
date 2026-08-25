@@ -1482,40 +1482,24 @@ report naming the cause was available and was not shipped.
   simultaneously active nothing is evictable and the map grows past it. That is
   the many-compromised-pods case the design ruled out of scope, recorded so the
   absence reads as a decision.
-- **The ingress peer is a label selector, so it admits whoever wears the
-  labels.** A pod in the game namespace carrying `managed-by`, that network's
-  `spawnery.cloud/network` and `role=proxy` is admitted to the backends on
-  25565 wherever a CNI enforces, whoever created it. Creating one takes pod
-  `create` in that namespace, which is authority over the namespace anyway, so
-  this is the ordinary shape of a pod-selector policy rather than a defect —
-  but "only this network's proxies" means "only pods labelled as this
-  network's proxies", and the two are the same sentence only for as long as
-  nobody else can write those labels.
-- **The rate limit lives inside `Authenticate`, not in the interceptor.** The
-  design's §5.3 sketched it "in the interceptor before `Authenticate`"; it is
-  at `internal/grpcauth/identity.go`'s cache-miss branch instead, and it has to
-  be, because "consulted only when the cache misses" cannot be decided by a
-  caller that has not yet looked in the cache. Worth knowing before reading the
-  design and expecting to find it a layer up. **It is also the proximate cause
-  of the milestone's one critical defect, and that is worth recording beside
-  the ruling that it is right.** Living inside `Authenticate` forced the peer
-  to be recovered from a `context.Context` — and no test in the package put a
-  peer in one: the tests passed `context.Background()`, so the key was always
-  `"unknown"`; nothing exercised the real key; and a key naming a connection
-  rather than a pod therefore survived the whole milestone. The interceptor
-  placement would have made the peer an explicit parameter and the bug visible
-  at the call site. The placement stands, because the alternative is a limiter
-  consulted on every request; what it costs is that the seam has to be tested
-  deliberately, which
-  `TestTheRateLimitKeysOnThePodRatherThanTheConnection` now does.
+- **The rate limit lives inside `Authenticate`, not in the interceptor**, where
+  the design's §5.3 sketched it. It has to: "consulted only when the cache
+  misses" cannot be decided by a caller that has not yet looked in the cache.
+  Worth knowing before reading the design and expecting it a layer up, and
+  worth knowing what the placement costs — it forces the peer to be recovered
+  from a `context.Context` rather than passed as a parameter, which is how a
+  limiter keyed on the connection instead of the pod survived a whole
+  milestone. The seam has to be tested deliberately.
 - `newAuthFixture` (`internal/grpcauth/auth_envtest_test.go`) wires neither the
   cache nor the limiter, which is legal because both types' methods are
   nil-safe — and it means the package's existing envtest suite exercises the
   uncached, unlimited path. That is why a mutation to the cache broke nothing
   there and needed a test written for it.
-- The new RBAC entries' `Why` fields will go stale the first time a second call
-  site appears, exactly as `configmaps`' and `pods: patch`'s did. Nothing in
-  the audit can catch it; both precedents are under "On the RBAC audit" below.
+- A `Why` field in `required.go` goes stale the first time a second call site
+  appears, and nothing in the audit can catch it — `configmaps` and
+  `pods: patch` both did. Checked 2026-08-25: 22 of the 23 identifiers those
+  fields name still resolve to methods in this repository, and the 23rd is
+  `Recorder.Eventf`, which is controller-runtime's.
 
 ## From milestone 6c (the LoadBalancer and HostPort expose strategies)
 
