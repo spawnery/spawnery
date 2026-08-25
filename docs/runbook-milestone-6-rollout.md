@@ -1412,6 +1412,39 @@ finding under `[advanced]` is what makes that work, and this is its
 confirmation from the other end. Nothing in the chain was checked by the
 operator, and every link of it is the cluster owner's to keep.
 
+## Scenario 12 — the budget refusing an eviction, without a player
+
+Scenario 6 left this open: both budgets select on `spawnery.cloud/occupied`
+and the operator sizes `minAvailable` from its own occupancy tally rather than
+from the labels on the pods, so hand-labelling a pod occupied moves
+`currentHealthy` and leaves `desiredHealthy` at 0 — the eviction is still
+allowed, correctly, because a label nobody counted changes nothing.
+
+"Only a real player can make the budget refuse" is the wrong conclusion. What
+the budget needs is an **occupied** pod, and `proxyOccupied` is
+`Players != 0 || PlayersStale || !Connected` — a proxy whose agent has gone
+silent counts, not because anyone is on it but because the operator cannot
+know and takes the conservative answer.
+
+Driven 2026-08-25 with nobody playing, in a namespace of its own: one
+`ProxyGroup` at one replica, evicted successfully while healthy (`201`), then
+a `NetworkPolicy` selecting the proxy for `Egress` with no allow rules, to cut
+the agent's stream. Eighteen seconds later `spawnery.cloud/occupied: true` was
+on the pod, the budget read `minAvailable 1 / currentHealthy 1 /
+disruptionsAllowed 0`, and the eviction API answered `TooManyRequests: Cannot
+evict pod as it would violate the pod's disruption budget`. Deleting the
+policy cleared it within 24 seconds, so the protection lifts on its own rather
+than sticking.
+
+That run measured something else on the way past, and it is the first time the
+production CNI has been asked: **Cilium enforces a NetworkPolicy on
+`paulwtf`.** The egress deny is what cut the stream, so it was enforced rather
+than ignored — the opposite of what the e2e harness's kindnet does.
+
+A real player produced the same sentence later the same day, for the occupied
+proxy and for the lobby server carrying the session, which is what §6's
+"PodDisruptionBudget under a real eviction" asked for.
+
 ## Acceptance criteria
 
 Against the design's §9, one line each, naming the scenario that decided it.

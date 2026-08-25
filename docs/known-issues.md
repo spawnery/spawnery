@@ -2112,42 +2112,6 @@ rests on: it is what establishes that Velocity ignores the misplaced key
 rather than failing on it, which is the whole reason a render-time refusal is
 worth its cost.
 
-**A PodDisruptionBudget's protective behaviour cannot be simulated.** Both
-budgets select on `spawnery.cloud/occupied: true` and the operator sizes
-`minAvailable` from its own occupancy tally rather than from the labels on the
-pods. Hand-labelling pods occupied moved `currentHealthy` to 2 and left
-`desiredHealthy` at 0, so the eviction API still allowed the eviction — which
-is correct: the operator sizes from its own tally and a label nobody counted
-changes nothing.
-
-*"Only real players can make the budget refuse anything" is what this used to
-say next, and it is wrong.* What the budget needs is an **occupied** pod, and
-`proxyOccupied` is `Players != 0 || PlayersStale || !Connected` — a proxy whose
-agent has gone silent counts, not because anyone is on it but because the
-operator cannot know, and the conservative answer is the one it takes. Driven
-on `paulwtf` on 2026-08-25 with nobody playing, in a namespace of its own: one
-`ProxyGroup` at one replica, evicted successfully while healthy (`201`), then a
-`NetworkPolicy` selecting the proxy for `Egress` with no allow rules — the
-first policy to select a proxy at all, per the 6b entry above — to cut the
-agent's stream. Eighteen seconds later `spawnery.cloud/occupied: true` was on
-the pod, the budget read `minAvailable 1 / currentHealthy 1 / disruptionsAllowed
-0`, and the eviction API answered `TooManyRequests: Cannot evict pod as it
-would violate the pod's disruption budget` — the same sentence the player
-produced. Deleting the policy cleared it within 24 seconds, so the protection
-lifts on its own rather than sticking.
-
-That run measured something else on the way past, which nothing had: **Cilium
-enforces a NetworkPolicy on `paulwtf`.** The egress deny is what cut the
-stream, so it was enforced rather than ignored — the opposite of what 6b
-measured for kindnet on the e2e harness, and the first time the production CNI
-has been asked.
-
-A real player did, later the same day: both budgets went to `minAvailable 1`,
-`disruptionsAllowed 0`, and the eviction API answered
-`TooManyRequests: Cannot evict pod as it would violate the pod's disruption
-budget` for the occupied proxy and for the lobby server carrying the session.
-§6's "PodDisruptionBudget under a real eviction" is met.
-
 **Cilium will not share a LoadBalancer address between two `Local` Services
 that select different pods.** Non-overlapping ports are necessary and not
 sufficient. Measured:
