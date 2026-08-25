@@ -14,6 +14,15 @@
 #
 #   systemd-run --scope --user --property=Delegate=yes -- \
 #     nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e
+#
+# It costs less memory than it looks like it should. Measured 2026-08-25 on a
+# 7.9 GiB machine with no swap: 962 MiB over baseline for a full run with a
+# warm nix store, of which a bare single-node kind cluster is 675 MiB. No image
+# in the run resolves, by decision, so no game or proxy process ever starts --
+# what runs is a control plane and one operator pod with a 256 MiB limit. The
+# `nix build` at line 95 costs about 1 GiB on a cold store and finishes before
+# `kind create` at line 112, so the peak is the larger of the two rather than
+# their sum.
 set -euo pipefail
 
 CLUSTER="${CLUSTER:-spawnery-e2e}"

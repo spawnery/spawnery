@@ -717,8 +717,8 @@ fixed in them. Three others stood here and are closed:
   `set_ready_sent` is already non-zero — a sub-second window on a correct
   agent.
 
-**Two facts about the machine this milestone was built on — both have since
-flipped, which is the point.** Measured 2026-08-14: `docker` was a symlink
+**Three facts about the machine this milestone was built on — two of them have
+since flipped and the third was never measured at all, which is the point.** Measured 2026-08-14: `docker` was a symlink
 into `podman-docker-compat`, so `CONTAINER ?= docker` already ran Podman and
 `CONTAINER=podman` changed nothing; and `/tmp` was not a tmpfs, so the
 `TMPDIR` prerequisite did not apply.
@@ -735,6 +735,23 @@ nothing re-reads a dated fact, and a stale one about the machine is acted on
 rather than merely read. `docs/runbook-milestone-3-evidence.md` §0 states both
 conditionally, which is why nothing downstream broke while this paragraph was
 wrong.
+
+**The third was worse than stale: it was never measured.** "This machine has
+8 GB, so `make e2e` does not run here" stood as a working rule for weeks and
+was acted on — it is why several entries in this file said "unproven until
+driven" rather than saying what a run had found. Measured 2026-08-25 on the
+same machine, 7.9 GiB total with no swap: a full `make e2e` peaks at **962 MiB
+over baseline** with a warm nix store, and 1.1 GiB on a run whose scenarios
+fail. A bare single-node `kind` cluster is 675 MiB of that; `nix build
+.#operator-image` costs about 1 GiB on a cold store and does not overlap the
+cluster, since `hack/e2e.sh` builds at line 95 and creates at line 112. So the
+peak is the larger of the two, not their sum.
+
+The reason it is so small is a decision this file already records: no image in
+the run resolves, so no Paper or Velocity process ever starts. What runs is a
+Kubernetes control plane and one operator pod with a 256 MiB limit. An
+estimate that assumed game servers would have been several times too high —
+which is what the rule was, and nothing had checked it.
 
 **An unchecked question about milestone 3's runbook, which must not be repeated
 as a finding.** Measured 2026-08-14 against Go 1.26.5 in this repository's
