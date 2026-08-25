@@ -4602,3 +4602,94 @@ func TestAServerGroupReportsItsOwnRotationState(t *testing.T) {
 			got, spawneryv1alpha1.ReasonForwardingSecretInSync)
 	}
 }
+
+// taintNode puts a drain taint on a node the fixture already created.
+func (f *fixture) taintNode(t *testing.T, name, key string) {
+	t.Helper()
+	node := &corev1.Node{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name}, node); err != nil {
+		t.Fatalf("get node %s: %v", name, err)
+	}
+	node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
+		Key: key, Effect: corev1.TaintEffectNoSchedule,
+	})
+	if err := f.c.Update(f.ctx, node); err != nil {
+		t.Fatalf("taint node %s: %v", name, err)
+	}
+}
+
+// The taint half of IsDeparting, against a real Node object.
+//
+// Both halves were covered before this only where it costs least: IsDeparting
+// itself takes a corev1.Node built in memory, and setup_test.go proves
+// Options.DrainTaintKeys reaches the reconciler. What nothing drove was a taint
+// on a Node the API server holds, read back through nodeDeparting on the path a
+// condemnation actually takes — and that is the half an autoscaler exercises,
+// because cluster-autoscaler taints and deletes without touching
+// spec.unschedulable unless --cordon-node-before-terminating is on, which it is
+// not by default.
+//
+// The second subtest is the configuration `paulwtf` runs: measured 2026-08-25,
+// its Deployment passes no --drain-taint at all. Harmless there, because the
+// cluster has three fixed nodes and no autoscaler — and exactly the state this
+// entry warns would make a scale-in invisible.
+func TestATaintedNodeCondemnsOnlyWhenItsKeyIsConfigured(t *testing.T) {
+	const key = "ToBeDeletedByClusterAutoscaler"
+
+	for _, tc := range []struct {
+		name       string
+		taintKeys  []string
+		wantGoing  bool
+		wantReason string
+	}{
+		{
+			"the key the operator was told to watch",
+			[]string{key},
+			true,
+			"a taint whose key is configured is a node on its way out",
+		},
+		{
+			"no keys configured, which is the default",
+			nil,
+			false,
+			"an empty -drain-taint list must see nothing: reacting to another " +
+				"project's taint key by default would couple this operator to a " +
+				"vocabulary that project is free to rename",
+		},
+		{
+			"a key that is not the one taints carry",
+			[]string{"example.com/going-away"},
+			false,
+			"only the configured keys count, or the list would be decoration",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t)
+			r := groupReconciler(f)
+			r.DrainTaintKeys = tc.taintKeys
+
+			f.reconcileGroup(t, r)
+			servers := f.listServers(t)
+			if len(servers) != 1 {
+				t.Fatalf("servers = %d, want 1", len(servers))
+			}
+			f.markReady(t, servers[0].Name)
+
+			node := f.ensureNode(t, "node-tainted-"+f.ns, false)
+			reloaded := f.server(servers[0].Name)
+			pod, ok := f.pod(reloaded.Status.PodName)
+			if !ok {
+				t.Fatalf("pod of %s not found", servers[0].Name)
+			}
+			f.bindPodToNode(t, pod, node.Name)
+			f.taintNode(t, node.Name, key)
+
+			f.reconcileGroup(t, r)
+
+			going := !f.server(servers[0].Name).DeletionTimestamp.IsZero()
+			if going != tc.wantGoing {
+				t.Errorf("server condemned = %v, want %v: %s", going, tc.wantGoing, tc.wantReason)
+			}
+		})
+	}
+}

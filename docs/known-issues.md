@@ -981,7 +981,14 @@ pass began.
 
 **An operator running cluster-autoscaler must pass `-drain-taint
 ToBeDeletedByClusterAutoscaler`, or a scale-in is invisible to this operator
-until something else cordons the node.** `IsDeparting` (`internal/controller/nodes.go`)
+until something else cordons the node.** *Measured on `paulwtf` 2026-08-25: it
+passes none.* Its `Deployment`'s args are `--leader-elect`,
+`--startup-deadline`, `--metrics-bind-address` and
+`--health-probe-bind-address`, and nothing else — so the taint branch cannot
+fire on that cluster at all. Harmless there, and worth writing down rather than
+fixing: three fixed bare-metal nodes and no autoscaler, so the branch has
+nothing to react to. It stops being harmless the day one appears, and this is
+the sentence that will be looked for then. `IsDeparting` (`internal/controller/nodes.go`)
 has two ways in: `spec.unschedulable`, which is hardwired, and a taint whose
 key appears in the operator's `-drain-taint` list — repeatable, and empty by
 default. An earlier draft of the design that produced this milestone claimed
@@ -2276,7 +2283,36 @@ single-node topology. Nothing in the run can reach node drain and its taint
 handling (4c-3), a PodDisruptionBudget's effect on a real eviction, `HostPort`
 and its CNI dependency, a `LoadBalancer` address, or CIS `restricted` pod
 security. Those belong to the RKE2 rollout at the end of milestone 6 (design
-§12), and until it is driven they are unproven rather than merely untested.
+§12).
+
+*Three of the five are driven on `paulwtf` as of 2026-08-25, against the
+deployed `v0.2.0` operator.* CIS `restricted` and `HostPort` are under
+milestone 6c above. **Node departure is driven for the cordon leg**: `kubectl
+cordon server03`, which carried one of the two `gateway` proxies. The operator
+replaced it without being asked twice and the timestamps are the interesting
+part — the replacement was scheduled to `server02` and started **eleven seconds
+before** the condemned pod was stopped, which is make-before-break doing what
+it is for on a real scheduler. `NodeDraining` went `True` and back to `False`
+inside one twenty-second polling window, so the group read `Ready` with two
+replicas throughout and `mc.paul.wtf` never had fewer than one proxy behind it.
+
+The **taint** leg — `IsDeparting`'s second branch, the one an autoscaler
+drives — a cordon never reaches, since it sets `spec.unschedulable` instead. It
+is driven now, but in envtest rather than here:
+`TestATaintedNodeCondemnsOnlyWhenItsKeyIsConfigured` taints a real `Node` the
+API server holds and reads it back through `nodeDeparting` on the path a
+condemnation takes. Before that, both halves were covered only where they cost
+least — `IsDeparting` over a `Node` built in memory, and
+`TestSetupAllThreadsTheDrainTaintKeys` over the option that reaches the
+reconciler. It was not forced on `paulwtf`, and the reason is the measurement
+under milestone 4c-3 below: that operator passes no `-drain-taint` at all, so
+the branch cannot fire there, and giving it one means editing a Flux-managed
+`Deployment` on a live cluster to exercise a branch envtest already drives.
+
+A **PodDisruptionBudget's effect on a real eviction cannot be driven on this
+cluster while nobody is playing**: both PDBs sit at `minAvailable: 0` precisely
+because no pod is occupied, so an eviction would be allowed and the protection
+this is about would never engage. That one needs players, not a cluster.
 
 **No image in the run resolves, by decision, so no game or proxy process ever
 starts.** Every pod sits in `ErrImagePull`/`ImagePullBackOff` for the whole
