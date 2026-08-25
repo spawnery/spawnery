@@ -2339,8 +2339,11 @@ Three guards were in place and none could see it. `required.go` is checked
 against the generated role in both directions, so table and ClusterRole can
 never drift -- but the table is written from the markers rather than from the
 call sites, so both sides agreed on the same wrong answer. The envtest
-controller tests do drive `retireServer`, and envtest enforces no RBAC against
-their admin client, so a missing verb is invisible there by construction. And
+controller tests do drive `retireServer`, and did so through a client holding
+everything, so a missing verb could not show. Not because envtest waives
+authorization -- its API server runs the same authorizer any cluster does,
+which is precisely why the fix below works -- but because nothing had ever
+asked those tests to be anybody in particular. And
 the `is forbidden:` sweep above would have caught the exact string -- except
 no e2e scenario ever changes a `ServerGroup`'s image, so the one path that
 needs the verb is never taken during a run.
@@ -3383,10 +3386,22 @@ that is a statement about the library's source, not about a run.
 `internal/rbacaudit` checks the rendered chart's RBAC against a
 hand-maintained table in both directions, so it catches the table and the
 role disagreeing — but the table itself is hand-maintained, and nothing
-catches the table and the role agreeing while both are wrong against what
-the code actually needs. envtest cannot close that gap either: its test
-client is granted everything, so a missing grant is invisible to every
-envtest-backed test in this repository. The only thing that has exercised
+caught the table and the role agreeing while both were wrong against what
+the code actually needs.
+
+That paragraph was written as a warning and then came true: `servers` was
+granted `get;list;watch;create;update;delete`, the table said the same, and
+`ServerGroupReconciler.retireServer` patches `spec.retire`, so no ServerGroup
+rolling update could ever finish. It ran into a live cluster on 2026-08-25.
+Closed the same day — see the third `is forbidden:` entry in milestone 6a's
+section for the full account. `testenv.RestrictedClient` gives every
+reconciler in the controller tests the operator's own identity and exactly
+the generated ClusterRole, so the sentence this paragraph used to carry —
+"envtest cannot close that gap either: its test client is granted
+everything" — is no longer true of this repository. Removing `patch` from
+the servers rule now turns four existing tests red; from `pods`, 93.
+
+The only thing that has exercised
 the operator's real ServiceAccount against a real API server since the
 grant changed is one `make e2e` run, and that run's `PASS` reaches exactly
 as far as the check it drives allows, no further:
