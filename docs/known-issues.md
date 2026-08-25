@@ -2309,10 +2309,15 @@ under milestone 4c-3 below: that operator passes no `-drain-taint` at all, so
 the branch cannot fire there, and giving it one means editing a Flux-managed
 `Deployment` on a live cluster to exercise a branch envtest already drives.
 
-A **PodDisruptionBudget's effect on a real eviction cannot be driven on this
-cluster while nobody is playing**: both PDBs sit at `minAvailable: 0` precisely
-because no pod is occupied, so an eviction would be allowed and the protection
-this is about would never engage. That one needs players, not a cluster.
+A **PodDisruptionBudget's effect on a real eviction** was driven on 2026-08-20
+and is recorded under the RKE2 rollout below, not here — with a real player,
+both budgets at `minAvailable 1` and `disruptionsAllowed 0`, and the eviction
+API answering `TooManyRequests`. The sentence this paragraph replaced said it
+was still open, which was a misreading of the line above: the *harness* cannot
+reach it, and the rollout did. What remains true for an idle cluster is only
+that it cannot be re-driven on demand — both PDBs sit at `minAvailable: 0`
+precisely because no pod is occupied, which the rollout also measured and found
+correct.
 
 **No image in the run resolves, by decision, so no game or proxy process ever
 starts.** Every pod sits in `ErrImagePull`/`ImagePullBackOff` for the whole
@@ -3635,7 +3640,30 @@ budgets select on `spawnery.cloud/occupied: true` and the operator sizes
 `minAvailable` from its own occupancy tally rather than from the labels on the
 pods. Hand-labelling pods occupied moved `currentHealthy` to 2 and left
 `desiredHealthy` at 0, so the eviction API still allowed the eviction — which
-is correct. Only real players can make the budget refuse anything.
+is correct: the operator sizes from its own tally and a label nobody counted
+changes nothing.
+
+*"Only real players can make the budget refuse anything" is what this used to
+say next, and it is wrong.* What the budget needs is an **occupied** pod, and
+`proxyOccupied` is `Players != 0 || PlayersStale || !Connected` — a proxy whose
+agent has gone silent counts, not because anyone is on it but because the
+operator cannot know, and the conservative answer is the one it takes. Driven
+on `paulwtf` on 2026-08-25 with nobody playing, in a namespace of its own: one
+`ProxyGroup` at one replica, evicted successfully while healthy (`201`), then a
+`NetworkPolicy` selecting the proxy for `Egress` with no allow rules — the
+first policy to select a proxy at all, per the 6b entry above — to cut the
+agent's stream. Eighteen seconds later `spawnery.cloud/occupied: true` was on
+the pod, the budget read `minAvailable 1 / currentHealthy 1 / disruptionsAllowed
+0`, and the eviction API answered `TooManyRequests: Cannot evict pod as it
+would violate the pod's disruption budget` — the same sentence the player
+produced. Deleting the policy cleared it within 24 seconds, so the protection
+lifts on its own rather than sticking.
+
+That run measured something else on the way past, which nothing had: **Cilium
+enforces a NetworkPolicy on `paulwtf`.** The egress deny is what cut the
+stream, so it was enforced rather than ignored — the opposite of what 6b
+measured for kindnet on the e2e harness, and the first time the production CNI
+has been asked.
 
 A real player did, later the same day: both budgets went to `minAvailable 1`,
 `disruptionsAllowed 0`, and the eviction API answered
