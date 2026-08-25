@@ -122,7 +122,7 @@ class RouterTest {
         directory.apply(listOf(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val router = Router(directory)
 
-        assertNull(router.choose(listOf("lobby"), excluding = "lobby-1"))
+        assertNull(router.choose(listOf("lobby"), excluding = setOf("lobby-1")))
     }
 
     @Test
@@ -139,7 +139,7 @@ class RouterTest {
         fakeServer(registry, "lobby-2").players = players(2)
         val router = Router(directory)
 
-        val chosen = router.choose(listOf("lobby"), excluding = "lobby-1")
+        val chosen = router.choose(listOf("lobby"), excluding = setOf("lobby-1"))
 
         assertEquals("lobby-2", chosen?.serverInfo?.name)
     }
@@ -171,7 +171,7 @@ class RouterTest {
         )
         val router = Router(directory)
 
-        val chosen = router.choose(listOf("lobby", "hub"), excluding = "lobby-1")
+        val chosen = router.choose(listOf("lobby", "hub"), excluding = setOf("lobby-1"))
 
         assertEquals("hub-1", chosen?.serverInfo?.name)
     }

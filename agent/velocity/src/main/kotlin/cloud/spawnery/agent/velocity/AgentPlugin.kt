@@ -9,6 +9,8 @@ import cloud.spawnery.agent.pb.PlayerJoinedServer
 import cloud.spawnery.agent.pb.ProxyMessage
 import com.google.inject.Inject
 import com.velocitypowered.api.event.Subscribe
+import com.velocitypowered.api.event.connection.DisconnectEvent
+import com.velocitypowered.api.event.player.KickedFromServerEvent
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent
 import com.velocitypowered.api.event.player.ServerConnectedEvent
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
@@ -75,7 +77,7 @@ class AgentPlugin @Inject constructor(
 
     /**
      * Everything below is null while the agent is dormant, and that is what
-     * makes the two player events inert in that state rather than merely
+     * makes the player events inert in that state rather than merely
      * harmless.
      *
      * The brief for this task said to register those events with
@@ -90,12 +92,13 @@ class AgentPlugin @Inject constructor(
      * mechanism that already delivers [onInitialize] here with no registration
      * anywhere. So a `@Subscribe` method on this class is registered from
      * plugin load, before [onInitialize] runs and whatever it decides, and a
-     * dormant agent cannot decline to receive these two events. It can only
+     * dormant agent cannot decline to receive these events. It can only
      * decline to do anything with them, which is what the null checks below
      * are.
      */
     private var loop: SessionLoop<ProxyMessage, OperatorToProxy>? = null
     private var router: Router? = null
+    private var rescue: Rescue? = null
     private var fallbackGroups: List<String> = emptyList()
     private var sampling: ScheduledTask? = null
     private var scheduler: ScheduledExecutorService? = null
@@ -142,6 +145,7 @@ class AgentPlugin @Inject constructor(
         val players = VelocityPlayers(proxy)
         val router = Router(directory)
         this.router = router
+        this.rescue = Rescue(router, ::warn)
         this.fallbackGroups = env.fallbackGroups
         val state = ProxyState(env.playerLimit)
         val role = ProxyRole(
@@ -245,16 +249,56 @@ class AgentPlugin @Inject constructor(
     }
 
     /**
-     * Tells the operator where a player ended up.
+     * Moves a player whose server dropped them, rather than letting the proxy
+     * disconnect them.
      *
-     * Accepted and ignored by the operator today -- player counts come from
-     * the servers themselves -- and on the wire for project 4's dashboard.
-     * [SessionLoop.send] drops it silently when there is no stream, which is
-     * right: this is a notification about a moment, and a moment that has
-     * passed by the time a reconnect completes is not worth replaying.
+     * The decision is [Rescue]'s -- including when *not* to decide, which is
+     * what a null means here: Velocity's own result stands, and that is
+     * deliberately the outcome both when the player still has a working
+     * server and when there is genuinely nowhere left to send them. See
+     * [Rescue] for which backend failures reach this at all; one of them does
+     * not.
+     */
+    @Subscribe
+    fun onKickedFromServer(event: KickedFromServerEvent) {
+        val target = rescue?.target(
+            player = event.player.uniqueId,
+            from = event.server.serverInfo.name,
+            stillConnectedElsewhere = event.kickedDuringServerConnect(),
+            toGroups = fallbackGroups,
+        ) ?: return
+        event.result = KickedFromServerEvent.RedirectPlayer.create(target)
+    }
+
+    /**
+     * Ends a player's rescue chain when they leave.
+     *
+     * Without this the map in [Rescue] would be the one structure in this
+     * plugin that only ever grows: a proxy that has rescued somebody keeps
+     * their entry for as long as the process lives.
+     */
+    @Subscribe
+    fun onDisconnect(event: DisconnectEvent) {
+        rescue?.forget(event.player.uniqueId)
+    }
+
+    /**
+     * Tells the operator where a player ended up, and ends their rescue chain.
+     *
+     * The report is accepted and ignored by the operator today -- player
+     * counts come from the servers themselves -- and on the wire for
+     * project 4's dashboard. [SessionLoop.send] drops it silently when there
+     * is no stream, which is right: this is a notification about a moment, and
+     * a moment that has passed by the time a reconnect completes is not worth
+     * replaying.
+     *
+     * The [Rescue.forget] is not a detail of the report. Arriving anywhere is
+     * what makes an earlier bounce history rather than an ongoing incident,
+     * and this is the only event that says a player arrived.
      */
     @Subscribe
     fun onServerConnected(event: ServerConnectedEvent) {
+        rescue?.forget(event.player.uniqueId)
         loop?.send(
             ProxyMessage.newBuilder()
                 .setPlayerJoinedServer(

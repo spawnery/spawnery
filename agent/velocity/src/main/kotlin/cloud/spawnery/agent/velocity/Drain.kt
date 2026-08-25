@@ -35,7 +35,7 @@ class Drain(
             // whichever server was emptiest at the moment this message
             // arrived, instead of spreading them across toGroups the way
             // repeated per-player choices do.
-            val target = router.choose(toGroups, excluding = fromServer)
+            val target = router.choose(toGroups, excluding = setOf(fromServer))
             if (target == null) {
                 if (!loggedNoTarget) {
                     log(

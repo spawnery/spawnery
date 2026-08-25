@@ -17,16 +17,20 @@ import com.velocitypowered.api.proxy.server.RegisteredServer
  */
 class Router(private val directory: ServerDirectory) {
     /**
-     * @param excluding a server name never returned, compared
+     * @param excluding server names never returned, compared
      *   case-insensitively -- matching [ServerDirectory]'s own lookup rule.
-     *   [Drain] passes the server it is draining players off of here, so
+     *   [Drain] passes the single server it is draining players off of, so
      *   that server is never handed back as its own replacement even while it
-     *   is still, briefly, a member of one of [groups].
+     *   is still, briefly, a member of one of [groups]. [Rescue] passes a
+     *   whole chain, which is why this is a collection rather than the one
+     *   name [Drain] alone would need: a player being bounced from one dead
+     *   server to the next has to exclude every server that already refused
+     *   them, not just the last one.
      */
-    fun choose(groups: List<String>, excluding: String? = null): RegisteredServer? {
+    fun choose(groups: List<String>, excluding: Collection<String> = emptySet()): RegisteredServer? {
         for (group in groups) {
             val candidates = directory.inGroup(group)
-                .filter { excluding == null || !it.serverInfo.name.equals(excluding, ignoreCase = true) }
+                .filter { candidate -> excluding.none { candidate.serverInfo.name.equals(it, ignoreCase = true) } }
             // Emptiness is decided after the exclusion, not before it: a group
             // whose only member is the server being drained holds no candidate
             // and has to fall through to the next group. Checking

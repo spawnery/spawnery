@@ -361,6 +361,24 @@ package comment names the failure mode (a loud "Outdated client!" naming the
 version to fix it to), so it fails loud rather than silent, but the runbook
 that depends on this tool inherits the same assumption.
 
+**A backend that goes silent without closing its socket still disconnects its
+players, and no plugin can stop it.** `Rescue` (added 2026-08-25) catches a
+player whose server drops them and redirects them onto `fallbackGroups`, which
+closes the gap the design's §6.2 assumed was already closed — measured that
+day on `paulwtf` against a two-backend `lobby` group, where force-deleting the
+pod under a joined player disconnected them while a ready, registered, empty
+peer stood unused beside it. It does not close every case. Disassembling
+velocity 3.5.1 build 615, `ConnectedPlayer.handleConnectionException(server,
+reason, friendly, safe)` returns *before* firing `KickedFromServerEvent` when
+`safe` is false, and `BackendPlaySessionHandler.exception(cause)` passes
+`safe = !(cause instanceof ReadTimeoutException)`. So a hard-powered-off node
+or a partitioned network — where the backend stops answering but never closes
+the connection — surfaces as a read timeout, and Velocity disconnects the
+player before any plugin is consulted. The hole is Velocity's own and cannot
+be closed from the agent; closing it would mean the operator noticing the
+dead server and sending `DrainPlayers` inside Velocity's read timeout, which
+is a different mechanism than this one.
+
 ## From the milestone 3c evidence run (2026-08-12)
 
 `docs/runbook-milestone-3-evidence.md` was finally run against a real `kind`
