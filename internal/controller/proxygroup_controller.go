@@ -328,7 +328,10 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	// create pods below, but pods itself is not refreshed to include them, so
 	// its per-pod logic -- the readiness assertion loop and the divergence
 	// check riding along with it -- sees a newly created pod for the first
-	// time on the pass after this one, not this one.
+	// time on the pass after this one, not this one. This has caught test
+	// construction twice: a test that creates a pod and then asserts something
+	// about it within the same reconcile is asserting against a snapshot that
+	// predates it.
 	pods, err := r.pods(ctx, group)
 	if err != nil {
 		return obs, ctrl.Result{}, err
