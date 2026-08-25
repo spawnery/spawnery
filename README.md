@@ -891,8 +891,10 @@ meets its network before the Network controller has accepted it, it tries again
 only after `networkRetryInterval` (30 seconds). The 90 seconds above also cover
 Paper's own start — about seven seconds to a first answered ping — and the
 agent's handshake after it. Loading the image into the cluster beforehand is
-its own wait: at 26.2-0.2.0 it is 735 MB as a tarball, a little over a gigabyte
-unpacked.
+its own wait: at 26.2-0.2.0 it is 372 MB as a tarball. It was 735 MB until
+2026-08-25, when the image stopped shipping a whole headless JDK and started
+shipping a runtime jlink'd to the modules Paper and the agent actually
+resolve — see `nix/paper-jre.nix`.
 
 Expected, as measured on 2026-08-10 against `kind` v1.36.1 under rootless
 Podman:

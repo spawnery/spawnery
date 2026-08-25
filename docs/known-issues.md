@@ -278,7 +278,7 @@ receiver ignores; and until this milestone no test had ever put a proxy in
 front of a Paper server. Both halves are now closed — a fixture of Paper's
 own default config checked against the renderer's key names
 (`TestPaperWritesTheKeysPaperItselfReads`, against
-`internal/render/testdata/paper-global.default.yml`), and an image test that
+`internal/render/defaults/paper-global.default.yml`), and an image test that
 reads the file back out of the running container
 (`hack/image-test.sh`) — but the class is what the next person needs to
 carry forward: a green render test proves what was written, never what was
@@ -287,7 +287,7 @@ read.
 **And the same two for Velocity**, which the whole-branch review found had
 been missed: the lesson had been applied only to the flavour it was learned
 on. `TestVelocityWritesTheKeysVelocityItselfReads` checks the renderer's key
-names against `internal/render/testdata/velocity.default.toml`, extracted from
+names against `internal/render/defaults/velocity.default.toml`, extracted from
 the pinned jar's own `default-velocity.toml`, and `hack/velocity-image-test.sh`
 now asks the running proxy for a server list ping and reads `show-max-players`
 and the motd back out of the answer. That script's readback of
@@ -2428,6 +2428,11 @@ selecting the operator pod — and closes the availability half of the agent
 channel with gRPC bounds, a `TokenReview` cache and a per-peer rate limit. The
 first entry below is the one that governs how every other sentence in this
 section, in the README, and in the handover has to be read.
+
+Every `config/deploy/` path in this section is where the file was in 6b.
+Milestone 6d moved that directory into `charts/spawnery/templates/`, and its
+own section below opens by saying so; the paths here are left as they were
+written because they date what was measured.
 
 **kindnet, the CNI the end-to-end harness runs on, was measured not to enforce
 a NetworkPolicy ingress rule — and measured is the operative word.** Task 3
