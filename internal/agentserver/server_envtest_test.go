@@ -736,6 +736,16 @@ func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 		// and flow-control errors -- exactly the code this task's own new
 		// keepalive enforcement policy can produce. Accepting either would
 		// let the one failure this test exists to catch report PASS.
+		//
+		// The narrowing is safe in this fixture and only in this fixture.
+		// The two real paths to Unavailable during the quota wait are a
+		// GOAWAY and the transport context closing, and neither can fire
+		// here: the connection is never idle (eight live streams),
+		// MaxConnectionAge is unset, this client sets no keepalive so
+		// ENHANCE_YOUR_CALM cannot fire, and the transport context is
+		// cancelled only by t.Cleanup. Share a connection across subtests
+		// here, or give the client a keepalive, and that argument stops
+		// holding -- revisit the narrowing before doing either.
 		if status.Code(err) != codes.DeadlineExceeded {
 			t.Fatalf("stream %d failed to open with %v, want the deadline "+
 				"-- a different code means it failed for some other reason "+

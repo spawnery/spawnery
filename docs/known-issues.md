@@ -2703,82 +2703,12 @@ which is the one thing this milestone exists to prevent — the review weighed
 the alternatives and judged each of them worse than the behaviour above. A
 report naming the cause was available and was not shipped.
 
-**Six defects in this milestone's own plan test code, each an assertion that
-could not fail or that would have failed for the wrong reason.** This is the
-seventh milestone in a row where mutation found what reading did not; milestone
-5's handover records six of its own across five shapes. What is worth carrying
-is the shapes, not the count:
-
-1. **An assertion that verifies only non-nilness.** Task 1's egress-peer test
-   checked that the operator peer had a `PodSelector`, never its content:
-   replacing `OperatorPodLabels()` with a wrong map left all five subtests
-   green — the exact trap the builder's own doc comment warns about.
-2. **Unasserted fields on an object whose whole point is those fields.** Task
-   1's owner-reference test left `APIVersion` and `BlockOwnerDeletion`
-   unchecked; a wrong `APIVersion` means the owner never resolves and the
-   policy outlives its `Network`, which is the single failure the owner
-   reference exists to prevent. Both are now compared against
-   `spawneryv1alpha1.GroupVersion.String()` rather than a literal, so they
-   cannot drift from the scheme.
-3. **A one-directional check.** Task 3's admitted-ports assertion checked that
-   every required port was present and never that no other one was: adding port
-   9999 to the peerless rule left it green. See the peerless-rule entry above.
-4. **A test that passes down a branch that accepts anything.** Task 4's
-   over-limit stream test was documented as blocking in `Recv()`; grpc-go
-   v1.83.0 actually blocks in `NewStream` on the mirrored
-   `SETTINGS_MAX_CONCURRENT_STREAMS` quota (`internal/transport/http2_client.go`),
-   so the branch a passing run really takes was `if err != nil { return }`,
-   which accepts **any** error. Widening the accepted set to
-   `{DeadlineExceeded, Unavailable, ResourceExhausted}` made it worse, because
-   two of those are codes this codebase produces for unrelated reasons and both
-   are reachable only *after* the bound has already failed. It is now
-   `DeadlineExceeded` alone.
-5. **A name that claims more than the test proves.**
-   `TestARepeatedTokenNeverReachesTheLimiter` passed with the limiter **removed
-   entirely**, not merely moved: replaying one token means only the first call
-   misses the cache, so `reviews.calls != 1` was satisfied by the cache alone.
-   It proved ordering while its name claimed ordering *and* wiring;
-   `TestDistinctTokensFromOnePeerAreRateLimited` now covers the second half.
-6. **A prescribed mutation that could not produce a failure.** Task 7's brief
-   said to rename `podspec.NetworkPolicyName` and watch the e2e scenario time
-   out. It passed, all fourteen subtests: the test calls that same exported
-   function to build its own expectation, so both sides move together and a
-   broken build is indistinguishable from a correct one. The real mutation —
-   hardcoding a suffix onto what `BuildNetworkPolicy` writes, leaving the name
-   function alone — produced the predicted red. **A mutation that shares a
-   function with the code under test is not a mutation**, and it looks exactly
-   like one on the page.
-
-**What Task 4 established about grpc-go, and the part of it that is
-fixture-specific.** `MaxConcurrentStreams` is mirrored to the client through
-SETTINGS, and the client blocks in `NewStream` when the quota is exhausted —
-which is why the over-limit test's runtime is dominated by its 5s deadline
-rather than by anything the server does. The test now accepts
-`DeadlineExceeded` alone, and that narrowness is safe **in this fixture only**:
-the two real paths to `Unavailable` during the quota wait are a GOAWAY and the
-transport context closing, and neither can fire here because the connection is
-never idle (eight live streams), `MaxConnectionAge` is unset, the test's client
-sets no keepalive so `ENHANCE_YOUR_CALM` cannot fire, and the transport context
-is cancelled only by `t.Cleanup`. If that test ever shares a connection across
-subtests or adds client keepalive, the narrowing has to be revisited.
-
 **Smaller ones, each worth a sentence:**
 
-- The per-`Network` policy's own `spawnery.cloud/network` metadata label is
-  unasserted. It is there for a human reading `kubectl` output rather than for
-  a mechanism — and so, it turns out, is `managed-by` beside it. Four places in
-  6b said that label existed so the operator's restricted cache could see the
-  object: `internal/podspec/netpol.go`, a *failure message* in
-  `netpol_test.go`, the design's §3.2, and this file. There is no such
-  restriction. `cmd/spawnery-operator`'s `Cache.ByObject` has no
-  `NetworkPolicy` entry, so `Owns(&NetworkPolicy{})` starts an unrestricted
-  informer, and all four have been corrected to say what the label is. The
-  claim was deleted rather than the restriction added: NetworkPolicies are a
-  handful per cluster, unlike the ConfigMaps and claims those entries exist to
-  bound, and adding the restriction would be a regression — `CreateOrUpdate`
-  reads through that cache, so a pre-existing *unlabelled* object at
-  `<network>-backends` would be invisible to its `Get` and every pass would
-  `Create` and take `AlreadyExists`, forever.
+- No test asserts the per-`Network` policy's own `spawnery.cloud/network` and
+  `managed-by` metadata labels. Both are there for a human reading `kubectl`
+  output and nothing selects on them, so a wrong value costs nothing today —
+  but nothing would catch one either.
 - `TestADeletedPolicyComesBack` does not compare a UID before and after; it
   relies on envtest's synchronous delete plus the recorded mutation to
   distinguish "recreated" from "never removed". The mutation discharges it, the
@@ -2789,11 +2719,6 @@ subtests or adds client keepalive, the narrowing has to be revisited.
 - The token-review cache does not coalesce concurrent misses on the same token:
   two goroutines both call `reviewToken` and both store. Benign, and it means
   the cache does not itself deduplicate a hot token.
-- The refusal split reorders one message. A token that authenticates, belongs
-  to a valid ServiceAccount, asks for the wrong role **and** lacks pod-binding
-  claims now reports "token is not bound to a pod" rather than the role
-  message. No refusal was dropped and no error type changed, and `TokenRequest`
-  cannot mint that combination.
 - `evictFullLocked` is not a hard cap: with `maxBuckets` peers all
   simultaneously active nothing is evictable and the map grows past it. That is
   the many-compromised-pods case the design ruled out of scope, recorded so the
