@@ -264,7 +264,8 @@ disconnecting players. Adding the role term closed it in the reconciler, but
 one copy is out of reach: a `ServerGroup` last reconciled by pre-4c-3 code
 left a budget at its own bare name, which nothing renames or deletes, carrying
 a frozen `minAvailable` and a frozen copy of the broken selector. Delete it by
-hand — `docs/known-issues.md` has the `kubectl` to find it. It also leaves
+hand — [`docs/upgrading.md`](docs/upgrading.md) has the `kubectl` to find
+it. `docs/known-issues.md` also leaves
 open that an operator running cluster-autoscaler must pass
 `-drain-taint ToBeDeletedByClusterAutoscaler` by hand: that autoscaler taints
 without cordoning, and an unset flag looks exactly like a quiet node.

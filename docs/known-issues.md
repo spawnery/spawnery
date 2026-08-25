@@ -1,11 +1,16 @@
 # Known issues and carry-overs for later milestones
 
-Status: end of milestone 3c, the Velocity agent (2026-08-11).
+This file carries only problems that still exist. An entry that gets fixed is
+deleted, and the account of what it was and how it was found lives in the
+commit that removed it — `git log -p docs/known-issues.md` is where to look
+for one. A closed entry left standing with a note saying it is closed costs a
+reader the same attention as a live one, which is the whole reason for the
+rule.
 
-This list collects what was deliberately left open during the implementation and
-the reviews of milestone 1, milestone 2a, milestone 2b, milestone 2c, milestone
-3a, milestone 3b and milestone 3c. It does not replace a spec — the design
-decisions live in
+Two things that are not open problems live elsewhere.
+[`upgrading.md`](upgrading.md) carries the three renames that strand an object
+in an installation created before them — real work for whoever has such an
+installation, and nothing at all for anyone else. The design decisions live in
 `superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md`, in
 `superpowers/specs/2026-08-08-agent-channel-design.md`, in
 `superpowers/specs/2026-08-09-paper-agent-design.md`, in
@@ -222,38 +227,21 @@ overlay can move them (`internal/render/paper.go`), so what a typo can reach
 is the author's own settings and nothing this operator depends on. Closing it
 would mean a third default file and a third regeneration step.
 
-**The rendered ConfigMap's name changed, and nothing migrates the old
-one.** `podspec.GroupConfigMapName` used to return the group's own bare
-name; it now returns `<group>-<role>-config`. The rename fixed a real
-collision — a `ServerGroup` and a `ProxyGroup` sharing a name could fight
-over one ConfigMap, and a user's own ConfigMap named after their group
-(their `configOverlay` ConfigMap, most plausibly) would have been adopted,
-owner-reference stamped, and deleted the moment the group was. What the
-rename does not do is carry an already-running cluster across the change: a
-group reconciled under the old code has a ConfigMap at the old bare name,
-nothing renames or deletes it once the new code takes over, and nothing
-warns that it is sitting there orphaned. That was acceptable only for as
-long as nothing was deployed against this code, and milestone 6 ended that
-condition — but not the way this entry expected. The first cluster to run
-this operator was installed at v0.1.0 on 2026-08-20, months of milestones
-after the rename, so it never held a ConfigMap at the old bare name and the
-migration gap is moot for it. What the gap now describes is a cluster nobody
-has: one installed before the rename and upgraded across it. Read it as a
-warning for whoever finds such an installation, not as a pending task.
-
-It is also not fully closed on the receiving end: neither
-`reconcileConfigMap` (`internal/controller/servergroup_controller.go` and
-`internal/controller/proxygroup_controller.go`) checks that a ConfigMap
-already sitting at the *new* name is actually owned by this group before
-mutating it. `controllerutil.CreateOrUpdate`'s mutate closure sets the
+**A ConfigMap already sitting at the rendered name is adopted without an
+ownership check.** Neither `reconcileConfigMap`
+(`internal/controller/servergroup_controller.go` and
+`internal/controller/proxygroup_controller.go`) checks that a ConfigMap at
+`<group>-<role>-config` belongs to this group before mutating it.
+`controllerutil.CreateOrUpdate`'s mutate closure sets the
 label and `config.yaml` and calls `SetControllerReference` last, and
 `SetControllerReference` only refuses when the object already has a
 *different* controller owner — an object with no owner at all is silently
 given one. A ConfigMap that happens to carry `podspec.LabelManagedBy` (so
 the cache sees it) but was created by something other than this group's
-reconciler is therefore still adoptable. The rename traded a plausible
-collision (bare group name) for an implausible one (the exact rendered
-name, pre-labelled); it did not remove the shape.
+reconciler is therefore still adoptable. The `<group>-<role>-config` rename
+traded a plausible collision (a user's own ConfigMap at the bare group name)
+for an implausible one (the exact rendered name, pre-labelled); it did not
+remove the shape.
 
 ## From milestone 3c (the Velocity agent)
 
@@ -1075,54 +1063,6 @@ cluster-autoscaler user has to take themselves, and nothing in the operator
 will tell them they missed it: an unset flag and a genuinely quiet node look
 identical from here.
 
-**The ServerGroup's PodDisruptionBudget was renamed this milestone, and
-upgrading an already-running cluster strands the old object.** Before 4c-3,
-`reconcilePDB` named the budget after the bare group name; this milestone's
-own review caught that a `ProxyGroup` sharing that name would collide with it
-— exactly the incident `podspec.GroupConfigMapName`'s doc comment already
-narrates for the ConfigMap, reproduced one object type over — so both group
-kinds' budgets now go through `podspec.GroupPDBName(group, role)`, which
-appends `-server-pdb` or `-proxy-pdb`. `reconcilePDB` and
-`reconcileProxyPDB` only ever `CreateOrUpdate` the new name; nothing renames
-or deletes the old one. A `ServerGroup` reconciled under pre-4c-3 code
-therefore leaves a `PodDisruptionBudget` sitting at its own bare name, with
-`minAvailable` frozen at whatever the last old-code reconcile wrote — and
-nothing updates it again, because the reconciler has moved on to writing the
-new-named object exclusively. **Delete it promptly.** The frozen count is the
-smaller of the two problems it causes: the stranded object also carries the
-pre-4c-3 *selector*
-(`spawnery.cloud/managed-by`, `spawnery.cloud/group`,
-`spawnery.cloud/occupied`), which has no `spawnery.cloud/role` term, and this
-milestone is the one that put `spawnery.cloud/occupied` on proxy pods as well
-as server pods. So in a namespace holding a `ProxyGroup` of the same name,
-that selector matches the occupied *proxies* too, while its `minAvailable`
-was only ever counted from occupied *servers*. `currentHealthy` counts the
-ready pods among everything the selector matches, proxies included;
-`desiredHealthy` is the frozen server-only figure; `disruptionsAllowed` is
-the difference, and the ready occupied proxies push it up. The eviction API
-can then spend those disruptions on occupied server pods — disconnecting the
-players on them. That is the exact
-defect this milestone's own final review found in the live `reconcilePDB`
-selector and fixed there by adding the role term; the stranded object is a
-frozen copy of the broken selector that no fix can reach. To find it:
-`kubectl get pdb -n <namespace>` and look for one named exactly the
-`ServerGroup`'s own name, rather than `<group>-server-pdb` — `kubectl get pdb
-<name> -n <namespace> -o
-jsonpath='{.metadata.ownerReferences[0].name}'` confirms it is owned by that
-group. `kubectl delete pdb <name> -n <namespace>` removes it; the group's
-protection continues uninterrupted through the new-named object, which
-`reconcilePDB` has been maintaining all along.
-
-*Checked against the only installation there is, 2026-08-22.* `kubectl get pdb
--n minecraft` returns `gateway-proxy-pdb` and `lobby-server-pdb` and nothing
-at a bare group name: that cluster was installed at v0.1.0 on 2026-08-20,
-milestones after this rename, so it never wrote the old object. Like the
-`GroupConfigMapName` rename recorded under milestones 3a and 3b, this hazard
-now describes a cluster nobody has — one installed before 4c-3 and upgraded
-across it. Keep it for whoever finds such an installation; the selector
-analysis above is what makes it worth finding, and it is not a pending task
-for anyone here.
-
 **A group in create-backoff, or one with a broken Network, condemns without
 replacing.** `size()` (`internal/controller/servergroup_controller.go`) gates
 only the create loop behind `backoff.MayCreate` — `condemn()`, which runs
@@ -1600,59 +1540,6 @@ kubectl get server -n <namespace> -l spawnery.cloud/group=<group> \
 
 Two rows with one ordinal between them is the state; nothing on the group's
 conditions, events or logs says so.
-
-**A `Persistent` group that existed before this upgrade keeps a stale `Ready:
-False` forever.** Before 5a the ServerGroup controller published
-`Ready: False` with reason `NotImplementedInThisVersion` and the message
-"persistent groups arrive in milestone 5" on every persistent group,
-unconditionally. 5a removed that block, and it was the only thing that ever set
-`ConditionReady` on a `ServerGroup` of either type — readiness is
-`status.phase`, which `derivePhase` computes from `readyReplicas` against
-`DesiredReplicas()`. Nothing removes the condition an older operator wrote, so
-such a group carries `Ready: False / NotImplementedInThisVersion` beside pods
-that are up and players who are online, while `status.phase` next to it reports
-whatever those pods actually support — `Ready` among them. Nothing in the operator reads the condition, so nothing behaves
-differently; it misleads a person, and any alert written on
-`.status.conditions[?(@.type=="Ready")]` for a ServerGroup.
-
-Clearing it is one command per affected group, and it is safe precisely because
-nothing republishes it:
-
-```bash
-kubectl patch servergroup <name> -n <namespace> --subresource=status --type=json \
-  -p '[{"op":"test","path":"/status/conditions/<index>/type","value":"Ready"},
-       {"op":"remove","path":"/status/conditions/<index>"}]'
-```
-
-`<index>` is the position of the `Ready` entry in `.status.conditions`; the
-`test` operation is there so the patch fails loudly rather than removing a
-neighbouring condition if the index has moved between the read and the write.
-Find it with:
-
-```bash
-kubectl get servergroup <name> -n <namespace> \
-  -o jsonpath='{range .status.conditions[*]}{.type}{"\n"}{end}' | grep -n Ready
-```
-
-*Checked against the only installation there is, 2026-08-22.* It runs one
-`ServerGroup`, `minecraft/lobby`, of type `Ephemeral`, whose conditions are
-`Accepted`, `NodeDraining`, `ScalingLimited`, `BackingOff` and `Degraded` —
-no `Ready` among them — and it holds no `Persistent` group at all. Installed
-at v0.1.0 on 2026-08-20, milestones after 5a, so no older operator ever wrote
-the condition here. This is the third hazard in this file about upgrading
-across a rename or a removal, beside `GroupConfigMapName` under 3a/3b and the
-PodDisruptionBudget under 4c-3, and all three describe the same installation
-nobody has: one that predates the change and was carried across it. Keep them
-for whoever finds one; none is a task for anybody here.
-
-`ReasonNotImplemented` (`api/v1alpha1/common_types.go`) has no user left in the
-codebase after this milestone: grepping `.go` and `.yaml` finds the identifier
-only at its own definition, and the string `NotImplementedInThisVersion` only
-in a test comment describing the block that was removed and in
-`docs/superpowers/plans/`, which is a historical record rather than live code.
-The constant is kept rather than deleted: it costs a line, and it is the exact
-string an operator meets on the stale condition above, so removing it would
-make that string unsearchable in the repository it came from.
 
 **An ordinal waits, visibly, for a pod that a dead node will never finish
 terminating.** As of the branch review closing this milestone, the Server
