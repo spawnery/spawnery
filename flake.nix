@@ -129,7 +129,7 @@
           # operator as Hello.version) and the image tag, so the two can
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
-          imageVersion = "0.2.0";
+          imageVersion = "0.2.1";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
