@@ -3501,8 +3501,8 @@ one container runtime can now sit green in CI indefinitely.
 **The nightly's red path has never been driven.** Two workflow paths once
 existed only on paper here, and both have since run in the shape that ships —
 including the `schedule` trigger, which this entry carried as a residue for
-four days and which has now fired on its own on four consecutive nights,
-2026-08-21 through 2026-08-24, on `master`. What has not run is the issue a
+four days and which has now fired on its own on five consecutive nights,
+2026-08-21 through 2026-08-25, on `master`. What has not run is the issue a
 failure opens.
 
 `9a25874` gave `nightly.yml` an `if: failure()` step that opens or edits a
@@ -3513,7 +3513,19 @@ the day before that step landed. So the opening path has never executed, the
 closing path has only ever run against a repository with no such issue, and
 the release gate has only ever measured an absence. That gate is the one where
 absence means *permission* rather than refusal — so the branch nothing has
-exercised is the branch that would stop a release.
+exercised is the branch that would stop a release. It measured an absence
+once more on 2026-08-25, on the way to `v0.2.1`, and let it through.
+
+Narrow it to what is actually untested, though: the *script* is not the
+untested part. `hack/require-no-red-nightly-test.sh` drives its refusal four
+ways through a seam, and its own header says why the refusing case must be a
+fixture rather than a live call — it would need an open issue in the tracker
+it is testing. What has never executed is the workflow wiring on either side
+of the script: the `if: failure()` step writing the issue, and the
+`if: success()` step closing one that exists. The cheapest way to drive the
+closing half without a red run is to open a `nightly-red` issue by hand and
+let the next green nightly close it, which costs one issue and blocks
+releases until that nightly runs.
 
 `nightly.yml` was driven once before the merge, but not in its merged shape: it
 needed a temporary `pull_request:` trigger, because GitHub will not run
