@@ -7,7 +7,7 @@ type: application
 # They move independently: a chart fix that changes no image is a chart
 # version bump alone.
 version: 0.2.1
-appVersion: "0.2.0"
+appVersion: "0.2.1"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
 # +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec
