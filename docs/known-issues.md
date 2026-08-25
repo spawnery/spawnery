@@ -622,17 +622,6 @@ itself. Removing one is a deliberate human act with `kubectl delete pvc`,
 outside this operator entirely, and belongs on the runbook that grows up
 around this operator's use rather than in its own code.
 
-**A persistent server on a node-pinned volume cannot follow a node drain.**
-`docs/known-issues.md`'s own "From milestone 4c-3" section recorded this
-before 5a existed to make it real: `Condemn` names a server whose pod sits on
-a departing node regardless of what kind of server it is, and its replacement
-then sits `Pending` if the storage class backing its claim is bound to the
-node that is leaving — a local or node-pinned `ReadWriteOnce` volume does not
-follow a pod to a different node, and nothing in this operator or in the
-storage class itself can move it. That entry is not repeated here in full; 5a
-is what turns it from a recorded limit into one an operator can actually run
-into, because before 5a no persistent server existed to condemn.
-
 **A claim that never binds ends in a stall, and the stall is deliberate.**
 `docs/superpowers/specs/2026-08-15-persistent-groups-design.md` §3.5 is on its
 third version for exactly this mechanism — the first two were wrong, and its
@@ -864,20 +853,17 @@ kubectl delete pod <group>-<ordinal> -n <namespace> --force --grace-period=0
 
 ## From the milestone 5a evidence run (2026-08-16)
 
-`docs/runbook-milestone-5a-evidence.md` was driven against a single-node `kind`
-cluster on master at `f3c6fc1`, and its acceptance test passed: blocks placed
-at -74 / -10, the pod deleted, the client rejoined, the blocks still there.
-Every claim the milestone makes held.
-
-**Twelve optimistic-concurrency conflicts are separate, expected, and not part
-of this.** The same run logged twelve `the object has been modified; please
-apply your changes to the latest version` errors across all three controllers,
-one at essentially every state transition — the apply, first readiness, the
-join, the leave, the delete, the replacement's readiness, the rejoin. These are
-controller-runtime's ordinary retry path and they self-heal; one of them is
-what produced the `PodAdopted` event the runbook's §8 now explains. They are
-noted here only so that a reader counting error lines in an operator log does
-not attribute all of them to the paragraph above.
+**A clean recreate still logs twelve optimistic-concurrency conflicts, and
+they are not a symptom.** The 2026-08-16 run — driven against a single-node
+`kind` cluster at `f3c6fc1`, acceptance passed, blocks still there after the
+pod was deleted and the client rejoined — logged twelve `the object has been
+modified; please apply your changes to the latest version` errors across all
+three controllers, one at essentially every state transition: the apply, first
+readiness, the join, the leave, the delete, the replacement's readiness, the
+rejoin. They are controller-runtime's ordinary retry path and they self-heal;
+one of them is what produced the `PodAdopted` event the runbook's §8 explains.
+Recorded so that somebody counting error lines in an operator log does not
+read a healthy recreate as a fault.
 
 ## From milestone 5b (ordered shutdown, `Recreate` updates, storage growth)
 
