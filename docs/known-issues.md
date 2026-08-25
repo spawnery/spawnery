@@ -55,8 +55,41 @@ headless JDK, not a JRE. Measured at 724 MB as a tarball for 26.2-0.1.0, and
 unpacked, as Podman reports it). There is no cheap substitution: this pin's
 `temurin-jre-bin` stops at 21, and Paper 26.2 needs 25 or newer, while
 `jre25_minimal` is `jlink` with `modules = [ "java.base" ]` by default and
-therefore needs a module list nobody has yet. The right time to derive that list
-has now arrived — see "The JRE module list is now derivable" below.
+therefore needs a module list. *Derived 2026-08-25, and it is fourteen
+modules:*
+
+```
+java.base,java.compiler,java.desktop,java.instrument,java.rmi,
+java.scripting,java.security.jgss,java.sql,jdk.httpserver,jdk.jfr,
+jdk.management,jdk.security.auth,jdk.unsupported,jdk.zipfs
+```
+
+Thirteen of those came from `jdeps --print-module-deps --ignore-missing-deps
+--multi-release 25` over the whole classpath — all 105 jars of
+`.#paper-repo` plus `.#agents`' `spawnery-agent.jar` — with an empty stderr,
+so nothing was skipped despite the flag. `jlink` over that set produces a
+runtime of **332 MB on disk against `jdk25_headless`'s 650 MB**.
+
+The fourteenth is the interesting one and no static analysis could have found
+it. Paper booted on the thirteen and died in `Paperclip.extractFiles` with
+`java.nio.file.ProviderNotFoundException`: `FileSystems.newFileSystem` needs
+the zip provider, which arrives through `ServiceLoader` rather than through any
+reference `jdeps` can see. With `jdk.zipfs` added, Paper reached
+`Done (11.361s)!` with the agent plugin loaded.
+
+**What that boot did not exercise, and whoever wires this in must:** the
+agent's channel. It reported `dormant: SPAWNERY_OPERATOR_ENDPOINT is not set`,
+and with the endpoint set it stopped at `/var/run/spawnery/ca.crt is not
+readable; refusing to trust anything else` — correct behaviour both times, and
+it means no TLS handshake and no gRPC dial ever ran. A security provider
+reached by name, `jdk.crypto.ec` being the obvious candidate, would fail
+exactly the way `jdk.zipfs` did and would not show up until an agent actually
+connects. `make image-test` and `make agent-test` are what drive that path;
+neither was run here, so this list is a starting point that boots a server, not
+a finished answer.
+
+This is Paper's list. Velocity's image is a separate derivation and its
+classpath is not this one.
 
 **`k3d` does not work on this machine, and probably not on similar ones.**
 `docker` here is a Podman 5.8.4 alias with no `/var/run/docker.sock`, only a
@@ -120,7 +153,8 @@ down all day would say so once, at the start. So the cost stands as written
 and is accepted; what changed is that it is now a decision with reasons rather
 than an oversight.
 
-**The JRE module list is now derivable, and milestone 3 is where to cut it.**
+**The JRE module list is derivable, and was derived on 2026-08-25 — see the
+image-size entry above for the fourteen modules and what they buy.**
 The Paper-side classpath stopped moving with this milestone: the agent is the
 last thing that joins it, and gRPC and okhttp pull modules Paper alone does not.
 So the list can finally be derived from the complete classpath, with `jdeps
@@ -758,14 +792,25 @@ devshell: `go run` does not forward `SIGTERM` to the binary it compiled, so
 the operator goes on reconciling.
 `docs/runbook-milestone-4c1-evidence.md` says so and kills the child.
 `docs/runbook-milestone-3-evidence.md` cleans up the same `go run` with
-`kill %1`, and whether that has the same problem is **not known**: `kill %n`
-addresses the *job*, which in some shells means the job's whole process group,
-and signalling the group would take the compiled child down along with the
-wrapper. Two possibilities, one of them benign, and nobody has run it in the
-shell milestone 3 was actually run in. The 4c-1 measurement is about `pkill -f`,
-which signals only the process it matched, and it does not settle the other
-case — evidence consistent with a conclusion is not evidence that establishes
-it, which is a lesson this milestone learned three separate times.
+`kill %1`. Whether that has the same problem was recorded here as **not
+known**, on the reasoning that `kill %n` addresses the *job*, which in some
+shells means the job's whole process group, and signalling the group would take
+the compiled child down along with the wrapper. Two possibilities, one of them
+benign.
+
+*Measured 2026-08-25 in bash, and it is the other one.* `go run` in the
+background, `kill %1`, three seconds, then `kill -0` on both pids: the wrapper
+is gone and the compiled child is alive, reparented and still running. Bash's
+`kill %1` resolves the job to one pid and signals that process; `kill -- -PGID`
+is what signals a group, and no runbook writes that. So milestone 3's cleanup
+leaves the operator reconciling exactly the way `pkill -f` does, and both
+runbooks need the second step the 4c-1 one already has: kill the compiled child
+by name.
+
+The reasoning that made this "not known" was sound and the possibility it
+leaned towards was the wrong one — the third time in this file that evidence
+consistent with a conclusion turned out not to establish it. The measurement
+cost thirty seconds.
 
 ## From milestone 4c-2 (proxy rolling updates)
 
@@ -1183,8 +1228,34 @@ from wedging its group's evictions permanently — at the cost of the same
 
 This is recorded as a decision, not left as an unweighed risk. A tighter
 bound needs the distribution of how long agents actually take to reconnect
-after a real outage, and nobody has measured it; 15 seconds is a number
-chosen for being finite, not one derived from the agents' own behaviour. It
+after a real outage; 15 seconds is a number chosen for being finite, not one
+derived from the agents' own behaviour.
+
+*Measured 2026-08-25 on `paulwtf`, and the shape matters more than the
+numbers.* A throwaway `ProxyGroup`, its agent's stream cut with a
+`NetworkPolicy` denying the proxy's egress, then restored — timed from
+deleting the policy to the group's budget relaxing again:
+
+| outage held for | budget relaxed after |
+|---|---|
+| 10 s | 12 s |
+| 150 s | 85 s |
+
+The agent's own reconnect delay is `1 s` doubling to a `30 s` cap with ±10%
+jitter (`SessionLoop.backoffMillis`), so a short outage is answered almost at
+once and a long one waits out whatever sleep it is in. Both figures include the
+operator's five-second resync and whatever the CNI takes to drop the policy, so
+they are upper bounds on the reconnect rather than the reconnect itself.
+
+**85 s is more than the 30 s cap plus a resync accounts for, and the
+decomposition was not isolated.** The likeliest explanation is in
+`SessionLoop`'s own class comment: the channel has no keepalive and no idle
+timeout, and the calls have no deadline, so a partitioned agent does not learn
+its stream is dead when the packets stop — it learns when a send fails, which
+for a Paper agent is its next player-count report. Its backoff clock would then
+start well after the operator's did. That is reasoning, not measurement, and
+whoever tightens this bound should isolate it first: the two are different
+distributions, and the grace period is sized against the second. It
 sits between two failures neither of which it is allowed to become: no grace
 at all, and a grace that never ends. The alternative that was considered and
 rejected was the first of those — qualifying occupancy on `Known` alone, with

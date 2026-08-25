@@ -699,7 +699,14 @@ silent hang to debug from nothing.
 ## 9. Clean up
 
 ```bash
-kill %1   # the operator's go run
+# Both steps, and the second is not optional. `go run` does not forward the
+# signal to the binary it compiled, and bash's `kill %1` signals one process
+# rather than the job's group -- measured 2026-08-25, see docs/known-issues.md
+# under milestone 4c-1. Without the second line the operator goes on
+# reconciling against a cluster this section is about to delete.
+kill %1                          # the go run wrapper
+pkill -x spawnery-operat || true # the binary it compiled; comm is truncated at 15
+ps -eo pid,comm | grep spawnery || true
 podman rm -f spawnery-evidence-relay
 systemd-run --scope --user --property=Delegate=yes \
   env KIND_EXPERIMENTAL_PROVIDER=podman \
