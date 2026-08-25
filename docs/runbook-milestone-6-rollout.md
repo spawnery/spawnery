@@ -1343,6 +1343,38 @@ lobby reached `Ready`, which requires the agent to have reached 9443 — but tha
 was one direction only. This is the direction 6b was written for.
 
 
+## Scenario 10 — the CA rotation, driven by hand
+
+The CA rotation procedure, driven by hand end to end. It had no evidence
+document of its own until this one; the account lived in
+`docs/known-issues.md` and belongs here with the other driven scenarios. `start` → `distributing` with both CAs published while the
+serving certificate still chained to the old one → the gate passed → the
+operator switched on its own → the hold → `drop-old` by hand. The end state,
+re-read from the cluster the same day:
+
+- `spawnery-agent-tls` carries exactly four keys — `ca.crt`, `ca.key`,
+  `tls.crt`, `tls.key` — and **no annotations at all**, so `drop-old` cleared
+  the slots and all three rotation annotations as described.
+- `ca.crt` is the CA minted at `start`: `notBefore 2026-08-22T15:19:55Z`,
+  subject `CN=spawnery-agent-ca`, ten-year lifetime.
+- The serving certificate was re-signed at the switch —
+  `notBefore 2026-08-22T15:32:31Z` — and its Authority Key Identifier equals
+  the new CA's Subject Key Identifier byte for byte
+  (`27:A3:51:…:D1:E1`), which is the check that distinguishes a real switch
+  from a re-published old certificate.
+- `minecraft`'s `spawnery-ca` ConfigMap holds exactly one certificate, so the
+  overlap is closed everywhere the bundle reaches.
+- **The three agent pods in `minecraft` have `restartCount` 0 and start times
+  of 2026-08-20** — older than the rotation by two days and unrestarted
+  through all of it. That is the whole point of the overlap, measured rather
+  than argued: `gateway-mcv4`, `gateway-pmmy` and `lobby-hktx` re-read `ca.crt`
+  from their projected volume across session deadlines and never noticed.
+
+One rotation is one rotation. What it establishes is that the sequence
+completes and that agents survive it; it establishes nothing about a fleet
+larger than three pods, about a gate that actually blocks, or about any of the
+refusal and slot-repair paths above, none of which were exercised here.
+
 ## Acceptance criteria
 
 Against the design's §9, one line each, naming the scenario that decided it.

@@ -26,6 +26,12 @@
           # happens when the derivation is built. The reverse does not
           # hold for Linux: those prebuilt binaries are dynamically linked
           # against glibc and would need autoPatchelfHook.
+          #
+          # The two halves drift on their own. A new Kubernetes version
+          # arriving through the nixpkgs channel moves the Linux path and
+          # leaves envtestVersion below exactly where it was, so the two
+          # development environments run different kube-apiserver versions
+          # against the same suite with nothing saying so. Bump both together.
           envtestVersion = "1.36.2";
           envtestFromUpstream = pkgs.stdenvNoCC.mkDerivation {
             pname = "envtest-assets";

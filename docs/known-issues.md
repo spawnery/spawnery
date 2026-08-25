@@ -2673,20 +2673,6 @@ days by default. The operator still
 holds no threshold of its own: how many days should worry somebody is a fact
 about a cluster, not about this code.
 
-**And the gauges could not be scraped at all until the same day, which made
-this file's own advice unfollowable.** The operator has served metrics on
-`:8080` since it existed, and the NetworkPolicy has admitted that port from
-anywhere with a comment naming "a metrics scrape" — but
-`templates/service.yaml` exposed only the agent port, so nothing could route to
-it, and no `ServiceMonitor` existed to ask. The entry below tells a reader to
-"alert on the gauge, not on the event" because the events expire out of the API
-within the hour; as installed, there was no address at which those gauges could
-be reached. The Service now carries the port the Deployment had always
-declared, and `metrics.serviceMonitor.enabled` renders the object that scrapes
-it. Both monitoring templates default to off, because their kinds come from the
-Prometheus Operator's CRDs and a chart that renders them unasked fails `helm
-install` on every cluster without them.
-
 Nothing in the operator watches a certificate's remaining lifetime. The
 procedure below exists and works, but it only runs because a human annotates
 the operator's own TLS secret, `spawnery-agent-tls`; nothing triggers it on its
@@ -2926,22 +2912,6 @@ The overlap above is orderly precisely because it keeps trusting the outgoing
 CA for the width of that wait — on the order of a quarter of an hour. That is
 exactly what a compromise cannot afford to do. "Delete the secret, restart all
 pods" stays the answer to that case.
-
-**`controller-gen` silently ignores a `+kubebuilder:rbac` marker inside a doc
-comment — no rule, no error.** The marker has to sit immediately before the
-declaration it applies to; if it sits further up as part of that declaration's
-comment block, no line appears in `config/rbac/role.yaml` at all. Task 10 walked
-into this twice — the first attempt to add permissions for `secrets` and
-`tokenreviews` produced no rule whatsoever, without comment. Anyone adding a new
-marker should diff `config/rbac/role.yaml` afterwards rather than just watch
-`make manifests` go green.
-
-**On Darwin the envtest binaries come from the controller-tools releases, not
-from nixpkgs**, with one hash per version checked into `flake.nix` (design,
-section 3). A new Kubernetes version in the nixpkgs channel — the Linux path —
-does not bring that hash along; it has to be updated separately for Darwin, or
-the two development environments run different `kube-apiserver` versions against
-the same suite with nothing indicating it.
 
 ## Small things
 

@@ -38,6 +38,13 @@ package rbacaudit
 // anyway: it records what the code calls, not what today's cache
 // configuration happens to make free, so swapping that call site onto an
 // uncached client later is not also an RBAC change nobody remembered to make.
+// A marker that produces no rule at all: controller-gen ignores a
+// +kubebuilder:rbac marker that sits inside a doc comment rather than
+// immediately before the declaration it applies to -- no rule, no error, no
+// diagnostic. Task 10 walked into it twice; the first attempt at `secrets` and
+// `tokenreviews` produced nothing whatsoever. After adding a marker, diff
+// config/rbac/role.yaml rather than watching `make manifests` go green.
+
 var RequiredCluster = []Permission{
 	// Events — the recorder writes them for every phase change and every
 	// warning, and patches them when it aggregates repeats.
