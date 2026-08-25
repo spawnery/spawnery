@@ -1375,6 +1375,43 @@ completes and that agents survive it; it establishes nothing about a fleet
 larger than three pods, about a gate that actually blocks, or about any of the
 refusal and slot-repair paths above, none of which were exercised here.
 
+## Scenario 11 — ClusterIP behind Traefik, after the rollout
+
+`type: ClusterIP` with a required `clusterIP.address` was built after this
+rollout, to replace the NodePort stand-in scenario 4 used: that left a node
+port allocated nobody dialled and a `status.address` of `<node>:<nodePort>`,
+an address nobody plays on. The operator's part is narrow and unchanged — it
+creates the Service the fronting thing routes to, publishes the address it was
+given once a proxy pod of the group is ready, and creates no routing object
+and verifies no address. See
+`docs/superpowers/specs/2026-08-20-clusterip-expose-design.md` §4 for why each
+of those refusals is a refusal rather than an omission.
+
+Measured on `paulwtf` 2026-08-22, with `minecraft/gateway` `Ready` since
+2026-08-20T10:47:30Z:
+
+- `spec.expose` is `{"type":"ClusterIP","clusterIP":{"address":"mc.paul.wtf"}}`
+  and `status.address` is `mc.paul.wtf`, two ready replicas.
+- The routing object the operator refuses to create exists, written by hand:
+  `IngressRouteTCP/spawnery-gateway` in `minecraft`, entryPoint `minecraft`,
+  matching `HostSNI(*)`, to `Service/gateway` port 25565 with
+  `proxyProtocol.version: 2`.
+- `mc.paul.wtf` resolves to Traefik's three LoadBalancer addresses, whose
+  Service publishes `25565:30561/TCP`, and `Service/gateway`'s EndpointSlice
+  carries both proxy pod IPs `ready`.
+- Both proxy pods have served real joins. Three distinct names appear in the
+  logs the pods still hold — `WildesDomi`, `anweisen`, `DomiIRL` — each
+  reaching `lobby-hktx` through the proxy and disconnecting cleanly, the most
+  recent connect at 2026-08-22T16:57:35+02:00.
+
+So Traefik does route to that Service, for this one fronting proxy in this one
+configuration. The client addresses in those logs are public ones
+(`/95.89.220.159`, `/79.198.252.14`) rather than pod IPs, which means the
+PROXY v2 header Traefik sends is being honoured — the `haproxy-protocol`
+finding under `[advanced]` is what makes that work, and this is its
+confirmation from the other end. Nothing in the chain was checked by the
+operator, and every link of it is the cluster owner's to keep.
+
 ## Acceptance criteria
 
 Against the design's §9, one line each, naming the scenario that decided it.

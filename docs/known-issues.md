@@ -1275,89 +1275,25 @@ that can prove a permission missing from both the ClusterRole and
 proof actually covers, found while verifying the check itself rather
 than while using it.
 
-**A denied `list` on a watched-but-idle type (`pods`, and separately
-`networks`) is invisible to the check, not merely late.** The check
-reads the operator's log once, moments after rollout; the first
-hypothesis was that this was simply too early — `OrphanReconciler`'s
-periodic sweep, one of the two call sites `required.go` cites for
-`pods:list`, only ticks once a minute, and no custom resource exists
-yet in a Task-4-only run to drive the other reconcilers at all.
-That hypothesis was tested and rejected. `pods:list` was removed from
-every marker that grants it (`controller-gen` unions verbs per
-resource across markers, so a partial removal is not a real
-mutation), the revocation was confirmed at the API server
-(`kubectl auth can-i list pods --as=system:serviceaccount:spawnery-
-system:spawnery-operator` → `no`), and the operator was then watched
-continuously — log followed, not sampled; `rest_client_requests_total`
-scraped every 15 seconds, every sample kept; pod phase and restart
-count watched — for seven minutes and forty-five seconds, well past
-`Controller`'s default two-minute `CacheSyncTimeout`. Across the whole
-window: the log gained not one line past the initial
-`"Starting workers"` burst (32 lines at second 0, 32 lines at 7m45s);
-`rest_client_requests_total` recorded only codes `200`, `201`, `404`
-and `429`, never `403`, across 24 fifteen-second samples; the pod's
-restart count stayed `0`; `kubectl logs --previous` confirms there is
-no previous container to have hidden anything in (`"previous
-terminated container \"operator\" ... not found"`); and the
-Deployment's `Available` condition never moved off `True` from
-`04:05:46Z` onward. The two-minute boundary passed with no observable
-effect of any kind — the process did not exit, and nothing in the
-vendored source's own documented failure mode
-(`sigs.k8s.io/controller-runtime/pkg/internal/source/kind.go:58-59,82`,
-"`cache.GetInformer` will block ... and log ... `failed to get informer
-from cache`") was ever seen to fire, even though the same log line
-*does* appear, promptly, when a startup-critical uncached call is
-denied instead (see below).
+**A denied permission on a type reached only through the manager's cache
+produces no signal at all — not a late one, an absent one.** Measured by
+removing `pods:list` from every marker that grants it, confirming the
+revocation at the API server, and then watching the operator continuously for
+seven minutes and forty-five seconds, well past `Controller`'s two-minute
+`CacheSyncTimeout`: the log gained not one line past the initial
+`"Starting workers"` burst, `rest_client_requests_total` recorded `200`,
+`201`, `404` and `429` across 24 samples and never `403`, and the restart
+count stayed `0`. So `theOperatorWasNeverDenied` cannot see it, and neither
+can a person reading the log.
 
-**The contrast is what makes this a coverage gap and not a
-measurement artifact.** Denying a direct, uncached call that gates a
-leader-bound `manager.Runnable` — `create` on the TLS secret
-(`internal/certs/store.go`), or `update` on the leader-election lease
-(`internal/controller/setup.go`) — produces a real, immediate, and
-repeated `is forbidden:` line every time
-(`"ensure the TLS bundle: create spawnery-agent-tls: secrets is
-forbidden: ..."`; `"Failed to update lease" err="...is forbidden: ...
-cannot update resource \"leases\"..."` on a ~3-4 second retry loop).
-Those two mutations sit at the opposite failure mode: the denial is
-loud, but the pod never reaches `Available`, so `hack/e2e.sh`'s
-rollout wait times out and `test/e2e` never runs at all. Between the
-two failure modes — cache-backed reads that are silent and safe,
-direct calls that are loud and fatal to readiness — no permission
-removal tried during Task 4 both fires a logged denial *and* leaves
-the operator healthy enough for the check to read it.
-
-**What this means for anyone relying on a green `test/e2e` run.** A
-pass proves the operator was not denied anything it actually asked
-the API server for while the check was watching. It does not prove
-every permission the ClusterRole grants is exercised, and — this
-entry's finding — it specifically does not prove a *watched* resource
-type (anything reached only through the manager's cache: `Owns()`,
-`For()`, the restricted caches in `cmd/spawnery-operator/main.go`) is
-correctly permissioned, because a missing permission there produces no
-signal this check — or, on this evidence, the pod's log at all —
-ever surfaces. Proving that class needs either a second signal this
-check does not currently read (the metrics endpoint;
-`kubectl logs --previous` after a restart, if the informer failure
-ever does become fatal on some other code path) or CR-driven traffic
-that forces a controller to actually call through to a live List
-rather than only register a watch for one. Milestone 6a's Tasks 5
-through 8, which apply `test/e2e/manifests/e2e.yaml` and drive
-reconciles, narrow this for the reconciler-triggered call sites but do
-not by themselves explain why the *informer's own* initial sync — which
-the vendored source's comment says should retry and log on its own,
-unconditionally, without any reconcile — produced nothing observable
-here. That mechanism was not chased further.
-
-*The raw output is gone, 2026-08-22.* This entry cited
-`.superpowers/sdd/2026-08-16-operator-image-and-e2e/task-4-report.md` for the
-full transcript of both mutations. That directory is git-ignored scratch, and
-the subagent-driven workflow that creates it deletes it on completion by
-design, so nothing there survives and nothing is in git either. What remains
-is the account above, which is why it states its numbers — 32 log lines at
-second 0 and at 7m45s, 24 samples carrying only 200, 201, 404 and 429, restart
-count 0 — rather than deferring them. **Nothing in this file should cite that
-directory**: two other entries did, both under milestone 6d, and both are
-corrected the same way.
+The class is now largely covered from the other side. Since
+`testenv.RestrictedClient`, removing `pods:list` turns **231** controller
+tests red, because those tests call through to a live List rather than only
+registering a watch. What is left uncovered is a permission reached
+*exclusively* through `Owns()`, `For()` or one of the restricted caches in
+`cmd/spawnery-operator/main.go`, on a path no controller test drives — and
+for that class a green `make e2e` still proves nothing, because the failure
+mode above is silence.
 
 ## From milestone 6a (the operator in a cluster)
 
@@ -2142,53 +2078,6 @@ previous release, and a deployment that wants a digest pins it where the
 deployment is described. The design's §4 and its acceptance criterion 2 both
 assumed the opposite; both were wrong, and this is structural rather than an
 oversight anyone could have avoided.
-
-**`ProxyGroup.spec.expose` needed a fourth strategy for this, and got one
-afterwards.** What was measured on `paulwtf` is the gap: the rollout put a
-network behind Traefik's TCP entryPoint and had to use `NodePort` as a
-stand-in, which left a node port allocated that nobody dialled and made
-`status.address` report `<node>:<nodePort>` — an address nobody plays on.
-
-The rest of this entry is not a claim about that cluster on that day.
-`type: ClusterIP` with a required `clusterIP.address` was built after the
-rollout, and when this was written it had been driven against no cluster at
-all — only envtest and the E2E kind cluster, where no proxy image resolves and
-no player has ever connected. What the operator does is narrow and unchanged:
-it creates the Service the fronting thing routes to, publishes the address it
-was given — once a proxy pod of the group is ready, and nothing before then,
-the same gate every other strategy's address is behind — and creates no
-routing object and verifies no address. See
-`docs/superpowers/specs/2026-08-20-clusterip-expose-design.md` §4 for why each
-of those refusals is a refusal rather than an omission.
-
-**It has since been driven, and players have played on it.** Measured on
-`paulwtf` on 2026-08-22, with the group `minecraft/gateway` `Ready` since
-2026-08-20T10:47:30Z:
-
-- `spec.expose` is `{"type":"ClusterIP","clusterIP":{"address":"mc.paul.wtf"}}`
-  and `status.address` is `mc.paul.wtf`, two ready replicas.
-- The routing object the operator refuses to create exists, written by hand:
-  `IngressRouteTCP/spawnery-gateway` in `minecraft`, entryPoint `minecraft`,
-  matching `HostSNI(*)`, to `Service/gateway` port 25565 with
-  `proxyProtocol.version: 2`.
-- `mc.paul.wtf` resolves to Traefik's three LoadBalancer addresses, whose
-  Service publishes `25565:30561/TCP`, and `Service/gateway`'s EndpointSlice
-  carries both proxy pod IPs `ready`.
-- Both proxy pods have served real joins. Three distinct names appear in the
-  logs the pods still hold — `WildesDomi`, `anweisen`, `DomiIRL` — each
-  reaching `lobby-hktx` through the proxy and disconnecting cleanly; the most
-  recent connect is 2026-08-22T16:57:35+02:00. That is what the pods' current
-  logs carry, not necessarily every join since the group came up.
-
-So the answer to "whether Traefik actually routes to that Service" is yes, for
-this one fronting proxy in this one configuration. Two things ride along with
-it. The client addresses in those logs are public ones
-(`/95.89.220.159`, `/79.198.252.14`), not pod IPs, which means the PROXY v2
-header Traefik sends is being honoured — the entry below about
-`haproxy-protocol` under `[advanced]` is what makes that work, and this is its
-confirmation from the other end. And the operator's refusal to verify the
-address is unchanged by any of this: nothing in the chain above was checked by
-the operator, and every link of it is the cluster owner's to keep.
 
 **A `configOverlay` key in the wrong TOML table used to be silently ignored,
 and looked right in the rendered file.** Velocity's `haproxy-protocol` lives under
