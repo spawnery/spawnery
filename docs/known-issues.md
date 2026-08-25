@@ -546,38 +546,6 @@ report, and its backoff clock starts well after the operator's did. That is
 reasoning, not measurement. Whoever narrows the bound should isolate the two
 distributions first: the grace is sized against the second one.
 
-**A node holding a whole group empties it at once**, so its players go to the
-fallback groups rather than to the group's own replacements, which are not
-ready yet. `DecideSize`'s `Condemn` rule names every server on a departing
-node in the same pass, unconditionally and all at once — described in
-`docs/superpowers/specs/2026-08-15-node-drain-design.md` §3.3, along with the
-reason it is not throttled: draining one server at a time would make `kubectl
-drain` wait out `drain.timeoutSeconds` once per occupied server on the node
-rather than once for the whole node, turning ten occupied servers at the
-default 60-second deadline into ten minutes of exactly the hanging this
-milestone exists to end. So a `ServerGroup` whose every live server happens
-to sit on one node — a small group, or an unlucky scheduling run — condemns
-its entire population in one pass. The replacement servers are ordered in the
-same pass, but they take a cold start to come up, and in the meantime every
-player who was on that node has nowhere to land but a `fallbackGroups` entry.
-This is the nature of losing the node those servers were on, not a choice
-this design makes differently than it could have; an operator meeting it
-should recognise it rather than read it as a fallback-routing defect.
-
-**A `Persistent` server on a node-pinned RWO volume may not be schedulable
-anywhere else.** `Condemn` names a server whose pod sits on a departing node
-regardless of what kind of server it is or what volume it carries — the node
-is leaving either way, and the alternative is leaving the server's players
-to whatever eviction the node's own departure eventually forces. Its
-replacement, once ordered, then sits `Pending` if the storage class backing
-its `PersistentVolumeClaim` is bound to the node that is going away: a local
-or node-pinned RWO volume does not follow the pod to a different node, and
-nothing in this milestone — or in the storage class itself — can move it.
-This is out of scope by the design's own §4 rather than an oversight
-discovered afterwards, and it stays a limit of the storage class a `Persistent`
-group is configured against, not something node drain can be taught to work
-around.
-
 **The taint list is trusted, not validated.** `-drain-taint` accepts any
 string, and `IsDeparting` matches it only against a taint whose effect is
 `NoSchedule` or `NoExecute` — deliberately, per §3.1's own reasoning: a
@@ -1387,31 +1355,21 @@ documentation agree, and neither of them has been extended to egress here. The
 practical difference is nil: on this harness nothing 6b writes has been shown
 to refuse anything, in either direction.
 
-**The consequence, stated once so nothing downstream has to re-derive it: 6b
-has not observed a single connection being refused, anywhere.** Every test it
-ships asserts an object — the rendered policy in `internal/podspec`, the
-manifest in `internal/rbacaudit`, the created object and the operator's
-continued readiness in `test/e2e`. On this harness a perfect policy and a
-wholly broken one produce the same green, and the e2e scenario
-`theOperatorStaysReadyBehindItsOwnPolicy` says so in its own doc comment
-rather than leaving a reader to infer it. The invariant open since 3b — a
-Paper server runs `online-mode=false`, authenticates nobody, and trusts
-whatever completes the modern-forwarding handshake with the right secret — now
-has a policy written against it.
+**The policy defends against a co-tenant that cannot create pods, and against
+nothing else.** Its ingress peer is a podSelector over labels a pod's own
+creator chooses, so anyone who may create a pod in a game namespace can wear
+its colours. Closing that would buy little: the same privilege reads
+`velocity-forwarding-secret` outright, measured 2026-08-21 by mounting it from
+an unlabelled pod. The boundary is the namespace, not this policy.
 
-*The RKE2 rollout turned that into an observation, on 2026-08-21.* Against
-that cluster's CNI, recorded at `internal/podspec/netpol.go`: a pod carrying
-the managed-by, network and role=proxy labels reached a backend on 25565, and
-the same pod without labels timed out. So the policy does refuse connections
-where the CNI enforces it — and the same measurement established what it
-cannot do, which is the part worth carrying forward. The ingress peer is a
-podSelector over labels a pod's own creator chooses, so anyone who may create
-a pod in a game namespace can wear the policy's colours; and closing that
-would buy little, since the same privilege reads `velocity-forwarding-secret`
-outright, measured the same day by mounting it from an unlabelled pod. The
-boundary is the namespace, not this policy. Everything above about kindnet
-still stands unchanged: on the harness `make e2e` runs, nothing is enforced
-and the object changes nothing.
+It does refuse connections where a CNI enforces it, which took a real cluster
+to establish and is recorded at `internal/podspec/netpol.go`: on 2026-08-21 a
+pod carrying the managed-by, network and role=proxy labels reached a backend
+on 25565 while the same pod without labels timed out, and on 2026-08-25 an
+egress-deny policy cut a proxy agent's stream (scenario 12 of the rollout
+runbook). What it is written against is the invariant open since 3b — a Paper
+server runs `online-mode=false`, authenticates nobody, and trusts whatever
+completes the modern-forwarding handshake with the right secret.
 
 **Proxy pods are selected by no policy 6b writes, and the reason is an
 asymmetry in how the two pod classes are probed.** A server's readiness probe
