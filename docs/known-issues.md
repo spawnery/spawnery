@@ -1364,96 +1364,33 @@ and counted again — is reported stale while its process runs the new secret.
 
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 
-**Completeness of the permission table.** The audit in `internal/rbacaudit`
-catches drift between table and role. If a permission is missing from both, it
-stays green — only the operator running under its ServiceAccount in a real
-cluster proves that (level B of the E2E design).
+**Milestone 2a's isolation promise does not cover availability.** The promise
+of the agent channel reads: a compromised game server pod cannot harm any
+other. For identity and confidentiality it holds — the token is
+audience-bound and accepted nowhere else, the `spawnery-server`
+ServiceAccount has no RoleBinding anywhere, pods run with
+`automountServiceAccountToken: false`, the private CA key never leaves the
+operator secret, and identity comes exclusively from the token and never from
+what the agent claims about itself.
 
-*That run has happened, twice over, and the blind spot is now bounded rather
-than open.* `make e2e` runs the operator as a Deployment under
-`spawnery-operator` in a kind cluster, and a real installation has run under
-the same ServiceAccount on RKE2 since 2026-08-20 — through a CA rotation,
-among other things. What those two prove is exactly the paths they exercise:
-a permission missing from both table and role on a path neither touches is
-still green here and still absent there. So the entry is not closed; it is
-narrowed to the code the driven runs do not reach.
+For availability it does not, and 6b narrowed it without closing it.
+`internal/agentserver` now sets `MaxConcurrentStreams`, `ConnectionTimeout`,
+`MaxConnectionIdle` and a keepalive policy; `internal/grpcauth` caches
+TokenReviews and rate-limits cache misses per peer; the chart ships a
+NetworkPolicy admitting 9443 only from pods labelled
+`spawnery.cloud/managed-by`. Read what each bounds rather than the group:
+**none of them bounds how many connections one pod may open**, which is the
+attack. `MaxConcurrentStreams` bounds streams on one connection and an agent
+opens one; a connection carrying a live stream is never idle, so the reaper
+does not touch it; the rate limit is unreachable by a pod replaying one valid
+token, because that pod hits the cache; and a *compromised managed* pod
+carries the label the policy admits.
 
-**Milestone 2a's isolation promise does not cover availability.** The promise of
-the agent channel reads: a compromised game server pod cannot harm any other.
-For identity and confidentiality it holds — the token is audience-bound and not
-accepted anywhere else, the `spawnery-server` ServiceAccount has no RoleBinding
-anywhere, the pods run with `automountServiceAccountToken: false`, the private CA
-key never leaves the operator secret, `ProxySession` does not exist, and the
-identity comes exclusively from the token, never from what the agent claims about
-itself. For availability it does not hold:
-
-- `grpc.NewServer` in `internal/agentserver` sets neither
-  `MaxConcurrentStreams` nor `ConnectionTimeout` nor a keepalive policy — the
-  number of open streams and half-open connections is unbounded;
-- there is no rate limit in front of `Authenticator.Authenticate`, so a sender
-  needs no valid token to cause work;
-- there is no NetworkPolicy in `config/`, so port 9443 is reachable from every
-  pod in the cluster, not only from the managed ones;
-- and every connection costs a `TokenReview` against the API server, with no
-  cache for positive answers.
-
-Together that means: a single pod in a connection loop generates load on the API
-server and thereby hits the whole cluster, not only itself. It is triggered by a
-compromised or simply faulty reconnecting agent — the failure case from the
-Kotlin agent, already listed above under "reconnect with overlap", is the same
-path without malice. The remedy belongs to this milestone's Helm chart: a
-NetworkPolicy allowing ingress on 9443 only from pods carrying
-`spawnery.cloud/managed-by`, plus an upper bound on concurrent streams. Whoever
-quotes the promise from milestone 2a has to quote this point along with it — it
-holds for identity and confidentiality, not for availability.
-
-*Narrowed by milestone 6b, and narrowed is the right word — the entry stays,
-with three of its four bullets amended and its conclusion still standing.*
-
-- **The gRPC bounds exist now.** `internal/agentserver/server.go` constructs
-  the server with `MaxConcurrentStreams` (8), `ConnectionTimeout` (30s), a
-  `MaxConnectionIdle` of five minutes and a keepalive enforcement policy
-  (`MinTime` 30s, `PermitWithoutStream: false`). Read what each one bounds
-  rather than the group: `MaxConcurrentStreams` bounds streams on **one**
-  connection, and an agent opens one stream, so the headroom is deliberate.
-  **None of them bounds how many connections one pod may open**, which is
-  precisely the attack this entry describes. A connection carrying a live
-  stream is never idle, so the idle reaper does not touch it either.
-- **The `TokenReview` is cached, the pod lookup is not.**
-  `internal/grpcauth/cache.go` keys on a SHA-256 of the token, holds an
-  accepted review for 60 seconds and a refusal for 10, and never stores the
-  third answer — "the API server could not say" — because caching an outage
-  would extend it past its end. The line is the design: deleting a pod —
-  the revocation an operator actually performs — takes effect on the next
-  connection attempt whatever the cache holds, because the pod lookup runs
-  every time. What the cache can delay is a token revoked while its pod still
-  runs, which in Kubernetes means deleting the ServiceAccount.
-- **There is a rate limit, on cache misses only.**
-  `internal/grpcauth/limiter.go` is a token bucket per peer address: five
-  misses of burst, one refilled per ten seconds, refused attempts returning
-  `codes.ResourceExhausted`. It is deliberately unreachable by a pod replaying
-  one valid token, because that pod hits the cache — which is the same
-  sentence as "a pod in a connection loop with one good token is not rate
-  limited". What it bounds is the API-server load such a pod can generate, not
-  the connections it can open.
-- **The NetworkPolicy exists** (`config/deploy/` at 6b, now
-  `charts/spawnery/templates/networkpolicy.yaml`, gated on
-  `values.networkPolicy.enabled` since milestone 6d and on by default),
-  admitting 9443 on the operator pod only from pods labelled
-  `spawnery.cloud/managed-by`, in any namespace. Whether it removes the
-  anonymous half of the attack depends entirely on the cluster's CNI, and
-  nothing in this repository has observed a connection to 9443 being
-  refused — see "From milestone 6b" below.
-
-**So the conclusion of this entry survives 6b intact.** A single pod in a
-connection loop can still open connections without bound, and a *compromised
-managed* pod carries the label the policy admits, so the policy would not stop
-it even where a CNI enforces. What 6b removes is the API-server amplification
-— the cache is what does that, and it is the one part of this whose effect is
-observable from inside the operator, in
+What 6b did remove is the API-server amplification, and the cache is what does
+it — observable from inside the operator in
 `spawnery_agent_token_review_cache_hits_total` beside its misses and
-`spawnery_agent_rate_limited_total`. Anyone quoting milestone 2a's promise
-still has to quote this entry with it.
+`spawnery_agent_rate_limited_total`. Anyone quoting milestone 2a's promise has
+to quote this entry with it.
 
 ## From the milestone 6a Task 4 measurement round (2026-08-17)
 
