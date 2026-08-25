@@ -64,18 +64,12 @@ read-only one takes Paper's own bundled plugins down with it. Mounts below
 them; a ConfigMap or Secret mount is always read-only (`internal/podspec`
 sets `ReadOnly: true` on every user mount unconditionally). So a mount at
 `/data/plugins` makes the `cp` fail under `set -eu` with a bare `cp:` message
-that says nothing about why. This is the same shape as the `/data/config`
-collision above and wants the same fix; the entrypoint already points here for
-it.
-
-**This entry still stands.** Unlike `/data/config`, milestone 3b did not
-resolve it, and could not have with the same move: `/data/config` was
-avoided by relocating the operator's *own* mount target to `/etc/spawnery`
-(see above), but `/data/plugins` is not the operator's choice to relocate —
-it is Paper's own plugins directory, and the agent jar has to land inside it
-regardless of what a user mounts there. A user mount that names
-`/data/plugins` — permitted, since `checkMountCollision` does not single it
-out either — still breaks the start with the same bare `cp:` message.
+that says nothing about why. Unlike `/data/config`, this one cannot be fixed the way that one was:
+`/data/config` was avoided by relocating the operator's *own* mount target to
+`/etc/spawnery`, but `/data/plugins` is Paper's own plugins directory and the
+agent jar has to land inside it regardless of what a user mounts there.
+`checkMountCollision` does not single it out, so the mount is permitted and
+the start breaks with a bare `cp:` message that says nothing about why.
 
 **The relocation is not proven on the give-up path.** The cast to
 `ClientCallStreamObserver` that the cancel needs sits inside a `runCatching`,
@@ -83,23 +77,6 @@ which catches `Throwable` — so a `NoClassDefFoundError` from a shading
 regression would be swallowed and phase 3 of `make agent-test` would still pass.
 Phase 3 being green is evidence that the bound holds, not that the cast resolves
 under the shaded names.
-
-**A permanently unreachable operator writes one WARNING every 30 seconds,
-forever.** There is no rate limit and no deduplication on the reconnect log. One
-line per pod per 30 s is nothing for one server and is a real log bill for a
-fleet that loses its operator for a day.
-
-*The fix this entry proposed was considered and refused, deliberately.* Both
-`AgentPlugin`s now carry the argument at their `log` callback: `SessionLoop`
-never gives up and never escalates on its own, so that callback is the only
-place deciding how loud an unreachable operator gets to be. INFO would bury a
-30-second cadence among routine startup lines, and by the time anybody looked,
-"unmonitored for six hours" would be indistinguishable from "fine"; SEVERE
-would misrepresent a condition the loop is already recovering from. Logging
-only on a change of cause has the same defect as INFO — a fleet that has been
-down all day would say so once, at the start. So the cost stands as written
-and is accepted; what changed is that it is now a decision with reasons rather
-than an oversight.
 
 **The level-2 harness has rough edges milestone 3 inherits.** `hack/agent-test.sh`
 and `cmd/spawnery-stubop` are exactly what a Velocity agent will be tested with,
