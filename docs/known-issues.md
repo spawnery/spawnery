@@ -132,23 +132,13 @@ different thing and outlived its milestone.
 What follows is what 3b discovered while closing its own two preconditions,
 and what 3c inherits as a result.
 
-**The overlay's "refuse rather than guess" philosophy now covers the nested
-documents, and still not `server.properties`.** Both flavours refuse an
-overlay that does not parse — bad YAML, bad TOML; `paperGlobal` refuses one
-whose `proxies` or `proxies.velocity` key parses to something other than a
-mapping, and `velocityToml` refuses the same of `servers` and `forced-hosts`,
-"rather than treating either as an absent overlay" (`paperGlobal`'s own doc
-comment). Since 2026-08-24 they also refuse a key the receiving program does
-not declare, at any depth, measured against that program's own default
-configuration (`internal/render/declared.go`, `internal/render/defaults/`).
-That was the class that had cost this project two outages, and the trade it
-takes is stated where it is taken: a Paper or Velocity bump refuses a
-legitimate override for a newly added key until the default file is
-regenerated.
-
-What is left is `server.properties`, and it is left by construction rather
-than by omission. `parseProperties` accepts any `key=value` line, so a mistyped
-key adds an unused one — and there is no fixture to check against, because
+**`server.properties` is the one overlay nothing checks.** Both other
+flavours refuse an overlay that does not parse and, since 2026-08-24, one that
+names a key the receiving program does not declare, measured against that
+program's own defaults (`internal/render/declared.go`). This one is left out
+by construction rather than by omission. `parseProperties` accepts any
+`key=value` line, so a mistyped key adds an unused one — and there is no
+fixture to check against, because
 Paper's `server.properties` is Minecraft's own and this repository has never
 measured it the way it measures `paper-global.yml` and `velocity.toml`. The
 four keys the operator relies on there are in the critical layer and no
