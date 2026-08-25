@@ -2590,3 +2590,51 @@ func TestAnOrdinalWaitingOnItsPredecessorIsNotFailedForHavingNoPod(t *testing.T)
 			"obstacle for as long as it stands", accepted, ReasonPodNameTerminating)
 	}
 }
+
+// TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError drives the race the
+// recreate path produces: this controller deletes the Server itself, and a
+// reconcile holding a cached copy from just before that delete then writes to
+// an object the API server no longer has.
+//
+// Before persistedServer, that NotFound escaped unwrapped and
+// controller-runtime logged it at `error` with a stacktrace on a path where
+// nothing was wrong -- measured on a real cluster 2026-08-16, with the
+// replacement Server created within the second. The reconcile must report the
+// disappearance as done, because there is nothing left for it to accomplish
+// and the requeued pass already handles the absence at the top of Reconcile.
+func TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError(t *testing.T) {
+	f := newFixture(t)
+	srv := f.createServer("lobby-race")
+
+	// The copy a pass is holding, taken before the object goes away.
+	held := srv.DeepCopy()
+
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	// The finalizer this fixture's servers carry keeps the object until it is
+	// released, so release it and let the delete land for real.
+	held2 := &spawneryv1alpha1.Server{}
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(srv), held2); err == nil {
+		held2.Finalizers = nil
+		if err := f.c.Update(f.ctx, held2); err != nil {
+			t.Fatalf("release finalizer: %v", err)
+		}
+	}
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(srv), &spawneryv1alpha1.Server{}); !apierrors.IsNotFound(err) {
+		t.Fatalf("the Server is still there, so this test would prove nothing: %v", err)
+	}
+
+	// Exactly what a mid-pass write does: a status update against the stale
+	// copy. The bare call is what used to escape; persistedServer is what the
+	// reconcile now goes through.
+	bare := f.reconc.Status().Update(f.ctx, held)
+	if !apierrors.IsNotFound(bare) {
+		t.Fatalf("the write did not produce NotFound (%v), so the guard below is "+
+			"not being asked the question this test exists for", bare)
+	}
+	if got := persistedServer(bare); got != nil {
+		t.Errorf("persistedServer(%v) = %v, want nil -- a Server that is gone is "+
+			"nothing for this pass to do, not an error to log with a stacktrace", bare, got)
+	}
+}

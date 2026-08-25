@@ -25,14 +25,16 @@ not (`PodAdopted`, and a `count: 2` on the new object's *first*
 most recent line by timestamp is unnecessary here, for a reason better than
 the rule it replaces.
 
-**One finding this run produced that is not a runbook correction at all:** the
-recreate path — the one this whole milestone rests on — logs a
-`level=error` line with a full stacktrace every single time it runs, on the
-happy path, in the very log §4 tells the driver to watch for real trouble.
-`docs/known-issues.md` carries the trace, and is careful to say which part of
-it the run established and which part it could not: three writes could have
-produced that line, the log names none of them, and the entry declines to
-guess.
+**One finding this run produced that is not a runbook correction at all**, and
+it has since been fixed: the recreate path — the one this whole milestone
+rests on — logged a `level=error` line with a full stacktrace every single
+time it ran, on the happy path, in the very log §4 tells the driver to watch
+for real trouble. The recreate path deletes the `Server` itself, and a
+reconcile holding a copy from just before that delete then wrote to an object
+the API server no longer had. Since 2026-08-25 the writes to the `Server` go
+through `persistedServer`, which treats its disappearance as done. If a driver
+of this runbook still sees that line, the fix has regressed and
+`TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError` should have caught it.
 
 This is a new document rather than a section of `docs/runbook-milestone-4c1-evidence.md`
 or `docs/runbook-milestone-3-evidence.md`. Both of those measure the proxy

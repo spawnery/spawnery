@@ -374,7 +374,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if srv.Status.Phase == "" {
 				srv.Status.Phase = string(phase.Pending)
 			}
-			if err := r.Status().Update(ctx, srv); err != nil {
+			if err := persistedServer(r.Status().Update(ctx, srv)); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{RequeueAfter: resyncInterval}, nil
@@ -428,7 +428,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if decision.Next == phase.Terminating && !podFound {
 		if !srv.DeletionTimestamp.IsZero() {
 			srv.Finalizers = slices.DeleteFunc(srv.Finalizers, func(f string) bool { return f == ServerFinalizer })
-			if err := r.Update(ctx, srv); err != nil {
+			if err := persistedServer(r.Update(ctx, srv)); err != nil {
 				return ctrl.Result{}, err
 			}
 			return ctrl.Result{}, nil
@@ -443,6 +443,29 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{RequeueAfter: resyncInterval}, nil
+}
+
+// persistedServer reports a write to the Server object, with its disappearance
+// treated as done rather than as a failure.
+//
+// The recreate path deletes the Server itself and lets the group build a
+// replacement. A reconcile that read the object through the informer cache
+// just before that delete landed then writes to an object the API server no
+// longer has, and the NotFound escaped unwrapped: controller-runtime logged it
+// at `error` with a stacktrace and requeued, and the requeued pass found the
+// object gone at the top of Reconcile and returned cleanly. Nothing was ever
+// wrong -- measured 2026-08-16, the replacement Server was created within a
+// second and reached Ready 22 seconds later, with the error line sitting in
+// between. A false error line on the happy path is worse than noise here,
+// because `make e2e` reads this log for real refusals.
+//
+// Deliberately not a blanket ignore at the top of Reconcile: a NotFound there
+// could be the *ServerGroup* rather than this object, and swallowing that
+// would turn a group that vanished mid-pass into a silent no-op. This is only
+// ever handed a write to srv, where the object being gone means there is
+// nothing left for this pass to accomplish.
+func persistedServer(err error) error {
+	return client.IgnoreNotFound(err)
 }
 
 // growClaim raises the claim's storage request to match spec.storage.size,
@@ -610,7 +633,7 @@ func (r *ServerReconciler) ensureFinalizer(ctx context.Context, srv *spawneryv1a
 		return nil
 	}
 	srv.Finalizers = append(srv.Finalizers, ServerFinalizer)
-	return r.Update(ctx, srv)
+	return persistedServer(r.Update(ctx, srv))
 }
 
 // fetchPod returns the pod of a server. A pod carrying a deletion timestamp
@@ -866,7 +889,7 @@ func (r *ServerReconciler) applyDecision(
 		// One extra status write, at the single transition into Ready.
 		if !srv.Status.WasRegistered {
 			srv.Status.WasRegistered = true
-			if err := r.Status().Update(ctx, srv); err != nil {
+			if err := persistedServer(r.Status().Update(ctx, srv)); err != nil {
 				return fmt.Errorf("persist the registration intent for %s: %w", srv.Name, err)
 			}
 		}
@@ -970,7 +993,7 @@ func (r *ServerReconciler) applyDecision(
 		Message: d.Message,
 	})
 
-	return r.Status().Update(ctx, srv)
+	return persistedServer(r.Status().Update(ctx, srv))
 }
 
 // mirrorPlayerCount writes the in-memory count into the status, throttled.
