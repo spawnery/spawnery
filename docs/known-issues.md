@@ -2741,6 +2741,17 @@ admitting one. This refusal is the one thing 6c observed being enforced:
 `TestARejectedProxyPodIsReportedOnTheGroup`) and `make e2e`
 (`test/e2e/expose_test.go`, `aForbiddenHostPortIsReportedOnTheGroup`).
 
+*`restricted` itself is now measured too, on `paulwtf` on 2026-08-25.* A
+throwaway namespace labelled `enforce: restricted`, a `Network`, and one
+`ProxyGroup` at `expose.type: HostPort` port 25577. The group went
+`Degraded=True`/`ProxyPodRejected` and quoted the API server verbatim —
+`violates PodSecurity "restricted:latest": hostPort (container "velocity" uses
+hostPort 25577)` — with no pod in the namespace at any point. So the sentence
+this entry opens with is no longer inherited from the Pod Security Standards
+for `restricted`; it is a thing this cluster did. Driven against the deployed
+`v0.2.0` operator rather than a working tree, which is what makes it a
+statement about what ships.
+
 6a's handover §6 listed CIS `restricted` pod security and `HostPort` under the
 cluster's real CNI among what the RKE2 rollout owed
 (`docs/handover-milestone-6.md`), and this entry was written to say the two
@@ -2749,9 +2760,30 @@ and it did not have to choose. Measured on `paulwtf` on 2026-08-22: the
 `minecraft` namespace enforces `restricted` (`enforce` and `warn` both), and
 the one `ProxyGroup` in it exposes `ClusterIP` with two ready replicas beside a
 `Ready` `Server`, all of it up for over two days. So `restricted` against a
-game server namespace is driven and holds; `HostPort` under the real CNI is the
-leg that went undriven rather than the leg that conflicted, and nothing in the
-cluster is standing in this incompatibility today.
+game server namespace is driven and holds; `HostPort` under the real CNI was
+the leg that went undriven rather than the leg that conflicted, and nothing in
+the cluster is standing in this incompatibility today.
+
+*That leg is driven too, on 2026-08-25, and the answer is not the one the
+phrase "under the real CNI" implies.* A namespace of its own with no Pod
+Security label — the remedy this entry recommends two paragraphs down — and one
+`HostPort` `ProxyGroup` at port 25577. The pod was admitted, went `Ready`, and
+the group published `status.address: 45.137.203.198:25577`, having withheld it
+until a ready pod actually declared that `hostPort`. So the CNI implements
+`hostPort`: `cilium-config` runs `cni-chaining-mode = portmap` with
+`kube-proxy-replacement = false`, which is the portmap plugin's job rather than
+Cilium's eBPF.
+
+What a player would meet is a different object entirely. From outside, 25577
+times out while 25565 and 443 on the same node IP connect instantly — the
+difference is `paulwtf`'s own `CiliumClusterwideNetworkPolicy`
+`host-firewall-ingress`, which admits from `world` exactly 6443, 80, 443, 25,
+465, 587, 143, 993, 5432 and 25565, plus ICMP echo, and drops the rest. Its own
+description says so. **So `HostPort` on this cluster is a host-firewall
+question, not a CNI one**, and the remedy is one port in that policy rather
+than anything in this operator. Anyone reading the paragraph below about giving
+the `HostPort` group a namespace of its own should read this beside it: the
+namespace is necessary and not sufficient.
 
 It stays recorded because the code cannot make the two compatible and the trap
 is waiting for whoever picks `HostPort` later. The remedy is the runbook's to
