@@ -648,94 +648,6 @@ group.
 
 ## From milestone 4c-1 (the proxy readiness contract)
 
-**A new operator against proxy images that predate `SetReady` empties nobody
-and disconnects everybody five minutes later.** What an operator sees first is
-that nothing happens: `spec.replicas` goes from 2 to 1 and the surplus pod
-stays `Ready`, stays in the `Service`'s endpoint slice, and goes on receiving
-*new* players for the whole of the drain window. Then, at the deadline, the pod
-is deleted with all of them on it, and one event is the only thing that says
-so:
-
-```
-Warning  ProxyDrainTimeout  proxygroup/gateway  deleting proxy gateway-xxxx after 5m0s with 3 player(s) still connected
-```
-
-That is worse than the immediate deletion 4c-1 replaced, which disconnected the
-same people without first routing more of them onto a pod it was about to
-remove.
-
-The tell that separates this from a proxy that is genuinely still occupied is
-on the pod. The operator writes `spawnery.cloud/draining-since` whether or not
-the agent ever hears the message, so an un-upgraded proxy carries the
-annotation while its `Ready` condition is still `True` and
-`kubectl get endpointslice -l kubernetes.io/service-name=<group>` still shows
-its address as ready. A correctly drained proxy carries the annotation and is
-`NotReady`. Annotation plus `Ready` is the signature.
-
-The cause is one line of protobuf: `SetReady` is field 7 of
-`OperatorToProxy`'s oneof (`proto/spawnery/agent/v1alpha1/agent.proto`), added
-by this milestone. An older agent does what protobuf requires of an unknown
-field and ignores it, so `ReadyGate.close()` is never reached, the kubelet's
-probe keeps succeeding, and the endpoint never goes away. The deadline bounds
-the damage and the event names it; nothing prevents it.
-
-**So: upgrade the proxy images before the operator, until something
-version-gates the message.** There is no condition and no event that tells
-"old agent" apart from "busy proxy", so nothing an operator can see
-distinguishes them, and the other order is the safe one.
-
-> **Corrected 2026-08-22, and the correction matters more than the entry.**
-> This paragraph used to say the operator *cannot* detect the case, because
-> "`Hello` carries no version". That is false, and was when it was written:
-> `Hello` has carried `string version = 1` since the original gRPC contract on
-> 2026-08-08, the agent fills it from its plugin metadata, and the operator
-> already reads it — `internal/agentserver/server.go:454` logs `"proxy
-> connected", "version", m.Hello.GetVersion()` at V(1). So the wire carries
-> exactly what a version gate would need and nothing has to be added to the
-> protocol; what is missing is only that nobody acts on it. The advice above
-> stands, because today nothing does act on it. The task it defers to is much
-> smaller than this entry implied.
-
-Rolling the operator back on its own is safe too: an agent that supports
-`SetReady` and never receives one behaves exactly as 3c's did, because
-`ProxyRole`'s latch starts at
-`asserted = null` and its first `FullSync` opens the gate unless a `false` was
-asserted — `ProxyRole.kt`'s `Latch(synced = false, asserted = null)` and, in
-its `FULL_SYNC` branch, `if (!previous.synced && previous.asserted != false)
-onFirstSync()`. Quoted rather than cited by line: this file's citations into
-that one have gone stale twice already.
-
-**`status.connectedPlayers` briefly meant something other than what it says,
-because this milestone changed the field's meaning without editing the line
-that computes it — found and fixed inside the same milestone.** `setStatus`
-skipped any pod that was not `Ready` before adding its player count, so after
-a scale-down the group printed `READY 1 PLAYERS 0` with a person visibly in
-the game. The evidence run of 2026-08-14 saw exactly that.
-
-The line did not need editing to become wrong. Before 4c-1, `NotReady` meant
-starting up or broken, and skipping those pods was a fair reading of "players
-in this group". 4c-1 makes `NotReady` also a deliberate, healthy, populated
-state — a proxy serving people precisely because it is being emptied — so the
-same code answered a different question than it used to, while the CRD's own
-description still promised "the sum of players across all proxies".
-
-The whole-branch review ruled it a defect rather than a naming question, and
-the sum now runs above the readiness guard while `ready++` stays inside it.
-Four things decided it: the CRD description was false in a state the operator
-deliberately creates, and it is a printed column; it was wrong during the one
-operation where it is the only observable, since nothing logs a readiness
-withdrawal; the milestone had shipped a runbook paragraph apologising for it,
-which is evidence the output was wrong rather than the reader; and no test
-anywhere asserted the field, so the fix broke nothing — which also means
-nothing would have caught it.
-
-**Kept because the trap is general, not because the bug survives.** A guard
-can go on compiling, passing its tests and reading sensibly while the meaning
-of the state it filters on moves underneath it. The 4a entry above records the
-same shape on `derivePhase` and `DesiredReplicas()`, which stood open until
-2026-08-24 and was then ruled rather than repaired. Both were found by reading a comment or description against what the
-code had come to do — not by any test.
-
 **`nix build` filters the source tree through the git index, so an untracked
 file does not exist for a sandboxed build.** This is not a 4c-1 discovery —
 it cost time in milestone 2c as well and was simply never written down. It
@@ -749,78 +661,12 @@ warns about and is not. The agents derivation builds from `src = ../agent`
 either way the source is the git tree. `git add` before the build, not just
 before the commit — staging is enough, nothing has to be committed.
 
-**One smaller thing**, carried out of this milestone's task reviews rather than
-fixed in them. Three others stood here and are closed:
-
-- Two assertions in `hack/agent-test.sh` are argued rather than demonstrated:
-  the control probe on 25565 that follows the closed-gate assertion, which
-  needs the container to die mid-phase to be shown failing, and the post-loop
-  arm of phase 4's withdrawal guard, which needs `port_open` to answer while
-  `set_ready_sent` is already non-zero — a sub-second window on a correct
-  agent.
-
-**Three facts about the machine this milestone was built on — two of them have
-since flipped and the third was never measured at all, which is the point.** Measured 2026-08-14: `docker` was a symlink
-into `podman-docker-compat`, so `CONTAINER ?= docker` already ran Podman and
-`CONTAINER=podman` changed nothing; and `/tmp` was not a tmpfs, so the
-`TMPDIR` prerequisite did not apply.
-
-Re-measured 2026-08-22, and both are now the opposite. There is no `docker` in
-the PATH at all, so `CONTAINER=podman` is required rather than inert; and
-`/tmp` is a 3.9 G tmpfs, so `TMPDIR` on a disk-backed path is required for
-anything that extracts an image archive. Both overrides are what this
-repository's own image and agent runs use today.
-
-The entry was right to date these and right to say they are not properties of
-the repository. What it shows is that dating is necessary and not sufficient:
-nothing re-reads a dated fact, and a stale one about the machine is acted on
-rather than merely read. `docs/runbook-milestone-3-evidence.md` §0 states both
-conditionally, which is why nothing downstream broke while this paragraph was
-wrong.
-
-**The third was worse than stale: it was never measured.** "This machine has
-8 GB, so `make e2e` does not run here" stood as a working rule for weeks and
-was acted on — it is why several entries in this file said "unproven until
-driven" rather than saying what a run had found. Measured 2026-08-25 on the
-same machine, 7.9 GiB total with no swap: a full `make e2e` peaks at **962 MiB
-over baseline** with a warm nix store, and 1.1 GiB on a run whose scenarios
-fail. A bare single-node `kind` cluster is 675 MiB of that; `nix build
-.#operator-image` costs about 1 GiB on a cold store and does not overlap the
-cluster, since `hack/e2e.sh` builds at line 95 and creates at line 112. So the
-peak is the larger of the two, not their sum.
-
-The reason it is so small is a decision this file already records: no image in
-the run resolves, so no Paper or Velocity process ever starts. What runs is a
-Kubernetes control plane and one operator pod with a 256 MiB limit. An
-estimate that assumed game servers would have been several times too high —
-which is what the rule was, and nothing had checked it.
-
-**An unchecked question about milestone 3's runbook, which must not be repeated
-as a finding.** Measured 2026-08-14 against Go 1.26.5 in this repository's
-devshell: `go run` does not forward `SIGTERM` to the binary it compiled, so
-`pkill -f` on the wrapper leaves the compiled child running and reparented, and
-the operator goes on reconciling.
-`docs/runbook-milestone-4c1-evidence.md` says so and kills the child.
-`docs/runbook-milestone-3-evidence.md` cleans up the same `go run` with
-`kill %1`. Whether that has the same problem was recorded here as **not
-known**, on the reasoning that `kill %n` addresses the *job*, which in some
-shells means the job's whole process group, and signalling the group would take
-the compiled child down along with the wrapper. Two possibilities, one of them
-benign.
-
-*Measured 2026-08-25 in bash, and it is the other one.* `go run` in the
-background, `kill %1`, three seconds, then `kill -0` on both pids: the wrapper
-is gone and the compiled child is alive, reparented and still running. Bash's
-`kill %1` resolves the job to one pid and signals that process; `kill -- -PGID`
-is what signals a group, and no runbook writes that. So milestone 3's cleanup
-leaves the operator reconciling exactly the way `pkill -f` does, and both
-runbooks need the second step the 4c-1 one already has: kill the compiled child
-by name.
-
-The reasoning that made this "not known" was sound and the possibility it
-leaned towards was the wrong one — the third time in this file that evidence
-consistent with a conclusion turned out not to establish it. The measurement
-cost thirty seconds.
+**Two assertions in `hack/agent-test.sh` are argued rather than
+demonstrated.** The control probe on 25565 that follows the closed-gate
+assertion needs the container to die mid-phase to be shown failing, and the
+post-loop arm of phase 4's withdrawal guard needs `port_open` to answer while
+`set_ready_sent` is already non-zero — a sub-second window on a correct agent.
+Neither has been made to fail on purpose, so neither is known to be able to.
 
 ## From milestone 4c-2 (proxy rolling updates)
 

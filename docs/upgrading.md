@@ -9,6 +9,49 @@ an older one.
 
 Nothing here is an open defect. `docs/known-issues.md` carries those.
 
+## Upgrade the proxy images before the operator
+
+A new operator against proxy images that predate milestone 4c-1's `SetReady`
+empties nobody and disconnects everybody at the deadline. What it looks like
+first is that nothing happens: `spec.replicas` goes 2 to 1 and the surplus pod
+stays `Ready`, stays in the Service's endpoint slice, and goes on receiving
+*new* players for the whole drain window. Then the pod is deleted with all of
+them on it, and one event is the only record:
+
+```
+Warning  ProxyDrainTimeout  proxygroup/gateway  deleting proxy gateway-xxxx after 5m0s with 3 player(s) still connected
+```
+
+That is worse than the immediate deletion 4c-1 replaced, which disconnected
+the same people without first routing more of them onto a pod it was about to
+remove.
+
+The cause is one line of protobuf: `SetReady` is field 7 of
+`OperatorToProxy`'s oneof, added by that milestone. An older agent does what
+protobuf requires of an unknown field and ignores it, so `ReadyGate.close()`
+is never reached, the kubelet's probe keeps succeeding, and the endpoint never
+goes away. The deadline bounds the damage; nothing prevents it.
+
+**The signature is annotation plus `Ready`.** The operator writes
+`spawnery.cloud/draining-since` whether or not the agent ever hears the
+message, so an un-upgraded proxy carries the annotation while its `Ready`
+condition is still `True` and
+`kubectl get endpointslice -l kubernetes.io/service-name=<group>` still shows
+its address as ready. A correctly drained proxy carries the annotation and is
+`NotReady`.
+
+Nothing version-gates the message, which is why the order matters. It could:
+`Hello` has carried `string version = 1` since the original gRPC contract on
+2026-08-08, the agent fills it from its plugin metadata, and the operator
+already logs it at V(1) in `internal/agentserver/server.go`. The wire carries
+what a gate would need; nobody acts on it yet.
+
+Rolling the *operator* back on its own is safe. An agent that supports
+`SetReady` and never receives one behaves exactly as milestone 3c's did:
+`ProxyRole`'s latch starts at `Latch(synced = false, asserted = null)` and its
+`FULL_SYNC` branch opens the gate unless a `false` was asserted --
+`if (!previous.synced && previous.asserted != false) onFirstSync()`.
+
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 
 `v0.1.1` added a fourth `expose` strategy to the `ProxyGroup` CRD's enum. The
