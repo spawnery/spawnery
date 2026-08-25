@@ -362,25 +362,18 @@ version to fix it to), so it fails loud rather than silent, but the runbook
 that depends on this tool inherits the same assumption.
 
 **A backend that goes silent without closing its socket still disconnects its
-players, and no plugin can stop it.** `Rescue` (added 2026-08-25) catches a
-player whose server drops them and redirects them onto `fallbackGroups`, which
-closes the gap the design's §6.2 assumed was already closed — measured that
-day on `paulwtf` against a two-backend `lobby` group, where force-deleting the
-pod under a joined player disconnected them while a ready, registered, empty
-peer stood unused beside it. Re-run the same way against `0.2.1` the same
-day, the player was moved instead: the proxy logged the kick from
-`lobby-97eq` and `-> lobby-gzvz has connected` in the same second, and the
-client stayed until its own hold expired. It does not close every case. Disassembling
-velocity 3.5.1 build 615, `ConnectedPlayer.handleConnectionException(server,
-reason, friendly, safe)` returns *before* firing `KickedFromServerEvent` when
-`safe` is false, and `BackendPlaySessionHandler.exception(cause)` passes
+players, and no plugin can stop it.** `Rescue` catches a player whose server
+drops them and redirects them onto `fallbackGroups`, which is what Velocity's
+own failover cannot do here — it walks `try`, and internal/render renders
+`try = []` because the server list is dynamic. It does not cover every case.
+Disassembling velocity 3.5.1 build 615, `handleConnectionException` returns
+*before* firing `KickedFromServerEvent` when its `safe` argument is false, and
+`BackendPlaySessionHandler.exception(cause)` passes
 `safe = !(cause instanceof ReadTimeoutException)`. So a hard-powered-off node
-or a partitioned network — where the backend stops answering but never closes
-the connection — surfaces as a read timeout, and Velocity disconnects the
-player before any plugin is consulted. The hole is Velocity's own and cannot
-be closed from the agent; closing it would mean the operator noticing the
-dead server and sending `DrainPlayers` inside Velocity's read timeout, which
-is a different mechanism than this one.
+or a partitioned network surfaces as a read timeout and the player is
+disconnected before any plugin is consulted. Closing it would mean the
+operator noticing the dead server and sending `DrainPlayers` inside Velocity's
+read timeout, which is a different mechanism than this one.
 
 ## From the milestone 3c evidence run (2026-08-12)
 
@@ -2324,57 +2317,17 @@ so. The general lesson for anyone extending the check: it can only see what
 something logs, so an error the code handles well is invisible to it by the
 same mechanism that makes the handling good.
 
-**And a third way past it: the verb was never exercised while anybody was
-watching.** `ServerGroupReconciler.retireServer` nominates a server for a
-rolling update with a `client.MergeFrom` patch, and the `servers` marker
-granted `get;list;watch;create;update;delete` -- no `patch`, which is its own
-verb to the API server. So the operator could create and delete servers but
-never retire one: a rolling update brought the new generation up and left the
-old one running beside it, the reconcile erroring every few seconds with
-`is forbidden`, and `status.freeSlots` frozen at whatever the failed pass
-never got to write. Fixed 2026-08-25, found by changing a `ServerGroup`'s
-image on a live cluster rather than by any test.
-
-Three guards were in place and none could see it. `required.go` is checked
-against the generated role in both directions, so table and ClusterRole can
-never drift -- but the table is written from the markers rather than from the
-call sites, so both sides agreed on the same wrong answer. The envtest
-controller tests do drive `retireServer`, and did so through a client holding
-everything, so a missing verb could not show. Not because envtest waives
-authorization -- its API server runs the same authorizer any cluster does,
-which is precisely why the fix below works -- but because nothing had ever
-asked those tests to be anybody in particular. And
-the `is forbidden:` sweep above would have caught the exact string -- except
-no e2e scenario ever changes a `ServerGroup`'s image, so the one path that
-needs the verb is never taken during a run.
-
-The intersection is the hole: a verb is only proven by a test that both runs
-under the operator's own identity *and* takes the path that needs it.
-
-Closed the same day, and not the way it first looked. The obvious repair --
-drive an image change in `make e2e` -- does not work, and the reason is worth
-keeping because it is invisible from the outside: `selectRetirement` only
-nominates when the group holds a Ready server of the *current* generation
-(`internal/controller/scaling.go`, the `v.Phase == phase.Ready` clause), and
-`test/e2e/manifests/e2e.yaml` names an unresolvable image on purpose, so no
-server in that harness is ever Ready. An image change there produces no
-nomination at all. The scenario would have passed while proving nothing.
-
-What closed it instead is `testenv.RestrictedClient`: the controller tests'
-reconcilers now run under `system:serviceaccount:spawnery-system:spawnery-operator`,
-impersonated, holding exactly the ClusterRole `config/rbac/role.yaml`
-generates. The fixture keeps its admin client for arranging and asserting --
-a harness may create a ServerGroup, the operator may not -- and hands every
-reconciler and Bootstrapper the restricted one. The four tests that already
-drove `retireServer` now fail when `patch` is missing from the servers rule,
-with the same message the cluster produced; removing `patch` from `pods`
-turns 93 red. So the table no longer has to be derived from the code: any
-path a controller test already takes proves its own verbs.
-
-What is still not covered is a path no controller test takes. `make e2e`
-remains the only place the operator's real identity meets a real cluster, and
-it still cannot reach the retirement branch for the reason above.
-
+**A verb is only proven by a test that runs under the operator's own identity
+*and* takes the path needing it, and `make e2e` cannot do the second.**
+`selectRetirement` only nominates when the group holds a Ready server of the
+current generation, and `test/e2e/manifests/e2e.yaml` names an unresolvable
+image on purpose, so nothing in that harness is ever Ready — an image change
+there produces no nomination at all. Since 2026-08-25 the controller tests
+carry the first half instead: `testenv.RestrictedClient` gives every
+reconciler the operator's ServiceAccount and exactly the generated
+ClusterRole, so any path those tests already take proves its own verbs. What
+remains uncovered is a path no controller test takes, and `make e2e` is still
+the only place the operator's real identity meets a real cluster.
 
 **"The whole log" is only as whole as the container is old, and the check now
 says so itself.** Until the milestone's final fix wave, `operatorLog` passed an
@@ -3385,23 +3338,9 @@ short a verb the library will reach for nor carrying one it will not, and
 that is a statement about the library's source, not about a run.
 `internal/rbacaudit` checks the rendered chart's RBAC against a
 hand-maintained table in both directions, so it catches the table and the
-role disagreeing — but the table itself is hand-maintained, and nothing
-caught the table and the role agreeing while both were wrong against what
-the code actually needs.
-
-That paragraph was written as a warning and then came true: `servers` was
-granted `get;list;watch;create;update;delete`, the table said the same, and
-`ServerGroupReconciler.retireServer` patches `spec.retire`, so no ServerGroup
-rolling update could ever finish. It ran into a live cluster on 2026-08-25.
-Closed the same day — see the third `is forbidden:` entry in milestone 6a's
-section for the full account. `testenv.RestrictedClient` gives every
-reconciler in the controller tests the operator's own identity and exactly
-the generated ClusterRole, so the sentence this paragraph used to carry —
-"envtest cannot close that gap either: its test client is granted
-everything" — is no longer true of this repository. Removing `patch` from
-the servers rule now turns four existing tests red; from `pods`, 93.
-
-The only thing that has exercised
+role disagreeing. It once could not catch both agreeing while both were
+wrong against what the code needs; `testenv.RestrictedClient` closes that for
+any path a controller test takes. The only thing that has exercised
 the operator's real ServiceAccount against a real API server since the
 grant changed is one `make e2e` run, and that run's `PASS` reaches exactly
 as far as the check it drives allows, no further:
@@ -3498,66 +3437,18 @@ ever exercises the podman path again. CI proves Docker; the author's machine
 proves podman; neither proves the other, and a change that only breaks under
 one container runtime can now sit green in CI indefinitely.
 
-**The nightly's red path has never been driven.** Two workflow paths once
-existed only on paper here, and both have since run in the shape that ships —
-including the `schedule` trigger, which this entry carried as a residue for
-four days and which has now fired on its own on five consecutive nights,
-2026-08-21 through 2026-08-25, on `master`. What has not run is the issue a
-failure opens.
+**The `if: failure()` step that opens a `nightly-red` issue has never run.**
+`9a25874` gave `nightly.yml` that step, an `if: success()` step that closes
+the issue, and `hack/require-no-red-nightly.sh`, which refuses a release while
+one stands. The only red night this project has had was 2026-08-22, the day
+before the step landed, so it has never written anything.
 
-`9a25874` gave `nightly.yml` an `if: failure()` step that opens or edits a
-`nightly-red` issue, an `if: success()` step that closes it, and
-`hack/require-no-red-nightly.sh`, which refuses a release while one stands.
-The one red nightly this project has had was run 32550359170 on 2026-08-22 —
-the day before that step landed. So the opening path has never executed, the
-closing path has only ever run against a repository with no such issue, and
-the release gate has only ever measured an absence. That gate is the one where
-absence means *permission* rather than refusal — so the branch nothing has
-exercised is the branch that would stop a release. It measured an absence
-once more on 2026-08-25, on the way to `v0.2.1`, and let it through.
-
-Narrow it to what was actually untested: the *script* never was.
-`hack/require-no-red-nightly-test.sh` drives its refusal four ways through a
-seam, and its own header says why the refusing case must be a fixture rather
-than a live call — it would need an open issue in the tracker it is testing.
-What had never executed is the workflow wiring on either side of it.
-
-Half of that was driven on 2026-08-25, deliberately, by standing in for the
-failure rather than causing one. `spawnery/spawnery#2` was opened by hand
-carrying the `nightly-red` label — which is the only thing any of the three
-pieces looks at — and the label itself had to be created, because until then
-no failure had ever reported one. Then, in order:
-
-- `hack/require-no-red-nightly.sh spawnery/spawnery` refused, exit 1, naming
-  the issue. That is the first time the refusing branch has run against the
-  live repository rather than a fixture, and it is the branch whose silence
-  would have been permission.
-- A dispatched `nightly.yml` run (32850128806) passed, and its `if: success()`
-  step closed the issue with "Closed by the nightly run that passed", logging
-  `::notice::closed spawnery/spawnery#2`.
-- The gate then returned exit 0.
-
-So the closing half and the release gate's refusal are both driven. What is
-still on paper is the `if: failure()` step that *writes* the issue: driving it
-needs a genuinely red nightly, and the one red night this project has had
-(2026-08-22) came the day before that step existed. Standing in for it is what
-the drill above did, which tests everything downstream of it and nothing of
-the step itself.
-
-`nightly.yml` was driven once before the merge, but not in its merged shape: it
-needed a temporary `pull_request:` trigger, because GitHub will not run
-`workflow_dispatch` on a workflow that has never reached the default branch,
-and that trigger was removed before merging. Run 32350280041 is the merged
-file, dispatched from `master`: `image-repro: success`.
-
-`release.yml` has now run four times: once dispatched with `DRY_RUN=1` before
-any tag existed, which is what that trigger is for, and three times on real
-tags — `v0.1.0`, `v0.1.1`, `v0.1.2`. `skopeo login` works on a hosted runner
-with `REGISTRY_AUTH_FILE`, the `WRITE_DIGEST` branch of `hack/publish.sh` has
-run against a real registry, the digest guard has fired, and the per-image loop
-has exercised both of its outcomes — publishing, and skipping an image already
-at its version with exit 3, which `v0.1.1` and `v0.1.2` did for Paper and
-Velocity.
+The two pieces downstream of it were driven on 2026-08-25 by standing in for
+the failure: an issue opened by hand with the `nightly-red` label made the
+gate refuse (exit 1, live rather than against a fixture, and that is the
+branch whose silence is permission), and a dispatched green run closed it and
+returned the gate to exit 0. Driving the writing step itself needs a
+genuinely red nightly and nothing stands in for that.
 
 **Corrected after the milestone's final review, on `release.yml`'s first
 tag specifically: as the file shipped, that tag would have published
@@ -3842,19 +3733,6 @@ error. The measurement above is kept because it is the evidence the check
 rests on: it is what establishes that Velocity ignores the misplaced key
 rather than failing on it, which is the whole reason a render-time refusal is
 worth its cost.
-
-**`syncOccupiedLabel` runs.** The "On the RBAC audit" list used to record that
-`required.go`'s `Why` for `pods: patch` named `syncOccupiedLabel` — the Server
-controller's, singular — while `ProxyGroupReconciler.syncOccupiedLabels` is
-what runs on every pass. That entry is gone: the `Why` now names both. Both were
-driven by hand-labelling pods `spawnery.cloud/occupied=true` and watching the
-operator remove the label, which is the same `Patch` call the grant exists for:
-`rest_client_requests_total{method="PATCH"}` moved 1→3 for the two proxy pods
-and 3→4 for the lobby's server pod. The named call site does run and does issue
-the patch. Both directions were then driven by a real join: with one player online the
-labels appeared on their own — `true` on the occupied proxy pod and on the
-lobby's server pod — the PATCH counter moved from 8 to 12, and both went away
-again on disconnect.
 
 **A PodDisruptionBudget's protective behaviour cannot be simulated.** Both
 budgets select on `spawnery.cloud/occupied: true` and the operator sizes
