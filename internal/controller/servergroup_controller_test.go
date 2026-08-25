@@ -4151,10 +4151,13 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 	}
 }
 
-// TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead pins the ruling
-// docs/known-issues.md's milestone 4d entry asked for: when a group has both
-// given up and lost its Network, which of two true messages an operator sees
-// first.
+// TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead pins which of two true
+// messages an operator sees first when a group has both given up and lost its
+// Network. The BackingOff/Degraded switch in Reconcile tests !sized before
+// backoff.GaveUp, so without this ruling such a group reports "backoff is not
+// being decided: the group's network is not usable" -- even though the failure
+// count that produced GaveUp is computed from the views before sized is known
+// and does not depend on the Network at all.
 //
 // Both are true. They are not equally useful. The Network's unusability is
 // transient and already carried by Accepted: False, so repeating it here spends
@@ -4162,15 +4165,25 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 // elsewhere. Giving up is terminal — it takes a spec edit — so an operator who
 // reads only "the group's network is not usable", fixes the Network and walks
 // away has been told the truth and left with a group that still creates
-// nothing.
+// nothing. Restoring the old order fails this test, and it also asserts
+// Accepted is still False, so the ruling cannot quietly become hiding the
+// Network rather than declining to repeat it.
+//
+// How this state is reached is the part that cost the most to find. The
+// obvious construction -- point the group's networkRef at something missing --
+// cannot reach it at all, because editing the group is a spec change and a
+// spec change deliberately clears the failure streak. The Network has to
+// become unusable *without* the group being touched: deleted, or made
+// unaccepted by a rival. Any future test about this pair has to break the
+// Network, never the group.
 func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
 	// backoffGiveUpAt rounds, each one failing whatever the group built.
 	//
-	// A whole floor failing at once used to be enough on its own, which is what
-	// the milestone 4d entry above is about: the count was corpses, so one
+	// A whole floor failing at once used to be enough on its own: the count
+	// was corpses, so one
 	// round at minReplicas 6 spent the entire budget. Since the count became
 	// rounds it takes six of them, and building the give-up that way is also
 	// the honest construction — it is what a genuinely broken image does.
