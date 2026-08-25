@@ -2610,52 +2610,30 @@ reachable — the server still reaches `Done` and answers a ping. Nothing has
 observed it failing *this* way, through a policy, because nothing here enforces
 one.
 
-**The Service ClusterIP and the DNAT question, which the RKE2 rollout has to
-settle.** The per-`Network` policy's egress rule to the operator names the
-operator's pod by selector (`podspec.OperatorPodLabels()`, intersected with the
-operator's namespace in a single peer). What the agent actually dials is
-`spawnery-operator.<ns>.svc`, which resolves to a Service ClusterIP that
-kube-proxy DNATs to that pod's IP. Whether a pod-selector egress rule matches
-depends on whether the CNI evaluates policy **before or after** that
-translation: after, and the selector matches; before, and the rule would have
-to be an `ipBlock` covering the Service CIDR instead — which the operator
+**Whether a pod-selector egress rule survives Service DNAT is settled for
+Cilium and for no other CNI.** Two of the per-`Network` policy's egress rules
+name a pod or namespace selector while what the pod actually dials is a
+Service ClusterIP that kube-proxy DNATs: the operator hop
+(`podspec.OperatorPodLabels()`, against `spawnery-operator.<ns>.svc`) and the
+resolver hop (`kube-system` by namespace selector, against the cluster DNS
+Service). A CNI evaluating policy pre-DNAT would drop both, and the rule would
+have to be an `ipBlock` over the Service CIDR instead — which the operator
 cannot discover from inside the cluster. The design (§6) declined to assert
-which side any particular CNI falls on, exactly because that is the class of
-claim this project keeps catching itself making from memory. The pod-selector
-form is what ships. It cannot be tested where the CNI enforces nothing: on
-kindnet an egress rule that matches and one that does not are the same green.
-If backends stop reaching the operator on a real CNI, this is the first thing
-to check, and the symptom would be every agent failing to connect at once
-while the objects all look correct.
+which side any CNI falls on, and the pod-selector form is what ships.
 
-*Settled for one CNI, 2026-08-22.* The RKE2 cluster runs Cilium, carries
-`production-backends` in `minecraft` — the per-`Network` policy, selecting
-`role=server` — and its backend `lobby-hktx` reports `Ready`, which the design
-only grants once that server's agent has connected to the operator. So on
-Cilium the pod-selector egress rule does match traffic addressed to the
-Service ClusterIP: policy is evaluated on a side where the selector still
-resolves. That is one CNI, not the class. The operator still cannot discover
-which side any other CNI falls on, and the `ipBlock`-over-Service-CIDR
-fallback this entry names is still what a CNI on the other side would need.
+On Cilium both rules match: `paulwtf` carries `production-backends` in
+`minecraft` selecting `role=server`, and a backend under it reaches `Ready`,
+which the design only grants once that server's agent has connected — so it
+resolved the operator's name *and* dialled it through the ClusterIP. Verified
+again 2026-08-25 on a pod rolled that day.
 
-**The DNS rule has the same exposure, and its symptom looks nothing like the
-one above.** A backend resolves through the cluster DNS `Service`, whose
-ClusterIP kube-proxy DNATs to a CoreDNS pod exactly as it does the operator's,
-and the per-`Network` policy's first egress rule names `kube-system` by
-namespace selector — so a CNI evaluating policy pre-DNAT would drop the
-resolver query too. The RKE2 rollout's obligation is therefore both rules, not
-just the operator hop: check that a backend can resolve as well as that it can
-dial. The symptoms diverge, which is why this is worth naming separately — the
-operator hop failing looks like agents that never register, while DNS failing
-looks like nothing resolving at all, including the operator's own name, so the
-agent failure is a downstream effect and the first thing to check is the wrong
-one.
-
-*Settled by the same observation, 2026-08-22, and by the same limit.* A
-backend that reaches `Ready` on Cilium has resolved the operator's name to
-dial it, so the `kube-system` namespace-selector rule admits the resolver
-query there too. Both rules therefore work on that one CNI, and neither is
-established for any other.
+That is one CNI, not the class, and it cannot be widened where it would be
+cheapest to test: kindnet enforces nothing, so an egress rule that matches and
+one that does not are the same green in `make e2e`. The two failure symptoms
+diverge and the misleading one comes first — the operator hop failing looks
+like agents that never register, DNS failing looks like nothing resolving at
+all *including* the operator's name, so agents failing to register is the
+downstream effect and checking that first leads away from the cause.
 
 **The peerless rule is the widest-open thing 6b writes, and one unit test is
 all that stands behind it.** The operator's own `NetworkPolicy` (`config/deploy/networkpolicy.yaml`
@@ -2783,52 +2761,6 @@ never idle (eight live streams), `MaxConnectionAge` is unset, the test's client
 sets no keepalive so `ENHANCE_YOUR_CALM` cannot fire, and the transport context
 is cancelled only by `t.Cleanup`. If that test ever shares a connection across
 subtests or adds client keepalive, the narrowing has to be revisited.
-
-**`make agent-test` was run for this milestone and stayed green**, from a
-pruned podman store, with no `ENHANCE_YOUR_CALM`: the new keepalive enforcement
-policy regresses neither real agent. That matters because the agents send no
-keepalive at all — `agent/common`'s `SessionLoop` says so in its own comment —
-so the enforcement policy has nothing legitimate to throttle. Nothing under
-`agent/` or `proto/` changed on the branch.
-
-**The per-peer rate limit was per *connection*, and the attack it was written
-against reset it on every reconnect.** Found by the whole-branch review, fixed
-in 6b's final fix wave, and recorded here because the shape is more useful than
-the fix. `peerAddr` returned `peer.FromContext(ctx).Addr.String()`, and that
-`Addr` is a `*net.TCPAddr` whose `String()` is `IP:ephemeral-port` — measured
-from a real gRPC server as `127.0.0.1:42662` on one connection and
-`127.0.0.1:42674` on the next. So the bucket key named a connection, every TCP
-connection started with a fresh `PeerBurst`, and the pod-in-a-connection-loop
-this file documents could spend five real `TokenReview` calls, close, reconnect
-and spend five more, bounded only by how fast it completes TLS handshakes. It
-failed **open**, which is why nothing broke and nothing said anything.
-`net.SplitHostPort` makes the bucket one per pod IP, which is what the design's
-mass-reconnect safety argument had assumed all along.
-
-The reason it survived is the part worth carrying, and it was measured
-rather than reasoned: **no test in the tree exercised the limiter's key.**
-Replacing `peerAddr`'s body with a constant left `go test ./...` entirely green
-before the fix, because no test carried a `peer.Peer` in its context — the unit
-tests pass `context.Background()` and the envtest fixture passes `testenv`'s
-context, so the key was the constant `"unknown"` in every one of them — while
-`TestPeerLimiterBucketsArePerPeer` exercised the limiter's own keying with bare
-IP strings the production path never produced.
-Two tests, each individually reasonable, and between them a seam nothing
-crossed. `TestTheRateLimitKeysOnThePodRatherThanTheConnection` now installs the
-`peer.Peer` a real server installs and closes both directions.
-
-**The `TokenReview` cache's bound was not a bound, and its test could not see
-that.** `evictExpiredLocked` deleted only expired entries, so with
-`maxCacheEntries` live entries it deleted nothing and the map grew for as long
-as distinct tokens arrived. The test stored 1025 entries at one frozen instant —
-already past the bound — then advanced the clock past `PositiveTTL` before its
-final store, so its length assertion ran against a map the expiry sweep had just
-emptied. Green for a cache that bounded nothing, under a comment claiming "this
-bounds how large it gets in between". 6b's final wave made the bound real rather
-than correcting the claim: `store` sweeps expired entries first and drops the
-entry closest to expiry only when that frees nothing. The replacement test's
-clock never moves, so nothing can expire and the bound can only hold by
-dropping a live entry.
 
 **Smaller ones, each worth a sentence:**
 
