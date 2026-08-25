@@ -4144,9 +4144,6 @@ the same suite with nothing indicating it.
 
 ## Small things
 
-- `ObjectRef` is a non-pointer struct without `omitempty`, so a `required`
-  marker on fields of that type never applies; the rejection effectively comes
-  from `MinLength=1` on the name.
 - Since milestone 2a, `BuildServerPod` rejects a user mount that hits `/data` or
   `/tmp` exactly, that reuses one of the operator's reserved volume **names**,
   and that overlaps the agent mount path in either direction: the same path,
