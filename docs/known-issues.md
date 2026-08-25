@@ -2672,144 +2672,30 @@ objects it expects rather than a count, so a template that stops rendering
 fails rather than passing by being absent, and one that is added fails until
 somebody lists it.
 
-**`hack/chart-templates.sh` now checks its outcomes as well as its inputs.**
-Its two original guards (`grep -q` on `config/rbac/role.yaml` and on each
-file under `config/crd/bases/`) confirm only that the *source* still has the
-shape the following `sed` is anchored to, which is exactly what a broken
-`sed` leaves untouched: an intact input and a substitution that never fired
-were indistinguishable to them, and both exited 0 while writing a corrupted
-`rbac.yaml` (a surviving `spawnery-system` literal) or `crds.yaml` (no
-`helm.sh/resource-policy: keep` annotation). The whole-branch review measured
-that the CRD half was uncovered by anything else in the repository — a broken
-CRD anchor gave `make manifests` exit 0, `make chart-lint` exit 0 and
-`go test ./internal/rbacaudit/` fully green, with zero `keep` annotations in
-`crds.yaml` — while the rbac half had become covered by
-`TestTheChartRendersIntoTheNamespaceItIsGiven` when the audit moved onto the
-rendered chart. The script now also asserts, over the files it wrote, that
-`crds.yaml` carries the `keep` annotation once per CRD file processed
-(counted against the files the run walked, so a fifth CRD cannot pass on the
-other four's annotations) and that `rbac.yaml` carries exactly one
-`{{ .Release.Namespace }}` and no `spawnery-system`. Closed; kept here
-because the shape of the mistake — a guard that checks its input rather than
-its outcome — recurred three times in this milestone.
+**`TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` flaked once and
+has never done it again.** `internal/controller/server_controller_test.go`. It
+failed during milestone 6d's Task 6 `make test`, passed in isolation and on a
+full rerun, and 6d changed nothing it touches. Nothing was captured.
 
-**The design's claim about the forwarding-secret grant is wrong, and the real
-consequence is quieter.** §9 of
-`docs/superpowers/specs/2026-08-19-helm-chart-design.md`
-and milestone 6d's own Task 6 brief both state that a misconfigured grant
-leaves "every group in the namespace refuses with `NetworkNotAccepted`." It
-does not. `internal/controller/network_controller.go`'s `Reconcile` sets
-`ConditionAccepted` `True` before the forwarding secret is read, and nothing on
-the read's path can clear it: the read's outcome only ever reaches
-`ConditionForwardingSecretResolved` and
-`ConditionForwardingSecretRotationPending`. Since 2026-08-24 that holds more
-firmly than it did, because a failure below the condition now writes the status
-before it requeues rather than discarding it. The one path that does return
-before the write is the NetworkPolicy, recorded under milestone 6b above. So
-`ServerGroup`s and `ProxyGroup`s in the affected namespace keep scheduling
-normally, and only forwarding-secret rotation detection breaks, for that
-namespace. `charts/spawnery/README.md` states the narrower, grep-verified
-consequence.
+One thing is ruled out rather than assumed: **it is not cache lag.**
+`internal/testenv`'s `Client` is `client.New`, a direct client with no
+informer behind it, so the hypothesis everyone reaches for first with envtest
+cannot be the mechanism. Sixty runs in isolation and five full-package runs on
+2026-08-23 did not reproduce it.
 
-**It used to break silently, and that half is closed.** `readForwardingSecret`
-folded the `403` into a condition message written for a person — "the operator
-may not read secret X; grant it with `kubectl apply` …" — which quotes no API
-server and therefore carries no `is forbidden:` substring, and the controller
-made no logger call at all. That substring is exactly what `test/e2e`'s
-`theOperatorWasNeverDenied` greps the operator's log for, so a broken
-`config/rbac/forwarding-secret-reader.yaml` grant was invisible to the one
-check in this repository written to catch a denial the RBAC audit cannot — not
-through the cache, the way that check's other blind spot works, but through an
-error the code handled instead of surfacing. The read now carries the API
-server's error out beside the message, and the controller logs it and records a
-`Warning` on the Network. Both are gated on entering the state, like the
-forwarding-secret events beside them: at `resyncInterval` an ungated report is
-twelve a minute per Network, forever. The residue that gate leaves is worth
-knowing — an operator restarted into an already-refused state finds the
-condition already set and says nothing more, so the log line reports the
-transition and the condition is the durable record.
+The evidence against it has grown without anyone doing anything: `ci.yml`'s
+`test` job runs `go test -race ./...` on every push and pull request, and over
+86 runs since 2026-08-20T08:35Z it has **never** concluded `failure` — the ten
+red runs are five `e2e`, five `lint` and three `deps`, none of them this
+suite. So this is one occurrence standing against roughly ninety executions.
 
-**`v0.1.1` is a release whose chart no cluster can receive, and a tag cannot
-be moved.** The four CRDs sit in `charts/spawnery/templates/` with
-`helm.sh/resource-policy: keep`, so an upgrade carries a CRD schema change
-through and an `uninstall` does not destroy every custom resource in the
-cluster. The uninstall half was the half that had been observed; the upgrade
-half failed the first time it mattered, and that failure is the useful one.
-
-`v0.1.1` added a fourth `expose` strategy to the
-`ProxyGroup` CRD's enum. The upgrade ran, the operator's image moved — and the
-cluster's CRD never learned the new value. Flux names a packaged chart after
-`Chart.yaml`'s `version`, that number had stayed at `0.1.0`, so the artifact
-counted as unchanged and the HelmRelease kept serving the previous chart's
-templates. The image moved only because the deployment pins its digest in
-values, which is exactly what made the failure look like a success.
-
-`v0.1.2` moved `Chart.yaml`'s version with the release and the enum arrived:
-`["LoadBalancer","NodePort","HostPort","ClusterIP"]`.
-
-Two guards were added rather than a note: `internal/rbacaudit`'s
-`TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease` pins `appVersion` and
-`values.yaml`'s tag to `flake.nix`'s `operatorVersion`, and `release.yml`
-refuses a tag whose `charts/` differ from the previous tag's while
-`Chart.yaml`'s version does not — simulated against `v0.1.1` in a worktree,
-where it exits 1. Neither reaches back: the tag stands as it was published.
-
-**`TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` flaked once.**
-`internal/controller/server_controller_test.go`. It failed once during
-milestone 6d's Task 6 `make test`, then passed both in isolation and on a full
-rerun, and 6d changed nothing it touches — the test is envtest-backed and the
-suspicion is timing around the predecessor pod's disappearance, but that is a
-guess and nothing has reproduced it since. Recorded because an unrecorded
-flake is rediscovered from scratch by whoever meets it next; if it recurs,
-this entry is the second data point rather than the first.
-
-**Hunted on 2026-08-23, not caught — and the failure is now made to explain
-itself, which is the part that will matter.** What was tried: sixty runs of the
-test in isolation, and five full-package runs, all green. What was ruled out
-rather than assumed: **it is not cache lag.** `internal/testenv`'s `Client` is
-`client.New`, a direct client with no informer behind it, so "the controller's
-cache still shows the terminating pod" — the first hypothesis anyone reaches
-for with envtest — cannot be the mechanism here.
-
-What is left is genuinely unknown, and one occurrence with no captured output
-is close to no information at all. So the assertion that failed now prints what
-it saw: the `Accepted` condition, every pod in the namespace with its
-`deletionTimestamp` and node, and whether the pod holding the name is still the
-predecessor's. Those three separate the candidates — a lingering predecessor
-means the force delete did not take; `PodNameTerminating` with no such pod
-present means the controller decided against a pod that was already gone; an
-empty namespace with a clean condition means something else refused the create
-entirely.
-
-**The UID, not the name**, and finding out why is the reason to write this
-down: the ordinal's pod name is reused across generations, so "is a pod called
-`survival-0` present" is true both while the predecessor lingers and once the
-successor exists — the two states the failure has to tell apart. The first
-draft asked by name and reported "predecessor still present: true" about a
-perfectly healthy successor. It was caught only because the message was made to
-fire on purpose and read, which is worth doing to any diagnostic before
-trusting it.
-
-**What milestone 6e adds to this entry: frequency, not a diagnosis.**
-`go test -race ./...` now runs on every pull request through `ci.yml`'s
-`test` job, which means this suite runs on the rhythm of how often somebody
-pushes rather than the rhythm of how often somebody happens to run
-`make test` by hand — far more often than a person does. A test with a real,
-low-probability timing flake that nobody has diagnosed will therefore surface
-more often simply because it is asked more often, with nothing about the
-underlying flake having changed. A red `test` job in CI's first weeks, on
-this test specifically, is a measurement of how often the flake already
-happened to occur, not a regression CI introduced.
-
-Two days of that rhythm have now run, and the flake has not taken any of the
-chances. Measured 2026-08-22 over every `ci.yml` run the API lists — 61 runs
-since 2026-08-20T08:35Z, 47 from pushes to `master` and 14 from pull
-requests — **the `test` job has never concluded `failure`.** The ten red runs
-are all elsewhere: five `e2e` (the Nix `vendorHash` mismatch of 2026-08-22 and
-its predecessors) and five `lint`/`deps` on milestone 6e's own branch. So this
-entry is still one data point, but it is one data point against roughly sixty
-further executions of the suite rather than against nothing, and the next
-person to meet it should weight it accordingly.
+It stays because an unrecorded flake is rediagnosed from scratch. The
+assertion now prints what it saw — the `Accepted` condition, every pod with
+its `deletionTimestamp` and node, and whether the pod under the name is still
+the predecessor *by UID*, since the name is reused across generations and the
+first draft of that diagnostic reported "predecessor still present: true"
+about a healthy successor. A second occurrence should be a diagnosis rather
+than another data point.
 
 ## From milestone 6e (CI)
 

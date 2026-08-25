@@ -9,6 +9,29 @@ an older one.
 
 Nothing here is an open defect. `docs/known-issues.md` carries those.
 
+## A cluster still on `v0.1.1`'s chart has the old CRDs
+
+`v0.1.1` added a fourth `expose` strategy to the `ProxyGroup` CRD's enum. The
+upgrade ran and the operator's image moved, but the cluster's CRD never
+learned the new value: Flux names a packaged chart after `Chart.yaml`'s
+`version`, that number had stayed at `0.1.0`, so the artifact counted as
+unchanged and the HelmRelease kept serving the previous chart's templates. The
+image moved anyway because the deployment pins its digest in values, which is
+exactly what made the failure look like a success.
+
+A tag cannot be moved, so `v0.1.1` is permanently a release whose chart no
+cluster can receive. `v0.1.2` moved `Chart.yaml`'s version with the release
+and the enum arrived. If you find a cluster that took `v0.1.1`, check the CRD
+rather than the operator version:
+
+```bash
+kubectl get crd proxygroups.spawnery.cloud \
+  -o jsonpath='{.spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.expose.properties.type.enum}'
+```
+
+Four values means the chart arrived. Upgrading to any later release fixes it,
+because every one since has moved `Chart.yaml`'s version.
+
 ## The ServerGroup's PodDisruptionBudget — delete it promptly
 
 Before milestone 4c-3 the budget was named after the bare group name; it is
