@@ -118,6 +118,12 @@
           # matters).
           oci-common = pkgs.callPackage ./nix/oci-common.nix { };
 
+          # The Paper image's Java runtime, jlink'd to the modules Paper and
+          # the agent actually resolve. Its own file because the list is
+          # measured rather than chosen, and that measurement is what a Paper
+          # bump has to repeat.
+          paper-jre = pkgs.callPackage ./nix/paper-jre.nix { };
+
           # The one place this version is written down. It reaches both the
           # plugin's paper-plugin.yml (which the agent reports to the
           # operator as Hello.version) and the image tag, so the two can
@@ -232,7 +238,7 @@
           # mislabelled image. `nix flake show` and `nix develop` stay
           # unaffected elsewhere.
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
-            inherit paper spawnery-slp spawnery-config agents imageVersion oci-common;
+            inherit paper spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
           };
 
           # No spawnery-slp: a proxy's readiness is the agent's ready port,

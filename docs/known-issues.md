@@ -49,47 +49,30 @@ the Yggdrasil call, and milestone 6b built the egress policy. What remains is
 the bare fact — a Paper server still calls `fill.papermc.io` on every start,
 and anything that tightens egress further has to decide about it.
 
-**The image is large because `jdk25_headless` has a 697 MiB closure** — a full
-headless JDK, not a JRE. Measured at 724 MB as a tarball for 26.2-0.1.0, and
-735 MB for 26.2-0.2.0 once the agent joined it (a little over a gigabyte
-unpacked, as Podman reports it). There is no cheap substitution: this pin's
-`temurin-jre-bin` stops at 21, and Paper 26.2 needs 25 or newer, while
-`jre25_minimal` is `jlink` with `modules = [ "java.base" ]` by default and
-therefore needs a module list. *Derived 2026-08-25, and it is fourteen
-modules:*
+**The image was large because `jdk25_headless` has a 697 MiB closure** — a
+full headless JDK, not a JRE. Measured at 724 MB as a tarball for 26.2-0.1.0
+and 735 MB for 26.2-0.2.0 once the agent joined it. *Cut on 2026-08-25: the
+Paper image ships a jlink'd runtime of fourteen modules instead, and the
+tarball is 372 MB.* Closure 405 MiB against 697; `nix/paper-jre.nix` carries
+the list and how it was derived.
 
-```
-java.base,java.compiler,java.desktop,java.instrument,java.rmi,
-java.scripting,java.security.jgss,java.sql,jdk.httpserver,jdk.jfr,
-jdk.management,jdk.security.auth,jdk.unsupported,jdk.zipfs
-```
-
-Thirteen of those came from `jdeps --print-module-deps --ignore-missing-deps
---multi-release 25` over the whole classpath — all 105 jars of
-`.#paper-repo` plus `.#agents`' `spawnery-agent.jar` — with an empty stderr,
-so nothing was skipped despite the flag. `jlink` over that set produces a
-runtime of **332 MB on disk against `jdk25_headless`'s 650 MB**.
-
-The fourteenth is the interesting one and no static analysis could have found
-it. Paper booted on the thirteen and died in `Paperclip.extractFiles` with
+Getting there took two steps and only the first was mechanical. `jdeps
+--print-module-deps --ignore-missing-deps --multi-release 25` over the whole
+classpath — all 105 jars of `.#paper-repo` plus `.#agents`' agent jar — gave
+thirteen modules with an empty stderr, so nothing was skipped despite the flag.
+Paper then booted on those thirteen and died in `Paperclip.extractFiles` with
 `java.nio.file.ProviderNotFoundException`: `FileSystems.newFileSystem` needs
 the zip provider, which arrives through `ServiceLoader` rather than through any
-reference `jdeps` can see. With `jdk.zipfs` added, Paper reached
-`Done (11.361s)!` with the agent plugin loaded.
+reference `jdeps` can follow. `jdk.zipfs` is the fourteenth and no static
+analysis could have produced it.
 
-**What that boot did not exercise, and whoever wires this in must:** the
-agent's channel. It reported `dormant: SPAWNERY_OPERATOR_ENDPOINT is not set`,
-and with the endpoint set it stopped at `/var/run/spawnery/ca.crt is not
-readable; refusing to trust anything else` — correct behaviour both times, and
-it means no TLS handshake and no gRPC dial ever ran. A security provider
-reached by name, `jdk.crypto.ec` being the obvious candidate, would fail
-exactly the way `jdk.zipfs` did and would not show up until an agent actually
-connects. `make image-test` and `make agent-test` are what drive that path;
-neither was run here, so this list is a starting point that boots a server, not
-a finished answer.
-
-This is Paper's list. Velocity's image is a separate derivation and its
-classpath is not this one.
+The remaining doubt was the agent's channel, since a boot without an operator
+never opens one and a security provider reached by name — `jdk.crypto.ec` being
+the candidate — would have failed the same way and only on a connection. `make
+image-test` and `make agent-test` both pass on this runtime, the second driving
+a real session with a TLS handshake against a rotated CA bundle, so that doubt
+is closed rather than carried. Velocity's image is a separate derivation over a
+separate classpath and still carries the full JDK; this list is Paper's.
 
 **`k3d` does not work on this machine, and probably not on similar ones.**
 `docker` here is a Podman 5.8.4 alias with no `/var/run/docker.sock`, only a
@@ -153,8 +136,8 @@ down all day would say so once, at the start. So the cost stands as written
 and is accepted; what changed is that it is now a decision with reasons rather
 than an oversight.
 
-**The JRE module list is derivable, and was derived on 2026-08-25 — see the
-image-size entry above for the fourteen modules and what they buy.**
+**The JRE module list is derived and shipped as of 2026-08-25 — see the
+image-size entry above for how, and `nix/paper-jre.nix` for the list.**
 The Paper-side classpath stopped moving with this milestone: the agent is the
 last thing that joins it, and gRPC and okhttp pull modules Paper alone does not.
 So the list can finally be derived from the complete classpath, with `jdeps

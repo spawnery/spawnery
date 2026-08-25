@@ -6,7 +6,7 @@
 { bash
 , buildEnv
 , coreutils
-, jdk25_headless
+, paper-jre
 , runCommand
 , paper
 , spawnery-slp
@@ -50,7 +50,13 @@ oci-common.layeredImage {
       # coreutils for the mkdir/cp the entrypoint uses to place the agent
       # jar; bash because the entrypoint's shebang points at it. grep is
       # gone with set_property, the only thing that ever used it.
-      paths = [ bash coreutils jdk25_headless ];
+      #
+      # paper-jre rather than jdk25_headless since 2026-08-25: the entrypoint
+      # invokes `java` and nothing else out of that package, and a jlink'd
+      # runtime carrying only the modules Paper and the agent resolve is 405
+      # MiB of closure against 697. See nix/paper-jre.nix for how the list was
+      # derived and what re-deriving it costs.
+      paths = [ bash coreutils paper-jre ];
       pathsToLink = [ "/bin" ];
     })
     oci-common.passwd
