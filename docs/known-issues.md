@@ -1166,32 +1166,6 @@ edit landing inside that same reconcile can be adopted along with the old pod
 rather than triggering a rebuild; it is bounded by the next edit, which will
 compute a hash that no longer matches.
 
-**Widening the proxy hash rolls every proxy group once on upgrade.**
-`DesiredProxyHash` (`internal/podspec/hash.go:57`) now digests the rendered
-config values as well as the pod, closing the `motd` gap 5a's handover
-recorded — but unlike the server-side adoption above, there is no
-adopt-on-empty escape here: the label `LabelPodHash` is present on every
-existing proxy pod already, merely computed under the narrower, pod-only hash,
-and nothing can tell "the hash widened" apart from "the image really changed"
-from the value alone. The first reconcile after upgrading therefore rolls
-every `ProxyGroup` once, through the ordinary surge-1, one-at-a-time path.
-Expected, not a defect — but worth knowing before it is read as one, and
-before it is read as evidence that the `motd` fix itself is broken.
-
-**`DesiredProxyHash` takes the agent endpoint and `DesiredServerHash` does
-not.** `DesiredServerHash`'s own doc comment (`internal/podspec/hash.go:104`)
-names the asymmetry directly: the endpoint comes from an operator flag, not
-from any spec, so `DesiredServerHash` renders with a fixed sentinel address
-regardless of the real flag value, while `DesiredProxyHash` still takes it as
-a parameter and folds the real value in (`internal/podspec/hash.go:57`). An
-operator restarted with a different `--operator-namespace` therefore rolls
-every proxy group in the installation, while a persistent server group is
-unaffected. This is a real asymmetry between the two sibling functions rather
-than an oversight in one of them — a
-rolled proxy loses no world, so the argument that forces the exclusion on the
-server side does not reach the proxy side — but it is worth knowing before
-someone reads the difference as a bug and "fixes" it into consistency.
-
 **The positive half of storage growth cannot be shown on `kind`'s default
 storage class.** `kind`'s `local-path` provisioner reports
 `allowVolumeExpansion: false`
