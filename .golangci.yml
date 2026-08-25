@@ -15,6 +15,14 @@
 # total is not a measurement, and CI would have reported an uncertain count
 # while nobody could tell whether a falling number meant better code or a
 # different sample.
+#
+# The cache half is worth the same sentence. Those five SA1019 findings in
+# internal/controller/setup.go were reported by lint's first CI run and by
+# nobody before it: three local runs and two reviewers had all seen `make
+# lint` exit 0, every one of them answering from a cache warmed before the
+# findings existed, and a hosted runner starts with none. Any tool that caches
+# its own answers can report a tree as clean when the cache, not the tree, is
+# what is clean -- clear it before trusting a count from it.
 version: "2"
 
 run:

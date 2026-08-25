@@ -2124,81 +2124,6 @@ a schedule plus `workflow_dispatch`; `.github/workflows/release.yml` runs
 `hack/publish.sh` on a `v*` tag. Full account:
 `docs/handover-milestone-6e.md`.
 
-**`make lint` was never actually green, and a runner's cold cache is what
-proved it.** Three local runs and two reviewers all reported `make lint`
-exiting 0 during this milestone's own Task 3. `lint`'s first CI run found
-five real `SA1019` findings in `internal/controller/setup.go`
-(`mgr.GetEventRecorderFor`, deprecated) that none of them had seen. The
-cause was `golangci-lint`'s own disk cache: every local run had been
-answering from a cache warmed before those five findings existed, and a
-hosted runner starts with none. `golangci-lint cache clean` followed by
-`golangci-lint run` reproduced the five findings locally, and reproduced a
-second thing: the milestone's own accepted count of "33" findings — written
-into the design spec and into Task 2's commit message — was measured
-against the same stale cache and was wrong for the same reason. The true
-count, from a cleared cache, was **38** (26 `errcheck`, 12 `staticcheck`);
-the missing five are exactly the `setup.go` findings the cache had been
-hiding. This is the clearest demonstration in this milestone of what CI
-actually bought: a check that had been "clean" on three different local runs
-and two independent reviews was not clean, and only a machine with no
-opinion about what it had already seen could say so.
-
-**The lesson generalises past `golangci-lint`.** Any tool that caches its
-own answers — a linter, a formatter, a build system's incremental state —
-can report a tree as clean when the cache, not the tree, is what is clean.
-The fix is not a smarter cache; it is to clear the cache before trusting a
-count from it, the same way this entry's own correction (33 → 38) only
-became visible once someone did.
-
-**Plain `golangci-lint run` with no config reports at most three findings
-sharing a message per linter, and the concurrent package walk means the
-subset shown is not guaranteed to be the same one twice.** Three consecutive
-runs during this milestone's design each reported seventeen issues, and the
-note recorded alongside them at the time claimed each of the three named a
-different set of files — read together, that would mean the cap was hiding
-a genuinely unstable sample. That second half did not hold up: a reviewer's
-three consecutive runs later, against the same pre-fix tree, each returned
-the identical seventeen. So this entry says only what was actually
-confirmed twice — the cap is real, seventeen against a true (cleared-cache)
-count of thirty-eight is not close — and says the varying-subset claim was
-observed once, during design, and did not reproduce when it was checked
-again, rather than asserting it as established behaviour. `.golangci.yml`
-now pins `max-issues-per-linter: 0` and `max-same-issues: 0`, so
-`golangci-lint run` reports the true count with no explicit flags needed.
-Worth an entry rather than only a commit message because the failure mode
-generalises the same way the cache one does: any tool with a default output
-cap reports a sample, and a sample that looks like a total is how a count
-gets trusted that should not be.
-
-**The events-API migration this milestone's lint fix forced, and how far
-the one piece of evidence for its RBAC grant actually reaches.** Fixing the
-five `SA1019` findings above meant migrating `internal/controller`'s five
-`Recorder` fields from the deprecated `record.EventRecorder` to
-`events.EventRecorder` — twenty-three production call sites, twenty-one
-fake-recorder constructions across eight test files. The new recorder's
-sink is the `events.k8s.io/v1` API, not the core group controller-runtime
-used before, so it needed its own RBAC grant
-(`config/rbac/role.yaml`, `charts/spawnery/templates/rbac.yaml`); the old
-core-group grant stays, unrelated to this migration, because
-controller-runtime's own leader-election lock still calls the deprecated
-`GetEventRecorderFor` internally, and leader election is on by default here.
-
-**Corrected after the milestone's final review, on the core grant's width.**
-The sentence above is right that the core grant stays and right about why,
-and wrong by omission about how wide it should be. It was cluster-wide,
-which was correct while every controller wrote core events — and stopped
-being correct the moment they stopped. Its one remaining consumer is a
-leader-election lock on a Lease in the operator's own namespace, so the
-events it writes regard an object in that namespace and nowhere else. The
-marker at `internal/controller/server_controller.go` now carries
-`namespace=spawnery-system` (the same placeholder, rewritten by
-`hack/chart-templates.sh`, as the lease grant at
-`internal/controller/setup.go`), the generated Role carries `""/events`
-instead of the ClusterRole, and both entries moved to
-`internal/rbacaudit/required.go`'s `RequiredNamespaced`. `events.k8s.io`
-stays cluster-wide, because those events really do regard objects in
-namespaces the operator does not know in advance.
-
 **The verb set on both grants is exactly right and exactly minimal, and
 this is readable in client-go rather than inferred from a green e2e run.**
 The paragraph above leans on one `make e2e` `PASS` for the claim that the
@@ -2239,26 +2164,6 @@ reads the same log through the Kubernetes API in-process, never printing it
 — so on a green run the corpus that grep searches structurally cannot
 contain the thing being searched for, and a zero-match result against it is
 not evidence about the grant one way or the other.
-
-**`events.k8s.io/v1` caps a note at 1024 bytes — a limit the core `v1.Event`
-this operator used before never had — and the check is `len()` on bytes,
-not on characters.** A note over the limit is refused outright by the API
-server, and the client library abandons the refused event with a `klog`
-line; nothing retries it and nothing on the reconciled object says an event
-was lost. Measured directly against envtest's real API server: 512
-em-dashes is 512 *characters* and 1536 *bytes*, and is refused, despite the
-API server's own error text saying "characters" — a rune-counting helper
-would have been the wrong fix. Six sites build their note from text this
-operator did not write — an admission refusal, a scheduler explanation, a
-divergence list, a bootstrap error, a secret-resolution message and a CSI
-driver's resize error — and the
-sharpest case is the one milestone 6c built on purpose: a PodSecurity
-`restricted` refusal is exactly the kind of API server text that runs past 1
-KB, and before this fix it would have been dropped from `kubectl get
-events` entirely while the `Degraded` condition (which allows 32 KB) kept
-the full text. `internal/controller/events.go`'s `eventNote` helper now
-formats first, truncates on a rune boundary, and appends a marker pointing
-at the condition for the untruncated text; applied at all six.
 
 **What is still not covered anywhere, and is now at least recorded: the
 `action` the events API takes at every one of this package's `Eventf` call
@@ -2329,192 +2234,23 @@ branch whose silence is permission), and a dispatched green run closed it and
 returned the gate to exit 0. Driving the writing step itself needs a
 genuinely red nightly and nothing stands in for that.
 
-**Corrected after the milestone's final review, on `release.yml`'s first
-tag specifically: as the file shipped, that tag would have published
-nothing.** Two defects, found by reading rather than by running, because
-nothing can run this file until it is on `master`. First, the `skopeo
-login` step relied on `XDG_RUNTIME_DIR`, which GitHub's hosted Ubuntu
-runners do not set; with it unset, containers/image falls back to
-`/run/containers/$UID/auth.json` and cannot create it as a non-root user
-(`mkdir /run/containers: permission denied`, reproduced in this
-repository's own dev shell, and containers/skopeo#1654 reports the same at
-`/run/containers/1001/auth.json` on a runner). Worse than a failed step
-would be a merely absent credential: `hack/publish.sh`'s guard would then
-inspect ghcr.io anonymously, which answers `403 Forbidden`, and 403 is not
-the `manifest unknown` the guard reads as permission to proceed — so the
-run would stop at "cannot tell whether … already exists". The workflow now
-names the credential file with `REGISTRY_AUTH_FILE` under `$RUNNER_TEMP`,
-which also reaches the `skopeo inspect` and `skopeo copy` inside the
-script. Second, the workflow ran `hack/publish.sh` with no arguments, which
-the script's own header says publishes all three images and "refuses at the
-first image whose tag is already there — correctly — and never reaches the
-one that changed": a `v0.1.1` that bumps only `operatorVersion` would have
-stopped on Paper's existing tag and never published the operator. The
-workflow now invokes the script once per image and the script's refusal
-carries exit status 3, distinct from 1, so "already there" is separable
-from "I could not tell" without a second copy of the guard in YAML. A third
-defect in the same file was found by the re-review of that fix and closed
-the same way: with the loop above, a re-run of a tag that already published
-finds all three tags present, and
-the "this tag releases nothing" guard would have failed the job before it
-reached the digest and Release steps — which are exactly what a re-run
-after a transient failure there is for, and whose remedy text ("bump and
-tag again") would have been actively wrong. The guard now exempts
-`github.run_attempt > 1`, keeping its teeth on the attempt where a tag
-pushed without a version bump is actually possible.
+**Only the nightly catches a hash that goes stale from outside.** `ci.yml`
+builds `.#operator-image` unconditionally, through `hack/e2e.sh`, and reaches
+no other image derivation on its own: `make test` and `make lint` enter Nix
+only through `nix develop`, and the `deps` job builds
+`.#agents.mitmCache.updateScript` and nothing else. Since 2026-08-23 an
+`images` job closes most of that — `hack/image-derivations-changed.sh` decides
+from a `git diff` whether anything defining `.#paper-image` or
+`.#velocity-image` moved, and the two `nix build` steps run only when it did,
+so a hash this repository breaks is caught on the pull request that breaks it
+and every other push spends one diff.
 
-When this was written, none of these fixes had run, and what was verified
-about the first tag was only what the review could check from outside:
-authenticated, GHCR answers `manifest unknown` for a repository that does
-not exist, so the guard proceeds rather than falsely aborting; and `gh api
-/orgs/spawnery/packages?package_type=container` returned `[]`.
-
-They have since run on a runner, repeatedly. Measured 2026-08-22:
-`release.yml` has five successful runs from tag pushes (`v0.1.0` through
-`v0.2.0`, the last of them the retag after the `vendorHash` fix), and that
-same API call now returns `paper`, `velocity` and `spawnery-operator`. So the
-`REGISTRY_AUTH_FILE` path authenticates on a hosted runner, and the
-once-per-image invocation publishes a release that bumps only one of the three.
-The clean-slate premise is spent; every future tag meets tags that are already
-there, which is the case the exit-status-3 separation was written for.
-
-**`release.yml` can now be dry-run without a tag, which it could not
-before.** It has a `workflow_dispatch` trigger that runs the job with
-`DRY_RUN=1` unconditionally and takes no input — the images are built and
-what would be copied where is printed, and nothing can reach the registry,
-so the button cannot become an accidental publish. This is the mechanism
-the design's §5 already claimed existed ("`DRY_RUN=1` … is how the workflow
-gets exercised before a real tag exists") and did not; §5 now says so. Like
-`nightly.yml`'s, the dispatch cannot fire until the file is on the default
-branch, so it too was a one-time post-merge check for whoever owns this
-repository: `gh workflow run release.yml`, once, and read what it says it
-would push. **Done — 2026-08-20T08:45Z**, the one `workflow_dispatch` run in
-this workflow's history, concluded `success`.
-
-**CI builds one of the three image derivations the release publishes, so a
-stale Paper or Velocity hash is green all the way to the tag.** Recorded
-while writing the 2026-08-22 green-CI gate, whose design had claimed the
-opposite. `hack/e2e.sh` runs `nix build .#operator-image`, and that is the
-only image derivation any job in `ci.yml` reaches: `make test` and `make
-lint` enter Nix at all only through `nix develop`, and the `deps` job's
-`make agent-deps` builds `.#agents.mitmCache.updateScript` and nothing else.
-`make image-test`, `make velocity-image-test` and `make image-repro` — among
-the targets that do build `.#paper-image` and `.#velocity-image` — are in no
-CI job. Only `image-repro` and `agent-test` say as much in their own comments,
-and what they say is that they are not part of `test` or `all`, which is a
-narrower claim than this one: CI runs `make test`, `lint`, `agent-deps` and
-`e2e`, and never `make all`. Verified by
-`make -n` on all four CI targets in the dev shell, and by `nix path-info
---derivation -r .#operator-image`, whose 1431-derivation closure contains
-`spawnery-operator` and no `paper`, `velocity` or `agents` derivation at
-all.
-
-What that leaves uncovered is not hypothetical: `nix/paper.nix` carries two
-fixed-output `hash =` values (the paperclip launcher and Mojang's server
-jar) and `nix/velocity.nix` a third, and nothing outside a release ever
-fetches against them. `flake.nix`'s five `vendorHash` copies are covered,
-but only accidentally — they all hold the same value, and one of the five is
-`spawnery-operator`'s, which is why the `e2e` job caught the 2026-08-22
-mismatch. Move a Paper or Velocity download instead and the first thing to
-notice is `hack/publish.sh` on a runner, after a `v*` tag has been pushed
-and the release has therefore already been announced. That is the 2026-08-22
-failure exactly, one derivation over, and the green-CI gate does not close
-it: the gate asks whether CI passed, and CI passing is the premise of this
-entry rather than a defence against it.
-
-One thing does build all three, on a slower clock: `nightly.yml` runs `make
-image-repro` at 03:17 UTC, and that target builds `.#paper-image`,
-`.#velocity-image`, `.#operator-image` and `.#agents`, each twice. So a
-stale Paper or Velocity hash would go red there within a day. But its own
-comment says it "does not block a pull request", nothing consults it at tag
-time — the green-CI gate deliberately does not, because a nightly's signal
-is not per-commit and would need its own staleness rule — and a nightly is
-precisely the kind of standing red this repository has already let run three
-times unread. Whether a red nightly gets noticed was the open question, and
-it is the same question, not a different one.
-
-**It has been answered, in the worst way available, by this entry's own
-incident.** `nightly.yml` ran at 2026-08-22T03:56Z and concluded `failure`,
-its `make image-repro` step being the one that failed. That is eleven hours
-before the `v0.2.0` release died at 15:07Z on the stale `vendorHash`, and
-`image-repro` builds `.#operator-image`, so the nightly was standing red on
-the release's own cause while the tag was being prepared. Nobody read it — it
-was found on 2026-08-22 only because this entry was being triaged. The run's
-log is no longer retrievable through the API, so the cause is inferred from
-what `master` carried at that hour rather than read from the output; the
-conclusion and the failing step are read directly.
-
-The green-CI gate would not have helped here either, for the reason above:
-`ci.yml`'s `e2e` job was red on the same commit, and the gate catches that.
-What the nightly adds is the two derivations `e2e` does not build — and this
-run is the demonstration that adding a signal is not the same as adding a
-reader.
-
-Closing the gap properly means building all three per push: minutes of
-runner time on every commit for derivations that change a handful of times a
-year. Nobody had made that trade, which is why this was an entry and not a
-commit.
-
-**The trade nobody had written down, taken 2026-08-23.** There is a third
-option between "every push" and "never": build them when the files that define
-them move, which is exactly when a hash in this repository can move, and spend
-one `git diff` on every other push. `ci.yml` gained an `images` job whose first
-step is `hack/image-derivations-changed.sh`, and the two `nix build` steps
-behind it carry `if: steps.changed.outputs.build == 'true'`.
-
-Three things about its shape are deliberate and are the reasons it is worth
-more than it looks:
-
-- **It is a job in `ci.yml`, not a workflow of its own.**
-  `hack/require-green-ci.sh` reads this workflow's *run* conclusion and never a
-  named job's, precisely so a job added later is inside the release gate for
-  free. A separate `images.yml` would have been outside it, and a red one would
-  not have stopped a tag.
-- **Every uncertainty builds.** An all-zeros base on a branch's first push, an
-  empty base, a base the clone does not contain, a `git diff` that fails —
-  each answers `true`. The wrong answer that costs runner minutes is always
-  preferred to the wrong answer that costs coverage, and skipping is the exact
-  failure the job exists to prevent. Its test drives all three not-knowing
-  cases, because none of them is reachable in the ordinary run anybody would
-  check by hand.
-- **The path list is `nix/` entire**, plus `flake.nix`, `flake.lock` and the
-  two files that decide this. Naming only the four files that carry hashes
-  would be a list somebody has to remember to extend.
-
-**It does not replace the nightly, and the entry above is still true of the
-part it cannot reach.** A fixed-output hash breaks when the bytes at a URL
-change, and upstream can do that without a line of this repository moving. This
-job narrows the window between a bad commit and 03:17 the next morning; only
-`nightly.yml`, which builds all four derivations unconditionally, watches for
-the breakage that arrives from outside.
-
-**What was made instead, on 2026-08-23: the nightly got a reader and the
-release got a gate.** The gap above is unchanged — `ci.yml` still builds one
-of the three, and a stale Paper or Velocity hash still goes green through
-every pull request. What changed is that the nightly's verdict no longer stops
-at a run nobody opens. `nightly.yml` opens an issue labelled `nightly-red` when
-`make image-repro` fails and closes it when a later nightly passes, and
-`release.yml`'s publish job refuses to start while such an issue is open
-(`hack/require-no-red-nightly.sh`, beside the green-CI gate).
-
-The rule is deliberately a person rather than a duration, and the reason is
-this entry's own incident read the other way round. A nightly's verdict is
-about the night it ran: "the last one was green" says nothing about a commit
-pushed this morning, and "the last one was red" stands until 03:17 the next
-morning even after the cause is fixed at noon. A gate reading the run would
-therefore have refused the 2026-08-22 retag that fixed the `vendorHash` — it
-would have blocked its own remedy. A gate reading an issue refuses until
-somebody closes it, and closing it is a claim that the cause is fixed, with the
-next nightly free to contradict them. **The override is the act of reading,
-which is precisely what was missing.**
-
-Two things this does not do. It does not make CI build the two derivations, so
-the window between a bad merge and 03:17 the next morning is as open as it
-was. And it cannot help a repository where the nightly never runs at all — a
-disabled schedule leaves no issue to find, and the gate reads that as
-permission, by the same rule that makes "no issue" the ordinary state.
-`docs/superpowers/specs/2026-08-22-release-requires-green-ci-design.md` §2
-carries the correction to the design that had refused this.
+What no diff can see is a fixed-output hash breaking because the bytes at a
+URL changed, with no line here moving. `nightly.yml` builds all four
+derivations unconditionally and is the only thing watching for that, which is
+why its verdict is wired into the release rather than left in a run nobody
+opens: it labels a `nightly-red` issue on failure, closes it on a later pass,
+and `hack/require-no-red-nightly.sh` refuses to publish while one stands.
 
 ## From the RKE2 rollout (milestone 6, driven 2026-08-20)
 
