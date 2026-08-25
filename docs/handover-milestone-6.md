@@ -103,15 +103,19 @@ against a different spec.
 
 **Not driven, and belonging to the repository owner:**
 
-- **The first real `make publish`.** It needs a GitHub token with
-  `write:packages`, which nobody in milestone 6a had. What has been run is
-  `DRY_RUN=1`. As of 2026-08-17 `ghcr.io/spawnery/paper` is confirmed *not*
-  publicly pullable — an anonymous
-  `https://ghcr.io/token?scope=repository:spawnery/paper:pull` returns 403,
-  while the same request against a known-public repository returns a token.
-  So acceptance criterion 8, "all three images are pullable from
-  `ghcr.io/spawnery/` without a pull secret", is unmet by measurement rather
-  than by assumption.
+- ~~**The first real `make publish`.**~~ Driven since. It needs a GitHub token
+  with `write:packages`, which nobody in milestone 6a had; what 6a ran was
+  `DRY_RUN=1`. This item also recorded that as of 2026-08-17
+  `ghcr.io/spawnery/paper` was *not* publicly pullable, measured with an
+  anonymous token request that returned 403 — and so declared acceptance
+  criterion 8 unmet. That was true only until the packages were switched to
+  public, which happened right after the first image was pushed and long
+  before anyone read this line again. As of 2026-08-25 both game images pull
+  anonymously; `paulwtf` runs them with no pull secret, and
+  `hack/publish.sh paper-image velocity-image` has published 0.2.1 from a
+  developer machine. Kept rather than deleted because the *measurement*
+  stands — it says what was true on 2026-08-17, and the paragraph below it
+  still turns on the same publish having happened.
 - **A digest reference that resolves** (acceptance criterion 7). The manifest
   still names `ghcr.io/spawnery/spawnery-operator:0.1.0`, a tag, because
   `WRITE_DIGEST=1` has never had a push to write back from. `make e2e` cannot
