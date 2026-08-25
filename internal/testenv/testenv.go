@@ -25,12 +25,15 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/yaml"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
@@ -149,4 +152,80 @@ func Stop() error {
 		return nil
 	}
 	return env.Stop()
+}
+
+// OperatorUser is the identity the operator runs as in a cluster, and the one
+// RestrictedClient impersonates.
+const OperatorUser = "system:serviceaccount:spawnery-system:spawnery-operator"
+
+var (
+	restrictedOnce sync.Once
+	restrictedErr  error
+)
+
+// RestrictedClient returns a client that acts as the operator does in a
+// cluster: under OperatorUser, holding exactly the ClusterRole that
+// config/rbac/role.yaml generates from the kubebuilder markers.
+//
+// Hand this to a reconciler under test and keep [Client]'s admin client for
+// arranging and asserting -- the test harness legitimately does things the
+// operator may not, such as creating a ServerGroup. That split is the whole
+// point: a reconciler that reaches for a verb no marker declares fails here,
+// in the test that already drives it, instead of on a cluster months later.
+//
+// Impersonation rather than envtest's AddUser: the authorization decision is
+// the same one the API server makes for a real ServiceAccount, and this needs
+// no second kubeconfig or client certificate.
+func RestrictedClient(t *testing.T) client.Client {
+	t.Helper()
+	cfg := Config(t)
+
+	rolePath := RepoPath(t, filepath.Join("config", "rbac", "role.yaml"))
+	restrictedOnce.Do(func() { restrictedErr = grantOperatorRole(cfg, rolePath) })
+	if restrictedErr != nil {
+		t.Fatalf("grant the operator's own ClusterRole: %v", restrictedErr)
+	}
+
+	as := rest.CopyConfig(cfg)
+	as.Impersonate = rest.ImpersonationConfig{UserName: OperatorUser}
+	c, err := client.New(as, client.Options{Scheme: Scheme(t)})
+	if err != nil {
+		t.Fatalf("new restricted client: %v", err)
+	}
+	return c
+}
+
+// grantOperatorRole applies the generated ClusterRole and binds it to
+// OperatorUser. Once per control plane, which is shared across the package.
+func grantOperatorRole(cfg *rest.Config, rolePath string) error {
+	c, err := client.New(cfg, client.Options{})
+	if err != nil {
+		return err
+	}
+	ctx := context.Background()
+
+	raw, err := os.ReadFile(rolePath)
+	if err != nil {
+		return err
+	}
+	role := &rbacv1.ClusterRole{}
+	if err := yaml.Unmarshal(raw, role); err != nil {
+		return err
+	}
+	role.ResourceVersion = ""
+	if err := c.Create(ctx, role); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+
+	binding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "spawnery-operator-testenv"},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: role.Name,
+		},
+		Subjects: []rbacv1.Subject{{Kind: rbacv1.UserKind, APIGroup: rbacv1.GroupName, Name: OperatorUser}},
+	}
+	if err := c.Create(ctx, binding); err != nil && !apierrors.IsAlreadyExists(err) {
+		return err
+	}
+	return nil
 }

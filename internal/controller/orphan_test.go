@@ -39,7 +39,7 @@ func (f *fixture) createProxyPod(name, group string) string {
 
 func orphanReconciler(f *fixture) *OrphanReconciler {
 	return &OrphanReconciler{
-		Client: f.c,
+		Client: f.rc,
 		Agents: f.agents,
 	}
 }

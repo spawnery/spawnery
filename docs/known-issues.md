@@ -2346,10 +2346,31 @@ no e2e scenario ever changes a `ServerGroup`'s image, so the one path that
 needs the verb is never taken during a run.
 
 The intersection is the hole: a verb is only proven by a test that both runs
-under the operator's own identity *and* takes the path that needs it. Driving
-an image change in `make e2e` would close it for this verb. Nothing closes it
-for the next one, because no machinery here derives the required table from
-the code.
+under the operator's own identity *and* takes the path that needs it.
+
+Closed the same day, and not the way it first looked. The obvious repair --
+drive an image change in `make e2e` -- does not work, and the reason is worth
+keeping because it is invisible from the outside: `selectRetirement` only
+nominates when the group holds a Ready server of the *current* generation
+(`internal/controller/scaling.go`, the `v.Phase == phase.Ready` clause), and
+`test/e2e/manifests/e2e.yaml` names an unresolvable image on purpose, so no
+server in that harness is ever Ready. An image change there produces no
+nomination at all. The scenario would have passed while proving nothing.
+
+What closed it instead is `testenv.RestrictedClient`: the controller tests'
+reconcilers now run under `system:serviceaccount:spawnery-system:spawnery-operator`,
+impersonated, holding exactly the ClusterRole `config/rbac/role.yaml`
+generates. The fixture keeps its admin client for arranging and asserting --
+a harness may create a ServerGroup, the operator may not -- and hands every
+reconciler and Bootstrapper the restricted one. The four tests that already
+drove `retireServer` now fail when `patch` is missing from the servers rule,
+with the same message the cluster produced; removing `patch` from `pods`
+turns 93 red. So the table no longer has to be derived from the code: any
+path a controller test already takes proves its own verbs.
+
+What is still not covered is a path no controller test takes. `make e2e`
+remains the only place the operator's real identity meets a real cluster, and
+it still cannot reach the retirement branch for the reason above.
 
 
 **"The whole log" is only as whole as the container is old, and the check now

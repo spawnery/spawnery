@@ -119,7 +119,7 @@ func (f *fixture) createProxyGroup(name string, mutate ...func(*spawneryv1alpha1
 
 func proxyGroupReconciler(f *fixture) *ProxyGroupReconciler {
 	return &ProxyGroupReconciler{
-		Client: f.c,
+		Client: f.rc,
 		Scheme: testenv.Scheme(f.t),
 		Agents: f.agents,
 		Bootstrap: &Bootstrapper{
@@ -820,13 +820,13 @@ func TestProxyGroupConfigMapUpdatesOnSpecChange(t *testing.T) {
 // Recording the actual Create calls can.
 func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 	f := newFixture(t)
-	recorder := &createOrderRecorder{Client: f.c}
+	recorder := &createOrderRecorder{Client: f.rc}
 	r := &ProxyGroupReconciler{
 		Client: recorder,
 		Scheme: testenv.Scheme(t),
 		Agents: f.agents,
 		Bootstrap: &Bootstrapper{
-			Client: recorder, Reader: f.c,
+			Client: recorder, Reader: f.rc,
 			CA: func() []byte { return []byte("test-ca") },
 		},
 		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",

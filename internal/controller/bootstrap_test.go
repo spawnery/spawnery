@@ -38,7 +38,7 @@ import (
 func TestEnsureCreatesConfigMapAndServiceAccount(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+	b := &Bootstrapper{Client: testenv.RestrictedClient(t), Reader: testenv.RestrictedClient(t), CA: func() []byte { return []byte("PEM-A") }}
 
 	if err := b.Ensure(ctx, ns); err != nil {
 		t.Fatalf("Ensure: %v", err)
@@ -67,7 +67,7 @@ func TestEnsureCreatesConfigMapAndServiceAccount(t *testing.T) {
 func TestEnsureIsIdempotent(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+	b := &Bootstrapper{Client: testenv.RestrictedClient(t), Reader: testenv.RestrictedClient(t), CA: func() []byte { return []byte("PEM-A") }}
 
 	if err := b.Ensure(ctx, ns); err != nil {
 		t.Fatalf("first Ensure: %v", err)
@@ -83,7 +83,7 @@ func TestEnsureUpdatesAChangedCA(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
 	ca := "PEM-A"
-	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte(ca) }}
+	b := &Bootstrapper{Client: testenv.RestrictedClient(t), Reader: testenv.RestrictedClient(t), CA: func() []byte { return []byte(ca) }}
 
 	if err := b.Ensure(ctx, ns); err != nil {
 		t.Fatalf("Ensure: %v", err)
@@ -105,7 +105,7 @@ func TestEnsureUpdatesAChangedCA(t *testing.T) {
 func TestEnsureRepairsAHandEditedConfigMap(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+	b := &Bootstrapper{Client: testenv.RestrictedClient(t), Reader: testenv.RestrictedClient(t), CA: func() []byte { return []byte("PEM-A") }}
 
 	if err := b.Ensure(ctx, ns); err != nil {
 		t.Fatalf("Ensure: %v", err)
@@ -145,7 +145,7 @@ func TestEnsureRepairsAHandEditedConfigMap(t *testing.T) {
 func TestEnsureLeavesAnUnlabelledServiceAccountAlone(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+	b := &Bootstrapper{Client: testenv.RestrictedClient(t), Reader: testenv.RestrictedClient(t), CA: func() []byte { return []byte("PEM-A") }}
 
 	if err := b.Ensure(ctx, ns); err != nil {
 		t.Fatalf("Ensure: %v", err)
@@ -328,7 +328,7 @@ func TestEnsureToleratesAServiceAccountThatFellOutOfTheCache(t *testing.T) {
 func TestEnsureRefusesAnEmptyCA(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return nil }}
+	b := &Bootstrapper{Client: testenv.RestrictedClient(t), Reader: testenv.RestrictedClient(t), CA: func() []byte { return nil }}
 
 	if err := b.Ensure(ctx, ns); err == nil {
 		t.Error("Ensure wrote an empty CA bundle")
@@ -342,7 +342,7 @@ func TestEnsureRefusesAnEmptyCA(t *testing.T) {
 func TestEnsureCreatesBothServiceAccounts(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+	b := &Bootstrapper{Client: testenv.RestrictedClient(t), Reader: testenv.RestrictedClient(t), CA: func() []byte { return []byte("PEM-A") }}
 
 	if err := b.Ensure(ctx, ns); err != nil {
 		t.Fatalf("Ensure: %v", err)
@@ -365,7 +365,7 @@ func TestEnsureCreatesBothServiceAccounts(t *testing.T) {
 func TestEnsureLeavesExistingServiceAccountsAlone(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	b := &Bootstrapper{Client: c, Reader: c, CA: func() []byte { return []byte("PEM-A") }}
+	b := &Bootstrapper{Client: testenv.RestrictedClient(t), Reader: testenv.RestrictedClient(t), CA: func() []byte { return []byte("PEM-A") }}
 
 	if err := b.Ensure(ctx, ns); err != nil {
 		t.Fatalf("first Ensure: %v", err)

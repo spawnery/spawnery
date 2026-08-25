@@ -51,7 +51,7 @@ func networkReconciler(f *fixture) *NetworkReconciler {
 func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *nonBlockingRecorder) {
 	rec := newRecorder()
 	return &NetworkReconciler{
-		Client:   f.c,
+		Client:   f.rc,
 		Scheme:   f.reconc.Scheme,
 		Recorder: rec,
 		// Matches what config/deploy/ installs; the NetworkPolicy tests need

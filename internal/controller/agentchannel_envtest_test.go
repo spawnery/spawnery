@@ -310,7 +310,7 @@ func TestReconcileCreatesNoPodWhileTheCAIsMissing(t *testing.T) {
 		t.Fatalf("delete the fixture's CA ConfigMap: %v", err)
 	}
 
-	f.reconc.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return nil }}
+	f.reconc.Bootstrap = &Bootstrapper{Client: f.rc, Reader: f.rc, CA: func() []byte { return nil }}
 
 	srv := f.createServer("lobby-abcd")
 	f.reconcile(srv.Name)
@@ -328,7 +328,7 @@ func TestReconcileCreatesNoPodWhileTheCAIsMissing(t *testing.T) {
 
 	// And it recovers by itself once the provider has one — no restart, no
 	// manual step.
-	f.reconc.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return f.ca }}
+	f.reconc.Bootstrap = &Bootstrapper{Client: f.rc, Reader: f.rc, CA: func() []byte { return f.ca }}
 	f.reconcile(srv.Name)
 	if _, ok := f.pod(srv.Name); !ok {
 		t.Fatal("no pod was created after the CA became available")

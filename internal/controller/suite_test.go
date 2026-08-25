@@ -179,10 +179,32 @@ func (r *recordingRegistrar) Drain(_ context.Context, s *spawneryv1alpha1.Server
 
 // fixture is one isolated namespace with a network, a group and the wired
 // Server reconciler.
+// fixture holds one test's envtest namespace and the two clients that reach
+// it.
+//
+// The two are not interchangeable, and picking the wrong one is silent.
+//
+//   - c is admin. It is the test *harness*: creating the Network and the
+//     ServerGroup a scenario needs, planting a stray pod, reading back what a
+//     reconcile decided. A harness legitimately does things the operator may
+//     not -- nothing grants the operator `create` on servergroups, and it
+//     never needs it.
+//   - rc acts as the operator does in a cluster, holding exactly the
+//     ClusterRole config/rbac/role.yaml generates from the markers. Every
+//     reconciler and every Bootstrapper under test gets this one.
+//
+// The split is what makes a missing verb fail here rather than on a cluster.
+// It was added after one escaped: `servers` was granted
+// get;list;watch;create;update;delete and the group's rolling update patches
+// spec.retire, so retireServer was refused in production while four tests
+// that drive it passed against an admin client. Removing `patch` from the
+// servers rule now turns those same four red; removing it from `pods` turns
+// 93 red. Anyone adding a reconciler here hands it rc.
 type fixture struct {
 	t         *testing.T
 	ctx       context.Context
 	c         client.Client
+	rc        client.Client
 	ns        string
 	clock     *testClock
 	agents    *agent.Registry
@@ -196,6 +218,7 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	c, ctx := testenv.Client(t)
+	rc := testenv.RestrictedClient(t)
 	ns := testenv.Namespace(t, ctx, c)
 
 	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
@@ -209,15 +232,15 @@ func newFixture(t *testing.T) *fixture {
 	// gRPC service actually serves. Shared between the two reconcilers below
 	// so the fixture cannot drift on what the test CA is.
 	bootstrap := &Bootstrapper{
-		Client: c, Reader: c,
+		Client: rc, Reader: rc,
 		CA: func() []byte { return []byte("test-ca") },
 	}
 
 	f := &fixture{
-		t: t, ctx: ctx, c: c, ns: ns,
+		t: t, ctx: ctx, c: c, rc: rc, ns: ns,
 		clock: clock, agents: agents, registrar: registrar, proxies: proxies,
 		reconc: &ServerReconciler{
-			Client:               c,
+			Client:               rc,
 			Scheme:               testenv.Scheme(t),
 			Recorder:             newRecorder(),
 			Agents:               agents,
@@ -245,7 +268,7 @@ func newFixture(t *testing.T) *fixture {
 	// controller itself. Tests that specifically exercise rejection or
 	// recovery construct their own NetworkReconciler and reconcile again.
 	netReconciler := &NetworkReconciler{
-		Client:       c,
+		Client:       rc,
 		Scheme:       testenv.Scheme(t),
 		Recorder:     newRecorder(),
 		SecretReader: c,

@@ -57,7 +57,7 @@ func (f *fixture) groupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
 // groupReconciler wires a ServerGroup reconciler onto an existing fixture.
 func groupReconciler(f *fixture) *ServerGroupReconciler {
 	return &ServerGroupReconciler{
-		Client:       f.c,
+		Client:       f.rc,
 		Scheme:       f.reconc.Scheme,
 		Recorder:     newRecorder(),
 		Agents:       f.agents,
@@ -1487,7 +1487,7 @@ func TestServerGroupConfigMapUpdatesOnSpecChange(t *testing.T) {
 // sitting there. Recording the actual Create calls can.
 func TestServerGroupConfigMapWrittenBeforeTheServer(t *testing.T) {
 	f := newFixture(t)
-	recorder := &createOrderRecorder{Client: f.c}
+	recorder := &createOrderRecorder{Client: f.rc}
 	r := &ServerGroupReconciler{
 		Client:       recorder,
 		Scheme:       f.reconc.Scheme,
