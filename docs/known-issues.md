@@ -1828,21 +1828,6 @@ single pass, since the next pass's first `pods` read no longer sees it, and
 it is no worse than the address the code published before this design — but
 it is a case the design does not name.
 
-**A side effect worth naming rather than hiding: `status.observedGeneration`
-now advances on a pass that failed, not only one that succeeded.**
-`setStatus` writes it alongside the address, and `setStatus` is now reached
-on every path that observed the pods and the Service, so a group
-permanently refused by Pod Security reports `observedGeneration ==
-generation` for as long as the refusal stands. That agrees with the field's
-own definition (`api/v1alpha1/proxygroup_types.go`: "ObservedGeneration is
-the spec generation this status was computed from") — the status genuinely
-was computed from that generation. A reader who instead uses the looser,
-common convention — `observedGeneration == generation` meaning "the
-controller has caught up with the spec" — would be misled into reading a
-permanently-refused group as settled. `Degraded=True` standing beside the
-same generation is the correction: read together, they say the controller
-did catch up and what it found was a refusal.
-
 ## From milestone 6d (the Helm chart)
 
 `config/deploy/` no longer exists. The operator installs by

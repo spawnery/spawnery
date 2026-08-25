@@ -246,6 +246,16 @@ type ProxyGroupStatus struct {
 	ConnectedPlayers int32 `json:"connectedPlayers"`
 
 	// ObservedGeneration is the spec generation this status was computed from.
+	//
+	// Literally that, and not the looser convention it is often read as. It
+	// advances on a pass that failed as well as one that succeeded, because
+	// setStatus writes it on every path that observed the pods and the
+	// Service -- so a group permanently refused by Pod Security reports
+	// observedGeneration == generation for as long as the refusal stands. A
+	// reader taking that to mean "the controller has caught up and all is
+	// well" is misled; Degraded=True beside the same generation is the
+	// correction, and the two together say the controller did catch up and
+	// what it found was a refusal.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
