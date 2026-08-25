@@ -1915,6 +1915,11 @@ wrong**, all established by tasks 10 and 10b:
   — two packet-id constants and one `case` in `holdOpen`, not a rewrite. Write
   the runbook so that outcome is a recognisable branch rather than a puzzle.
 
+  *That estimate was measured on 2026-08-25 and is wrong: the client has to
+  drive the exchange rather than answer one packet, and it is four constants
+  and a small state machine. `docs/known-issues.md`, under the milestone 3c
+  evidence run, carries what the wire actually does.*
+
 - [ ] **Step 2: Perform the runbook and record what happened**
 
 This step is executed by the session controller together with the human partner,

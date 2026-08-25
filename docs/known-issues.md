@@ -422,10 +422,35 @@ under a player the proxy was still counting.
 
 1. **Criterion 9 is not provable with `spawnery-join` as it stands.** Closing
    this needs the client to play the configuration phase through to the point
-   Paper starts counting it — the whole-branch review already on file
-   established that this is two packet-id constants and one `case` in
-   `holdOpen`, not a rewrite of the tool. Until that lands, criterion 9 can
-   only be proven manually, with a real client — see
+   Paper starts counting it. The whole-branch review scoped that as "two
+   packet-id constants and one `case` in `holdOpen`, not a rewrite".
+
+   *Measured on the wire 2026-08-25, against a local Paper 26.2 (protocol
+   776), and the scoping was wrong in the way that matters: the client has to
+   **drive**, not react.* After Login Acknowledged the server sends Plugin
+   Message `0x01` (`minecraft:brand`, "Paper"), Feature Flags `0x0c`
+   (`minecraft:vanilla`) and Select Known Packs `0x0e` (`minecraft:core
+   26.2`) — and then nothing but Keep Alive `0x04`, for as long as the client
+   waits. It never sends Finish Configuration unprompted, so a `case` that
+   answers one packet would wait for a packet that never comes.
+
+   What actually moves it, each step confirmed by the server's own next move
+   rather than by a remembered constant:
+
+   - serverbound **Known Packs `0x07`** with an empty list — the server
+     answers with 29 Registry Data `0x07` packets and Update Tags `0x0d`,
+     35 KB of them, rather than assuming the client already has the registry;
+   - clientbound **Finish Configuration `0x03`**, empty payload, once that is
+     done;
+   - serverbound **Acknowledge Finish Configuration `0x03`**, empty — after
+     which the server logs `probeplayer joined the game` and counts the
+     player, which is the whole point;
+   - and the hold then sits in the play state, where Keep Alive is `0x2c`
+     carrying a millisecond timestamp, not the configuration state's `0x04`.
+
+   So it is four constants and a small state machine that leads the exchange,
+   not two constants and a `case`. Until that lands, criterion 9 can only be
+   proven manually, with a real client — see
    `docs/runbook-milestone-3-evidence.md` §10 for that session — or not at
    all.
 2. **A narrower product finding, and this half belongs to milestone 4, not
