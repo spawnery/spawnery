@@ -164,10 +164,6 @@ remove the shape.
 
 ## From milestone 3c (the Velocity agent)
 
-Design `2026-08-11-velocity-agent-design.md` §11 named five of these before
-the milestone started; what follows carries them and adds what building it
-actually found. The one that matters most is first.
-
 **Paper 26.2 accepts the forwarding secret from the environment**
 (`PAPER_VELOCITY_SECRET`), so the plaintext need not be written into
 `/data/config/paper-global.yml` in the writable layer at all. Not done; a
@@ -1090,13 +1086,6 @@ it — observable from inside the operator in
 to quote this entry with it.
 
 ## From the milestone 6a Task 4 measurement round (2026-08-17)
-
-The "Completeness of the permission table" item above names
-`test/e2e` (`TestSpawneryUnderItsOwnServiceAccount`) as the only thing
-that can prove a permission missing from both the ClusterRole and
-`internal/rbacaudit/required.go` at once. This entry narrows what that
-proof actually covers, found while verifying the check itself rather
-than while using it.
 
 **A denied permission on a type reached only through the manager's cache
 produces no signal at all — not a late one, an absent one.** Measured by
