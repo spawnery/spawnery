@@ -2138,45 +2138,6 @@ all. Kubernetes keeps exactly one container back, so from the second restart on
 there is a stretch nothing can read — which is why the check errors rather than
 patching over it.
 
-**Two permissions in the table that no driven scenario exercises,** measured on
-a held cluster at the end of Task 8 rather than guessed:
-
-- `persistentvolumeclaims: patch` — **measured.** `growClaim`
-  (`internal/controller/server_controller.go`) patches only when
-  `spec.storage.size` has grown past what the claim already requests. No
-  scenario changes a group's `storage.size` after its claim exists —
-  `test/e2e/manifests/e2e.yaml` fixes `survival` at `1Gi` and every patch the
-  harness makes goes to `replicas` or the scaling bounds — so the guard
-  short-circuits before the `Patch`. Confirmed at the end of the run: both
-  `survival-*-data` claims still request and hold their original `1Gi`.
-- `tokenreviews: create` — **reasoned, not measured.** No image in the run
-  resolves, so no agent process exists anywhere to open a stream, and
-  `grpcauth.Authenticator.Authenticate` is never called. This one could not be
-  confirmed the way the other was: this client-go build's
-  `rest_client_requests_total` carries only `method`, `code` and `host`, with
-  no `resource` or `verb` label, so a TokenReview `POST` is indistinguishable
-  in that counter from the run's ninety-odd other creates. Disaggregating it
-  would need API server audit logging, which this harness's cluster does not
-  enable.
-
-Both are absence-of-agent gaps in what the harness proves rather than defects:
-a deployment with a resolvable image exercises both. `pods: patch` is
-deliberately **not** on this list, and why is under "On the RBAC audit" below.
-
-**Both were measured by the RKE2 rollout on 2026-08-20**, and the harness
-still exercises neither — the two statements are compatible and worth keeping
-apart. `persistentvolumeclaims: patch`: a persistent group was created on
-Longhorn and grown from `1Gi` to `2Gi`, and the operator's own client metric
-moved from no `PATCH` line at all to exactly one. `tokenreviews: create`, which
-this entry rightly called reasoned rather than measured:
-`spawnery_agent_token_review_cache_misses_total` — `internal/grpcauth/metrics.go`,
-"Token checks that required a TokenReview" — went 7 to 8 when a single lobby pod
-was deleted and its replacement's agent connected. Neither the client metrics
-nor the API server's own `apiserver_request_total` could have answered that
-second one: the first has no per-resource label, and the second stood at 38,607
-across every client on the cluster. See `docs/runbook-milestone-6-rollout.md`,
-scenario 7.
-
 **The E2E cluster is a single node, so a whole class of behaviour is
 untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
 single-node topology. Nothing in the run can reach node drain and its taint

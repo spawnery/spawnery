@@ -178,6 +178,25 @@ var (
 // no second kubeconfig or client certificate.
 func RestrictedClient(t *testing.T) client.Client {
 	t.Helper()
+	c, err := client.New(RestrictedConfig(t), client.Options{Scheme: Scheme(t)})
+	if err != nil {
+		t.Fatalf("new restricted client: %v", err)
+	}
+	return c
+}
+
+// RestrictedConfig is [RestrictedClient]'s config, for the callers that need a
+// typed clientset rather than a controller-runtime client -- the TokenReview
+// the agent channel's authenticator issues is the one that matters, since
+// `authentication.k8s.io/tokenreviews: create` is otherwise granted and never
+// exercised by any test.
+//
+// Hand it only to the thing under test. A harness minting a ServiceAccount
+// token needs `serviceaccounts/token: create`, which the operator does not
+// have and must not: that grant would let it forge an identity for any
+// ServiceAccount in the cluster.
+func RestrictedConfig(t *testing.T) *rest.Config {
+	t.Helper()
 	cfg := Config(t)
 
 	rolePath := RepoPath(t, filepath.Join("config", "rbac", "role.yaml"))
@@ -188,11 +207,7 @@ func RestrictedClient(t *testing.T) client.Client {
 
 	as := rest.CopyConfig(cfg)
 	as.Impersonate = rest.ImpersonationConfig{UserName: OperatorUser}
-	c, err := client.New(as, client.Options{Scheme: Scheme(t)})
-	if err != nil {
-		t.Fatalf("new restricted client: %v", err)
-	}
-	return c
+	return as
 }
 
 // grantOperatorRole applies the generated ClusterRole and binds it to

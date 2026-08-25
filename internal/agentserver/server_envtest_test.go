@@ -160,7 +160,12 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 		Addr:     "127.0.0.1:0",
 		Provider: provider,
 		Auth: &grpcauth.Authenticator{
-			Reviews:  cs.AuthenticationV1().TokenReviews(),
+			// The operator's own view, not the harness's: this is the one call in the
+			// tree that needs `authentication.k8s.io/tokenreviews: create`, and under
+			// testenv.Client it would have been granted everything and proved nothing.
+			// f.cs stays admin because the harness mints ServiceAccount tokens, which
+			// the operator has no right to do and must not acquire.
+			Reviews:  restrictedCS(t).AuthenticationV1().TokenReviews(),
 			Pods:     &grpcauth.ClientPodChecker{Client: c},
 			Audience: podspec.AgentTokenAudience,
 		},
@@ -762,4 +767,16 @@ func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 			"error means it was refused for some other reason and this test "+
 			"proves nothing about the bound", agentserver.MaxConcurrentStreams+1, err)
 	}
+}
+
+// restrictedCS is a clientset acting as the operator does in a cluster, under
+// its own ServiceAccount and the ClusterRole config/rbac/role.yaml
+// generates. See testenv.RestrictedConfig.
+func restrictedCS(t *testing.T) *kubernetes.Clientset {
+	t.Helper()
+	cs, err := kubernetes.NewForConfig(testenv.RestrictedConfig(t))
+	if err != nil {
+		t.Fatalf("restricted clientset: %v", err)
+	}
+	return cs
 }
