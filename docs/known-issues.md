@@ -367,7 +367,10 @@ player whose server drops them and redirects them onto `fallbackGroups`, which
 closes the gap the design's §6.2 assumed was already closed — measured that
 day on `paulwtf` against a two-backend `lobby` group, where force-deleting the
 pod under a joined player disconnected them while a ready, registered, empty
-peer stood unused beside it. It does not close every case. Disassembling
+peer stood unused beside it. Re-run the same way against `0.2.1` the same
+day, the player was moved instead: the proxy logged the kick from
+`lobby-97eq` and `-> lobby-gzvz has connected` in the same second, and the
+client stayed until its own hold expired. It does not close every case. Disassembling
 velocity 3.5.1 build 615, `ConnectedPlayer.handleConnectionException(server,
 reason, friendly, safe)` returns *before* firing `KickedFromServerEvent` when
 `safe` is false, and `BackendPlaySessionHandler.exception(cause)` passes
