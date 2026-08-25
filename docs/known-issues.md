@@ -857,96 +857,27 @@ joining; the group's other watches fire on `Pod`, `Node`, `Service` and
 `ConfigMap` changes, and a reconcile any of those happens to trigger brings
 the budget forward as a side effect rather than because anybody asked it to.
 
-**A proxy the registry has not yet heard from is not evictable for up to 15
-seconds after the operator starts — and that window can matter well past the
-fifteenth second.** `proxyOccupiedForBudget`
-(`internal/controller/proxygroup_controller.go`) is what sizes a
-`ProxyGroup`'s budget and writes the `spawnery.cloud/occupied` label, and it
-treats a pod the registry has never heard of as occupied while
-`Snapshot.StreamDownFor` is still under `phase.StreamDownGrace` — which, for
-an unknown pod, `Registry.Lookup` reports as the time since the operator
-process came up. The agent registry is in-process state and does not survive
-a restart, so during that grace every proxy whose agent has not yet dialled
-back in reads as unknown, gets the label, and is counted into its group's
-`minAvailable`; where that covers the whole group, `currentHealthy` equals
-`desiredHealthy` and the eviction API refuses everything. A `kubectl drain` running across an operator restart therefore
-stalls for up to 15 seconds beyond whatever it was already waiting for. That
-is the deliberate direction: the alternative reads a fleet of Ready proxies
-full of players as empty, at exactly the moment a drain is retrying
-evictions in a loop — and an operator evicted off the node being drained is
-an ordinary way to arrive there. A proxy whose agent reconnects inside the
-grace and reports, say, zero players on a live stream is judged on that
-report immediately: it carries no label and is evictable well before the
-fifteenth second.
+**The 15-second occupancy grace is not derived from a measured reconnect
+distribution, and a proxy that is genuinely reconnecting can lose its
+protection before it answers.** `proxyOccupiedForBudget`
+(`internal/controller/proxygroup_controller.go`) argues the bound in full
+where it lives: it sits between reporting a live, player-carrying fleet as
+empty the instant the operator restarts, and letting a proxy whose agent never
+arrives wedge its group's evictions forever. What the comment cannot say is
+that 15 seconds was chosen to sit between those two rather than derived from
+anything, and `SessionLoop`'s backoff cap is 30 seconds — so a proxy still
+dialling back in can pass the fifteenth second without having had a chance to
+report, and after that nothing tells its group's budget apart from the pod
+that never will.
 
-The 15-second figure is a floor on the stall, not a ceiling on how late an
-agent can still be un-dialled, and that gap is worth naming rather than
-leaving as an implicit risk. The agents' own reconnect backoff
-(`SessionLoop.backoffMillis`,
-`agent/common/src/main/kotlin/cloud/spawnery/agent/SessionLoop.kt`) is
-`min(30 s, 1 s << attempt)` with jitter and no give-up point, reset only when
-the operator actually answers a stream. After an operator outage long enough
-to push agents up against that 30-second cap, a meaningful share of the
-fleet can still be un-dialled at second 15 — not because those agents ever
-stop trying, but because they are mid-backoff — and every one of them drops
-out of `minAvailable` at the same fifteenth second regardless of how much
-longer its own reconnect is going to take. The grace does not distinguish a
-proxy whose agent never arrives from one whose agent arrives at, say, second
-22: both are treated identically until the moment either one actually
-reports. That identical treatment is what keeps a `CrashLoopBackOff` proxy
-from wedging its group's evictions permanently — at the cost of the same
-30-second tail applying to every other proxy still reconnecting.
-
-This is recorded as a decision, not left as an unweighed risk. A tighter
-bound needs the distribution of how long agents actually take to reconnect
-after a real outage; 15 seconds is a number chosen for being finite, not one
-derived from the agents' own behaviour.
-
-*Measured 2026-08-25 on `paulwtf`, and the shape matters more than the
-numbers.* A throwaway `ProxyGroup`, its agent's stream cut with a
-`NetworkPolicy` denying the proxy's egress, then restored — timed from
-deleting the policy to the group's budget relaxing again:
-
-| outage held for | budget relaxed after |
-|---|---|
-| 10 s | 12 s |
-| 150 s | 85 s |
-
-The agent's own reconnect delay is `1 s` doubling to a `30 s` cap with ±10%
-jitter (`SessionLoop.backoffMillis`), so a short outage is answered almost at
-once and a long one waits out whatever sleep it is in. Both figures include the
-operator's five-second resync and whatever the CNI takes to drop the policy, so
-they are upper bounds on the reconnect rather than the reconnect itself.
-
-**85 s is more than the 30 s cap plus a resync accounts for, and the
-decomposition was not isolated.** The likeliest explanation is in
-`SessionLoop`'s own class comment: the channel has no keepalive and no idle
-timeout, and the calls have no deadline, so a partitioned agent does not learn
-its stream is dead when the packets stop — it learns when a send fails, which
-for a Paper agent is its next player-count report. Its backoff clock would then
-start well after the operator's did. That is reasoning, not measurement, and
-whoever tightens this bound should isolate it first: the two are different
-distributions, and the grace period is sized against the second. It
-sits between two failures neither of which it is allowed to become: no grace
-at all, and a grace that never ends. The alternative that was considered and
-rejected was the first of those — qualifying occupancy on `Known` alone, with
-no grace period — which would report every un-dialled proxy as unoccupied the
-instant the operator starts, collapsing every group's budget to
-`minAvailable: 0` at second zero and exposing a live, player-carrying fleet to
-eviction at exactly the moment an operator restart is likeliest to coincide
-with a drain; fifteen seconds of blanket protection is safer than none. The
-second failure is the one this section's own reasoning names for the grace
-existing at all: an unbounded grace would let a proxy whose agent never
-arrives — `CrashLoopBackOff`, or simply gone — wedge its group's evictions
-permanently, which is the exact failure this mechanism exists to end. Fifteen
-seconds sits between those two without being derived from either, and the
-30-second backoff cap is why it does not fully close the gap: a proxy that is
-genuinely still reconnecting, not dead, can lose its protection at the
-fifteenth second before it has had a chance to answer, and nothing after that
-point tells its group's budget the difference from the pod that never will.
-That residual is not eliminated by the choice of a bound, only left bounded
-by one. A number derived from a measured reconnect distribution would narrow
-it further; that is work for a later milestone.
+One observation stands unexplained beside it: a reconnect measured at 85 s,
+more than the 30 s cap plus a resync accounts for. The likeliest reading is
+`SessionLoop`'s own class comment — the channel has no keepalive, no idle
+timeout and no call deadlines, so a partitioned agent learns its stream is
+dead only when a send fails, which for a Paper agent is its next player-count
+report, and its backoff clock starts well after the operator's did. That is
+reasoning, not measurement. Whoever narrows the bound should isolate the two
+distributions first: the grace is sized against the second one.
 
 **A node holding a whole group empties it at once**, so its players go to the
 fallback groups rather than to the group's own replacements, which are not
