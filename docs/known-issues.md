@@ -310,28 +310,6 @@ decision now reads it too.
 
 ## From milestone 4b
 
-**Any spec change begins a changeover.** `metadata.generation` moves on every
-edit, so tuning `minReplicas`, `spareSlots` or `maxReplicas` marks every
-running server stale and replaces a whole group of functionally identical
-servers. The master design's §4.4 specifies exactly this — "when the group
-spec changes, its generation goes up" — and 4b implements it as written. The
-behaviour was latent before: `AggregateGroup` already filtered
-`status.freeSlots` by generation, but nothing acted on it, so a generation
-bump changed a published number and nothing else. It is safe — nobody is
-kicked, and `maxUnavailable` and the cold start govern the changeover exactly
-as they would for a real image bump — but it costs churn, and the likeliest
-moment anyone changes a scaling knob is a player spike, which is the worst
-time to be replacing servers one at a time. Narrowing staleness to the fields
-that actually shape a pod is a real design change with its own pitfalls —
-which fields count, and what happens to a server whose pod-affecting fields
-never moved but whose scaling knobs did — and was deliberately not made
-mid-milestone. `TestGroupShrinksOnceTheStabilizationWindowElapses`
-(`internal/controller/servergroup_controller_test.go`) documents the
-behaviour rather than hiding it: dropping `minReplicas` from 3 to 1 still
-produces a fourth server, of the new generation, before it produces a shrink,
-because the spec edit that lowered the floor is the same edit that staled the
-three servers already running.
-
 **A group at its ceiling with nothing to shed cannot start a changeover, and
 one that is holding a stuck retiree does not say why.** The cold start (design
 §3.3) is a create like any other, so a group whose `maxReplicas` equals its

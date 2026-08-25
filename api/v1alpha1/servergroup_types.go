@@ -169,6 +169,16 @@ type ServerGroupSpec struct {
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 
 	// Scaling configures slot-based scaling. Ephemeral only.
+	//
+	// Editing any of it replaces the group's servers. metadata.generation
+	// moves on every spec change and a server of an older generation is
+	// stale, so tuning a scaling knob marks every running server for
+	// replacement even though nothing here shapes a pod. Nobody is kicked --
+	// maxUnavailable and the cold start govern the changeover exactly as they
+	// would for an image bump -- but it costs churn, and the likeliest moment
+	// anyone reaches for these is a player spike, which is the worst time to
+	// be replacing servers one at a time. Narrowing staleness to the fields
+	// that actually shape a pod is a design change that has not been made.
 	// +optional
 	Scaling *ScalingSpec `json:"scaling,omitempty"`
 
