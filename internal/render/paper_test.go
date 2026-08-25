@@ -109,6 +109,15 @@ const paperGlobalDefault = defaultsDir + "/paper-global.default.yml"
 // forwarded join with "Your server did not send a forwarding request to the
 // proxy" at the other end. That was true of this renderer from the day it was
 // written until milestone 3c's first end-to-end join.
+//
+// The class, which is the part that outlives this key: a green render test
+// proves what was written and never what was read. Every assertion in this
+// file that compares the renderer against itself is blind to a receiver that
+// ignores the key -- which is why this one compares against the receiving
+// program's own defaults, and why hack/image-test.sh reads the file back out
+// of a running container. Velocity has the same pair, for the same reason and
+// after the same mistake: the lesson had been applied only to the flavour it
+// was learned on until the whole-branch review noticed.
 func TestPaperWritesTheKeysPaperItselfReads(t *testing.T) {
 	defaults, err := os.ReadFile(paperGlobalDefault)
 	if err != nil {

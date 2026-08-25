@@ -54,21 +54,6 @@ the Yggdrasil call, and milestone 6b built the egress policy. What remains is
 the bare fact — a Paper server still calls `fill.papermc.io` on every start,
 and anything that tightens egress further has to decide about it.
 
-**`k3d` does not work on this machine, and probably not on similar ones.**
-`docker` here is a Podman 5.8.4 alias with no `/var/run/docker.sock`, only a
-rootless Podman socket. k3d's tools node always bind-mounts the runtime socket
-to the fixed in-container path `/var/run/docker.sock`; rootless Podman refuses
-to create that mount point (`mkdir /var/run/docker.sock: permission denied`),
-regardless of `DOCKER_HOST`. There is no workaround short of a rootful Podman
-socket, which this user does not have group access to. `kind` under
-`KIND_EXPERIMENTAL_PROVIDER=podman`, wrapped in
-`systemd-run --scope --user --property=Delegate=yes`, works against the same
-rootless socket and is what the README now documents. Milestone 6 settled the
-CI half of this: `ci.yml`'s `e2e` job runs `make e2e` on a GitHub runner,
-which has a real Docker daemon and needs none of the above. What the entry
-still says is about this machine and machines like it — the local flow needs
-kind that way, and the README documents it.
-
 ## From milestone 2c (the Paper agent)
 
 **A read-only mount at `/data/plugins` breaks the start.** `image/entrypoint.sh`
@@ -214,46 +199,6 @@ Design `2026-08-11-velocity-agent-design.md` §11 named five of these before
 the milestone started; what follows carries them and adds what building it
 actually found. The one that matters most is first.
 
-**`internal/render/paper.go` wrote the Velocity forwarding secret under the
-key `secret-key`; Paper reads `secret`.** Paper does not reject the unknown
-key — it ignores it, preserves it verbatim on the next save so the file looks
-correct, keeps `secret: ''`, and disables forwarding in its own
-post-processing while logging *"Velocity is enabled, but no secret key was
-specified. A secret key is required. Disabling velocity..."*. That line was
-printed in every Paper container from the moment milestone 3b shipped, and
-nothing read it. Backend-side forwarding had never worked. It was found only
-by the first real end-to-end join, ten tasks into this milestone.
-
-The portable lesson is bigger than the fix: **no test in this repository
-measured the receiving program.** The render tests assert that the renderer
-writes the string the renderer says it writes, which cannot fail on a key the
-receiver ignores; and until this milestone no test had ever put a proxy in
-front of a Paper server. Both halves are now closed — a fixture of Paper's
-own default config checked against the renderer's key names
-(`TestPaperWritesTheKeysPaperItselfReads`, against
-`internal/render/defaults/paper-global.default.yml`), and an image test that
-reads the file back out of the running container
-(`hack/image-test.sh`) — but the class is what the next person needs to
-carry forward: a green render test proves what was written, never what was
-read.
-
-**And the same two for Velocity**, which the whole-branch review found had
-been missed: the lesson had been applied only to the flavour it was learned
-on. `TestVelocityWritesTheKeysVelocityItselfReads` checks the renderer's key
-names against `internal/render/defaults/velocity.default.toml`, extracted from
-the pinned jar's own `default-velocity.toml`, and `hack/velocity-image-test.sh`
-now asks the running proxy for a server list ping and reads `show-max-players`
-and the motd back out of the answer. That script's readback of
-`/data/velocity.toml` had been asserting over the renderer's own bytes:
-Velocity never rewrites that file (`.autosave()`, and no migration fires at
-`config-version = "2.8"`), which the script's own comment claimed the opposite
-of. Its `playerLimit` fixture moved off 500 in the same change, because 500 is
-both Velocity's default and `podspec.DefaultPlayerLimit`, so a misspelled
-`show-max-players` is invisible against it. The one key still not read back
-from Velocity is `forwarding-secret-file`, which nothing but a forwarded join
-exercises; it is checked instead by the absence of the `/data/forwarding.secret`
-Velocity generates when it cannot find the configured one.
-
 **`online-mode` moved to the CRD.** `ProxyGroup.spec.config.onlineMode`,
 defaulting `true`. It could not be set by a `configOverlay` because
 `render.Velocity` reasserts the keys it owns after the merge, and the ruling
@@ -296,23 +241,18 @@ from an unlabelled pod showed why closing that would buy little. The boundary
 is the namespace, not this policy, and the longer form is under "From
 milestone 6b" below.
 
-**Smaller ones**, each worth a sentence: phase 5 of `hack/agent-test.sh`
-reuses phase 2's window constants declared 400 lines
-earlier, both derived from a hard-coded renewal interval; and `streams_opened`
-counts what the operator saw, so a proxy leaking a gRPC channel per reconnect
-is still measured nowhere — the standing blind spot inherited from milestone
-2c. Three entries that stood here are closed: phase 1's empty-token comparison now
-carries the same guard phase 4 does; `Router.choose`'s fall-through when
-the exclusion empties the first group is covered both by a unit test and by
-the second fallback group `docs/runbook-milestone-3-evidence.md` §8a drains
-into; and `ServerDirectory`'s stale-removal path logs the backend it drops. Separately: `cmd/spawnery-join` asks a
-server for its protocol version by announcing an unsupported one
-(`announceUnsupported = -1`) and trusts that the proxy's newest supported
+**Smaller ones**, each worth a sentence. Phase 5 of `hack/agent-test.sh`
+reuses phase 2's window constants, declared 400 lines earlier and both derived
+from a hard-coded renewal interval. `streams_opened` counts what the operator
+saw, so a proxy leaking a gRPC channel per reconnect is measured nowhere — the
+standing blind spot inherited from milestone 2c. And `cmd/spawnery-join` asks
+a server for its protocol version by announcing an unsupported one
+(`announceUnsupported = -1`), trusting that the proxy's newest supported
 version and the backend's actual version agree — true of every pinned pair
-this repository ships and not guaranteed generally; `internal/mcjoin`'s own
-package comment names the failure mode (a loud "Outdated client!" naming the
-version to fix it to), so it fails loud rather than silent, but the runbook
-that depends on this tool inherits the same assumption.
+this repository ships and not guaranteed generally. `internal/mcjoin`'s
+package comment names the failure mode, a loud "Outdated client!" naming the
+version to fix it to, so it fails loud rather than silent; the runbook that
+depends on the tool inherits the same assumption.
 
 **A backend that goes silent without closing its socket still disconnects its
 players, and no plugin can stop it.** `Rescue` catches a player whose server
