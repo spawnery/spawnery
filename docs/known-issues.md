@@ -327,76 +327,29 @@ Neither has been made to fail on purpose, so neither is known to be able to.
 
 ## From milestone 4c-2 (proxy rolling updates)
 
-**Which edits roll a group, and which do not, is decided by what reaches the
-pod — and that is not the shape of the CRD.** The digest covers
-`podspec.BuildProxyPod`'s output, so an edit rolls the group exactly when it
-changes that pod. Read off `internal/podspec/proxy.go` as it stands: `image`,
-`resources`, `scheduling`, `config.playerLimit` (it is
-`SPAWNERY_PLAYER_LIMIT`), `routing.fallbackGroups` (`SPAWNERY_FALLBACK_GROUPS`),
-`configOverlay` (the ConfigMap's *name*, in a volume) and `drain.timeoutSeconds`
-all roll it, as do the `Network` fields the proxy pod inherits —
-`defaults.resources`, `defaults.scheduling`, `defaults.imagePullSecrets` and
-`forwardingSecretRef.name`. `replicas` does not, which is the whole point of that
-design's §3.1. Two others do not either, and those are the ones worth knowing
-in advance:
+**Which edits roll a proxy group is decided by what reaches the pod, and that
+is not the shape of the CRD.** The digest covers `podspec.BuildProxyPod`'s
+output, so an edit rolls the group exactly when it changes that pod. Read off
+`internal/podspec/proxy.go`: `image`, `resources`, `scheduling`,
+`config.playerLimit`, `routing.fallbackGroups`, `configOverlay` (the
+ConfigMap's *name*, in a volume) and `drain.timeoutSeconds` all roll it, as do
+the `Network` fields the proxy pod inherits — `defaults.resources`,
+`defaults.scheduling`, `defaults.imagePullSecrets` and
+`forwardingSecretRef.name`. `replicas` does not, which is the point of the
+design's §3.1. Neither do `config.motd` and `config.onlineMode`, nor the
+*contents* of a `configOverlay` ConfigMap or of the forwarding secret, because
+the pod names all of those rather than carrying them — those two fields now
+say so themselves, and `kubectl explain` says it with them.
 
-- **`spec.config.motd` and `spec.config.onlineMode` do not roll a group, so
-  editing them changes nothing about a proxy that is already running.** Both
-  are rendered into the group's ConfigMap by `proxyConfigValues`, and the pod
-  references that ConfigMap by name; `spawnery-config` reads it at container
-  start and writes `velocity.toml` from it. So the new value applies to the
-  *next* proxy pod and to no existing one. For `motd` that is cosmetic. For
-  `onlineMode` it is not: turning it off, or back on, decides whether the proxy
-  authenticates players at all, and the change takes effect on a pod's next
-  restart rather than on the edit. Nothing on the CR says so — the group's
-  `status.observedGeneration` advances and the phase stays `Ready` — so every
-  signal the API offers says the change is applied while the proxies go on
-  authenticating players the old way. That is exactly the state 4c-2 was built
-  to end, now narrowed to the fields that land in the ConfigMap instead of
-  covering the whole spec. The same holds for the *contents* of a user's own
-  `configOverlay` ConfigMap and of the forwarding secret: the pod names them,
-  so editing what is inside them rolls nothing.
-
-  **After changing `onlineMode`, delete the group's proxy pods, or edit a
-  field that does roll — `spec.config.playerLimit` is the cheapest.** Nothing
-  on the CR will tell you it has not been applied, and doing nothing is worse
-  than it looks: a pod that restarts later for an unrelated reason picks the
-  new value up on its own, so a group left alone drifts into running both
-  settings at once, with which proxy authenticates depending on which happened
-  to restart. That drift is not random, and knowing where it starts is the
-  point: a crashlooping proxy is by definition a pod that restarts, so it takes
-  the new value first while any sibling that stays up keeps the old — the
-  broken proxy is the one that diverges, and it diverges soonest. The mechanism,
-  if you need to confirm it on a cluster: the group ConfigMap reaches the pod
-  as a projected volume with no `subPath`, so the kubelet updates the file in
-  place, and `image/velocity-entrypoint.sh` re-runs `spawnery-config` on every
-  container start — including an in-place restart under `RestartPolicy:
-  Always` — while the pod carries a readiness probe and no liveness probe, so a
-  restart means the process exited rather than a probe having killed it.
-
-  Note where the boundary actually falls, because it is not where the CRD
-  suggests: `spec.config` has three fields and two behaviours. `playerLimit`
-  rolls the group, because it reaches the pod as `SPAWNERY_PLAYER_LIMIT`.
-  `motd` and `onlineMode` are siblings of it under the same stanza and do not,
-  because they reach only the ConfigMap. Nothing about the stanza distinguishes
-  them; only `internal/podspec/proxy.go` does.
-- **`spec.drain.timeoutSeconds` does roll the group**, because it reaches the
-  pod as `terminationGracePeriodSeconds`. Tuning a drain timeout is something
-  an operator does in the middle of an incident, and under this rule it also
-  replaces every proxy in the group. **Expect the edit itself to add a surge
-  pod and a full replacement cycle on top of whatever incident prompted it**;
-  that is the operationally relevant part and it applies whether or not a drain
-  is under way. Raising it while a drain is already in flight does otherwise
-  behave — the marked pod keeps its mark, since it is now stale as well as
-  draining, and the deadline it is measured against is read from the current
-  spec on every pass.
-  `docs/runbook-milestone-4c1-evidence.md` §9 recommends exactly this edit for
-  a drain you want to give more room to; after 4c-2 it is no longer free.
-
-Neither of these is a defect in the digest — it covers what it says it covers —
-and both are arguments for a later milestone to hash the *rendered
-configuration* alongside the rendered pod, rather than for hand-picking fields,
-which is the trade that design already ruled on.
+The one worth knowing before an incident: **`spec.drain.timeoutSeconds` rolls
+the group**, because it reaches the pod as `terminationGracePeriodSeconds`.
+Tuning a drain timeout is something an operator does in the middle of an
+incident, and the edit adds a surge pod and a full replacement cycle on top of
+whatever prompted it. Raising it while a drain is already in flight otherwise
+behaves — the marked pod keeps its mark, being now stale as well as draining,
+and the deadline is read from the current spec on every pass.
+`docs/runbook-milestone-4c1-evidence.md` §9 recommends exactly this edit for a
+drain you want to give more room to; since 4c-2 it is not free.
 
 ## From milestone 4c-3 (node drain)
 
