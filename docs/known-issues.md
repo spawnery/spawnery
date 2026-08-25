@@ -2645,6 +2645,29 @@ consequence, not a decision, and nothing but the operator log names the cause.
 `test/e2e`'s `theOperatorWasNeverDenied` would catch it, since it is a denied
 *write* and 6a measured that those are the kind that get logged.
 
+*Driven 2026-08-25, and it does not — for a reason neither half of that
+sentence covers.* `networkpolicies: create` was removed from the kubebuilder
+marker **and** from `internal/rbacaudit`'s table, which is the sharpest form of
+the case: absent from both, so the audit is green and only the running operator
+knows. The consequence this entry predicts arrived exactly as written — no
+`Network` ever reached `Accepted`, so no group ever sized, and the run's first
+scenario reported `0 non-Failed Servers`.
+
+That is what starves the check. Every scenario after it waits out its own
+two-minute timeout on state that will never arrive, and
+`theOperatorWasNeverDenied` is the *last* of twenty
+(`test/e2e/e2e_test.go:129`). The package's own `go test -timeout 20m` fired
+first: `panic: test timed out after 20m0s`, six scenarios short of the one that
+would have read the log. The denial was in that log the whole time and nothing
+looked.
+
+So the claim is not wrong about what the check can see — it is wrong about the
+check getting to look. A permission whose absence stops the fleet dead is
+precisely the permission whose denial this scenario cannot report, because the
+scenarios in front of it spend the budget waiting. Ordering it earlier, or
+giving the harness a per-scenario deadline that fails fast rather than waiting
+out state that cannot arrive, is what would close that — neither is done here.
+
 The ordering was reviewed and left alone. Persisting `Accepted` before writing
 the policy would let groups start servers in a namespace with no policy at all,
 which is the one thing this milestone exists to prevent — the review weighed
