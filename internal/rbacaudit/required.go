@@ -151,6 +151,12 @@ var RequiredCluster = []Permission{
 	{Group: "spawnery.cloud", Resource: "servers", Verb: "create", Why: "ServerGroupReconciler creates servers up to the lower bound"},
 	{Group: "spawnery.cloud", Resource: "servers", Verb: "delete", Why: "scaling down, capping retained failures, the orphan sweep"},
 	{Group: "spawnery.cloud", Resource: "servers", Verb: "update", Why: "setting and clearing the finalizer"},
+	// Not covered by "update" above: a MergeFrom patch is its own verb to the
+	// API server. Without this the operator can create and delete servers but
+	// never nominate one, so a ServerGroup rolling update stops after the new
+	// generation is up and the old one is never asked to go. Measured on a
+	// live cluster 2026-08-25.
+	{Group: "spawnery.cloud", Resource: "servers", Verb: "patch", Why: "ServerGroupReconciler.retireServer sets spec.retire; adoptServers stamps spec.podHash"},
 	{Group: "spawnery.cloud", Resource: "servers", Subresource: "status", Verb: "update", Why: "ServerReconciler writes phase, timestamps and conditions"},
 	{Group: "spawnery.cloud", Resource: "servers", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod owner references in podspec.BuildServerPod"},
 

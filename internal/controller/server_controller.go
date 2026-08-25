@@ -109,7 +109,7 @@ type ServerReconciler struct {
 	AgentEndpoint string
 }
 
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers/status,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch

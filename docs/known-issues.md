@@ -2324,6 +2324,34 @@ so. The general lesson for anyone extending the check: it can only see what
 something logs, so an error the code handles well is invisible to it by the
 same mechanism that makes the handling good.
 
+**And a third way past it: the verb was never exercised while anybody was
+watching.** `ServerGroupReconciler.retireServer` nominates a server for a
+rolling update with a `client.MergeFrom` patch, and the `servers` marker
+granted `get;list;watch;create;update;delete` -- no `patch`, which is its own
+verb to the API server. So the operator could create and delete servers but
+never retire one: a rolling update brought the new generation up and left the
+old one running beside it, the reconcile erroring every few seconds with
+`is forbidden`, and `status.freeSlots` frozen at whatever the failed pass
+never got to write. Fixed 2026-08-25, found by changing a `ServerGroup`'s
+image on a live cluster rather than by any test.
+
+Three guards were in place and none could see it. `required.go` is checked
+against the generated role in both directions, so table and ClusterRole can
+never drift -- but the table is written from the markers rather than from the
+call sites, so both sides agreed on the same wrong answer. The envtest
+controller tests do drive `retireServer`, and envtest enforces no RBAC against
+their admin client, so a missing verb is invisible there by construction. And
+the `is forbidden:` sweep above would have caught the exact string -- except
+no e2e scenario ever changes a `ServerGroup`'s image, so the one path that
+needs the verb is never taken during a run.
+
+The intersection is the hole: a verb is only proven by a test that both runs
+under the operator's own identity *and* takes the path that needs it. Driving
+an image change in `make e2e` would close it for this verb. Nothing closes it
+for the next one, because no machinery here derives the required table from
+the code.
+
+
 **"The whole log" is only as whole as the container is old, and the check now
 says so itself.** Until the milestone's final fix wave, `operatorLog` passed an
 empty `PodLogOptions`, which returns the *current* container's log and nothing
