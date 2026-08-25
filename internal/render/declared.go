@@ -209,6 +209,20 @@ func contains(names []string, name string) bool {
 // proxies.velocity.secret-key for secret (milestone 3c, every forwarded join
 // refused) and haproxy-protocol at the top level instead of under [advanced]
 // (the RKE2 rollout, half a day spent suspecting the reverse proxy).
+//
+// That second one is what establishes "silently ignored" as a measurement
+// rather than a reading of the code. Driven 2026-08-20 against a scratch
+// ProxyGroup with a hand-built PROXY v1 header sent straight to the pod, no
+// reverse proxy involved:
+//
+//	key placed          no header          with header
+//	top level           status response    silence
+//	under [advanced]    silence            status response
+//
+// So the misplaced key leaves Velocity behaving exactly as if the setting were
+// absent, and the rendered file reads exactly as the author intended. Nothing
+// downstream distinguishes the two until a connection behaves strangely, which
+// is the cost this refusal buys out.
 func checkDeclaredKeys(declared *keyNode, overlay map[string]any, what string) error {
 	return walkOverlay(declared, declared, overlay, "", what)
 }

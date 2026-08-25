@@ -1924,39 +1924,6 @@ deployment is described. The design's §4 and its acceptance criterion 2 both
 assumed the opposite; both were wrong, and this is structural rather than an
 oversight anyone could have avoided.
 
-**A `configOverlay` key in the wrong TOML table used to be silently ignored,
-and looked right in the rendered file.** Velocity's `haproxy-protocol` lives under
-`[advanced]`. Set at the top level it reaches the rendered
-`/data/velocity.toml` — where it reads exactly as intended — and Velocity acts
-as though it were `false`: no PROXY header is required, and a connection
-carrying one is dropped without a log line. Measured on 2026-08-20 against a
-scratch ProxyGroup with a hand-built PROXY v1 header sent straight to the pod,
-no reverse proxy involved:
-
-| key placed | no header | with header |
-|---|---|---|
-| top level | status response | silence |
-| under `[advanced]` | silence | status response |
-
-The overlay mechanism itself is sound and this is the first end-to-end
-confirmation that it works: `internal/render/velocity.go` assigns whole
-top-level keys from the fragment, the operator writes no `[advanced]` table of
-its own, and Velocity fills the rest of that table from its defaults. Half a
-day was spent on this one, most of it suspecting the reverse proxy, and the
-reason it could be spent that way was that nothing in the operator knew
-Velocity's schema — a misplaced key was indistinguishable from a correct one
-until something downstream behaved strangely.
-
-Since 2026-08-24 it does know, and this exact overlay is what the check was
-built around. `internal/render/declared.go` measures an overlay against
-Velocity's own `default-velocity.toml`, refuses a key it does not declare, and
-says where the key is actually declared when it is declared somewhere —
-`haproxy-protocol` at the top level names `advanced.haproxy-protocol` in the
-error. The measurement above is kept because it is the evidence the check
-rests on: it is what establishes that Velocity ignores the misplaced key
-rather than failing on it, which is the whole reason a render-time refusal is
-worth its cost.
-
 **Cilium will not share a LoadBalancer address between two `Local` Services
 that select different pods.** Non-overlapping ports are necessary and not
 sufficient. Measured:
