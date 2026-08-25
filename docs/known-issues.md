@@ -1622,12 +1622,12 @@ a schedule plus `workflow_dispatch`; `.github/workflows/release.yml` runs
 `hack/publish.sh` on a `v*` tag. Full account:
 `docs/handover-milestone-6e.md`.
 
-**The verb set on both grants is exactly right and exactly minimal, and
-this is readable in client-go rather than inferred from a green e2e run.**
-The paragraph above leans on one `make e2e` `PASS` for the claim that the
-grant is sufficient, and the next paragraph but one says how far that
-reaches — not far. The verbs, at least, do not need it. In client-go
-v0.36.0, the events broadcaster's `recordEvent`
+**The events grants are right and minimal, and that is readable in client-go
+rather than inferred from a green e2e run — which is the only reason to
+believe it.** Migrating to `events.k8s.io/v1` needed its own RBAC grant, and
+the evidence for it being sufficient was one `make e2e` `PASS`, which reaches
+about as far as the rest of this entry says. The verbs do not need it. In
+client-go v0.36.0, the events broadcaster's `recordEvent`
 (`tools/events/event_broadcaster.go:230-273`) calls exactly two methods on
 its sink: `sink.Patch` at `:240`, when the event is a series, and
 `sink.Create` at `:246` otherwise or when the patch found nothing to patch.
