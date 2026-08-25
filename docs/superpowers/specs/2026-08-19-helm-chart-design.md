@@ -270,6 +270,23 @@ claim is reasoning rather than measurement. The corrected statement lives in
 `hack/e2e.sh`'s `OPERATOR_NAMESPACE` comment and
 `test/e2e/e2e_test.go`'s `operatorNamespace` comment now carry the same split.
 
+**Measured 2026-08-25: the second path is caught, and by two checks rather
+than one.** `config/rbac/forwarding-secret-reader.yaml` was applied unedited
+into both game namespaces of a real `make e2e` run — the mistake this chart's
+README warns an administrator against — so its RoleBinding bound
+`system:serviceaccount:spawnery-system:spawnery-operator` while the operator
+ran as `platform-system:spawnery-operator`. Kubernetes accepted it, as this
+section says it would. `theOperatorWasNeverDenied` went red naming both
+denials, and `the table holds against the real authorizer` went red beside it.
+
+Two things the reasoning above had wrong, both in the same direction. The
+denial lands on a **read**, not a write: it is the forwarding-secret `get`, and
+it reaches the log only because `readForwardingSecret` was made to carry the
+API server's own error out on 2026-08-24 — before that it folded the 403 into a
+condition message with no `is forbidden:` substring and this run would have
+stayed green. And the check is not alone: the `SubjectAccessReview` scenario
+sees the same break without needing the operator to have attempted anything.
+
 The chart keeps `spawnery-system` as its documented default, so the README
 and every document stay true for the ordinary case.
 

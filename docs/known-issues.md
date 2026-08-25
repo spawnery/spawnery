@@ -2849,23 +2849,6 @@ did catch up and what it found was a refusal.
 `helm template` actually renders rather than an intermediate on disk. Full
 account: `docs/handover-milestone-6d.md`.
 
-**`theOperatorWasNeverDenied` guards a narrower hazard than
-`docs/superpowers/specs/2026-08-19-helm-chart-design.md` §5.2 claims.** §5.2
-says that check "becomes, without being modified at all, the guard over this
-milestone's principal risk." A mutation putting a `spawnery-system` literal
-on the chart's own RoleBinding `metadata.namespace` was instead caught by
-`helm install` itself — Kubernetes refuses a RoleBinding naming a namespace
-that does not exist, at admission, before `go test` ever runs. The
-equivalent leak in a RoleBinding's *subject* namespace — the shape that
-actually matches `config/rbac/forwarding-secret-reader.yaml:65`'s real
-hazard — is not validated by the API server at all, and is, by the design's
-own reasoning, the path `theOperatorWasNeverDenied` exists to catch once the
-resulting denial lands on a write verb. That path was never mutated by this
-milestone. The claim holds for one of the two ways the defect can leak and
-is unproven for the other. Caught by mutation during the milestone; the
-report that held the transcript was in the deleted SDD workspace, so this
-paragraph is the record.
-
 **`make chart-lint` cannot catch a chart that renders with an empty
 namespace, and that is a property of Helm rather than of the target.** The
 plan justified `chart-lint`'s `helm template` line by a chart that lints but
