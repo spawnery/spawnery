@@ -178,13 +178,6 @@ Design `2026-08-11-velocity-agent-design.md` §11 named five of these before
 the milestone started; what follows carries them and adds what building it
 actually found. The one that matters most is first.
 
-**`online-mode` moved to the CRD.** `ProxyGroup.spec.config.onlineMode`,
-defaulting `true`. It could not be set by a `configOverlay` because
-`render.Velocity` reasserts the keys it owns after the merge, and the ruling
-was that a security property switchable in a YAML file nobody reads is worse
-than one visible on the custom resource. Turning it off means the proxy
-stops authenticating players.
-
 **Paper 26.2 accepts the forwarding secret from the environment**
 (`PAPER_VELOCITY_SECRET`), so the plaintext need not be written into
 `/data/config/paper-global.yml` in the writable layer at all. Not done; a
@@ -195,30 +188,6 @@ smaller attack surface for whoever next opens the Paper renderer.
 (`ReadyGate.open`'s own `log(...)` call). This is the same shape as the
 `playerLimit` defect milestone 3b found and fixed, in a place where the
 operator has nothing to write to.
-
-**Per-proxy load balancing.** With several proxies, placement is even per
-proxy and not necessarily across the network — `Router` counts only the
-players Velocity itself can see, not what any other proxy in the same
-`ProxyGroup` is carrying.
-
-**The NetworkPolicy is overdue, not deferred.** With `online-mode=false` on
-the backends and forwarding now actually working, a Paper server
-authenticates no one and trusts whatever completes the handshake with the
-right secret — and nothing restricts who may attempt it. Milestone 6 owns
-NetworkPolicies as a group. This entry is the one most likely to be read as a
-formality; it is not.
-
-*Milestone 6b wrote the policy, and it has since been watched doing its
-work.* Measured on 2026-08-21 against a real CNI and recorded at
-`internal/podspec/netpol.go`: a pod carrying the managed-by, network and
-role=proxy labels reached a backend on 25565, while the same pod without
-labels timed out. What that measurement also established is the limit — the
-ingress peer is a podSelector over labels any pod's creator chooses, so the
-policy defends against a co-tenant that cannot create pods in the namespace
-and against nothing else. The same day, mounting `velocity-forwarding-secret`
-from an unlabelled pod showed why closing that would buy little. The boundary
-is the namespace, not this policy, and the longer form is under "From
-milestone 6b" below.
 
 **Smaller ones**, each worth a sentence. Phase 5 of `hack/agent-test.sh`
 reuses phase 2's window constants, declared 400 lines earlier and both derived

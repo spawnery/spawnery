@@ -14,6 +14,13 @@ import com.velocitypowered.api.proxy.server.RegisteredServer
  * bigger, usually-emptier hub group and have it mean something: hunting for
  * the global minimum across every group would silently undo that ordering
  * the first time the lobby got busy.
+ *
+ * What it balances is this proxy's own view. `playersConnected` is what
+ * Velocity itself can see, so with several proxies in one group the placement
+ * is even per proxy and not necessarily across the network -- two proxies
+ * choosing at the same moment both see the same emptiest backend and neither
+ * knows what the other is carrying. Nothing here can fix that; it would take
+ * a count the operator holds and hands back.
  */
 class Router(private val directory: ServerDirectory) {
     /**
