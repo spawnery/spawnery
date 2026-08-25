@@ -262,6 +262,42 @@ class ServerDirectoryTest {
         assertTrue(logs[0].contains("lobby-1"), logs[0])
     }
 
+    @Test
+    fun `a removal is logged, naming the backend`() {
+        val registry = FakeRegistry()
+        val logs = mutableListOf<String>()
+        val directory = ServerDirectory(registry) { message, _ -> logs += message }
+
+        directory.apply(listOf(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+        assertTrue(logs.isEmpty(), "a registration must not log; a FullSync carries every backend")
+
+        directory.remove("lobby-1")
+
+        assertEquals(1, logs.size, logs.toString())
+        assertTrue(logs[0].contains("lobby-1"), logs[0])
+    }
+
+    @Test
+    fun `a full sync logs the backends it drops and not the ones it keeps`() {
+        val registry = FakeRegistry()
+        val logs = mutableListOf<String>()
+        val directory = ServerDirectory(registry) { message, _ -> logs += message }
+
+        directory.apply(
+            listOf(
+                Backend("lobby-1", "10.0.0.1:25565", "lobby"),
+                Backend("lobby-2", "10.0.0.2:25565", "lobby"),
+            ),
+        )
+        logs.clear()
+
+        directory.apply(listOf(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+
+        assertEquals(setOf("lobby-1"), directory.names())
+        assertEquals(1, logs.size, logs.toString())
+        assertTrue(logs[0].contains("lobby-2"), logs[0])
+    }
+
     private companion object {
         fun serverInfo(name: String, host: String, port: Int) =
             ServerInfo(name, InetSocketAddress.createUnresolved(host, port))

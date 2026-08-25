@@ -328,16 +328,14 @@ milestone 6b" below.
 
 **Smaller ones**, each worth a sentence: phase 5 of `hack/agent-test.sh`
 reuses phase 2's window constants declared 400 lines
-earlier, both derived from a hard-coded renewal interval; `streams_opened`
+earlier, both derived from a hard-coded renewal interval; and `streams_opened`
 counts what the operator saw, so a proxy leaking a gRPC channel per reconnect
 is still measured nowhere — the standing blind spot inherited from milestone
-2c; `ServerDirectory`'s stale-removal path (`unregisterTracked`) logs nothing
-at the point of removal, unlike every other mutation in the same class. Two
-entries that stood here are closed: phase 1's empty-token comparison now
-carries the same guard phase 4 does, and `Router.choose`'s fall-through when
+2c. Three entries that stood here are closed: phase 1's empty-token comparison now
+carries the same guard phase 4 does; `Router.choose`'s fall-through when
 the exclusion empties the first group is covered both by a unit test and by
 the second fallback group `docs/runbook-milestone-3-evidence.md` §8a drains
-into. Separately: `cmd/spawnery-join` asks a
+into; and `ServerDirectory`'s stale-removal path logs the backend it drops. Separately: `cmd/spawnery-join` asks a
 server for its protocol version by announcing an unsupported one
 (`announceUnsupported = -1`) and trusts that the proxy's newest supported
 version and the backend's actual version agree — true of every pinned pair

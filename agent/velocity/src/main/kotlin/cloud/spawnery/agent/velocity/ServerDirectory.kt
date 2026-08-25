@@ -161,10 +161,28 @@ class ServerDirectory(
         return true
     }
 
-    /** Unregisters whatever the registry currently has for [key], and forgets it. */
+    /**
+     * Unregisters whatever the registry currently has for [key], and forgets
+     * it.
+     *
+     * Logged, and it is the only mutation here that is. Not because a removal
+     * matters more than a registration -- because it is rarer and it is what
+     * somebody investigating looks for. Every `FullSync` upserts every backend
+     * the operator knows about, roughly every thirty seconds, so logging those
+     * would bury this line under a line per server per sync; a backend
+     * *leaving* happens when the operator scales down, drains a node or loses
+     * a server, and "where did that backend go" is a question with no other
+     * answer on the proxy side.
+     *
+     * docs/known-issues.md carried this as "logs nothing at the point of
+     * removal, unlike every other mutation in the same class". The comparison
+     * was wrong -- no mutation here logged, only the malformed-address skip --
+     * but the gap it named was real.
+     */
     private fun unregisterTracked(key: String) {
         registry.server(key)?.let { registry.unregister(it.serverInfo) }
         backends.remove(key)
+        log("spawnery: unregistered backend '$key'", null)
     }
 
     private companion object {
