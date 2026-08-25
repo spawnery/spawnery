@@ -2124,20 +2124,6 @@ ClusterRole, so any path those tests already take proves its own verbs. What
 remains uncovered is a path no controller test takes, and `make e2e` is still
 the only place the operator's real identity meets a real cluster.
 
-**"The whole log" is only as whole as the container is old, and the check now
-says so itself.** Until the milestone's final fix wave, `operatorLog` passed an
-empty `PodLogOptions`, which returns the *current* container's log and nothing
-else, and the restart count was read once — by the first subtest, before any
-scenario had driven a single call. An operator OOM-killed mid-run on a
-memory-tight host would have left the last subtest reading a log that began after the
-interesting part, and a replacement process making no denied call of its own
-would have reported PASS over a run it had covered a fraction of.
-`theOperatorWasNeverDenied` now re-reads the pod, prepends the previous
-container's log where the kubelet still has it, and fails on any restart at
-all. Kubernetes keeps exactly one container back, so from the second restart on
-there is a stretch nothing can read — which is why the check errors rather than
-patching over it.
-
 **The E2E cluster is a single node, so a whole class of behaviour is
 untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
 single-node topology. Nothing in the run can reach node drain and its taint
@@ -2199,33 +2185,9 @@ that — and only then get stuck pulling. An earlier version of the manifest's
 own comment asserted `Pending` from the binding mode alone, without checking;
 the measured answer is `Bound`.
 
-**Any patch to a `ServerGroup`'s spec bumps `metadata.generation`,** and
-therefore starts a rolling update beside whatever the patch was for. Task 5's
-scaling scenario was written against `minReplicas`, passed, and passed for the
-wrong reason: what it observed was churn from the run's own 20-second startup
-deadline rather than a scaling decision, and the rewrite that fixed it walked
-into the same trap once more — a cold start refused by the ceiling instead of
-the plain over-ceiling branch. Anyone adding a scenario that patches a spec
-should assume a generation change rides along and say which branch the
-assertion is actually pinning. (`docs/known-issues.md`'s "From milestone 4b"
-section carries the same property as a product concern.)
-
 **A group's count of live servers briefly touched zero under sustained
 churn** before recovering — observed during Task 5, not investigated, and
 recorded here for whoever next looks at backoff and replacement timing.
-
-**The orphan sweep dispatches on `podspec.LabelRole`.** A fixture pod built
-without that label is never routed to `sweepServerPod`
-(`internal/controller/orphan.go`), so a scenario built on one tests nothing
-while looking like it does. Task 6's brief shipped with exactly that defect and
-it was caught by reading the switch rather than by the run.
-
-**Smaller things this milestone leaves, none of them shipping behaviour:**
-
-- Swapping the namespace in `test/e2e/rbac_test.go`'s third loop to the
-  operator's own namespace would leave the scenario green, because
-  `secrets: get` is granted there too for `certs.Store.Ensure`. The loop is
-  correct as written; the mutation is simply not catchable by it.
 
 ## From milestone 6b (NetworkPolicies, and the channel's availability half)
 

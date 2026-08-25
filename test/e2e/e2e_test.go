@@ -107,6 +107,16 @@ func TestMain(m *testing.M) {
 // naming. These depend on one another -- the manifest has to exist before
 // anything can scale it -- so the order is written down instead. The denial
 // check is last because it judges everything the run did.
+//
+// Adding a scenario that patches a spec: assume a generation change rides
+// along with it. Any patch to a ServerGroup's spec bumps metadata.generation
+// and so starts a rolling update beside whatever the patch was for. The
+// scaling scenario was written against minReplicas, passed, and passed for
+// the wrong reason -- what it observed was churn from this run's own
+// 20-second startup deadline -- and the rewrite that fixed it walked into the
+// same trap once more, pinning a cold start refused by the ceiling instead of
+// the plain over-ceiling branch. Say in the assertion which branch it is
+// actually pinning.
 func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("the operator is up and has not restarted", theOperatorIsUp)
 	t.Run("the test manifest is accepted", theTestManifestIsAccepted)

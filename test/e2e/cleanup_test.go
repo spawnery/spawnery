@@ -22,6 +22,12 @@ import (
 //
 // This is the one scenario that checks a code path nothing else in the run
 // reaches: every other pod here was created by the operator itself.
+//
+// The planted pod must carry podspec.LabelRole. The sweep dispatches on it
+// (internal/controller/orphan.go), so a pod built without it is never routed
+// to sweepServerPod at all and the scenario tests nothing while looking
+// exactly like it does. This brief shipped with that defect once; it was
+// caught by reading the switch, not by the run.
 func theOrphanSweepRemovesAStrayPod(t *testing.T) {
 	orphan := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{

@@ -64,6 +64,11 @@ func theTableHoldsAgainstTheRealAuthorizer(t *testing.T) {
 	for _, p := range rbacaudit.RequiredNamespaced {
 		check(p, operatorNamespace)
 	}
+	// Swapping testNamespace here for the operator's own namespace leaves this
+	// green, because `secrets: get` is granted there too for certs.Store.Ensure.
+	// The loop is correct as written; that particular mutation is simply not
+	// one it can catch, and a reader who tries it should not conclude the loop
+	// is inert.
 	for _, p := range rbacaudit.RequiredNetworkNamespace {
 		check(p, testNamespace)
 	}
