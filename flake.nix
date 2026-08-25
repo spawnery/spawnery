@@ -124,6 +124,10 @@
           # bump has to repeat.
           paper-jre = pkgs.callPackage ./nix/paper-jre.nix { };
 
+          # Velocity's counterpart. Separate because the classpaths are, and
+          # each list is a measurement over its own.
+          velocity-jre = pkgs.callPackage ./nix/velocity-jre.nix { };
+
           # The one place this version is written down. It reaches both the
           # plugin's paper-plugin.yml (which the agent reports to the
           # operator as Hello.version) and the image tag, so the two can
@@ -245,7 +249,7 @@
           # not a server list ping, so the image needs no pinger. The agent
           # itself now ships -- it is the thing that binds that port.
           velocity-image = pkgs.callPackage ./nix/velocity-image.nix {
-            inherit velocity spawnery-config agents imageVersion oci-common;
+            inherit velocity spawnery-config agents imageVersion oci-common velocity-jre;
           };
 
           # Restricted to x86_64-linux for the same reason the two game images

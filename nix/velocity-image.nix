@@ -6,7 +6,7 @@
 { bash
 , buildEnv
 , coreutils
-, jdk25_headless
+, velocity-jre
 , runCommand
 , velocity
 , spawnery-config
@@ -34,7 +34,7 @@ oci-common.layeredImage {
       name = "velocity-tools";
       # bash because the entrypoint's shebang points at it; coreutils for the
       # mkdir/cp the entrypoint uses to place the agent jar.
-      paths = [ bash coreutils jdk25_headless ];
+      paths = [ bash coreutils velocity-jre ];
       pathsToLink = [ "/bin" ];
     })
     oci-common.passwd

@@ -54,31 +54,6 @@ the Yggdrasil call, and milestone 6b built the egress policy. What remains is
 the bare fact — a Paper server still calls `fill.papermc.io` on every start,
 and anything that tightens egress further has to decide about it.
 
-**The image was large because `jdk25_headless` has a 697 MiB closure** — a
-full headless JDK, not a JRE. Measured at 724 MB as a tarball for 26.2-0.1.0
-and 735 MB for 26.2-0.2.0 once the agent joined it. *Cut on 2026-08-25: the
-Paper image ships a jlink'd runtime of fourteen modules instead, and the
-tarball is 372 MB.* Closure 405 MiB against 697; `nix/paper-jre.nix` carries
-the list and how it was derived.
-
-Getting there took two steps and only the first was mechanical. `jdeps
---print-module-deps --ignore-missing-deps --multi-release 25` over the whole
-classpath — all 105 jars of `.#paper-repo` plus `.#agents`' agent jar — gave
-thirteen modules with an empty stderr, so nothing was skipped despite the flag.
-Paper then booted on those thirteen and died in `Paperclip.extractFiles` with
-`java.nio.file.ProviderNotFoundException`: `FileSystems.newFileSystem` needs
-the zip provider, which arrives through `ServiceLoader` rather than through any
-reference `jdeps` can follow. `jdk.zipfs` is the fourteenth and no static
-analysis could have produced it.
-
-The remaining doubt was the agent's channel, since a boot without an operator
-never opens one and a security provider reached by name — `jdk.crypto.ec` being
-the candidate — would have failed the same way and only on a connection. `make
-image-test` and `make agent-test` both pass on this runtime, the second driving
-a real session with a TLS handshake against a rotated CA bundle, so that doubt
-is closed rather than carried. Velocity's image is a separate derivation over a
-separate classpath and still carries the full JDK; this list is Paper's.
-
 **`k3d` does not work on this machine, and probably not on similar ones.**
 `docker` here is a Podman 5.8.4 alias with no `/var/run/docker.sock`, only a
 rootless Podman socket. k3d's tools node always bind-mounts the runtime socket
@@ -140,16 +115,6 @@ only on a change of cause has the same defect as INFO — a fleet that has been
 down all day would say so once, at the start. So the cost stands as written
 and is accepted; what changed is that it is now a decision with reasons rather
 than an oversight.
-
-**The JRE module list is derived and shipped as of 2026-08-25 — see the
-image-size entry above for how, and `nix/paper-jre.nix` for the list.**
-The Paper-side classpath stopped moving with this milestone: the agent is the
-last thing that joins it, and gRPC and okhttp pull modules Paper alone does not.
-So the list can finally be derived from the complete classpath, with `jdeps
---print-module-deps` or `-verbose:module` against a running server. Milestone 3
-adds Velocity and faces the same question with the same answer, so derive it
-once, there, for both images — see the image-size entry under milestone 2b for
-what it buys.
 
 **The level-2 harness has rough edges milestone 3 inherits.** `hack/agent-test.sh`
 and `cmd/spawnery-stubop` are exactly what a Velocity agent will be tested with,

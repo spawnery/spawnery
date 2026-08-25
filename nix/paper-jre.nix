@@ -44,8 +44,10 @@
 # against a rotated CA bundle included. Neither needed a module beyond the
 # fourteen.
 #
-# Velocity's image is a separate derivation over a separate classpath and
-# still carries jdk25_headless; this list is Paper's.
+# This list is Paper's. Velocity's is nix/velocity-jre.nix -- a separate
+# derivation over a separate classpath, measured the same way and sharing
+# exactly one finding with this one: jdk.zipfs, which neither jdeps run could
+# see and which both programs die without.
 { jre25_minimal }:
 
 jre25_minimal.override {
