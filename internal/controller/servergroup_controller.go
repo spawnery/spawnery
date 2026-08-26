@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"time"
 
@@ -171,6 +172,27 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// which is what makes that a guarantee and not just where the calls
 	// happen to be written.
 	if err := r.reconcileConfigMap(ctx, group); err != nil {
+		// The one error here that is a state rather than a failure, and it
+		// needs saying on the object: nothing this group does afterwards can
+		// work, and a bare error would requeue in silence for as long as the
+		// collision stood. Status is written on this path and nowhere else
+		// before the end of Reconcile, because this is the only early return
+		// that leaves the group permanently unable to proceed.
+		if errors.Is(err, errForeignConfigMap) {
+			name := podspec.GroupConfigMapName(group.Name, podspec.RoleServer)
+			meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+				Type:    spawneryv1alpha1.ConditionDegraded,
+				Status:  metav1.ConditionTrue,
+				Reason:  spawneryv1alpha1.ReasonConfigMapNotOurs,
+				Message: foreignConfigMapMessage(group.Namespace, name),
+			})
+			group.Status.Phase = "Degraded"
+			// Requeued rather than left to a watch. The ConfigMap this waits
+			// on is one the operator does not own, so it carries no owner
+			// reference back to this group and no watch this controller sets
+			// up will fire when somebody finally deletes it.
+			return ctrl.Result{RequeueAfter: networkRetryInterval}, r.Status().Update(ctx, group)
+		}
 		return ctrl.Result{}, err
 	}
 
@@ -1486,25 +1508,8 @@ func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *s
 	if err != nil {
 		return err
 	}
-
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podspec.GroupConfigMapName(group.Name, podspec.RoleServer),
-			Namespace: group.Namespace,
-		},
-	}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		if cm.Labels == nil {
-			cm.Labels = map[string]string{}
-		}
-		cm.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
-		if cm.Data == nil {
-			cm.Data = map[string]string{}
-		}
-		cm.Data[podspec.ConfigValuesKey] = string(data)
-		return controllerutil.SetControllerReference(group, cm, r.Scheme)
-	})
-	return err
+	return reconcileGroupConfigMap(ctx, r.Client, r.Scheme, group,
+		podspec.GroupConfigMapName(group.Name, podspec.RoleServer), data)
 }
 
 // groupsOfNetwork maps a Network event onto the ServerGroups in its namespace that

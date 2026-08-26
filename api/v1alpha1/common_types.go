@@ -162,6 +162,11 @@ const (
 	ReasonAtDesiredState       = "AtDesiredState"
 	ReasonStorageResized       = "StorageResized"
 	ReasonStorageResizeRefused = "StorageResizeRefused"
+	// ReasonConfigMapNotOurs says something else occupies the name this group
+	// renders its ConfigMap at. The operator refuses to write into an object
+	// it does not own, and a group whose configuration cannot be written can
+	// start no pod, so this is Degraded rather than a warning.
+	ReasonConfigMapNotOurs = "ConfigMapNotOwnedByGroup"
 
 	// The three ProxyPods reasons on a ProxyGroup's Degraded condition. Two
 	// failures rather than one because the remedies differ: a create the API

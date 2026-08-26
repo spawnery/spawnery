@@ -146,22 +146,6 @@ overlay can move them (`internal/render/paper.go`), so what a typo can reach
 is the author's own settings and nothing this operator depends on. Closing it
 would mean a third default file and a third regeneration step.
 
-**A ConfigMap already sitting at the rendered name is adopted without an
-ownership check.** Neither `reconcileConfigMap`
-(`internal/controller/servergroup_controller.go` and
-`internal/controller/proxygroup_controller.go`) checks that a ConfigMap at
-`<group>-<role>-config` belongs to this group before mutating it.
-`controllerutil.CreateOrUpdate`'s mutate closure sets the
-label and `config.yaml` and calls `SetControllerReference` last, and
-`SetControllerReference` only refuses when the object already has a
-*different* controller owner — an object with no owner at all is silently
-given one. A ConfigMap that happens to carry `podspec.LabelManagedBy` (so
-the cache sees it) but was created by something other than this group's
-reconciler is therefore still adoptable. The `<group>-<role>-config` rename
-traded a plausible collision (a user's own ConfigMap at the bare group name)
-for an implausible one (the exact rendered name, pre-labelled); it did not
-remove the shape.
-
 ## From milestone 3c (the Velocity agent)
 
 **Paper 26.2 accepts the forwarding secret from the environment**

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"sort"
@@ -256,6 +257,37 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	obs, res, err := r.reconcileObserved(ctx, network, group)
+
+	// One named exception to "wherever the pods were read", below. A group
+	// whose rendered ConfigMap name is occupied by somebody else's object
+	// never gets as far as reading a pod, and it never will: the operator
+	// refuses to write into an object it does not own, so nothing downstream
+	// of that can run. Left to the rule below it would requeue in silence for
+	// as long as the collision stood, which is the one outcome worse than
+	// either alternative the refusal was choosing between.
+	//
+	// The pods and the Service are deliberately not touched here, for the
+	// same reason the missing-Network path does not touch them: they are
+	// running and people are connected through them, and this pass learned
+	// nothing about either.
+	if errors.Is(err, errForeignConfigMap) {
+		name := podspec.GroupConfigMapName(group.Name, podspec.RoleProxy)
+		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+			Type:    spawneryv1alpha1.ConditionDegraded,
+			Status:  metav1.ConditionTrue,
+			Reason:  spawneryv1alpha1.ReasonConfigMapNotOurs,
+			Message: foreignConfigMapMessage(group.Namespace, name),
+		})
+		group.Status.Phase = "Degraded"
+		if werr := r.writeStatus(ctx, group); werr != nil {
+			log.FromContext(ctx).Error(werr, "recording the group's status")
+		}
+		// Requeued rather than left to a watch: the colliding ConfigMap is not
+		// owned by this group, so no owner reference leads back here and no
+		// watch fires when somebody deletes it.
+		return ctrl.Result{RequeueAfter: networkRetryInterval}, nil
+	}
+
 	// The status is written wherever the pods and the Service were actually
 	// read, and nowhere else. Both halves of that are deliberate.
 	//
@@ -1591,25 +1623,8 @@ func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *sp
 	if err != nil {
 		return fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
 	}
-
-	cm := &corev1.ConfigMap{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      podspec.GroupConfigMapName(group.Name, podspec.RoleProxy),
-			Namespace: group.Namespace,
-		},
-	}
-	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		if cm.Labels == nil {
-			cm.Labels = map[string]string{}
-		}
-		cm.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
-		if cm.Data == nil {
-			cm.Data = map[string]string{}
-		}
-		cm.Data[podspec.ConfigValuesKey] = string(data)
-		return controllerutil.SetControllerReference(group, cm, r.Scheme)
-	})
-	return err
+	return reconcileGroupConfigMap(ctx, r.Client, r.Scheme, group,
+		podspec.GroupConfigMapName(group.Name, podspec.RoleProxy), data)
 }
 
 // proxyConfigValues builds the neutral document reconcileConfigMap writes
