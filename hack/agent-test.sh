@@ -867,6 +867,27 @@ until port_open "$NAME4" 25565; do
 done
 echo "25565 answers from inside the container"
 
+# The other half of the control, and the half that was missing:
+# docs/known-issues.md recorded that the probe had been shown able to answer
+# true and never shown able to answer false for the ordinary reason. The 25565
+# probe above rules out a prober that always says no; this rules out one that
+# always says yes -- a /dev/tcp redirect that succeeded on a refused
+# connection, a bash that treats the failure as success, a runtime whose exec
+# swallows the exit code.
+#
+# 1 is chosen because nothing in either image can be listening on it: it is
+# privileged, the containers drop every capability, and both entrypoints exec a
+# JVM that binds 25565 and 8081 and nothing else. Any port nothing binds would
+# do; a port that could conceivably be bound would make a failure here
+# ambiguous.
+UNBOUND_PORT=1
+if port_open "$NAME4" "$UNBOUND_PORT"; then
+	echo "port_open answered true for port $UNBOUND_PORT, which nothing in this image binds" >&2
+	echo "the closed-gate assertion below cannot fail, so it proves nothing" >&2
+	exit 1
+fi
+echo "$UNBOUND_PORT reads closed, so the probe tells the two apart"
+
 # Nothing has been synced yet, checked before and after the probe. Either check
 # failing means the hold above expired while this phase was still getting ready,
 # which makes the result below meaningless rather than merely late - and a

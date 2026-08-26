@@ -4795,3 +4795,65 @@ func TestTheOrdinalConditionClearsWhenTheDuplicateGoes(t *testing.T) {
 		t.Errorf("OrdinalBlocked = %+v, want False once the duplicate is gone", blocked)
 	}
 }
+
+// TestAFailedRetireeIsNamedOnProgressing closes the silent half of
+// docs/known-issues.md's milestone 4b entry. spec.retire is the update
+// budget's one signal and it survives the server failing, so a server the
+// group patched it onto and that then failed holds a maxUnavailable slot for
+// its whole failedRetentionSeconds -- an hour by default -- and the changeover
+// simply stops. Before this there was no condition, no event and nothing else
+// saying so: the group reported "still being replaced" for the whole window,
+// which is true and useless.
+func TestAFailedRetireeIsNamedOnProgressing(t *testing.T) {
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: 2},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{FailedRetentionSeconds: 3600},
+	}
+	views := []ServerView{
+		{Name: "lobby-new", Generation: 2, Phase: phase.Ready},
+		// The stuck one: retiring, and dead.
+		{Name: "lobby-old", Generation: 1, Phase: phase.Failed, Retire: true},
+	}
+
+	reportProgressing(group, views)
+
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("Progressing = %+v, want True", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonRetireeStuck {
+		t.Fatalf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonRetireeStuck)
+	}
+	// The name and the remedy, because the remedy is per server: deleting that
+	// one server returns the slot at once, and a count would leave an operator
+	// listing every server to find which.
+	for _, want := range []string{"lobby-old", "spec.retire", "3600", "Deleting it"} {
+		if !strings.Contains(cond.Message, want) {
+			t.Errorf("message %q does not mention %q", cond.Message, want)
+		}
+	}
+}
+
+// TestAnOrdinaryRetireeIsNotReportedAsStuck keeps the check from firing on the
+// normal path. A retiree that is draining is the update working, not the
+// update stopped, and a condition that fired on it would name every changeover
+// this operator ever performs.
+func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: 2},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{FailedRetentionSeconds: 3600},
+	}
+	for _, p := range []phase.Phase{phase.Retiring, phase.Draining, phase.Ready} {
+		t.Run(string(p), func(t *testing.T) {
+			group.Status.Conditions = nil
+			reportProgressing(group, []ServerView{
+				{Name: "lobby-new", Generation: 2, Phase: phase.Ready},
+				{Name: "lobby-old", Generation: 1, Phase: p, Retire: true},
+			})
+			cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+			if cond != nil && cond.Reason == spawneryv1alpha1.ReasonRetireeStuck {
+				t.Errorf("a %s retiree was reported as stuck: %q", p, cond.Message)
+			}
+		})
+	}
+}

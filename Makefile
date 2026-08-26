@@ -114,6 +114,19 @@ lint:
 	golangci-lint run
 
 .PHONY: agent
+# `nix build` filters the source tree through the git index, so an untracked
+# file does not exist for a sandboxed build. This is worth reading before
+# diagnosing anything else, because it presents as a compile failure naming a
+# symbol that is plainly there in the file in front of you -- milestone 4c-1's
+# was 35 copies of `package cloud.spawnery.agent.pb.SetReady does not exist`
+# from this target, immediately after `make proto` had generated the Java
+# stubs, which looks exactly like the protoc/runtime version drift documented
+# in flake.nix and is not. It cost time in milestone 2c as well.
+#
+# The agents derivation builds from `src = ../agent` (nix/agents.nix), the Go
+# binaries from `src = ./.` in flake.nix; either way the source is the git
+# tree. So: `git add` before the build, not just before the commit. Staging is
+# enough -- nothing has to be committed.
 agent:
 	nix build .#agents
 

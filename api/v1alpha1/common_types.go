@@ -168,11 +168,15 @@ const (
 	// ReasonOrdinalDuplicated says more than one Server of the group carries
 	// the same spec.ordinal. The operator refuses to act on such an ordinal
 	// rather than choose between two worlds, so this needs a person.
-	ReasonOrdinalDuplicated    = "OrdinalCarriedByTwoServers"
-	ReasonOrdinalsAvailable    = "OrdinalsAvailable"
-	ReasonServersStarting      = "ServersStarting"
-	ReasonReplacingServers     = "ReplacingServers"
-	ReasonAtDesiredState       = "AtDesiredState"
+	ReasonOrdinalDuplicated = "OrdinalCarriedByTwoServers"
+	ReasonOrdinalsAvailable = "OrdinalsAvailable"
+	ReasonServersStarting   = "ServersStarting"
+	ReasonReplacingServers  = "ReplacingServers"
+	ReasonAtDesiredState    = "AtDesiredState"
+	// ReasonRetireeStuck says a server carrying spec.retire has failed, and is
+	// therefore holding an update slot until its retention window ends. The
+	// changeover is stopped, not finished.
+	ReasonRetireeStuck         = "RetireeFailedAndHoldsTheBudget"
 	ReasonStorageResized       = "StorageResized"
 	ReasonStorageResizeRefused = "StorageResizeRefused"
 	// ReasonConfigMapNotOurs says something else occupies the name this group

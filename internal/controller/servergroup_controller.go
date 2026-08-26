@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -1012,7 +1013,28 @@ func (r *ServerGroupReconciler) groupPods(
 // counts on the next pass, with Degraded saying meanwhile what went wrong.
 func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) {
 	var starting, older int32
+	// A retiree that will never retire. spec.retire is the update budget's one
+	// signal (selectRetirement), and it survives the server failing -- so a
+	// server the group patched spec.retire onto and that then failed holds a
+	// maxUnavailable slot for its whole failedRetentionSeconds, an hour by
+	// default. Until this said so there was no condition, no event and nothing
+	// else telling an operator why no further server was retiring: the
+	// changeover simply stopped, looking exactly like one that had finished.
+	//
+	// Reached by a real path rather than a hypothetical one. phase.Decide
+	// tests a readiness loss before the retirement, deliberately, so a server
+	// that loses readiness between the patch and the next reconcile goes to
+	// Starting rather than Retiring while spec.retire stays true; if it never
+	// recovers, StartupDeadlineReached fails it there.
+	//
+	// Named and not counted, because the remedy is per server -- delete it and
+	// the slot comes back at once -- and a count would leave an operator
+	// listing every server to find which.
+	var stuck []string
 	for _, v := range views {
+		if v.Retire && v.Phase == phase.Failed {
+			stuck = append(stuck, v.Name)
+		}
 		if v.Generation != group.Generation {
 			older++
 			continue
@@ -1021,9 +1043,22 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) 
 			starting++
 		}
 	}
+	sort.Strings(stuck)
 
 	condition := metav1.Condition{Type: spawneryv1alpha1.ConditionProgressing}
 	switch {
+	// Before the two counts below, because it is the answer to the question
+	// they raise. A group in this state reports older > 0 for as long as the
+	// retention window lasts and says "still being replaced", which is true
+	// and useless: nothing is being replaced and nothing will be.
+	case len(stuck) > 0:
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = spawneryv1alpha1.ReasonRetireeStuck
+		condition.Message = fmt.Sprintf(
+			"the update is held by %s, which carries spec.retire and has failed: a failed retiree holds an "+
+				"update slot for its whole failedRetentionSeconds (%ds), so no further server retires until "+
+				"then. Deleting it returns the slot immediately.",
+			strings.Join(stuck, ", "), group.Spec.FailedRetentionSeconds)
 	case starting > 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = spawneryv1alpha1.ReasonServersStarting

@@ -164,6 +164,18 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 	// only this flag tells them apart. Testing Stale here instead would be a
 	// regression — a genuinely starting server is stale too, and crediting it
 	// zero is the runaway this function exists to prevent.
+	// SessionsGone reads true for one resync on a server that has genuinely
+	// just started, whenever the informer's cache has not yet shown a pod the
+	// API server already created: it is
+	// `status.PodName != "" && (!podFound || podTerminal(pod))`, and the name
+	// is stamped before the cache catches up. Such a server is credited zero
+	// rather than its full maxPlayers, so the sum reads low, `wanted` reads
+	// high, and the group over-creates for a pass or two.
+	//
+	// That is the safer of the two directions and it is chosen deliberately: a
+	// group with a server too many costs money, a group with a server too few
+	// costs joins. isOccupied has carried the same lag for the same reason
+	// since before 4b; what 4b changed is that a scaling decision reads it too.
 	if v.SessionsGone {
 		return 0
 	}

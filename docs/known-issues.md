@@ -135,92 +135,21 @@ configuration phase within the same round trip. It was found because
 `kubectl delete` on a held player disconnect them rather than move them —
 `internal/mcjoin`'s `holdOpen` carries what a held connection is and is not.
 
-## From milestone 4a
-
-**`status.freeSlots` and the scaler's own figure are two numbers.**
-`AggregateGroup` computes free slots over `Ready` servers of the current
-generation; `provisionalCapacity` in `internal/controller/scaling.go` computes
-a second figure that also credits servers whose capacity is ordered and has
-not arrived. Anyone reading the code for the first time will want to unify
-them. They must not be: the first is what `status.freeSlots` documents and
-what 4b's rolling update needs; the second is what stops the scaler ordering
-the same replacement on every five-second pass. Both files say so; this entry
-is the third place, so a search finds it.
-
-**`provisionalCapacity` credits a server the informer has not caught up with,
-for one pass.** The original defect here — a server whose pod had vanished
-credited a full `maxPlayers` — was closed by testing `ServerView.SessionsGone`
-before the `Slots == 0` credit, and both the reason and the wrong fix are
-pinned where they belong: `internal/controller/scaling.go` says in its own
-comment why testing `Stale` there would be a regression, and
-`TestProvisionalCapacityStillCreditsAStartingServer` fails if anybody tries.
-
-What is recorded here because it is recorded nowhere else: `SessionsGone` is
-`srv.Status.PodName != "" && (!podFound || podTerminal(pod))`, and that reads
-true for one resync for a server that has genuinely just started, if the
-informer's cache has not yet shown a pod the API server already created. Such
-a server is credited zero instead of its full `maxPlayers`, so the sum reads
-low and `wanted` reads high — over-creation for a pass or two. That is the
-safer of the two directions: a group with a server too many costs money, a
-group with a server too few costs joins. `isOccupied` has carried the same lag
-for the same reason since before 4b; what 4b changed is that a scaling
-decision now reads it too.
-
-## From milestone 4b
-
-**A group at its ceiling with nothing to shed cannot start a changeover, and
-one that is holding a stuck retiree does not say why.** The cold start (design
-§3.3) is a create like any other, so a group whose `maxReplicas` equals its
-current size cannot simply build the first server of the new generation. It
-first tries to make its own room: a refused cold start that was the only thing
-the pass wanted falls through to the demand rule, which sheds an idle stale
-server if there is one, and the next pass then starts the changeover. Only when
-there is genuinely nothing to shed does the group stall with its old generation
-serving. That stall is correct — a lowered ceiling is an instruction, not a
-suggestion — and it is not silent: `DecideSize` sets `Limited` and, in this
-specific case, `ColdStartBlocked`, so the `ScalingLimited` condition carries a
-message naming the cold start specifically rather than an ordinary capacity
-shortfall. Raising `maxReplicas` by one is the way out.
-
-There is a second way a changeover stops, and this one *is* silent. A server
-the group has just patched `spec.retire: true` onto, which loses readiness
-before the `Server` controller next reconciles, goes to `Starting` rather than
-`Retiring` (`phase.Decide` tests the readiness loss first, deliberately) while
-`spec.retire` stays true. If it recovers to `Ready` it retires normally. If it
-never does, `StartupDeadlineReached` fails it — and a `Failed` server carrying
-`spec.retire` holds the whole `maxUnavailable` budget for its retention window,
-an hour by default, with no condition, no event and nothing telling an operator
-why no further server is retiring. This matches design §3.8 as written ("a
-server counts against the budget while its `spec.retire` is true"); the spec
-did not consider a retiree that never retires, and the behaviour errs
-conservative — fewer retirements, never a disconnection — so it is carried
-rather than changed. `kubectl get servers -o custom-columns` showing
-`spec.retire` alongside the phase is what answers it today. Both of these
-present the same way from outside — the changeover stopped — and the difference
-is that the first one names itself on the group's conditions and the second
-does not.
-
 ## From milestone 4c-1 (the proxy readiness contract)
 
-**`nix build` filters the source tree through the git index, so an untracked
-file does not exist for a sandboxed build.** This is not a 4c-1 discovery —
-it cost time in milestone 2c as well and was simply never written down. It
-presents as a compile failure naming a symbol that is plainly there in the file
-in front of you: this milestone's was 35 copies of
-`package cloud.spawnery.agent.pb.SetReady does not exist` from `make agent`,
-immediately after `make proto` had generated the Java stubs, which looks
-exactly like the `protoc`/runtime version drift the milestone 2c entry above
-warns about and is not. The agents derivation builds from `src = ../agent`
-(`nix/agents.nix:33`), the four Go binaries from `src = ./.` in `flake.nix`;
-either way the source is the git tree. `git add` before the build, not just
-before the commit — staging is enough, nothing has to be committed.
+**One assertion in `hack/agent-test.sh` is still argued rather than
+demonstrated.** The post-loop arm of phase 4's withdrawal guard — the 25565
+probe that runs after the gate has closed — would only be seen failing if the
+proxy's own listener went down with the gate, which no correct agent does and
+no fault this harness can inject produces. It is a control that has never been
+observed controlling anything.
 
-**Two assertions in `hack/agent-test.sh` are argued rather than
-demonstrated.** The control probe on 25565 that follows the closed-gate
-assertion needs the container to die mid-phase to be shown failing, and the
-post-loop arm of phase 4's withdrawal guard needs `port_open` to answer while
-`set_ready_sent` is already non-zero — a sub-second window on a correct agent.
-Neither has been made to fail on purpose, so neither is known to be able to.
+The probe underneath it is no longer the unknown: `port_open` is now shown to
+answer true for a bound port (25565, before the gate probe) and false for one
+nothing binds, so it discriminates rather than merely agreeing. What is left is
+whether this particular assertion can fail, and answering that means making a
+proxy shut its own listener on a SetReady — a fault injection nothing here
+needs for any other purpose.
 
 ## From milestone 4c-2 (proxy rolling updates)
 
