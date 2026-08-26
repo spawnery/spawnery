@@ -63,6 +63,15 @@ const (
 	// for the *other* cause of the same error, a cache that has not caught up
 	// yet. So the group retried every five seconds, forever, with nothing on
 	// its conditions, events or logs to say so.
+	//
+	// It carries a second, mirrored occasion, distinguished by the reason:
+	// more than one Server of the group carrying the same spec.ordinal. There
+	// an object holds the *ordinal* rather than the name, and it was silent in
+	// the other direction -- DecidePersistentSize's held map is keyed by
+	// ordinal, so the second server overwrote the first and the loser was
+	// never surplus, never recreated and never named anywhere, while its pod
+	// went on mounting a claim of its own. Reason tells the two apart:
+	// OrdinalNameTaken and OrdinalCarriedByTwoServers.
 	ConditionOrdinalBlocked = "OrdinalBlocked"
 	// ConditionChangingOver is true while a ProxyGroup holds pods whose
 	// rendered shape this operator no longer produces, and says how many.
@@ -156,6 +165,10 @@ const (
 	ReasonPodShapeChanged      = "PodShapeChanged"
 	ReasonPodShapeCurrent      = "PodShapeCurrent"
 	ReasonOrdinalNameTaken     = "OrdinalNameTaken"
+	// ReasonOrdinalDuplicated says more than one Server of the group carries
+	// the same spec.ordinal. The operator refuses to act on such an ordinal
+	// rather than choose between two worlds, so this needs a person.
+	ReasonOrdinalDuplicated    = "OrdinalCarriedByTwoServers"
 	ReasonOrdinalsAvailable    = "OrdinalsAvailable"
 	ReasonServersStarting      = "ServersStarting"
 	ReasonReplacingServers     = "ReplacingServers"

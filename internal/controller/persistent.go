@@ -112,16 +112,51 @@ type PersistentInputs struct {
 // holds. A view whose Ordinal is nil is ignored in both directions: it fills
 // no ordinal, and it is not deleted as surplus. This rule removes what it can
 // name, and something it cannot name is not its to remove.
+//
+// # An ordinal two servers carry
+//
+// held is a map, so a second server claiming an ordinal used to overwrite the
+// first and the loser vanished from this rule entirely: never surplus, because
+// the surplus loop walks held and the loser is not in it; never recreated,
+// because the ordinal is taken; and still running its pod against the claim
+// named after its own name. Which of the two survived in held was decided by
+// the order of in.Views, so the answer could change between passes.
+//
+// Such an ordinal is now collected into Conflicts and excluded from all three
+// nominations below. Excluding it is the point rather than a side effect. The
+// deletes all read held[ordinal], so acting on a duplicated ordinal means
+// deleting whichever of the two the map happened to keep -- an arbitrary
+// choice between two worlds, and an irreversible one. Refusing leaves the
+// group oversized or stale until a person resolves it, which is the safe half
+// of that trade and the one this repository takes everywhere else.
+//
+// Creation is deliberately not excluded, because it is not affected: the
+// create loop asks only whether an ordinal is taken, and a duplicated one is
+// taken twice over.
 func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	held := make(map[int32]string, len(in.Views))
+	// carrying is only built for the ordinals that turn out to be duplicated,
+	// which is why it is filled from held rather than in place of it: the
+	// ordinary case allocates nothing beyond the map header.
+	carrying := map[int32][]string{}
 	for _, v := range in.Views {
 		if v.Ordinal == nil {
+			continue
+		}
+		if first, taken := held[*v.Ordinal]; taken {
+			if len(carrying[*v.Ordinal]) == 0 {
+				carrying[*v.Ordinal] = []string{first}
+			}
+			carrying[*v.Ordinal] = append(carrying[*v.Ordinal], v.Name)
 			continue
 		}
 		held[*v.Ordinal] = v.Name
 	}
 
 	var decision SizeDecision
+	if len(carrying) > 0 {
+		decision.Conflicts = ordinalConflicts(carrying)
+	}
 	for ordinal := int32(0); ordinal < in.Replicas; ordinal++ {
 		if _, taken := held[ordinal]; taken {
 			continue
@@ -134,6 +169,9 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 
 	surplus := make([]int32, 0, len(held))
 	for ordinal := range held {
+		if carrying[ordinal] != nil {
+			continue
+		}
 		if ordinal >= in.Replicas {
 			surplus = append(surplus, ordinal)
 		}
@@ -166,7 +204,7 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 
 	stale := make([]int32, 0, len(held))
 	for ordinal, name := range held {
-		if ordinal >= in.Replicas {
+		if ordinal >= in.Replicas || carrying[ordinal] != nil {
 			continue
 		}
 		v := viewByName(in.Views, name)
@@ -191,7 +229,7 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	// never ask for this at all.
 	resizing := make([]int32, 0, len(held))
 	for ordinal, name := range held {
-		if ordinal >= in.Replicas {
+		if ordinal >= in.Replicas || carrying[ordinal] != nil {
 			continue
 		}
 		if viewByName(in.Views, name).ResizePending {
@@ -204,6 +242,22 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 		decision.DeleteReason = "ResizePending"
 	}
 	return decision
+}
+
+// ordinalConflicts turns the duplicate map into the sorted list a caller can
+// put in a message. Sorted by ordinal, and each ordinal's names sorted too, so
+// the condition a group publishes does not change its wording between passes
+// over a state that has not changed -- a condition whose message churns is one
+// whose LastTransitionTime stops meaning anything.
+func ordinalConflicts(carrying map[int32][]string) []OrdinalConflict {
+	out := make([]OrdinalConflict, 0, len(carrying))
+	for ordinal, names := range carrying {
+		sorted := append([]string(nil), names...)
+		sort.Strings(sorted)
+		out = append(out, OrdinalConflict{Ordinal: ordinal, Servers: sorted})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Ordinal < out[j].Ordinal })
+	return out
 }
 
 // takedownInFlight is Gate A: does any ordinal-bearing view of the group

@@ -122,6 +122,19 @@ type SizeDecision struct {
 	// DeleteReason is the event reason for Delete. The contract is one reason
 	// for the whole batch, not one per name.
 	DeleteReason string
+	// Conflicts names the ordinals more than one server carries. Only the
+	// persistent rule fills it -- an ephemeral group has no ordinals -- and it
+	// is a report rather than an instruction: the operator cannot choose
+	// between two worlds, so DecidePersistentSize refuses to act on such an
+	// ordinal and this is what says so on the group.
+	Conflicts []OrdinalConflict
+}
+
+// OrdinalConflict is one ordinal and every server carrying it.
+type OrdinalConflict struct {
+	Ordinal int32
+	// Servers are the colliding names, sorted. At least two.
+	Servers []string
 }
 
 // provisionalCapacity is one server's contribution to the figure the scale-up

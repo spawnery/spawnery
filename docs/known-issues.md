@@ -629,69 +629,29 @@ before it can fail in turn and be counted as the next failure. Each gap is
 therefore close to `3600 + 300` = 3900 seconds, about sixty-five minutes, not
 an even hour. `Degraded` therefore does not turn true until roughly **five
 and a half hours** after the first failure — five gaps of about sixty-five
-minutes each — not six. **That figure holds at `replicas: 1`, and is a floor
-with no ceiling above it; the next entry is why.** An operator watching for a
-stall in that window should not wait for `Degraded` or for `BackingOff: True`: both
-`status.consecutiveFailures` and `status.lastFailureAt` are written from the
-very first counted failure, for a group of either type — that counting is
-unconditional in `Reconcile`, not behind `if group.IsEphemeral()` the way the
-two conditions used to be before this milestone's own review lifted them out.
-`kubectl get servergroup <name> -o jsonpath='{.status.consecutiveFailures}
-{.status.lastFailureAt}'` says something true from the first failure onward,
-hours before either condition would — at `replicas: 1`. At two or more the two
-fields part company, and the next entry says which of them still tells the
-truth.
+minutes each — not six.
 
-**A healthy sibling resets a broken ordinal's failure streak, so with two or
-more ordinals `Degraded` may never arrive.** `CountFailures`
-(`internal/controller/backoff.go`) takes the newest `ReadySince` across the
-group's servers of the current generation — the set `ofGeneration` narrows the
-views to before handing them over — and, when it is newer than the last counted
-failure, restarts the count at zero. For an ephemeral group that is the right rule, and its own
-doc comment says why: those servers are interchangeable, so one of them
-becoming ready is evidence about the group. A persistent group's are not
-interchangeable — the world is on one claim and no other server can serve it.
+The figure holds at any `replicas`, which is newer than it looks: a healthy
+sibling used to reset a broken ordinal's streak, so at two or more ordinals
+`Degraded` could be delayed without bound or never arrive at all.
+`CountFailures` takes `requiredOrdinals` now and, for a persistent group,
+breaks the streak only when *every* required ordinal has a ready server. What
+is left is the lateness itself, which is arithmetic rather than a defect.
 
-So with `replicas: 2`: `survival-0`'s claim never binds and its server fails
-roughly hourly, while `survival-1` runs normally and loses its readiness probe
-once — a container restart, a slow tick, a node blip. That one recovery stamps
-a `ReadySince` newer than `survival-0`'s last counted failure; the streak goes
-back to zero, the six-failure give-up starts over, and the condition that
-exists to name this stall need never turn true. There is no bound on how long
-that can go on, because there is no bound on how often a healthy server may
-blip.
-
-Recorded rather than fixed in 5a, and the reasoning is on the record: a
-per-ordinal streak changes what `BackoffInputs` means for a group of either
-kind and deserves a design of its own rather than being appended to a milestone
-whose scope is "persistent groups exist", and what it costs is a late or absent
-condition rather than lost data or a disconnected player. 5b takes it, as
-either a per-ordinal streak or a reset restricted to the ordinal that failed.
-
-Until then the two status fields answer differently, and the difference is
-worth knowing before you read either. `status.consecutiveFailures` **is** what
-the sibling resets: `CountFailures` sets the count to zero when any view's
-`ReadySince` is newer than the last counted failure, so for a multi-ordinal
-group it can read 0 or 1 while an ordinal has been stalled for a day.
-`status.lastFailureAt` survives the reset and keeps advancing —
-`CountFailures` returns its watermark unchanged on that path, and the write is
-guarded against zeroing it, deliberately: the comment beside it says clearing
-it on a reset "would be the opposite of durable". So a `lastFailureAt` far in
-the past beside a low `consecutiveFailures` is itself the signature of this
-issue rather than a sign that nothing is wrong.
-
-What does not lie at all is the `Server` objects:
+An operator watching for a stall in that window should not wait for `Degraded`
+or for `BackingOff: True`: both `status.consecutiveFailures` and
+`status.lastFailureAt` are written from the very first counted failure, for a
+group of either type — that counting is unconditional in `Reconcile`, not
+behind `if group.IsEphemeral()` the way the two conditions used to be before
+this milestone's own review lifted them out.
 
 ```bash
-kubectl get server -n <namespace> -l spawnery.cloud/group=<group> \
-  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,FAILED:.status.failedAt
+kubectl get servergroup <name> \
+  -o jsonpath='{.status.consecutiveFailures} {.status.lastFailureAt}'
 ```
 
-A persistent ordinal sitting in `Failed`, or one that keeps reappearing with a
-newer `.status.failedAt` and never reaching `Ready`, is what `Degraded` would
-have told you about. The one test that exercises the give-up
-(`TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp`) runs a single ordinal,
-which is the one configuration in which none of this can show.
+That says something true from the first failure onward, hours before either
+condition would.
 
 **Lowering `replicas` nominates the top ordinal whoever is on it.** The two
 sizing rules do not agree about this, and they share one delete path.
@@ -718,30 +678,6 @@ group has a different server to delete instead, and a persistent group does
 not. Neither direction is free. If you need the players off first, empty the
 ordinal before lowering `replicas`, or raise `spec.drain.timeoutSeconds` on the
 group beforehand so the drain has time to finish.
-
-**Two servers carrying the same `spec.ordinal` are invisible in both
-directions.** `DecidePersistentSize` builds its `held` map as
-`held[*v.Ordinal] = v.Name`, which is last-write-wins over the list order. If
-two `Server` objects of the group carry the same `spec.ordinal` — hand-created,
-restored from a backup, or copied — one of them wins the map entry and the
-other exists as far as the rule is concerned only in that it is never named.
-It is never surplus, because the surplus loop walks `held` and the loser is not
-in it; it is never recreated, because the ordinal is taken; and it goes on
-running its own pod, mounting the claim named after *its own* name. If that
-name is not `<group>-<ordinal>` the claim is a second world nobody is looking
-at; if it is, two pods contend for one `ReadWriteOnce` volume, which hangs on
-the volume rather than failing cleanly. It is the mirror of the case
-`ConditionOrdinalBlocked` reports — there an object holds the *name* without
-the ordinal; here it holds the *ordinal* without being reachable, which nothing
-reports. The tell is the same shape:
-
-```bash
-kubectl get server -n <namespace> -l spawnery.cloud/group=<group> \
-  -o custom-columns=NAME:.metadata.name,ORDINAL:.spec.ordinal
-```
-
-Two rows with one ordinal between them is the state; nothing on the group's
-conditions, events or logs says so.
 
 **An ordinal waits, visibly, for a pod that a dead node will never finish
 terminating.** As of the branch review closing this milestone, the Server
@@ -844,8 +780,8 @@ takedown proceeds. An ordinal that can never become `Ready` therefore holds
 the whole group at its current spec forever; nothing times this wait out.
 Inherited from `StatefulSet`'s shape knowingly, and tolerable only because the
 stall is reported: `ConditionDegraded` publishes for a persistent group since
-5a, and 5b's failure-streak fix (below) is what makes it actually arrive
-rather than being reset forever by a healthy sibling.
+5a, and 5b's failure-streak fix is what makes it actually arrive rather than
+being reset forever by a healthy sibling.
 
 **A spec edit made during the upgrade window can be missed on an ordinal that
 is adopted rather than replaced.** Every server that predates 5b carries an

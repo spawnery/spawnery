@@ -21,6 +21,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -812,6 +813,13 @@ func (r *ServerGroupReconciler) size(
 			r.Expectations.expectCreated(key, name)
 		}
 	}
+	// After the creates, and deliberately so: reportSquatter may have set this
+	// same condition while they ran, and a duplicated ordinal outranks a name
+	// somebody else is holding. A squatter is a create that has not happened;
+	// a duplicate is two pods that may already be contending for one
+	// ReadWriteOnce volume, and it is the one an operator has to see first.
+	reportDuplicateOrdinals(group, decision.Conflicts)
+
 	if int32(len(decision.Delete)) < decision.Surplus {
 		logger.Info("fewer free servers than the surplus, trying again later",
 			"group", group.Name, "surplus", decision.Surplus, "free", len(decision.Delete))
@@ -1288,18 +1296,52 @@ func (r *ServerGroupReconciler) reportSquatter(
 	return nil
 }
 
+// reportDuplicateOrdinals publishes what DecidePersistentSize refused to act
+// on, and does nothing when there is nothing to report -- so it never
+// overwrites clearOrdinalBlocked's False, and never a squatter's True either,
+// on a group that has no duplicate.
+//
+// The message names every colliding server, because the remedy is a choice
+// between them and a person cannot make it without their names. It does not
+// suggest which to delete: the operator has no way to tell which claim holds
+// the world anybody cares about, and guessing on a group's status would be
+// worse than saying nothing.
+func reportDuplicateOrdinals(group *spawneryv1alpha1.ServerGroup, conflicts []OrdinalConflict) {
+	if len(conflicts) == 0 {
+		return
+	}
+	parts := make([]string, 0, len(conflicts))
+	for _, c := range conflicts {
+		parts = append(parts, fmt.Sprintf("%d (%s)", c.Ordinal, strings.Join(c.Servers, ", ")))
+	}
+	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+		Type:   spawneryv1alpha1.ConditionOrdinalBlocked,
+		Status: metav1.ConditionTrue,
+		Reason: spawneryv1alpha1.ReasonOrdinalDuplicated,
+		Message: fmt.Sprintf(
+			"more than one server carries the same spec.ordinal: %s. This group will not remove, "+
+				"replace or resize those ordinals until one server per ordinal remains, because it "+
+				"cannot tell which of them holds the world. Check each server's claim before deleting "+
+				"either.",
+			strings.Join(parts, "; ")),
+	})
+}
+
 // clearOrdinalBlocked publishes the condition's False side.
 //
-// Called on every pass before the creates, so the True set by reportSquatter is
-// this pass's own finding rather than one that latched. A condition that can
-// only go True is a condition that stops meaning anything the first time it
-// fires.
+// Called on every pass before the creates, so a True set by reportSquatter or
+// reportDuplicateOrdinals is this pass's own finding rather than one that
+// latched. A condition that can only go True is a condition that stops meaning
+// anything the first time it fires.
+//
+// Its message covers both of the condition's occasions, because a reader who
+// sees the False side has no way to know which of them it is the negation of.
 func clearOrdinalBlocked(group *spawneryv1alpha1.ServerGroup) {
 	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionOrdinalBlocked,
 		Status:  metav1.ConditionFalse,
 		Reason:  spawneryv1alpha1.ReasonOrdinalsAvailable,
-		Message: "no ordinal's name is held by an object outside this group",
+		Message: "every ordinal is free to create and none is carried by two servers",
 	})
 }
 

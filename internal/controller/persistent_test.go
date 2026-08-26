@@ -468,3 +468,124 @@ func TestOrdinalOf(t *testing.T) {
 		})
 	}
 }
+
+// TestADuplicatedOrdinalIsReportedAndNeverActedOn covers the state
+// DecidePersistentSize used to be unable to name. held is keyed by ordinal, so
+// a second server carrying one overwrote the first, and the loser was never
+// surplus, never recreated, and never mentioned anywhere -- while its pod went
+// on mounting the claim named after its own name.
+func TestADuplicatedOrdinalIsReportedAndNeverActedOn(t *testing.T) {
+	// Both orderings, because the defect was decided by list order: whichever
+	// server came second won the map entry. A fix that reported the conflict
+	// but still nominated from held would pass one of these and fail the
+	// other, which is precisely the bug wearing a condition.
+	for _, order := range [][]ServerView{
+		{ordinalView("survival-2", 2, phase.Ready), ordinalView("restored-copy", 2, phase.Ready)},
+		{ordinalView("restored-copy", 2, phase.Ready), ordinalView("survival-2", 2, phase.Ready)},
+	} {
+		t.Run("surplus is refused while an ordinal is doubled", func(t *testing.T) {
+			views := append([]ServerView{
+				ordinalView("survival-0", 0, phase.Ready),
+				ordinalView("survival-1", 1, phase.Ready),
+			}, order...)
+			// Replicas 2 makes ordinal 2 surplus, which is the nomination that
+			// would otherwise delete one of the two arbitrarily.
+			got := DecidePersistentSize(PersistentInputs{Group: "survival", Replicas: 2, Views: views})
+
+			if len(got.Delete) != 0 {
+				t.Errorf("Delete = %v, want none: the rule chose between two worlds", got.Delete)
+			}
+			want := []OrdinalConflict{{Ordinal: 2, Servers: []string{"restored-copy", "survival-2"}}}
+			if !reflect.DeepEqual(got.Conflicts, want) {
+				t.Errorf("Conflicts = %+v, want %+v", got.Conflicts, want)
+			}
+		})
+	}
+}
+
+// TestADuplicatedOrdinalDoesNotStopTheRestOfTheGroup keeps the refusal narrow.
+// Refusing everything would turn one hand-created object into a group-wide
+// stall, which is a worse failure than the one being prevented.
+func TestADuplicatedOrdinalDoesNotStopTheRestOfTheGroup(t *testing.T) {
+	// Ordinal 1 is doubled; ordinal 3 is missing and ordinal 4 is surplus.
+	got := DecidePersistentSize(PersistentInputs{
+		Group: "survival", Replicas: 4,
+		Views: []ServerView{
+			ordinalView("survival-0", 0, phase.Ready),
+			ordinalView("survival-1", 1, phase.Ready),
+			ordinalView("copy-of-1", 1, phase.Ready),
+			ordinalView("survival-2", 2, phase.Ready),
+			ordinalView("survival-4", 4, phase.Ready),
+		},
+	})
+
+	// The missing ordinal is still created: the create loop asks only whether
+	// an ordinal is taken, and a doubled one is taken twice over.
+	if !equalOrdinals(got.CreateOrdinals, []int32{3}) {
+		t.Errorf("CreateOrdinals = %v, want [3]", got.CreateOrdinals)
+	}
+	// And the surplus that is *not* doubled is still nominated.
+	if len(got.Delete) != 1 || got.Delete[0] != "survival-4" {
+		t.Errorf("Delete = %v, want [survival-4]", got.Delete)
+	}
+	if len(got.Conflicts) != 1 || got.Conflicts[0].Ordinal != 1 {
+		t.Errorf("Conflicts = %+v, want ordinal 1", got.Conflicts)
+	}
+}
+
+// TestAStaleDuplicatedOrdinalIsNotReplaced is the second nomination path, and
+// the one with the sharpest edge: replacing a stale ordinal deletes its server
+// so a new one can take the claim. Doing that to the wrong half of a duplicate
+// pair takes down a world that was never stale.
+func TestAStaleDuplicatedOrdinalIsNotReplaced(t *testing.T) {
+	got := DecidePersistentSize(PersistentInputs{
+		Group: "survival", Replicas: 2, PodHash: "new",
+		Views: []ServerView{
+			ordinalViewWithHash("survival-0", 0, phase.Ready, "new"),
+			ordinalViewWithHash("survival-1", 1, phase.Ready, "old"),
+			ordinalViewWithHash("copy-of-1", 1, phase.Ready, "old"),
+		},
+	})
+
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: a stale ordinal two servers carry is not replaceable", got.Delete)
+	}
+	if len(got.Conflicts) != 1 {
+		t.Fatalf("Conflicts = %+v, want one", got.Conflicts)
+	}
+}
+
+// TestThreeServersOnOneOrdinalAreAllNamed guards the collection rather than
+// the rule: a message that named only the first two would send somebody to
+// delete "the other one" when there were two others.
+func TestThreeServersOnOneOrdinalAreAllNamed(t *testing.T) {
+	got := DecidePersistentSize(PersistentInputs{
+		Group: "survival", Replicas: 1,
+		Views: []ServerView{
+			ordinalView("survival-0", 0, phase.Ready),
+			ordinalView("b-copy", 0, phase.Ready),
+			ordinalView("a-copy", 0, phase.Ready),
+		},
+	})
+	want := []OrdinalConflict{{Ordinal: 0, Servers: []string{"a-copy", "b-copy", "survival-0"}}}
+	if !reflect.DeepEqual(got.Conflicts, want) {
+		t.Errorf("Conflicts = %+v, want %+v -- sorted, so the message does not churn", got.Conflicts, want)
+	}
+}
+
+// TestNoConflictsWhenEveryOrdinalIsSingle is the negative: the field stays nil
+// on the ordinary path, so a caller can use its emptiness as the question.
+func TestNoConflictsWhenEveryOrdinalIsSingle(t *testing.T) {
+	got := DecidePersistentSize(PersistentInputs{
+		Group: "survival", Replicas: 2,
+		Views: []ServerView{
+			ordinalView("survival-0", 0, phase.Ready),
+			ordinalView("survival-1", 1, phase.Ready),
+			// A view with no ordinal at all shares no identity with anything.
+			{Name: "stray", Phase: phase.Ready},
+		},
+	})
+	if got.Conflicts != nil {
+		t.Errorf("Conflicts = %+v, want nil", got.Conflicts)
+	}
+}

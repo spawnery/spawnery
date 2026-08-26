@@ -4706,3 +4706,92 @@ func TestATaintedNodeCondemnsOnlyWhenItsKeyIsConfigured(t *testing.T) {
 		})
 	}
 }
+
+// TestADuplicatedOrdinalReachesTheGroupsConditions is the half of the fix that
+// a rule test cannot show: that the refusal is visible. The rule declining to
+// nominate is only half an answer -- a group that quietly stopped shrinking
+// would look exactly like one that had nothing to shrink.
+func TestADuplicatedOrdinalReachesTheGroupsConditions(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 2)
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	// A second server carrying ordinal 1, under a name this operator would
+	// never choose -- restored from a backup, or copied. It is a member of the
+	// group by label, which is what puts it in the views.
+	copied := f.server("survival-1").DeepCopy()
+	dup := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "survival-restored", Namespace: f.ns, Labels: copied.Labels,
+		},
+		Spec: copied.Spec,
+	}
+	if err := f.c.Create(f.ctx, dup); err != nil {
+		t.Fatalf("create the duplicate: %v", err)
+	}
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "survival", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	blocked := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionOrdinalBlocked)
+	if blocked == nil || blocked.Status != metav1.ConditionTrue {
+		t.Fatalf("OrdinalBlocked = %+v, want True", blocked)
+	}
+	if blocked.Reason != spawneryv1alpha1.ReasonOrdinalDuplicated {
+		t.Errorf("reason = %q, want %q", blocked.Reason, spawneryv1alpha1.ReasonOrdinalDuplicated)
+	}
+	// Both names, because the remedy is a choice between them.
+	for _, name := range []string{"survival-1", "survival-restored"} {
+		if !strings.Contains(blocked.Message, name) {
+			t.Errorf("message %q does not name %s", blocked.Message, name)
+		}
+	}
+
+	// And neither server was removed. This is the part that would have cost a
+	// world: with replicas at 2 nothing is surplus here, but the pair is
+	// exactly what the stale and resize paths would also have nominated from.
+	names := f.serverNamesOfGroup(t, "survival")
+	if len(names) != 3 {
+		t.Errorf("servers = %v, want all three left standing", names)
+	}
+}
+
+// TestTheOrdinalConditionClearsWhenTheDuplicateGoes pins the other side. A
+// condition that only goes True stops meaning anything the first time it
+// fires, which is why clearOrdinalBlocked runs every pass.
+func TestTheOrdinalConditionClearsWhenTheDuplicateGoes(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 2)
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	copied := f.server("survival-1").DeepCopy()
+	dup := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "survival-restored", Namespace: f.ns, Labels: copied.Labels,
+		},
+		Spec: copied.Spec,
+	}
+	if err := f.c.Create(f.ctx, dup); err != nil {
+		t.Fatalf("create the duplicate: %v", err)
+	}
+	f.reconcilePersistentGroup(t, r, "survival")
+	if err := f.c.Delete(f.ctx, dup); err != nil {
+		t.Fatalf("delete the duplicate: %v", err)
+	}
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "survival", Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	blocked := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionOrdinalBlocked)
+	if blocked == nil || blocked.Status != metav1.ConditionFalse {
+		t.Errorf("OrdinalBlocked = %+v, want False once the duplicate is gone", blocked)
+	}
+}
