@@ -40,7 +40,6 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
-	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/render"
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -2684,12 +2683,23 @@ func TestProxyOccupiedForBudget(t *testing.T) {
 		},
 		{
 			"a pod the registry has never seen does not count, once the grace has passed",
-			agent.Snapshot{Players: 0, PlayersStale: true, StreamDownFor: phase.StreamDownGrace},
+			agent.Snapshot{Players: 0, PlayersStale: true, StreamDownFor: budgetReconnectGrace},
 			false,
 		},
 		{
 			"a pod the registry has never seen counts while the operator is still coming up",
-			agent.Snapshot{Players: 0, PlayersStale: true, StreamDownFor: phase.StreamDownGrace - time.Second},
+			agent.Snapshot{Players: 0, PlayersStale: true, StreamDownFor: budgetReconnectGrace - time.Second},
+			true,
+		},
+		{
+			// The row the measurement added. A Paper agent reconnecting after
+			// a 45-second absence was timed greeting at 12.5 to 17.8 seconds,
+			// every one of four at or past the 15 seconds this used to allow
+			// -- so the fleet lost its budget protection while it was still
+			// dialling back in, and minAvailable was sized without pods that
+			// were Ready and full of players.
+			"a pod still reconnecting at eighteen seconds is protected, which fifteen did not do",
+			agent.Snapshot{Players: 0, PlayersStale: true, StreamDownFor: 18 * time.Second},
 			true,
 		},
 	}
@@ -2709,11 +2719,13 @@ func TestProxyOccupiedForBudget(t *testing.T) {
 // group with one crash-looping proxy refused every eviction of the occupied
 // proxies beside it, with no deadline anywhere to end that.
 //
-// The clock has to move past phase.StreamDownGrace, and that is the point
+// The clock has to move past budgetReconnectGrace, and that is the point
 // rather than a fixture detail: newFixture starts the registry at the same
 // instant it starts the clock, so at the top of any test built on newFixture
 // every unknown pod is inside the post-restart grace and reads as occupied on
-// purpose.
+// purpose. That constant is the budget's own and not phase.StreamDownGrace,
+// which answers a different question about a known server; its comment carries
+// the measurement that separated them.
 func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2748,7 +2760,7 @@ func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
 	// Past the grace the silent proxy stops being paid for. The reporting one
 	// has to be kept fresh, or it would go stale on the same advance and the
 	// count would stay at 2 for a reason that has nothing to do with this.
-	f.clock.Advance(phase.StreamDownGrace + time.Second)
+	f.clock.Advance(budgetReconnectGrace + time.Second)
 	f.reportProxyPlayers(t, pods[0], 4)
 	f.reconcileProxyGroup(r, "gateway")
 

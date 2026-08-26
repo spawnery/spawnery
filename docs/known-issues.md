@@ -187,27 +187,26 @@ touching `spec.unschedulable`, unless `--cordon-node-before-terminating` is on,
 and that flag defaults to off. Karpenter was never re-checked and is not
 claimed here either way.
 
-**The 15-second occupancy grace is not derived from a measured reconnect
-distribution, and a proxy that is genuinely reconnecting can lose its
-protection before it answers.** `proxyOccupiedForBudget`
-(`internal/controller/proxygroup_controller.go`) argues the bound in full
-where it lives: it sits between reporting a live, player-carrying fleet as
-empty the instant the operator restarts, and letting a proxy whose agent never
-arrives wedge its group's evictions forever. What the comment cannot say is
-that 15 seconds was chosen to sit between those two rather than derived from
-anything, and `SessionLoop`'s backoff cap is 30 seconds — so a proxy still
-dialling back in can pass the fifteenth second without having had a chance to
-report, and after that nothing tells its group's budget apart from the pod
-that never will.
+**One reconnect measured at 85 s is still unexplained.** The occupancy grace
+the budget reads is derived now rather than chosen —
+`budgetReconnectGrace` is 45 s, from `SessionLoop`'s own 30 s backoff cap plus
+its jitter plus one report interval, and the measurement it replaces a guess
+with is beside the constant: at a 45-second operator absence a Paper agent
+greeted again at 12.5, 17.8, 12.5 and 15.0 seconds, every one of the four at or
+past the 15 seconds the old shared grace allowed.
 
-One observation stands unexplained beside it: a reconnect measured at 85 s,
-more than the 30 s cap plus a resync accounts for. The likeliest reading is
-`SessionLoop`'s own class comment — the channel has no keepalive, no idle
-timeout and no call deadlines, so a partitioned agent learns its stream is
-dead only when a send fails, which for a Paper agent is its next player-count
-report, and its backoff clock starts well after the operator's did. That is
-reasoning, not measurement. Whoever narrows the bound should isolate the two
-distributions first: the grace is sized against the second one.
+What that does not account for is an 85-second reconnect observed during
+milestone 4c-2, which is more than the cap plus a resync explains and more than
+anything measured since. The likeliest reading is `SessionLoop`'s own class
+comment — the channel has no keepalive, no idle timeout and no call deadlines,
+so a partitioned agent learns its stream is dead only when a send fails, which
+for a Paper agent is its next player-count report, and its backoff clock
+therefore starts well after the operator's did. That is reasoning and not
+measurement: the runs above took the operator away rather than partitioning it,
+so they exercise the agent noticing a closed socket and not the agent noticing
+silence. **Nobody has measured the partition case**, and a grace sized against
+the wrong one of the two distributions is the shape of mistake this entry
+already caught once.
 
 **A `-drain-taint` key that is simply absent from the cluster cannot be told
 from a typo.** The flag is validated as far as it can be: since 2026-08-24 it

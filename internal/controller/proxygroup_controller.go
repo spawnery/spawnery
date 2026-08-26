@@ -675,16 +675,50 @@ func proxyPlayerNote(snap agent.Snapshot) string {
 // kubectl drain will be retrying evictions throughout it. Registry.Lookup
 // already answers this — for an unknown pod it reports StreamDownFor as the
 // time since the operator started, which agent.Snapshot's own field comment
-// describes as "a grace period to reconnect after an operator restart", and
-// phase.StreamDownGrace is the length the server side already reads it at.
+// describes as "a grace period to reconnect after an operator restart".
+// budgetReconnectGrace below is the length, and its comment carries the
+// measurement it comes from.
 // Inside that window an unknown pod is treated as occupied, which is what
 // protects the whole fleet while its agents dial back in. Outside it, an
-// unknown pod is one whose agent has failed to appear for longer than the
-// grace the server side already gives a stream that has gone quiet, and the
-// group stops paying for it — deliberately, because that is the crash-looping
+// unknown pod is one whose agent has failed to appear for longer than an
+// agent's own worst-case reconnect, and the group stops paying for it — deliberately, because that is the crash-looping
 // pod the wedge above is about.
+// budgetReconnectGrace is how long an unknown pod is treated as occupied, and
+// it is derived from the agents rather than chosen to sit between two harms.
+//
+// It used to be phase.StreamDownGrace, 15 seconds, shared with the server
+// side's "a Ready server's stream has gone quiet" question. Sharing was the
+// mistake: that number answers how long a *known* server may go silent before
+// it is unplayable, and this one answers how long a *whole fleet* needs to
+// dial back in after the operator restarted. Nothing makes those the same
+// length, and measurement says they are not.
+//
+// Measured 2026-08-26, a Paper agent against a stub operator taken away and
+// brought back, timing from the stub's return to the agent's greeting:
+//
+//	3 s outage    0.26  3.82  3.83  4.08  0.26  4.08  0.26  4.08
+//	15 s outage   0.26  16.31  14.27  1.03
+//	45 s outage   13.25  17.84  12.49  15.04
+//
+// At a 45-second absence every one of the four landed at or past fifteen
+// seconds. That is not an edge: SessionLoop.backoffMillis is 1 s doubling to a
+// 30 s cap with ±10 % jitter, so once an agent has retried a few times its
+// next attempt lands wherever that timer sits, and the observed times cluster
+// exactly there. A 15-second grace therefore expired while the fleet it exists
+// to protect was still reconnecting -- and an unknown pod outside the grace
+// reads as unoccupied, so minAvailable was sized without pods that were Ready
+// and full of players, with kubectl drain retrying evictions throughout.
+//
+// 45 seconds is the agent's own worst case and not a round number: a 30 s
+// backoff cap, plus its jitter, plus one report interval before the agent has
+// said anything about players. What a longer grace costs is bounded and small:
+// a proxy whose agent never appears holds its group's minAvailable up for 45
+// seconds after the operator starts rather than 15, and then stops -- the
+// crash-loop wedge this rule exists to avoid is unchanged, only later.
+const budgetReconnectGrace = 45 * time.Second
+
 func proxyOccupiedForBudget(snap agent.Snapshot) bool {
-	if !snap.Known && snap.StreamDownFor >= phase.StreamDownGrace {
+	if !snap.Known && snap.StreamDownFor >= budgetReconnectGrace {
 		return false
 	}
 	return proxyOccupied(snap)
