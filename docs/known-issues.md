@@ -42,24 +42,6 @@ What that leaves is the half a person still does: noticing that a build exists
 and deciding to take it. The automated image pipeline is project 3 in the main
 design and has never been scheduled.
 
-## From milestone 2c (the Paper agent)
-
-**`hack/agent-test.sh`'s six phases are near-verbatim copies of one another,
-and whether that is worth paying off needs a decision.** Each phase starts its
-own stub, its own container and its own volume, waits on its own events and
-tears its own scaffolding down, and the differences between them — which flags
-the stub gets, which assertions run — have to be found by reading two phases
-side by side. There were three when this was first written and there are six
-now, so the cost has doubled rather than been paid off.
-
-It is not a defect and nothing it proves is wrong; every assertion in it is
-sound and the script is the only thing that proves the agents work at all.
-What it is is a standing tax on adding a seventh phase, weighed against the
-risk of refactoring the one harness that stands between a broken agent and a
-cluster. Parameterising the phases would also hide the differences this entry
-complains are hard to see, which is the argument against — so this stays open
-as a judgement about where to spend effort rather than as something to fix.
-
 ## From milestone 3c (the Velocity agent)
 
 **A proxy that cannot bind its ready port stays `Pending` with the reason

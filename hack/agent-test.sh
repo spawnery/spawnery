@@ -147,38 +147,75 @@ printf 'test-forwarding-secret\n' >"$WORK/config/forwarding.secret"
 chmod 0755 "$WORK/config"
 chmod 0644 "$WORK/config/config.yaml" "$WORK/config/forwarding.secret"
 
+# start_stub <events-file> <log-file> <what> [stubop flags...]
+#
+# Starts a stub operator in the background, waits a moment, and stops the run
+# if it did not stay up -- printing its log rather than leaving the next wait
+# to time out against a stub that is not there.
+#
+# Every phase used to write these ten lines out again. What differed between
+# them was the flags and nothing else, so the flags are what this takes: the
+# thing each phase varies is now on one line at the call site instead of being
+# found by reading two phases side by side. The scaffolding is shared; no
+# assertion is.
+#
+# It echoes the PID rather than setting a named variable, so a caller keeps its
+# own STUBn_PID and the trap at the top of this file keeps working unchanged.
+start_stub() {
+	local events="$1" log="$2" what="$3"
+	shift 3
+	"$STUBOP" "$@" >"$events" 2>"$log" &
+	local pid=$!
+	sleep 1
+	if ! kill -0 "$pid" 2>/dev/null; then
+		echo "the $what stub operator did not stay up:" >&2
+		cat "$log" >&2
+		exit 1
+	fi
+	printf '%s\n' "$pid"
+}
+
+# start_agent <name> <volume> <agent-dir> <config-dir> <endpoint> <image> [-e VAR=value...]
+#
+# Creates the volume and starts the container, with the sandbox every phase
+# applies: a read-only root, an exec tmpfs for /tmp, no capabilities, no new
+# privileges, and a memory limit.
+#
+# The limit is not decoration. Both entrypoints read the cgroup and drop
+# AlwaysPreTouch when nothing bounds the container, so a phase that forgot
+# --memory would silently exercise a different JVM configuration than a pod
+# does -- and would say so only in a log line nobody reads.
+#
 # host-gateway is understood by both Docker and Podman, so the container
-# reaches the stub the same way under either runtime, and the SAN below is the
-# name it dials.
-"$STUBOP" \
+# reaches the stub the same way under either runtime, and the SAN each stub is
+# given is the name the endpoint below dials.
+start_agent() {
+	local name="$1" volume="$2" agent_dir="$3" config_dir="$4" endpoint="$5" image="$6"
+	shift 6
+	"$CONTAINER" volume create "$volume" >/dev/null
+	"$CONTAINER" run -d --name "$name" \
+		--add-host stubop:host-gateway \
+		--read-only --tmpfs /tmp:rw,exec,size=256m \
+		--cap-drop ALL \
+		--security-opt no-new-privileges \
+		--memory 2g \
+		-v "$volume:/data" \
+		-v "$agent_dir:/var/run/spawnery:ro" \
+		-v "$config_dir:/etc/spawnery:ro" \
+		-e SPAWNERY_OPERATOR_ENDPOINT="$endpoint" \
+		"$@" \
+		"$image" >/dev/null
+}
+
+STUB_PID="$(start_stub "$EVENTS" "$WORK/stub.log" "passive" \
 	--dir "$WORK/agent" \
 	--san stubop \
 	--listen ":19443" \
 	--report-interval 1 \
 	--renew-after "$RENEW_AFTER" \
-	--hard-deadline 20 \
-	>"$EVENTS" 2>"$WORK/stub.log" &
-STUB_PID=$!
+	--hard-deadline 20)"
 
-sleep 1
-if ! kill -0 "$STUB_PID" 2>/dev/null; then
-	echo "the stub operator did not stay up:" >&2
-	cat "$WORK/stub.log" >&2
-	exit 1
-fi
-
-"$CONTAINER" volume create "$VOLUME" >/dev/null
-"$CONTAINER" run -d --name "$NAME" \
-	--add-host stubop:host-gateway \
-	--read-only --tmpfs /tmp:rw,exec,size=256m \
-	--cap-drop ALL \
-	--security-opt no-new-privileges \
-	--memory 2g \
-	-v "$VOLUME:/data" \
-	-v "$WORK/agent:/var/run/spawnery:ro" \
-	-v "$WORK/config:/etc/spawnery:ro" \
-	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19443 \
-	"$IMAGE" >/dev/null
+start_agent "$NAME" "$VOLUME" "$WORK/agent" "$WORK/config" "stubop:19443" "$IMAGE"
 
 # A dormant agent is silent by design, and silence is also what a hung one
 # looks like from here. The agent logs its reason on the way to dormancy, so
@@ -483,36 +520,16 @@ STUB_PID=""
 
 mkdir -p "$WORK/agent-supersede"
 chmod 0755 "$WORK/agent-supersede"
-"$STUBOP" \
+STUB2_PID="$(start_stub "$EVENTS2" "$WORK/stub2.log" "superseding" \
 	--dir "$WORK/agent-supersede" \
 	--san stubop \
 	--listen ":19444" \
 	--report-interval 1 \
 	--renew-after "$RENEW_AFTER" \
 	--hard-deadline 20 \
-	--supersede \
-	>"$EVENTS2" 2>"$WORK/stub2.log" &
-STUB2_PID=$!
+	--supersede)"
 
-sleep 1
-if ! kill -0 "$STUB2_PID" 2>/dev/null; then
-	echo "the superseding stub operator did not stay up:" >&2
-	cat "$WORK/stub2.log" >&2
-	exit 1
-fi
-
-"$CONTAINER" volume create "$VOLUME2" >/dev/null
-"$CONTAINER" run -d --name "$NAME2" \
-	--add-host stubop:host-gateway \
-	--read-only --tmpfs /tmp:rw,exec,size=256m \
-	--cap-drop ALL \
-	--security-opt no-new-privileges \
-	--memory 2g \
-	-v "$VOLUME2:/data" \
-	-v "$WORK/agent-supersede:/var/run/spawnery:ro" \
-	-v "$WORK/config:/etc/spawnery:ro" \
-	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19444 \
-	"$IMAGE" >/dev/null
+start_agent "$NAME2" "$VOLUME2" "$WORK/agent-supersede" "$WORK/config" "stubop:19444" "$IMAGE"
 
 echo "waiting up to ${DEADLINE}s for the agent to greet the superseding operator..."
 await_event hello "$EVENTS2" "$NAME2"
@@ -591,7 +608,7 @@ STUB2_PID=""
 MUTE_HARD_DEADLINE=20
 mkdir -p "$WORK/agent-mute"
 chmod 0755 "$WORK/agent-mute"
-"$STUBOP" \
+STUB3_PID="$(start_stub "$EVENTS3" "$WORK/stub3.log" "muting" \
 	--dir "$WORK/agent-mute" \
 	--san stubop \
 	--listen ":19445" \
@@ -599,29 +616,9 @@ chmod 0755 "$WORK/agent-mute"
 	--renew-after "$RENEW_AFTER" \
 	--hard-deadline "$MUTE_HARD_DEADLINE" \
 	--supersede \
-	--mute-after 1 \
-	>"$EVENTS3" 2>"$WORK/stub3.log" &
-STUB3_PID=$!
+	--mute-after 1)"
 
-sleep 1
-if ! kill -0 "$STUB3_PID" 2>/dev/null; then
-	echo "the muting stub operator did not stay up:" >&2
-	cat "$WORK/stub3.log" >&2
-	exit 1
-fi
-
-"$CONTAINER" volume create "$VOLUME3" >/dev/null
-"$CONTAINER" run -d --name "$NAME3" \
-	--add-host stubop:host-gateway \
-	--read-only --tmpfs /tmp:rw,exec,size=256m \
-	--cap-drop ALL \
-	--security-opt no-new-privileges \
-	--memory 2g \
-	-v "$VOLUME3:/data" \
-	-v "$WORK/agent-mute:/var/run/spawnery:ro" \
-	-v "$WORK/config:/etc/spawnery:ro" \
-	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19445 \
-	"$IMAGE" >/dev/null
+start_agent "$NAME3" "$VOLUME3" "$WORK/agent-mute" "$WORK/config" "stubop:19445" "$IMAGE"
 
 echo "waiting up to ${DEADLINE}s for the agent to greet the muting operator..."
 await_event hello "$EVENTS3" "$NAME3"
@@ -774,7 +771,7 @@ SET_READY_AFTER=60s
 # either hold past 180 between them is what would break this.
 mkdir -p "$WORK/agent-proxy"
 chmod 0755 "$WORK/agent-proxy"
-"$STUBOP" \
+STUB4_PID="$(start_stub "$EVENTS4" "$WORK/stub4.log" "proxy" \
 	--dir "$WORK/agent-proxy" \
 	--san stubop \
 	--listen ":19446" \
@@ -784,33 +781,13 @@ chmod 0755 "$WORK/agent-proxy"
 	--proxy \
 	--require-token \
 	--full-sync-after "$FULL_SYNC_AFTER" \
-	--set-ready-after "$SET_READY_AFTER" \
-	>"$EVENTS4" 2>"$WORK/stub4.log" &
-STUB4_PID=$!
-
-sleep 1
-if ! kill -0 "$STUB4_PID" 2>/dev/null; then
-	echo "the proxy stub operator did not stay up:" >&2
-	cat "$WORK/stub4.log" >&2
-	exit 1
-fi
+	--set-ready-after "$SET_READY_AFTER")"
 
 # The two proxy-only variables are not decoration: without either one the agent
 # goes dormant and never connects at all, naming the variable it did not get.
-"$CONTAINER" volume create "$VOLUME4" >/dev/null
-"$CONTAINER" run -d --name "$NAME4" \
-	--add-host stubop:host-gateway \
-	--read-only --tmpfs /tmp:rw,exec,size=256m \
-	--cap-drop ALL \
-	--security-opt no-new-privileges \
-	--memory 2g \
-	-v "$VOLUME4:/data" \
-	-v "$WORK/agent-proxy:/var/run/spawnery:ro" \
-	-v "$WORK/velocity-config:/etc/spawnery:ro" \
-	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19446 \
+start_agent "$NAME4" "$VOLUME4" "$WORK/agent-proxy" "$WORK/velocity-config" "stubop:19446" "$VELOCITY_IMAGE" \
 	-e SPAWNERY_PLAYER_LIMIT="$PROXY_LIMIT" \
-	-e SPAWNERY_FALLBACK_GROUPS=lobby \
-	"$VELOCITY_IMAGE" >/dev/null
+	-e SPAWNERY_FALLBACK_GROUPS=lobby
 
 echo "waiting up to ${DEADLINE}s for the proxy agent to greet..."
 await_event hello "$EVENTS4" "$NAME4"
@@ -1105,7 +1082,7 @@ STUB4_PID=""
 # been synced on would be a shape the operator does not produce.
 mkdir -p "$WORK/agent-proxy-supersede"
 chmod 0755 "$WORK/agent-proxy-supersede"
-"$STUBOP" \
+STUB5_PID="$(start_stub "$EVENTS5" "$WORK/stub5.log" "superseding proxy" \
 	--dir "$WORK/agent-proxy-supersede" \
 	--san stubop \
 	--listen ":19447" \
@@ -1114,31 +1091,12 @@ chmod 0755 "$WORK/agent-proxy-supersede"
 	--hard-deadline 20 \
 	--supersede \
 	--proxy \
-	--require-token \
-	>"$EVENTS5" 2>"$WORK/stub5.log" &
-STUB5_PID=$!
+	--require-token)"
 
-sleep 1
-if ! kill -0 "$STUB5_PID" 2>/dev/null; then
-	echo "the superseding proxy stub operator did not stay up:" >&2
-	cat "$WORK/stub5.log" >&2
-	exit 1
-fi
-
-"$CONTAINER" volume create "$VOLUME5" >/dev/null
-"$CONTAINER" run -d --name "$NAME5" \
-	--add-host stubop:host-gateway \
-	--read-only --tmpfs /tmp:rw,exec,size=256m \
-	--cap-drop ALL \
-	--security-opt no-new-privileges \
-	--memory 2g \
-	-v "$VOLUME5:/data" \
-	-v "$WORK/agent-proxy-supersede:/var/run/spawnery:ro" \
-	-v "$WORK/velocity-config:/etc/spawnery:ro" \
-	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19447 \
+start_agent "$NAME5" "$VOLUME5" "$WORK/agent-proxy-supersede" "$WORK/velocity-config" \
+	"stubop:19447" "$VELOCITY_IMAGE" \
 	-e SPAWNERY_PLAYER_LIMIT="$PROXY_LIMIT" \
-	-e SPAWNERY_FALLBACK_GROUPS=lobby \
-	"$VELOCITY_IMAGE" >/dev/null
+	-e SPAWNERY_FALLBACK_GROUPS=lobby
 
 echo "waiting up to ${DEADLINE}s for the proxy agent to greet the superseding operator..."
 await_event hello "$EVENTS5" "$NAME5"
@@ -1230,36 +1188,16 @@ STUB5_PID=""
 # adding anything this phase is checking.
 mkdir -p "$WORK/agent-rotate"
 chmod 0755 "$WORK/agent-rotate"
-"$STUBOP" \
+STUB6_PID="$(start_stub "$EVENTS6" "$WORK/stub6.log" "rotating" \
 	--dir "$WORK/agent-rotate" \
 	--san stubop \
 	--listen ":19448" \
 	--report-interval 1 \
 	--renew-after 180 \
 	--hard-deadline 240 \
-	--rotate-ca \
-	>"$EVENTS6" 2>"$WORK/stub6.log" &
-STUB6_PID=$!
+	--rotate-ca)"
 
-sleep 1
-if ! kill -0 "$STUB6_PID" 2>/dev/null; then
-	echo "the rotating stub operator did not stay up:" >&2
-	cat "$WORK/stub6.log" >&2
-	exit 1
-fi
-
-"$CONTAINER" volume create "$VOLUME6" >/dev/null
-"$CONTAINER" run -d --name "$NAME6" \
-	--add-host stubop:host-gateway \
-	--read-only --tmpfs /tmp:rw,exec,size=256m \
-	--cap-drop ALL \
-	--security-opt no-new-privileges \
-	--memory 2g \
-	-v "$VOLUME6:/data" \
-	-v "$WORK/agent-rotate:/var/run/spawnery:ro" \
-	-v "$WORK/config:/etc/spawnery:ro" \
-	-e SPAWNERY_OPERATOR_ENDPOINT=stubop:19448 \
-	"$IMAGE" >/dev/null
+start_agent "$NAME6" "$VOLUME6" "$WORK/agent-rotate" "$WORK/config" "stubop:19448" "$IMAGE"
 
 # Reaching this line is the whole proof: the obvious mutation is mounting only
 # ca.crt's first PEM, which is exactly the bundle a pod carries before a
