@@ -58,7 +58,52 @@ const (
 	// FlapResetWindow is how long a server must stay Ready before its
 	// readiness-loss counter is forgiven.
 	FlapResetWindow = 10 * time.Minute
+
+	// VelocityReadTimeout is what a proxy waits on a silent backend before it
+	// disconnects the players on it, and it is the deadline the drain in the
+	// Ready branch below is racing.
+	//
+	// It is the value internal/render/defaults/velocity.default.toml ships,
+	// pinned here because a number in a TOML file nothing reads is a number
+	// that drifts. TestTheShippedVelocityDefaultMatchesTheConstant is what
+	// keeps the two the same.
+	//
+	// Thirty seconds is also Velocity's own default, so a cluster that
+	// replaces the whole file rather than overlaying it lands on the same
+	// number by accident rather than by agreement. That is luck, and
+	// RescueWindow's doc says what it cannot see.
+	VelocityReadTimeout = 30 * time.Second
 )
+
+// RescueWindow is how long the operator has to move players off a backend
+// whose node has died, before Velocity disconnects them itself.
+//
+// The arithmetic is the whole of it. Reports stop the instant the node does,
+// and PlayersStale says so after twice the report interval; from that moment
+// the Ready branch below deregisters the server and starts a drain. Velocity
+// starts its own clock at the same instant and fires at VelocityReadTimeout,
+// with no event and nothing a plugin can intervene in -- disassembling
+// velocity 3.5.1 build 615, ConnectedPlayer.handleConnectionException falls
+// straight through to disconnect() for a ReadTimeoutException. So the room the
+// operator has is what is left of the read timeout after the staleness rule
+// has spent its share.
+//
+// At the operator's default report interval of five seconds that is twenty
+// seconds. At anything above fifteen it is negative, and the operator is
+// racing a deadline that has already passed.
+//
+// # What it cannot see
+//
+// A velocity.toml overlay that lowers read-timeout. The overlay is the user's
+// own ConfigMap, mounted into the pod by name and rendered there by
+// spawnery-config; the operator never reads its contents, and its ConfigMap
+// cache is deliberately restricted to objects carrying the managed-by label,
+// so it could not without an uncached read of somebody else's object. Half of
+// this comparison is therefore knowable at startup and half is not, and the
+// half that is knowable is the one an operator sets by hand.
+func RescueWindow(reportInterval time.Duration) time.Duration {
+	return VelocityReadTimeout - 2*reportInterval
+}
 
 // MaxReadinessLosses is the number of readiness losses after which a server is
 // considered broken rather than flapping.

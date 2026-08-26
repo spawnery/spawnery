@@ -20,6 +20,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/spawnery/spawnery/internal/controller"
+	"github.com/spawnery/spawnery/internal/phase"
 )
 
 // The endpoint and the certificate SANs are derived from the same two strings.
@@ -205,5 +208,77 @@ func TestTheLeaderElectionLeaseLandsInTheOperatorNamespace(t *testing.T) {
 	if len(opts.Cache.DefaultNamespaces) != 0 {
 		t.Errorf("cache namespaces = %v with no --namespace, want the whole cluster",
 			opts.Cache.DefaultNamespaces)
+	}
+}
+
+// TestRescueWindowWarning covers the three readings and, above all, that the
+// default is silent. A warning every operator sees at every start is one
+// nobody reads by the time it means something.
+func TestRescueWindowWarning(t *testing.T) {
+	for _, tc := range []struct {
+		what           string
+		reportInterval time.Duration
+		wantWarning    bool
+		wantPhrase     string
+	}{
+		{
+			what:           "the operator's own default, which must say nothing",
+			reportInterval: 5 * time.Second,
+		},
+		{
+			what:           "thirteen seconds, which leaves four -- above zero, below a resync",
+			reportInterval: 13 * time.Second,
+			wantWarning:    true,
+			wantPhrase:     "less than the",
+		},
+		{
+			what:           "fifteen, the boundary at which the window closes exactly",
+			reportInterval: 15 * time.Second,
+			wantWarning:    true,
+			wantPhrase:     "no room at all",
+		},
+		{
+			what:           "twenty, where the operator is later than the kick",
+			reportInterval: 20 * time.Second,
+			wantWarning:    true,
+			wantPhrase:     "no room at all",
+		},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			got := rescueWindowWarning(tc.reportInterval)
+			if !tc.wantWarning {
+				if got != "" {
+					t.Errorf("warned about a report interval of %s: %q", tc.reportInterval, got)
+				}
+				return
+			}
+			if got == "" {
+				t.Fatalf("said nothing about a report interval of %s", tc.reportInterval)
+			}
+			if !strings.Contains(got, tc.wantPhrase) {
+				t.Errorf("the warning is %q, which does not carry %q -- the two readings need "+
+					"different responses and the message is what tells them apart",
+					got, tc.wantPhrase)
+			}
+			if !strings.Contains(got, tc.reportInterval.String()) {
+				t.Errorf("the warning is %q and does not name the flag's value; somebody has "+
+					"to know which number to change", got)
+			}
+		})
+	}
+}
+
+// TestTheRescueWindowThresholdIsTheResyncInterval ties the warning's boundary
+// to the thing that justifies it rather than to a number typed twice. If the
+// resync ever moves, this is what says the warning moved with it.
+func TestTheRescueWindowThresholdIsTheResyncInterval(t *testing.T) {
+	// The largest report interval whose window still clears a resync.
+	ok := (phase.VelocityReadTimeout - controller.ResyncInterval) / 2
+	if got := rescueWindowWarning(ok); got != "" {
+		t.Errorf("warned at a report interval of %s, whose window is exactly the %s resync: %q",
+			ok, controller.ResyncInterval, got)
+	}
+	if got := rescueWindowWarning(ok + time.Second); got == "" {
+		t.Errorf("said nothing at a report interval of %s, one second past the boundary", ok+time.Second)
 	}
 }

@@ -35,7 +35,7 @@ const testGrace = 60 * time.Second
 // Written as a helper because the property under test is about *sequences* of
 // passes, and a test that spelled each one out would bury that in noise.
 func pass(d *readinessDivergence, clock *testClock, group string, diverging map[types.UID]bool) []types.UID {
-	clock.Advance(resyncInterval)
+	clock.Advance(ResyncInterval)
 	return d.observe(group, diverging, testGrace)
 }
 
@@ -43,18 +43,18 @@ func TestADivergenceReportsOnceItHasBeenWatchedForTheWholeGrace(t *testing.T) {
 	d, clock := newTestDivergence()
 	diverging := map[types.UID]bool{"pod-a": true}
 
-	// The steady state: a pass every resyncInterval. Nothing may report before
+	// The steady state: a pass every ResyncInterval. Nothing may report before
 	// the grace has actually elapsed under observation.
 	elapsed := time.Duration(0)
 	for elapsed < testGrace {
 		if stale := pass(d, clock, "ns/gateway", diverging); len(stale) != 0 {
 			t.Fatalf("reported %v after %s of a %s grace", stale, elapsed, testGrace)
 		}
-		elapsed += resyncInterval
+		elapsed += ResyncInterval
 	}
 
 	if stale := pass(d, clock, "ns/gateway", diverging); len(stale) != 1 || stale[0] != "pod-a" {
-		t.Errorf("stale = %v after %s of continuous observation, want [pod-a]", stale, elapsed+resyncInterval)
+		t.Errorf("stale = %v after %s of continuous observation, want [pod-a]", stale, elapsed+ResyncInterval)
 	}
 }
 
@@ -100,12 +100,12 @@ func TestAGapInObservationCannotBeSpentOnTheGrace(t *testing.T) {
 	// of it. Derived from the constants rather than fitted to the answer, so
 	// changing either constant moves the expectation with it.
 	watched := divergenceObservationStep // what the resuming pass could add
-	for range int(testGrace / resyncInterval * 2) {
+	for range int(testGrace / ResyncInterval * 2) {
 		stale := pass(d, clock, "ns/gateway", diverging)
 		if len(stale) > 0 {
 			break
 		}
-		watched += resyncInterval
+		watched += ResyncInterval
 	}
 	if watched < testGrace-divergenceObservationStep || watched > testGrace {
 		t.Errorf("reported after %s of accountable watched time; want it inside "+
@@ -176,7 +176,7 @@ func TestTwoGroupsDoNotShareAClock(t *testing.T) {
 	// One group is observed throughout; the other joins late. The shared
 	// instance must not let the first group's passes advance the second's
 	// measurement.
-	for elapsed := time.Duration(0); elapsed < testGrace; elapsed += resyncInterval {
+	for elapsed := time.Duration(0); elapsed < testGrace; elapsed += ResyncInterval {
 		pass(d, clock, "ns/gateway", diverging)
 	}
 	if stale := d.observe("ns/other", diverging, testGrace); len(stale) != 0 {

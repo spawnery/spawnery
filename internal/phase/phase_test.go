@@ -17,6 +17,10 @@ limitations under the License.
 package phase
 
 import (
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -780,5 +784,61 @@ func TestABrokenStreamIsStillJustABrokenStream(t *testing.T) {
 	}
 	if d.StartDrain {
 		t.Error("a reconnecting agent had its server's players moved off")
+	}
+}
+
+// TestTheShippedVelocityDefaultMatchesTheConstant is what keeps
+// VelocityReadTimeout from being a number somebody wrote down once.
+//
+// The operator does not render velocity.toml -- spawnery-config does, inside
+// the pod, from the defaults this repository ships plus the user's overlay --
+// so the constant here and the file there are two statements of one fact with
+// nothing between them. This is the something.
+func TestTheShippedVelocityDefaultMatchesTheConstant(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "render", "defaults", "velocity.default.toml"))
+	if err != nil {
+		t.Fatalf("read the shipped velocity defaults: %v", err)
+	}
+
+	found := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		if after, ok := strings.CutPrefix(strings.TrimSpace(line), "read-timeout"); ok {
+			found = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(after), "="))
+			break
+		}
+	}
+	if found == "" {
+		t.Fatal("the shipped velocity.default.toml sets no read-timeout, so nothing here " +
+			"is pinned to anything. Either the key was renamed or the file was rewritten")
+	}
+	millis, err := strconv.Atoi(found)
+	if err != nil {
+		t.Fatalf("read-timeout = %q is not a number of milliseconds: %v", found, err)
+	}
+	if got := time.Duration(millis) * time.Millisecond; got != VelocityReadTimeout {
+		t.Errorf("the shipped velocity.default.toml says read-timeout = %s and "+
+			"VelocityReadTimeout says %s. Everything that decides whether a player on a "+
+			"dead node is moved or kicked is arithmetic on these two agreeing",
+			got, VelocityReadTimeout)
+	}
+}
+
+// TestTheRescueWindowIsTheReadTimeoutLessWhatStalenessSpends pins the
+// arithmetic at the operator's own default and at the boundary the entry that
+// produced this named: above fifteen seconds the operator is later than the
+// kick it is racing.
+func TestTheRescueWindowIsTheReadTimeoutLessWhatStalenessSpends(t *testing.T) {
+	for _, tc := range []struct {
+		reportInterval time.Duration
+		want           time.Duration
+	}{
+		{5 * time.Second, 20 * time.Second},
+		{10 * time.Second, 10 * time.Second},
+		{15 * time.Second, 0},
+		{20 * time.Second, -10 * time.Second},
+	} {
+		if got := RescueWindow(tc.reportInterval); got != tc.want {
+			t.Errorf("RescueWindow(%s) = %s, want %s", tc.reportInterval, got, tc.want)
+		}
 	}
 }

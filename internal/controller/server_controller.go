@@ -80,10 +80,16 @@ const (
 	defaultFailedRetentionSeconds int32 = 3600
 )
 
-// resyncInterval is how often a Server is re-examined even without an event.
+// ResyncInterval is how often a Server is re-examined even without an event.
 // The state machine has time-driven transitions (startup deadline, drain
 // deadline, stream grace period) that no watch reports.
-const resyncInterval = 5 * time.Second
+//
+// Exported because it bounds more than this file: an operator can only act on
+// a time-driven transition at a resync, so a deadline the operator is racing
+// has to be more than one of these away or it may be met after the fact. See
+// cmd/spawnery-operator's rescue-window check, which is that comparison for
+// the one deadline somebody can misconfigure.
+const ResyncInterval = 5 * time.Second
 
 // ServerReconciler drives one Server through the state machine.
 type ServerReconciler struct {
@@ -377,7 +383,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			if err := persistedServer(r.Status().Update(ctx, srv)); err != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{RequeueAfter: resyncInterval}, nil
+			return ctrl.Result{RequeueAfter: ResyncInterval}, nil
 
 		case apierrors.IsForbidden(err), apierrors.IsInvalid(err):
 			// A create the API server refused is the Server's business and not
@@ -442,7 +448,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, nil
 	}
 
-	return ctrl.Result{RequeueAfter: resyncInterval}, nil
+	return ctrl.Result{RequeueAfter: ResyncInterval}, nil
 }
 
 // persistedServer reports a write to the Server object, with its disappearance

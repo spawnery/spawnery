@@ -134,7 +134,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// them apart.
 	networkUsable := networkFound && meta.IsStatusConditionTrue(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
 
-	requeue := resyncInterval
+	requeue := ResyncInterval
 	switch {
 	case !networkFound:
 		logger.Info("network not found, no servers are created for this group",

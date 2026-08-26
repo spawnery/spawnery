@@ -330,7 +330,7 @@ func TestZombieIsCaughtUnderAContinuousReconcileLoop(t *testing.T) {
 	const ticks = 200 // 200 * 5s resync is far past the 5 minute deadline
 	failedAfter := -1
 	for i := 0; i < ticks; i++ {
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 		if err := f.agents.ReportPlayers(uid, 9, 100); err != nil {
 			t.Fatalf("ReportPlayers: %v", err)
 		}
@@ -344,7 +344,7 @@ func TestZombieIsCaughtUnderAContinuousReconcileLoop(t *testing.T) {
 	srv := f.server("lobby-x7k2")
 	if failedAfter < 0 {
 		t.Fatalf("still %q with 9 players after %d reconciles over %v — the startup deadline never fired",
-			srv.Status.Phase, ticks, time.Duration(ticks)*resyncInterval)
+			srv.Status.Phase, ticks, time.Duration(ticks)*ResyncInterval)
 	}
 	if len(f.registrar.drained) != 1 {
 		t.Errorf("drained = %v, want exactly one drain — 9 players were left on a dead server",
@@ -967,7 +967,7 @@ func TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel(t *testing.T) {
 				"the eviction API will refuse to release it for the whole retention window",
 				i, podspec.LabelOccupied, v)
 		}
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 	}
 }
 
@@ -1008,7 +1008,7 @@ func TestOccupiedLabelNeedsTheServerToHaveBeenRegistered(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 		f.reconcile("lobby-x7k2")
 		p, ok := f.pod("lobby-x7k2")
 		if !ok {

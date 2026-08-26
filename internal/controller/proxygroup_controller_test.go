@@ -199,7 +199,7 @@ func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
 }
 
 // watchThroughGrace runs the passes a real operator would run across one
-// readinessDivergenceGrace: a reconcile every resyncInterval, which is what
+// readinessDivergenceGrace: a reconcile every ResyncInterval, which is what
 // ProxyGroupReconciler requeues at on its successful path.
 //
 // It exists because readinessDivergence measures *watched* time. A single
@@ -210,8 +210,8 @@ func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
 // passed had the divergence gone entirely unobserved for the whole grace.
 func (f *fixture) watchThroughGrace(t *testing.T, r *ProxyGroupReconciler, name string) {
 	t.Helper()
-	for elapsed := time.Duration(0); elapsed <= readinessDivergenceGrace; elapsed += resyncInterval {
-		f.clock.Advance(resyncInterval)
+	for elapsed := time.Duration(0); elapsed <= readinessDivergenceGrace; elapsed += ResyncInterval {
+		f.clock.Advance(ResyncInterval)
 		f.reconcileProxyGroup(r, name)
 	}
 }
@@ -1506,7 +1506,7 @@ func TestADrainingProxyWithPlayersIsNotDeleted(t *testing.T) {
 
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 
 	pods := f.proxyPods("gateway")
@@ -1979,7 +1979,7 @@ func TestTheSurgePodMustBeReadyBeforeAnyPodIsMarked(t *testing.T) {
 	f.reconcileProxyGroup(r, "gateway")
 	// A resync with the surge pod still unready: the group is at its target
 	// size now, so nothing is created and nothing may be marked either.
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 
 	// Make the surge pod ready and reconcile again.
@@ -2086,7 +2086,7 @@ func TestADrainingProxyKeepsItsMarkWhileTheRolloutWaits(t *testing.T) {
 		t.Fatal("no proxy was marked once the surge pod was ready; there is no drain to keep")
 	}
 
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 
 	pod, ok := f.pod(marked)
@@ -2240,7 +2240,7 @@ func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
 	if err := f.c.Delete(f.ctx, lost); err != nil {
 		t.Fatalf("delete the surge pod: %v", err)
 	}
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 
 	pod, ok := f.pod(marked)
@@ -2298,7 +2298,7 @@ func TestAPartlyCancelledScaleDownReleasesOnlyTheMarksItHasTo(t *testing.T) {
 	}
 
 	f.setProxyReplicas("gateway", 3)
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 
 	pods := f.proxyPods("gateway")
@@ -2407,7 +2407,7 @@ func TestAStaleMarkDoesNotSpendTheSurplusBudget(t *testing.T) {
 	// And back up to three. The stale proxy is still going, and its departure
 	// is the only one the group has room for.
 	f.setProxyReplicas("gateway", 3)
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 
 	after := f.proxyPods("gateway")
@@ -2506,7 +2506,7 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	if err := f.c.Update(f.ctx, g); err != nil {
 		t.Fatalf("revert: %v", err)
 	}
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 
 	network := &spawneryv1alpha1.Network{}
@@ -3217,7 +3217,7 @@ func TestANodeDrainMarkFiresANodeDrainingEvent(t *testing.T) {
 	// group repeats every pass. Without the guard against re-stamping an
 	// existing mark, this would announce the same drain once per resync for
 	// as long as the pod takes to empty.
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 	if containsEvent(drainEvents(rec), spawneryv1alpha1.ReasonNodeDraining) {
 		t.Error("NodeDraining event fired again on a resync that changed nothing about the mark")

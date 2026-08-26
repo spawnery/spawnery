@@ -417,7 +417,7 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	return obs, ctrl.Result{RequeueAfter: resyncInterval}, nil
+	return obs, ctrl.Result{RequeueAfter: ResyncInterval}, nil
 }
 
 // refuse is the shared tail of the three paths that give up before
@@ -448,7 +448,7 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 // one -- would otherwise hide the refusal that explains the group's whole
 // state, on exactly the groups whose state most needs explaining.
 //
-// The requeue is networkRetryInterval rather than resyncInterval, which is
+// The requeue is networkRetryInterval rather than ResyncInterval, which is
 // what bounds how stale the budget can get here; see protectPlayersOnly.
 // controller-runtime ignores it when the error is non-nil and backs off
 // instead, which is the behaviour wanted for a failed protection pass.
@@ -508,7 +508,7 @@ func (r *ProxyGroupReconciler) protectOccupiedProxies(
 // that reaches this function.
 //
 // The residual cost is timing, and it is worth stating: these paths requeue
-// at networkRetryInterval rather than resyncInterval, so a proxy that becomes
+// at networkRetryInterval rather than ResyncInterval, so a proxy that becomes
 // occupied while its group's Network is broken can wait up to that long to be
 // counted, against five seconds on a healthy group. A bounded lag replaces an
 // unbounded one.

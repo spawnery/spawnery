@@ -406,7 +406,7 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		if !found {
 			t.Fatalf("pass %d removed the occupied server %q outright", i, busy)
 		}
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 	}
 
 	// setMinReplicas performs a real spec update, so the two servers already
@@ -523,7 +523,7 @@ func TestGroupHoldsItsFloorWithoutChurn(t *testing.T) {
 				t.Fatalf("pass %d created the extra server %q", i, s.Name)
 			}
 		}
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 	}
 }
 
@@ -583,7 +583,7 @@ func TestGroupReplacesAFailedServer(t *testing.T) {
 				t.Fatalf("pass %d deleted the failed server before its retention elapsed", i)
 			}
 		}
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 	}
 
 	if got := f.server(failed).Status.Phase; got != string(phase.Failed) {
@@ -857,7 +857,7 @@ func TestRetainedFailedPodDoesNotWedgeTheBudget(t *testing.T) {
 		if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 0 {
 			t.Fatalf("pass %d: minAvailable = %d for a group with no live server, want 0", i, got)
 		}
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 	}
 }
 
@@ -913,7 +913,7 @@ func TestPodThatCrashedWithPlayersOnItDoesNotWedgeTheBudget(t *testing.T) {
 		if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 0 {
 			t.Fatalf("pass %d: minAvailable = %d with no live server left, want 0", i, got)
 		}
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 	}
 }
 
@@ -1072,7 +1072,7 @@ func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T)
 		if !found {
 			t.Fatalf("pass %d removed %q outright", i, victim)
 		}
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 	}
 
 	final := f.listServers(t)
@@ -1118,7 +1118,7 @@ func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
 			f.reconcile(s.Name)
 		}
 		f.reconcileGroup(t, r)
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 	}
 
 	// spareSlots keeps its fixture default of 40 free player slots, and
@@ -1556,7 +1556,7 @@ func TestGroupCreatesTheShortfallOnceWhileTheNewServersStart(t *testing.T) {
 	// and the test would pass for the wrong reason — a stale server contributes
 	// nothing either.
 	for i := 0; i < 10; i++ {
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 		if err := f.agents.ReportPlayers(uid, 70, 100); err != nil {
 			t.Fatalf("ReportPlayers: %v", err)
 		}
@@ -2401,7 +2401,7 @@ func TestGroupStopsCreatingWhileItBacksOff(t *testing.T) {
 			"the group built a replacement inside the backoff window it had just opened", got)
 	}
 
-	f.clock.Advance(resyncInterval)
+	f.clock.Advance(ResyncInterval)
 	f.reconcileGroup(t, r)
 	if got := len(f.listServers(t)); got != 1 {
 		t.Errorf("%d servers five seconds into a ten-second window, want 1", got)
@@ -3040,7 +3040,7 @@ func drainRecorder(rec *nonBlockingRecorder) { drainEvents(rec) }
 // The bound is read off the backoff schedule rather than set at one more than
 // the cold start built, and the arithmetic has two factors rather than one.
 //
-// Ten passes move the clock fifty seconds: passes * resyncInterval = 10 * 5s.
+// Ten passes move the clock fifty seconds: passes * ResyncInterval = 10 * 5s.
 // backoffDelay(n) = backoffBase * backoffFactor^(n-1) gives windows of 10s,
 // 20s, 40s for n = 1, 2, 3 (backoffBase = 10s, backoffFactor = 2, both in
 // backoff.go). Since 2026-08-24 the count is rounds rather than corpses, so it
@@ -3059,7 +3059,7 @@ func drainRecorder(rec *nonBlockingRecorder) { drainEvents(rec) }
 // So bound = 1 (the cold start's own server) + 2 windows * 2 servers = 5. A
 // group rebuilding every pass would have built about twenty, so the test still
 // separates the two by a wide margin. Changing passes, backoffBase,
-// backoffFactor, resyncInterval or spareSlots moves this arithmetic and will
+// backoffFactor, ResyncInterval or spareSlots moves this arithmetic and will
 // turn this red — that is a fixture change, not a backoff regression.
 func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	const (
@@ -3084,7 +3084,7 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 		// lifecycle events, which is more than a FakeRecorder holds.
 		drainRecorder(f.reconc.Recorder.(*nonBlockingRecorder))
 		drainRecorder(r.Recorder.(*nonBlockingRecorder))
-		f.clock.Advance(resyncInterval)
+		f.clock.Advance(ResyncInterval)
 		for _, s := range f.serversOfGeneration(t, generation) {
 			if s.Status.Phase != string(phase.Failed) {
 				f.failServer(t, s.Name)
@@ -3717,9 +3717,9 @@ func TestAPersistentGroupPublishesTheReadinessItsPodsSupport(t *testing.T) {
 	if got := group.Status.Phase; got != string(phase.Ready) {
 		t.Errorf("phase = %q with its one replica Ready, want %s", got, phase.Ready)
 	}
-	if res.RequeueAfter != resyncInterval {
+	if res.RequeueAfter != ResyncInterval {
 		t.Errorf("RequeueAfter = %s, want the ordinary resync %s: a persistent group decides "+
-			"removals on the same clock as an ephemeral one", res.RequeueAfter, resyncInterval)
+			"removals on the same clock as an ephemeral one", res.RequeueAfter, ResyncInterval)
 	}
 }
 

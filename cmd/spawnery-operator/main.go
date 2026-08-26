@@ -45,6 +45,7 @@ import (
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/controller"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/proxyreg"
 	"github.com/spawnery/spawnery/internal/rbacaudit"
@@ -82,6 +83,40 @@ func validateAgentFlags(operatorNamespace string, renewAfter, hardDeadline time.
 			"or the operator would cut every stream off mid-renewal", renewAfter, hardDeadline)
 	}
 	return nil
+}
+
+// rescueWindowWarning is the one comparison between the two numbers that decide
+// whether a player on a dead node is moved or kicked, and the empty string when
+// there is nothing to say.
+//
+// A warning and not a refusal. A report interval this high is a degradation and
+// not a broken configuration -- every other thing the interval governs goes on
+// working, and refusing to start would turn a fleet that loses a rescue into a
+// fleet that loses everything. It is also not the operator's place to decide
+// how much room is enough: the threshold here is one this code owns, namely
+// that the operator can only act at a resync, so a window shorter than one
+// resync is one it may spend entirely on not having looked yet.
+//
+// phase.RescueWindow says what the arithmetic is and what half of it the
+// operator cannot see.
+func rescueWindowWarning(reportInterval time.Duration) string {
+	window := phase.RescueWindow(reportInterval)
+	if window >= controller.ResyncInterval {
+		return ""
+	}
+	if window <= 0 {
+		return fmt.Sprintf(
+			"--report-interval %s leaves no room at all to move players off a backend whose "+
+				"node has died: a count goes stale after %s, and Velocity disconnects them "+
+				"itself at %s. The operator would deregister the server after the kick "+
+				"rather than before it",
+			reportInterval, 2*reportInterval, phase.VelocityReadTimeout)
+	}
+	return fmt.Sprintf(
+		"--report-interval %s leaves %s to move players off a backend whose node has died, "+
+			"which is less than the %s resync the operator acts on -- so the drain may be "+
+			"decided after Velocity has already disconnected them",
+		reportInterval, window, controller.ResyncInterval)
 }
 
 // taintKeys collects a repeatable flag, the same shape as the names collector
@@ -348,6 +383,13 @@ func main() {
 	}); err != nil {
 		setupLog.Error(err, "unable to add the permission self-check")
 		os.Exit(1)
+	}
+
+	// Said once, at startup, where a flag is set. It is not a condition on any
+	// object because it is not about any object: it is about the pair of
+	// numbers this process was started with.
+	if warning := rescueWindowWarning(reportInterval); warning != "" {
+		setupLog.Info("the rescue window for a dead node is short", "warning", warning)
 	}
 
 	started := time.Now()

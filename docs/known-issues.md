@@ -46,15 +46,25 @@ every stream at once and leaves `AgentConnected` false. On that signature the
 server loses readiness, is deregistered so nobody else is sent to it, and is
 drained.
 
-The margin is arithmetic: Velocity's `read-timeout` is 30 s, and the reports
-stop the instant the node does, which `PlayersStale` reports after twice the
-agent report interval — ten seconds at the operator's default. **Neither
-number is enforced anywhere.** A cluster that raises
-`--agent-report-interval`, or a `velocity.toml` overlay that lowers
-`read-timeout`, closes the gap without anything noticing; at a report interval
-above fifteen seconds the operator would be *later* than the kick it is
-racing. Nothing compares the two, and nothing can, because one of them lives
-in a file the operator renders and the other in a flag it is given.
+The margin is arithmetic and `phase.RescueWindow` is now that arithmetic:
+Velocity's `read-timeout` less twice the agent report interval, which is twenty
+seconds at the operator's defaults and zero at a report interval of fifteen.
+**Half of it is checked and half of it cannot be.** The operator warns at
+startup when its own `--report-interval` leaves a window shorter than the
+`ResyncInterval` it could act within — that is the half somebody sets by hand,
+and the read timeout it is compared against is pinned to the value
+`internal/render/defaults/velocity.default.toml` ships by a test, so the two
+cannot drift apart silently.
+
+What stays open is the other half: **a `velocity.toml` overlay that lowers
+`read-timeout` closes the gap without anything noticing.** The overlay is the
+user's own ConfigMap, mounted into the pod by name and rendered there by
+`spawnery-config`; the operator never reads its contents, and its ConfigMap
+cache is deliberately restricted to objects carrying the managed-by label, so
+seeing it would mean an uncached read of somebody else's object on every
+reconcile. A cluster that replaces the whole file rather than overlaying it
+lands on Velocity's own 30-second default by luck rather than by agreement, and
+nothing here can tell the two apart.
 
 ## From milestone 4c-1 (the proxy readiness contract)
 

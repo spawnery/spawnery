@@ -89,7 +89,7 @@ type divergenceEntry struct {
 
 // divergenceObservationStep is the most a single pass may contribute.
 //
-// A ProxyGroup requeues every resyncInterval on its successful path, so in
+// A ProxyGroup requeues every ResyncInterval on its successful path, so in
 // steady state each pass contributes that; four times it absorbs a slow pass
 // and scheduler jitter. What it bounds is the other case: an outage during
 // which nothing observed, after which the first pass back would otherwise
@@ -103,7 +103,7 @@ type divergenceEntry struct {
 // cliff. Passes 25 seconds apart still contribute 20 each, so the report
 // arrives late rather than never, and the worst an outage can do is overcount
 // by one step against a sixty-second grace instead of by its whole length.
-const divergenceObservationStep = 4 * resyncInterval
+const divergenceObservationStep = 4 * ResyncInterval
 
 func newReadinessDivergence(now func() time.Time) *readinessDivergence {
 	return &readinessDivergence{now: now, byGroup: make(map[string]map[types.UID]divergenceEntry)}

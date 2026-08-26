@@ -1199,7 +1199,7 @@ func TestARefusedSecretReadIsSaidOutLoud(t *testing.T) {
 			ev, spawneryv1alpha1.ReasonSecretReadForbidden)
 	}
 
-	// And not again on the next pass: at resyncInterval an ungated report is
+	// And not again on the next pass: at ResyncInterval an ungated report is
 	// twelve a minute per Network, forever.
 	f.reconcileNetwork(t, r, f.network.Name)
 	if n := countEvents(drainEvents(rec), spawneryv1alpha1.ReasonSecretReadForbidden); n != 0 {

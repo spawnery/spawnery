@@ -270,7 +270,7 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// saying.
 	//
 	// Gated on the transition, like the events beside it: this branch runs on
-	// every pass for as long as the refusal stands, and at resyncInterval that
+	// every pass for as long as the refusal stands, and at ResyncInterval that
 	// is a line every five seconds per Network. The cost of the gate is that
 	// an operator restarted into an already-refused state finds the condition
 	// already set and says nothing more; the condition itself is the durable
@@ -339,7 +339,7 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, fmt.Errorf("bootstrap the namespace: %w", err)
 	}
 
-	return ctrl.Result{RequeueAfter: resyncInterval}, nil
+	return ctrl.Result{RequeueAfter: ResyncInterval}, nil
 }
 
 // reconcileNetworkPolicy keeps the policy that admits only this network's own
@@ -411,7 +411,7 @@ func pickNamespaceOwner(networks []spawneryv1alpha1.Network) string {
 //
 // No Owns/Watches on ServerGroup: nothing sets an owner reference from a
 // ServerGroup to its Network, so a watch keyed on that owner reference could
-// never fire. The aggregated status is kept fresh by the resyncInterval poll
+// never fire. The aggregated status is kept fresh by the ResyncInterval poll
 // in Reconcile instead. An event-driven refresh would need a mapping handler
 // from a ServerGroup (or ProxyGroup) change to its Network's request, which is
 // for Task 12's manager wiring to add if the poll interval turns out to be
@@ -419,7 +419,7 @@ func pickNamespaceOwner(networks []spawneryv1alpha1.Network) string {
 //
 // Owns(&networkingv1.NetworkPolicy{}) is different: the policy does carry an
 // owner reference, so a hand-deleted one comes back on the next watch event
-// instead of waiting out resyncInterval.
+// instead of waiting out ResyncInterval.
 func (r *NetworkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.Network{}).
