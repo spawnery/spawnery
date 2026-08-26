@@ -26,13 +26,13 @@ class Router(private val directory: ServerDirectory) {
     /**
      * @param excluding server names never returned, compared
      *   case-insensitively -- matching [ServerDirectory]'s own lookup rule.
-     *   [Drain] passes the single server it is draining players off of, so
-     *   that server is never handed back as its own replacement even while it
-     *   is still, briefly, a member of one of [groups]. [Rescue] passes a
-     *   whole chain, which is why this is a collection rather than the one
-     *   name [Drain] alone would need: a player being bounced from one dead
-     *   server to the next has to exclude every server that already refused
-     *   them, not just the last one.
+     *   [Drain] passes every server the operator is draining, so none of
+     *   them is handed back as a replacement even while it is still, briefly,
+     *   a member of one of [groups] -- neither the one being left, nor
+     *   another that would only have to be left again. [Rescue] passes a
+     *   whole chain: a player being bounced from one dead server to the next
+     *   has to exclude every server that already refused them, not just the
+     *   last one.
      */
     fun choose(groups: List<String>, excluding: Collection<String> = emptySet()): RegisteredServer? {
         for (group in groups) {

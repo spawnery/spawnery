@@ -639,6 +639,33 @@ needs more fails there rather than by being refused in a cluster.
 What that does not close is in `docs/known-issues.md` unchanged: the bound is
 per peer, so a *set* of compromised pods is bounded only by their number.
 
+The second thing closed since the rollout is half of the drain's oldest gap,
+and the measurement is the interesting part. **A player whose connection to a
+draining server is still in flight is counted by nobody**, so `DrainPlayers`
+moved everyone except them and the operator then read an empty server. The
+obvious fix — have the proxy report its own `playersConnected` — would not
+have worked: disassembling velocity 3.5.1 build 615,
+`VelocityRegisteredServer.addPlayer` is called from exactly one place, the
+backend's *play* phase, so the proxy does not count such a player either.
+Neither would simply widening the drain's filter, because
+`ConnectionRequestBuilderImpl` refuses a move while a connection is in flight
+and would have made the change a silent no-op.
+
+So the agent catches them on arrival instead. `Drain` now remembers which
+servers are draining and moves whoever lands on one, driven from
+`ServerPostConnectEvent` — the first point at which Velocity has cleared the
+in-flight connection and a move actually takes. The set is rebuilt from what
+the operator says rather than aged out on a timer: a resync is a `FullSync`
+followed by one `DrainPlayers` per draining server, so the messages after a
+`FullSync` are a complete statement, and a drain the operator stops naming is
+gone within one further resync. It also stops a drain sending players onto
+another draining server, which the single-name exclusion could not see.
+
+That is the proxy image `0.2.2`, and `docs/upgrading.md` says why it rolls the
+Paper fleet too and why nothing has to be upgraded in any particular order.
+The operator's half stays open in `docs/known-issues.md`: `Occupied()` still
+reads only the backend's count.
+
 Anyone starting there begins at
 [`docs/handover-milestone-6e.md`](docs/handover-milestone-6e.md): it says
 where 6e stopped, what was actually driven versus what only exists, what the

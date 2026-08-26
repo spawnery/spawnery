@@ -221,6 +221,48 @@ class ProxyRoleTest {
     }
 
     @Test
+    fun `a FullSync rotates the drain set, so a drain the operator drops expires`() {
+        // The wiring test for `drain.resynced()`. It is asserted through
+        // behaviour rather than a spy because Drain is a concrete class here,
+        // and behaviour is the thing that matters anyway: a FullSync branch
+        // that stopped rotating would leave this proxy enforcing a drain the
+        // operator cancelled, indefinitely.
+        val servers = arrayOf(
+            backend("lobby-1", "10.0.0.1:25565", "lobby"),
+            backend("mini-1", "10.0.1.7:25565", "mini"),
+        )
+        role.onMessage(fullSync(*servers))
+        role.onMessage(
+            OperatorToProxy.newBuilder()
+                .setDrainPlayers(DrainPlayers.newBuilder().setFromServer("mini-1").addToGroups("lobby"))
+                .build(),
+        )
+
+        val latecomer = FakePlayer("carol", "mini-1")
+
+        // One resync with the drain restated: still in force.
+        role.onMessage(fullSync(*servers))
+        role.onMessage(
+            OperatorToProxy.newBuilder()
+                .setDrainPlayers(DrainPlayers.newBuilder().setFromServer("mini-1").addToGroups("lobby"))
+                .build(),
+        )
+        drain.landed(players.ref(latecomer))
+        assertEquals(listOf("carol" to "lobby-1"), players.moves.filter { it.first == "carol" })
+
+        // Two resyncs with it dropped: gone. The first still carries it --
+        // what arrived since the previous FullSync is what becomes current --
+        // so it takes the second before an arrival is left alone.
+        role.onMessage(fullSync(*servers))
+        role.onMessage(fullSync(*servers))
+        drain.landed(players.ref(FakePlayer("dave", "mini-1")))
+        assertTrue(
+            players.moves.none { it.first == "dave" },
+            "a drain the operator stopped restating was still enforced: ${players.moves}",
+        )
+    }
+
+    @Test
     fun `an unrecognised message yields None and touches nothing`() {
         // The default instance is MESSAGE_NOT_SET, which is what an older
         // agent sees when a newer operator sends a case it does not know.

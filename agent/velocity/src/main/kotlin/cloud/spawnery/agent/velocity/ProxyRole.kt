@@ -189,6 +189,14 @@ class ProxyRole(
         when (message.messageCase) {
             OperatorToProxy.MessageCase.FULL_SYNC -> {
                 directory.apply(message.fullSync.serversList.map(::backend))
+                // Behind the apply for the same reason the latch is: a sync
+                // that threw half-way is not a statement about anything, and
+                // rotating on it would drop the drains this proxy is meant to
+                // keep enforcing. Keeping the old set is the safe direction --
+                // a stale drain moves a player off a server that no longer
+                // needs emptying, and a dropped one leaves them on a server
+                // about to be deleted.
+                drain.resynced()
                 // After the apply and not before it: a sync that threw
                 // half-way has not given this proxy a server list, and the
                 // operator repeats FullSync roughly every 30 seconds. Claiming

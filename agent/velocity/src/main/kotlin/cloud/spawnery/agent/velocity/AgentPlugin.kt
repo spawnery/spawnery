@@ -13,6 +13,7 @@ import com.velocitypowered.api.event.connection.DisconnectEvent
 import com.velocitypowered.api.event.player.KickedFromServerEvent
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent
 import com.velocitypowered.api.event.player.ServerConnectedEvent
+import com.velocitypowered.api.event.player.ServerPostConnectEvent
 import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent
 import com.velocitypowered.api.plugin.Plugin
@@ -99,6 +100,7 @@ class AgentPlugin @Inject constructor(
     private var loop: SessionLoop<ProxyMessage, OperatorToProxy>? = null
     private var router: Router? = null
     private var rescue: Rescue? = null
+    private var drain: Drain? = null
     private var fallbackGroups: List<String> = emptyList()
     private var sampling: ScheduledTask? = null
     private var scheduler: ScheduledExecutorService? = null
@@ -148,10 +150,12 @@ class AgentPlugin @Inject constructor(
         this.rescue = Rescue(router, ::warn)
         this.fallbackGroups = env.fallbackGroups
         val state = ProxyState(env.playerLimit)
+        val drain = Drain(players, router, ::warn)
+        this.drain = drain
         val role = ProxyRole(
             state = state,
             directory = directory,
-            drain = Drain(players, router, ::warn),
+            drain = drain,
             onFirstSync = gate::open,
             onSetReady = { ready -> if (ready) gate.open() else gate.close() },
             log = ::warn,
@@ -296,6 +300,29 @@ class AgentPlugin @Inject constructor(
      * what makes an earlier bounce history rather than an ongoing incident,
      * and this is the only event that says a player arrived.
      */
+    /**
+     * Moves a player who has just landed on a server the operator is draining.
+     *
+     * This is the drain's late half, and [Drain] carries the measurement it
+     * rests on. The short version: a player whose connection was already in
+     * flight when the drain began is counted by neither the backend nor the
+     * proxy, so `DrainPlayers` arrives and moves everyone except them, and the
+     * operator then reads an empty server and deletes the pod under them.
+     *
+     * `ServerPostConnectEvent` and not `ServerConnectedEvent`, although the
+     * agent already subscribes to the latter and it fires sooner. Velocity
+     * fires both from `TransitionSessionHandler`, but the connected one is
+     * fired mid-transition -- there is a second `setConnectedServer` after it
+     * -- and issuing a fresh connection request into that is a race against
+     * the switch still under way. The post event is on the far side of it,
+     * and the few milliseconds bought by the earlier one are not worth
+     * racing Velocity for.
+     */
+    @Subscribe
+    fun onServerPostConnect(event: ServerPostConnectEvent) {
+        drain?.landed(VelocityPlayer(event.player))
+    }
+
     @Subscribe
     fun onServerConnected(event: ServerConnectedEvent) {
         rescue?.forget(event.player.uniqueId)

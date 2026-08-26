@@ -139,7 +139,14 @@
           # operator as Hello.version) and the image tag, so the two can
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
-          imageVersion = "0.2.1";
+          #
+          # 0.2.2 is a Velocity agent change: Drain now catches a player who
+          # lands on a draining server after the drain began. It moves both
+          # images because the version is one, and both are what a `Network`
+          # names -- rolling a Paper fleet that gained nothing is the price of
+          # a single agent version, and the alternative is two versions to
+          # keep straight.
+          imageVersion = "0.2.2";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the

@@ -58,8 +58,14 @@ class VelocityPlayers(private val proxy: ProxyServer) : Players {
  * result -- a player who fails to connect is still on their old server (or
  * disconnected), and either way shows up again, or doesn't, the next time
  * [Drain.run] reads [currentServer].
+ *
+ * Internal rather than private because one arrival has to be wrapped on its
+ * own: [AgentPlugin] hands a single `ServerPostConnectEvent`'s player to
+ * [Drain.landed], and going through [VelocityPlayers.all] to find them again
+ * would be a scan of the whole proxy to rediscover the one player the event
+ * already named.
  */
-private class VelocityPlayer(private val player: Player) : PlayerRef {
+internal class VelocityPlayer(private val player: Player) : PlayerRef {
     override val username: String
         get() = player.username
 

@@ -208,29 +208,46 @@ cluster. Criterion 7 (a player can join, automated) is now proven — see
 player rather than disconnecting them) was not, and the reason why is the most
 important finding of this run.
 
-**A player connected at the proxy but not yet counted by the backend sits
-outside the drain's protection, and no milestone owns the question.**
-`Occupied()` (`internal/phase/phase.go`) is `in.PlayersStale ||
-in.PlayersOnline > 0` — what the *backend* has reported — and the proxy's own
-count is not consulted at all. Checked again 2026-08-22: nothing in 4a through
-4d changed it, so the window is exactly as open as when it was found and it no
-longer has a milestone assigned. Whoever next touches drain inherits it rather
-than finding it owned.
+**The drain's exit condition still cannot see a player who is arriving, and
+no milestone owns the question.** `Occupied()`
+(`internal/phase/phase.go`) is `in.PlayersStale || in.PlayersOnline > 0` —
+what the *backend* has reported — so a player whose connection to the draining
+server is still in flight makes it read empty.
+
+The agent no longer loses that player: `Drain` remembers which servers are
+draining and moves whoever lands on one afterwards
+(`agent/velocity/.../Drain.kt`, which carries the disassembly the rule rests
+on). What is left is the operator's half. Between the arrival and the move the
+player *is* on the draining server, and the backend's count has not caught up,
+so a `DeletePod` decided in that window still lands on someone. The window is
+now the gap between two events on one proxy rather than a whole backend
+handshake, and it is bounded by nothing stated anywhere.
+
+Reading the proxy's `playersConnected` instead would not have helped, and
+that is worth recording because it is the obvious fix: disassembling velocity
+3.5.1 build 615, `VelocityRegisteredServer.addPlayer` is called only from
+`BackendPlaySessionHandler.activated()` — the backend's *play* phase — so the
+proxy does not count such a player either. Closing this needs the proxy to
+report what only it knows, which is
+`ConnectedPlayer.getConnectionInFlightOrConnectedServer` per backend, as a
+periodic state beside `PlayerCount`. That is a proto change and a deployment
+order — every proxy has to carry it before the operator may trust it — and it
+is deferred rather than done.
+
+None of this branch's reviews caught the original, and why is the transferable
+part. The whole-branch review correctly predicted that a held connection would
+be *counted* on the proxy side, in `status.connectedPlayers`. Nobody asked the
+complementary question: which side does the drain's own exit condition read?
+The two counts live in different structs, are populated by different agents,
+and were never checked against each other until an actual delete on an actual
+held connection forced it. The prediction was also wrong, which nobody noticed
+either: the proxy does not count a held connection.
 
 In production the window is real but small: a real client completes the
 configuration phase within the same round trip. It was found because
 `spawnery-join --hold` freezes a connection there deliberately, which made a
 `kubectl delete` on a held player disconnect them rather than move them —
-`internal/mcjoin`'s `holdOpen` now carries what a held connection is and is
-not, and what closing that gap would take.
-
-None of this branch's reviews caught it, and why is the transferable part. The
-whole-branch review correctly predicted that a held connection would be
-*counted* on the proxy side, in `status.connectedPlayers`. Nobody asked the
-complementary question: which side does the drain's own exit condition read?
-The two counts live in different structs, are populated by different agents,
-and were never checked against each other until an actual delete on an actual
-held connection forced it.
+`internal/mcjoin`'s `holdOpen` carries what a held connection is and is not.
 
 ## From milestone 4a
 

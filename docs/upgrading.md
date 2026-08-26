@@ -111,6 +111,32 @@ Rolling the *operator* back on its own is safe. An agent that supports
 `FULL_SYNC` branch opens the gate unless a `false` was asserted --
 `if (!previous.synced && previous.asserted != false) onFirstSync()`.
 
+## The 0.2.2 images roll both fleets, and one of them for nothing
+
+0.2.2 is a Velocity agent change and nothing else: `Drain` now moves a player
+who lands on a draining server after the drain began, which is the arrival
+`DrainPlayers` used to miss. The Paper agent is untouched.
+
+Both images carry the tag anyway, because `flake.nix` holds one
+`imageVersion` for both, and a `Network` names both. So a Paper fleet that
+gained nothing rolls on this upgrade, one server at a time, drain-aware — the
+cost is the rollout, not any player's session. The alternative is two agent
+versions to keep straight against one operator, and that trade was made
+deliberately; the reasoning sits beside `imageVersion` itself.
+
+**No ordering requirement in either direction**, unlike the `SetReady` case
+above. Nothing new is on the wire: the change is entirely inside the proxy
+agent's own reaction to a `DrainPlayers` message it has understood since
+milestone 3c. An old proxy image against any operator behaves as it always
+did — it misses the late arrival, which is the defect, not a new failure — and
+a 0.2.2 proxy against an older operator behaves correctly. Roll them in
+whatever order suits.
+
+What this does *not* close is the operator's half, and
+`docs/known-issues.md` carries it: `Occupied()` still reads only the backend's
+count, so a `DeletePod` decided between a player's arrival and the agent's
+move still lands on someone. The window is much smaller and it is not zero.
+
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 
 `v0.1.1` added a fourth `expose` strategy to the `ProxyGroup` CRD's enum. The

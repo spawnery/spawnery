@@ -161,6 +161,165 @@ class DrainTest {
         assertEquals(3 * 2, counting.lookups - before)
     }
 
+
+    // ---- late arrivals -------------------------------------------------
+    //
+    // The half of a drain that `run` alone cannot reach. A player whose
+    // connection to the draining server was already in flight is on neither
+    // side's books when `DrainPlayers` arrives -- Drain's own doc comment
+    // carries the disassembly -- so `run` moves everyone except them, and they
+    // land afterwards on a server the operator has been told is empty.
+
+    @Test
+    fun `a player who lands on a draining server afterwards is moved off it`() {
+        val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+        // Nobody on hub when the drain arrives: this is exactly the trace the
+        // operator sees before it concludes the server is empty.
+        val players = FakePlayers(emptyList())
+        val drain = Drain(players, router) { _, _ -> }
+        drain.run("hub", listOf("lobby"))
+        assertTrue(players.moves.isEmpty(), "the drain found nobody, which is the premise")
+
+        val latecomer = FakePlayer("alice", "hub")
+        drain.landed(players.ref(latecomer))
+
+        assertEquals(listOf("alice" to "lobby-1"), players.moves)
+    }
+
+    @Test
+    fun `a player who lands on a server that is not draining is left alone`() {
+        val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+        val players = FakePlayers(emptyList())
+        val drain = Drain(players, router) { _, _ -> }
+        drain.run("hub", listOf("lobby"))
+
+        drain.landed(players.ref(FakePlayer("alice", "survival")))
+
+        assertTrue(players.moves.isEmpty(), "an ordinary arrival was moved")
+    }
+
+    @Test
+    fun `a player with no server at all is left alone`() {
+        val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+        val players = FakePlayers(emptyList())
+        val drain = Drain(players, router) { _, _ -> }
+        drain.run("hub", listOf("lobby"))
+
+        drain.landed(players.ref(FakePlayer("alice", null)))
+
+        assertTrue(players.moves.isEmpty())
+    }
+
+    @Test
+    fun `the remembered server name is matched case-insensitively`() {
+        val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+        val players = FakePlayers(emptyList())
+        val drain = Drain(players, router) { _, _ -> }
+        drain.run("HUB", listOf("lobby"))
+
+        drain.landed(players.ref(FakePlayer("alice", "hub")))
+
+        assertEquals(listOf("alice" to "lobby-1"), players.moves)
+    }
+
+    @Test
+    fun `a late arrival with nowhere to go is left in place and logged`() {
+        val router = Router(directory())
+        val players = FakePlayers(emptyList())
+        val logged = mutableListOf<String>()
+        val drain = Drain(players, router) { message, _ -> logged += message }
+        drain.run("hub", listOf("lobby"))
+
+        drain.landed(players.ref(FakePlayer("alice", "hub")))
+
+        assertTrue(players.moves.isEmpty(), "a player was moved with no target available")
+        assertTrue(
+            logged.any { it.contains("alice") && it.contains("hub") },
+            "the stranded arrival was not logged: $logged",
+        )
+    }
+
+    // ---- the drain set, rotated by FullSync -----------------------------
+    //
+    // A resync is a FullSync followed by one DrainPlayers per draining server,
+    // so what follows a FullSync is a complete statement. These pin the
+    // rotation rather than a duration, because there is no duration here.
+
+    @Test
+    fun `a drain restated after every FullSync keeps catching arrivals`() {
+        val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+        val players = FakePlayers(emptyList())
+        val drain = Drain(players, router) { _, _ -> }
+
+        // Three resyncs, each restating the drain the way the operator does
+        // for as long as the server keeps draining.
+        repeat(3) {
+            drain.resynced()
+            drain.run("hub", listOf("lobby"))
+        }
+        drain.landed(players.ref(FakePlayer("alice", "hub")))
+
+        assertEquals(listOf("alice" to "lobby-1"), players.moves)
+    }
+
+    @Test
+    fun `a drain the operator stops restating is forgotten, one resync later`() {
+        val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+        val players = FakePlayers(emptyList())
+        val drain = Drain(players, router) { _, _ -> }
+        drain.run("hub", listOf("lobby"))
+
+        // The first FullSync after the drain stops still carries it: what
+        // arrived since the previous FullSync is what becomes current, and the
+        // drain arrived in that window. Being one resync slow here is the safe
+        // direction -- it moves a player off a server that no longer needs
+        // emptying, where being early would leave one on a server about to go.
+        drain.resynced()
+        drain.landed(players.ref(FakePlayer("alice", "hub")))
+        assertEquals(listOf("alice" to "lobby-1"), players.moves)
+
+        // The second does not, because nothing restated it in between.
+        drain.resynced()
+        drain.landed(players.ref(FakePlayer("bob", "hub")))
+        assertEquals(listOf("alice" to "lobby-1"), players.moves, "bob was moved off a cancelled drain")
+    }
+
+    @Test
+    fun `a drain that arrives between FullSyncs catches arrivals at once`() {
+        val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+        val players = FakePlayers(emptyList())
+        val drain = Drain(players, router) { _, _ -> }
+
+        // The immediate DrainPlayers the operator sends when a drain starts,
+        // not the one that rides a resync. It must not wait for the next
+        // FullSync to take effect: the player it has to catch is in flight now.
+        drain.resynced()
+        drain.run("hub", listOf("lobby"))
+        drain.landed(players.ref(FakePlayer("alice", "hub")))
+
+        assertEquals(listOf("alice" to "lobby-1"), players.moves)
+    }
+
+    @Test
+    fun `a server that is itself draining is never a drain target`() {
+        val router = Router(
+            directory(
+                // Emptier, and in toGroups -- so without the exclusion it wins
+                // on both counts and the player is moved onto a server the
+                // operator is trying to empty.
+                Backend("lobby-1", "10.0.0.1:25565", "lobby"),
+                Backend("lobby-2", "10.0.0.2:25565", "lobby"),
+            ),
+        )
+        val players = FakePlayers(listOf(FakePlayer("alice", "hub")))
+        val drain = Drain(players, router) { _, _ -> }
+
+        drain.run("lobby-1", listOf("lobby"))
+        drain.run("hub", listOf("lobby"))
+
+        assertEquals(listOf("alice" to "lobby-2"), players.moves)
+    }
+
     private companion object {
         fun directory(vararg backends: Backend): ServerDirectory {
             val directory = ServerDirectory(FakeRegistry()) { _, _ -> }
