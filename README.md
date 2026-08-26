@@ -369,8 +369,8 @@ anything, and until someone pushes, every consumer still loads the images into
 their cluster by hand. The run is single-node, so node drain, `HostPort` and
 CIS pod security wait for the RKE2 rollout at the end of milestone 6.
 
-Milestone 6b is done: the traffic rules, and the agent channel's availability
-half. An accepted `Network` now writes a `NetworkPolicy` into its own
+Milestone 6b is done: the traffic rules, and the first bounds the agent
+channel ever had. An accepted `Network` now writes a `NetworkPolicy` into its own
 namespace, owned by that `Network` so the garbage collector takes it away
 again, selecting the network's own server pods: ingress on 25565 from that same
 network's proxies in that same namespace, egress to cluster DNS and to the
@@ -612,6 +612,32 @@ serves HTTPS all day, so the filtering sits in front of the cluster and not in
 anything spawnery configures. Without it there is no real join, no player for
 the PodDisruptionBudget to protect, and nothing to drive the *adding* half of
 the occupied label. All three unblock together.
+
+Since the rollout, one thing has been closed that predates every milestone
+above it: **milestone 2a promised that a compromised game server pod cannot
+harm any other, and the availability half of that promise had no bound at
+all.** 6b gave the channel `MaxConcurrentStreams`, an idle reaper and a
+`TokenReview` cache, and none of the three reaches the actual attack — a pod
+opening connections without limit, each carrying a valid token and a live
+stream, so that the idle reaper never fires and the rate limit never misses its
+cache. `internal/agentserver` now bounds connections per peer address on the
+listener itself, which is before the TLS handshake and therefore before the
+expensive half of a connection is paid for.
+
+The number is measured rather than chosen. A legitimate agent's peak is 2,
+because renewal is make-before-break and each attempt builds its own channel;
+`cmd/spawnery-stubop` counts connections for exactly this, and the high-water
+mark was 2 in every run across the plain renewal, the operator-supersede path,
+the give-up path and the Velocity agent — roughly seventy renewals, never a
+third connection. The bound is 8, four times that, and
+`hack/agent-test.sh` now asserts the peak against it, so an agent change that
+needs more fails there rather than by being refused in a cluster.
+`spawnery_agent_open_connections` and
+`spawnery_agent_connections_refused_total` publish both halves, and the chart's
+`PrometheusRule` alerts on the second.
+
+What that does not close is in `docs/known-issues.md` unchanged: the bound is
+per peer, so a *set* of compromised pods is bounded only by their number.
 
 Anyone starting there begins at
 [`docs/handover-milestone-6e.md`](docs/handover-milestone-6e.md): it says

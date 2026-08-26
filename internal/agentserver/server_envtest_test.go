@@ -662,7 +662,8 @@ func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 // Be precise about what this does NOT bound, because the convenient reading is
 // that it closes the availability gap and it does not: MaxConcurrentStreams is
 // per connection, so a pod that opens many connections is untouched by it.
-// That is what grpcauth's per-peer rate limit is for.
+// That is MaxConnectionsPerPeer's job, and
+// TestTheServerBoundsConnectionsPerPeer below is where it is proven.
 func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 	f := newServerFixture(t)
 
@@ -779,4 +780,117 @@ func restrictedCS(t *testing.T) *kubernetes.Clientset {
 		t.Fatalf("restricted clientset: %v", err)
 	}
 	return cs
+}
+
+// TestTheServerBoundsConnectionsPerPeer is the other half, and the one that
+// closes milestone 2a's availability gap: a single peer cannot hold an
+// unbounded number of connections open, no matter how legitimate each one is.
+//
+// Every connection here carries a valid token and a live stream, which is what
+// makes it the real attack rather than a caricature of one. None of the bounds
+// that came before this touches that shape -- MaxConcurrentStreams is per
+// connection, MaxConnectionIdle never fires on a connection carrying a stream,
+// and grpcauth's rate limit throttles TokenReview misses, which a pod
+// replaying one valid token does not produce.
+//
+// One connection per grpc.NewClient, deliberately. A single ClientConn would
+// multiplex every stream onto one transport, which is the previous test's
+// subject and would prove nothing here.
+func TestTheServerBoundsConnectionsPerPeer(t *testing.T) {
+	f := newServerFixture(t)
+
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(f.ca) {
+		t.Fatal("CA bundle unusable")
+	}
+	creds := credentials.NewTLS(&tls.Config{
+		RootCAs:    pool,
+		ServerName: "spawnery-operator.spawnery-system.svc",
+		MinVersion: tls.VersionTLS13,
+	})
+
+	// session opens a connection of its own and takes a stream on it as far as
+	// the operator's first message, which is the point the stream is really
+	// being served rather than merely requested.
+	session := func(i int) error {
+		conn, err := grpc.NewClient(f.addr, grpc.WithTransportCredentials(creds))
+		if err != nil {
+			return fmt.Errorf("dial: %w", err)
+		}
+		t.Cleanup(func() { _ = conn.Close() })
+
+		pod := f.pod(fmt.Sprintf("lobby-conn-%d", i))
+		token := f.token(podspec.ServerServiceAccountName,
+			[]string{podspec.AgentTokenAudience}, pod)
+		ctx := metadata.AppendToOutgoingContext(f.ctx, "authorization", "Bearer "+token)
+		stream, err := agentpb.NewAgentServiceClient(conn).ServerSession(ctx)
+		if err != nil {
+			return fmt.Errorf("open: %w", err)
+		}
+		// Recv, not Send: a Send goes into the transport's buffer and would
+		// succeed against a connection the listener has already closed.
+		if _, err := stream.Recv(); err != nil {
+			return fmt.Errorf("recv: %w", err)
+		}
+		return nil
+	}
+
+	for i := 0; i < agentserver.MaxConnectionsPerPeer; i++ {
+		if err := session(i); err != nil {
+			t.Fatalf("connection %d of the permitted %d was refused: %v",
+				i+1, agentserver.MaxConnectionsPerPeer, err)
+		}
+	}
+
+	// The one over the bound. Its TCP connection is accepted and closed before
+	// TLS, so what the client sees is a transport that will not come up --
+	// Unavailable, after grpc-go has retried it as far as the context allows.
+	over, cancel := context.WithTimeout(f.ctx, 20*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		conn, err := grpc.NewClient(f.addr, grpc.WithTransportCredentials(creds))
+		if err != nil {
+			done <- err
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		pod := f.pod("lobby-conn-over")
+		token := f.token(podspec.ServerServiceAccountName,
+			[]string{podspec.AgentTokenAudience}, pod)
+		ctx := metadata.AppendToOutgoingContext(over, "authorization", "Bearer "+token)
+		stream, err := agentpb.NewAgentServiceClient(conn).ServerSession(ctx)
+		if err != nil {
+			done <- err
+			return
+		}
+		_, err = stream.Recv()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("connection %d was served; MaxConnectionsPerPeer is not in force",
+				agentserver.MaxConnectionsPerPeer+1)
+		}
+		// Unavailable is what a transport that never came up produces, and the
+		// message it came back with says which half refused it:
+		//
+		//	transport: authentication handshake failed: EOF
+		//
+		// The connection was closed before TLS -- the listener's doing, not the
+		// authenticator's, which is the whole design argument for putting the
+		// bound on the listener rather than in a StatsHandler. The code is what
+		// is asserted, though, and not the message: Unauthenticated here would
+		// mean the connection *was* served and the token then rejected, a
+		// different outcome wearing the same failure. The code separates them
+		// where the wording would only track grpc-go's phrasing.
+		if code := status.Code(err); code != codes.Unavailable && code != codes.DeadlineExceeded {
+			t.Errorf("code = %s, want Unavailable or DeadlineExceeded (err: %v)", code, err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatalf("connection %d neither succeeded nor failed",
+			agentserver.MaxConnectionsPerPeer+1)
+	}
 }

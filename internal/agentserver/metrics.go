@@ -43,4 +43,39 @@ var RejectedReports = prometheus.NewCounterVec(
 	[]string{"role"},
 )
 
-func init() { metrics.Registry.MustRegister(OpenStreams, RejectedReports) }
+// OpenConnections is how many connections the agent listener holds right now,
+// across every peer. An agent opens one per session and a renewal overlaps two
+// for the length of a handover, so a fleet's steady state is its pod count and
+// anything durably above that is a channel somebody is not closing.
+//
+// This is also the count milestone 2c's blind spot was about: OpenStreams
+// above counts what the operator was asked to serve, so an agent leaking a
+// gRPC channel per reconnect moved this number and nothing else. Until this
+// existed, nothing measured it.
+var OpenConnections = prometheus.NewGauge(
+	prometheus.GaugeOpts{
+		Name: "spawnery_agent_open_connections",
+		Help: "Connections open on the agent endpoint.",
+	},
+)
+
+// ConnectionsRefused counts connections turned away for being over their
+// peer's bound (see peerLimiter). A healthy fleet never moves it, so any
+// increase is either a compromised pod or a bound set too low -- and the two
+// are told apart by whether the pods that own the addresses are behaving,
+// which is why the log line beside it names the peer.
+//
+// No peer label. The label values would be pod IPs, which is one new time
+// series per address the cluster ever assigns, driven by whoever is attacking:
+// a cardinality bomb the attacker aims. The peer belongs in the log, where it
+// is bounded by retention rather than by memory.
+var ConnectionsRefused = prometheus.NewCounter(
+	prometheus.CounterOpts{
+		Name: "spawnery_agent_connections_refused_total",
+		Help: "Connections refused for exceeding the per-peer connection limit.",
+	},
+)
+
+func init() {
+	metrics.Registry.MustRegister(OpenStreams, RejectedReports, OpenConnections, ConnectionsRefused)
+}

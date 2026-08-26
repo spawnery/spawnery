@@ -364,6 +364,39 @@ jq -rs '
 	| .[-6:] | .[]
 ' <"$EVENTS"
 
+# The connection peak, which is a different quantity from the stream count
+# above and the reason internal/agentserver has a bound at all. SessionLoop
+# builds a fresh ManagedChannel per attempt, so a make-before-break renewal
+# holds two connections while it holds two streams -- and until the stub
+# counted connections, an agent leaking one per reconnect moved no number this
+# script reads. MaxConnectionsPerPeer is derived from this peak, so asserting
+# it here is what keeps the derivation true: an agent change that needs a third
+# concurrent connection fails on this line rather than by being refused in a
+# cluster.
+#
+# The bound is the constant's value, restated. Reading it out of the Go source
+# would couple a shell script to a parse; restating it means the two can drift,
+# and the comment above internal/agentserver.MaxConnectionsPerPeer names this
+# assertion so whoever moves the constant is told where the other copy lives.
+CONNECTION_PEAK_BOUND=8
+peak="$(jq -rs '[.[] | select(.kind == "connection") | .peak] | max // 0' <"$EVENTS")"
+case "$peak" in
+'' | *[!0-9]*)
+	echo "could not read the connection peak: jq answered '$peak'" >&2
+	exit 1
+	;;
+esac
+if [ "$peak" -gt "$CONNECTION_PEAK_BOUND" ]; then
+	jq -c 'select(.kind == "connection")' <"$EVENTS" >&2
+	echo "the agent held $peak connections at once, over the $CONNECTION_PEAK_BOUND that internal/agentserver admits per peer" >&2
+	exit 1
+fi
+if [ "$peak" -lt 2 ]; then
+	echo "the agent never held two connections at once, so this trace saw no renewal overlap on the wire and the peak proves nothing" >&2
+	exit 1
+fi
+echo "the connection peak was $peak, within the $CONNECTION_PEAK_BOUND per peer the operator admits"
+
 # ---------------------------------------------------------------------------
 # Phase two: the operator's own retirement order.
 #

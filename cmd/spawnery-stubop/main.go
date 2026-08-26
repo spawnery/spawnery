@@ -115,6 +115,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/agentserver"
 	"github.com/spawnery/spawnery/internal/certs"
 )
 
@@ -232,8 +233,31 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Certificates: []tls.Certificate{material.Certificate},
 		MinVersion:   tls.VersionTLS13,
 	})
+	events := newRecorder(stdout)
+
+	// Counted, never refused -- the zero limit, which is the mode this stub
+	// wants and the operator never uses.
+	//
+	// streams_opened counts what the operator was asked to serve, and a stream
+	// is not a connection: SessionLoop builds a fresh ManagedChannel per
+	// attempt, so a make-before-break renewal holds two connections at once
+	// and an agent leaking one per reconnect moved no number this trace
+	// carried. The operator publishes the same count as
+	// spawnery_agent_open_connections, but that needs an operator and a
+	// cluster; here is where it can be read against a real agent, over a real
+	// socket, on one host -- which is what agent-test.sh asserts the peak from
+	// and what MaxConnectionsPerPeer is derived from. The Kotlin unit tests
+	// cannot: their in-process transport opens no socket at all.
+	counted := agentserver.NewPeerLimiter(listener, 0, func(ev agentserver.ConnEvent) {
+		events.record("connection", map[string]any{
+			"peer": ev.Peer,
+			"open": ev.Open,
+			"peak": ev.Peak,
+		})
+	})
+
 	served := &stub{
-		events:         newRecorder(stdout),
+		events:         events,
 		reportInterval: int32(*reportInterval),
 		renewAfter:     int32(*renewAfter),
 		hardDeadline:   int32(*hardDeadline),
@@ -262,7 +286,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}()
 
 	_, _ = fmt.Fprintf(stderr, "serving AgentService on %s for %v\n", listener.Addr(), []string(sans))
-	if err := server.Serve(listener); err != nil {
+	if err := server.Serve(counted); err != nil {
 		_, _ = fmt.Fprintf(stderr, "serve: %v\n", err)
 		return 1
 	}

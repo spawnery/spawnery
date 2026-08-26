@@ -177,10 +177,8 @@ operator has nothing to write to.
 
 **Smaller ones**, each worth a sentence. Phase 5 of `hack/agent-test.sh`
 reuses phase 2's window constants, declared 400 lines earlier and both derived
-from a hard-coded renewal interval. `streams_opened` counts what the operator
-saw, so a proxy leaking a gRPC channel per reconnect is measured nowhere — the
-standing blind spot inherited from milestone 2c. And `cmd/spawnery-join` asks
-a server for its protocol version by announcing an unsupported one
+from a hard-coded renewal interval. And `cmd/spawnery-join` asks a server for
+its protocol version by announcing an unsupported one
 (`announceUnsupported = -1`), trusting that the proxy's newest supported
 version and the backend's actual version agree — true of every pinned pair
 this repository ships and not guaranteed generally. `internal/mcjoin`'s
@@ -1057,33 +1055,31 @@ and counted again — is reported stale while its process runs the new secret.
 
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 
-**Milestone 2a's isolation promise does not cover availability.** The promise
-of the agent channel reads: a compromised game server pod cannot harm any
-other. For identity and confidentiality it holds — the token is
-audience-bound and accepted nowhere else, the `spawnery-server`
-ServiceAccount has no RoleBinding anywhere, pods run with
+**Milestone 2a's isolation promise holds against one compromised pod and not
+against a set of them.** The promise of the agent channel reads: a compromised
+game server pod cannot harm any other. For identity and confidentiality it
+holds — the token is audience-bound and accepted nowhere else, the
+`spawnery-server` ServiceAccount has no RoleBinding anywhere, pods run with
 `automountServiceAccountToken: false`, the private CA key never leaves the
 operator secret, and identity comes exclusively from the token and never from
 what the agent claims about itself.
 
-For availability it does not, and 6b narrowed it without closing it.
-`internal/agentserver` now sets `MaxConcurrentStreams`, `ConnectionTimeout`,
-`MaxConnectionIdle` and a keepalive policy; `internal/grpcauth` caches
-TokenReviews and rate-limits cache misses per peer; the chart ships a
-NetworkPolicy admitting 9443 only from pods labelled
-`spawnery.cloud/managed-by`. Read what each bounds rather than the group:
-**none of them bounds how many connections one pod may open**, which is the
-attack. `MaxConcurrentStreams` bounds streams on one connection and an agent
-opens one; a connection carrying a live stream is never idle, so the reaper
-does not touch it; the rate limit is unreachable by a pod replaying one valid
-token, because that pod hits the cache; and a *compromised managed* pod
-carries the label the policy admits.
+For availability it now holds for one pod, and stops exactly there. Every axis
+a single pod controls is bounded: `MaxConnectionsPerPeer` bounds its
+connections, `MaxConcurrentStreams` the streams on each, and `internal/grpcauth`
+the TokenReviews it can drive. **Nothing bounds the sum across peers.** Ten
+compromised pods are ten times the one-pod bound; the NetworkPolicy admits
+every pod carrying `spawnery.cloud/managed-by` and says nothing about how many
+there may be; and the operator holds no global ceiling — deliberately, because
+a global cap reached by one busy namespace would refuse another namespace's
+agents, which is the harm the promise is about, moved rather than removed.
 
-What 6b did remove is the API-server amplification, and the cache is what does
-it — observable from inside the operator in
-`spawnery_agent_token_review_cache_hits_total` beside its misses and
-`spawnery_agent_rate_limited_total`. Anyone quoting milestone 2a's promise has
-to quote this entry with it.
+Closing it needs a number the per-peer bound cannot use: how many agents the
+operator *ought* to be serving, which is the pod count of the groups it owns.
+It has that number in its own caches. Nothing yet compares it to
+`spawnery_agent_open_connections`, and a bound derived from it would be the
+first one in this channel that is a statement about the fleet rather than
+about a peer.
 
 ## From the milestone 6a Task 4 measurement round (2026-08-17)
 

@@ -58,8 +58,9 @@ const (
 	// MaxConcurrentStreams bounds streams on ONE connection. An agent opens
 	// exactly one -- proto/spawnery/agent/v1alpha1 has two RPCs and a session
 	// uses one of them -- so this is generous by an order of magnitude. What it
-	// does not bound is how many connections a pod may open, which is the
-	// documented attack and is grpcauth's rate limit's job.
+	// does not bound is how many connections a pod may open: that is
+	// MaxConnectionsPerPeer below, and PeerLimiter's doc comment says why none
+	// of the bounds that came before it reaches that far.
 	MaxConcurrentStreams uint32 = 8
 
 	// ConnectionTimeout bounds how long a half-finished handshake holds
@@ -70,6 +71,43 @@ const (
 	// session stream is long-lived, so a connection that has been idle this
 	// long has lost its agent.
 	MaxConnectionIdle = 5 * time.Minute
+
+	// MaxConnectionsPerPeer bounds how many connections one peer address may
+	// hold at once. PeerLimiter says what a peer is, why the bound sits on the
+	// listener, and what it does and does not close. This is where the number
+	// comes from.
+	//
+	// A legitimate agent's peak is 2, and that is measured rather than read
+	// off SessionLoop. Renewal is make-before-break and every attempt builds
+	// its own ManagedChannel, so the replacement's connection and the outgoing
+	// one overlap for the length of a handover. cmd/spawnery-stubop counts
+	// connections for exactly this (see its zero-limit PeerLimiter); against
+	// the pinned 0.2.1 images on 2026-08-26 the high-water mark was 2 in every
+	// run, over roughly seventy renewals and four paths:
+	//
+	//	Paper, plain renewal            17 renewals   peak 2
+	//	Paper, --supersede              17 renewals   peak 2
+	//	Paper, --mute-after             8 give-ups    peak 2
+	//	Velocity, --proxy               18 renewals   peak 2
+	//
+	// The give-up path is the interesting one: it drops to 0 between attempts,
+	// because an operator that never answered leaves nothing to hand over.
+	// Nothing observed 3.
+	//
+	// Eight is four times that, and the factor is a judgement where the peak
+	// is a measurement. It is loose on purpose, because the two directions
+	// cost differently. Too high costs a bounded multiple of one connection --
+	// the attack is *unbounded*, so it is already defeated at any small finite
+	// number, and 8 versus 4 is not a security difference. Too low costs a
+	// working agent its session, on a bound nothing in the fleet can see
+	// coming. It also leaves room for the one legitimate shape that would
+	// exceed 2 without anything being wrong: an agent holding both of
+	// AgentService's RPCs at once, each renewing, which is 4. A pod is one
+	// role today, so no agent does.
+	//
+	// hack/agent-test.sh asserts the peak against this constant, so an agent
+	// change that raises it fails there rather than in a cluster.
+	MaxConnectionsPerPeer = 8
 
 	// MinKeepaliveInterval is how often a client may ping. The agents send no
 	// keepalive at all -- agent/common's SessionLoop says so in its own
@@ -181,6 +219,26 @@ func (s *Server) Start(ctx context.Context) error {
 	bound := listener.Addr().String()
 	s.addr.Store(&bound)
 
+	// Bounded per peer before the TLS handshake, which is the expensive half
+	// of a connection and the half the attack is after. PeerLimiter's doc
+	// comment carries the argument for the cut and for the key.
+	//
+	// The log is deliberately not one line per refusal. A peer that is over
+	// its bound is by definition one opening connections as fast as it can, so
+	// a line each would hand it the operator's log as the amplifier the
+	// connections themselves no longer are. One line at the first refusal and
+	// then at every power of ten keeps an episode legible -- first, tenth,
+	// hundredth -- while the count an operator actually alerts on lives in
+	// spawnery_agent_connections_refused_total.
+	limited := NewPeerLimiter(listener, MaxConnectionsPerPeer, func(ev ConnEvent) {
+		if !ev.Refused || !isPowerOfTen(ev.Refusals) {
+			return
+		}
+		logger.Info("refusing connections from a peer at its limit",
+			"peer", ev.Peer, "open", ev.Open, "limit", MaxConnectionsPerPeer,
+			"refused", ev.Refusals)
+	})
+
 	// GetCertificate rather than a fixed certificate: the provider rotates it
 	// underneath us and every handshake must pick up the current one.
 	creds := credentials.NewTLS(&tls.Config{
@@ -225,7 +283,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}()
 
 	logger.Info("serving agents", "addr", bound)
-	if err := grpcServer.Serve(listener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+	if err := grpcServer.Serve(limited); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 		return fmt.Errorf("serve agents: %w", err)
 	}
 	<-stopped
