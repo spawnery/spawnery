@@ -1003,6 +1003,43 @@ if [ "$proxy_slots" != "$PROXY_LIMIT" ]; then
 fi
 echo "the proxy reports its configured player limit as slots"
 
+# The message the operator's drain rests on, and the one whose absence looks
+# exactly like a working agent.
+#
+# BackendPlayers is what tells the operator a player is *arriving* at a
+# backend. Neither the backend nor the proxy's own getPlayersConnected() can
+# see one -- velocity 3.5.1 build 615 calls VelocityRegisteredServer.addPlayer
+# from BackendPlaySessionHandler.activated() and from nowhere else, so a player
+# still in the configuration phase is counted by neither. An agent that stopped
+# sending this would leave every other assertion in this phase green while a
+# drain deleted a pod under somebody, which is why it is checked here rather
+# than left to the unit tests that cannot reach a real proxy.
+#
+# The map is empty in this phase -- no player has ever joined this proxy -- and
+# that is the assertion: the message arrives on the reporting tick whether or
+# not anybody is on a backend, because it is a state and not an event. A
+# version that only sent it when it had something to say would be silent
+# exactly when the operator most needs to hear "nobody".
+await_event backend_players "$EVENTS4" "$NAME4"
+backends4="$(jq -rs '[.[] | select(.kind == "backend_players")] | length' <"$EVENTS4")"
+case "$backends4" in
+'' | *[!0-9]*)
+	echo "could not count backend_players events: jq answered '$backends4'" >&2
+	exit 1
+	;;
+esac
+if [ "$backends4" -lt 1 ]; then
+	echo "the proxy never reported which backends its players are on" >&2
+	exit 1
+fi
+empty4="$(jq -rs '[.[] | select(.kind == "backend_players") | .backends | length] | max' <"$EVENTS4")"
+if [ "$empty4" != "0" ]; then
+	echo "the proxy reported players on a backend nobody has ever joined: $empty4" >&2
+	jq -c 'select(.kind == "backend_players")' <"$EVENTS4" >&2
+	exit 1
+fi
+echo "the proxy reports its backend attachments, empty and on every tick"
+
 # The gate closes on the operator's word, which is the contract milestone 4c-1
 # hangs the whole drain on: the operator tells a surplus proxy to stop being
 # ready, the kubelet's probe fails, the Service drops the endpoint, and no new

@@ -140,13 +140,14 @@
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
           #
-          # 0.2.2 is a Velocity agent change: Drain now catches a player who
-          # lands on a draining server after the drain began. It moves both
+          # 0.2.3 is a Velocity agent change: the proxy now reports which
+          # backends its players are attached to, which is the only way the
+          # operator can see a player who is still arriving. It moves both
           # images because the version is one, and both are what a `Network`
           # names -- rolling a Paper fleet that gained nothing is the price of
           # a single agent version, and the alternative is two versions to
           # keep straight.
-          imageVersion = "0.2.2";
+          imageVersion = "0.2.3";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -154,7 +155,7 @@
           # Hello.version -- and hanging the operator's tag off it would mean a
           # fix in the reconciler claiming a new agent version, and an agent
           # release renaming an unchanged operator image.
-          operatorVersion = "0.2.2";
+          operatorVersion = "0.2.3";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

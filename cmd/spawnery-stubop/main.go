@@ -102,6 +102,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -905,6 +906,30 @@ func (s *stub) observeProxy(of func(map[string]any) map[string]any, message *age
 			"player": body.PlayerJoinedServer.GetPlayer(),
 			"server": body.PlayerJoinedServer.GetServer(),
 		}))
+	case *agentpb.ProxyMessage_BackendPlayers:
+		// Recorded rather than ignored, because this is the one message whose
+		// absence looks exactly like an agent that works. It is what tells the
+		// operator a player is *arriving* at a backend, which neither the
+		// backend nor the proxy's own player list can see, and an agent that
+		// silently stopped sending it would leave every trace here looking
+		// perfectly healthy while a drain deleted a pod under somebody.
+		//
+		// The map is sorted into a slice of pairs, not written as an object:
+		// a JSON object's key order is not a thing a test can assert on, and
+		// this trace exists to be asserted on.
+		names := make([]string, 0, len(body.BackendPlayers.GetPlayers()))
+		for name := range body.BackendPlayers.GetPlayers() {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		pairs := make([]map[string]any, 0, len(names))
+		for _, name := range names {
+			pairs = append(pairs, map[string]any{
+				"server":  name,
+				"players": body.BackendPlayers.GetPlayers()[name],
+			})
+		}
+		s.events.record("backend_players", of(map[string]any{"backends": pairs}))
 	case *agentpb.ProxyMessage_Heartbeat:
 		s.events.record("heartbeat", of(map[string]any{}))
 	default:
