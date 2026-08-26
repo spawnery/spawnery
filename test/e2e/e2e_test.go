@@ -136,6 +136,7 @@ func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("the table holds against the real authorizer", theTableHoldsAgainstTheRealAuthorizer)
 	t.Run("the network gets its policy", theNetworkGetsItsPolicy)
 	t.Run("the operator stays ready behind its own policy", theOperatorStaysReadyBehindItsOwnPolicy)
+	t.Run("the operator checked its own permissions", theOperatorCheckedItsOwnPermissions)
 	t.Run("the operator was never denied", theOperatorWasNeverDenied)
 }
 
@@ -203,9 +204,12 @@ func theOperatorIsUp(t *testing.T) {
 // logs. This check can only see what something logs, so an error the code
 // handles well is invisible to it.
 //
-// Read a green run as evidence about write paths, and see
-// docs/known-issues.md's two milestone 6a sections for what it does not
-// establish beyond them. Do not add a sleep to manufacture traffic.
+// Read a green run as evidence about write paths and nothing wider. What
+// covers the rest is theOperatorCheckedItsOwnPermissions, which reads the
+// operator's own verdict on itself: a SelfSubjectAccessReview asks the
+// authorizer rather than waiting to be refused, so it is blind to neither of
+// the cases above. This check is kept beside it because a quoted denial is
+// worth reading when there is one. Do not add a sleep to manufacture traffic.
 //
 // The restart re-check below is not redundant with theOperatorIsUp. That
 // subtest runs first, before any scenario has driven a single call; this one

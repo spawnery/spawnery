@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -145,4 +146,46 @@ func operatorSubject(t *testing.T) string {
 	}
 
 	return "system:serviceaccount:" + subj.Namespace + ":" + subj.Name
+}
+
+// theOperatorCheckedItsOwnPermissions reads the operator's verdict on itself.
+//
+// theTableHoldsAgainstTheRealAuthorizer above asks the same questions, but it
+// asks them as the test, about a third party, from an admin identity. This
+// asks whether the operator asked -- whether rbacaudit.Checker is wired in,
+// runs, and says what it found. Those are different failures: a chart that
+// grants everything correctly and an operator that never checks would pass
+// that test and this one is the only thing that would notice.
+//
+// It is also the answer to what theOperatorWasNeverDenied cannot see. That
+// check greps for the API server's own `is forbidden:` phrasing, so it is
+// blind to a cache-backed verb, which is claimed by a watch that retries
+// silently, and to an error the code handles well enough to phrase itself.
+// A SelfSubjectAccessReview is blind to neither.
+func theOperatorCheckedItsOwnPermissions(t *testing.T) {
+	log, _ := operatorLog(t)
+
+	if strings.Contains(log, "is missing permissions it needs") {
+		t.Errorf("the operator reports permissions it does not have. Its own lines say which:\n%s",
+			strings.Join(linesContaining(log, "is missing permissions it needs"), "\n"))
+	}
+
+	granted := linesContaining(log, "every permission the operator needs is granted")
+	if len(granted) < len(rbacaudit.DefaultScopes(operatorNamespace)) {
+		t.Errorf("the operator reported on %d permission scopes, want %d. Either the "+
+			"self-check is not wired in or it did not finish; without it a permission "+
+			"revoked while the operator runs is invisible to everything here",
+			len(granted), len(rbacaudit.DefaultScopes(operatorNamespace)))
+	}
+}
+
+// linesContaining is denialsIn's shape for an arbitrary substring.
+func linesContaining(log, want string) []string {
+	var found []string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, want) {
+			found = append(found, line)
+		}
+	}
+	return found
 }

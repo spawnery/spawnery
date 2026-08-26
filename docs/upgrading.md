@@ -203,9 +203,30 @@ see in its own caches: a pod in a namespace it does not watch, or an agent
 reaching it from outside the pod network. Neither is a supported shape, and now
 neither is a free one.
 
-**The operator rolls, the fleets do not.** This is operator-side only:
-`internal/podspec` is untouched, so no pod's rendered hash moves, and the
-agents are unchanged.
+## 0.2.4: the permission self-check repeats
+
+The operator has asked the API server what it may actually do since 0.2.2, at
+startup. From 0.2.4 it asks again every ten minutes, so a permission revoked
+while it runs is reported instead of turning it into a process that looks
+healthy and reconciles nothing on the paths that need the verb.
+
+Nothing to do. `--permission-check-interval` sets the cadence and a negative
+value restores exactly what 0.2.3 did, one check at startup. The cost of the
+repeat was measured before it was chosen: 73 `SelfSubjectAccessReview`s in
+54 ms against a real API server, with the client-side rate limiter off, which
+is what controller-runtime v0.24 configures by default. A cluster that sets a
+client QPS instead should know that the same 73 take 3.4 seconds at 20 and
+13.4 at client-go's default of 5.
+
+What to watch is `spawnery_permissions_missing`, a gauge per scope, absent
+until the first check answers and left where it was when one fails. The chart's
+PrometheusRule alerts on it. In the log, a denial repeats at every check and a
+grant is logged only when it is news — at startup, and again when a denial has
+been repaired.
+
+**The operator rolls, the fleets do not.** Everything in this release is
+operator-side: `internal/podspec` is untouched, so no pod's rendered hash
+moves, and the agents are unchanged.
 
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 

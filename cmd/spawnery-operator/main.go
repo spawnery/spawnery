@@ -18,7 +18,6 @@ limitations under the License.
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"net/http"
@@ -218,19 +217,20 @@ func managerOptions(f managerFlags) manager.Options {
 
 func main() {
 	var (
-		metricsAddr          string
-		probeAddr            string
-		leaderElect          bool
-		watchNamespace       string
-		reportInterval       time.Duration
-		startupDeadline      time.Duration
-		playerStatusInterval time.Duration
-		orphanInterval       time.Duration
-		operatorNamespace    string
-		agentBindAddress     string
-		renewAfter           time.Duration
-		hardDeadline         time.Duration
-		drainTaints          taintKeys
+		metricsAddr             string
+		probeAddr               string
+		leaderElect             bool
+		watchNamespace          string
+		reportInterval          time.Duration
+		startupDeadline         time.Duration
+		playerStatusInterval    time.Duration
+		orphanInterval          time.Duration
+		operatorNamespace       string
+		agentBindAddress        string
+		permissionCheckInterval time.Duration
+		renewAfter              time.Duration
+		hardDeadline            time.Duration
+		drainTaints             taintKeys
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
@@ -249,6 +249,10 @@ func main() {
 		"how often the orphan sweep runs")
 	flag.StringVar(&operatorNamespace, "operator-namespace", os.Getenv("POD_NAMESPACE"),
 		"namespace the operator runs in; holds the TLS secret and the agent service")
+	flag.DurationVar(&permissionCheckInterval, "permission-check-interval", rbacaudit.DefaultCheckInterval,
+		"how often the operator asks the API server whether it still has the permissions it needs. "+
+			"A negative value checks once at startup and never again, which is what it did before "+
+			"0.2.4; the cost of the repeat is 73 SelfSubjectAccessReviews, measured at 54ms.")
 	flag.StringVar(&agentBindAddress, "agent-bind-address", fmt.Sprintf(":%d", agentserver.DefaultPort),
 		"address the agent gRPC endpoint binds to")
 	flag.DurationVar(&renewAfter, "agent-session-renew-after", 8*time.Minute,
@@ -328,50 +332,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// What the API server says this identity may actually do, asked once
-	// before anything relies on it.
+	// What the API server says this identity may actually do, asked now and
+	// then again on an interval.
 	//
 	// Added as a Runnable so it runs after the manager has started and the
-	// leader election, if any, has settled -- a non-leader answering the same
-	// questions is the same answer, so it does not need to be, but a check
-	// that ran before Start would report before the process is in a position
-	// to act on anything anyway. It is deliberately not leader-bound: an
-	// installation whose RBAC is wrong should say so on every replica, since
-	// the replica that says nothing is the one somebody is looking at.
-	//
-	// It does not stop the operator. A missing permission may be one this
-	// cluster's paths never take, and refusing to start would turn a
-	// degradation into an outage on the strength of a table maintained by
-	// hand. Loud is the point: rbacaudit.Verify's own comment carries the
-	// measurement that made silence unacceptable -- seven and three-quarter
-	// minutes with pods:list revoked, and not one log line anywhere.
-	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
-		reviewer := clientset.AuthorizationV1().SelfSubjectAccessReviews()
-		for _, scope := range []struct {
-			what      string
-			required  []rbacaudit.Permission
-			namespace string
-		}{
-			{"cluster-scoped", rbacaudit.RequiredCluster, ""},
-			{"in its own namespace", rbacaudit.RequiredNamespaced, operatorNamespace},
-		} {
-			denied, err := rbacaudit.Verify(ctx, reviewer, scope.required, scope.namespace)
-			if err != nil {
-				// Reported and not fatal, for the same reason a denial is not:
-				// an API server that cannot answer a review says nothing about
-				// what this operator may do.
-				setupLog.Error(err, "could not check the operator's own permissions", "scope", scope.what)
-				continue
-			}
-			if len(denied) == 0 {
-				setupLog.Info("every permission the operator needs is granted", "scope", scope.what)
-				continue
-			}
-			setupLog.Error(nil, "the operator is missing permissions it needs; it will run and reconcile nothing on the paths that use them",
-				"scope", scope.what, "count", len(denied), "missing", rbacaudit.DeniedMessage(denied))
-		}
-		return nil
-	})); err != nil {
+	// leader election, if any, has settled -- a check that ran before Start
+	// would report before the process is in a position to act on anything
+	// anyway. rbacaudit.Checker carries the rest of the reasoning: why it is
+	// not leader-bound, why it is loud rather than fatal, and what asking
+	// repeatedly costs, which was measured before it was decided.
+	if err := mgr.Add(&rbacaudit.Checker{
+		Reviewer: clientset.AuthorizationV1().SelfSubjectAccessReviews(),
+		Scopes:   rbacaudit.DefaultScopes(operatorNamespace),
+		Interval: permissionCheckInterval,
+	}); err != nil {
 		setupLog.Error(err, "unable to add the permission self-check")
 		os.Exit(1)
 	}

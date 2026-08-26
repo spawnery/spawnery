@@ -229,32 +229,11 @@ and `make e2e`: a `kind` cluster in which the operator runs as a Deployment
 under its own ServiceAccount while a Go test package drives it through twelve
 ordered subtests — design §7.1's nine scenarios, plus the operator's own
 health, plus §7.3's permission table against the real authorizer, plus §7.2's
-last one, which reads the operator's whole log for `is forbidden:`. The section
-above — Task 4's
-measurement round — belongs to this milestone too and is not repeated here; the
-first item below is what answered its open question.
-
-**The denial check reads a log, so an error the code handles well is
-invisible to it — and the self-check that answers the wider question runs
-once.** `hack/e2e.sh`'s §7.2 scenario greps the operator's whole log for
-`is forbidden:`. A revoked *write* verb produces exactly that on the first
-attempt, measured. A revoked cache-backed *list* produces nothing at all,
-measured over seven and three-quarter minutes with `pods: list` gone: no log
-line, no `403` in `rest_client_requests_total` across 24 samples, no restart.
-And `readForwardingSecret` deliberately folds a real 403 into a message
-reading "the operator may not read secret …", with no `is forbidden:` anywhere
-in it — an error handled well is invisible to a check that can only see what
-something logs.
-
-Since 2026-08-26 the operator asks the authorizer directly instead of waiting
-to be refused: a `SelfSubjectAccessReview` per entry of
-`rbacaudit.RequiredCluster` and `RequiredNamespaced` at startup, which sees a
-cache-backed verb exactly as well as any other and names the call site of
-every one it lacks. **That runs once.** A permission revoked while the
-operator is running is still invisible — the same silence, arriving later —
-and closing that would mean 74 reviews on every resync for a state that
-changes when a person changes it. Whether that trade is worth taking is the
-open question; nothing else here is.
+last one, which reads the operator's whole log for `is forbidden:`. What that
+grep can and cannot see was measured four ways during Task 4 and is written
+down where it applies, in `theOperatorWasNeverDenied`'s own comment; the
+operator's answer to the wider question — asking the authorizer directly, every
+ten minutes — is `rbacaudit.Checker`.
 
 **A group's count of live servers briefly touched zero under sustained
 churn** before recovering — observed during Task 5, not investigated, and

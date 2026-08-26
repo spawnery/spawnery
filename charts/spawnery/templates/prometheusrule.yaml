@@ -153,4 +153,36 @@ spec:
               beside a fleet that plainly is not empty is the third reading:
               the count itself is broken, and the endpoint is serving one
               peer's worth while it is.
+
+    - name: spawnery-permissions
+      rules:
+        # The operator asks the API server every ten minutes whether it still
+        # has the permissions it needs, and this is what survives the asking.
+        # The reason it is not enough to watch for denials in the log was
+        # measured during milestone 6a: a permission reached only through the
+        # manager's cache is claimed by a watch, and a watch that cannot start
+        # is retried silently forever -- seven and three-quarter minutes with
+        # pods:list revoked produced no log line, no 403 in
+        # rest_client_requests_total, and no restart. The operator sits there
+        # looking healthy and reconciling nothing.
+        #
+        # Five minutes rather than none: a check runs every ten, so a single
+        # scrape landing between a revocation and the next round is not
+        # something to page on. Anything that survives one full round is real.
+        - alert: SpawneryOperatorMissingPermissions
+          expr: spawnery_permissions_missing > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: The spawnery operator lacks {{ "{{ $value }}" }} permission(s) it needs ({{ "{{ $labels.scope }}" }}).
+            description: >-
+              The operator's log names each missing verb and the call site that
+              needs it -- search it for "is missing permissions it needs". It
+              keeps running on purpose, because a missing permission may be one
+              this cluster's paths never take, so nothing else will look wrong:
+              the paths that need the verb simply reconcile nothing. Compare
+              the ClusterRole and Role in the release against
+              config/rbac/role.yaml, and check that the bindings still name the
+              operator's ServiceAccount.
 {{- end }}
