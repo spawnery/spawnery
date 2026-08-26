@@ -3524,3 +3524,205 @@ func TestAProxyGroupReportsItsOwnRotationState(t *testing.T) {
 			got.Status, got.Reason, spawneryv1alpha1.ReasonRotationPending)
 	}
 }
+
+// refusedFixture is the shape all four tests below start from: a group with
+// two ready proxies, one of them on a node that is then cordoned, and a
+// Network that is then deleted so every later reconcile takes the refusing
+// path. It returns the pods in the order proxyPods gives them, with pods[1]
+// the one on the departing node.
+func refusedFixture(t *testing.T) (*fixture, *ProxyGroupReconciler, []corev1.Pod, *corev1.Node) {
+	t.Helper()
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.bindPodToNode(t, &pods[1], node.Name)
+	f.ensureNode(t, node.Name, true)
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete network: %v", err)
+	}
+	return f, r, pods, node
+}
+
+// proxyPod returns one of the group's live pods by name, or nil if it is gone.
+// A helper rather than a scan at each call site, because "is it still there"
+// is the question four of these tests ask and a loop that fell through
+// silently would answer it wrongly.
+func (f *fixture) proxyPod(t *testing.T, name string) *corev1.Pod {
+	t.Helper()
+	for _, p := range f.proxyPods("gateway") {
+		if p.Name == name {
+			return &p
+		}
+	}
+	return nil
+}
+
+// assertRefused makes each test below a statement about the gate rather than
+// about whatever else the pass did.
+func assertRefused(t *testing.T, f *fixture) {
+	t.Helper()
+	accepted := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonNetworkNotFound {
+		t.Fatalf("Accepted = %v, want False/%s", accepted, spawneryv1alpha1.ReasonNetworkNotFound)
+	}
+}
+
+// TestARefusedGroupDrainsAProxyOffADepartingNode is the defect. Such a group
+// published NodeDraining: True naming the node, sized minAvailable to cover
+// every occupied proxy so the eviction API refused the pod, and then never
+// marked it draining, never withdrew its readiness and never started its
+// removal deadline. `kubectl drain` could not finish until somebody repaired
+// the Network -- the budget refused the disruption, nothing acted on it.
+func TestARefusedGroupDrainsAProxyOffADepartingNode(t *testing.T) {
+	f, r, pods, _ := refusedFixture(t)
+	going := pods[1]
+
+	f.reportProxyPlayers(t, going, 0)
+
+	f.reconcileProxyGroup(r, "gateway")
+	assertRefused(t, f)
+
+	// Readiness withdrawn, so no further player is routed to a pod that is
+	// about to go. This is the half the budget cannot do.
+	if got := f.proxies.lastReady(string(going.UID)); got == nil || *got {
+		t.Errorf("lastReady(%s) = %v, want false: the proxy on the departing node is still taking players",
+			going.Name, got)
+	}
+	// And the survivor is untouched, which is what says the drain is aimed
+	// rather than applied to the group.
+	if got := f.proxies.lastReady(string(pods[0].UID)); got == nil || !*got {
+		t.Errorf("lastReady(%s) = %v, want true", pods[0].Name, got)
+	}
+
+	// Reported empty on a live stream, which is what "empty" has to mean here:
+	// a proxy whose agent has never spoken reads as occupied on purpose, so
+	// that a pod whose stream broke is not deleted with people on it. So the
+	// deletion is immediate and costs nobody anything.
+	live := f.proxyPods("gateway")
+	for _, p := range live {
+		if p.Name == going.Name {
+			t.Fatalf("proxy %s is still there; a refused group still cannot drain a departing node", p.Name)
+		}
+	}
+}
+
+// TestARefusedGroupWaitsOutTheDeadlineForAnOccupiedProxy is the other side of
+// the same loop, and the one that decides whether this fix is safe. An
+// occupied proxy is not deleted on the pass that marks it -- that would
+// disconnect exactly the players the readiness contract exists to protect --
+// and goes only when spec.drain.timeoutSeconds has passed.
+func TestARefusedGroupWaitsOutTheDeadlineForAnOccupiedProxy(t *testing.T) {
+	f, r, pods, _ := refusedFixture(t)
+	going := pods[1]
+	f.reportProxyPlayers(t, going, 3)
+
+	f.reconcileProxyGroup(r, "gateway")
+	assertRefused(t, f)
+
+	marked := f.proxyPod(t, going.Name)
+	if marked == nil {
+		t.Fatal("the occupied proxy was deleted with players on it")
+	}
+	if _, dated := drainingSince(marked); !dated {
+		t.Error("the occupied proxy carries no draining mark, so its deadline never starts")
+	}
+	if got := f.proxies.lastReady(string(going.UID)); got == nil || *got {
+		t.Errorf("lastReady = %v, want false", got)
+	}
+
+	// Past the deadline, which is DrainTimeout's five minutes here -- the
+	// fixture's ProxyGroup sets no spec.drain, so the default is what runs.
+	f.clock.Advance(6 * time.Minute)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if f.proxyPod(t, going.Name) != nil {
+		t.Error("the proxy outlived its drain deadline on a refused group")
+	}
+}
+
+// TestARefusedGroupLeavesASurplusProxyAlone keeps the new behaviour as narrow
+// as its reasoning. Surplus and a stale hash both need a replacement the group
+// cannot build without its Network, and both can wait for the Network at no
+// cost to anybody; only a departing node cannot wait.
+func TestARefusedGroupLeavesASurplusProxyAlone(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+
+	// Replicas down to one and the Network gone, with no node going anywhere.
+	group := f.proxyGroup("gateway")
+	group.Spec.Replicas = 1
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("lower replicas: %v", err)
+	}
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete network: %v", err)
+	}
+
+	f.reconcileProxyGroup(r, "gateway")
+	assertRefused(t, f)
+
+	if live := f.proxyPods("gateway"); len(live) != 2 {
+		t.Errorf("proxy pods = %d, want both: a refused group drains for a departing node and nothing else",
+			len(live))
+	}
+	for i := range pods {
+		if got := f.proxies.lastReady(string(pods[i].UID)); got == nil || !*got {
+			t.Errorf("lastReady(%s) = %v, want true", pods[i].Name, got)
+		}
+	}
+}
+
+// TestUncordoningRestoresARefusedGroupsProxy is the cancellation. leaving is
+// recomputed from the node on every pass and never read back off the
+// annotation, which matters most here: a refused group cannot create a
+// replacement, so a drain it could not undo would cost it a proxy for nothing.
+func TestUncordoningRestoresARefusedGroupsProxy(t *testing.T) {
+	f, r, pods, node := refusedFixture(t)
+	going := pods[1]
+	// Occupied, so the pod survives the marking pass and there is something
+	// left to restore.
+	f.reportProxyPlayers(t, going, 2)
+
+	f.reconcileProxyGroup(r, "gateway")
+	assertRefused(t, f)
+	if marked := f.proxyPod(t, going.Name); marked == nil {
+		t.Fatal("the proxy went before it could be restored")
+	} else if _, dated := drainingSince(marked); !dated {
+		t.Fatal("the proxy was never marked, so this test would pass for the wrong reason")
+	}
+
+	f.ensureNode(t, node.Name, false)
+	f.reconcileProxyGroup(r, "gateway")
+
+	restored := f.proxyPod(t, going.Name)
+	if restored == nil {
+		t.Fatal("the proxy was deleted after its node was released")
+	}
+	if _, dated := drainingSince(restored); dated {
+		t.Error("the draining mark survived the uncordon, so the deadline is still running")
+	}
+	if got := f.proxies.lastReady(string(going.UID)); got == nil || !*got {
+		t.Errorf("lastReady = %v, want true: the proxy is out of service with nothing able to bring it back", got)
+	}
+}

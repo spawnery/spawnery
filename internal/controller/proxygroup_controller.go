@@ -429,13 +429,15 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 // the reason on the group's Accepted condition; this does everything that is
 // the same for all three.
 //
-// Divergence is forgotten because this return is before reconcileReplicas,
-// and reportReadinessDivergence -- the only caller of Divergence.observe --
-// runs nowhere else, so no observation of this group is coming on this pass.
-// See the comment on the readinessDivergence type for why forgetting, not a
-// TTL, is the right response to a gap in observation. protectPlayersOnly does
-// call r.pods(), which observes the *expectations*: a different structure,
-// with its own TTL, that this reasoning does not touch.
+// Divergence is no longer forgotten here, and that changed with the reason for
+// it. This used to be the one return before reconcileReplicas, the only caller
+// of Divergence.observe, so no observation of this group was coming on this
+// pass and forgetting was the right response to a gap in observation -- see
+// the comment on the readinessDivergence type. protectPlayersOnly now runs
+// drainDeparting, which withdraws readiness and reports divergence for the
+// pods it acts on, so there is no gap to forget: a proxy told to stop taking
+// connections while its group is refused is exactly as capable of ignoring
+// the instruction as any other, and a cleared observation would hide it.
 //
 // The status is written whether or not protectPlayersOnly succeeded, and the
 // reason is the one the accepted path states for its own early write: a
@@ -451,7 +453,6 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 // controller-runtime ignores it when the error is non-nil and backs off
 // instead, which is the behaviour wanted for a failed protection pass.
 func (r *ProxyGroupReconciler) refuse(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) (ctrl.Result, error) {
-	r.Divergence.forget(group.Namespace + "/" + group.Name)
 	protectErr := r.protectPlayersOnly(ctx, group)
 	if err := r.writeStatus(ctx, group); err != nil {
 		return ctrl.Result{}, err
@@ -517,11 +518,28 @@ func (r *ProxyGroupReconciler) protectPlayersOnly(ctx context.Context, group *sp
 		return err
 	}
 	nodeGoing := make([]bool, len(pods))
+	// The departing-node pods, and only those. Everything else DecideRollout
+	// would have nominated -- a surplus reduction, a stale hash -- needs a
+	// replacement this group cannot build without its Network, and can wait
+	// for the Network at no cost to anybody. A departing node cannot wait; see
+	// drainDeparting.
+	leaving := make(map[string]bool, len(pods))
 	for i := range pods {
 		nodeGoing[i] = nodeDeparting(ctx, r.Client, pods[i].Spec.NodeName, r.DrainTaintKeys)
+		if nodeGoing[i] {
+			leaving[pods[i].Name] = true
+		}
 	}
 	r.reportNodeDraining(group, pods, nodeGoing)
-	return r.protectOccupiedProxies(ctx, group, pods)
+	// Before the drain, not after: the label and the budget are what stand
+	// between the eviction API and a proxy that still has players, and
+	// drainDeparting can delete a pod, which changes what the budget is
+	// sizing. Protecting first means the budget of this pass describes the
+	// fleet the drain then acted on.
+	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
+		return err
+	}
+	return r.drainDeparting(ctx, group, pods, leaving, nodeGoing)
 }
 
 // pods lists the group's live proxy pods, oldest first, so scale-down is
@@ -1039,6 +1057,64 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		}
 	}
 
+	// The drain half, shared with the path that never gets here. See
+	// drainDeparting.
+	return r.drainDeparting(ctx, group, pods, leaving, nodeGoing)
+}
+
+// drainDeparting is everything a proxy pod's removal consists of once
+// something has decided it should go: withdraw its readiness so no new player
+// arrives, stamp the draining mark that starts its deadline, and delete it
+// once it is empty or that deadline has passed.
+//
+// It is a function of its own because two callers need it and only one of them
+// used to have it. reconcileReplicas passes what DecideRollout nominated --
+// surplus, a stale hash, a departing node. protectPlayersOnly passes the
+// departing-node pods and nothing else, on the three paths that give up before
+// reconcileReplicas ever runs: a missing Network, one that is not Accepted,
+// and an expose.type this operator has no branch for.
+//
+// # Why the refusing paths get this and not the rest of reconcileReplicas
+//
+// A group whose Network is broken cannot create anything -- the render needs
+// the Network -- so it cannot replace a proxy it removes. Everything
+// DecideRollout does is therefore out of reach there, and that is right: a
+// surplus reduction and a hash rollout can both wait for the Network without
+// costing anyone anything.
+//
+// A departing node cannot wait. The node is going whatever this operator
+// decides, and the only question is whether its proxy leaves gracefully or is
+// killed by the kubelet with its players still on it. Before this ran on those
+// paths, a ProxyGroup with a broken Network published NodeDraining: True
+// naming the node, sized minAvailable to cover every occupied proxy -- so the
+// eviction API refused every attempt to take that proxy -- and then never
+// marked it draining, never started its removal deadline and never withdrew
+// its readiness. `kubectl drain` could not complete against such a group until
+// somebody fixed the Network. The budget refused the disruption; nothing acted
+// on it.
+//
+// The lost capacity is real and is the price. A group that drains its last
+// proxy on a broken Network has no proxy until the Network is fixed, where
+// before it had one on a node that was being taken away. That is a worse
+// steady state and a better outcome, because the pod on the departing node
+// was never going to survive the drain either way.
+//
+// # Cancellation
+//
+// leaving is recomputed by each caller on every pass and never read back off
+// the annotation, so a node whose taint is removed stops being a reason: the
+// loop below re-asserts readiness and markDraining clears the mark. That
+// matters most on the refusing paths, where a cancelled node drain would
+// otherwise leave a proxy withdrawn from service with nothing able to bring it
+// back.
+func (r *ProxyGroupReconciler) drainDeparting(
+	ctx context.Context,
+	group *spawneryv1alpha1.ProxyGroup,
+	pods []corev1.Pod,
+	leaving map[string]bool,
+	nodeGoing []bool,
+) error {
+	key := group.Namespace + "/" + group.Name
 	// The desired readiness is derived, not remembered: this loop already
 	// knows which pods are surplus, so it asserts the answer for every pod on
 	// every pass. An operator restart recomputes the same thing, and a
@@ -1071,12 +1147,13 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	names := make(map[types.UID]string, len(pods))
 	for i := range pods {
 		going := leaving[pods[i].Name]
-		// Read before markDraining below can change it: views[i].Draining is
-		// this same pod's drainingSince verdict from the loop that built
-		// views, taken before anything in this pass patched its annotations,
-		// so it is what "already marked, before this call" means for the
-		// event gate two lines down.
-		wasMarked := views[i].Draining
+		// Read before markDraining below can change it, which is what makes
+		// it mean "already marked, before this call" for the event gate two
+		// lines down. Asked of the pod here rather than carried in from a
+		// ProxyView, so that the caller with no views -- protectPlayersOnly --
+		// gets the same answer: markDraining only ever patches the pod of its
+		// own iteration, so an earlier iteration cannot have changed this one.
+		_, wasMarked := drainingSince(&pods[i])
 		if err := r.Proxies.SetReady(ctx, string(pods[i].UID), !going); err != nil {
 			return err
 		}
@@ -2186,10 +2263,11 @@ func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// failure mode SetupAll refuses a nil Bootstrapper for, and the same guard
 	// ServerGroupReconciler.SetupWithManager carries for Expectations. Cheap
 	// insurance twice over here: 4c-1 shipped exactly this defect once, and
-	// Divergence.forget now sits on five of Reconcile's paths, every one of
-	// which returns before reconcileReplicas — so a nil field would be
-	// dereferenced there first, and the earliest of the five is reachable on
-	// the very first reconcile of a group that is already gone.
+	// Divergence is reached on paths that return before reconcileReplicas —
+	// forget on the two that end the group's life, and observe by way of
+	// protectPlayersOnly's drainDeparting on the three that refuse it — so a
+	// nil field would be dereferenced there first, and the earliest of them is
+	// reachable on the very first reconcile of a group that is already gone.
 	if r.Expectations == nil {
 		r.Expectations = newExpectations(r.Clock)
 	}

@@ -414,53 +414,42 @@ was worse in a way that is easy to miss — the group published
 drain` hanging on an occupied pod indefinitely, which is the exact failure
 this milestone exists to end.
 
-**A `ProxyGroup` whose `Network` is broken cannot be drained at all.** Its
-budget still protects players, but nothing moves them off. `Reconcile`
-(`internal/controller/proxygroup_controller.go`) gives up before
+**A `ProxyGroup` whose `Network` is broken loses a proxy it cannot replace.**
+`Reconcile` (`internal/controller/proxygroup_controller.go`) gives up before
 `reconcileReplicas` on three paths — a missing `Network`, one that is not
 `Accepted`, and an `expose.type` this operator has no branch for, the last of
 which milestone 6c made unreachable while the CRD's enum and
 `exposeImplemented` agree, and kept only as the fail-safe for an enum value
-added without a branch to serve it — and each of them
-calls `protectPlayersOnly` instead, which re-derives the
-`spawnery.cloud/occupied` labels, re-sizes the budget from them, and
-republishes the `NodeDraining` condition. What `protectPlayersOnly` does not
-do is anything `reconcileReplicas` owns: `markDraining`, the readiness
-withdrawal (`Proxies.SetReady`) that stops new connections from arriving, and
-the drain-deadline deletion that finally removes an empty or timed-out pod
-all live inside `reconcileReplicas` and run nowhere else. So such a group
-publishes `NodeDraining: True` naming the node, sizes `minAvailable` to cover
-every occupied proxy — which now makes the eviction API refuse every attempt
-to take the occupied proxy on the departing node — and never marks that
-proxy draining, never starts its removal deadline, and never replaces it.
-`kubectl drain` cannot complete against a `ProxyGroup` in this state until
-its `Network` is fixed; the budget refuses the disruption, it does not act
-on it.
+added without a branch to serve it. Those paths now run `drainDeparting` for
+the pods on a departing node, so `kubectl drain` completes: readiness is
+withdrawn, the mark starts the deadline, and the pod goes when it is empty or
+when `spec.drain.timeoutSeconds` has passed.
 
-That is a change from before this milestone, and it is worth being precise
-about what moved and what did not. In the case that matters most, the same
-group already hung: a proxy that already had a player was already counted
-(its frozen `minAvailable` was at least 1 against a pod the kubelet still
-called Ready), so `disruptionsAllowed` was already 0 and the eviction API
-already refused it, node drain or not. The one case that moved is the proxy
-that was empty at the group's last good pass and picked up a player
-afterwards: before, nothing on these paths re-derived the label or the
-budget, so that pod sat at `minAvailable: 0` with no label and the eviction
-API could take it — a disconnect. Now `protectPlayersOnly` counts it and the
-eviction API refuses it too — a hang instead of a disconnect. That trade is
-deliberate, for the same reason the create-backoff case above accepts a
-longer wait: a hung eviction recovers once the `Network` is fixed, and a
-disconnected player does not.
+What they still cannot do is replace it. The render needs the `Network`, so a
+group that drains its last proxy this way has no proxy at all until somebody
+repairs the `Network` — where before it had one on a node that was being taken
+away. That is the deliberate half of the trade and it is the residue: **a
+broken `Network` plus a node drain is a proxy outage, and nothing warns before
+it becomes one.** The group's `Accepted: False` says the `Network` is broken
+and its `NodeDraining: True` says a node is going; no condition says that the
+combination is about to leave the group empty, and the drain is what makes it
+so.
 
-The cadence cost the previous version of this entry described still applies
-on top: those three early-return paths requeue at `networkRetryInterval`
-(30 s) rather than the ordinary five-second `resyncInterval`, so even the
-label and budget `protectPlayersOnly` does maintain lag behind a healthy
-group's by up to 6×. Nothing watches the agent registry — occupancy is
-in-process state, not an API object — so no event corresponds to a player
-joining; the group's other watches fire on `Pod`, `Node`, `Service` and
-`ConfigMap` changes, and a reconcile any of those happens to trigger brings
-the budget forward as a side effect rather than because anybody asked it to.
+Everything else `DecideRollout` decides still waits for the `Network`, on
+purpose: a surplus reduction and a stale hash both need a replacement, and
+both can wait at no cost to anybody. Only a departing node cannot wait, since
+the node is going whatever this operator decides and the only question is
+whether the proxy leaves gracefully or is killed with its players still on it.
+
+The cadence cost the earlier version of this entry described still applies on
+top: those three early-return paths requeue at `networkRetryInterval` (30 s)
+rather than the ordinary five-second `resyncInterval`, so the label, the
+budget and now the drain all lag a healthy group's by up to 6×. Nothing
+watches the agent registry — occupancy is in-process state, not an API object
+— so no event corresponds to a player joining; the group's other watches fire
+on `Pod`, `Node`, `Service` and `ConfigMap` changes, and a reconcile any of
+those happens to trigger brings it forward as a side effect rather than
+because anybody asked it to.
 
 **The 15-second occupancy grace is not derived from a measured reconnect
 distribution, and a proxy that is genuinely reconnecting can lose its
