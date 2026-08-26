@@ -9,10 +9,15 @@
 # steps is mechanical and every one of them is a place to mistype a hash into
 # a build that then fails somewhere else entirely.
 #
-# This does not replace the automated image pipeline the main design calls
-# project 3. That would watch for new builds and open a change; this answers
-# the narrower question of what the values *are* once somebody has decided to
-# move. The decision stays a person's.
+# The watching half of the main design's project 3 is
+# .github/workflows/paper-watch.yml, which runs this script under CHECK on a
+# schedule and turns exit 2 into an issue. What is deliberately still not
+# automated is opening the change: no job in this repository runs a Paper
+# server -- ci.yml builds .#paper-image without loading it and e2e builds only
+# .#operator-image -- so a bot's pull request would be green on the strength of
+# a hash and silent about whether the build works. The workflow's own comment
+# carries that argument in full. The decision stays a person's, and
+# `make image-test` is what informs it.
 #
 # Usage:
 #   hack/paper-pin.sh                 # the latest build of the pinned version

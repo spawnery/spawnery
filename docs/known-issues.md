@@ -27,21 +27,6 @@ rather than a list of faults. The design decisions live in
 `superpowers/specs/2026-08-10-velocity-image-design.md` and in
 `superpowers/specs/2026-08-11-velocity-agent-design.md`.
 
-## From milestone 2b (the base image)
-
-**Whether to automate *watching* for a new Paper build is still a decision.**
-Computing the pin is not: `make paper-pin` reads the launcher's URL and
-checksum from PaperMC's API, verifies the download against it, takes Mojang's
-URL and hash out of `META-INF/download-context` inside the launcher — which is
-why that second checksum does not come from the host serving the artifact —
-converts both to SRI, and writes all four values into `nix/paper.nix`.
-`make paper-pin-check` compares without changing anything, and reproduces the
-checked-in pin exactly, which is how it was verified.
-
-What that leaves is the half a person still does: noticing that a build exists
-and deciding to take it. The automated image pipeline is project 3 in the main
-design and has never been scheduled.
-
 ## From milestone 3c (the Velocity agent)
 
 **A backend whose node dies with players on it now has about twenty seconds
@@ -267,11 +252,13 @@ arrives.
 
 ## From milestone 6e (CI)
 
-GitHub Actions now runs three workflows: `.github/workflows/ci.yml` blocks
+GitHub Actions runs four workflows: `.github/workflows/ci.yml` blocks
 four jobs — `test`, `lint`, `deps`, `e2e` — on every pull request and on
 push to `master`; `.github/workflows/nightly.yml` runs `make image-repro` on
 a schedule plus `workflow_dispatch`; `.github/workflows/release.yml` runs
-`hack/publish.sh` on a `v*` tag. Full account:
+`hack/publish.sh` on a `v*` tag; and `.github/workflows/paper-watch.yml`,
+added after that milestone, asks daily whether PaperMC has published a build
+newer than `nix/paper.nix` names. Full account of the first three:
 `docs/handover-milestone-6e.md`.
 
 **The rootless-podman path is now unexercised by anything automatic.**
