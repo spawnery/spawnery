@@ -224,9 +224,40 @@ PrometheusRule alerts on it. In the log, a denial repeats at every check and a
 grant is logged only when it is news — at startup, and again when a denial has
 been repaired.
 
-**The operator rolls, the fleets do not.** Everything in this release is
-operator-side: `internal/podspec` is untouched, so no pod's rendered hash
-moves, and the agents are unchanged.
+## 0.2.4: Paper moves from build 111 to 119
+
+`nix/paper.nix` named Paper 26.2 build 111 and PaperMC had published 119. The
+gap is what `.github/workflows/paper-watch.yml` exists to stop happening again;
+this release is the first time it was closed by something other than somebody
+remembering to look.
+
+Mojang's server jar did not move — its URL and hash are unchanged, so this is
+Paper's own patch level and not a Minecraft version. What is in it, from the
+API's own changelog: a `ClientboundLoginCompressionPacket` ordering fix (112),
+spark bumped twice (115, 119), Leafpile 1.1.0 (116), velocity-natives 4.1.0
+(117), a DataConverter sync (118).
+
+Verified on 2026-08-26 before the pin was taken: `make image-test` and
+`make agent-test`, both green against build 119 — Velocity forwarding
+negotiated, the agent plugin loaded and linked, a full session driven against
+a stub operator, and the CA-rotation handshake. That is what a person does for
+a Paper bump, and it is deliberately not what CI does: no job in this
+repository runs a Paper server, so a green pull request for a pin bump proves
+the fixed-output hashes and nothing else.
+
+**Both fleets roll, the operator rolls nothing by itself.** The image tag is
+`<upstream>-<imageVersion>` and carries no build number, so build 119 reaches a
+cluster as `paper:26.2-0.2.4` — a `Network` moved to that tag rolls its server
+fleet, one server at a time, drain-aware. Unlike 0.2.2, where the Paper fleet
+rolled for a Velocity change and gained nothing, this time it is the Paper
+fleet that gained something and the Velocity fleet that rolls for the version
+bump alone. `hack/publish.sh` is what makes the tag bump obligatory rather than
+tidy: it refuses to overwrite a tag that already exists, so republishing
+`26.2-0.2.3` with different bytes stops the release rather than mutating what a
+running cluster pulled.
+
+The operator itself changes nothing a pod renders: `internal/podspec` is
+untouched, so no pod's rendered hash moves, and the agent jars are unchanged.
 
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 

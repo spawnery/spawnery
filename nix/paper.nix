@@ -25,14 +25,14 @@
 # hand is four chances to mistype a hash into a build that fails elsewhere.
 rec {
   paperVersion = "26.2";
-  paperBuild = "111";
+  paperBuild = "119";
 
   # The launcher. Its hash was computed from a download and checked in here;
   # that does not make the source trustworthy, it makes the artifact frozen —
   # a changed upstream breaks the build instead of substituting a jar quietly.
   paperJar = fetchurl {
-    url = "https://fill-data.papermc.io/v1/objects/3ec81e3ea50cc6090b94aab024491846a202702e8a874308a5d7510f6b3aa012/paper-${paperVersion}-${paperBuild}.jar";
-    hash = "sha256-PsgePqUMxgkLlKqwJEkYRqICcC6Kh0MIpddRD2s6oBI=";
+    url = "https://fill-data.papermc.io/v1/objects/a8c9140c3075bd7c04973e9cdc491b21bfe6bad472b674ef932a4ae0fec19629/paper-${paperVersion}-${paperBuild}.jar";
+    hash = "sha256-qMkUDDB1vXwElz6c3EkbIb/mutRytnTvkypK4P7Blik=";
   };
 
   # Mojang's server jar. This URL and this hash both come from
