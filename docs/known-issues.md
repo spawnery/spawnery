@@ -180,32 +180,6 @@ ten minutes — is `rbacaudit.Checker`.
 churn** before recovering — observed during Task 5, not investigated, and
 recorded here for whoever next looks at backoff and replacement timing.
 
-## From milestone 6b (NetworkPolicies)
-
-What the two `NetworkPolicy` objects buy and what they do not is
-[`network-boundaries.md`](network-boundaries.md): measured scope, not defects.
-One thing from that milestone is a defect and stays here.
-
-**A `Forbidden` on the policy write is reported, and the audit still cannot
-see the case that produced it.** `reconcileNetworkPolicy` runs before anything
-else the Network reconcile does, and a failure there is fail-closed by design:
-the namespace must not quietly come up unprotected, so every group in it
-refuses. Since 2026-08-26 it is also *named* — `Accepted=False` with reason
-`NetworkPolicyNotWritten` and the API server's own refusal in the message —
-where before the condition was never persisted at all and every group quoted
-`network "..." has not been accepted yet`, which is true and misleading in the
-same breath.
-
-What is still open is upstream of that. *Driven 2026-08-25:*
-`networkpolicies: create` was removed from the kubebuilder marker **and** from
-`internal/rbacaudit`'s table. Absent from both, so the audit is green, and the
-startup self-check does not catch it either — it checks the table, and the
-table no longer asks. **Nothing in this repository compares the required table
-against what the code actually calls.** A verb dropped from both places is
-invisible until a cluster refuses it, and the only reason that case is now
-survivable rather than mysterious is that the refusal reports itself when it
-arrives.
-
 ## From milestone 6e (CI)
 
 GitHub Actions runs four workflows: `.github/workflows/ci.yml` blocks
