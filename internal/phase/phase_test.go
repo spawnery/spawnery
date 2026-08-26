@@ -667,3 +667,74 @@ func TestOccupiedIsUnchangedWithoutProxyReports(t *testing.T) {
 		})
 	}
 }
+
+// TestASilentAgentOnALiveStreamLosesReadinessAndDrains is the case a dead node
+// actually produces, and the one nothing used to notice.
+//
+// A node that is hard-powered off sends no FIN and no RST, so the operator's
+// socket goes on looking connected for minutes -- measured through a
+// freezable relay at over 200 seconds. AgentConnected therefore stays true and
+// AgentReady stays at the last thing the agent said, so the server stayed
+// Ready, stayed registered, and went on being sent new players, while the ones
+// already on it waited for Velocity's read timeout to disconnect them.
+func TestASilentAgentOnALiveStreamLosesReadinessAndDrains(t *testing.T) {
+	d := Decide(Ready, Inputs{
+		PodExists: true, PodRunning: true, PodReady: true,
+		AgentConnected: true, AgentReady: true,
+		AgentSilent:   true,
+		WasRegistered: true,
+	})
+
+	if d.Next != Starting {
+		t.Errorf("Next = %s, want Starting", d.Next)
+	}
+	if !d.Deregister {
+		t.Error("a server whose agent has gone silent stays registered, so new players keep arriving on it")
+	}
+	// The half that matters to the people already there. Velocity kicks them
+	// outright when its read timeout fires -- no KickedFromServerEvent, so the
+	// agent's own Rescue never sees them -- and this is the only thing that
+	// moves them first.
+	if !d.StartDrain {
+		t.Error("the players on a dead backend were left to be disconnected by the read timeout")
+	}
+}
+
+// TestAnOrdinaryReadinessLossDoesNotDrain keeps the drain to the case that
+// needs it. A server that reports not-ready may come back, and moving its
+// players costs them a loading screen for nothing.
+func TestAnOrdinaryReadinessLossDoesNotDrain(t *testing.T) {
+	d := Decide(Ready, Inputs{
+		PodExists: true, PodRunning: true, PodReady: true,
+		AgentConnected: true, AgentReady: false,
+		WasRegistered: true,
+	})
+
+	if d.Next != Starting || !d.Deregister {
+		t.Fatalf("Next = %s deregister = %v, want Starting and true", d.Next, d.Deregister)
+	}
+	if d.StartDrain {
+		t.Error("an unhealthy server that may recover had its players moved off anyway")
+	}
+}
+
+// TestABrokenStreamIsStillJustABrokenStream is the discriminator, and the
+// reason this is safe to run in an operator restart -- which breaks every
+// agent's stream at once. A broken stream leaves AgentConnected false and is
+// tolerated for StreamDownGrace exactly as before; only a stream that is up
+// and quiet is read as a peer that has gone without TCP noticing.
+func TestABrokenStreamIsStillJustABrokenStream(t *testing.T) {
+	d := Decide(Ready, Inputs{
+		PodExists: true, PodRunning: true, PodReady: true,
+		AgentConnected: false, AgentReady: true,
+		AgentStreamDownFor: StreamDownGrace / 2,
+		WasRegistered:      true,
+	})
+
+	if d.Next != Ready {
+		t.Errorf("Next = %s, want Ready: a briefly broken stream is not a dead backend", d.Next)
+	}
+	if d.StartDrain {
+		t.Error("a reconnecting agent had its server's players moved off")
+	}
+}

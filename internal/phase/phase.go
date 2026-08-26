@@ -140,6 +140,26 @@ type Inputs struct {
 	// while the stream is up.
 	AgentStreamDownFor time.Duration
 
+	// AgentSilent is true when the stream is up, the agent has reported before,
+	// and it has stopped -- which is not the same state as a broken stream and
+	// is the one nothing used to notice.
+	//
+	// A node that is hard-powered off, or a network that black-holes, sends no
+	// FIN and no RST, so the operator's own socket goes on looking connected
+	// for as long as TCP retransmits: measured 2026-08-26 through a freezable
+	// relay, over 200 seconds and twice not at all within 213. Meanwhile
+	// AgentConnected stays true and AgentReady stays at the last thing the
+	// agent said, so a Ready server on a dead node stayed Ready, stayed
+	// registered, and went on being sent new players.
+	//
+	// The reports are the signal that does move: they stop at once, and
+	// PlayersStale says so after twice the report interval. A stream that is
+	// up and quiet is exactly the shape of a peer that is gone without TCP
+	// having noticed, and it is distinguishable from an operator restart --
+	// which breaks every stream and would otherwise look identical -- because
+	// that leaves AgentConnected false.
+	AgentSilent bool
+
 	// ReadinessLosses is how often this server already fell out of Ready.
 	ReadinessLosses int32
 	// ReadyFor is how long the server has been continuously Ready.
@@ -471,8 +491,11 @@ func Decide(current Phase, in Inputs) Decision {
 		lost := !in.PodReady
 		if !lost {
 			if in.AgentConnected {
-				// A live stream that reports not-ready is an immediate loss.
-				lost = !in.AgentReady
+				// A live stream that reports not-ready is an immediate loss,
+				// and so is one that has stopped reporting at all -- see
+				// Inputs.AgentSilent for why the second is a different state
+				// from a broken stream and why nothing else catches it.
+				lost = !in.AgentReady || in.AgentSilent
 			} else {
 				// A broken stream is tolerated until the grace expires; the
 				// player count goes stale meanwhile, so the server counts as
@@ -481,9 +504,34 @@ func Decide(current Phase, in Inputs) Decision {
 			}
 		}
 		if lost {
+			// StartDrain when the agent went silent, and not otherwise.
+			//
+			// Deregistering stops new joins and does nothing for the players
+			// already there, which is fine when a server is merely
+			// unhealthy -- it may come back, and moving people costs them a
+			// loading screen. It is not fine when the backend is gone: those
+			// players are on a socket that will never answer again, and
+			// Velocity disconnects them outright when its read timeout fires.
+			// Disassembling velocity 3.5.1 build 615,
+			// ConnectedPlayer.handleConnectionException falls straight through
+			// to disconnect() when its `safe` argument is false, and
+			// BackendPlaySessionHandler passes false for exactly a
+			// ReadTimeoutException -- so no KickedFromServerEvent fires and
+			// the agent's own Rescue never sees them.
+			//
+			// The window is what makes this worth doing rather than merely
+			// correct: Velocity's read-timeout is 30 s, and PlayersStale says
+			// the agent stopped after twice the report interval, ten seconds
+			// at the operator's default. Twenty seconds is a great deal of
+			// room to move somebody one server sideways.
+			//
+			// Starting rather than Draining, so a server whose agent was
+			// merely wedged can come back. What a false positive costs is a
+			// server switch; what it buys is that a real one is not a kick.
 			return Decision{
 				Next: Starting, Deregister: true, CountReadinessLoss: true,
-				Reason: ReasonReadinessLost, Message: "server lost a ready signal",
+				StartDrain: in.AgentSilent,
+				Reason:     ReasonReadinessLost, Message: "server lost a ready signal",
 			}
 		}
 		// After the readiness check on purpose: a server that has just lost a

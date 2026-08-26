@@ -2866,3 +2866,60 @@ func TestTheDrainDeadlineStillEndsAWaitNobodyCanSatisfy(t *testing.T) {
 		t.Error("the drain deadline did not end a wait nobody could satisfy")
 	}
 }
+
+// TestADeadBackendIsDrainedBeforeVelocityKicksItsPlayers drives the whole
+// thing through the reconciler, in the state a hard-powered-off node produces:
+// the stream still reads as connected, because no FIN and no RST ever arrived,
+// and the reports have stopped.
+func TestADeadBackendIsDrainedBeforeVelocityKicksItsPlayers(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 4, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
+		t.Fatalf("phase = %q, want Ready", got)
+	}
+
+	// The node dies. Nothing calls Disconnect, because nothing told the
+	// operator anything -- that is the whole point of this state.
+	f.clock.Advance(30 * time.Second)
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase == string(phase.Ready) {
+		t.Error("a server whose agent went silent is still Ready, so players keep being routed to it")
+	}
+	if srv.Status.Registered {
+		t.Error("it is still registered with the proxies")
+	}
+	// The half the entry was about: those players are on a socket that will
+	// never answer, and Velocity disconnects them outright when its read
+	// timeout fires, with no event any plugin can catch.
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want one drain command before the read timeout", f.registrar.drained)
+	}
+}
+
+// TestALiveAgentThatKeepsReportingIsLeftAlone is the negative that matters
+// most, because this rule runs against every Ready server on every pass.
+func TestALiveAgentThatKeepsReportingIsLeftAlone(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+
+	for i := 0; i < 4; i++ {
+		if err := f.agents.ReportPlayers(uid, 4, 100); err != nil {
+			t.Fatalf("ReportPlayers: %v", err)
+		}
+		f.clock.Advance(5 * time.Second)
+		f.reconcile("lobby-x7k2")
+	}
+
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase = %q, want Ready: a reporting agent was read as silent", got)
+	}
+	if len(f.registrar.drained) != 0 {
+		t.Errorf("drained = %v, want none", f.registrar.drained)
+	}
+}

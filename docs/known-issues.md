@@ -44,19 +44,32 @@ design and has never been scheduled.
 
 ## From milestone 3c (the Velocity agent)
 
-**A backend that goes silent without closing its socket still disconnects its
-players, and no plugin can stop it.** `Rescue` catches a player whose server
-drops them and redirects them onto `fallbackGroups`, which is what Velocity's
-own failover cannot do here — it walks `try`, and internal/render renders
-`try = []` because the server list is dynamic. It does not cover every case.
-Disassembling velocity 3.5.1 build 615, `handleConnectionException` returns
-*before* firing `KickedFromServerEvent` when its `safe` argument is false, and
-`BackendPlaySessionHandler.exception(cause)` passes
-`safe = !(cause instanceof ReadTimeoutException)`. So a hard-powered-off node
-or a partitioned network surfaces as a read timeout and the player is
-disconnected before any plugin is consulted. Closing it would mean the
-operator noticing the dead server and sending `DrainPlayers` inside Velocity's
-read timeout, which is a different mechanism than this one.
+**A backend whose node dies with players on it now has about twenty seconds
+of margin, and that margin is not guaranteed.** Velocity disconnects such
+players outright rather than firing an event: disassembling velocity 3.5.1
+build 615, `ConnectedPlayer.handleConnectionException` falls straight through
+to `disconnect()` when its `safe` argument is false, and
+`BackendPlaySessionHandler` passes false for exactly a `ReadTimeoutException`.
+So no `KickedFromServerEvent` fires, the agent's own `Rescue` never sees them,
+and no plugin can intervene. That is unchanged and unchangeable from this side.
+
+What changed is that the operator now moves them first. A stream that is *up
+and quiet* is the signature of a peer that is gone without TCP having noticed —
+measured through a freezable relay at over 200 seconds before the socket
+reacts — and it is distinguishable from an operator restart, which breaks
+every stream at once and leaves `AgentConnected` false. On that signature the
+server loses readiness, is deregistered so nobody else is sent to it, and is
+drained.
+
+The margin is arithmetic: Velocity's `read-timeout` is 30 s, and the reports
+stop the instant the node does, which `PlayersStale` reports after twice the
+agent report interval — ten seconds at the operator's default. **Neither
+number is enforced anywhere.** A cluster that raises
+`--agent-report-interval`, or a `velocity.toml` overlay that lowers
+`read-timeout`, closes the gap without anything noticing; at a report interval
+above fifteen seconds the operator would be *later* than the kick it is
+racing. Nothing compares the two, and nothing can, because one of them lives
+in a file the operator renders and the other in a flag it is given.
 
 ## From milestone 4c-1 (the proxy readiness contract)
 

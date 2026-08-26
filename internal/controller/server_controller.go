@@ -706,6 +706,11 @@ func (r *ServerReconciler) collectInputs(
 	in.AgentReady = snap.Ready
 	in.AgentConnected = snap.Connected
 	in.AgentStreamDownFor = snap.StreamDownFor
+	// A stream that is up and has gone quiet. Never-reported is excluded on
+	// purpose: a server that has just become Ready may not have sent its first
+	// count yet, and reading that as silence would fail it on the pass that
+	// made it.
+	in.AgentSilent = snap.Connected && !snap.PlayersReportedAt.IsZero() && snap.PlayersStale
 	in.PlayersOnline = snap.Players
 	in.PlayersStale = snap.PlayersStale
 	in.Slots = snap.Slots
