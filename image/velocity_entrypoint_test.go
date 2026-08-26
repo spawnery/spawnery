@@ -144,3 +144,34 @@ func TestVelocityEntrypointCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *
 		t.Errorf("plugins/spawnery-agent.jar = %q, want the copy from the image", got)
 	}
 }
+
+// TestTheVelocityJVMDoesNotPreTouchWithoutAMemoryLimit is the mirror of the
+// Paper test, and needs to exist for the reason every mirrored test in this
+// file does: the two scripts are nearly identical and diverge silently. A
+// proxy holds every player's connection, so a proxy that claims three quarters
+// of an unbounded node at start takes the whole network's front door with it.
+func TestTheVelocityJVMDoesNotPreTouchWithoutAMemoryLimit(t *testing.T) {
+	out, err := runVelocityEntrypoint(t, t.TempDir(), 0, cgroupRoot(t, "max", false))
+	if err != nil {
+		t.Fatalf("entrypoint: %v", err)
+	}
+	argv := javaArgv(t, out)
+	if strings.Contains(argv, "AlwaysPreTouch") {
+		t.Errorf("the proxy JVM pre-touches its heap with no memory limit; got: %s", argv)
+	}
+	if !strings.Contains(argv, "-XX:MaxRAMPercentage=75") {
+		t.Errorf("the rest of the flags went with it; got: %s", argv)
+	}
+}
+
+// TestTheVelocityJVMStillPreTouchesUnderALimit keeps the removal from being
+// unconditional here too.
+func TestTheVelocityJVMStillPreTouchesUnderALimit(t *testing.T) {
+	out, err := runVelocityEntrypoint(t, t.TempDir(), 0, cgroupRoot(t, "2147483648", false))
+	if err != nil {
+		t.Fatalf("entrypoint: %v", err)
+	}
+	if !strings.Contains(javaArgv(t, out), "-XX:+AlwaysPreTouch") {
+		t.Errorf("the flag was dropped under a limit; got: %s", out)
+	}
+}

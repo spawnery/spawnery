@@ -246,16 +246,31 @@ func TestPaperOverlayCannotMoveVelocityCriticalKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Paper: %v", err)
 	}
+	// Read out of the document rather than matched as substrings against the
+	// whole file. The substring form asserted "enabled: false" appears
+	// nowhere, which was only ever true by accident: the moment the renderer
+	// gained a second `enabled` anywhere -- update-checker did it -- the test
+	// failed while the keys it is actually about were correct. What it means
+	// is that proxies.velocity carries these three values, so that is what it
+	// now asks.
 	global := string(files["config/paper-global.yml"])
-	for _, want := range []string{"enabled: true", "online-mode: true", "secret: s3cret"} {
-		if !strings.Contains(global, want) {
-			t.Errorf("paper-global.yml does not contain %q, the overlay moved a critical key:\n%s", want, global)
+	doc := map[string]any{}
+	if err := yaml.Unmarshal(files["config/paper-global.yml"], &doc); err != nil {
+		t.Fatalf("paper-global.yml does not parse: %v\n%s", err, global)
+	}
+	proxies, _ := doc["proxies"].(map[string]any)
+	velocity, _ := proxies["velocity"].(map[string]any)
+	if velocity == nil {
+		t.Fatalf("paper-global.yml has no proxies.velocity block:\n%s", global)
+	}
+	for key, want := range map[string]any{"enabled": true, "online-mode": true, "secret": "s3cret"} {
+		if got := velocity[key]; got != want {
+			t.Errorf("proxies.velocity.%s = %v, want %v -- the overlay moved a critical key:\n%s",
+				key, got, want, global)
 		}
 	}
-	for _, unwanted := range []string{"enabled: false", "online-mode: false", "not-the-real-secret"} {
-		if strings.Contains(global, unwanted) {
-			t.Errorf("paper-global.yml contains %q, an overlay value that should have been clobbered:\n%s", unwanted, global)
-		}
+	if strings.Contains(global, "not-the-real-secret") {
+		t.Errorf("paper-global.yml still carries the overlay's secret:\n%s", global)
 	}
 }
 
@@ -366,4 +381,58 @@ func TestPaperOverlayReachesTheRestOfPaperGlobal(t *testing.T) {
 				"survive an overlay that carries the rest of the document:\n%s", want, global)
 		}
 	}
+}
+
+// TestPaperTurnsOffTheUpdateChecker covers the outbound call every Paper start
+// used to make to fill.papermc.io. The build is pinned by nix/paper.nix, so
+// the answer can change nothing; what it reaches is the egress policy, and
+// anybody tightening that had to decide about a dependency the operator does
+// not need.
+func TestPaperTurnsOffTheUpdateChecker(t *testing.T) {
+	files, err := Paper(paperValues(), "s3cret", nil)
+	if err != nil {
+		t.Fatalf("Paper: %v", err)
+	}
+	// A map rather than a tagged struct: sigs.k8s.io/yaml converts YAML to
+	// JSON and reads `json` tags, so a `yaml` tag here would be ignored and
+	// every field would come back nil -- a test that passes for nothing.
+	if got := updateCheckerEnabled(t, files); got != false {
+		t.Errorf("update-checker.enabled = %v, want false", got)
+	}
+}
+
+// TestAnOverlayCanTurnTheUpdateCheckerBackOn is what makes the line above a
+// default rather than a critical key. The velocity block is reasserted
+// whatever an overlay says, because those keys decide whether a join works at
+// all; this one decides nothing, so the user wins.
+func TestAnOverlayCanTurnTheUpdateCheckerBackOn(t *testing.T) {
+	files, err := Paper(paperValues(), "s3cret", map[string]string{
+		"paper-global.yml": "update-checker:\n  enabled: true\n",
+	})
+	if err != nil {
+		t.Fatalf("Paper: %v", err)
+	}
+	if got := updateCheckerEnabled(t, files); got != true {
+		t.Errorf("update-checker.enabled = %v, want the overlay's true", got)
+	}
+}
+
+// updateCheckerEnabled reads update-checker.enabled out of the rendered
+// document, failing the test if the key is missing rather than reporting a
+// zero value that would read as "off" and pass one of its two callers.
+func updateCheckerEnabled(t *testing.T, files map[string][]byte) bool {
+	t.Helper()
+	doc := map[string]any{}
+	if err := yaml.Unmarshal(files["config/paper-global.yml"], &doc); err != nil {
+		t.Fatalf("paper-global.yml does not parse: %v", err)
+	}
+	checker, ok := doc["update-checker"].(map[string]any)
+	if !ok {
+		t.Fatalf("paper-global.yml has no update-checker block:\n%s", files["config/paper-global.yml"])
+	}
+	enabled, ok := checker["enabled"].(bool)
+	if !ok {
+		t.Fatalf("update-checker.enabled is %T, want a bool", checker["enabled"])
+	}
+	return enabled
 }

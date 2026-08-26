@@ -50,6 +50,24 @@ const (
 	// TmpMountPath is where TmpVolumeName is mounted.
 	TmpMountPath = "/tmp"
 
+	// PluginsMountPath is the server's plugins directory, and the one place
+	// under DataMountPath a user mount cannot go.
+	//
+	// image/entrypoint.sh copies the agent jar into it on every start, and
+	// every user mount is read-only (this package sets ReadOnly on all of
+	// them, unconditionally), so a mount here makes that copy fail under
+	// `set -eu` with a bare `cp:` message that names no cause. The jar cannot
+	// simply be loaded from where it ships either: Paper writes its plugins'
+	// data folders inside this directory, so pointing --plugins at a
+	// read-only path takes Paper's own bundled plugins down with it.
+	//
+	// Refused on an exact match only, unlike the bidirectional check
+	// AgentMountPath gets. A mount *inside* it is the ordinary way to add a
+	// plugin and breaks nothing -- the copy writes one file beside whatever
+	// is mounted -- and a mount above it is DataMountPath, which is already
+	// refused on its own account.
+	PluginsMountPath = DataMountPath + "/plugins"
+
 	// SLPHealthBinary is the Server-List-Ping tool baked into the base image.
 	// Kubelet knows no SLP probe type, and a tcpSocket probe on 25565 turns
 	// green before the world is loaded.
@@ -535,6 +553,18 @@ func checkMountCollision(m spawneryv1alpha1.Mount) error {
 		if user == path.Clean(reserved) {
 			return fmt.Errorf("mount %q targets the reserved mount path %q", m.Name, reserved)
 		}
+	}
+
+	// Its own message rather than the generic one above, because the generic
+	// one would send a reader looking for what the operator keeps there. What
+	// it keeps there is one file it writes on every start, and the remedy is
+	// to mount a directory beside it rather than over it.
+	if user == path.Clean(PluginsMountPath) {
+		return fmt.Errorf(
+			"mount %q targets %s, where the entrypoint copies the agent plugin on every start; "+
+				"a read-only mount there fails that copy and the server does not come up. "+
+				"Mount inside it instead, at %s/<name>",
+			m.Name, PluginsMountPath, PluginsMountPath)
 	}
 	return nil
 }

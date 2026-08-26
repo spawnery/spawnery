@@ -928,6 +928,17 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 			mountPath: DataMountPath + "-extra",
 		},
 		{
+			// Inside the plugins directory, which is the ordinary way to add
+			// a plugin. Only the directory itself is refused -- the entrypoint
+			// writes one file beside whatever is mounted here.
+			name:      "a plugin nested inside the plugins directory",
+			mountPath: PluginsMountPath + "/my-plugin",
+		},
+		{
+			name:      "a sibling directory that only shares a prefix with the plugins directory",
+			mountPath: PluginsMountPath + "-extra",
+		},
+		{
 			name:      "a sibling directory that only shares a prefix with the config mount",
 			mountPath: ConfigMountPath + "-extra",
 		},
@@ -1072,5 +1083,41 @@ func TestTheServerGroupSelectorIsASubsetOfServerLabels(t *testing.T) {
 	if len(selector) != len(full)-1 {
 		t.Errorf("the selector has %d labels and ServerLabels %d; they differ by more than %s",
 			len(selector), len(full), LabelServer)
+	}
+}
+
+// TestAMountAtThePluginsDirectoryIsRefused closes the entry in
+// docs/known-issues.md that this was the last live half of: the entrypoint
+// copies the agent jar into the plugins directory on every start, every user
+// mount is read-only, and a mount here therefore failed that copy under
+// `set -eu` with a bare `cp:` message naming no cause. Unlike /data/config,
+// which was solved by moving the operator's own target to /etc/spawnery, the
+// jar has to land in Paper's own plugins directory whatever a user does --
+// so refusing the mount is the only place this can be answered.
+func TestAMountAtThePluginsDirectoryIsRefused(t *testing.T) {
+	for _, mountPath := range []string{PluginsMountPath, PluginsMountPath + "/"} {
+		t.Run(mountPath, func(t *testing.T) {
+			net, group := testNetwork(), testGroup()
+			group.Spec.Mounts = []spawneryv1alpha1.Mount{{
+				Name:      "plugins",
+				MountPath: mountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			}}
+
+			_, err := BuildServerPod(net, group, testServer(), testEndpoint)
+			if err == nil {
+				t.Fatalf("BuildServerPod accepted a mount at %q; the server would not have come up", mountPath)
+			}
+			// The message has to carry the remedy, because the failure it
+			// replaces was a bare `cp:` and the difference between the two is
+			// the whole point of refusing here.
+			for _, want := range []string{PluginsMountPath, "agent plugin", "Mount inside it instead"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("error = %q, want it to mention %q", err, want)
+				}
+			}
+		})
 	}
 }

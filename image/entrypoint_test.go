@@ -271,3 +271,109 @@ func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *t
 		t.Errorf("plugins/spawnery-agent.jar = %q after the second run, want %q — cp -f alone must replace a read-only leftover, with no chmod in between", got, "v2")
 	}
 }
+
+// cgroupRoot writes a fake cgroup tree and returns the env var pointing the
+// entrypoint at it. limit is the file's contents: "max" for cgroup v2's
+// unbounded, a number for a real limit. v1 writes a different file, which the
+// second argument selects.
+func cgroupRoot(t *testing.T, limit string, v1 bool) string {
+	t.Helper()
+	root := t.TempDir()
+	path := filepath.Join(root, "memory.max")
+	if v1 {
+		if err := os.MkdirAll(filepath.Join(root, "memory"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		path = filepath.Join(root, "memory", "memory.limit_in_bytes")
+	}
+	if err := os.WriteFile(path, []byte(limit+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return "SPAWNERY_CGROUP_ROOT=" + root
+}
+
+// javaArgv is the line the stub java prints, and nothing else. Asserting
+// against the whole output would be wrong in both directions here: the log
+// line this check emits names AlwaysPreTouch in order to say it is not being
+// used, so "the output contains the flag" is true exactly when the flag was
+// dropped.
+func javaArgv(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "JAVA_ARGV:") {
+			return line
+		}
+	}
+	t.Fatalf("java was never invoked; output: %s", out)
+	return ""
+}
+
+// TestTheJVMDoesNotPreTouchWithoutAMemoryLimit is the hazard the flag creates
+// outside a limit. AlwaysPreTouch claims the whole heap at start, and
+// MaxRAMPercentage makes that heap a share of whatever bounds the container --
+// the node, when nothing does. So one server with no resources.limits.memory
+// took three quarters of the machine from every other pod on it, the instant
+// it started.
+func TestTheJVMDoesNotPreTouchWithoutAMemoryLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit string
+		v1    bool
+	}{
+		{"cgroup v2 unbounded", "max", false},
+		{"cgroup v1 sentinel", "9223372036854771712", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := runEntrypoint(t, t.TempDir(), 0, cgroupRoot(t, tc.limit, tc.v1))
+			if err != nil {
+				t.Fatalf("entrypoint: %v", err)
+			}
+			argv := javaArgv(t, out)
+			if strings.Contains(argv, "AlwaysPreTouch") {
+				t.Errorf("the JVM pre-touches its heap with no memory limit; got: %s", argv)
+			}
+			// The rest of the tuning is untouched: this drops one flag, it
+			// does not decide the JVM has no opinion about anything.
+			if !strings.Contains(argv, "-XX:+UseG1GC") {
+				t.Errorf("the other JVM flags went with it; got: %s", argv)
+			}
+			// And it says so, because a pod that quietly starts differently is
+			// a pod nobody can diagnose.
+			if !strings.Contains(out, "no memory limit") {
+				t.Errorf("nothing in the log says why; got: %s", out)
+			}
+		})
+	}
+}
+
+// TestTheJVMStillPreTouchesUnderALimit is the other half, and the one that
+// keeps the check from being a silent removal of the flag everywhere. Inside a
+// limit the trade AlwaysPreTouch makes is a good one and nothing changes.
+func TestTheJVMStillPreTouchesUnderALimit(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		limit string
+		v1    bool
+	}{
+		{"cgroup v2 with a limit", "2147483648", false},
+		{"cgroup v1 with a limit", "2147483648", true},
+		// An unreadable cgroup is treated as limited: the direction that
+		// changes nothing. This is also what every developer machine running
+		// make test lands on.
+		{"no cgroup files at all", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			env := "SPAWNERY_CGROUP_ROOT=" + t.TempDir()
+			if tc.limit != "" {
+				env = cgroupRoot(t, tc.limit, tc.v1)
+			}
+			out, err := runEntrypoint(t, t.TempDir(), 0, env)
+			if err != nil {
+				t.Fatalf("entrypoint: %v", err)
+			}
+			if !strings.Contains(javaArgv(t, out), "-XX:+AlwaysPreTouch") {
+				t.Errorf("the flag was dropped under a limit; got: %s", out)
+			}
+		})
+	}
+}

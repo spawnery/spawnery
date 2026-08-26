@@ -177,6 +177,26 @@ grep -q '^cloud/spawnery/agent/shaded/kotlin/' <<<"$entries" ||
 grep -q '^cloud/spawnery/agent/pb/AgentServiceGrpc.class$' <<<"$entries" ||
 	fail "the generated gRPC stubs are missing from the jar"
 
+# The one class the give-up path casts to, and the only class in this jar whose
+# absence is invisible at runtime.
+#
+# SessionLoop.close(cancel = true) casts the stub's request observer to
+# ClientCallStreamObserver in order to cancel the call, and that cast sits
+# inside a runCatching, which catches Throwable -- a NoClassDefFoundError from
+# a shading regression included. So a jar that lost this class would swallow
+# the error, fall through to shutdownNow(), and pass phase 3 of
+# hack/agent-test.sh: the give-up still bounds the attempt, because
+# shutdownNow() does not depend on the cast. Green there is evidence that the
+# bound holds and never was evidence that the cast resolves.
+#
+# Checked here instead, where it is a fact about the artifact rather than about
+# a code path that has to be reached. The runCatching stays as it is: what it
+# is for is a cancel that fails on a call already ending, which is ordinary,
+# and narrowing it to make one shading regression loud would trade a real
+# failure mode for a hypothetical one.
+grep -q '^cloud/spawnery/agent/shaded/io/grpc/stub/ClientCallStreamObserver.class$' <<<"$entries" ||
+	fail "the relocated ClientCallStreamObserver is missing; the give-up path's cancel would fail silently"
+
 # gRPC resolves its transport through ServiceLoader. Relocation renames the
 # provider classes, so the service files have to be merged and rewritten with
 # them; without that the channel fails at runtime with "no functional channel

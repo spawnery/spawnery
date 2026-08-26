@@ -305,9 +305,26 @@ echo "the first player count already carries the enforced maximum"
 # the first was closed - which is exactly what a make-before-break renewal
 # looks like from the operator's side, and what a break-before-make one does
 # not.
+# alive <container> - stops the run if the container has exited, naming what it
+# was waiting for. Every wait in this script is a wait on something a live
+# container is expected to do, so a container that died turns each of them into
+# a wait for its own timeout and then a diagnosis pointing at whatever the wait
+# was about rather than at the crash. await_event has always checked this; the
+# two loops below did not, which is what docs/known-issues.md recorded.
+alive() {
+	local name="$1" waiting_for="$2"
+	if [ -z "$("$CONTAINER" ps -q --filter "name=^${name}$")" ]; then
+		echo "the container exited while waiting for $waiting_for" >&2
+		"$CONTAINER" logs "$name" >&2
+		cat "$WORK"/stub*.log >&2 || true
+		exit 1
+	fi
+}
+
 echo "waiting for a renewal..."
 start=$SECONDS
 until [ "$(jq -rs '[.[] | select(.kind == "stream_opened")] | length' <"$EVENTS" 2>/dev/null || echo 0)" -ge 2 ]; do
+	alive "$NAME" "the renewal"
 	if [ $((SECONDS - start)) -gt 60 ]; then
 		echo "no second stream within 60s of a 5s renewal deadline" >&2
 		cat "$EVENTS" >&2
@@ -325,6 +342,11 @@ done
 RETIRED_WITHIN=30
 start=$SECONDS
 until [ "$(jq -rs '[.[] | select(.kind == "stream_closed" and .stream == 0)] | length' <"$EVENTS" 2>/dev/null || echo 0)" -ge 1 ]; do
+	# Checked here too, although this loop breaks rather than failing: a
+	# container that died mid-handover would otherwise reach the verdict below
+	# as "the first stream was not retired ... the agent is leaking a stream
+	# per renewal", which is an accusation about an agent that is not running.
+	alive "$NAME" "the outgoing stream's retirement"
 	if [ $((SECONDS - start)) -gt "$RETIRED_WITHIN" ]; then
 		break
 	fi
@@ -340,12 +362,27 @@ done
 # The stub is passive - it never closes a stream - so every close in this trace
 # is the agent retiring one, and an agent that has opened its replacement and
 # retired nothing is leaking a stream per renewal, forever.
+#
+# What seq orders is the stub's own record calls, not arrival on the wire. The
+# two are taken under one lock (see recorder.record), so the sequence is a real
+# total order over what this process observed -- it is just an order over
+# observations rather than over packets, and two events arriving within a
+# scheduling quantum of each other could be recorded either way round.
+#
+# That is enough for this verdict and not more than it, which is why the
+# message below says "recorded". The failure it names is not a close and a
+# greeting a microsecond apart: it is the ordering a break-before-make renewal
+# produces, where the close travels an established connection and the greeting
+# waits on a fresh TCP handshake and a TLS handshake behind it. Milestones of
+# runs put that gap in the tens of milliseconds and it was measured losing
+# every time, so a verdict that fired on a race would be a coin flip rather
+# than the consistent result this has.
 verdict="$(jq -rs --argjson within "$RETIRED_WITHIN" '
 	(map(select(.kind == "hello" and .stream == 1)) | first | .seq) as $second_greeted |
 	(map(select(.kind == "stream_closed" and .stream == 0)) | first | .seq) as $first_closed |
 	if $second_greeted == null then "the second stream never greeted"
 	elif $first_closed == null then "the first stream was not retired within \($within)s of the replacement opening: the agent is leaking a stream per renewal"
-	elif $first_closed < $second_greeted then "the first stream closed before the second greeted: break before make"
+	elif $first_closed < $second_greeted then "the operator recorded the first stream closing before the second greeted: break before make"
 	else empty end
 ' <"$EVENTS")"
 if [ -n "$verdict" ]; then

@@ -22,101 +22,32 @@ a thing a human drives rather than a thing that is wrong. The design decisions l
 
 ## From milestone 2b (the base image)
 
-**The Darwin machine cannot build the image.** A Linux image needs a Linux
-builder, so `nix build .#paper-image`, `make image-test` and the local-cluster
-flow only work on `x86_64-linux`. `make test` still runs everywhere, including
-the entrypoint and SLP tests. This is the mirror image of the envtest gate that
-milestone 2a closed, and it cannot be closed with a checked-in hash.
-
-**Without a memory limit the JVM sizes itself against the whole node.** The
-entrypoint passes `-XX:MaxRAMPercentage=75`, which is a share of the container
-limit — and of the node when there is no limit. `AlwaysPreTouch` then claims
-that share immediately. Neither `ServerGroup` nor `Network` is required to set
-`resources`, and no CEL rule demands it; the sample manifest sets 2Gi and
-nothing makes anyone else do so.
-
-**Following Paper upstream is manual.** A new build means new hashes in
-`nix/paper.nix`, by hand, including the Mojang hash out of the new jar's
-`META-INF/download-context`. The automated image pipeline is project 3 in the
-main design.
-
-**`cache/mojang_26.2.jar` ships unused**, 61 MB of the image. Paperclip touches
-the cache directory before deciding whether it needs to patch, and fails on a
-read-only path if it is absent. Removing it would require a writable cache
-directory in every pod, which is the worse trade.
-
-**Paper makes two outbound calls on every start that have nothing to do with
-artifact provisioning.** `api.minecraftservices.com/publickeys` is the
-Yggdrasil key fetch that follows from `online-mode=true`; `fill.papermc.io` is
-Paper's own update checker. Both are measured to fail harmlessly with no
-network reachable — the server still reaches `Done` and answers a ping, which
-is what `make image-test` relies on. Both consequences this entry once named
-have since happened: milestone 3 flipped `online-mode` to false, which retired
-the Yggdrasil call, and milestone 6b built the egress policy. What remains is
-the bare fact — a Paper server still calls `fill.papermc.io` on every start,
-and anything that tightens egress further has to decide about it.
+**Following Paper upstream is manual, and needs a decision rather than a
+fix.** A new build means new hashes in `nix/paper.nix`, by hand, including the
+Mojang hash out of the new jar's `META-INF/download-context`. Automating it is
+project 3 in the main design and has never been scheduled; until it is, every
+Paper release is a person reading two hashes out of a jar. Nothing here is
+broken — the pinning is deliberate and the hash chain is stronger than most —
+so this stays open only because somebody has to decide whether project 3 is
+worth doing.
 
 ## From milestone 2c (the Paper agent)
 
-**A read-only mount at `/data/plugins` breaks the start.** `image/entrypoint.sh`
-copies the agent jar out of the image into `plugins/` under `/data`, because
-Paper writes its plugins' data folders inside the plugins directory and a
-read-only one takes Paper's own bundled plugins down with it. Mounts below
-`/data` are the documented way to add files and `checkMountCollision` allows
-them; a ConfigMap or Secret mount is always read-only (`internal/podspec`
-sets `ReadOnly: true` on every user mount unconditionally). So a mount at
-`/data/plugins` makes the `cp` fail under `set -eu` with a bare `cp:` message
-that says nothing about why. Unlike `/data/config`, this one cannot be fixed the way that one was:
-`/data/config` was avoided by relocating the operator's *own* mount target to
-`/etc/spawnery`, but `/data/plugins` is Paper's own plugins directory and the
-agent jar has to land inside it regardless of what a user mounts there.
-`checkMountCollision` does not single it out, so the mount is permitted and
-the start breaks with a bare `cp:` message that says nothing about why.
+**`hack/agent-test.sh`'s six phases are near-verbatim copies of one another,
+and whether that is worth paying off needs a decision.** Each phase starts its
+own stub, its own container and its own volume, waits on its own events and
+tears its own scaffolding down, and the differences between them — which flags
+the stub gets, which assertions run — have to be found by reading two phases
+side by side. There were three when this was first written and there are six
+now, so the cost has doubled rather than been paid off.
 
-**The relocation is not proven on the give-up path.** The cast to
-`ClientCallStreamObserver` that the cancel needs sits inside a `runCatching`,
-which catches `Throwable` — so a `NoClassDefFoundError` from a shading
-regression would be swallowed and phase 3 of `make agent-test` would still pass.
-Phase 3 being green is evidence that the bound holds, not that the cast resolves
-under the shaded names.
-
-**The level-2 harness has rough edges milestone 3 inherits.** `hack/agent-test.sh`
-and `cmd/spawnery-stubop` are exactly what a Velocity agent will be tested with,
-so what they do not check is worth writing down: stream indices `0` and `1` are
-hard-coded in the overlap verdict; `seq` is record order and not arrival order,
-which the verdict's wording overstates; two wait loops after `await_event` do not
-check that the container is still alive; the phases are near-verbatim copies
-of one another rather than one parameterised function, so what each varies has
-to be found by eye -- and there are six of them now, not the three this entry
-counted, so that cost has doubled rather than been paid off; and the stub's own
-Go tests cover neither the never-closes property nor the uniqueness of `seq`.
-
-**The local kind flow needs a `Service` nothing creates.** A pod dials
-`spawnery-operator.<ns>.svc:9443`. When the operator runs outside the cluster —
-which is the only way the README's local flow runs it — no selector can find it,
-so the flow has to create a selector-less `Service` and a hand-written
-`Endpoints` by hand, or the `Server` never leaves `Starting`. Under rootless
-Podman that is harder than it sounds: the `kind` network's gateway is inside the
-rootless network namespace and refuses the connection, and the address that does
-reach the host (`host.containers.internal`, a pasta link-local `169.254.x.x`) is
-rejected by the API server in both `Endpoints` and `EndpointSlice`. The README
-documents the relay container that works. Milestone 6 wires this flow into CI and
-will meet the same wall, and the durable answer there is to run the operator
-inside the cluster from its own image, where the Service is a Service.
-
-*Closed by milestone 6a for the half that matters, and still true for the
-other.* Anything that runs the operator **in** the cluster now gets a Service
-carrying an ordinary selector over
-`app.kubernetes.io/name=spawnery,app.kubernetes.io/component=operator` and needs
-no hand-written `Endpoints` and no relay; `hack/e2e.sh` installs exactly that and
-`make e2e` runs on it. *The source moved under milestone 6d*: what was
-`config/deploy/service.yaml` is now `charts/spawnery/templates/service.yaml`,
-rendered by `helm install` rather than applied directly — the selector itself
-is unchanged. The README's local `go run` flow is unchanged and still
-needs the whole workaround — the selector-less `Service`, the hand-written
-`Endpoints`, and under rootless Podman the relay container — because the process
-is still outside the cluster there and no selector can reach it. Read this entry
-as scoped to that flow from 6a onward.
+It is not a defect and nothing it proves is wrong; every assertion in it is
+sound and the script is the only thing that proves the agents work at all.
+What it is is a standing tax on adding a seventh phase, weighed against the
+risk of refactoring the one harness that stands between a broken agent and a
+cluster. Parameterising the phases would also hide the differences this entry
+complains are hard to see, which is the argument against — so this stays open
+as a judgement about where to spend effort rather than as something to fix.
 
 ## From milestones 3a and 3b (the operator's proxy side, and the Velocity image)
 

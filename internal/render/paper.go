@@ -176,6 +176,28 @@ func paperGlobal(secret, overlay string) (string, error) {
 		}
 	}
 
+	// Paper's update checker, off unless the user asked for it.
+	//
+	// It is an outbound call to fill.papermc.io on every start, and in a fleet
+	// whose Paper build is pinned by nix/paper.nix it can change nothing: the
+	// answer reaches a log line nobody acts on, because upgrading means a new
+	// image and not a running server downloading anything. What it does reach
+	// is the egress policy. Milestone 6b's per-Network policy already permits
+	// no general egress, so on a cluster whose CNI enforces it this call
+	// already fails; leaving the default on means every server start spends a
+	// DNS lookup and a connect attempt on a request that is designed to be
+	// refused, and means anybody tightening egress has to decide about a
+	// dependency the operator does not need.
+	//
+	// A default and not a critical key. It is set only where the overlay has
+	// said nothing about update-checker at all, so a user who wants it back
+	// writes `update-checker: {enabled: true}` and gets it -- unlike the
+	// velocity block below, which is reasserted whatever the overlay said,
+	// because those keys decide whether a join works.
+	if _, set := doc["update-checker"]; !set {
+		doc["update-checker"] = map[string]any{"enabled": false}
+	}
+
 	// The two shapes below are refused rather than treated as an absent
 	// overlay, for the reason above the function: an overlay that silently
 	// does nothing looks exactly like one that took effect.
