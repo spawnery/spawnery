@@ -49,57 +49,28 @@ cluster. Parameterising the phases would also hide the differences this entry
 complains are hard to see, which is the argument against — so this stays open
 as a judgement about where to spend effort rather than as something to fix.
 
-## From milestones 3a and 3b (the operator's proxy side, and the Velocity image)
-
-All five of milestone 3's original preconditions were discharged — three by 3a
-on 2026-08-10, two by 3b on 2026-08-11 — and were removed on 2026-08-22 once
-their stated reason for being kept had expired: they were held so the next
-sub-project could inherit the reasoning, and that sub-project, 3c, landed and
-shares the code rather than reimplementing it. `git log` has them.
-
-What stands below is what 3a and 3b found while closing them, which is a
-different thing and outlived its milestone.
-
-What follows is what 3b discovered while closing its own two preconditions,
-and what 3c inherits as a result.
-
-**`server.properties` is the one overlay nothing checks.** Both other
-flavours refuse an overlay that does not parse and, since 2026-08-24, one that
-names a key the receiving program does not declare, measured against that
-program's own defaults (`internal/render/declared.go`). This one is left out
-by construction rather than by omission. `parseProperties` accepts any
-`key=value` line, so a mistyped key adds an unused one — and there is no
-fixture to check against, because
-Paper's `server.properties` is Minecraft's own and this repository has never
-measured it the way it measures `paper-global.yml` and `velocity.toml`. The
-four keys the operator relies on there are in the critical layer and no
-overlay can move them (`internal/render/paper.go`), so what a typo can reach
-is the author's own settings and nothing this operator depends on. Closing it
-would mean a third default file and a third regeneration step.
-
 ## From milestone 3c (the Velocity agent)
 
-**Paper 26.2 accepts the forwarding secret from the environment**
-(`PAPER_VELOCITY_SECRET`), so the plaintext need not be written into
-`/data/config/paper-global.yml` in the writable layer at all. Not done; a
-smaller attack surface for whoever next opens the Paper renderer.
+**A proxy that cannot bind its ready port stays `Pending` with the reason
+only in its own log, and closing that needs a choice between two answers
+neither of which is obviously right.** `ReadyGate.open` logs the bind failure
+and carries on; the kubelet's probe on 8081 then fails forever, the pod never
+goes `Ready`, and the group sits below its count with nothing saying why.
+`kubectl logs` has the reason, which is the ordinary path for a container-level
+failure — but the group's own status does not, and a `playerLimit` defect of
+exactly this shape was worth fixing in milestone 3b.
 
-**A proxy that cannot bind its ready port is silent on the CR.** It stays
-`Pending` with the reason only in the container log
-(`ReadyGate.open`'s own `log(...)` call). This is the same shape as the
-`playerLimit` defect milestone 3b found and fixed, in a place where the
-operator has nothing to write to.
-
-**Smaller ones**, each worth a sentence. Phase 5 of `hack/agent-test.sh`
-reuses phase 2's window constants, declared 400 lines earlier and both derived
-from a hard-coded renewal interval. And `cmd/spawnery-join` asks a server for
-its protocol version by announcing an unsupported one
-(`announceUnsupported = -1`), trusting that the proxy's newest supported
-version and the backend's actual version agree — true of every pinned pair
-this repository ships and not guaranteed generally. `internal/mcjoin`'s
-package comment names the failure mode, a loud "Outdated client!" naming the
-version to fix it to, so it fails loud rather than silent; the runbook that
-depends on the tool inherits the same assumption.
+The two ways out cost different things. **A fault channel**: the agent's stream
+is up even when the gate is not, so it could tell the operator — but
+`OperatorToProxy`'s counterpart carries no field for it, so this means a new
+proto message and every agent in the fleet rolling before the operator may
+rely on it. **Shutting the proxy down**: a proxy whose gate never binds can
+never take a player, so `proxy.shutdown()` would turn a silent `Pending` into a
+`CrashLoopBackOff`, which the operator already reports on the group with a
+reason. That is free and immediate, and it also means one failed bind takes
+down a proxy that is otherwise serving nobody yet — which is either exactly
+right or exactly wrong depending on how much a transient bind failure is
+believed in.
 
 **A backend that goes silent without closing its socket still disconnects its
 players, and no plugin can stop it.** `Rescue` catches a player whose server

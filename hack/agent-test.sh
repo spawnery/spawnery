@@ -58,6 +58,29 @@ VELOCITY_IMAGE="${VELOCITY_IMAGE:?VELOCITY_IMAGE must be set}"
 STUBOP="${STUBOP:?STUBOP must be set}"
 DEADLINE="${DEADLINE:-240}"
 
+# The renewal interval every phase but the proxy-sync one configures its stub
+# with, and the window the two stream-rate phases count over.
+#
+# Declared here rather than beside the phase that first used them, which is
+# what docs/known-issues.md recorded: phase 5 read WINDOW, RENEWALS, LIMIT and
+# FLOOR out of phase 2, five hundred lines above it, and RENEWALS divided by a
+# literal 5 that had to match a --renew-after somewhere else again. Changing
+# the interval meant finding three unrelated places and hoping.
+#
+# The bounds are the same for both phases because they measure the same
+# quantity from opposite sides -- the rate at which an agent opens streams --
+# and a phase that wanted its own would say so by declaring its own, the way
+# phase 3 does with MUTE_LIMIT.
+RENEW_AFTER=5
+WINDOW=30
+RENEWALS=$((WINDOW / RENEW_AFTER))
+# At most two streams per renewal plus slack: one per renewal is correct, and
+# twice that still rules out a reconnect storm.
+LIMIT=$((RENEWALS * 2 + 2))
+# And at least half, so a dead agent cannot pass a bound that only fails
+# upwards.
+FLOOR=$((RENEWALS / 2))
+
 NAME="spawnery-agent-test-$$"
 VOLUME="spawnery-agent-test-$$"
 NAME2="spawnery-agent-test-supersede-$$"
@@ -132,7 +155,7 @@ chmod 0644 "$WORK/config/config.yaml" "$WORK/config/forwarding.secret"
 	--san stubop \
 	--listen ":19443" \
 	--report-interval 1 \
-	--renew-after 5 \
+	--renew-after "$RENEW_AFTER" \
 	--hard-deadline 20 \
 	>"$EVENTS" 2>"$WORK/stub.log" &
 STUB_PID=$!
@@ -465,7 +488,7 @@ chmod 0755 "$WORK/agent-supersede"
 	--san stubop \
 	--listen ":19444" \
 	--report-interval 1 \
-	--renew-after 5 \
+	--renew-after "$RENEW_AFTER" \
 	--hard-deadline 20 \
 	--supersede \
 	>"$EVENTS2" 2>"$WORK/stub2.log" &
@@ -494,9 +517,14 @@ fi
 echo "waiting up to ${DEADLINE}s for the agent to greet the superseding operator..."
 await_event hello "$EVENTS2" "$NAME2"
 
-# One renewal interval is 5s, so the window holds about six of them. Twice that
-# plus two is the threshold: a correct agent is nowhere near it and the 1 Hz
-# churn is several times past it, so the number below is not a timing guess.
+# WINDOW, RENEWALS, LIMIT and FLOOR are declared at the top of this script,
+# beside RENEW_AFTER they derive from, because phase 5 measures the same
+# quantity with the same bounds. What each one is for is written there; what
+# follows is why this phase needs both directions.
+#
+# Twice the renewals due plus two is the ceiling: a correct agent is nowhere
+# near it and the 1 Hz churn this phase exists to catch is several times past
+# it, so the number is not a timing guess.
 #
 # Half the renewals due is the floor, and it is not decoration. Everything this
 # phase measures is bounded from above, so every way the agent can stop - a
@@ -504,10 +532,6 @@ await_event hello "$EVENTS2" "$NAME2"
 # a low count and would print "no reconnect storm" on the strength of it. That
 # is the milestone's own assertion passing for the exact failure it exists to
 # catch.
-WINDOW=30
-RENEWALS=$((WINDOW / 5))
-LIMIT=$((RENEWALS * 2 + 2))
-FLOOR=$((RENEWALS / 2))
 before="$(streams_opened "$EVENTS2")"
 echo "counting the streams the agent opens over ${WINDOW}s of renewals..."
 sleep "$WINDOW"
@@ -572,7 +596,7 @@ chmod 0755 "$WORK/agent-mute"
 	--san stubop \
 	--listen ":19445" \
 	--report-interval 1 \
-	--renew-after 5 \
+	--renew-after "$RENEW_AFTER" \
 	--hard-deadline "$MUTE_HARD_DEADLINE" \
 	--supersede \
 	--mute-after 1 \
@@ -1028,7 +1052,7 @@ chmod 0755 "$WORK/agent-proxy-supersede"
 	--san stubop \
 	--listen ":19447" \
 	--report-interval 1 \
-	--renew-after 5 \
+	--renew-after "$RENEW_AFTER" \
 	--hard-deadline 20 \
 	--supersede \
 	--proxy \

@@ -42,6 +42,9 @@ var paperDefaultConfig []byte
 //go:embed defaults/velocity.default.toml
 var velocityDefaultConfig []byte
 
+//go:embed defaults/server.properties.default
+var paperPropertiesDefaultConfig []byte
+
 // keyNode is one level of a configuration document's declared shape.
 //
 // The shape is measured, not written down: it comes from the receiving
@@ -97,7 +100,30 @@ var velocityFreeForm = []freeFormPath{
 var (
 	paperDeclared    = mustKeyTree(paperDefaultConfig, unmarshalYAML, paperFreeForm, "paper-global.yml")
 	velocityDeclared = mustKeyTree(velocityDefaultConfig, unmarshalTOML, velocityFreeForm, "velocity.toml")
+	// server.properties is flat, so its tree is one level deep and needs no
+	// free-form paths: every key in it is Minecraft's own, and there is no
+	// level whose child names belong to whoever writes the file.
+	paperPropertiesDeclared = mustKeyTree(
+		paperPropertiesDefaultConfig, unmarshalProperties, nil, "server.properties")
 )
+
+// unmarshalProperties reads a .properties document as the flat map its
+// declared-key tree is built from.
+//
+// It delegates to parseProperties, which is the same function the renderer
+// applies to a user's overlay, so the two agree about what a key even is --
+// comments, blank lines, whitespace around the separator and a line with no
+// separator at all are all handled once. A second parser here would be a
+// second answer to that question, and the check would then refuse or admit
+// keys the renderer never saw.
+func unmarshalProperties(doc []byte) (map[string]any, error) {
+	flat := parseProperties(string(doc))
+	out := make(map[string]any, len(flat))
+	for k, v := range flat {
+		out[k] = v
+	}
+	return out, nil
+}
 
 func unmarshalYAML(doc []byte) (map[string]any, error) {
 	var out map[string]any

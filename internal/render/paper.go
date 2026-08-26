@@ -70,12 +70,38 @@ func Paper(v Values, secret string, overlay map[string]string) (map[string][]byt
 		return nil, err
 	}
 
+	// Before the layering, so a key Minecraft does not read is reported as
+	// the key it is rather than silently added to the file and ignored.
+	//
+	// This was the one overlay nothing checked. paper-global.yml and
+	// velocity.toml have been measured against their programs' own defaults
+	// since 2026-08-24; server.properties was left out because its default
+	// file is Minecraft's and this repository had never captured one. It has
+	// now -- defaults/server.properties.default, written by the pinned build
+	// on a first start, the same way the other two were -- so the same rule
+	// applies to all three.
+	//
+	// What it catches is narrow and worth stating: the four keys the operator
+	// relies on are in the critical layer below and no overlay can move them,
+	// so a typo could only ever reach the author's own settings. It reached
+	// them silently, which is the part that changed.
+	userProps := parseProperties(overlay["server.properties"])
+	if len(userProps) > 0 {
+		doc := make(map[string]any, len(userProps))
+		for k, val := range userProps {
+			doc[k] = val
+		}
+		if err := checkDeclaredKeys(paperPropertiesDeclared, doc, "server.properties"); err != nil {
+			return nil, err
+		}
+	}
+
 	props := Layer(
 		map[string]string{
 			"max-players": strconv.FormatInt(int64(*v.MaxPlayers), 10),
 			"motd":        valueOr(v.Motd, ""),
 		},
-		parseProperties(overlay["server.properties"]),
+		userProps,
 		map[string]string{
 			"server-port":            "25565",
 			"online-mode":            "false",
@@ -233,6 +259,25 @@ func paperGlobal(secret, overlay string) (string, error) {
 	// milestone 3c's first end-to-end join found it; see
 	// TestPaperWritesTheKeysPaperItselfReads for the check that now measures
 	// these names against Paper's own defaults rather than against this file.
+	// The environment is not a way to keep this secret off disk, and it looks
+	// like one. Paper 26.2 does read PAPER_VELOCITY_SECRET -- measured
+	//2026-08-26 against the pinned build, booted with a paper-global.yml
+	// carrying enabled and online-mode and no secret at all: forwarding came
+	// up, with none of the "no secret key was specified. Disabling velocity"
+	// that a genuinely missing secret produces.
+	//
+	// And then Paper wrote it into config/paper-global.yml itself:
+	//
+	//	velocity:
+	//	  enabled: true
+	//	  online-mode: true
+	//	  secret: measured-from-the-environment
+	//
+	// So the plaintext reaches the same file either way, and for a persistent
+	// group that file is on the PersistentVolume. What the environment would
+	// add is a second copy -- in the pod spec, unless it came by secretKeyRef
+	// -- for no reduction anywhere. docs/known-issues.md carried this as a
+	// smaller attack surface waiting to be taken; it is not one.
 	velocity["enabled"] = true
 	velocity["online-mode"] = true
 	velocity["secret"] = secret

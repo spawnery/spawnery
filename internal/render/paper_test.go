@@ -436,3 +436,83 @@ func updateCheckerEnabled(t *testing.T, files map[string][]byte) bool {
 	}
 	return enabled
 }
+
+// paperPropertiesDefault is Minecraft's own server.properties, byte for byte
+// as the pinned Paper build writes it on a first start against an otherwise
+// empty data directory. It is the third of the three measured defaults, and
+// the last one to arrive: paper-global.yml and velocity.toml have been checked
+// against their programs since 2026-08-24, and this file was the gap
+// docs/known-issues.md called "the one overlay nothing checks".
+//
+// Reproduce it with the paperGlobalDefault recipe above, taking
+// server.properties out of the same run rather than a second one -- the two
+// files appear together and one boot measures both.
+//
+// The second line of the file is the timestamp Minecraft stamps on it. It
+// carries no meaning for the check, which reads keys and ignores comments, and
+// it is kept rather than stripped so that regenerating the file dates the
+// measurement in the diff.
+const paperPropertiesDefault = defaultsDir + "/server.properties.default"
+
+// TestServerPropertiesOverlayIsCheckedAgainstMinecraftsOwnKeys is the check
+// that entry asked for. Minecraft does not refuse a key it does not know: it
+// keeps its own default for the field the author meant and writes the stray
+// key back out, so the file on disk looks like the override took.
+func TestServerPropertiesOverlayIsCheckedAgainstMinecraftsOwnKeys(t *testing.T) {
+	_, err := Paper(paperValues(), "s3cret", map[string]string{
+		// One character off view-distance, which is a real key.
+		"server.properties": "view-distanc=12\n",
+	})
+	if err == nil {
+		t.Fatal("Paper accepted a server.properties key Minecraft does not declare")
+	}
+	for _, want := range []string{"server.properties", "view-distanc"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %q, want it to name %q", err, want)
+		}
+	}
+}
+
+// TestServerPropertiesOverlayAcceptsRealKeys is the other direction, and the
+// one that stops the check above from passing on a tree that refuses
+// everything. difficulty and view-distance are both Minecraft's.
+func TestServerPropertiesOverlayAcceptsRealKeys(t *testing.T) {
+	files, err := Paper(paperValues(), "s3cret", map[string]string{
+		"server.properties": "difficulty=hard\nview-distance=12\n",
+	})
+	if err != nil {
+		t.Fatalf("Paper refused keys Minecraft declares: %v", err)
+	}
+	props := parseProperties(string(files["server.properties"]))
+	if props["difficulty"] != "hard" || props["view-distance"] != "12" {
+		t.Errorf("server.properties = %+v, want the overlay's difficulty and view-distance", props)
+	}
+}
+
+// TestTheMeasuredPropertiesDefaultIsTheOneTheRendererReads guards the fixture
+// itself. An empty or truncated file would build a tree that declares nothing,
+// and every overlay key would then be refused -- or, if the tree were empty
+// enough to be skipped, admitted. Both are silent from the renderer's side.
+func TestTheMeasuredPropertiesDefaultIsTheOneTheRendererReads(t *testing.T) {
+	raw, err := os.ReadFile(paperPropertiesDefault)
+	if err != nil {
+		t.Fatalf("read %s: %v", paperPropertiesDefault, err)
+	}
+	keys := parseProperties(string(raw))
+	if len(keys) < 50 {
+		t.Fatalf("%s declares %d keys, want a real Minecraft default (about 70)", paperPropertiesDefault, len(keys))
+	}
+	// The four the operator itself writes have to be among them, or the
+	// critical layer would be writing keys Minecraft does not read.
+	for _, key := range []string{"server-port", "online-mode", "enable-status", "enforce-secure-profile"} {
+		if _, ok := keys[key]; !ok {
+			t.Errorf("%s does not declare %q, which this renderer writes unconditionally", paperPropertiesDefault, key)
+		}
+	}
+	// And the two a user's Values reach.
+	for _, key := range []string{"max-players", "motd"} {
+		if _, ok := keys[key]; !ok {
+			t.Errorf("%s does not declare %q", paperPropertiesDefault, key)
+		}
+	}
+}
