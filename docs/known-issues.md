@@ -209,34 +209,25 @@ report, and its backoff clock starts well after the operator's did. That is
 reasoning, not measurement. Whoever narrows the bound should isolate the two
 distributions first: the grace is sized against the second one.
 
-**The taint list is trusted, not validated.** `-drain-taint` accepts any
-string, and `IsDeparting` matches it only against a taint whose effect is
-`NoSchedule` or `NoExecute` — deliberately, per §3.1's own reasoning: a
-`PreferNoSchedule` taint does not stop the scheduler putting a replacement pod
-straight back on the same node, so matching on it would condemn a pod, rebuild
-it in place, and condemn it again next pass. That correctness comes at a cost
-this operator never reports: a key configured with an effect it ignores — a
-real taint on a real node, `PreferNoSchedule` or any future effect Kubernetes
-adds — simply never matches, silently, with nothing on any group's conditions
-or events distinguishing "this taint does not apply" from "there is no such
-taint at all". *The key is checked as of 2026-08-24, for the half of that
-which is checkable.* `-drain-taint` now refuses a value that is not a bare
-qualified name, using `validation.IsQualifiedName` — the same check Kubernetes
-validates a taint key with, so it refuses exactly what the API server would
-and nothing more.
-
-The mistake this catches is the one to expect. Taints are written
-`key=value:Effect` nearly everywhere a person meets them — `kubectl taint`,
-node manifests, every tutorial — so passing the whole taint is the likely slip,
-and it was the one this operator survived worst: such a key matches no taint
+**A `-drain-taint` key that is simply absent from the cluster cannot be told
+from a typo.** The flag is validated as far as it can be: since 2026-08-24 it
+refuses a value that is not a bare qualified name, using
+`validation.IsQualifiedName` — the same check the API server validates a taint
+key with, so it refuses exactly what the API server would and nothing more.
+That catches the mistake to expect, because taints are written
+`key=value:Effect` nearly everywhere a person meets them and passing the whole
+taint was the slip this operator survived worst: such a key matches no taint
 that exists, so the flag was accepted, nothing ever drained, and nothing said
-why. It is now a refusal at startup whose message shows what the flag takes.
+why.
 
-A well-formed key that is simply absent from the cluster still cannot be told
-from a typo. Nothing can tell those apart, and this does not pretend to. An
-operator relying on a taint to drain a node should confirm independently, with
-`kubectl describe node`, that the taint is present with an effect this
-operator honours; there is no warning if it is not.
+A well-formed key nobody uses is a different matter and nothing can tell it
+from a working one — except in the one case that now warns, a node carrying a
+*well-known* drain taint this operator was not configured for. For a key of
+somebody's own choosing there is no such list to check against. Confirm with
+`kubectl describe node` that the taint is present with an effect this operator
+honours (`NoSchedule` or `NoExecute`; `PreferNoSchedule` is ignored
+deliberately, since it does not stop the scheduler putting a replacement back
+on the same node).
 
 ## From milestone 5c (detecting forwarding secret rotation)
 
@@ -415,129 +406,6 @@ operator's log and names any denial it finds, so the cause lands in the failure
 message of the scenario that actually stalled instead of in a scenario twenty
 places later that the run never reaches.
 
-## From milestone 6c (the LoadBalancer and HostPort expose strategies)
-
-**`HostPort` and CIS `restricted` cannot both hold in one namespace.** Pod
-Security `baseline` — which `restricted` inherits, per the Kubernetes Pod
-Security Standards rather than anything measured here — disallows a container
-`hostPort` outright, so a namespace enforcing either policy refuses every
-`HostPort` pod's create, and `ProxyGroupReconciler` reports the refusal on the
-group's own `Degraded` condition (`ReasonProxyPodRejected`) rather than ever
-admitting one. This refusal is the one thing 6c observed being enforced:
-`baseline`, not `restricted`, against a real API server, in both envtest
-(`internal/controller/expose_test.go`,
-`TestARejectedProxyPodIsReportedOnTheGroup`) and `make e2e`
-(`test/e2e/expose_test.go`, `aForbiddenHostPortIsReportedOnTheGroup`).
-
-*`restricted` itself is now measured too, on `paulwtf` on 2026-08-25.* A
-throwaway namespace labelled `enforce: restricted`, a `Network`, and one
-`ProxyGroup` at `expose.type: HostPort` port 25577. The group went
-`Degraded=True`/`ProxyPodRejected` and quoted the API server verbatim —
-`violates PodSecurity "restricted:latest": hostPort (container "velocity" uses
-hostPort 25577)` — with no pod in the namespace at any point. So the sentence
-this entry opens with is no longer inherited from the Pod Security Standards
-for `restricted`; it is a thing this cluster did. Driven against the deployed
-`v0.2.0` operator rather than a working tree, which is what makes it a
-statement about what ships.
-
-6a's handover §6 listed CIS `restricted` pod security and `HostPort` under the
-cluster's real CNI among what the RKE2 rollout owed
-(`docs/handover-milestone-6.md`), and this entry was written to say the two
-could not both be honoured in one namespace. That rollout has since happened,
-and it did not have to choose. Measured on `paulwtf` on 2026-08-22: the
-`minecraft` namespace enforces `restricted` (`enforce` and `warn` both), and
-the one `ProxyGroup` in it exposes `ClusterIP` with two ready replicas beside a
-`Ready` `Server`, all of it up for over two days. So `restricted` against a
-game server namespace is driven and holds; `HostPort` under the real CNI was
-the leg that went undriven rather than the leg that conflicted, and nothing in
-the cluster is standing in this incompatibility today.
-
-*That leg is driven too, on 2026-08-25, and the answer is not the one the
-phrase "under the real CNI" implies.* A namespace of its own with no Pod
-Security label — the remedy this entry recommends two paragraphs down — and one
-`HostPort` `ProxyGroup` at port 25577. The pod was admitted, went `Ready`, and
-the group published `status.address: 45.137.203.198:25577`, having withheld it
-until a ready pod actually declared that `hostPort`. So the CNI implements
-`hostPort`: `cilium-config` runs `cni-chaining-mode = portmap` with
-`kube-proxy-replacement = false`, which is the portmap plugin's job rather than
-Cilium's eBPF.
-
-What a player would meet is a different object entirely. From outside, 25577
-times out while 25565 and 443 on the same node IP connect instantly — the
-difference is `paulwtf`'s own `CiliumClusterwideNetworkPolicy`
-`host-firewall-ingress`, which admits from `world` exactly 6443, 80, 443, 25,
-465, 587, 143, 993, 5432 and 25565, plus ICMP echo, and drops the rest. Its own
-description says so. **So `HostPort` on this cluster is a host-firewall
-question, not a CNI one**, and the remedy is one port in that policy rather
-than anything in this operator. Anyone reading the paragraph below about giving
-the `HostPort` group a namespace of its own should read this beside it: the
-namespace is necessary and not sufficient.
-
-It stays recorded because the code cannot make the two compatible and the trap
-is waiting for whoever picks `HostPort` later. The remedy is the runbook's to
-take: give the namespace running the `HostPort` `ProxyGroup` a relaxed Pod
-Security label, or a namespace of its own, separate from the `restricted`
-namespaces the rest of the network runs in.
-
-## From milestone 6d (the Helm chart)
-
-`config/deploy/` no longer exists. The operator installs by
-`helm install charts/spawnery`, and `internal/rbacaudit` now audits what
-`helm template` actually renders rather than an intermediate on disk. Full
-account: `docs/handover-milestone-6d.md`.
-
-**`make chart-lint` cannot catch a chart that renders with an empty
-namespace, and that is a property of Helm rather than of the target.** The
-plan justified `chart-lint`'s `helm template` line by a chart that lints but
-does not render. Measured directly with a typo'd `{{ .Release.Namspace }}` in
-a template, and measured again on 2026-08-24 against the same Helm v4.2.3 the
-flake pins: an unresolved `.Release` field renders as the empty string rather
-than erroring, so both `helm lint` and `helm template` exit 0. Nothing at the
-lint step can see it; `chart-lint` still catches a template that fails to
-render at all, which is a different class.
-
-What used to catch it was `TestAgentServiceReachesTheOperatorPods`
-(`internal/rbacaudit/deploy_envtest_test.go`), incidentally, because it
-applies the rendered Service into envtest's real API server and that refuses
-a `Service` with an empty `namespace` — so the one object that test happens to
-apply was covered and the other eight were not.
-`TestTheChartRendersIntoTheNamespaceItIsGiven` did not close the gap either:
-its literal scan looks for `spawnery-system`, and an empty namespace contains
-no literal to find, and it reads the namespace of two objects out of nine.
-
-Since 2026-08-24 `TestEveryRenderedObjectLandsInTheReleaseNamespace` reads
-every object instead, with the optional templates switched on so the
-ServiceMonitor and the PrometheusRule — both off by default, so the ordinary
-render never sees them — are covered too. It carries the list of namespaced
-objects it expects rather than a count, so a template that stops rendering
-fails rather than passing by being absent, and one that is added fails until
-somebody lists it.
-
-**`TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` flaked once and
-has never done it again.** `internal/controller/server_controller_test.go`. It
-failed during milestone 6d's Task 6 `make test`, passed in isolation and on a
-full rerun, and 6d changed nothing it touches. Nothing was captured.
-
-One thing is ruled out rather than assumed: **it is not cache lag.**
-`internal/testenv`'s `Client` is `client.New`, a direct client with no
-informer behind it, so the hypothesis everyone reaches for first with envtest
-cannot be the mechanism. Sixty runs in isolation and five full-package runs on
-2026-08-23 did not reproduce it.
-
-The evidence against it has grown without anyone doing anything: `ci.yml`'s
-`test` job runs `go test -race ./...` on every push and pull request, and over
-86 runs since 2026-08-20T08:35Z it has **never** concluded `failure` — the ten
-red runs are five `e2e`, five `lint` and three `deps`, none of them this
-suite. So this is one occurrence standing against roughly ninety executions.
-
-It stays because an unrecorded flake is rediagnosed from scratch. The
-assertion now prints what it saw — the `Accepted` condition, every pod with
-its `deletionTimestamp` and node, and whether the pod under the name is still
-the predecessor *by UID*, since the name is reused across generations and the
-first draft of that diagnostic reported "predecessor still present: true"
-about a healthy successor. A second occurrence should be a diagnosis rather
-than another data point.
-
 ## From milestone 6e (CI)
 
 GitHub Actions now runs three workflows: `.github/workflows/ci.yml` blocks
@@ -546,91 +414,6 @@ push to `master`; `.github/workflows/nightly.yml` runs `make image-repro` on
 a schedule plus `workflow_dispatch`; `.github/workflows/release.yml` runs
 `hack/publish.sh` on a `v*` tag. Full account:
 `docs/handover-milestone-6e.md`.
-
-**The events grants are right and minimal, and that is readable in client-go
-rather than inferred from a green e2e run — which is the only reason to
-believe it.** Migrating to `events.k8s.io/v1` needed its own RBAC grant, and
-the evidence for it being sufficient was one `make e2e` `PASS`, which reaches
-about as far as the rest of this entry says. The verbs do not need it. In
-client-go v0.36.0, the events broadcaster's `recordEvent`
-(`tools/events/event_broadcaster.go:230-273`) calls exactly two methods on
-its sink: `sink.Patch` at `:240`, when the event is a series, and
-`sink.Create` at `:246` otherwise or when the patch found nothing to patch.
-`EventSink.Update` is declared in the same package
-(`tools/events/interfaces.go:71`) and called from nowhere in it. The
-deprecated recorder's own `recordEvent` (`tools/record/event.go:330-341`)
-has the identical shape, `sink.Patch` then `sink.Create` and no `Update`.
-So `create;patch` on `events.k8s.io/events` and on `""/events` is neither
-short a verb the library will reach for nor carrying one it will not, and
-that is a statement about the library's source, not about a run.
-`internal/rbacaudit` checks the rendered chart's RBAC against a
-hand-maintained table in both directions, so it catches the table and the
-role disagreeing. It once could not catch both agreeing while both were
-wrong against what the code needs; `testenv.RestrictedClient` closes that for
-any path a controller test takes. The only thing that has exercised
-the operator's real ServiceAccount against a real API server since the
-grant changed is one `make e2e` run, and that run's `PASS` reaches exactly
-as far as the check it drives allows, no further:
-`theOperatorWasNeverDenied` excludes any log line containing `violates
-PodSecurity` (milestone 6c's own narrowing, so a deliberate Pod Security
-refusal in an unrelated scenario in the same run cannot fail this one), and
-two paths can carry a real denial without ever producing the `is forbidden:`
-line the check looks for — a revoked cache-backed read (tried against pods
-and against networks, watched for close to eight minutes, no log line and
-no `403` in the operator's own client metrics either time) and
-`readForwardingSecret` folding a real `403` into a condition message with no
-`is forbidden:` substring and no log call at all. A grep of the CI job's own
-stdout for `is forbidden:` was tried as independent corroboration of the
-grant and does not stand as any: `hack/e2e.sh` prints the operator's pod log
-only when the job's own exit status is non-zero, and the check's log source
-reads the same log through the Kubernetes API in-process, never printing it
-— so on a green run the corpus that grep searches structurally cannot
-contain the thing being searched for, and a zero-match result against it is
-not evidence about the grant one way or the other.
-
-**What is still not covered anywhere, and is now at least recorded: the
-`action` the events API takes at every one of this package's `Eventf` call
-sites.**
-`events.FakeRecorder` renders an event as `eventtype + " " + reason + " " +
-note` (client-go v0.36.0, `tools/events/fake.go:36-38`) and drops `action`
-entirely, so no assertion reading a fake recorder in this repository can
-say anything about it — four of the action constants were replaced with
-garbage during the final review and `go test ./internal/controller/` stayed
-green in 87.7s. `go vet` gives no cover either: it cannot see through the
-`events.EventRecorder` interface to know `Eventf`'s note is a format
-string, and a deliberately broken format at the `PodCreated` site in
-`internal/controller/server_controller.go` produced no diagnostic. The consequence of a call site passing `""` is a
-silent loss — `events.k8s.io/v1` refuses the event, the broadcaster
-classifies the `*errors.StatusError` as non-retryable and abandons it with
-a `klog` line, and unit tests, envtest and e2e all stay green. Two guards
-now stand in for what the fake cannot see, in
-`internal/controller/events_test.go`:
-`TestTheRealAPIServerRefusesAnEventWithNoAction` measures the premise
-against envtest's real API server, and
-`TestEveryEventfCallSitePassesAKnownAction` walks this package's own
-non-test sources and requires the fifth argument of every `Eventf` call to
-be one of `events.go`'s action constants.
-
-The second is a source-level check, and two of its three assertions exist
-because the obvious one alone was weaker than it looked — both found by the
-re-review of the fix that added it. It matches the action argument by
-*identifier name* and resolves no types, so `actionCreatePod := ""`
-declared above a call site passed; it now also requires that no local
-anywhere in the package shadows one of the constant names, which is
-what makes matching by name mean anything (a package-level redeclaration is
-a compile error, so the two together pin the identifier to the constant
-without a type checker). And it logged the number of call sites rather than
-asserting it, so deleting a call site outright left it green at 22, and a
-controller moved into a subpackage would have dropped out of a
-non-recursive scan the same way; the walk is recursive now and the count is
-asserted against `wantEventfSites`.
-
-What the check still cannot say — stated in its own comment as well — is
-whether the constant a call site chose is the *right* one for that call
-site. `actionSyncStatus` where `actionCreatePod` was meant passes every
-assertion. Nothing observes the action end to end, and nothing will until a
-test reads `Event.Action` back off a real API server for an event a
-controller actually emitted.
 
 **The rootless-podman path is now unexercised by anything automatic.**
 Before this milestone there was exactly one way `hack/e2e.sh` ran: by hand,
@@ -657,24 +440,6 @@ branch whose silence is permission), and a dispatched green run closed it and
 returned the gate to exit 0. Driving the writing step itself needs a
 genuinely red nightly and nothing stands in for that.
 
-**Only the nightly catches a hash that goes stale from outside.** `ci.yml`
-builds `.#operator-image` unconditionally, through `hack/e2e.sh`, and reaches
-no other image derivation on its own: `make test` and `make lint` enter Nix
-only through `nix develop`, and the `deps` job builds
-`.#agents.mitmCache.updateScript` and nothing else. Since 2026-08-23 an
-`images` job closes most of that — `hack/image-derivations-changed.sh` decides
-from a `git diff` whether anything defining `.#paper-image` or
-`.#velocity-image` moved, and the two `nix build` steps run only when it did,
-so a hash this repository breaks is caught on the pull request that breaks it
-and every other push spends one diff.
-
-What no diff can see is a fixed-output hash breaking because the bytes at a
-URL changed, with no line here moving. `nightly.yml` builds all four
-derivations unconditionally and is the only thing watching for that, which is
-why its verdict is wired into the release rather than left in a run nobody
-opens: it labels a `nightly-red` issue on failure, closes it on a later pass,
-and `hack/require-no-red-nightly.sh` refuses to publish while one stands.
-
 ## From the RKE2 rollout (milestone 6, driven 2026-08-20)
 
 Driven against `paulwtf`; the evidence is `docs/runbook-milestone-6-rollout.md`
@@ -692,15 +457,6 @@ deployment is described. The design's §4 and its acceptance criterion 2 both
 assumed the opposite; both were wrong, and this is structural rather than an
 oversight anyone could have avoided.
 
-**Cilium will not share a LoadBalancer address between two `Local` Services
-that select different pods.** Non-overlapping ports are necessary and not
-sufficient. Measured:
-`"compatible ExternalTrafficPolicy local but selecting different set of pods"`.
-This is a property of `externalTrafficPolicy: Local` — the announcement would
-be wrong for whichever Service lacks an endpoint on a given node — and it means
-a cluster whose address pool is exhausted must choose between real client
-addresses and a shared address.
-
 ## On the agent channel (`internal/certs`, `internal/agentserver`)
 
 **A CA rotation is asked for, never scheduled — but its clock is now
@@ -715,20 +471,3 @@ them. The chart ships an optional `PrometheusRule`
 days by default. The operator still
 holds no threshold of its own: how many days should worry somebody is a fact
 about a cluster, not about this code.
-
-## Small things
-
-- Since milestone 2a, `BuildServerPod` rejects a user mount that hits `/data` or
-  `/tmp` exactly, that reuses one of the operator's reserved volume **names**,
-  and that overlaps the agent mount path in either direction: the same path,
-  nested underneath, **or an ancestor of it** (`checkMountCollision`). The
-  asymmetry is intentional — mounting under `/data` is the documented way to add
-  extra files, whereas mounting under or above the agent mount would shadow the
-  token the agent reads its identity from. **Since 2026-08-24 it also refuses
-  two user mounts that collide with each other**, by name or by path —
-  including the same path spelled two ways, since the loop cleans before
-  comparing exactly as `checkMountCollision` does. That function sees one
-  mount at a time, so a collision *between* two of them is structurally
-  invisible to it and the check belongs to the loop. The API server catches both, but as a rejected pod
-  create that reaches a user as a `Degraded` condition quoting an apimachinery
-  message about an index in an array.

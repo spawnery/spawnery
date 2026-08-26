@@ -1945,6 +1945,26 @@ func podUnderNameIsStill(f *fixture, name string, uid types.UID) bool {
 // the wait ends by itself, and ends with a pod this controller really did
 // create. Without it the fix above would be indistinguishable from a Server
 // that never gets a pod at all.
+//
+// # It flaked once, on 2026-08-22, and has never done it again
+//
+// It failed during milestone 6d's Task 6 `make test`, passed in isolation and
+// on a full rerun, and 6d changed nothing it touches. Nothing was captured.
+// Recorded here rather than left to memory, because an unrecorded flake is
+// rediagnosed from scratch by whoever meets the second one.
+//
+// One thing is ruled out rather than assumed: **it is not cache lag.**
+// internal/testenv's Client is client.New, a direct client with no informer
+// behind it, so the hypothesis everyone reaches for first with envtest cannot
+// be the mechanism. Sixty runs in isolation and five full-package runs on
+// 2026-08-23 did not reproduce it, and ci.yml's `test` job -- go test -race
+// ./... on every push and pull request -- had concluded failure not once
+// across 86 runs as of 2026-08-25. So this is one occurrence standing against
+// roughly ninety executions.
+//
+// The diagnostic above is what a second occurrence gets that the first did
+// not: the Accepted condition, every pod with its deletionTimestamp and node,
+// and whether the pod under the name is still the predecessor by UID.
 func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
 	f := newFixture(t)
 	terminating := recreateOrdinalOverATerminatingPod(t, f)

@@ -49,6 +49,18 @@ var RequiredCluster = []Permission{
 	// Events — the recorder writes them for every phase change and every
 	// warning, and patches them when it aggregates repeats.
 	//
+	// create;patch and no update, read out of client-go rather than inferred
+	// from a green run, which is the only reason to believe it. In v0.36.0 the
+	// broadcaster's recordEvent (tools/events/event_broadcaster.go:230-273)
+	// calls exactly two methods on its sink: Patch when the event is a series,
+	// Create otherwise or when the patch found nothing to patch. EventSink's
+	// Update is declared in the same package (tools/events/interfaces.go:71)
+	// and called from nowhere in it, and the deprecated recorder
+	// (tools/record/event.go:330-341) has the identical shape. So this pair is
+	// neither short a verb the library will reach for nor carrying one it will
+	// not -- a statement about the library's source, which a `make e2e` PASS
+	// could not have made.
+	//
 	// Only events.k8s.io is here, and only because these events regard objects
 	// in namespaces the operator does not know in advance: every controller in
 	// internal/controller writes through k8s.io/client-go/tools/events, whose

@@ -1464,7 +1464,24 @@ spec:
                         a URL: no scheme and no spaces'
                       rule: '!self.address.contains('' '') && !self.address.contains(''://'')'
                   hostPort:
-                    description: HostPort configures type HostPort.
+                    description: "HostPort configures type HostPort.\n\nIt cannot
+                      coexist with Pod Security `baseline` or `restricted` in the\nsame
+                      namespace: both disallow a container hostPort outright, so the
+                      API\nserver refuses every pod of such a group and this operator
+                      reports the\nrefusal on Degraded rather than ever admitting
+                      one. Measured against\n`restricted` on a real cluster, quoted
+                      verbatim:\n\n\tviolates PodSecurity \"restricted:latest\": hostPort\n\t(container
+                      \"velocity\" uses hostPort 25577)\n\nThe remedy is a namespace
+                      of its own for the HostPort group, with a\nrelaxed Pod Security
+                      label, separate from the restricted namespaces the\nrest of
+                      the network runs in.\n\nThat namespace is necessary and not
+                      sufficient. A hostPort that is\nadmitted, ready and published
+                      in status.address can still be\nunreachable, because whether
+                      the port is open to the world is a\nhost-firewall question rather
+                      than a Kubernetes one -- measured on a\nCilium cluster whose
+                      CiliumClusterwideNetworkPolicy admitted a fixed\nlist of ports
+                      from `world` and dropped this one, while the pod was\nserving
+                      perfectly. docs/network-boundaries.md carries that measurement."
                     properties:
                       port:
                         description: |-

@@ -118,6 +118,27 @@ type ExposeSpec struct {
 	NodePort *NodePortSpec `json:"nodePort,omitempty"`
 
 	// HostPort configures type HostPort.
+	//
+	// It cannot coexist with Pod Security `baseline` or `restricted` in the
+	// same namespace: both disallow a container hostPort outright, so the API
+	// server refuses every pod of such a group and this operator reports the
+	// refusal on Degraded rather than ever admitting one. Measured against
+	// `restricted` on a real cluster, quoted verbatim:
+	//
+	//	violates PodSecurity "restricted:latest": hostPort
+	//	(container "velocity" uses hostPort 25577)
+	//
+	// The remedy is a namespace of its own for the HostPort group, with a
+	// relaxed Pod Security label, separate from the restricted namespaces the
+	// rest of the network runs in.
+	//
+	// That namespace is necessary and not sufficient. A hostPort that is
+	// admitted, ready and published in status.address can still be
+	// unreachable, because whether the port is open to the world is a
+	// host-firewall question rather than a Kubernetes one -- measured on a
+	// Cilium cluster whose CiliumClusterwideNetworkPolicy admitted a fixed
+	// list of ports from `world` and dropped this one, while the pod was
+	// serving perfectly. docs/network-boundaries.md carries that measurement.
 	// +optional
 	HostPort *HostPortSpec `json:"hostPort,omitempty"`
 
