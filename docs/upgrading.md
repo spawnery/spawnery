@@ -111,7 +111,7 @@ Rolling the *operator* back on its own is safe. An agent that supports
 `FULL_SYNC` branch opens the gate unless a `false` was asserted --
 `if (!previous.synced && previous.asserted != false) onFirstSync()`.
 
-## The 0.2.2 images roll both fleets, and one of them for nothing
+## 0.2.2: the images roll both fleets, the operator rolls nothing
 
 0.2.2 is a Velocity agent change and nothing else: `Drain` now moves a player
 who lands on a draining server after the drain began, which is the arrival
@@ -123,6 +123,21 @@ gained nothing rolls on this upgrade, one server at a time, drain-aware — the
 cost is the rollout, not any player's session. The alternative is two agent
 versions to keep straight against one operator, and that trade was made
 deliberately; the reasoning sits beside `imageVersion` itself.
+
+**The operator moves to 0.2.2 too, and rolls nothing by itself.** The section
+at the top of this page explains that an operator upgrade *can* roll every
+proxy in the cluster, because the pod hash is a digest of the rendered pod and
+a change in the rendering code moves it. This release does not change that
+rendering: `internal/podspec`'s golden hash test
+(`internal/podspec/hash_golden_test.go`) still passes unchanged, which is the
+check that would fail if either `DesiredServerHash` or `DesiredProxyHash` had
+moved. What the operator gained is a startup permission self-check, a refusal
+to adopt a ConfigMap it does not own, a report on a duplicated ordinal, a drain
+that completes on a node whose group's `Network` is broken, and a reconnect
+grace derived from measurement — none of which reaches a pod's rendered shape.
+
+So the only rolling this release causes is the one a `Network` asks for by
+naming the new image, and that is the paragraph above.
 
 **No ordering requirement in either direction**, unlike the `SetReady` case
 above. Nothing new is on the wire: the change is entirely inside the proxy
