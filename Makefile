@@ -113,6 +113,25 @@ build:
 lint:
 	golangci-lint run
 
+.PHONY: paper-pin
+# Computes what nix/paper.nix has to say about a Paper build, and writes it in.
+#
+#   make paper-pin                    the newest STABLE build of the pinned version
+#   make paper-pin ARGS="26.3"        the newest STABLE build of 26.3
+#   make paper-pin ARGS="26.3 118"    exactly that build
+#   make paper-pin-check              print, compare, change nothing
+#
+# It does not decide to upgrade; it answers what the values are once somebody
+# has. What it removes is four hashes read by hand out of two places and
+# converted from hex to SRI, which is mechanical and is four chances to put a
+# wrong hash into a build that then fails somewhere else entirely.
+paper-pin:
+	hack/paper-pin.sh $(ARGS)
+
+.PHONY: paper-pin-check
+paper-pin-check:
+	CHECK=1 hack/paper-pin.sh $(ARGS)
+
 .PHONY: agent
 # `nix build` filters the source tree through the git index, so an untracked
 # file does not exist for a sandboxed build. This is worth reading before

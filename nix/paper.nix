@@ -11,6 +11,18 @@
 , stdenvNoCC
 }:
 
+# Every value below that a Paper bump moves -- both versions and both hashes --
+# is what hack/paper-pin.sh computes and writes. It reads the launcher's URL
+# and checksum from PaperMC's API, downloads the launcher, verifies it against
+# that checksum, and takes Mojang's URL and hash out of META-INF/download-context
+# inside it, which is why the second checksum does not come from the host that
+# serves the artifact. `make paper-pin-check` says whether this file already
+# names a given build and changes nothing.
+#
+# The four lines it rewrites are anchored to their exact shape, so a file that
+# has drifted is a refusal rather than a partial edit. Moving any of them by
+# hand is still possible and still fine; the script exists because doing it by
+# hand is four chances to mistype a hash into a build that fails elsewhere.
 rec {
   paperVersion = "26.2";
   paperBuild = "111";

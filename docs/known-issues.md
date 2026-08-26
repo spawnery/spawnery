@@ -29,14 +29,18 @@ rather than a list of faults. The design decisions live in
 
 ## From milestone 2b (the base image)
 
-**Following Paper upstream is manual, and needs a decision rather than a
-fix.** A new build means new hashes in `nix/paper.nix`, by hand, including the
-Mojang hash out of the new jar's `META-INF/download-context`. Automating it is
-project 3 in the main design and has never been scheduled; until it is, every
-Paper release is a person reading two hashes out of a jar. Nothing here is
-broken — the pinning is deliberate and the hash chain is stronger than most —
-so this stays open only because somebody has to decide whether project 3 is
-worth doing.
+**Whether to automate *watching* for a new Paper build is still a decision.**
+Computing the pin is not: `make paper-pin` reads the launcher's URL and
+checksum from PaperMC's API, verifies the download against it, takes Mojang's
+URL and hash out of `META-INF/download-context` inside the launcher — which is
+why that second checksum does not come from the host serving the artifact —
+converts both to SRI, and writes all four values into `nix/paper.nix`.
+`make paper-pin-check` compares without changing anything, and reproduces the
+checked-in pin exactly, which is how it was verified.
+
+What that leaves is the half a person still does: noticing that a build exists
+and deciding to take it. The automated image pipeline is project 3 in the main
+design and has never been scheduled.
 
 ## From milestone 2c (the Paper agent)
 
@@ -138,39 +142,49 @@ touching `spec.unschedulable`, unless `--cordon-node-before-terminating` is on,
 and that flag defaults to off. Karpenter was never re-checked and is not
 claimed here either way.
 
-**Two of the three reconnect distributions are measured; the one that would
-explain an 85-second observation is not.** The occupancy grace the eviction
-budget reads is derived now rather than chosen — `budgetReconnectGrace` is
-45 s, from `SessionLoop`'s own 30 s backoff cap plus its jitter plus one report
-interval — and the measurements it rests on are beside the constant. What they
-cover, measured 2026-08-26 against a Paper agent:
+**A partitioned agent is invisible to both ends for minutes, and the channel
+has no keepalive to change that.** All three reconnect distributions are
+measured now, and the third is nothing like the other two. Against a Paper
+agent, timed from the moment the block lifted:
 
-- **the operator went away and came back**, its listener closing every socket:
-  12.5 to 17.8 s after a 45-second absence, because the agent retried against a
-  refused port throughout and its backoff escalated. This is the case the grace
-  exists for and 45 s covers it.
-- **the operator stopped reading without closing**, `SIGSTOP` on the process:
-  1.0 to 1.3 s once the socket finally closed. The agent noticed nothing
-  meanwhile — it went on writing player counts into a buffer nobody read — so
-  its backoff never advanced, and it reconnected on the first attempt.
+| what happened | the agent greeted again after |
+|---|---|
+| the operator went away and came back (sockets closed) | 12.5 – 17.8 s |
+| the operator stopped reading without closing (`SIGSTOP`) | 1.0 – 1.3 s |
+| **a black hole: packets dropped, socket held open** | **> 200 s, and twice not at all within 213 s** |
 
-The second is the interesting one, because it shows the agent's clock starting
-late rather than running long, and that is the shape that would explain the
-**85-second reconnect observed during milestone 4c-2** which nothing since has
-reproduced. `SessionLoop`'s own class comment says why: the channel has no
-keepalive, no idle timeout and no call deadlines, so a partitioned agent learns
-its stream is dead only when a send fails. If it notices a minute late, its
-backoff starts a minute late, and the total measured from the *operator's*
-clock — which is what the grace runs on — exceeds anything the cap alone
-predicts.
+The third needed a fault this harness could not previously inject, and it took
+a freezable TCP relay between the container and the stub to produce one.
+`SIGSTOP` does not make one — the kernel buffers, and the process's death
+closes the socket — and the agent containers drop every capability, so nothing
+inside them can drop a packet either.
 
-**Nobody has measured that.** It needs a black-hole partition: packets dropped
-with the socket left open, so no `RST` ever arrives. `SIGSTOP` does not produce
-one (the kernel buffers, and closing the process closes the socket), and the
-agent containers drop every capability, so nothing in this harness can inject
-it. Until somebody does, the grace is sized against a distribution that is
-measured and against one that is only reasoned about, which is the shape of
-mistake this entry already caught once.
+**What governs it is not `SessionLoop`'s backoff.** That caps at 30 s and the
+measurement is an order of magnitude past it. A partitioned agent's sends
+succeed locally, because they reach the kernel's buffer, so nothing in the
+application learns anything at all; what finally ends the wait is TCP's own
+retransmission giving up, which on a default Linux takes minutes. The agent is
+not backing off — it does not yet know there is anything to back off from.
+That explains the 85-second reconnect observed during milestone 4c-2 which
+this entry used to carry as unexplained, and explains it as the *fast* end of
+the range rather than the slow one.
+
+The operator is equally blind, and that is what makes this survivable rather
+than a defect. `internal/agentserver` sets `MaxConnectionIdle` and no
+keepalive, so it does not notice either: the stream reads as connected, the
+player count goes stale after two report intervals, `Occupied()` reads a stale
+count as occupied, and nothing deletes anything. A partitioned server goes on
+serving the players it has, which is the truth of the situation, and both ends
+ride it out.
+
+**What would change it is a server-side keepalive, and that is a decision
+rather than a fix.** `keepalive.ServerParameters{Time, Timeout}` would have
+the operator notice a dead peer in seconds instead of minutes, which would
+make `phase.StreamDownGrace` mean what it says. It would also make the
+operator start *acting* on partitions it currently rides out — deregistering a
+server whose players are perfectly happy, because the operator cannot hear its
+agent. Whether that trade is worth taking is the open question here; nothing
+else in this entry is.
 
 ## From milestone 5c (detecting forwarding secret rotation)
 

@@ -70,6 +70,21 @@ const (
 	// MaxConnectionIdle reaps a connection carrying no stream. An agent's
 	// session stream is long-lived, so a connection that has been idle this
 	// long has lost its agent.
+	//
+	// It is not a partition detector and must not be read as one. A
+	// black-holed connection carries a live stream, so this never fires on
+	// one, and nothing else here does either: no keepalive Time is set, so
+	// the operator learns a partitioned peer is gone only when TCP's own
+	// retransmission gives up -- minutes, on a default Linux. Measured
+	// 2026-08-26 from the agent's side through a freezable relay: over 200
+	// seconds, and twice not at all within 213.
+	//
+	// That is survivable rather than broken, and docs/known-issues.md carries
+	// why: the agent is blind for the same reason and by the same mechanism,
+	// so a partitioned server goes on serving the players it has while the
+	// operator reads its count as stale and therefore occupied. Both ends
+	// ride it out. What a keepalive would change, and what it would cost, is
+	// the open question in that entry.
 	MaxConnectionIdle = 5 * time.Minute
 
 	// MaxConnectionsPerPeer bounds how many connections one peer address may
