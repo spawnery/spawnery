@@ -23,6 +23,22 @@ import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 type NetworkSpec struct {
 	// ForwardingSecretRef names the Secret holding the Velocity modern
 	// forwarding secret under the key "secret".
+	//
+	// Generate the value at random. Do not choose it the way a password is
+	// chosen, because a guess against this one is cheap to test offline: the
+	// operator stamps every pod with an eight-byte salted digest of it in the
+	// spawnery.cloud/forwarding-hash label, and a pod label is readable by
+	// anyone with pod read access in the namespace -- a far commoner grant
+	// than read access to the Secret. The salt forces the work to be redone
+	// per network and makes precomputed tables worthless across
+	// installations; it does nothing against a guess aimed at one particular
+	// network. A random secret is not guessable this way and a memorable one
+	// is.
+	//
+	// What the secret buys whoever guesses it: a backend runs
+	// online-mode=false and trusts whatever completes the modern-forwarding
+	// handshake, so it is the whole of the authentication between the proxy
+	// and the servers behind it.
 	ForwardingSecretRef ObjectRef `json:"forwardingSecretRef"`
 
 	// Defaults are inherited by all groups of this network.

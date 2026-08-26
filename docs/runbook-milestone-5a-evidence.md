@@ -625,8 +625,9 @@ join, the leave, the pod delete, the replacement's readiness, and two more at
 the rejoin. Every one self-healed on requeue and none changed an outcome
 anywhere in this document. They are logged at `level=error` with a full
 stacktrace all the same — see §4's note about leaving the operator log
-visible, and the entry this run added to `docs/known-issues.md` about what
-that costs a person actually watching it.
+visible. This paragraph is the record of that: an operator counting error
+lines in a healthy recreate will find twelve, and none of them means
+anything.
 
 ## 9. Rejoin, and confirm the block is where it was left
 

@@ -235,125 +235,6 @@ operator relying on a taint to drain a node should confirm independently, with
 `kubectl describe node`, that the taint is present with an effect this
 operator honours; there is no warning if it is not.
 
-## From the milestone 5a evidence run (2026-08-16)
-
-**A clean recreate still logs twelve optimistic-concurrency conflicts, and
-they are not a symptom.** The 2026-08-16 run — driven against a single-node
-`kind` cluster at `f3c6fc1`, acceptance passed, blocks still there after the
-pod was deleted and the client rejoined — logged twelve `the object has been
-modified; please apply your changes to the latest version` errors across all
-three controllers, one at essentially every state transition: the apply, first
-readiness, the join, the leave, the delete, the replacement's readiness, the
-rejoin. They are controller-runtime's ordinary retry path and they self-heal;
-one of them is what produced the `PodAdopted` event the runbook's §8 explains.
-Recorded so that somebody counting error lines in an operator log does not
-read a healthy recreate as a fault.
-
-## From milestone 5b (ordered shutdown, `Recreate` updates, storage growth)
-
-5b closes the five gaps 5a's own handover named: an image change now moves a
-persistent server, a lowered `replicas` takes one ordinal down at a time
-rather than every surplus one at once, `spec.storage.size` growth reaches the
-claim, a broken ordinal's failure streak survives a healthy sibling, and a
-changed `motd` reaches a running proxy. What follows is what an operator finds
-still open, checked against the code as it stands.
-
-**The one-ordinal budget belongs to the nomination rule, not to the group: a
-node drain takes down as many ordinals as the node held.** §2's invariant is
-written "at most one ordinal of a persistent group is down at a time, whatever
-the reason", and the last three words claim more than the code does.
-`decision.Condemn` is attached for a persistent group like any other
-(`internal/controller/servergroup_controller.go:711`) and `condemn()` executes
-it ungated (`:779`), removing every server on a departing node in one pass — so
-a node holding two ordinals takes both down. Gate A is not bypassed here: a
-condemned view reads as `leaving()`, so the nomination rule declines to name
-anything on that pass. What it cannot do is throttle the drain, and an ordinal
-it nominated on an earlier pass can still be draining while the drain lands, so
-three ordinals of one group can be out at once.
-
-The behaviour is not the part to fix. "From milestone 4c-3" above records why
-condemnation is unthrottled — draining one server at a time makes `kubectl
-drain` wait out `drain.timeoutSeconds` once per occupied server rather than
-once for the node — and a node that is leaving takes its pods with it whether
-or not this operator moves their players first. The group's
-`PodDisruptionBudget` is a bound on a *different* thing and is worth not
-confusing with this one: sized to the occupied pods
-(`servergroup_controller.go:1226`), it refuses the eviction API an occupied
-pod, so somebody else's drain cannot disconnect players out from under the
-condemnation. It does not bound this operator's own deletes, which never go
-through eviction.
-
-**A permanently broken ordinal stalls the group's whole update.** §2's
-invariant — at most one ordinal taken down at a time — is held by waiting for
-every required ordinal to be `Ready` (Gate B) before a stale or resize-pending
-takedown proceeds. An ordinal that can never become `Ready` therefore holds
-the whole group at its current spec forever; nothing times this wait out.
-Inherited from `StatefulSet`'s shape knowingly, and tolerable only because the
-stall is reported: `ConditionDegraded` publishes for a persistent group since
-5a, and 5b's failure-streak fix is what makes it actually arrive rather than
-being reset forever by a healthy sibling.
-
-**A spec edit made during the upgrade window can be missed on an ordinal that
-is adopted rather than replaced.** Every server that predates 5b carries an
-empty `Server.spec.podHash`, and `adoptServers`
-(`internal/controller/servergroup_controller.go:1136`) stamps the current hash
-onto such a server without ordering a takedown, rather than nominating it as
-stale — the alternative would restart every persistent world in the
-installation on the first reconcile after the upgrade. The cost is that a spec
-edit landing inside that same reconcile can be adopted along with the old pod
-rather than triggering a rebuild; it is bounded by the next edit, which will
-compute a hash that no longer matches.
-
-**The positive half of storage growth cannot be shown on `kind`'s default
-storage class.** `kind`'s `local-path` provisioner reports
-`allowVolumeExpansion: false`
-(`docs/runbook-milestone-5a-evidence.md` §2's own `kubectl get storageclass`
-output), so raising `storage.size` against the default cluster this
-repository's other runbooks use can only ever exercise the rejection path —
-`ConditionStorageResize` turning `False` with the class named. Confirming that
-a claim actually grows, and that a driver's `FileSystemResizePending`
-condition restarts exactly the ordinal that needs it, requires a driver that
-supports expansion (`csi-driver-host-path`), which is extra cluster setup
-`docs/runbook-milestone-5b-evidence.md` §4 keeps separate for exactly this
-reason.
-
-**The synchronous resize rejection cannot be diagnosed from the error.**
-`growClaim`'s patch (`internal/controller/server_controller.go:420-453`) can
-be refused by the API server for at least two different reasons carrying the
-identical shape: `allowVolumeExpansion: false` on the storage class, and a
-claim that is not dynamically provisioned at all (verified empirically:
-`reason="Forbidden" code=403
-message="only dynamically provisioned pvc can be resized and the storageclass
-that provisions the pvc must support resize" Causes:nil` — the same response
-for both). `status.storageResizeError` therefore names `allowVolumeExpansion`
-as the first thing an operator should check, not as the established cause,
-and the message says so explicitly.
-
-**The generation-change reset is now partly undone for a persistent group
-whose stale-generation corpse is still present.** The reset at
-`internal/controller/servergroup_controller.go:208-210` zeroes
-`status.consecutiveFailures` and `status.lastFailureAt` whenever
-`metadata.generation` moves, on the reasoning that a spec edit is the
-operator's answer to whatever broke. For a persistent group the very same pass
-now counts failures over the *unfiltered* view list (`ofGeneration` is
-ephemeral-only as of 5b — see below), so a stale-generation `Failed` corpse
-still holding its ordinal is counted right back in on the same reconcile: the
-count returns to 1 rather than to 0.
-
-*It returned to the number of corpses until 2026-08-24*, when the count became
-rounds rather than servers (see milestone 4d). Four held ordinals used to put
-the group four-sixths of the way to a terminal give-up on the very pass the
-operator's spec edit was meant to answer for them. They are one round however
-many of them there are, so it is one now, pinned by
-`TestAGenerationResetLeavesOneRoundNotOnePerCorpse`.
-`pruneFailed` does not run for a persistent group, and each corpse keeps its
-own ordinal until its failed retention elapses, so with `replicas > 1` that is
-one per ordinal that has one, bounded by `spec.replicas`
-(`internal/controller/servergroup_controller.go:251-258`). Defensible — a spec
-edit does not heal a broken ordinal, and an operator watching for a stall
-should not read a non-zero count as "nothing happened" — but it means the reset
-an ephemeral group gets in full, a persistent one gets all but one round of.
-
 ## From milestone 5c (detecting forwarding secret rotation)
 
 5c is detection and reporting only: the Network controller reads the forwarding
@@ -365,47 +246,6 @@ orchestrated rotation stays deferred, unchanged and for the reason the master
 design's §6.5 gives, that it needs registration to become generation-aware. The
 restarts follow `docs/runbook-milestone-5c-secret-rotation.md`. What follows is
 what an operator finds still open, checked against the code as it stands.
-
-**The salted short hash does not defeat a targeted dictionary attack** on a
-weakly chosen forwarding secret. `podspec.ForwardingHash`
-(`internal/podspec/hash.go:168`) is eight bytes of
-`sha256(network.UID ‖ 0x00 ‖ value)`, and the result is a pod label, which is
-readable by anyone holding pod read access in the namespace — a far commoner
-grant than read access to the Secret itself. The salt does the one thing it was
-chosen for: it forces the work to be redone per network and makes precomputed
-tables worthless across installations. It does nothing against a guess aimed at
-one particular network, which is an offline test per candidate against a
-sixteen-character digest. A forwarding secret chosen the way a password is
-chosen is guessable this way; one generated at random is not.
-
-**The stamp says what a pod loaded at start**, not what it would load now. That
-is the point — the kubelet refreshes the projected file underneath a running
-pod and neither Velocity nor Paper reads it a second time, so the creation-time
-value is the only one that describes the running process
-(`internal/podspec/labels.go:56-74`). The cost is at the other end: **the stamp
-is the last digest the operator read, not necessarily the bytes the pod
-mounted.** `status.forwardingSecretHash` keeps its previous value on *any*
-failed read (`api/v1alpha1/network_types.go:75`, guarded at
-`internal/controller/network_controller.go:125-134`), and both builders stamp
-it whenever it is non-empty (`internal/podspec/server.go:441-443`,
-`internal/podspec/proxy.go:300-302`). The kubelet meanwhile projects whatever
-the Secret currently holds, which is independent of whether the operator may
-read it. The five resolved reasons therefore split two ways:
-
-- Under `SecretNotFound` and `SecretKeyMissing` there is nothing to project, so
-  a pod created in that state never starts — it sits in `ContainerCreating`,
-  and its label describes an intention rather than a fact. Here the stamp
-  misreports a pod that is not running.
-- Under `SecretReadForbidden` and `SecretReadFailed` the Secret may be
-  perfectly present, so such a pod **starts normally**. If the value is rotated
-  inside that window — the reader Role removed, or a transient API failure —
-  the pod loads the new bytes and carries the old digest, and once the read
-  recovers the operator reports it stale while it is in fact current. The read
-  recovering stops *further* pods being mis-stamped; it does not correct the
-  ones already created, whose labels stay wrong until they are rolled. So "the
-  stamp misreports only a pending pod" is not true of these two reasons, and a
-  rotation performed while the operator cannot read the secret produces a
-  network the condition describes incorrectly for as long as those pods live.
 
 **Rotation detection is off until an install step is performed per namespace.**
 The operator's ClusterRole grants no access to Secrets outside its own
@@ -471,34 +311,6 @@ into one that reads as unrestricted, which is the direction that matters: the
 silent version had `Compare` reporting the permission satisfied for every
 object when it was satisfied for one. Whoever takes the narrowing up gets an
 error naming the names.
-
-**The mis-stamp window is not confined to failed reads.** The two entries above
-document what a *failed* read does to the stamp; the successful path has a
-narrower version of the same gap, and nothing in the code or the runbook says
-so. Between the Secret changing and the Network controller persisting the new
-digest, a pod created by a group controller mounts the new value and is stamped
-with the old one. That interval is up to one `resyncInterval`
-(`internal/controller/network_controller.go:153`,
-`internal/controller/server_controller.go:75` — five seconds) for the Network
-controller to notice, plus informer lag before the group controllers see the
-new `status.forwardingSecretHash`: both builders copy it out of the Network
-object their reconciler holds from the cache
-(`internal/podspec/server.go:441-443`, `internal/podspec/proxy.go:300-302`).
-The stamp is written at creation and never revised, so that pod reads as stale
-for as long as it lives. The ordinary runbook roll sweeps it up, because it
-happens after the digest is recorded — but a pod created that way *after* its
-own group was already rolled, by a scale-up or a replacement, stays falsely
-stale until something rolls it again. `RotationPending` then keeps naming a
-group whose work is done. A third way needs no window and no failed read at
-all: the premise the stamp rests on — the process reads the file once
-(`internal/podspec/labels.go:56-60`) — holds for the pod and not for the
-container, because `RestartPolicy` is `Always`
-(`internal/podspec/server.go:387`, `internal/podspec/proxy.go:277`) and the
-forwarding secret is projected without a `subPath`
-(`internal/podspec/server.go:166-191`, `:291`), so a container that restarts
-after a rotation starts on whatever the kubelet has since refreshed onto that
-file, and a pod that crash-looped and then recovered — leaving `podTerminal`,
-and counted again — is reported stale while its process runs the new secret.
 
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 

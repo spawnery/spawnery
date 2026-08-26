@@ -432,3 +432,69 @@ digest and is mis-stamped a second time. Fix the read first — the remedy
 column above says how for each reason — and then roll, because a pod created
 against a readable secret is stamped with the digest of the bytes it is about
 to mount. Recorded in `docs/known-issues.md`.
+
+## 9. When the stamp lies, and for how long
+
+Everything above reads `spawnery.cloud/forwarding-hash` off a pod and compares
+it with the Network's `status.forwardingSecretHash`. Three situations make that
+comparison wrong, and all three are properties of what the stamp is rather than
+defects in it — which is why they are here, in the procedure that depends on
+them, rather than in `known-issues.md`.
+
+**The stamp says what a pod loaded at start**, not what it would load now. That
+is the point — the kubelet refreshes the projected file underneath a running
+pod and neither Velocity nor Paper reads it a second time, so the creation-time
+value is the only one that describes the running process
+(`internal/podspec/labels.go:56-74`). The cost is at the other end: **the stamp
+is the last digest the operator read, not necessarily the bytes the pod
+mounted.** `status.forwardingSecretHash` keeps its previous value on *any*
+failed read (`api/v1alpha1/network_types.go:75`, guarded at
+`internal/controller/network_controller.go:125-134`), and both builders stamp
+it whenever it is non-empty (`internal/podspec/server.go:441-443`,
+`internal/podspec/proxy.go:300-302`). The kubelet meanwhile projects whatever
+the Secret currently holds, which is independent of whether the operator may
+read it. The five resolved reasons therefore split two ways:
+
+- Under `SecretNotFound` and `SecretKeyMissing` there is nothing to project, so
+  a pod created in that state never starts — it sits in `ContainerCreating`,
+  and its label describes an intention rather than a fact. Here the stamp
+  misreports a pod that is not running.
+- Under `SecretReadForbidden` and `SecretReadFailed` the Secret may be
+  perfectly present, so such a pod **starts normally**. If the value is rotated
+  inside that window — the reader Role removed, or a transient API failure —
+  the pod loads the new bytes and carries the old digest, and once the read
+  recovers the operator reports it stale while it is in fact current. The read
+  recovering stops *further* pods being mis-stamped; it does not correct the
+  ones already created, whose labels stay wrong until they are rolled. So "the
+  stamp misreports only a pending pod" is not true of these two reasons, and a
+  rotation performed while the operator cannot read the secret produces a
+  network the condition describes incorrectly for as long as those pods live.
+
+**The mis-stamp window is not confined to failed reads.** The two entries above
+document what a *failed* read does to the stamp; the successful path has a
+narrower version of the same gap, and nothing in the code or the runbook says
+so. Between the Secret changing and the Network controller persisting the new
+digest, a pod created by a group controller mounts the new value and is stamped
+with the old one. That interval is up to one `resyncInterval`
+(`internal/controller/network_controller.go:153`,
+`internal/controller/server_controller.go:75` — five seconds) for the Network
+controller to notice, plus informer lag before the group controllers see the
+new `status.forwardingSecretHash`: both builders copy it out of the Network
+object their reconciler holds from the cache
+(`internal/podspec/server.go:441-443`, `internal/podspec/proxy.go:300-302`).
+The stamp is written at creation and never revised, so that pod reads as stale
+for as long as it lives. The ordinary runbook roll sweeps it up, because it
+happens after the digest is recorded — but a pod created that way *after* its
+own group was already rolled, by a scale-up or a replacement, stays falsely
+stale until something rolls it again. `RotationPending` then keeps naming a
+group whose work is done. A third way needs no window and no failed read at
+all: the premise the stamp rests on — the process reads the file once
+(`internal/podspec/labels.go:56-60`) — holds for the pod and not for the
+container, because `RestartPolicy` is `Always`
+(`internal/podspec/server.go:387`, `internal/podspec/proxy.go:277`) and the
+forwarding secret is projected without a `subPath`
+(`internal/podspec/server.go:166-191`, `:291`), so a container that restarts
+after a rotation starts on whatever the kubelet has since refreshed onto that
+file, and a pod that crash-looped and then recovered — leaving `podTerminal`,
+and counted again — is reported stale while its process runs the new secret.
+

@@ -232,6 +232,19 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// The counter and the two conditions belong to the spec that produced the
 	// failures. A generation change is the operator's answer to whatever broke,
 	// so the streak it caused is over and the next attempt is immediate.
+	//
+	// For a persistent group the reset is partly undone on the same pass, and
+	// that is worth knowing before reading the number. CountFailures counts
+	// over the unfiltered view list for a persistent group -- ofGeneration is
+	// ephemeral-only -- so a stale-generation Failed corpse still holding its
+	// ordinal is counted straight back in, and the count returns to 1 rather
+	// than to 0.
+	//
+	// One, however many corpses there are. It used to return the number of
+	// them, so four held ordinals put the group four sixths of the way to a
+	// terminal give-up on the very pass an operator's spec edit was meant to
+	// answer for them; the count became rounds rather than servers, and
+	// TestAGenerationResetLeavesOneRoundNotOnePerCorpse pins it.
 	if group.Generation != group.Status.ObservedGeneration {
 		group.Status.ConsecutiveFailures = 0
 		group.Status.LastFailureAt = nil
@@ -892,6 +905,30 @@ func (r *ServerGroupReconciler) size(
 // deletes beside it in size() name — a node leaving rather than a size
 // decision — and the event it emits says so. Reserved after the delete,
 // matching size()'s other removal loops.
+//
+// # It is not throttled, and a persistent group's one-ordinal rule does not
+// reach it
+//
+// The persistent sizing design states "at most one ordinal of a persistent
+// group is down at a time, whatever the reason", and the last three words
+// claim more than this does. Every server on a departing node goes in one
+// pass, so a node holding two ordinals takes both. Gate A is not bypassed —
+// a condemned view reads as leaving(), so DecidePersistentSize declines to
+// nominate anything that pass — but an ordinal it nominated on an earlier
+// pass can still be draining when this lands, so three ordinals of one group
+// can be out at once.
+//
+// That is the intended behaviour rather than a gap in it. Draining one server
+// at a time would make kubectl drain wait out drain.timeoutSeconds once per
+// occupied server instead of once for the node, and a node that is leaving
+// takes its pods with it whether or not this operator moved their players
+// first.
+//
+// The group's PodDisruptionBudget bounds a different thing and is worth not
+// confusing with this one. Sized to the occupied pods, it refuses the
+// eviction API an occupied pod, so somebody else's drain cannot disconnect
+// players out from under this condemnation. It does not bound these deletes,
+// which never go through eviction.
 func (r *ServerGroupReconciler) condemn(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1486,6 +1523,16 @@ func (r *ServerGroupReconciler) adoptServers(
 		if srv.Spec.PodHash != "" {
 			continue
 		}
+		// Adopted rather than nominated as stale, and the cost is worth
+		// stating. Stamping the current hash onto a server that predates the
+		// field means one spec edit can be missed: an edit landing inside this
+		// same reconcile is adopted along with the old pod instead of
+		// triggering a rebuild. The alternative is worse by a wide margin --
+		// nominating every hashless server as stale would restart every
+		// persistent world in the installation on the first reconcile after
+		// the upgrade -- and the cost is bounded by the next edit, which
+		// computes a hash that no longer matches. It is a one-time window per
+		// server, closing for good the first time this runs.
 		patch := client.MergeFrom(srv.DeepCopy())
 		srv.Spec.PodHash = podHash
 		if err := r.Patch(ctx, srv, patch); err != nil {

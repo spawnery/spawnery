@@ -196,7 +196,17 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	}
 
 	// Gate B: a stale ordinal is nominated only once every ordinal the group
-	// is supposed to have is confirmed Ready. Surplus removal above never
+	// is supposed to have is confirmed Ready.
+	//
+	// An ordinal that can never become Ready therefore holds the whole group
+	// at its current spec, forever: nothing times this wait out. That is
+	// inherited from StatefulSet's shape knowingly rather than overlooked, and
+	// it is tolerable only because the stall is reported -- ConditionDegraded
+	// publishes for a persistent group, and CountFailures' requiredOrdinals
+	// rule is what makes it actually arrive rather than being reset by a
+	// healthy sibling. An operator who sees Degraded on a persistent group and
+	// an update that has not moved is looking at this.
+	// Surplus removal above never
 	// reaches here, and that is deliberate -- see groupRecovered's comment.
 	if !groupRecovered(in) {
 		return decision
