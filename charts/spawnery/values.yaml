@@ -19,7 +19,7 @@ image:
   # A deployment that wants an immutable reference pins it where the
   # deployment is described. See docs/known-issues.md, "From the RKE2
   # rollout".
-  tag: "0.2.3"
+  tag: "0.2.4"
   # Set, this wins over tag and the image is referenced by digest. Left empty
   # deliberately; see above.
   digest: ""

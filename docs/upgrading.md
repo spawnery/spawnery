@@ -250,6 +250,12 @@ strikes and be sent a GOAWAY. Every released operator sets
 supported combination hits it. `hack/agent-test.sh`'s seventh phase asserts
 that from both sides against a stub carrying the same policy.
 
+**No ordering requirement in either direction.** A 0.2.4 agent against an older
+operator pings and is answered, which is the paragraph above. An older agent
+against a 0.2.4 operator sends no pings and is asked for none — the operator
+gained no keepalive and deliberately never will — so it behaves exactly as it
+did, which is to say it waits out a partition the way it always has.
+
 ## 0.2.4: Paper moves from build 111 to 119
 
 `nix/paper.nix` named Paper 26.2 build 111 and PaperMC had published 119. The

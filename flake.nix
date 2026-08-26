@@ -140,14 +140,20 @@
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
           #
-          # 0.2.3 is a Velocity agent change: the proxy now reports which
-          # backends its players are attached to, which is the only way the
-          # operator can see a player who is still arriving. It moves both
-          # images because the version is one, and both are what a `Network`
-          # names -- rolling a Paper fleet that gained nothing is the price of
-          # a single agent version, and the alternative is two versions to
-          # keep straight.
-          imageVersion = "0.2.3";
+          # 0.2.4 is the first release where both images earn the bump on
+          # their own. The agent change is in agent/common and so reaches
+          # both: OperatorChannel now sends a keepalive ping, which is the
+          # only clock either agent has on a connection that is up and going
+          # nowhere -- measured at 64 seconds against a stub gone deaf, where
+          # before the wait was over 200 and twice unbounded. And the Paper
+          # image carries Paper 26.2 build 119 where 0.2.3 carried 111.
+          #
+          # That the tag names neither of those is the point of the two
+          # constants: the tag is <upstream>-<imageVersion>, so a Paper build
+          # that moves without this number moving would be published over a
+          # tag a cluster has already pulled. hack/publish.sh refuses that,
+          # which is what makes the bump obligatory rather than tidy.
+          imageVersion = "0.2.4";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -155,7 +161,7 @@
           # Hello.version -- and hanging the operator's tag off it would mean a
           # fix in the reconciler claiming a new agent version, and an agent
           # release renaming an unchanged operator image.
-          operatorVersion = "0.2.3";
+          operatorVersion = "0.2.4";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
