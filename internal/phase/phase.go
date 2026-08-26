@@ -175,6 +175,18 @@ type Inputs struct {
 	ProxyAttached    int32
 	ProxyAttachStale bool
 
+	// CountPredatesDrain is true when this server's own player count was
+	// taken before the drain it is being asked about began.
+	//
+	// Freshness and recency are different questions and only the first was
+	// ever asked. PlayersStale says whether the number is recent enough to
+	// believe; this says whether it is about the right moment. A count from
+	// four seconds ago is perfectly fresh and still says nothing about a
+	// player who joined three seconds ago -- so a drain that read it as zero
+	// deleted the pod under them. Every source is asked the same way, which
+	// is why AttachedTo folds the identical rule into ProxyAttachStale.
+	CountPredatesDrain bool
+
 	// DrainDeadlineReached is true once drain.timeoutSeconds elapsed.
 	DrainDeadlineReached bool
 	// FailedRetentionElapsed is true once failedRetentionSeconds elapsed.
@@ -205,9 +217,17 @@ type Inputs struct {
 // player who is arriving: a backend counts a player only once they finish the
 // configuration phase, so a drain read an empty server while a connection to
 // it was still in flight. See Inputs.ProxyAttached.
+//
+// And every count, this server's own included, has to be about the right
+// moment and not merely recent. A number taken before a drain began cannot say
+// whether the drain has finished, however fresh it is -- which is the deeper
+// form of the same defect and the reason CountPredatesDrain exists. What that
+// costs is at most one report interval added to a drain, against a drain
+// timeout measured in minutes.
 func (in Inputs) Occupied() bool {
 	return in.PlayersStale || in.PlayersOnline > 0 ||
-		in.ProxyAttachStale || in.ProxyAttached > 0
+		in.ProxyAttachStale || in.ProxyAttached > 0 ||
+		in.CountPredatesDrain
 }
 
 // Decision is what the controller has to do. Next is always set.

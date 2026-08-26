@@ -323,15 +323,15 @@ func TestAttachedToSumsTheProxiesThatAreCurrent(t *testing.T) {
 		t.Fatalf("report from proxy-b: %v", err)
 	}
 
-	if n, stale := r.AttachedTo("minecraft", "lobby-0"); n != 5 || stale {
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); n != 5 || stale {
 		t.Errorf("lobby-0 = %d stale=%v, want 5 and fresh", n, stale)
 	}
-	if n, stale := r.AttachedTo("minecraft", "lobby-1"); n != 1 || stale {
+	if n, stale := r.AttachedTo("minecraft", "lobby-1", time.Time{}); n != 1 || stale {
 		t.Errorf("lobby-1 = %d stale=%v, want 1 and fresh", n, stale)
 	}
 	// A backend nobody named has nobody on it. That is what makes the map a
 	// state rather than a stream of changes: absence is an answer.
-	if n, stale := r.AttachedTo("minecraft", "lobby-2"); n != 0 || stale {
+	if n, stale := r.AttachedTo("minecraft", "lobby-2", time.Time{}); n != 0 || stale {
 		t.Errorf("lobby-2 = %d stale=%v, want 0 and fresh", n, stale)
 	}
 }
@@ -348,10 +348,10 @@ func TestAttachedToIsScopedToItsNamespace(t *testing.T) {
 		t.Fatalf("report: %v", err)
 	}
 
-	if n, stale := r.AttachedTo("minecraft", "lobby-0"); n != 0 || stale {
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); n != 0 || stale {
 		t.Errorf("lobby-0 in minecraft = %d stale=%v, want 0 and fresh", n, stale)
 	}
-	if n, _ := r.AttachedTo("other", "lobby-0"); n != 4 {
+	if n, _ := r.AttachedTo("other", "lobby-0", time.Time{}); n != 4 {
 		t.Errorf("lobby-0 in other = %d, want 4", n)
 	}
 }
@@ -373,7 +373,7 @@ func TestAProxyThatNeverReportedBackendsIsNotStale(t *testing.T) {
 	}
 	clock.now = clock.now.Add(time.Hour)
 
-	if n, stale := r.AttachedTo("minecraft", "lobby-0"); n != 0 || stale {
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); n != 0 || stale {
 		t.Errorf("= %d stale=%v, want 0 and fresh: an old agent is silent, not stale", n, stale)
 	}
 }
@@ -392,12 +392,12 @@ func TestAProxyThatStoppedReportingBackendsIsStale(t *testing.T) {
 
 	// Inside twice the report interval it still counts.
 	clock.now = clock.now.Add(9 * time.Second)
-	if n, stale := r.AttachedTo("minecraft", "lobby-0"); n != 1 || stale {
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); n != 1 || stale {
 		t.Errorf("at 9s: = %d stale=%v, want 1 and fresh", n, stale)
 	}
 	// Past it, the count is not believed and the caller is told so.
 	clock.now = clock.now.Add(3 * time.Second)
-	if n, stale := r.AttachedTo("minecraft", "lobby-0"); !stale {
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); !stale {
 		t.Errorf("at 12s: = %d stale=%v, want stale", n, stale)
 	}
 }
@@ -415,7 +415,103 @@ func TestABackendReportFromAServerAgentIsRefused(t *testing.T) {
 	if err := r.ReportBackends("a-server", "minecraft", map[string]int32{"lobby-0": 9}); err == nil {
 		t.Fatal("a server agent's backend report was accepted")
 	}
-	if n, _ := r.AttachedTo("minecraft", "lobby-0"); n != 0 {
+	if n, _ := r.AttachedTo("minecraft", "lobby-0", time.Time{}); n != 0 {
 		t.Errorf("= %d, want 0: the refused report was stored anyway", n)
+	}
+}
+
+// TestAReportFromBeforeTheDrainCannotAnswerAboutIt is the deeper half of the
+// drain gap, and the one that is easiest to mistake for freshness.
+//
+// A count taken four seconds ago is perfectly fresh and says nothing about a
+// player who joined three seconds ago. Every source is asked the same way: a
+// report that predates the question cannot answer it, however recent it is.
+func TestAReportFromBeforeTheDrainCannotAnswerAboutIt(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("proxy-a", RoleProxy)
+	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	// The drain begins a second after that report. The report is well inside
+	// its freshness window and still cannot say whether the drain is done.
+	clock.now = clock.now.Add(time.Second)
+	drainStart := clock.now
+	clock.now = clock.now.Add(time.Second)
+
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", drainStart); !stale {
+		t.Errorf("= %d stale=%v, want stale: this report predates the drain", n, stale)
+	}
+	// Without a drain to be about, the same report answers perfectly well.
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); n != 0 || stale {
+		t.Errorf("with no threshold: = %d stale=%v, want 0 and fresh", n, stale)
+	}
+}
+
+// TestTheNextReportAfterTheDrainAnswersIt is what keeps the rule above from
+// being a permanent hold. It clears on the proxy's very next report, at most
+// one interval away -- which is the whole cost of the rule.
+func TestTheNextReportAfterTheDrainAnswersIt(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("proxy-a", RoleProxy)
+	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	drainStart := clock.now.Add(time.Second)
+
+	clock.now = drainStart.Add(2 * time.Second)
+	if _, stale := r.AttachedTo("minecraft", "lobby-0", drainStart); !stale {
+		t.Fatal("the pre-drain report was believed, so this test would prove nothing")
+	}
+
+	// One report interval later the proxy speaks again, and now it is
+	// answering the question that was actually asked.
+	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{}); err != nil {
+		t.Fatalf("second report: %v", err)
+	}
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", drainStart); n != 0 || stale {
+		t.Errorf("= %d stale=%v, want 0 and fresh: the proxy has spoken since the drain", n, stale)
+	}
+}
+
+// TestAnOldProxyIsStillNotHeldAgainstADrain keeps the upgrade-in-any-order
+// property intact under the new rule. An agent that cannot report backends has
+// no report to predate anything, and treating it as one would hold every
+// draining server in the installation for as long as one old proxy ran.
+func TestAnOldProxyIsStillNotHeldAgainstADrain(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("old-proxy", RoleProxy)
+	if err := r.ReportPlayers("old-proxy", 5, 500); err != nil {
+		t.Fatalf("report players: %v", err)
+	}
+
+	drainStart := clock.now.Add(time.Second)
+	clock.now = drainStart.Add(time.Second)
+
+	if n, stale := r.AttachedTo("minecraft", "lobby-0", drainStart); n != 0 || stale {
+		t.Errorf("= %d stale=%v, want 0 and fresh", n, stale)
+	}
+}
+
+// TestLookupCarriesWhenTheCountArrived is the backend half of the same rule.
+// The Server controller compares this against the drain's start, so a
+// snapshot that did not carry it would leave that half unanswerable.
+func TestLookupCarriesWhenTheCountArrived(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("a-server", RoleServer)
+
+	if got := r.Lookup("a-server").PlayersReportedAt; !got.IsZero() {
+		t.Errorf("PlayersReportedAt = %v before any report, want zero", got)
+	}
+	clock.now = clock.now.Add(3 * time.Second)
+	if err := r.ReportPlayers("a-server", 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	if got := r.Lookup("a-server").PlayersReportedAt; !got.Equal(clock.now) {
+		t.Errorf("PlayersReportedAt = %v, want %v", got, clock.now)
 	}
 }

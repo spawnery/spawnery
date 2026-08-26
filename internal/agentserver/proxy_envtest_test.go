@@ -403,7 +403,7 @@ func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testi
 	// assume the send has been applied by the time Send returned.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
-		n, stale := f.agents.AttachedTo(f.ns, "lobby-0")
+		n, stale := f.agents.AttachedTo(f.ns, "lobby-0", time.Time{})
 		if n == 2 && !stale {
 			break
 		}
@@ -415,10 +415,10 @@ func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testi
 
 	// And it did not land under some other namespace's name, which is what a
 	// report trusted about its own scope would have allowed.
-	if n, _ := f.agents.AttachedTo("somewhere-else", "lobby-0"); n != 0 {
+	if n, _ := f.agents.AttachedTo("somewhere-else", "lobby-0", time.Time{}); n != 0 {
 		t.Errorf("lobby-0 in another namespace = %d, want 0", n)
 	}
-	if n, _ := f.agents.AttachedTo(f.ns, "lobby-1"); n != 1 {
+	if n, _ := f.agents.AttachedTo(f.ns, "lobby-1", time.Time{}); n != 1 {
 		t.Errorf("lobby-1 = %d, want 1", n)
 	}
 }

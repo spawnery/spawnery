@@ -93,39 +93,6 @@ disconnected before any plugin is consulted. Closing it would mean the
 operator noticing the dead server and sending `DrainPlayers` inside Velocity's
 read timeout, which is a different mechanism than this one.
 
-## From the milestone 3c evidence run (2026-08-12)
-
-`docs/runbook-milestone-3-evidence.md` was finally run against a real `kind`
-cluster. Criterion 7 (a player can join, automated) is now proven — see
-`docs/handover-milestone-4.md`. Criterion 9 (deleting a `Server` moves its
-player rather than disconnecting them) was not, and the reason why is the most
-important finding of this run.
-
-**The drain's exit condition sees an arriving player now, and the window it
-leaves is one report interval wide.** `Occupied()`
-(`internal/phase/phase.go`) used to be `PlayersStale || PlayersOnline > 0` —
-what the *backend* has reported — so a player still completing the
-configuration phase made it read empty, and `kubectl delete` took the pod out
-from under them. It now adds what the proxies say: `BackendPlayers`, a
-per-backend attachment map sent beside `PlayerCount`, built from
-`ConnectedPlayer.getConnectionInFlightOrConnectedServer` — the one thing that
-knows where a player is *heading*.
-
-Every term of `Occupied()` can only make it true, so a proxy too old to send
-the report contributes nothing and behaves exactly as before. **No deployment
-order is needed**, which is the opposite of what this entry predicted when it
-deferred the work: the operator never trusts the *absence* of a report, only
-its presence.
-
-What is left is the interval. The map is a periodic state, not an event, so a
-player who arrives just after a report is invisible until the next one —
-`spec.agent.reportInterval`, five seconds by default, and twice that before
-the count is called stale. Closing it further would mean an event on arrival
-beside the state, which brings back exactly the reconnect and
-missed-message problems the periodic snapshot was chosen to avoid. The window
-is bounded and stated rather than unbounded and unnamed, which is the whole of
-what changed.
-
 ## From milestone 4c-1 (the proxy readiness contract)
 
 **One assertion in `hack/agent-test.sh` is still argued rather than

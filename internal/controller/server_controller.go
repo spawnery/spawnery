@@ -718,7 +718,35 @@ func (r *ServerReconciler) collectInputs(
 	// Asked of the Server's own namespace and name, which is exactly how the
 	// proxies were told about it (proxyreg.registeredServer uses srv.Name), so
 	// nothing translates between the two vocabularies and nothing can drift.
-	in.ProxyAttached, in.ProxyAttachStale = r.Agents.AttachedTo(srv.Namespace, srv.Name)
+	//
+	// The drain's start is the moment every count has to be about. A report
+	// taken before it cannot say whether the drain has finished, however fresh
+	// it is -- so a zero from before the drain is not an answer, and both
+	// sources are held to the same rule: the proxies through AttachedTo's
+	// since, and this server's own count through CountPredatesDrain below.
+	//
+	// Zero when the server is not draining, which is the ordinary case and
+	// asks a different question entirely: "is anybody on it", which any fresh
+	// report answers.
+	var since time.Time
+	if srv.Status.DrainStartedAt != nil {
+		// Plus a second, because the stamp is a metav1.Time and those are
+		// truncated to whole seconds on the way through the API server --
+		// measured, 456 ms lost on a round trip. So the value read back is up
+		// to a second *earlier* than the drain actually started, and comparing
+		// against it as it stands would believe a report taken up to a second
+		// before the drain: precisely the report this rule exists to refuse.
+		// Adding a second puts the threshold back at or after the real moment.
+		//
+		// What it costs is that second, on top of the report interval the rule
+		// already costs, against a drain timeout measured in minutes.
+		since = srv.Status.DrainStartedAt.Add(time.Second)
+	}
+	in.ProxyAttached, in.ProxyAttachStale = r.Agents.AttachedTo(srv.Namespace, srv.Name, since)
+	// Not After rather than Before, so a report landing exactly on the
+	// threshold counts as predating it. A tie is ambiguous and the reading
+	// that keeps a pod is the one to take.
+	in.CountPredatesDrain = !since.IsZero() && !snap.PlayersReportedAt.After(since)
 
 	// Only once a pod has existed. The stamp is written on acceptance now, so
 	// without this guard the startup deadline would fire for a Server whose

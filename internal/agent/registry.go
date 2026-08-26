@@ -55,6 +55,17 @@ type Snapshot struct {
 	// PlayersStale is true if the count is older than twice the report
 	// interval, or if the pod is unknown. Stale counts as occupied.
 	PlayersStale bool
+	// PlayersReportedAt is when the count above arrived, zero if it never
+	// did.
+	//
+	// Freshness is not the same question as recency, and this is here for the
+	// second one. PlayersStale asks whether the number is recent enough to
+	// believe at all; a caller asking "is this server empty *now that I have
+	// started draining it*" needs something else -- whether the number was
+	// taken after the moment it is asking about. A count from four seconds ago
+	// is perfectly fresh and still says nothing about a player who joined
+	// three seconds ago.
+	PlayersReportedAt time.Time
 	// StreamDownFor is how long the stream has been down. Zero while up. For
 	// an unknown pod it is the time since the operator started, so agents get
 	// a grace period to reconnect after an operator restart.
@@ -264,7 +275,11 @@ func (r *Registry) ReportBackends(key, namespace string, backends map[string]int
 // reported at all: that is an old agent, not a silent one, and treating the
 // two the same would hold every server in the installation occupied for as
 // long as one un-upgraded proxy ran.
-func (r *Registry) AttachedTo(namespace, server string) (players int32, stale bool) {
+// since is the moment the caller's question is about, and a report older than
+// it cannot answer it. Pass the zero time when there is no such moment -- a
+// server that is not draining is asking "is anybody on it", which any fresh
+// report answers.
+func (r *Registry) AttachedTo(namespace, server string, since time.Time) (players int32, stale bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -273,6 +288,15 @@ func (r *Registry) AttachedTo(namespace, server string) (players int32, stale bo
 			continue
 		}
 		if e.backendsAt.IsZero() {
+			continue
+		}
+		if !since.IsZero() && !e.backendsAt.After(since) {
+			// Fresh and useless: this proxy last spoke before the caller began
+			// asking, so its zero is about a moment that has passed. Reported
+			// as stale for the same reason a genuinely old report is -- the
+			// caller cannot use either number -- and it clears on this proxy's
+			// very next report, at most one interval away.
+			stale = true
 			continue
 		}
 		if !e.connected || r.now().Sub(e.backendsAt) > 2*r.reportInterval {
@@ -336,11 +360,12 @@ func (r *Registry) Lookup(key string) Snapshot {
 	}
 
 	snap := Snapshot{
-		Known:     true,
-		Connected: e.connected,
-		Ready:     e.ready,
-		Players:   e.players,
-		Slots:     e.slots,
+		Known:             true,
+		Connected:         e.connected,
+		Ready:             e.ready,
+		Players:           e.players,
+		Slots:             e.slots,
+		PlayersReportedAt: e.lastReportAt,
 	}
 	if !e.connected {
 		snap.StreamDownFor = now.Sub(e.disconnectedAt)

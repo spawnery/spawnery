@@ -484,6 +484,13 @@ func TestDeletingAFailedServerDrainsThenReleasesIt(t *testing.T) {
 		t.Fatal("pod deleted while players were still online — core invariant broken")
 	}
 
+	// The clock moves before the post-drain report, which is the honest order
+	// rather than a fixture detail: the operator stamps the drain and sends
+	// DrainPlayers, and the agent's next periodic report is an interval later.
+	// A report sharing an instant with the drain decision cannot happen, and
+	// Occupied refuses one -- a count taken before the question cannot answer
+	// it. See CountPredatesDrain.
+	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
@@ -539,6 +546,13 @@ func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
 		t.Fatal("pod deleted while players were online — core invariant broken")
 	}
 
+	// The clock moves before the post-drain report, which is the honest order
+	// rather than a fixture detail: the operator stamps the drain and sends
+	// DrainPlayers, and the agent's next periodic report is an interval later.
+	// A report sharing an instant with the drain decision cannot happen, and
+	// Occupied refuses one -- a count taken before the question cannot answer
+	// it. See CountPredatesDrain.
+	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
@@ -611,6 +625,13 @@ func TestAPersistentServerDrainsAndReleasesItself(t *testing.T) {
 		t.Fatal("pod deleted while 5 players were online — core invariant broken")
 	}
 
+	// The clock moves before the post-drain report, which is the honest order
+	// rather than a fixture detail: the operator stamps the drain and sends
+	// DrainPlayers, and the agent's next periodic report is an interval later.
+	// A report sharing an instant with the drain decision cannot happen, and
+	// Occupied refuses one -- a count taken before the question cannot answer
+	// it. See CountPredatesDrain.
+	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
@@ -1076,7 +1097,11 @@ func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 		t.Fatal("pod deleted while players were online — core invariant broken")
 	}
 
-	// Now the server runs empty.
+	// Now the server runs empty. The clock moves first, for the reason the
+	// other drain tests state: a count taken before the drain -- or within the
+	// second the API server truncates the drain stamp into -- cannot say
+	// whether the drain has finished. See CountPredatesDrain.
+	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
@@ -2699,10 +2724,17 @@ func TestAnArrivingPlayerKeepsTheDrainingPodAlive(t *testing.T) {
 
 	// The player lands and leaves; the proxy says so, and only then does the
 	// pod go. This is what keeps the fix from being a permanent hold.
+	//
+	// Past the truncation slack as well as the drain stamp: metav1.Time keeps
+	// whole seconds, so the threshold is the stamp plus one, and a report has
+	// to clear both to be about the right moment.
+	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportBackends(proxyUID, f.ns, map[string]int32{}); err != nil {
 		t.Fatalf("ReportBackends: %v", err)
 	}
-	f.clock.Advance(time.Second)
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
 	f.reconcile("lobby-x7k2")
 	if _, ok := f.pod("lobby-x7k2"); ok {
 		t.Error("the pod outlived the last player the proxies knew about")
@@ -2735,10 +2767,102 @@ func TestAProxyThatCannotReportBackendsDoesNotHoldEveryServer(t *testing.T) {
 		t.Fatalf("delete Server: %v", err)
 	}
 	f.reconcile("lobby-x7k2")
-	f.clock.Advance(time.Second)
+	// Past the drain stamp and its truncation slack, then a fresh count: what
+	// this test is about is the *proxy*, so the backend's own count must not
+	// be the thing holding the pod.
+	f.clock.Advance(2 * time.Second)
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("second ReportPlayers: %v", err)
+	}
 	f.reconcile("lobby-x7k2")
 
 	if _, ok := f.pod("lobby-x7k2"); ok {
 		t.Error("an empty server was held occupied by a proxy that simply cannot report backends")
+	}
+}
+
+// TestADrainWaitsForACountTakenAfterItStarted is the deepest form of the drain
+// gap, and the one that predates every other fix for it.
+//
+// Occupied() trusted a number that could be older than the drain itself. A
+// count taken four seconds ago is perfectly fresh, and says nothing whatever
+// about a player who joined three seconds ago -- so a server that had been
+// reported empty just before the drain began was deleted on the strength of
+// it. Freshness was the only test; recency was never asked.
+func TestADrainWaitsForACountTakenAfterItStarted(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	// Reported empty, and genuinely fresh.
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+
+	// The drain begins after that report, which is the ordinary order of
+	// events: the operator decides on state it has already read.
+	f.clock.Advance(time.Second)
+	srv := f.server("lobby-x7k2")
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Draining) {
+		t.Fatalf("phase = %q, want Draining", got)
+	}
+
+	// The pod stays, on a count that is fresh and about the wrong moment.
+	f.clock.Advance(time.Second)
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("the pod went on a count taken before the drain began")
+	}
+
+	// The agent reports again, now answering the question that was asked, and
+	// only then does the pod go. This is the whole cost of the rule: one
+	// report interval added to a drain, plus the second metav1.Time truncates
+	// the drain stamp into.
+	f.clock.Advance(2 * time.Second)
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("second ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Error("the pod outlived a report that said the server was empty since the drain began")
+	}
+}
+
+// TestTheDrainDeadlineStillEndsAWaitNobodyCanSatisfy is the bound under the
+// rule above, and the reason it cannot wedge a drain for ever.
+//
+// A server whose agent is gone never reports again, so its count predates the
+// drain permanently. That is correct -- nobody can say whether players are on
+// it -- and it is exactly the state spec.drain.timeoutSeconds exists to end.
+func TestTheDrainDeadlineStillEndsAWaitNobodyCanSatisfy(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.clock.Advance(time.Second)
+
+	srv := f.server("lobby-x7k2")
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	// The agent goes and never speaks again.
+	f.agents.Disconnect(uid)
+
+	f.clock.Advance(2 * time.Second)
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("the pod went before the deadline, so this test would prove nothing about it")
+	}
+
+	// Past spec.drain.timeoutSeconds the deadline takes it whatever anybody
+	// can or cannot say.
+	f.clock.Advance(2 * time.Minute)
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Error("the drain deadline did not end a wait nobody could satisfy")
 	}
 }
