@@ -93,6 +93,8 @@ NAME5="spawnery-agent-test-proxy-supersede-$$"
 VOLUME5="spawnery-agent-test-proxy-supersede-$$"
 NAME6="spawnery-agent-test-rotate-$$"
 VOLUME6="spawnery-agent-test-rotate-$$"
+NAME7="spawnery-agent-test-deaf-$$"
+VOLUME7="spawnery-agent-test-deaf-$$"
 WORK="$(mktemp -d)"
 EVENTS="$WORK/events.jsonl"
 EVENTS2="$WORK/events-supersede.jsonl"
@@ -100,12 +102,14 @@ EVENTS3="$WORK/events-mute.jsonl"
 EVENTS4="$WORK/events-proxy.jsonl"
 EVENTS5="$WORK/events-proxy-supersede.jsonl"
 EVENTS6="$WORK/events-rotate.jsonl"
+EVENTS7="$WORK/events-deaf.jsonl"
 STUB_PID=""
 STUB2_PID=""
 STUB3_PID=""
 STUB4_PID=""
 STUB5_PID=""
 STUB6_PID=""
+STUB7_PID=""
 
 cleanup() {
 	[ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
@@ -114,9 +118,11 @@ cleanup() {
 	[ -n "$STUB4_PID" ] && kill "$STUB4_PID" 2>/dev/null || true
 	[ -n "$STUB5_PID" ] && kill "$STUB5_PID" 2>/dev/null || true
 	[ -n "$STUB6_PID" ] && kill "$STUB6_PID" 2>/dev/null || true
-	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" "$NAME6" >/dev/null 2>&1 || true
-	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" "$VOLUME4" "$VOLUME5" "$VOLUME6" \
+	[ -n "$STUB7_PID" ] && kill "$STUB7_PID" 2>/dev/null || true
+	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" "$NAME6" "$NAME7" \
 		>/dev/null 2>&1 || true
+	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" "$VOLUME4" "$VOLUME5" "$VOLUME6" \
+		"$VOLUME7" >/dev/null 2>&1 || true
 	rm -rf "$WORK"
 }
 # INT and TERM as well as EXIT: an untrapped SIGINT kills the shell without
@@ -1210,5 +1216,101 @@ echo "the agent completed a handshake against a certificate signed by the CA tha
 
 await_event ready "$EVENTS6" "$NAME6"
 echo "the agent completed a session through it"
+
+# ---------------------------------------------------------------------------
+# Phase seven: a connection that is up and going nowhere.
+#
+# Every phase above ends a stream in a way the agent can see: the stub closes
+# it, supersedes it, or accepts it and never answers -- and SessionLoop has a
+# clock for each. This one takes the case with no clock on either side. The
+# stub goes deaf mid-session: it stops reading and stops writing on every
+# connection and closes none of them, so no FIN, no RST, and no answer ever
+# again. See `deafness` in cmd/spawnery-stubop/deafen.go for what that
+# reproduces and what it does not.
+#
+# Two things are proved here and they pull in opposite directions.
+#
+# Before the deafening, that the keepalive is *allowed*. OperatorChannel pings
+# every 45 seconds and the operator's KeepaliveEnforcementPolicy sends a GOAWAY
+# to a client that pings oftener than MinKeepaliveInterval. The stub carries
+# that same policy now, so a ping refused would break the stream and the agent
+# would reconnect -- which is why the connection count at the moment of
+# deafening is taken and asserted, rather than merely noted. It is the whole
+# GOAWAY check, and it is why this phase runs long enough for a ping to cross.
+#
+# After it, that the keepalive is *enough*. Nothing else can end this wait: the
+# renewal is set past the phase, no timer in the agent is armed by anything the
+# operator said, and its own sends go on succeeding into a kernel buffer. A new
+# connection reaching the stub is therefore the ping having given up and
+# SessionLoop having started again -- and the connection event is recorded at
+# Accept, before a byte is read, so a stub that is deaf still records it.
+#
+# The phase costs about two minutes, which is what testing a 45-second timer
+# costs. The alternative is a knob on the agent that exists only for this test,
+# and a number nothing in production uses is a number this would not be
+# measuring.
+echo
+echo "deafening the operator mid-session, to prove the agent has a clock of its own..."
+"$CONTAINER" rm -f "$NAME6" >/dev/null 2>&1 || true
+kill "$STUB6_PID" 2>/dev/null || true
+STUB6_PID=""
+
+# The keepalive fires 45s after the last thing the operator said and waits 20
+# for the answer, so deafening at 50 lands after the first ping has been
+# answered and before the second is due.
+DEAFEN_AFTER=50
+# Worst case is a ping sent the instant before the deafening: 45 to the next
+# one and 20 more to give up on it. Half as much again for a loaded machine.
+DEAF_LIMIT=100
+
+mkdir -p "$WORK/agent-deaf"
+chmod 0755 "$WORK/agent-deaf"
+STUB7_PID="$(start_stub "$EVENTS7" "$WORK/stub7.log" "deafening" \
+	--dir "$WORK/agent-deaf" \
+	--san stubop \
+	--listen ":19450" \
+	--report-interval 1 \
+	--renew-after 600 \
+	--hard-deadline 1200 \
+	--deafen-after "${DEAFEN_AFTER}s")"
+
+start_agent "$NAME7" "$VOLUME7" "$WORK/agent-deaf" "$WORK/config" "stubop:19450" "$IMAGE"
+
+await_event hello "$EVENTS7" "$NAME7"
+echo "the agent connected; waiting ${DEAFEN_AFTER}s for the stub to go deaf, past the first keepalive..."
+await_event deafened "$EVENTS7" "$NAME7"
+
+before="$(count_events connection "$EVENTS7")"
+reports="$(count_events player_count "$EVENTS7")"
+# A ping the enforcement policy refused would have cost the stream and shown up
+# as a reconnect; the reports are the same statement from the other side.
+if [ "$before" -gt 2 ]; then
+	echo "the agent opened $before connections before the stub went deaf, want at most 2 (the "\
+		"session and a renewal overlap). A GOAWAY for pinging oftener than "\
+		"MinKeepaliveInterval looks exactly like this" >&2
+	jq -rs '.' <"$EVENTS7" >&2
+	exit 1
+fi
+if [ "$reports" -lt $((DEAFEN_AFTER / 2)) ]; then
+	echo "only $reports player counts arrived in ${DEAFEN_AFTER}s at a 1s interval; the stream "\
+		"did not survive the first keepalive ping" >&2
+	jq -rs '.' <"$EVENTS7" >&2
+	exit 1
+fi
+echo "$reports player counts crossed and the connection was not remade, so the ping was answered rather than refused"
+
+echo "waiting up to ${DEAF_LIMIT}s for the agent to give up on a connection nothing will ever answer..."
+deaf_start="$SECONDS"
+until [ "$(count_events connection "$EVENTS7")" -gt "$before" ]; do
+	if [ $((SECONDS - deaf_start)) -gt "$DEAF_LIMIT" ]; then
+		echo "the agent held a dead connection for ${DEAF_LIMIT}s without reconnecting. Nothing "\
+			"else can end this wait: OperatorChannel's keepalive is the only clock on it" >&2
+		jq -rs '.' <"$EVENTS7" >&2
+		"$CONTAINER" logs "$NAME7" | tail -40 >&2
+		exit 1
+	fi
+	sleep 2
+done
+echo "the agent reconnected $((SECONDS - deaf_start))s after the operator went silent, on its keepalive alone"
 
 echo "agent-test: ok"

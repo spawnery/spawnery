@@ -224,6 +224,32 @@ PrometheusRule alerts on it. In the log, a denial repeats at every check and a
 grant is logged only when it is news — at startup, and again when a denial has
 been repaired.
 
+## 0.2.4: the agents ping, and the operator still does not
+
+The agents now send a keepalive ping every 45 seconds and give up on a
+connection 20 seconds after one goes unanswered. Before this, a connection that
+was up and going nowhere — a node hard-powered off, a network black-holing —
+held the agent for as long as TCP's own retransmission took to give up:
+measured at over 200 seconds and twice not at all within 213. Measured after:
+64 seconds, against a stub told to stop reading and writing without closing
+anything.
+
+**Nothing on the operator gained a keepalive, and that is deliberate rather
+than pending.** The operator already notices a silent agent through its
+reports, within twice the report interval, and a transport keepalive would be
+slower than that *and* would replace the state it acts on: a broken stream is
+tolerated for `StreamDownGrace` and does not start the drain that moves players
+off a backend which will never answer. `MaxConnectionIdle` in
+`internal/agentserver` carries the argument in full.
+
+Nothing to do, and nothing to configure. The one thing that could have gone
+wrong is an operator refusing the pings: gRPC's *default* enforcement policy is
+one ping per five minutes, so an agent pinging every 45 seconds would collect
+strikes and be sent a GOAWAY. Every released operator sets
+`MinKeepaliveInterval` to 30 seconds instead, from v0.1.0 onwards, so no
+supported combination hits it. `hack/agent-test.sh`'s seventh phase asserts
+that from both sides against a stub carrying the same policy.
+
 ## 0.2.4: Paper moves from build 111 to 119
 
 `nix/paper.nix` named Paper 26.2 build 111 and PaperMC had published 119. The

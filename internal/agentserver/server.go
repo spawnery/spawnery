@@ -73,18 +73,31 @@ const (
 	//
 	// It is not a partition detector and must not be read as one. A
 	// black-holed connection carries a live stream, so this never fires on
-	// one, and nothing else here does either: no keepalive Time is set, so
-	// the operator learns a partitioned peer is gone only when TCP's own
-	// retransmission gives up -- minutes, on a default Linux. Measured
-	// 2026-08-26 from the agent's side through a freezable relay: over 200
-	// seconds, and twice not at all within 213.
+	// one, and no keepalive Time is set either, so the transport learns a
+	// partitioned peer is gone only when TCP's own retransmission gives up --
+	// minutes, on a default Linux. Measured 2026-08-26 from the agent's side
+	// through a freezable relay: over 200 seconds, and twice not at all
+	// within 213.
 	//
-	// That is survivable rather than broken, and docs/known-issues.md carries
-	// why: the agent is blind for the same reason and by the same mechanism,
-	// so a partitioned server goes on serving the players it has while the
-	// operator reads its count as stale and therefore occupied. Both ends
-	// ride it out. What a keepalive would change, and what it would cost, is
-	// the open question in that entry.
+	// **The operator does not need the transport to tell it, and setting a
+	// keepalive here would make it worse rather than better.** The agent's
+	// reports stop the instant its peer does, and phase.Inputs.AgentSilent
+	// reads "the stream is up and has gone quiet" for what it is, within twice
+	// the report interval -- ten seconds at the default, against the 65 a
+	// keepalive could manage at the fastest this server's own
+	// MinKeepaliveInterval permits a client to be asked. Worse than slower: a
+	// keepalive that broke the stream would turn AgentSilent into an ordinary
+	// broken stream, which phase tolerates for StreamDownGrace and which does
+	// *not* carry StartDrain -- so the twenty-second window for moving players
+	// off a backend that will never answer again would be traded for a socket
+	// closed sooner. HardDeadline already bounds how long that socket can lie.
+	//
+	// The agent is the end with no application signal, because nothing arrives
+	// on a healthy stream between one operator instruction and the next. That
+	// is why the keepalive is on the client and only on the client; see
+	// OperatorChannel.KEEPALIVE_SECONDS, and hack/agent-test.sh's seventh
+	// phase, which measured the agent giving up 64 seconds after a stub went
+	// deaf.
 	MaxConnectionIdle = 5 * time.Minute
 
 	// MaxConnectionsPerPeer bounds how many connections one peer address may

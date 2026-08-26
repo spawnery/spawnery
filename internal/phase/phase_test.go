@@ -668,6 +668,50 @@ func TestOccupiedIsUnchangedWithoutProxyReports(t *testing.T) {
 	}
 }
 
+// TestBreakingASilentAgentsStreamCostsTheDrain is the reason the operator sets
+// no transport keepalive, made executable.
+//
+// AgentSilent is defined as "the stream is up and has gone quiet". Anything
+// that breaks that stream -- a keepalive on internal/agentserver, a shorter
+// MaxConnectionIdle, an operator that decides to hang up on a peer it has
+// written off -- converts this state into the one below: an ordinary broken
+// stream, which is tolerated for StreamDownGrace and carries no StartDrain. So
+// the twenty-second window for moving players off a backend that will never
+// answer is not merely delayed by such a change, it is gone.
+//
+// Whoever comes to add a keepalive should meet this test rather than a fleet
+// that quietly stopped rescuing anybody. The agent's own keepalive is a
+// different thing and displaces nothing: see OperatorChannel in agent/common.
+func TestBreakingASilentAgentsStreamCostsTheDrain(t *testing.T) {
+	silent := Inputs{
+		PodExists: true, PodRunning: true, PodReady: true,
+		AgentConnected: true, AgentReady: true,
+		AgentSilent:   true,
+		WasRegistered: true,
+	}
+	if d := Decide(Ready, silent); !d.StartDrain {
+		t.Fatal("a silent agent on a live stream does not start a drain; the premise of this test is gone")
+	}
+
+	// The same moment, with the stream broken instead of quiet. AgentSilent
+	// cannot be true without AgentConnected, so this is what a keepalive would
+	// leave behind.
+	broken := silent
+	broken.AgentConnected = false
+	broken.AgentSilent = false
+	broken.AgentStreamDownFor = StreamDownGrace
+
+	d := Decide(Ready, broken)
+	if !d.Deregister {
+		t.Error("a stream down past the grace does not deregister")
+	}
+	if d.StartDrain {
+		t.Error("a broken stream now starts a drain; if that is deliberate, this test is the " +
+			"place to say so -- it exists to record that it did not, which is why breaking a " +
+			"silent agent's stream costs the rescue")
+	}
+}
+
 // TestASilentAgentOnALiveStreamLosesReadinessAndDrains is the case a dead node
 // actually produces, and the one nothing used to notice.
 //

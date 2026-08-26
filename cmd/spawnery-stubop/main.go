@@ -112,6 +112,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
@@ -188,6 +189,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fullSyncAfter := fs.Int("full-sync-after", 0,
 		"seconds to hold the FullSync back after the opening messages, so a test can "+
 			"probe the readiness gate while the proxy has no server list yet")
+	deafenAfter := fs.Duration("deafen-after", 0,
+		"after this long, stop reading and writing on every connection without closing "+
+			"any of them; 0 disables. The one fault with no clock on either side -- see "+
+			"deafness in deafen.go for what it does and does not reproduce, and "+
+			"OperatorChannel's keepalive for what is meant to end the wait")
 	setReadyAfter := fs.Duration("set-ready-after", 0,
 		"after a proxy's FullSync, wait this long and then tell it to stop being ready; "+
 			"0 disables. Used by hack/agent-test.sh phase 4 to prove the gate closes on the "+
@@ -257,6 +263,19 @@ func run(args []string, stdout, stderr io.Writer) int {
 		})
 	})
 
+	// Deafness sits outside the counter on purpose: a connection that has gone
+	// silent is still a connection, and the peak this stub exists to measure
+	// must go on counting it.
+	var serving net.Listener = counted
+	if *deafenAfter > 0 {
+		deaf := &deafness{}
+		serving = deaf.listener(counted)
+		time.AfterFunc(*deafenAfter, func() {
+			deaf.on.Store(true)
+			events.record("deafened", map[string]any{"after": deafenAfter.String()})
+		})
+	}
+
 	served := &stub{
 		events:         events,
 		reportInterval: int32(*reportInterval),
@@ -270,7 +289,21 @@ func run(args []string, stdout, stderr io.Writer) int {
 		token:          material.Token,
 	}
 
-	options := []grpc.ServerOption{grpc.Creds(creds)}
+	// The same keepalive enforcement the real operator applies, and the reason
+	// it is here is that it is the one server-side policy that can refuse a
+	// legitimate agent. OperatorChannel pings every 45 seconds; a client that
+	// pings more often than MinKeepaliveInterval collects strikes and is sent a
+	// GOAWAY, and a stub without this would let an agent tuned too eagerly pass
+	// a test the real operator would fail. Nothing else about grpc.NewServer is
+	// mirrored -- the stub is operator-shaped where a test needs it to be and
+	// nowhere else -- but a policy that can end a session belongs in that set.
+	options := []grpc.ServerOption{
+		grpc.Creds(creds),
+		grpc.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
+			MinTime:             agentserver.MinKeepaliveInterval,
+			PermitWithoutStream: false,
+		}),
+	}
 	if *requireToken {
 		options = append(options, grpc.StreamInterceptor(served.requireBearer))
 	}
@@ -287,7 +320,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}()
 
 	_, _ = fmt.Fprintf(stderr, "serving AgentService on %s for %v\n", listener.Addr(), []string(sans))
-	if err := server.Serve(counted); err != nil {
+	if err := server.Serve(serving); err != nil {
 		_, _ = fmt.Fprintf(stderr, "serve: %v\n", err)
 		return 1
 	}

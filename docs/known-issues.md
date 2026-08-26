@@ -101,50 +101,6 @@ touching `spec.unschedulable`, unless `--cordon-node-before-terminating` is on,
 and that flag defaults to off. Karpenter was never re-checked and is not
 claimed here either way.
 
-**A partitioned agent is invisible to both ends for minutes, and the channel
-has no keepalive to change that.** All three reconnect distributions are
-measured now, and the third is nothing like the other two. Against a Paper
-agent, timed from the moment the block lifted:
-
-| what happened | the agent greeted again after |
-|---|---|
-| the operator went away and came back (sockets closed) | 12.5 – 17.8 s |
-| the operator stopped reading without closing (`SIGSTOP`) | 1.0 – 1.3 s |
-| **a black hole: packets dropped, socket held open** | **> 200 s, and twice not at all within 213 s** |
-
-The third needed a fault this harness could not previously inject, and it took
-a freezable TCP relay between the container and the stub to produce one.
-`SIGSTOP` does not make one — the kernel buffers, and the process's death
-closes the socket — and the agent containers drop every capability, so nothing
-inside them can drop a packet either.
-
-**What governs it is not `SessionLoop`'s backoff.** That caps at 30 s and the
-measurement is an order of magnitude past it. A partitioned agent's sends
-succeed locally, because they reach the kernel's buffer, so nothing in the
-application learns anything at all; what finally ends the wait is TCP's own
-retransmission giving up, which on a default Linux takes minutes. The agent is
-not backing off — it does not yet know there is anything to back off from.
-That explains the 85-second reconnect observed during milestone 4c-2 which
-this entry used to carry as unexplained, and explains it as the *fast* end of
-the range rather than the slow one.
-
-The operator is equally blind, and that is what makes this survivable rather
-than a defect. `internal/agentserver` sets `MaxConnectionIdle` and no
-keepalive, so it does not notice either: the stream reads as connected, the
-player count goes stale after two report intervals, `Occupied()` reads a stale
-count as occupied, and nothing deletes anything. A partitioned server goes on
-serving the players it has, which is the truth of the situation, and both ends
-ride it out.
-
-**What would change it is a server-side keepalive, and that is a decision
-rather than a fix.** `keepalive.ServerParameters{Time, Timeout}` would have
-the operator notice a dead peer in seconds instead of minutes, which would
-make `phase.StreamDownGrace` mean what it says. It would also make the
-operator start *acting* on partitions it currently rides out — deregistering a
-server whose players are perfectly happy, because the operator cannot hear its
-agent. Whether that trade is worth taking is the open question here; nothing
-else in this entry is.
-
 ## From milestone 5c (detecting forwarding secret rotation)
 
 5c is detection and reporting only: the Network controller reads the forwarding

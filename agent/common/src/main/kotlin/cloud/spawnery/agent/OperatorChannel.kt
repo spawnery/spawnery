@@ -11,6 +11,7 @@ import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.util.concurrent.Executor
+import java.util.concurrent.TimeUnit
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -75,6 +76,53 @@ object OperatorChannel {
         "TLS_CHACHA20_POLY1305_SHA256",
     )
 
+    /**
+     * How long an idle connection waits before the agent pings the operator,
+     * and how long it then waits for the answer. Together they are the only
+     * clock the agent has on a connection that is up and going nowhere.
+     *
+     * # Why the agent needs one and the operator does not
+     *
+     * A node that is hard-powered off, or a network that black-holes, sends no
+     * FIN and no RST. Both ends go on believing the connection is fine until
+     * TCP's own retransmission gives up, which on a default Linux is minutes:
+     * measured 2026-08-26 through a freezable relay at over 200 seconds, and
+     * twice not at all within 213.
+     *
+     * The operator has an application-level answer to that and does not need a
+     * transport one. The agent's reports stop the instant the peer does, and
+     * `phase.Inputs.AgentSilent` reads "the stream is up and has gone quiet" as
+     * exactly what it is, within twice the report interval — ten seconds at the
+     * operator's default. A server-side keepalive would be slower than that and
+     * would *replace* that state with a weaker one, because breaking the stream
+     * turns AgentSilent into an ordinary broken stream, which is tolerated for
+     * StreamDownGrace and does not start the drain that moves players off a
+     * backend that will never answer. So the operator deliberately sets no
+     * keepalive; `internal/agentserver`'s MaxConnectionIdle says so in its own
+     * comment.
+     *
+     * The agent has no such signal. Nothing arrives on a healthy stream between
+     * one operator instruction and the next — [SessionLoop] arms every other
+     * timer it has off something the operator said — so on a black hole the
+     * agent's own sends succeed into a kernel buffer and it learns nothing. The
+     * transport ping is the only clock there can be on this side, and unlike
+     * the operator's it displaces nothing.
+     *
+     * # The numbers
+     *
+     * 45 seconds and 20, so the agent gives up at about 65 rather than at over
+     * 200. What bounds them from below is the operator's own enforcement:
+     * `MinKeepaliveInterval` is 30 seconds and a client that pings more often
+     * than that collects strikes and is sent a GOAWAY. Forty-five leaves half
+     * that again as margin for jitter; anything nearer the floor buys seconds
+     * and risks the one failure mode this change can introduce, which is an
+     * agent the operator refuses for being too eager. hack/agent-test.sh's
+     * blackhole phase exercises both directions against a stub carrying the
+     * same enforcement policy.
+     */
+    private const val KEEPALIVE_SECONDS = 45L
+    private const val KEEPALIVE_TIMEOUT_SECONDS = 20L
+
     fun build(endpoint: String, caBundlePem: ByteArray): ManagedChannel {
         val trust = trustManager(caBundlePem)
         val context = SSLContext.getInstance("TLS")
@@ -83,6 +131,15 @@ object OperatorChannel {
             .useTransportSecurity()
             .sslSocketFactory(context.socketFactory)
             .tlsConnectionSpec(TLS_VERSIONS, CIPHER_SUITES)
+            .keepAliveTime(KEEPALIVE_SECONDS, TimeUnit.SECONDS)
+            .keepAliveTimeout(KEEPALIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            // Only while a call is outstanding, which matches the operator's
+            // own KeepaliveEnforcementPolicy: it sets PermitWithoutStream
+            // false, so a ping sent between sessions would be a violation
+            // rather than a courtesy. The agent holds a stream for all but the
+            // moment between one session and the next, so this costs it
+            // nothing.
+            .keepAliveWithoutCalls(false)
             .build()
     }
 }

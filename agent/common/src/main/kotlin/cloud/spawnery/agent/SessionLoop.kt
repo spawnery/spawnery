@@ -302,13 +302,39 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
  * stays up either way, and an operator that is rolling out or briefly
  * unreachable must not cost the agent its session permanently.
  *
+ * How long that takes depends entirely on how the stream ended, and the three
+ * distributions are nothing like each other. Measured 2026-08-26, timed from
+ * the moment the fault lifted:
+ *
+ * | what happened                                   | greeted again after |
+ * |-------------------------------------------------|---------------------|
+ * | the operator went away and came back (sockets closed) | 12.5 – 17.8 s |
+ * | the operator stopped reading without closing (`SIGSTOP`) | 1.0 – 1.3 s |
+ * | a black hole: packets dropped, socket held open  | see below           |
+ *
+ * The third used to be over 200 seconds and twice not at all within 213, and
+ * it was never this class's backoff that governed it — that caps at 30
+ * seconds, an order of magnitude short. A partitioned agent's sends succeed
+ * into the kernel's buffer, so nothing in the application learns anything at
+ * all, and what finally ended the wait was TCP's own retransmission giving up.
+ * That is also the explanation for the unexplained 85-second reconnect
+ * observed during milestone 4c-2, and it explains it as the *fast* end of that
+ * range rather than the slow one.
+ * [OperatorChannel.KEEPALIVE_SECONDS] is what bounds it now.
+ *
  * A stream that never breaks and is never answered is retried too, and that is
- * not the same statement. Nothing else in the agent has a clock on it: the
- * channel has no keepalive and no idle timeout, the calls have no deadline, and
- * every timer this class arms is armed by something the operator said. So an
- * operator that accepts a stream and then goes quiet — see
- * [SessionLoop.awaitAnswer] for the one way that really happens — would
+ * not the same statement. Nothing this class arms has a clock of its own: the
+ * calls have no deadline, and every timer here is armed by something the
+ * operator said. So an operator that accepts a stream and then goes quiet —
+ * see [SessionLoop.awaitAnswer] for the one way that really happens — would
  * otherwise hold the agent for the life of the TCP connection.
+ *
+ * The case this class still cannot see is a stream that *was* answered and
+ * then goes silent, because every timer it would need has already been
+ * satisfied. That one is the channel's, not this class's:
+ * [OperatorChannel.KEEPALIVE_SECONDS] is the only clock on a connection that
+ * is up and going nowhere, and its doc comment says why the operator
+ * deliberately has no matching one.
  */
 class SessionLoop<Req, Resp>(
     private val channels: () -> ManagedChannel,

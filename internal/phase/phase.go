@@ -158,6 +158,15 @@ type Inputs struct {
 	// having noticed, and it is distinguishable from an operator restart --
 	// which breaks every stream and would otherwise look identical -- because
 	// that leaves AgentConnected false.
+	//
+	// It is also why the operator sets no transport keepalive. A keepalive
+	// that broke this stream would replace this state with the one below --
+	// an ordinary broken stream, tolerated for StreamDownGrace and carrying no
+	// StartDrain -- and would do it more slowly than the reports do. The two
+	// signals are not interchangeable: this one says the peer is gone *and*
+	// that its players are on a backend that will never answer, which is what
+	// the drain is for. internal/agentserver's MaxConnectionIdle carries the
+	// same argument from the other side.
 	AgentSilent bool
 
 	// ReadinessLosses is how often this server already fell out of Ready.
