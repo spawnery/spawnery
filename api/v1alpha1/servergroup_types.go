@@ -127,6 +127,19 @@ type ServerGroupSpec struct {
 
 	// Replicas is the fixed number of persistent servers. Ephemeral groups are
 	// sized by scaling instead.
+	//
+	// Lowering it takes the top ordinal whoever is on it. A persistent server
+	// is an identity and no other server can take its place, so unlike an
+	// ephemeral group -- which shrinks around its players by picking an empty
+	// server instead -- this one has no alternative to offer. The players on
+	// that ordinal are protected by the ordinary drain and by nothing else:
+	// they are moved through the proxies, and anyone still connected when
+	// spec.drain.timeoutSeconds passes is disconnected with the pod.
+	//
+	// So if they must not be: empty the ordinal first, or raise
+	// spec.drain.timeoutSeconds beforehand so the drain has room to finish.
+	// docs/persistent-storage.md carries why refusing to shrink while anyone
+	// is online would not be the better rule.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
