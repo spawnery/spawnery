@@ -4511,7 +4511,7 @@ func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
 	}
 }
 
-// The sentence docs/known-issues.md carried since milestone 4a, driven.
+// The lag provisionalCapacity's own comment describes, driven.
 //
 // An ephemeral group runs above spec.scaling.minReplicas to keep spareSlots
 // free, and DesiredReplicas() is only that floor — so a group DecideSize has
@@ -4797,7 +4797,7 @@ func TestTheOrdinalConditionClearsWhenTheDuplicateGoes(t *testing.T) {
 }
 
 // TestAFailedRetireeIsNamedOnProgressing closes the silent half of
-// docs/known-issues.md's milestone 4b entry. spec.retire is the update
+// docs/known-issues.md's milestone 4b entry, since removed. spec.retire is the update
 // budget's one signal and it survives the server failing, so a server the
 // group patched it onto and that then failed holds a maxUnavailable slot for
 // its whole failedRetentionSeconds -- an hour by default -- and the changeover

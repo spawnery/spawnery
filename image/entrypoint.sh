@@ -7,9 +7,10 @@
 # name the key that is missing; see docs/known-issues.md for why the shell
 # version it replaces did not generalise. /data/config is not an override
 # slot — it is Paper's own writable directory, where Paper itself writes
-# paper-global.yml and paper-world-defaults.yml at startup; see
-# docs/known-issues.md for the collision this creates with a read-only mount
-# there. See section 6 of
+# paper-global.yml and paper-world-defaults.yml at startup, which is why the
+# operator's own target was moved to /etc/spawnery rather than fought over.
+# (The plugins directory below could not be moved the same way, so
+# internal/podspec refuses a user mount at it instead.) See section 6 of
 # docs/superpowers/specs/2026-08-08-paper-base-image-design.md.
 set -eu
 

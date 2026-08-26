@@ -32,7 +32,7 @@ import (
 // its group, and the operator who deletes the wrong object. A StatefulSet
 // retains its claims on both scale-down and deletion for the same reason. The
 // cost is that claims accumulate and must be found and removed by hand;
-// docs/known-issues.md's "From milestone 5a" section is where that is written
+// docs/persistent-storage.md is where that is written
 // down, with the selector for finding them and the warning that removing one
 // destroys a world.
 //

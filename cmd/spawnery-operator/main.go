@@ -103,9 +103,12 @@ func (t *taintKeys) Set(value string) error {
 	// it is the one this operator was worst at surviving: a key with a colon or
 	// an equals sign in it matches no taint that exists, so the flag would be
 	// accepted, nothing would ever drain, and nothing would say why.
-	// docs/known-issues.md records the shape under milestone 4c-3: "a typo in
-	// -drain-taint is indistinguishable from a taint key that legitimately does
-	// not exist in this cluster."
+	// What stays true after this check, and is on the flag's own usage string:
+	// a well-formed key that is simply absent from the cluster cannot be told
+	// from a typo by anything here. The only case that warns is a node carrying
+	// a well-known drain taint this operator was not configured for
+	// (wellKnownDrainTaints, internal/controller/nodes.go); for a key of
+	// somebody's own choosing there is no list to check against.
 	//
 	// IsQualifiedName is what Kubernetes itself validates a taint key with, so
 	// this refuses exactly what the API server would refuse and nothing more. A
@@ -253,7 +256,12 @@ func main() {
 	flag.DurationVar(&hardDeadline, "agent-session-deadline", 10*time.Minute,
 		"when the operator closes an agent stream regardless")
 	flag.Var(&drainTaints, "drain-taint",
-		"taint key that marks a node as departing, beside spec.unschedulable; repeatable")
+		"taint key that marks a node as departing, beside spec.unschedulable; repeatable. "+
+			"A bare key, not key=value:Effect -- the value is ignored and only NoSchedule and "+
+			"NoExecute are honoured. A key that is simply absent from the cluster cannot be told "+
+			"from a typo by anything here, so confirm with `kubectl describe node` that the taint "+
+			"is present with one of those two effects; the operator warns only for the well-known "+
+			"keys it recognises.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)

@@ -58,8 +58,9 @@ DEADLINE="${DEADLINE:-300}"
 # Kubernetes validates those for existence at admission. Measured, not
 # reasoned: the install refused with `namespaces "spawnery-system" not
 # found`, this script stopped there under set -e, and `go test` never ran --
-# so no scenario in test/e2e caught that mutation or could have
-# (docs/known-issues.md, "From milestone 6d").
+# so no scenario in test/e2e caught that mutation or could have. What closed
+# that is TestEveryRenderedObjectLandsInTheReleaseNamespace, which reads every
+# rendered object's namespace rather than scanning for a literal.
 #
 # A literal surviving in a *subject* namespace -- subjects[].namespace, which
 # the chart templates as {{ .Release.Namespace }} -- is not validated by the

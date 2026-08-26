@@ -187,46 +187,39 @@ touching `spec.unschedulable`, unless `--cordon-node-before-terminating` is on,
 and that flag defaults to off. Karpenter was never re-checked and is not
 claimed here either way.
 
-**One reconnect measured at 85 s is still unexplained.** The occupancy grace
-the budget reads is derived now rather than chosen —
-`budgetReconnectGrace` is 45 s, from `SessionLoop`'s own 30 s backoff cap plus
-its jitter plus one report interval, and the measurement it replaces a guess
-with is beside the constant: at a 45-second operator absence a Paper agent
-greeted again at 12.5, 17.8, 12.5 and 15.0 seconds, every one of the four at or
-past the 15 seconds the old shared grace allowed.
+**Two of the three reconnect distributions are measured; the one that would
+explain an 85-second observation is not.** The occupancy grace the eviction
+budget reads is derived now rather than chosen — `budgetReconnectGrace` is
+45 s, from `SessionLoop`'s own 30 s backoff cap plus its jitter plus one report
+interval — and the measurements it rests on are beside the constant. What they
+cover, measured 2026-08-26 against a Paper agent:
 
-What that does not account for is an 85-second reconnect observed during
-milestone 4c-2, which is more than the cap plus a resync explains and more than
-anything measured since. The likeliest reading is `SessionLoop`'s own class
-comment — the channel has no keepalive, no idle timeout and no call deadlines,
-so a partitioned agent learns its stream is dead only when a send fails, which
-for a Paper agent is its next player-count report, and its backoff clock
-therefore starts well after the operator's did. That is reasoning and not
-measurement: the runs above took the operator away rather than partitioning it,
-so they exercise the agent noticing a closed socket and not the agent noticing
-silence. **Nobody has measured the partition case**, and a grace sized against
-the wrong one of the two distributions is the shape of mistake this entry
-already caught once.
+- **the operator went away and came back**, its listener closing every socket:
+  12.5 to 17.8 s after a 45-second absence, because the agent retried against a
+  refused port throughout and its backoff escalated. This is the case the grace
+  exists for and 45 s covers it.
+- **the operator stopped reading without closing**, `SIGSTOP` on the process:
+  1.0 to 1.3 s once the socket finally closed. The agent noticed nothing
+  meanwhile — it went on writing player counts into a buffer nobody read — so
+  its backoff never advanced, and it reconnected on the first attempt.
 
-**A `-drain-taint` key that is simply absent from the cluster cannot be told
-from a typo.** The flag is validated as far as it can be: since 2026-08-24 it
-refuses a value that is not a bare qualified name, using
-`validation.IsQualifiedName` — the same check the API server validates a taint
-key with, so it refuses exactly what the API server would and nothing more.
-That catches the mistake to expect, because taints are written
-`key=value:Effect` nearly everywhere a person meets them and passing the whole
-taint was the slip this operator survived worst: such a key matches no taint
-that exists, so the flag was accepted, nothing ever drained, and nothing said
-why.
+The second is the interesting one, because it shows the agent's clock starting
+late rather than running long, and that is the shape that would explain the
+**85-second reconnect observed during milestone 4c-2** which nothing since has
+reproduced. `SessionLoop`'s own class comment says why: the channel has no
+keepalive, no idle timeout and no call deadlines, so a partitioned agent learns
+its stream is dead only when a send fails. If it notices a minute late, its
+backoff starts a minute late, and the total measured from the *operator's*
+clock — which is what the grace runs on — exceeds anything the cap alone
+predicts.
 
-A well-formed key nobody uses is a different matter and nothing can tell it
-from a working one — except in the one case that now warns, a node carrying a
-*well-known* drain taint this operator was not configured for. For a key of
-somebody's own choosing there is no such list to check against. Confirm with
-`kubectl describe node` that the taint is present with an effect this operator
-honours (`NoSchedule` or `NoExecute`; `PreferNoSchedule` is ignored
-deliberately, since it does not stop the scheduler putting a replacement back
-on the same node).
+**Nobody has measured that.** It needs a black-hole partition: packets dropped
+with the socket left open, so no `RST` ever arrives. `SIGSTOP` does not produce
+one (the kernel buffers, and closing the process closes the socket), and the
+agent containers drop every capability, so nothing in this harness can inject
+it. Until somebody does, the grace is sized against a distribution that is
+measured and against one that is only reasoned about, which is the shape of
+mistake this entry already caught once.
 
 ## From milestone 5c (detecting forwarding secret rotation)
 
