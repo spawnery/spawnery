@@ -530,7 +530,14 @@ func (r *ProxyGroupReconciler) protectPlayersOnly(ctx context.Context, group *sp
 			leaving[pods[i].Name] = true
 		}
 	}
-	r.reportNodeDraining(group, pods, nodeGoing)
+	// The whole point of this path is that the group is refused, so a drain
+	// here removes a proxy nothing can replace until the refusal lifts. The
+	// group already says Accepted: False; what it did not say is that the
+	// combination of that and a departing node is about to leave it smaller,
+	// which is the sentence docs/known-issues.md carried instead.
+	r.reportNodeDraining(group, pods, nodeGoing, blockedReplacement{
+		Reason: "its Network is missing or not accepted",
+	})
 	// Before the drain, not after: the label and the budget are what stand
 	// between the eviction API and a proxy that still has players, and
 	// drainDeparting can delete a pod, which changes what the budget is
@@ -857,7 +864,9 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// for, and a second event tied to this condition's own transition would
 	// under-report a group where a second departing node appears while the
 	// condition is already True.
-	r.reportNodeDraining(group, pods, nodeGoing)
+	// Nothing blocked here: reaching reconcileReplicas at all means the
+	// Network is usable and this group can build what it removes.
+	r.reportNodeDraining(group, pods, nodeGoing, blockedReplacement{})
 	// Counted from the labels rather than from views[i].Stale, which folds the
 	// node-draining reason in with the hash one. Keeping them apart is the
 	// point: a group replacing a pod because its node is leaving and a group
@@ -1371,14 +1380,19 @@ func (r *ProxyGroupReconciler) reportReadinessDivergence(
 // condition's own True/False flank cannot stand in for -- a second departing
 // node while the condition is already True marks another proxy without the
 // condition changing at all.
-func (r *ProxyGroupReconciler) reportNodeDraining(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, nodeGoing []bool) {
+func (r *ProxyGroupReconciler) reportNodeDraining(
+	group *spawneryv1alpha1.ProxyGroup,
+	pods []corev1.Pod,
+	nodeGoing []bool,
+	blocked blockedReplacement,
+) {
 	names := make([]string, 0, len(pods))
 	for i, going := range nodeGoing {
 		if going {
 			names = append(names, pods[i].Spec.NodeName)
 		}
 	}
-	meta.SetStatusCondition(&group.Status.Conditions, drainingCondition(names))
+	meta.SetStatusCondition(&group.Status.Conditions, drainingConditionBlocked(names, blocked))
 }
 
 // reportChangingOver sets ConditionChangingOver from how many of the group's

@@ -224,7 +224,10 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			drainingNodes = append(drainingNodes, v.NodeName)
 		}
 	}
-	meta.SetStatusCondition(&group.Status.Conditions, drainingCondition(drainingNodes))
+	// Published below rather than here, once the backoff is known: the
+	// condition carries whether this group can replace what it condemns, and
+	// that is two facts -- networkUsable, settled above, and backoff.MayCreate,
+	// settled by DecideBackoff further down. See blockedReplacement.
 
 	// The counter and the two conditions belong to the spec that produced the
 	// failures. A generation change is the operator's answer to whatever broke,
@@ -334,6 +337,32 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// what known-issues already describes: a departing node takes a server
 	// regardless of what kind of server it is.
 	mayResize := networkUsable
+
+	// The NodeDraining condition, with what stops this group rebuilding what
+	// it is about to condemn.
+	//
+	// Condemnation is not gated on either of these -- deliberately, and the
+	// ruling holds: the players on a departing node are evicted off it
+	// whatever this group decides, so moving them to a fallback beats being
+	// kicked with nowhere chosen. What the ruling costs is capacity that
+	// cannot be rebuilt, and until now that cost was readable only by putting
+	// two conditions together.
+	//
+	// The Network is named first when both apply: it is the unbounded one, and
+	// a backoff window that will lift on its own is not the thing to report to
+	// somebody who has an unbounded wait as well.
+	blocked := blockedReplacement{}
+	switch {
+	case !mayResize:
+		blocked = blockedReplacement{Reason: "its Network is missing or not accepted"}
+	case !backoff.MayCreate:
+		blocked = blockedReplacement{
+			Reason:  "its servers are failing to start and it is backing off",
+			Bounded: true,
+		}
+	}
+	meta.SetStatusCondition(&group.Status.Conditions,
+		drainingConditionBlocked(drainingNodes, blocked))
 
 	// Gated the same as sizing, on mayResize rather than a check of its own:
 	// BuildServerPod reads net.Spec.Defaults, and when the Network was never

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -214,5 +215,79 @@ func TestTheMissingTaintWarningIsOncePerNode(t *testing.T) {
 	o.Do("node-b", func() { calls++ })
 	if calls != 2 {
 		t.Errorf("calls = %d, want 2: one per node, however often it is asked", calls)
+	}
+}
+
+// TestNodeDrainingSaysWhenTheGroupCannotReplace closes the half of two entries
+// that stayed open after the condemnation itself was settled.
+//
+// A group in create-backoff, or one whose Network is unusable, condemns the
+// pods on a departing node and cannot rebuild them. That ruling is sound --
+// those players are evicted off the node whatever the group does, so moving
+// them beats being kicked with nowhere chosen. What it costs is capacity, and
+// both halves of that were on the object separately (NodeDraining: True beside
+// Accepted: False or BackingOff: True) while the combination was on neither.
+func TestNodeDrainingSaysWhenTheGroupCannotReplace(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		blocked blockedReplacement
+		want    []string
+		absent  string
+	}{
+		{
+			name:    "nothing in the way",
+			blocked: blockedReplacement{},
+			want:    []string{"node-a"},
+			absent:  "cannot build replacements",
+		},
+		{
+			// The unbounded one. It waits for a person, which is the only
+			// case worth waking up for.
+			name:    "a broken Network",
+			blocked: blockedReplacement{Reason: "its Network is missing or not accepted"},
+			want:    []string{"node-a", "cannot build replacements", "Network", "until that is fixed"},
+		},
+		{
+			// The bounded one, which needs no action and must not read like
+			// the case above.
+			name: "create-backoff",
+			blocked: blockedReplacement{
+				Reason:  "its servers are failing to start and it is backing off",
+				Bounded: true,
+			},
+			want: []string{"node-a", "backing off", "until that clears on its own"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cond := drainingConditionBlocked([]string{"node-a"}, tc.blocked)
+			if cond.Status != metav1.ConditionTrue {
+				t.Fatalf("status = %s, want True", cond.Status)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(cond.Message, want) {
+					t.Errorf("message %q does not mention %q", cond.Message, want)
+				}
+			}
+			if tc.absent != "" && strings.Contains(cond.Message, tc.absent) {
+				t.Errorf("message %q mentions %q with nothing in the way", cond.Message, tc.absent)
+			}
+		})
+	}
+}
+
+// TestAGroupWithNoDrainingNodesSaysNothingAboutReplacing keeps the addition
+// off the False side. A group with nothing on a departing node has no
+// replacement problem to report, whatever else is wrong with it, and a
+// condition that mentioned one would be describing a situation that does not
+// exist.
+func TestAGroupWithNoDrainingNodesSaysNothingAboutReplacing(t *testing.T) {
+	cond := drainingConditionBlocked(nil, blockedReplacement{
+		Reason: "its Network is missing or not accepted",
+	})
+	if cond.Status != metav1.ConditionFalse {
+		t.Fatalf("status = %s, want False", cond.Status)
+	}
+	if strings.Contains(cond.Message, "replacements") {
+		t.Errorf("message %q talks about replacing with no node draining", cond.Message)
 	}
 }

@@ -163,7 +163,38 @@ var warnedMissingDrainTaint once
 // nodeDeparting check, respectively -- rather than asking nodeDeparting about
 // any pod a second time. Duplicates and empty names (an unresolvable pod) are
 // tolerated here so neither caller has to dedupe or filter before calling.
+// blockedReplacement says why a group cannot build what it is about to
+// condemn, or is empty when it can. It is the second half of the NodeDraining
+// message, and it exists because the two halves were only ever readable
+// separately.
+//
+// A group in create-backoff, or one whose Network is unusable, still condemns
+// the pods on a departing node -- deliberately, and the ruling is sound: those
+// players are evicted off that node whatever the group does, so moving them to
+// a fallback beats being kicked with nowhere chosen for them. What the ruling
+// costs is capacity the group cannot rebuild, for a backoff window in the
+// first case and for an unbounded wait in the second.
+//
+// Both facts were already on the object -- NodeDraining: True naming the node,
+// and Accepted: False or BackingOff: True beside it -- and the combination was
+// on neither. An operator reading "pods are on nodes that are on their way out
+// of service" had no way to see that this particular group would come back
+// smaller and stay that way.
+type blockedReplacement struct {
+	// Reason is a short clause naming what stops the creates, or empty.
+	Reason string
+	// Bounded is whether the wait ends on its own. A backoff window does; a
+	// broken Network waits for a person.
+	Bounded bool
+}
+
 func drainingCondition(nodeNames []string) metav1.Condition {
+	return drainingConditionBlocked(nodeNames, blockedReplacement{})
+}
+
+// drainingConditionBlocked is drainingCondition plus what the caller knows
+// about its own ability to replace what it condemns.
+func drainingConditionBlocked(nodeNames []string, blocked blockedReplacement) metav1.Condition {
 	cond := metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionNodeDraining,
 		Status:  metav1.ConditionFalse,
@@ -187,6 +218,20 @@ func drainingCondition(nodeNames []string) metav1.Condition {
 	cond.Reason = spawneryv1alpha1.ReasonNodeDraining
 	cond.Message = fmt.Sprintf("pods are on node(s) %s, which are on their way out of service",
 		strings.Join(names, ", "))
+	if blocked.Reason != "" {
+		// The bounded and unbounded cases read differently on purpose. One is
+		// "this group will be short for a while", which needs no action; the
+		// other is "this group will be short until you fix something", which
+		// is the only one worth waking up for, and an operator cannot tell
+		// them apart from the reason alone.
+		ends := "until that is fixed"
+		if blocked.Bounded {
+			ends = "until that clears on its own"
+		}
+		cond.Message += fmt.Sprintf(
+			"; this group cannot build replacements for them because %s, so it will run below its "+
+				"size %s", blocked.Reason, ends)
+	}
 	return cond
 }
 
