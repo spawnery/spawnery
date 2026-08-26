@@ -75,3 +75,27 @@ operator:
   # The production value. hack/e2e.sh overrides it for its own run.
   startupDeadline: 5m
   leaderElect: true
+
+# The namespaces that hold a Network, and the forwarding secret in each.
+#
+# Empty by default, and that is not caution: a chart installed once cannot know
+# the game namespaces somebody will create later, which is why
+# config/rbac/forwarding-secret-reader.yaml stays a hand-applied file and
+# remains the answer for a namespace nobody listed here. Listing one is for the
+# case where you do know, and it buys two things hand-applying cannot.
+#
+# It renders resourceNames, which the master design's §8 asks for and the
+# hand-applied file leaves out -- not because it is wrong but because by hand it
+# costs an edit per namespace and another whenever a secret is renamed. And it
+# renders the RoleBinding's subject into this release's namespace, where the
+# hand-applied file hard-codes spawnery-system and has to be edited first.
+#
+# An entry with no secrets is refused rather than rendered wide: a Role granting
+# get on every Secret in the namespace is what this exists to avoid, and getting
+# it by omission would be silent.
+#
+#   networkNamespaces:
+#     - namespace: minecraft
+#       secrets:
+#         - velocity-forwarding-secret
+networkNamespaces: []

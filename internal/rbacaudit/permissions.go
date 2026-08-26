@@ -48,6 +48,17 @@ type Permission struct {
 	Subresource string
 	// Verb is the RBAC verb.
 	Verb string
+	// ResourceNames, if set, is the exact set of objects this permission
+	// covers. Empty means every object of the resource, which is what almost
+	// every grant here is.
+	//
+	// It is part of the identity, so a named permission and an unnamed one are
+	// different permissions and neither satisfies the other. That is the whole
+	// point: an audit that let a named grant stand in for an unrestricted
+	// requirement would report the operator able to read every Secret when it
+	// can read one, and an audit that let an unrestricted grant stand in for a
+	// named requirement would miss a role that had quietly widened.
+	ResourceNames []string
 	// Why names the call site that needs this. It is documentation, not
 	// identity — Key ignores it — and it is what makes an obsolete entry
 	// noticeable when its call site disappears.
@@ -60,7 +71,17 @@ func (p Permission) Key() string {
 	if p.Subresource != "" {
 		resource += "/" + p.Subresource
 	}
-	return fmt.Sprintf("%s/%s:%s", p.Group, resource, p.Verb)
+	key := fmt.Sprintf("%s/%s:%s", p.Group, resource, p.Verb)
+	if len(p.ResourceNames) == 0 {
+		return key
+	}
+	// Sorted, so a role that lists the same names in a different order is the
+	// same permission. RBAC does not care about the order and neither should
+	// this; a copy, because sorting the caller's slice underneath them would
+	// be a surprising thing for an identity function to do.
+	names := append([]string(nil), p.ResourceNames...)
+	sort.Strings(names)
+	return key + " on [" + strings.Join(names, " ") + "]"
 }
 
 // String renders a permission for a failure message, including its reason.
@@ -87,28 +108,20 @@ func ExpandRules(rules []rbacv1.PolicyRule) ([]Permission, error) {
 		if len(rule.NonResourceURLs) > 0 {
 			return nil, fmt.Errorf("rule %d uses non-resource URLs, which this audit cannot model", i)
 		}
-		// Refused rather than ignored, which is what this used to do.
+		// resourceNames is carried through rather than refused, which is what
+		// this did until the chart began rendering a narrowed forwarding-secret
+		// reader Role.
 		//
-		// A Permission has no name field, so a rule restricted to particular
-		// object names would expand into one that reads as unrestricted --
-		// and it would read that way in the *permissive* direction: Compare
-		// would find the required permission granted when in truth it is
-		// granted for one name only. That is the wrong way for an audit to be
-		// wrong.
+		// The refusal was right for as long as Permission had nowhere to put a
+		// name: such a rule would have expanded into one that reads as
+		// unrestricted, and it would have read that way in the *permissive*
+		// direction, with Compare reporting the requirement satisfied for
+		// every object when it was satisfied for one. Now that the names are
+		// part of the identity, a named rule and an unrestricted one are
+		// simply different permissions and neither is mistaken for the other.
 		//
-		// controller-gen emits no resourceNames, so nothing generated reaches
-		// this. What does reach it is hand-written RBAC, and there is a live
-		// invitation to write some: docs/known-issues.md records that the
-		// master design asks for resourceNames on the forwarding-secret
-		// reader Role. Whoever takes that up gets this error rather than an
-		// audit that quietly stops meaning what it says.
-		if len(rule.ResourceNames) > 0 {
-			return nil, fmt.Errorf(
-				"rule %d is restricted to resourceNames %v, which this audit cannot model: "+
-					"a Permission carries no name, so this rule would expand into one that "+
-					"reads as unrestricted and Compare would report it satisfied for every "+
-					"object rather than for these", i, rule.ResourceNames)
-		}
+		// controller-gen still emits no resourceNames, so nothing generated
+		// reaches this; what does is hand-written and chart-rendered RBAC.
 		for _, group := range rule.APIGroups {
 			if group == rbacv1.APIGroupAll {
 				return nil, fmt.Errorf("rule %d grants every API group", i)
@@ -130,6 +143,10 @@ func ExpandRules(rules []rbacv1.PolicyRule) ([]Permission, error) {
 						Resource:    name,
 						Subresource: sub,
 						Verb:        verb,
+						// A copy per permission: one rule expands into many,
+						// and handing them all the rule's own slice would make
+						// a later sort of one reorder every other.
+						ResourceNames: append([]string(nil), rule.ResourceNames...),
 					})
 				}
 			}

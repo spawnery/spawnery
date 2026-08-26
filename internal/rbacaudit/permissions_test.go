@@ -17,7 +17,6 @@ limitations under the License.
 package rbacaudit
 
 import (
-	"strings"
 	"testing"
 
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -336,21 +335,65 @@ func TestCompare(t *testing.T) {
 // docs/known-issues.md records that the master design asks for resourceNames on
 // the forwarding-secret reader Role, so the case is not hypothetical — it is
 // waiting for somebody to follow that advice.
-func TestExpandRulesRejectsResourceNames(t *testing.T) {
-	rule := rbacv1.PolicyRule{
+// TestExpandRulesCarriesResourceNames is what lets the chart render a narrowed
+// forwarding-secret reader Role at all.
+//
+// It used to be a refusal, and the refusal was right for as long as Permission
+// had nowhere to put a name: such a rule would have expanded into one reading
+// as unrestricted, in the permissive direction, with Compare reporting a
+// requirement satisfied for every object when it was satisfied for one. The
+// names are part of the identity now, so the two are simply different
+// permissions -- which is the property this asserts, in both directions.
+func TestExpandRulesCarriesResourceNames(t *testing.T) {
+	named, err := ExpandRules([]rbacv1.PolicyRule{{
 		APIGroups:     []string{""},
 		Resources:     []string{"secrets"},
 		Verbs:         []string{"get"},
-		ResourceNames: []string{"one-particular-secret"},
+		ResourceNames: []string{"velocity-forwarding-secret"},
+	}})
+	if err != nil {
+		t.Fatalf("ExpandRules refused a named rule: %v", err)
 	}
-	got, err := ExpandRules([]rbacv1.PolicyRule{rule})
-	if err == nil {
-		t.Fatalf("a resourceNames restriction was accepted and expanded to %v; it has to be "+
-			"refused, because that expansion claims a grant on every secret", got)
+	if len(named) != 1 {
+		t.Fatalf("expanded to %d permissions, want 1", len(named))
 	}
-	// The message has to name the restriction, or whoever meets it cannot tell
-	// which rule to look at in a file with a dozen.
-	if !strings.Contains(err.Error(), "one-particular-secret") {
-		t.Errorf("error = %q, want it to name the resourceNames it refused", err)
+	if got := named[0].ResourceNames; len(got) != 1 || got[0] != "velocity-forwarding-secret" {
+		t.Fatalf("ResourceNames = %v, want the rule's own", got)
+	}
+
+	// A named grant does not satisfy an unrestricted requirement. This is the
+	// direction the old refusal existed to prevent, and the one that would
+	// report the operator able to read every Secret when it can read one.
+	unrestricted := []Permission{{Group: "", Resource: "secrets", Verb: "get"}}
+	if diff := Compare(unrestricted, named); len(diff.Missing) != 1 {
+		t.Errorf("Missing = %v, want the unrestricted requirement unmet by a named grant", diff.Missing)
+	}
+	// And an unrestricted grant does not silently satisfy a named requirement
+	// either: it is wider, and an audit that accepted it would miss a role
+	// that had quietly stopped naming anything.
+	wide, err := ExpandRules([]rbacv1.PolicyRule{{
+		APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get"},
+	}})
+	if err != nil {
+		t.Fatalf("ExpandRules: %v", err)
+	}
+	if diff := Compare(named, wide); len(diff.Missing) != 1 || len(diff.Extra) != 1 {
+		t.Errorf("Missing = %v Extra = %v, want the named requirement unmet and the wide grant flagged",
+			diff.Missing, diff.Extra)
+	}
+}
+
+// TestKeyIgnoresTheOrderOfResourceNames keeps a role that lists the same
+// secrets in a different order from reading as a different permission. RBAC
+// does not care about the order and neither does this.
+func TestKeyIgnoresTheOrderOfResourceNames(t *testing.T) {
+	a := Permission{Group: "", Resource: "secrets", Verb: "get", ResourceNames: []string{"b", "a"}}
+	b := Permission{Group: "", Resource: "secrets", Verb: "get", ResourceNames: []string{"a", "b"}}
+	if a.Key() != b.Key() {
+		t.Errorf("%q != %q", a.Key(), b.Key())
+	}
+	// And the caller's slice is not reordered underneath them.
+	if a.ResourceNames[0] != "b" {
+		t.Errorf("Key sorted the caller's slice: %v", a.ResourceNames)
 	}
 }

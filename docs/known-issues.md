@@ -189,6 +189,15 @@ there is no digest to compare against. So the gap announces itself rather than
 hiding — but it is a gap, and a namespace nobody opened has rotation detection
 that reports nothing about rotations.
 
+*Narrowed since 2026-08-26, for the namespaces somebody names.*
+`charts/spawnery/values.yaml`'s `networkNamespaces` renders the Role and
+RoleBinding per listed namespace, with `resourceNames` restricted to that
+Network's secret — the narrowing the master design's §8 asks for and the
+hand-applied file cannot afford — and with the RoleBinding's subject in the
+release's own namespace rather than a hard-coded `spawnery-system`. What
+remains is the gap below: a namespace nobody listed is a namespace nobody
+opened.
+
 *Not closed by milestone 6d, on purpose — the design changed rather than the
 gap.* This entry expected the Helm chart to render this Role for each
 configured network namespace; 6d's design
@@ -212,30 +221,6 @@ and `ForwardingSecretRotationPending=False/ForwardingSecretInSync`. So the
 `Unknown/SecretReadForbidden` path this entry describes is what a namespace
 nobody opened reports, and the opened case now has a witness rather than only
 tests.
-
-**The reader Role does not carry `resourceNames`, and the master design asks
-that it should.** §8 of
-`docs/superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md:776-779`
-says the secrets grant is to be "restricted through `resourceNames` to the
-secrets referenced in networks". The rotation design's §2.2 rejects
-`resourceNames` for a *watch*, correctly — the clause does not restrict `list`
-or `watch` — but the grant that was kept is `get`-only
-(`config/rbac/forwarding-secret-reader.yaml`), and `resourceNames` restricts
-`get`. So the narrowing is available and is not taken. Deliberately: the
-manifest applies with no editing at all today, and `resourceNames` would make
-every administrator hand-edit it per namespace and edit it again whenever a
-Network's secret is renamed; and the operator holds `pods: create` cluster-wide
-(`internal/rbacaudit/required.go:52`), so it can mount any Secret in those
-namespaces into a pod it creates, which makes a name-scoped `get` defence in
-depth rather than a boundary. Milestone 6's Helm chart, where a per-namespace
-value renders the list, is where it becomes cheap. **The audit that guards this
-manifest refuses rather than models it.** `rbacaudit.Permission` still carries
-no name, so a rule restricted to particular objects cannot be represented — but
-since 2026-08-24 `ExpandRules` fails on such a rule instead of expanding it
-into one that reads as unrestricted, which is the direction that matters: the
-silent version had `Compare` reporting the permission satisfied for every
-object when it was satisfied for one. Whoever takes the narrowing up gets an
-error naming the names.
 
 ## Preconditions for milestone 6 (Helm, RBAC, E2E)
 

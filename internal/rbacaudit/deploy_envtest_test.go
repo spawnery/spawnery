@@ -48,6 +48,7 @@ import (
 	"sigs.k8s.io/yaml"
 
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/rbacaudit"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -1242,5 +1243,143 @@ func TestEveryRenderedObjectLandsInTheReleaseNamespace(t *testing.T) {
 			t.Errorf("the chart renders %s, which chartNamespacedObjects does not list — "+
 				"add it, so the next object to appear is checked rather than assumed", key)
 		}
+	}
+}
+
+// renderChartWith renders the chart with extra --set-json arguments, without
+// the once-per-package caching renderChart uses: these renders vary by their
+// values, so caching one would answer every caller with the first one's.
+func renderChartWith(t *testing.T, setJSON ...string) map[string][]byte {
+	t.Helper()
+	args := []string{"template", "spawnery", testenv.RepoPath(t, "charts/spawnery"),
+		"--namespace", renderNamespace}
+	for _, s := range setJSON {
+		args = append(args, "--set-json", s)
+	}
+	cmd := exec.Command("helm", args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("helm template: %v\n%s", err, stderr.String())
+	}
+	docs, splitErr := splitRendered(out)
+	if splitErr != nil {
+		t.Fatalf("split: %v", splitErr)
+	}
+	return docs
+}
+
+// helmRefuses renders with the given values and requires helm to reject them,
+// returning what it said.
+func helmRefuses(t *testing.T, setJSON string) string {
+	t.Helper()
+	cmd := exec.Command("helm", "template", "spawnery", testenv.RepoPath(t, "charts/spawnery"),
+		"--namespace", renderNamespace, "--set-json", setJSON)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if _, err := cmd.Output(); err == nil {
+		t.Fatalf("helm rendered %s, want a refusal", setJSON)
+	}
+	return stderr.String()
+}
+
+// TestNoReaderRoleIsRenderedByDefault pins the decision milestone 6d took: a
+// chart installed once cannot know the game namespaces somebody will create
+// later, so config/rbac/forwarding-secret-reader.yaml stays the answer for a
+// namespace nobody listed, and an ordinary install renders no Role into a
+// namespace it was never told about.
+func TestNoReaderRoleIsRenderedByDefault(t *testing.T) {
+	for name := range renderChart(t) {
+		if strings.Contains(name, "forwarding-secret-readers") {
+			t.Errorf("%s was rendered with no networkNamespaces set", name)
+		}
+	}
+}
+
+// TestAListedNamespaceGetsANarrowedReaderRole is the narrowing the master
+// design's §8 asks for and the hand-applied file cannot afford: by hand,
+// resourceNames costs an edit per namespace and another whenever a secret is
+// renamed, and rendered from a value it costs nothing.
+func TestAListedNamespaceGetsANarrowedReaderRole(t *testing.T) {
+	docs := renderChartWith(t,
+		`networkNamespaces=[{"namespace":"minecraft","secrets":["velocity-forwarding-secret"]}]`)
+
+	var role rbacv1.Role
+	var binding rbacv1.RoleBinding
+	var foundRole, foundBinding bool
+	for _, doc := range docs {
+		var meta struct {
+			Kind     string `json:"kind"`
+			Metadata struct {
+				Name      string `json:"name"`
+				Namespace string `json:"namespace"`
+			} `json:"metadata"`
+		}
+		if err := yaml.Unmarshal(doc, &meta); err != nil {
+			continue
+		}
+		if meta.Metadata.Name != "spawnery-forwarding-secret-reader" {
+			continue
+		}
+		switch meta.Kind {
+		case "Role":
+			if err := yaml.Unmarshal(doc, &role); err != nil {
+				t.Fatalf("parse the Role: %v", err)
+			}
+			foundRole = true
+		case "RoleBinding":
+			if err := yaml.Unmarshal(doc, &binding); err != nil {
+				t.Fatalf("parse the RoleBinding: %v", err)
+			}
+			foundBinding = true
+		}
+	}
+	if !foundRole || !foundBinding {
+		t.Fatalf("role=%v binding=%v, want both rendered", foundRole, foundBinding)
+	}
+
+	if role.Namespace != "minecraft" {
+		t.Errorf("Role namespace = %q, want the listed one", role.Namespace)
+	}
+	// The audit can model this now, which is the other half of the change:
+	// until resourceNames were part of a Permission's identity, ExpandRules
+	// refused such a rule outright rather than reading it as unrestricted.
+	granted, err := rbacaudit.ExpandRules(role.Rules)
+	if err != nil {
+		t.Fatalf("ExpandRules on the narrowed Role: %v", err)
+	}
+	want := []rbacaudit.Permission{{
+		Group: "", Resource: "secrets", Verb: "get",
+		ResourceNames: []string{"velocity-forwarding-secret"},
+	}}
+	if diff := rbacaudit.Compare(want, granted); len(diff.Missing) > 0 || len(diff.Extra) > 0 {
+		t.Errorf("missing=%v extra=%v, want exactly a get on that one secret", diff.Missing, diff.Extra)
+	}
+
+	// The subject's namespace is this release's, which is the second thing the
+	// hand-applied file cannot do: it hard-codes spawnery-system and has to be
+	// edited before an operator installed anywhere else can use it.
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Namespace != renderNamespace {
+		t.Errorf("subjects = %+v, want one in %q", binding.Subjects, renderNamespace)
+	}
+	if binding.Namespace != "minecraft" {
+		t.Errorf("RoleBinding namespace = %q, want the listed one", binding.Namespace)
+	}
+}
+
+// TestAnEntryWithNoSecretsIsRefused keeps the omission from being the wide
+// grant. A Role with no resourceNames grants get on every Secret in the
+// namespace, which is what naming them exists to avoid, and an administrator
+// who listed the namespace would believe they had narrowed it.
+func TestAnEntryWithNoSecretsIsRefused(t *testing.T) {
+	said := helmRefuses(t, `networkNamespaces=[{"namespace":"minecraft","secrets":[]}]`)
+	if !strings.Contains(said, "secrets") {
+		t.Errorf("helm said %q, want it to name what is missing", said)
+	}
+
+	said = helmRefuses(t, `networkNamespaces=[{"namespace":"minecraft"}]`)
+	if !strings.Contains(said, "secrets") {
+		t.Errorf("helm said %q for a missing key, want it to name what is missing", said)
 	}
 }
