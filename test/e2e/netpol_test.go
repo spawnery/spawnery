@@ -10,6 +10,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -38,6 +39,26 @@ func theNetworkGetsItsPolicy(t *testing.T) {
 		}
 		if len(policy.OwnerReferences) != 1 {
 			return false, fmt.Sprintf("%d owner references", len(policy.OwnerReferences))
+		}
+		// The reference itself and not merely its count. What the owner
+		// reference is *for* is that deleting the Network takes its policy
+		// with it, and a reference to the wrong object -- or to the right name
+		// with a stale UID, which a delete-and-recreate leaves behind -- is a
+		// count of one that garbage-collects the policy at the wrong moment or
+		// not at all. The unit test asserts all three fields; this is the only
+		// place a real API server's own owner reference is read.
+		owner := policy.OwnerReferences[0]
+		var network spawneryv1alpha1.Network
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "production"}, &network); err != nil {
+			return false, "reading the Network to compare its UID: " + err.Error()
+		}
+		switch {
+		case owner.Kind != "Network":
+			return false, fmt.Sprintf("owned by a %s", owner.Kind)
+		case owner.Name != "production":
+			return false, fmt.Sprintf("owned by %q", owner.Name)
+		case owner.UID != network.UID:
+			return false, fmt.Sprintf("owned by UID %s, but the Network is %s", owner.UID, network.UID)
 		}
 		return true, ""
 	})

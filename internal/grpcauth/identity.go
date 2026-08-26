@@ -242,6 +242,23 @@ func (a *Authenticator) reviewToken(ctx context.Context, token string) (reviewRe
 }
 
 // Authenticate returns the identity behind a token, or why it is refused.
+//
+// The rate limit lives here and not in the interceptor, where milestone 6b's
+// design §5.3 sketched it, and it has to: "consulted only when the cache
+// misses" is not a decision a caller can take before it has looked in the
+// cache. Worth knowing before reading that design and expecting it a layer up.
+//
+// What the placement costs is worth knowing too, because it has already been
+// paid once. It forces the peer to be recovered from a context.Context rather
+// than taken as a parameter, and a limiter keyed on the connection instead of
+// the pod survived a whole milestone that way. The seam is tested
+// deliberately for that reason rather than incidentally.
+//
+// The cache does not coalesce concurrent misses on one token: two goroutines
+// both review and both store. Benign -- the answers agree -- and it means the
+// cache does not itself deduplicate a hot token, so a burst of first-time
+// connections from one pod costs one TokenReview each until the first store
+// lands.
 func (a *Authenticator) Authenticate(ctx context.Context, token string, want agent.Role) (Identity, error) {
 	if token == "" {
 		return Identity{}, fmt.Errorf("no token presented")

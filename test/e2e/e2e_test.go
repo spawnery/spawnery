@@ -214,6 +214,28 @@ func theOperatorIsUp(t *testing.T) {
 // host with no swap -- would leave this check reading a log that begins after
 // the interesting part, and a replacement making no denied call of its own
 // would report PASS over a run it had covered a fraction of.
+// denialsIn picks the RBAC denials out of an operator log.
+//
+// A Pod Security rejection is not an RBAC denial and it carries the same
+// `is forbidden:` prefix. aForbiddenHostPortIsReportedOnTheGroup causes one on
+// purpose -- it is the only enforced refusal this run can observe -- and
+// without this exclusion the last and most important scenario of the run would
+// fail for a reason another scenario created.
+//
+// The exclusion is one substring on purpose. Everything else the API server
+// phrases with `is forbidden:` still counts, including an RBAC denial on a pod
+// create, which shares nothing with this text.
+func denialsIn(log string) []string {
+	var offenders []string
+	for _, line := range strings.Split(log, "\n") {
+		if strings.Contains(line, "is forbidden:") &&
+			!strings.Contains(line, "violates PodSecurity") {
+			offenders = append(offenders, line)
+		}
+	}
+	return offenders
+}
+
 func theOperatorWasNeverDenied(t *testing.T) {
 	log, restarts := operatorLog(t)
 	if restarts > 0 {
@@ -224,23 +246,7 @@ func theOperatorWasNeverDenied(t *testing.T) {
 			"would look identical to no denial at all", restarts, restarts)
 	}
 
-	var offenders []string
-	for _, line := range strings.Split(log, "\n") {
-		// A Pod Security rejection is not an RBAC denial, and it carries the
-		// same `is forbidden:` prefix. aForbiddenHostPortIsReportedOnTheGroup
-		// causes one on purpose -- it is the only enforced refusal this run
-		// can observe -- and without this exclusion the last and most
-		// important scenario of the run would fail for a reason another
-		// scenario created.
-		//
-		// The exclusion is one substring on purpose. Everything else the API
-		// server phrases with `is forbidden:` still counts, including an RBAC
-		// denial on a pod create, which shares nothing with this text.
-		if strings.Contains(line, "is forbidden:") &&
-			!strings.Contains(line, "violates PodSecurity") {
-			offenders = append(offenders, line)
-		}
-	}
+	offenders := denialsIn(log)
 	if len(offenders) > 0 {
 		t.Errorf("the operator was denied %d time(s) under its own ServiceAccount:\n%s\n\n"+
 			"This is the assertion internal/rbacaudit cannot make. It compares the "+
@@ -355,7 +361,43 @@ func eventually(t *testing.T, deadline time.Duration, what string, cond func() (
 		last = detail
 		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatalf("timed out after %s waiting for %s; last seen: %s", deadline, what, last)
+	t.Fatalf("timed out after %s waiting for %s; last seen: %s%s", deadline, what, last, denialHint(t))
+}
+
+// denialHint is what a timed-out wait adds to its own failure, and it exists
+// because of a measured hole rather than for tidiness.
+//
+// theOperatorWasNeverDenied is the last of twenty scenarios. Driven
+// 2026-08-25 with networkpolicies:create removed from the marker and from
+// rbacaudit's table -- the sharpest form of the case, absent from both, so the
+// audit is green and only the running operator knows -- no Network ever
+// reached Accepted, so nothing sized, and every scenario after the first waited
+// out its own two-minute deadline on state that could not arrive. The
+// package's own 20-minute budget fired six scenarios short of the one that
+// would have read the log. The denial was in that log the whole time and
+// nothing looked.
+//
+// So every wait that gives up looks now, and says so in its own failure. That
+// puts the cause in the message of the scenario that actually stalled, which
+// is where somebody reading a failed run is looking -- and it does not depend
+// on the run getting as far as scenario twenty.
+//
+// Best-effort by construction: a log that cannot be read adds nothing rather
+// than replacing a real timeout with a complaint about kubectl.
+func denialHint(t *testing.T) string {
+	t.Helper()
+	log, _ := operatorLog(t)
+	offenders := denialsIn(log)
+	if len(offenders) == 0 {
+		return ""
+	}
+	shown := offenders
+	if len(shown) > 3 {
+		shown = shown[:3]
+	}
+	return fmt.Sprintf("\n\nthe operator was denied %d time(s) while this waited, "+
+		"which is the likeliest reason the state never arrived:\n%s",
+		len(offenders), strings.Join(shown, "\n"))
 }
 
 // eventuallyStable is eventually's sibling for a condition that must hold,

@@ -8,6 +8,26 @@
 # that a shell script asserting on cluster state produces failure messages
 # nobody can act on.
 #
+# # What a green run does not prove
+#
+# Two decisions here put whole classes of behaviour out of reach, and both are
+# worth knowing before this is read as coverage.
+#
+# **One node.** kind's default topology, so nothing in this run can reach node
+# drain and its taint handling, a PodDisruptionBudget's effect on a real
+# eviction, HostPort and its CNI dependency, a LoadBalancer address, or CIS
+# `restricted` pod security. Those are the RKE2 rollout's (design §12), and
+# docs/runbook-milestone-6-rollout.md is where each was driven.
+#
+# **No image resolves**, by the decision test/e2e/manifests/e2e.yaml takes and
+# explains, so no game or proxy process ever starts and every pod sits in
+# ErrImagePull for the whole run. Out of reach in consequence: the second stage
+# of the ready gate, which needs a connected agent; syncOccupiedLabel and the
+# PDB upkeep, which need a server that has been Ready once; growing a claim;
+# and a join. There is no cheap stand-in -- the readiness probe execs
+# spawnery-slp against 127.0.0.1:25565, and both that binary and something
+# answering a server-list ping exist only in the real Paper image.
+#
 # On this machine kind runs under rootless podman, which needs both an
 # environment variable and a systemd scope. The script deliberately hard-codes
 # neither:

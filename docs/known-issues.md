@@ -7,7 +7,7 @@ for one. A closed entry left standing with a note saying it is closed costs a
 reader the same attention as a live one, which is the whole reason for the
 rule.
 
-Three things that are not open problems live elsewhere.
+Four things that are not open problems live elsewhere.
 [`upgrading.md`](upgrading.md) carries what strands an object or rolls a fleet
 when an installation crosses a release — real work for whoever is upgrading
 one, and nothing at all for anyone else.
@@ -16,7 +16,10 @@ a thing a human drives rather than a thing that is wrong.
 [`persistent-storage.md`](persistent-storage.md) carries what an operator owns
 about a persistent group's claims — that this operator never deletes one, that
 deleting one deletes a world, and how long a group whose storage is broken
-takes to say so. The design decisions live in
+takes to say so.
+[`network-boundaries.md`](network-boundaries.md) carries what the
+`NetworkPolicy` objects buy and what they do not, which is measured scope
+rather than a list of faults. The design decisions live in
 `superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md`, in
 `superpowers/specs/2026-08-08-agent-channel-design.md`, in
 `superpowers/specs/2026-08-09-paper-agent-design.md`, in
@@ -374,331 +377,43 @@ and closing that would mean 74 reviews on every resync for a state that
 changes when a person changes it. Whether that trade is worth taking is the
 open question; nothing else here is.
 
-**The E2E cluster is a single node, so a whole class of behaviour is
-untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
-single-node topology. Nothing in the run can reach node drain and its taint
-handling (4c-3), a PodDisruptionBudget's effect on a real eviction, `HostPort`
-and its CNI dependency, a `LoadBalancer` address, or CIS `restricted` pod
-security. Those belong to the RKE2 rollout at the end of milestone 6 (design
-§12).
-
-*Three of the five are driven on `paulwtf` as of 2026-08-25, against the
-deployed `v0.2.0` operator.* CIS `restricted` and `HostPort` are under
-milestone 6c above. **Node departure is driven for the cordon leg**: `kubectl
-cordon server03`, which carried one of the two `gateway` proxies. The operator
-replaced it without being asked twice and the timestamps are the interesting
-part — the replacement was scheduled to `server02` and started **eleven seconds
-before** the condemned pod was stopped, which is make-before-break doing what
-it is for on a real scheduler. `NodeDraining` went `True` and back to `False`
-inside one twenty-second polling window, so the group read `Ready` with two
-replicas throughout and `mc.paul.wtf` never had fewer than one proxy behind it.
-
-The **taint** leg — `IsDeparting`'s second branch, the one an autoscaler
-drives — a cordon never reaches, since it sets `spec.unschedulable` instead. It
-is driven now, but in envtest rather than here:
-`TestATaintedNodeCondemnsOnlyWhenItsKeyIsConfigured` taints a real `Node` the
-API server holds and reads it back through `nodeDeparting` on the path a
-condemnation takes. Before that, both halves were covered only where they cost
-least — `IsDeparting` over a `Node` built in memory, and
-`TestSetupAllThreadsTheDrainTaintKeys` over the option that reaches the
-reconciler. It was not forced on `paulwtf`, and the reason is the measurement
-under milestone 4c-3 below: that operator passes no `-drain-taint` at all, so
-the branch cannot fire there, and giving it one means editing a Flux-managed
-`Deployment` on a live cluster to exercise a branch envtest already drives.
-
-A **PodDisruptionBudget's effect on a real eviction** was driven on 2026-08-20
-and is recorded under the RKE2 rollout below, not here — with a real player,
-both budgets at `minAvailable 1` and `disruptionsAllowed 0`, and the eviction
-API answering `TooManyRequests`. The sentence this paragraph replaced said it
-was still open, which was a misreading of the line above: the *harness* cannot
-reach it, and the rollout did. What remains true for an idle cluster is only
-that it cannot be re-driven on demand — both PDBs sit at `minAvailable: 0`
-precisely because no pod is occupied, which the rollout also measured and found
-correct.
-
-**No image in the run resolves, by decision, so no game or proxy process ever
-starts.** Every pod sits in `ErrImagePull`/`ImagePullBackOff` for the whole
-run. Out of reach in consequence: the second stage of the ready gate, which
-needs a connected agent; `ServerReconciler.syncOccupiedLabel` and the PDB
-upkeep, which need a server that has been `Ready` once; growing a claim; and a
-join. There is no cheap stand-in either — the server pod's readiness probe
-execs `/usr/local/bin/spawnery-slp` against `127.0.0.1:25565`, and both that
-binary and something answering a server-list ping exist only in the real Paper
-image.
-
-**A claim binds in this harness even though no container ever runs.** kind's
-default class is `rancher.io/local-path` with
-`volumeBindingMode: WaitForFirstConsumer`, which binds on the first pod
-*scheduled* to consume the claim, not the first pod that actually runs. The
-pods here are scheduled — a single control-plane node has nothing stopping
-that — and only then get stuck pulling. An earlier version of the manifest's
-own comment asserted `Pending` from the binding mode alone, without checking;
-the measured answer is `Bound`.
-
 **A group's count of live servers briefly touched zero under sustained
 churn** before recovering — observed during Task 5, not investigated, and
 recorded here for whoever next looks at backoff and replacement timing.
 
-## From milestone 6b (NetworkPolicies, and the channel's availability half)
+## From milestone 6b (NetworkPolicies)
 
-6b writes two `NetworkPolicy` objects — one per accepted `Network`, into that
-network's own namespace, selecting its server pods; and one in `config/deploy/`
-selecting the operator pod — and closes the availability half of the agent
-channel with gRPC bounds, a `TokenReview` cache and a per-peer rate limit. The
-first entry below is the one that governs how every other sentence in this
-section, in the README, and in the handover has to be read.
+What the two `NetworkPolicy` objects buy and what they do not is
+[`network-boundaries.md`](network-boundaries.md): measured scope, not defects.
+One thing from that milestone is a defect and stays here.
 
-Every `config/deploy/` path in this section is where the file was in 6b.
-Milestone 6d moved that directory into `charts/spawnery/templates/`, and its
-own section below opens by saying so; the paths here are left as they were
-written because they date what was measured.
-
-**kindnet, the CNI the end-to-end harness runs on, was measured not to enforce
-a NetworkPolicy ingress rule — and measured is the operative word.** Task 3
-deleted the peerless kubelet-probe rule from `config/deploy/networkpolicy.yaml`,
-leaving a policy that selects the operator pod (which makes it default-deny for
-ingress) and admits only the agent peer on 9443 — so the kubelet's probe to the
-health port is denied outright by the object in force. `make e2e` then stayed
-green: the rollout succeeded on its usual timeline
-(`deployment "spawnery-operator" successfully rolled out`) and all twelve
-subtests passed. Two alternative explanations were closed rather than waved at:
-
-- the operator's readiness probe is an `httpGet` to `/readyz` on the health
-  port (`config/deploy/deployment.yaml`), which travels the real network path,
-  and `kubectl rollout status` cannot return success without one passing — so
-  the denied path was genuinely exercised inside the window; and
-- `hack/e2e.sh` creates the cluster afresh on every run and the apply log for
-  that run reads `networkpolicy.networking.k8s.io/spawnery-operator-agent
-  created` rather than `unchanged` — so the mutated policy was genuinely in
-  force, not left over or skipped.
-
-That leaves one explanation: the CNI passed traffic its policy denied. Be
-precise about the scope of that, because the wider claim is the one everything
-downstream leans on: what was measured is **one ingress rule, on one path**.
-That kindnet implements no NetworkPolicy controller at all — no ingress rule
-and no egress rule, for any pod — is what kindnet's own documentation says, and
-this project's rule is that a mechanism is not evidence, which applies to a
-CNI's README as much as to a shell script. The measurement and the
-documentation agree, and neither of them has been extended to egress here. The
-practical difference is nil: on this harness nothing 6b writes has been shown
-to refuse anything, in either direction.
-
-**The policy defends against a co-tenant that cannot create pods, and against
-nothing else.** Its ingress peer is a podSelector over labels a pod's own
-creator chooses, so anyone who may create a pod in a game namespace can wear
-its colours. Closing that would buy little: the same privilege reads
-`velocity-forwarding-secret` outright, measured 2026-08-21 by mounting it from
-an unlabelled pod. The boundary is the namespace, not this policy.
-
-It does refuse connections where a CNI enforces it, which took a real cluster
-to establish and is recorded at `internal/podspec/netpol.go`: on 2026-08-21 a
-pod carrying the managed-by, network and role=proxy labels reached a backend
-on 25565 while the same pod without labels timed out, and on 2026-08-25 an
-egress-deny policy cut a proxy agent's stream (scenario 12 of the rollout
-runbook). What it is written against is the invariant open since 3b — a Paper
-server runs `online-mode=false`, authenticates nobody, and trusts whatever
-completes the modern-forwarding handshake with the right secret.
-
-**Proxy pods are selected by no policy 6b writes, and the reason is an
-asymmetry in how the two pod classes are probed.** A server's readiness probe
-is an `exec` of `spawnery-slp` against `127.0.0.1:25565`
-(`internal/podspec/server.go`), which runs inside the container over loopback
-and which no NetworkPolicy governs; a proxy's is a `TCPSocket` from the kubelet
-to `ProxyReadyPort` (`internal/podspec/proxy.go`), which one might. Selecting
-proxies would therefore have put the whole fleet's readiness at the mercy of
-whether a given CNI subjects kubelet traffic to policy — the risk the milestone
-6 handover made an acceptance criterion. 6b removes that risk instead of
-testing it, and the price is stated rather than hidden: **nothing restricts who
-may open a TCP connection to a proxy's 25565 from inside the cluster.** The
-proxy is the public front door — it sits behind a NodePort with
-`externalTrafficPolicy: Local` — so a rule there would have to admit the world
-on that port anyway, and unlike a backend it authenticates its players.
-
-**A game namespace is one trust domain, and the per-`Network` policy is not a
-boundary inside it.** This entry used to read "an unlabelled pod in a game
-namespace is unrestricted", which is true and is the less interesting half.
-Measured on 2026-08-21 against Cilium on `paulwtf`:
-
-- a pod carrying `spawnery.cloud/managed-by`, `spawnery.cloud/network=production`
-  and `spawnery.cloud/role=proxy` — labels anyone creating a pod may write —
-  **connected to a backend on 25565**;
-- the same pod without them **timed out**;
-- and an ordinary unlabelled pod **mounted `velocity-forwarding-secret`**, 44
-  bytes of it, because any pod may mount any Secret in its own namespace.
-
-So `pods: create` in a game namespace is equivalent to access to that network,
-by two independent routes, and the label filter's forgeability adds nothing to
-whoever holds it. Nor can the operator close it: vanilla NetworkPolicy's peers
-are `podSelector`, `namespaceSelector` and `ipBlock`, and inside one namespace
-the first is forgeable and the second says nothing. **No policy expressible
-here tells a real proxy from an invented one.**
-
-What the policy does defend, and defends well, is the co-tenant that *cannot*
-create pods — a compromised workload cannot relabel itself, and the second
-measurement above is what that looks like from the inside. The
-`spawnery.cloud/network` label also keeps the pods of a *losing* Network in a
-two-Network namespace outside the winner's policy, unchanged from before.
-
-Closing it properly would mean moving proxies to their own namespace, so a
-`namespaceSelector` could discriminate, or an admission webhook forbidding
-foreign pods the `managed-by` label. Both were considered on 2026-08-21 and
-neither was taken: the first breaks "a Network owns its namespace" and the
-second brings certificates and a failure mode to an operator that has no
-webhooks. The boundary is the namespace, and `charts/spawnery/README.md` now
-says so where an administrator chooses one.
-
-**Proxy egress is unrestricted, and vanilla NetworkPolicy is the reason.** A
-proxy configured `onlineMode: true` has to reach Mojang's session servers,
-whose addresses are neither stable nor discoverable, and a `NetworkPolicy`
-cannot name a destination by DNS name — only by pod, namespace or CIDR. An
-egress rule for it would have to be an `ipBlock` over addresses nobody can
-pin, so 6b writes none. A cluster that wants it needs a CNI with FQDN policies
-(Cilium, for one), which is not a portable assumption and therefore not
-something the operator can render. Backend egress is *written* against by the
-per-`Network` policy, whose egress half **admits** cluster DNS and the
-operator's agent port and nothing else — admits being the honest verb in this
-section, since whether anything is thereby restricted is the CNI's business and
-no run here has watched one refuse. It is safe to write that narrowly because a
-backend needs Mojang for nothing: it is
-`online-mode=false` by construction, so the Yggdrasil key fetch this file's
-milestone 2b section records is already gone. The one outbound call that would
-stop working where a CNI enforces is Paper's own update check to
-`fill.papermc.io`, and 2b measured that one to fail harmlessly with no network
-reachable — the server still reaches `Done` and answers a ping. Nothing has
-observed it failing *this* way, through a policy, because nothing here enforces
-one.
-
-**Whether a pod-selector egress rule survives Service DNAT is settled for
-Cilium and for no other CNI.** Two of the per-`Network` policy's egress rules
-name a pod or namespace selector while what the pod actually dials is a
-Service ClusterIP that kube-proxy DNATs: the operator hop
-(`podspec.OperatorPodLabels()`, against `spawnery-operator.<ns>.svc`) and the
-resolver hop (`kube-system` by namespace selector, against the cluster DNS
-Service). A CNI evaluating policy pre-DNAT would drop both, and the rule would
-have to be an `ipBlock` over the Service CIDR instead — which the operator
-cannot discover from inside the cluster. The design (§6) declined to assert
-which side any CNI falls on, and the pod-selector form is what ships.
-
-On Cilium both rules match: `paulwtf` carries `production-backends` in
-`minecraft` selecting `role=server`, and a backend under it reaches `Ready`,
-which the design only grants once that server's agent has connected — so it
-resolved the operator's name *and* dialled it through the ClusterIP. Verified
-again 2026-08-25 on a pod rolled that day.
-
-That is one CNI, not the class, and it cannot be widened where it would be
-cheapest to test: kindnet enforces nothing, so an egress rule that matches and
-one that does not are the same green in `make e2e`. The two failure symptoms
-diverge and the misleading one comes first — the operator hop failing looks
-like agents that never register, DNS failing looks like nothing resolving at
-all *including* the operator's name, so agents failing to register is the
-downstream effect and checking that first leads away from the cause.
-
-**The peerless rule is the widest-open thing 6b writes, and one unit test is
-all that stands behind it.** The operator's own `NetworkPolicy` (`config/deploy/networkpolicy.yaml`
-at 6b, now `charts/spawnery/templates/networkpolicy.yaml`)'s second ingress
-rule has no `from` at all — it admits 8081 and 8080 from anywhere in
-the cluster — because the kubelet's source is a node rather than a pod and no
-selector names it. That is the only formulation correct on every CNI, and it is
-also the rule where a mistake is worst: an extra port there admits that port
-from every source in the cluster. Since the harness enforces nothing, the
-manifest test in `internal/rbacaudit/deploy_envtest_test.go` is the only thing
-in this repository standing behind it — since milestone 6d that test reads the
-rendered chart rather than the file directly, and the claim is otherwise
-unchanged. Task 3's fix round made that check bidirectional — it had been
-one-directional, and adding port 9999 to the peerless rule left it green — and
-it now matches the container port *named* `agent` rather than the number
-9443, so it survives a port change. The most dangerous mutation of all,
-adding 9443 to the peerless rule, is caught.
-
-**A `Forbidden` on the policy write stops the whole namespace, and the design
-did not predict that.** `reconcileNetworkPolicy` is called after the `Accepted`
+**A `Forbidden` on the policy write stops the whole namespace, and it names the
+wrong thing.** `reconcileNetworkPolicy` is called after the `Accepted`
 condition is set on the in-memory object but before any `Status().Update`
 (`internal/controller/network_controller.go`), so an error there returns before
-the condition is ever persisted. The design's §2.4 argued the failure needs no new
-report because it is a fact about the installation rather than about the
-`Network`. The final review ruled that argument wrong and the code right, and
-§2.4 now carries the correction: **"no new report" was never on offer.** The
-shape produces one anyway, on every group in the namespace, and it names the
-wrong thing. `ServerGroupReconciler` and `ProxyGroupReconciler` both gate on the
-`Network`'s `Accepted=True`, so a *fresh* `Network` in a cluster where the
-operator cannot write NetworkPolicies never becomes usable, and every group in
-that namespace refuses with `ReasonNetworkNotAccepted` and the message
-`network "..." has not been accepted yet`. That message is true and misleading
-in the same breath: the network was accepted, and the acceptance could not be
-written down. An *existing* `Network` keeps its persisted condition and its
-groups keep running, so only new ones are affected. Failing closed is the right
-direction — an unprotected namespace does not quietly come up — but it is a
-consequence, not a decision, and nothing but the operator log names the cause.
-`test/e2e`'s `theOperatorWasNeverDenied` would catch it, since it is a denied
-*write* and 6a measured that those are the kind that get logged.
+the condition is ever persisted. Both group controllers gate on
+`Accepted=True`, so a *fresh* `Network` in a cluster where the operator cannot
+write NetworkPolicies never becomes usable, and every group in that namespace
+refuses with `network "..." has not been accepted yet` — true and misleading in
+the same breath, because the network *was* accepted and the acceptance could
+not be written down. An existing `Network` keeps its persisted condition and
+its groups keep running, so only new ones are affected.
 
-*Driven 2026-08-25, and it does not — for a reason neither half of that
-sentence covers.* `networkpolicies: create` was removed from the kubebuilder
-marker **and** from `internal/rbacaudit`'s table, which is the sharpest form of
-the case: absent from both, so the audit is green and only the running operator
-knows. The consequence this entry predicts arrived exactly as written — no
-`Network` ever reached `Accepted`, so no group ever sized, and the run's first
-scenario reported `0 non-Failed Servers`.
+Failing closed is right: an unprotected namespace must not quietly come up. The
+ordering was reviewed and left alone, because persisting `Accepted` before
+writing the policy would let groups start servers in a namespace with no policy
+at all. **What is missing is a report naming the cause**, which was available
+and was not shipped; nothing but the operator log says why.
 
-That is what starves the check. Every scenario after it waits out its own
-two-minute timeout on state that will never arrive, and
-`theOperatorWasNeverDenied` is the *last* of twenty
-(`test/e2e/e2e_test.go:129`). The package's own `go test -timeout 20m` fired
-first: `panic: test timed out after 20m0s`, six scenarios short of the one that
-would have read the log. The denial was in that log the whole time and nothing
-looked.
-
-So the claim is not wrong about what the check can see — it is wrong about the
-check getting to look. A permission whose absence stops the fleet dead is
-precisely the permission whose denial this scenario cannot report, because the
-scenarios in front of it spend the budget waiting. Ordering it earlier, or
-giving the harness a per-scenario deadline that fails fast rather than waiting
-out state that cannot arrive, is what would close that — neither is done here.
-
-The ordering was reviewed and left alone. Persisting `Accepted` before writing
-the policy would let groups start servers in a namespace with no policy at all,
-which is the one thing this milestone exists to prevent — the review weighed
-the alternatives and judged each of them worse than the behaviour above. A
-report naming the cause was available and was not shipped.
-
-**Smaller ones, each worth a sentence:**
-
-- No test asserts the per-`Network` policy's own `spawnery.cloud/network` and
-  `managed-by` metadata labels. Both are there for a human reading `kubectl`
-  output and nothing selects on them, so a wrong value costs nothing today —
-  but nothing would catch one either.
-- `TestADeletedPolicyComesBack` does not compare a UID before and after; it
-  relies on envtest's synchronous delete plus the recorded mutation to
-  distinguish "recreated" from "never removed". The mutation discharges it, the
-  test's own text does not.
-- The e2e scenario's owner-reference check asserts only `len(...) == 1`, not
-  the referenced Kind, Name or UID. The unit test asserts all of them; the
-  cluster-level one only counts.
-- The token-review cache does not coalesce concurrent misses on the same token:
-  two goroutines both call `reviewToken` and both store. Benign, and it means
-  the cache does not itself deduplicate a hot token.
-- `evictFullLocked` is not a hard cap: with `maxBuckets` peers all
-  simultaneously active nothing is evictable and the map grows past it. That is
-  the many-compromised-pods case the design ruled out of scope, recorded so the
-  absence reads as a decision.
-- **The rate limit lives inside `Authenticate`, not in the interceptor**, where
-  the design's §5.3 sketched it. It has to: "consulted only when the cache
-  misses" cannot be decided by a caller that has not yet looked in the cache.
-  Worth knowing before reading the design and expecting it a layer up, and
-  worth knowing what the placement costs — it forces the peer to be recovered
-  from a `context.Context` rather than passed as a parameter, which is how a
-  limiter keyed on the connection instead of the pod survived a whole
-  milestone. The seam has to be tested deliberately.
-- `newAuthFixture` (`internal/grpcauth/auth_envtest_test.go`) wires neither the
-  cache nor the limiter, which is legal because both types' methods are
-  nil-safe — and it means the package's existing envtest suite exercises the
-  uncached, unlimited path. That is why a mutation to the cache broke nothing
-  there and needed a test written for it.
-- A `Why` field in `required.go` goes stale the first time a second call site
-  appears, and nothing in the audit can catch it — `configmaps` and
-  `pods: patch` both did. Checked 2026-08-25: 22 of the 23 identifiers those
-  fields name still resolve to methods in this repository, and the 23rd is
-  `Recorder.Eventf`, which is controller-runtime's.
+*Driven 2026-08-25.* `networkpolicies: create` was removed from the kubebuilder
+marker **and** from `internal/rbacaudit`'s table — the sharpest form of the
+case, absent from both, so the audit stays green and only the running operator
+knows. The startup self-check does not catch this one either, for the same
+reason: it checks the table, and the table no longer asks. What did change is
+that the harness now reports it — every `eventually` that gives up reads the
+operator's log and names any denial it finds, so the cause lands in the failure
+message of the scenario that actually stalled instead of in a scenario twenty
+places later that the run never reaches.
 
 ## From milestone 6c (the LoadBalancer and HostPort expose strategies)
 

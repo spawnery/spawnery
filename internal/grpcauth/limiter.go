@@ -96,6 +96,15 @@ func (l *PeerLimiter) allow(peer string) bool {
 	return true
 }
 
+// evictFullLocked makes room by dropping buckets that have refilled, and is
+// deliberately not a hard cap.
+//
+// With maxBuckets peers all simultaneously active nothing is evictable and the
+// map grows past it. That is the many-compromised-pods case milestone 6b's
+// design ruled out of scope, and it is recorded here so the absence reads as a
+// decision rather than an oversight: a hard cap would mean refusing a
+// legitimate agent to make room for whoever is attacking, which is the harm
+// the limiter exists to prevent, moved rather than removed.
 func (l *PeerLimiter) evictFullLocked() {
 	for key, b := range l.buckets {
 		if b.tokens >= PeerBurst {

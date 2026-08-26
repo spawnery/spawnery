@@ -562,6 +562,7 @@ func TestADeletedPolicyComesBack(t *testing.T) {
 	if err := f.c.Get(f.ctx, policyKey(f, "production"), &policy); err != nil {
 		t.Fatalf("get the network policy: %v", err)
 	}
+	before := policy.UID
 	if err := f.c.Delete(f.ctx, &policy); err != nil {
 		t.Fatalf("delete the network policy: %v", err)
 	}
@@ -570,6 +571,41 @@ func TestADeletedPolicyComesBack(t *testing.T) {
 
 	if err := f.c.Get(f.ctx, policyKey(f, "production"), &policy); err != nil {
 		t.Fatalf("the policy did not come back: %v", err)
+	}
+	// The UID and not merely the presence. envtest's delete is synchronous and
+	// this fixture records the mutation, so the object here cannot be the one
+	// that was deleted -- but nothing in this test said so, and "it is still
+	// there" is exactly what a delete that silently did not happen looks like.
+	// A different identity is the only thing that distinguishes recreated from
+	// never removed.
+	if policy.UID == before {
+		t.Errorf("the policy carries its original UID %s, so it was never actually deleted "+
+			"and this test proves nothing about recreation", before)
+	}
+}
+
+// TestThePolicyCarriesTheLabelsAHumanReadsIt guards metadata nothing selects
+// on, which is why nothing else would catch a wrong value. Both labels exist
+// for somebody reading kubectl output in a namespace with more than one
+// Network in its history, and a policy carrying the wrong network name there
+// is worse than one carrying none: it answers the question wrongly instead of
+// not answering it.
+func TestThePolicyCarriesTheLabelsAHumanReadsIt(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+	f.reconcileNetwork(t, r, "production")
+
+	var policy networkingv1.NetworkPolicy
+	if err := f.c.Get(f.ctx, policyKey(f, "production"), &policy); err != nil {
+		t.Fatalf("get the network policy: %v", err)
+	}
+	for key, want := range map[string]string{
+		podspec.LabelManagedBy: podspec.ManagedByValue,
+		podspec.LabelNetwork:   "production",
+	} {
+		if got := policy.Labels[key]; got != want {
+			t.Errorf("policy label %s = %q, want %q", key, got, want)
+		}
 	}
 }
 
