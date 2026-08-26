@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.velocity
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.fail
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -157,5 +158,69 @@ class ReadyGateTest {
         // exactly the time the kubelet would give it, rather than in the two
         // minutes a bare connect spends retrying a dropped SYN.
         const val CONNECT_TIMEOUT = 3_000
+    }
+
+    @Test
+    fun `a first bind that fails stops the proxy`() {
+        // Somebody else already holds the port, which is what a bind failure
+        // is. A real pod cannot reach this state through its own netns; what
+        // it can reach is the same IOException for a reason nobody predicted,
+        // and the consequence is identical either way.
+        ServerSocket(0).use { taken ->
+            var stopped = false
+            val gate = ReadyGate(taken.localPort, onHopeless = { stopped = true }) { _, _ -> }
+
+            gate.open()
+
+            assertFalse(gate.isOpen, "the gate reports open on a port it did not get")
+            assertTrue(
+                stopped,
+                "a proxy that can never serve its readiness probe carried on regardless, " +
+                    "which leaves a pod stuck in Pending with the reason only in its own log",
+            )
+        }
+    }
+
+    @Test
+    fun `a later bind that fails leaves the proxy alone`() {
+        // The cancelled-drain shape: the gate opened, a SetReady(false) closed
+        // it, and the re-open cannot get the port back. This proxy has been in
+        // its group's Service and may have players on it right now, so taking
+        // the process down would disconnect every one of them to fix a
+        // readiness signal.
+        // A fixed port, not 0. With 0 the re-open binds a *different* free
+        // port and succeeds, which is the behaviour this class's own comment
+        // warns about and would make this test pass without exercising a
+        // failed rebind at all.
+        val port = ServerSocket(0).use { it.localPort }
+        val gate = ReadyGate(port, onHopeless = { fail("the proxy was stopped with players possibly on it") }) { _, _ -> }
+        gate.open()
+        assertTrue(gate.isOpen, "the gate never opened, so there is no re-open to test")
+        gate.close()
+
+        ServerSocket(port).use {
+            gate.open()
+            assertFalse(gate.isOpen, "the gate reports open on a port somebody else holds")
+        }
+    }
+
+    @Test
+    fun `the two failures say different things`() {
+        // The log line is what an operator reads next, and the two cases send
+        // them to different places: one is a pod that will never work, the
+        // other is a pod that is working and out of service.
+        val first = mutableListOf<String>()
+        ServerSocket(0).use { taken ->
+            ReadyGate(taken.localPort, onHopeless = {}) { m, _ -> first += m }.open()
+        }
+        assertTrue(first.any { it.contains("never become ready") }, "first bind: $first")
+
+        val later = mutableListOf<String>()
+        val port = ServerSocket(0).use { it.localPort }
+        val gate = ReadyGate(port, onHopeless = {}) { m, _ -> later += m }
+        gate.open()
+        gate.close()
+        ServerSocket(port).use { gate.open() }
+        assertTrue(later.any { it.contains("keeps the players it has") }, "later bind: $later")
     }
 }

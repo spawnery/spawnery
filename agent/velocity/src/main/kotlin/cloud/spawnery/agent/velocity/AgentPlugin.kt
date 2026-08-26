@@ -140,7 +140,24 @@ class AgentPlugin @Inject constructor(
         // A dormant agent never gets here at all, which is the claim
         // hack/velocity-image-test.sh makes by probing 8081 and requiring a
         // refusal.
-        val gate = ReadyGate(READY_PORT, ::warn)
+        // onHopeless is Velocity's own shutdown, and it fires only on a first
+        // bind that fails -- see ReadyGate.open. Such a pod has never been an
+        // endpoint of its group's Service, so nobody is on it and nobody can
+        // be; what stopping buys is a restart and then a CrashLoopBackOff,
+        // which the operator reports on the group. Carrying on buys a pod
+        // stuck in Pending with the reason in a container log and nothing
+        // anywhere else.
+        val gate = ReadyGate(
+            READY_PORT,
+            onHopeless = {
+                logger.error(
+                    "spawnery: this proxy cannot serve its readiness probe and never will; stopping " +
+                        "so the operator sees a restart rather than a pod that is silently never ready",
+                )
+                proxy.shutdown()
+            },
+            log = ::warn,
+        )
         this.gate = gate
 
         val directory = ServerDirectory(VelocityRegistry(proxy), ::warn)

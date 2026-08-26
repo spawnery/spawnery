@@ -1911,6 +1911,48 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 			return
 		}
 	}
+
+	// A proxy that is scheduled, admitted, and cannot run.
+	//
+	// Nothing said this. A ProxyGroup whose pods crash-loop reported Accepted,
+	// had its Service up, and published no reason anywhere -- the shape
+	// proxyConfigValues' own comment names as the cost of guessing a player
+	// limit wrong, and the shape docs/known-issues.md recorded for a proxy
+	// that cannot bind its ready port. The ServerGroup controller has reported
+	// CrashLoopBackoff since 4d; this is its counterpart, and it arrives with
+	// the agent change that makes a hopeless ready gate reach it.
+	//
+	// After the scheduling loop above rather than merged into it, because the
+	// two are different states with different remedies: unschedulable is about
+	// where a pod could go, crash-looping is about what it does once it is
+	// there, and an operator reading one is looking somewhere the other is
+	// not. Scheduling wins the condition when both are true, since a pod that
+	// never landed cannot also be crashing.
+	for i := range pods {
+		for _, cs := range pods[i].Status.ContainerStatuses {
+			if cs.State.Waiting == nil || cs.State.Waiting.Reason != "CrashLoopBackOff" {
+				continue
+			}
+			// The *last* termination rather than the waiting message, which
+			// says only "back-off 5m0s restarting failed container". What
+			// killed it is in the previous run's exit code and reason, and
+			// that is what an operator has to see.
+			detail := cs.State.Waiting.Message
+			if last := cs.LastTerminationState.Terminated; last != nil {
+				detail = fmt.Sprintf("exit %d (%s)", last.ExitCode, last.Reason)
+			}
+			message := fmt.Sprintf(
+				"proxy pod %s is crash-looping: %s. Its container log has the cause; "+
+					"a proxy that cannot serve its readiness probe stops on purpose so that this "+
+					"is visible here rather than only as a pod that never turns ready",
+				pods[i].Name, detail)
+			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonCrashLoopBackoff, message) {
+				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
+					actionSyncStatus, "%s", eventNote("%s", message))
+			}
+			return
+		}
+	}
 	// What the pass actually established, and no more: reconcileReplicas
 	// returned without the API server refusing anything, and no pod in the
 	// list is reported unschedulable. It did not establish that the group has

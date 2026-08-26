@@ -44,27 +44,6 @@ design and has never been scheduled.
 
 ## From milestone 3c (the Velocity agent)
 
-**A proxy that cannot bind its ready port stays `Pending` with the reason
-only in its own log, and closing that needs a choice between two answers
-neither of which is obviously right.** `ReadyGate.open` logs the bind failure
-and carries on; the kubelet's probe on 8081 then fails forever, the pod never
-goes `Ready`, and the group sits below its count with nothing saying why.
-`kubectl logs` has the reason, which is the ordinary path for a container-level
-failure — but the group's own status does not, and a `playerLimit` defect of
-exactly this shape was worth fixing in milestone 3b.
-
-The two ways out cost different things. **A fault channel**: the agent's stream
-is up even when the gate is not, so it could tell the operator — but
-`OperatorToProxy`'s counterpart carries no field for it, so this means a new
-proto message and every agent in the fleet rolling before the operator may
-rely on it. **Shutting the proxy down**: a proxy whose gate never binds can
-never take a player, so `proxy.shutdown()` would turn a silent `Pending` into a
-`CrashLoopBackOff`, which the operator already reports on the group with a
-reason. That is free and immediate, and it also means one failed bind takes
-down a proxy that is otherwise serving nobody yet — which is either exactly
-right or exactly wrong depending on how much a transient bind failure is
-believed in.
-
 **A backend that goes silent without closing its socket still disconnects its
 players, and no plugin can stop it.** `Rescue` catches a player whose server
 drops them and redirects them onto `fallbackGroups`, which is what Velocity's

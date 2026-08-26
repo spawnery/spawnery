@@ -3738,3 +3738,80 @@ func TestUncordoningRestoresARefusedGroupsProxy(t *testing.T) {
 		t.Errorf("lastReady = %v, want true: the proxy is out of service with nothing able to bring it back", got)
 	}
 }
+
+// TestACrashLoopingProxyIsReportedOnTheGroup closes the silence a ProxyGroup
+// kept about its own pods.
+//
+// A group whose pods crash-loop reported Accepted, had its Service up, and
+// published no reason anywhere -- proxyConfigValues' own comment names that
+// shape as the cost of guessing a player limit wrong, and it is what a proxy
+// that cannot bind its ready port produced too. The ServerGroup controller has
+// reported CrashLoopBackoff since 4d; this is its counterpart.
+func TestACrashLoopingProxyIsReportedOnTheGroup(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) == 0 {
+		t.Fatal("no proxy pods")
+	}
+	crashed := pods[0].DeepCopy()
+	crashed.Status.ContainerStatuses = []corev1.ContainerStatus{{
+		Name: "velocity",
+		State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+			Reason:  "CrashLoopBackOff",
+			Message: "back-off 5m0s restarting failed container",
+		}},
+		LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+			ExitCode: 1,
+			Reason:   "Error",
+		}},
+	}}
+	if err := f.c.Status().Update(f.ctx, crashed); err != nil {
+		t.Fatalf("set the crash-loop status: %v", err)
+	}
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	cond := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded)
+	if cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("Degraded = %+v, want True", cond)
+	}
+	if cond.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonCrashLoopBackoff)
+	}
+	// The name, and what killed it. The waiting message says only "back-off
+	// 5m0s restarting failed container", which is true of every crash loop
+	// there has ever been; the previous run's exit code is what an operator
+	// can act on.
+	for _, want := range []string{pods[0].Name, "exit 1", "Error"} {
+		if !strings.Contains(cond.Message, want) {
+			t.Errorf("message %q does not mention %q", cond.Message, want)
+		}
+	}
+}
+
+// TestAHealthyProxyGroupIsNotReportedAsCrashLooping keeps the check off the
+// ordinary path. Every pod in this fixture is running, and a Degraded that
+// fired here would be on every group in every cluster.
+func TestAHealthyProxyGroupIsNotReportedAsCrashLooping(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+	for _, p := range f.proxyPods("gateway") {
+		pod := p
+		f.markProxyPodReady(t, &pod)
+	}
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	cond := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
+		spawneryv1alpha1.ConditionDegraded)
+	if cond != nil && cond.Reason == spawneryv1alpha1.ReasonCrashLoopBackoff {
+		t.Errorf("a healthy group reports a crash loop: %q", cond.Message)
+	}
+}

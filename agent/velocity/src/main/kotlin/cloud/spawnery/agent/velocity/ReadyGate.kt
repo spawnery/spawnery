@@ -20,12 +20,27 @@ import java.net.ServerSocket
  *
  * @param port the port to bind. Production passes 8081; the tests pass 0 and
  *   read [boundPort] back, which is why this is a parameter at all.
+ * @param onHopeless called when the *first* bind fails, meaning this pod can
+ *   never become ready and has never had a player. [AgentPlugin] passes
+ *   Velocity's own shutdown; a test passes a flag. Default does nothing, so a
+ *   gate constructed without one behaves as this class always did.
+ *
+ *   Declared before [log] rather than after it, and that is not cosmetic: log
+ *   is the trailing lambda every existing caller passes positionally, and a
+ *   parameter added after it silently rebinds that lambda to the new one.
+ *   Kotlin refuses the result here because the types differ, which is luck
+ *   rather than protection -- two callbacks of the same shape would have
+ *   compiled and swapped meanings.
  * @param log where a failed bind goes. A callback rather than a logger,
  *   because the only logger this plugin has is the one Velocity injects into
  *   [AgentPlugin], and taking it here would make the class untestable without
  *   a proxy.
  */
-class ReadyGate(private val port: Int, private val log: (String, Throwable?) -> Unit) {
+class ReadyGate(
+    private val port: Int,
+    private val onHopeless: () -> Unit = {},
+    private val log: (String, Throwable?) -> Unit,
+) {
     // Guarded by `this`. open() and close() are called from a gRPC callback
     // thread and from Velocity's shutdown thread respectively, and the accept
     // loop reads the socket from a third; without the lock a close racing an
@@ -33,6 +48,12 @@ class ReadyGate(private val port: Int, private val log: (String, Throwable?) -> 
     // a draining pod ready.
     private var socket: ServerSocket? = null
     private var acceptor: Thread? = null
+
+    // Whether this gate has ever been bound. Guarded by `this` like the rest,
+    // and never cleared by close(): what it answers is "could a player have
+    // reached this pod", and a pod that was ready once is a pod the Service
+    // once carried, whatever it is doing now.
+    private var everOpened = false
 
     /** Whether the gate is bound, and therefore whether the pod is ready. */
     val isOpen: Boolean
@@ -56,11 +77,30 @@ class ReadyGate(private val port: Int, private val log: (String, Throwable?) -> 
      * On port 0 that would produce a *different* port each time while the
      * kubelet went on probing the one in the podspec.
      *
-     * A bind failure is reported and swallowed. This runs on a gRPC callback
-     * thread, where a thrown exception is absorbed by the stream observer and
-     * the proxy carries on with no gate and no explanation; a logged failure
-     * plus a pod that never turns ready is the same outcome with a cause
-     * attached.
+     * # A bind that fails
+     *
+     * The two cases are not the same and only one of them is survivable.
+     *
+     * **The first bind.** This pod has never been ready, so it has never been
+     * an endpoint of its group's Service, so no player has ever reached it and
+     * none can. It also never will be: nothing retries a bind that failed, and
+     * the kubelet will probe a port nothing is listening on for as long as the
+     * pod lives. Carrying on means a pod stuck in Pending with the reason in a
+     * container log and nothing on the group -- which is precisely what
+     * docs/known-issues.md recorded. [onHopeless] ends it instead, so the
+     * failure becomes a restart and then a CrashLoopBackOff, which the
+     * operator does report.
+     *
+     * **A later bind**, after [close] and a re-open -- which is what a
+     * cancelled drain produces. This proxy has been serving and may have
+     * players on it right now, and taking the process down would disconnect
+     * every one of them to fix a readiness signal. So that case is reported
+     * and swallowed, exactly as before: the pod stays NotReady, out of the
+     * Service, holding the sessions it has until they end.
+     *
+     * Either way the failure is not thrown. This runs on a gRPC callback
+     * thread, where an exception is absorbed by the stream observer and the
+     * proxy carries on with no gate and no explanation.
      */
     @Synchronized
     fun open() {
@@ -69,10 +109,24 @@ class ReadyGate(private val port: Int, private val log: (String, Throwable?) -> 
         val bound = try {
             ServerSocket(port)
         } catch (e: IOException) {
-            log("spawnery ready gate could not bind port $port; this proxy will not become ready", e)
+            if (everOpened) {
+                log(
+                    "spawnery ready gate could not rebind port $port; this proxy stays out of " +
+                        "service and keeps the players it has",
+                    e,
+                )
+            } else {
+                log(
+                    "spawnery ready gate could not bind port $port on this pod's first sync; " +
+                        "it can never become ready, so the proxy is stopping to say so",
+                    e,
+                )
+                onHopeless()
+            }
             return
         }
 
+        everOpened = true
         socket = bound
         acceptor = Thread({ accept(bound) }, "spawnery-ready-gate").apply {
             // A daemon thread, so a failure to close it can never be what
