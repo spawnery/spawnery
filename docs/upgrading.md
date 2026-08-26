@@ -152,6 +152,32 @@ What this does *not* close is the operator's half, and
 count, so a `DeletePod` decided between a player's arrival and the agent's
 move still lands on someone. The window is much smaller and it is not zero.
 
+## 0.2.3: drains take a report interval longer, on purpose
+
+Nothing to do, and one thing to expect. A drain now waits for a count that
+was taken *after* it began, where before any sufficiently recent count would
+do — and a count from four seconds ago is perfectly fresh while saying nothing
+about a player who joined three seconds ago. That was the oldest form of the
+gap this release closes.
+
+So every drain is longer by up to one `spec.agent.reportInterval` (five
+seconds by default) plus one more second. The extra second is not slack:
+`status.drainStartedAt` is a `metav1.Time` and those are truncated to whole
+seconds through the API server, so the stamp read back is up to a second
+earlier than the drain really started, and the threshold has to clear that.
+
+Where it shows: a rolling update over ten servers takes roughly a minute
+longer than it did. Where it does not: the drain deadline is unchanged, and a
+server whose agent has gone still leaves on `spec.drain.timeoutSeconds` rather
+than waiting for a report that cannot come.
+
+**The images roll both fleets and the operator rolls nothing**, the same shape
+as 0.2.2 above and for the same reasons: one `imageVersion` covers both
+images, and `internal/podspec` is untouched, so no pod's rendered hash moves.
+No ordering requirement either — the new `BackendPlayers` message only ever
+*adds* to what the operator counts as occupied, so a proxy too old to send it
+contributes nothing and behaves exactly as it did.
+
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 
 `v0.1.1` added a fourth `expose` strategy to the `ProxyGroup` CRD's enum. The
