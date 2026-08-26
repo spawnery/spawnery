@@ -124,6 +124,27 @@ const (
 	// change that raises it fails there rather than in a cluster.
 	MaxConnectionsPerPeer = 8
 
+	// FleetConnectionsPerAgent is the bound every peer falls back to once the
+	// connections open across the fleet pass what its pod count can account
+	// for. PeerLimiter says why a fleet bound has to work by withdrawing slack
+	// rather than by capping a total; this is where the number comes from.
+	//
+	// Four is twice a legitimate agent's measured peak of 2, and it is not a
+	// judgement in the way MaxConnectionsPerPeer's factor of four is. It is
+	// the one legitimate shape that has ever been argued to exceed the peak,
+	// written down beside the peak itself: an agent holding both of
+	// AgentService's RPCs at once, each renewing. No agent does that today, so
+	// nothing in the fleet reaches it, and that is the property this number is
+	// chosen for -- when the fleet bound binds, it must refuse only
+	// connections no working agent would have asked for.
+	//
+	// It doubles as the multiplier on the pod count: the ceiling that turns
+	// the bound on is ExpectedAgents * FleetConnectionsPerAgent. The two being
+	// the same number is what makes the bound converge -- a fleet held at
+	// four per peer sits exactly at its own ceiling and stops there, instead
+	// of oscillating around a ceiling it can pass.
+	FleetConnectionsPerAgent = 4
+
 	// MinKeepaliveInterval is how often a client may ping. The agents send no
 	// keepalive at all -- agent/common's SessionLoop says so in its own
 	// comment: "the channel underneath has no keepalive, no idle timeout" --
@@ -171,6 +192,11 @@ type Options struct {
 	// HardDeadline is when the operator closes a stream regardless. It must be
 	// above RenewAfter, or a well-behaved agent would be cut off mid-renewal.
 	HardDeadline time.Duration
+	// Fleet answers how many agents this operator ought to be serving, and
+	// whether it knows yet. It is what turns the per-peer connection bound
+	// into one the fleet as a whole cannot multiply: see PeerLimiter.Expect,
+	// which this is handed to unchanged. Nil means no fleet bound.
+	Fleet func() (int, bool)
 	// Clock reads the wall clock for the session duration this server logs.
 	// It does not drive HardDeadline: that runs on time.AfterFunc against the
 	// real clock, so a test cannot shorten the deadline by moving Clock
@@ -249,10 +275,14 @@ func (s *Server) Start(ctx context.Context) error {
 		if !ev.Refused || !isPowerOfTen(ev.Refusals) {
 			return
 		}
-		logger.Info("refusing connections from a peer at its limit",
-			"peer", ev.Peer, "open", ev.Open, "limit", MaxConnectionsPerPeer,
-			"refused", ev.Refusals)
+		logger.Info("refusing connections at a limit",
+			"peer", ev.Peer, "bound", ev.Bound, "limit", ev.Limit,
+			"open", ev.Open, "total", ev.Total, "refused", ev.Refusals)
 	})
+	// The fleet bound, when the operator can count its own pods. Nil is the
+	// tests' wiring and means peers are bounded and the fleet is not; Expect's
+	// doc comment says why unknown has to fail open.
+	limited.Expect(s.opts.Fleet)
 
 	// GetCertificate rather than a fixed certificate: the provider rotates it
 	// underneath us and every handshake must pick up the current one.

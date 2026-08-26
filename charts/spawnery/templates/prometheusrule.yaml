@@ -6,8 +6,8 @@
 # scheduled" and "a RotationBlocked event does not repeat", both in
 # docs/known-issues.md. Every one of them alerts on a gauge rather than on an
 # event, because a Kubernetes event expires out of the API within the hour and
-# the gauges do not. The agent rule below is the one signal the per-peer
-# connection bound produces, and the same argument applies to it: the refusal
+# the gauges do not. The two agent rules below are the only signal the
+# connection bounds produce, and the same argument applies to them: the refusal
 # is logged, and a log line is gone from a node long before anyone reads it.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -99,21 +99,20 @@ spec:
 
     - name: spawnery-agents
       rules:
-        # A healthy fleet never moves this counter. The bound it reports is
-        # per peer address, which on a pod network is one pod, and a real
-        # agent's measured peak is 2 against a bound of 8 -- see
-        # MaxConnectionsPerPeer in internal/agentserver, where that
-        # measurement is written down.
+        # A healthy fleet never moves this counter. The bound label separates
+        # the two shapes a refusal has, and they are different incidents.
         #
-        # There are exactly two readings and they need opposite responses, so
-        # do not act before telling them apart. Either a pod is opening
-        # connections it has no use for, which is the compromise the bound
-        # exists for, or the bound has become too low for an agent that
-        # legitimately needs more -- which can only happen after an agent
-        # change, and hack/agent-test.sh is meant to catch that first. The
-        # operator's log names the peer; start there.
+        # bound="peer" is one pod over MaxConnectionsPerPeer, whose measured
+        # peak is 2 against a bound of 8 -- see MaxConnectionsPerPeer in
+        # internal/agentserver, where that measurement is written down. There
+        # are exactly two readings and they need opposite responses, so do not
+        # act before telling them apart. Either a pod is opening connections it
+        # has no use for, which is the compromise the bound exists for, or the
+        # bound has become too low for an agent that legitimately needs more --
+        # which can only happen after an agent change, and hack/agent-test.sh
+        # is meant to catch that first.
         - alert: SpawneryAgentConnectionsRefused
-          expr: increase(spawnery_agent_connections_refused_total[15m]) > 0
+          expr: increase(spawnery_agent_connections_refused_total{bound="peer"}[15m]) > 0
           for: 15m
           labels:
             severity: warning
@@ -124,7 +123,34 @@ spec:
               and asked for more. Find the peer in the operator's log -- it is
               logged at the first refusal and then at every power of ten, so
               the line is there without the log being the flood. Compare
-              spawnery_agent_open_connections against the number of managed
-              pods: a fleet at its pod count with one peer refusing is a single
+              spawnery_agent_open_connections against spawnery_agents_expected:
+              a fleet at its pod count with one peer refusing is a single
               misbehaving pod, and a fleet well above it is something else.
+
+        # bound="fleet" is that something else, and it is the more serious of
+        # the two: the connections open across the whole endpoint had passed
+        # what the operator's own pod count can account for, so it withdrew
+        # every peer's slack at once. The peer named in the log may be
+        # blameless. A legitimate fleet holds one connection per pod and two
+        # through a handover, so anything near four times the pod count is not
+        # agents doing their job.
+        - alert: SpawneryAgentFleetOverItsBound
+          expr: increase(spawnery_agent_connections_refused_total{bound="fleet"}[15m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: The spawnery agent endpoint holds more connections than its fleet can account for.
+            description: >-
+              This is the one bound in the agent channel that is a statement
+              about the fleet rather than about one peer. Reaching it means
+              either that several pods are opening connections they have no use
+              for, or that addresses which are not managed pods at all are
+              reaching the endpoint -- the NetworkPolicy admits any pod
+              labelled spawnery.cloud/managed-by and does not count them. Start
+              with the peers in the operator's log and check each against
+              `kubectl get pod -A -o wide`. A spawnery_agents_expected of 0
+              beside a fleet that plainly is not empty is the third reading:
+              the count itself is broken, and the endpoint is serving one
+              peer's worth while it is.
 {{- end }}

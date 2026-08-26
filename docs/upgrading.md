@@ -178,6 +178,35 @@ No ordering requirement either — the new `BackendPlayers` message only ever
 *adds* to what the operator counts as occupied, so a proxy too old to send it
 contributes nothing and behaves exactly as it did.
 
+## 0.2.4: the refusal counter gains a `bound` label
+
+Nothing to do in a cluster, one thing to fix in a dashboard.
+`spawnery_agent_connections_refused_total` used to be a single series and is
+now split by `bound`, which is `peer` or `fleet`. A query that named the metric
+bare still works and now sums two series that mean different things, so pin the
+label: `{bound="peer"}` is one pod over its own limit, `{bound="fleet"}` is the
+whole endpoint over what the operator's pod count can account for. The chart's
+PrometheusRule ships an alert for each.
+
+There is also a new gauge, `spawnery_agents_expected`: the pods the operator
+manages, which is how many agent connections it ought to be holding. It is the
+denominator the old alert text told you to work out by hand, and it is absent
+rather than zero until the first count succeeds.
+
+**The bound it feeds can refuse connections, so read this if you run agents the
+operator does not manage.** Above four times the pod count in open connections,
+every peer's limit drops from 8 to 4; above eight times, connections are
+refused regardless of peer. A legitimate fleet holds one connection per pod and
+two through a handover — an eighth of the second threshold — so nothing in an
+ordinary cluster comes near either. What would is a peer the operator cannot
+see in its own caches: a pod in a namespace it does not watch, or an agent
+reaching it from outside the pod network. Neither is a supported shape, and now
+neither is a free one.
+
+**The operator rolls, the fleets do not.** This is operator-side only:
+`internal/podspec` is untouched, so no pod's rendered hash moves, and the
+agents are unchanged.
+
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 
 `v0.1.1` added a fourth `expose` strategy to the `ProxyGroup` CRD's enum. The

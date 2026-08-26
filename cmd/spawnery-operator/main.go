@@ -388,6 +388,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The pod count behind the fleet connection bound. It reads the manager's
+	// cache, which already holds the pods for the controllers' sake, so this
+	// adds a walk over them every FleetCountInterval and no API traffic at all.
+	fleet := &agentserver.FleetCounter{Pods: mgr.GetClient()}
+	if err := mgr.Add(fleet); err != nil {
+		setupLog.Error(err, "unable to add the fleet counter")
+		os.Exit(1)
+	}
+
 	if err := mgr.Add(agentserver.New(agentserver.Options{
 		Addr:     agentBindAddress,
 		Provider: provider,
@@ -400,6 +409,7 @@ func main() {
 		},
 		Agents:         registry,
 		Proxies:        proxies,
+		Fleet:          fleet.Size,
 		ReportInterval: reportInterval,
 		RenewAfter:     renewAfter,
 		HardDeadline:   hardDeadline,

@@ -178,6 +178,54 @@ it now matches the container port *named* `agent` rather than the number
 adding 9443 to the peerless rule, is caught.
 
 
+## How many agents may reach the operator
+
+**The NetworkPolicy beside the operator says who may open a connection to the
+agent endpoint. It says nothing about how many, and it cannot.** Its ingress
+peer is a `podSelector` over `spawnery.cloud/managed-by` — the same forgeable
+label as everywhere above — and vanilla NetworkPolicy has no concept of a
+count. Whatever bounds the number has to live in the operator, and does:
+`internal/agentserver`'s `PeerLimiter`, which refuses at `Accept`, before the
+TLS handshake that is the expensive half of a connection.
+
+There are two bounds and they answer different questions.
+
+`MaxConnectionsPerPeer` bounds one peer address, which on an un-NAT'd pod
+network is one pod. A legitimate agent's peak is 2, measured over roughly
+seventy renewals across four paths; the bound is 8, and the slack is deliberate
+because being too low costs a working agent its session.
+
+The fleet bound is that slack's answer. Eight per pod is a factor nobody would
+grant a fleet in aggregate, and until 2026-08-26 nothing did anything about
+it — a set of compromised pods was simply a multiple of the one-pod bound.
+What closes it is a number the operator already had and had never compared to
+anything: the count of pods it manages, exported as `spawnery_agents_expected`.
+Above four times that many connections open in total, every peer's bound drops
+to `FleetConnectionsPerAgent` (4, twice the measured peak, so no working agent
+is refused anything it would have asked for); above eight times, connections
+are refused whatever peer they came from.
+
+**Both are derived from the fleet's own size, and that is the whole design.** A
+fixed ceiling would be a number legitimate growth eventually reaches, and the
+agent it refused on that day would be whoever asked next — one namespace's
+traffic becoming another namespace's outage, which is the harm the agent
+channel's isolation promise is about, moved rather than removed. A ceiling that
+is a multiple of the pod count counts every legitimate agent in the number that
+bounds it, so growth raises it in lockstep and only connections that are not
+agents doing their job can reach it.
+
+**What is still not bounded is the number of peers.** A pod that is not in the
+operator's caches at all still gets its own allowance until the fleet ceiling
+binds, because what admits it is the policy above, which passes any labelled
+pod and counts nothing. Deriving the bound from the pod count narrows what the
+fleet may hold; it does not decide who is in the fleet, and nothing at `Accept`
+can — identity arrives with the bearer token, two round trips later. When the
+fleet ceiling does bind, the connection refused is whichever arrived next, and
+it may belong to an agent that has done nothing wrong. That residual is paid
+only in a cluster already holding eight times the connections its pods can
+account for, and `SpawneryAgentFleetOverItsBound` in the chart's PrometheusRule
+is what says so out loud.
+
 ## `HostPort`, Pod Security, and the host firewall
 
 **`HostPort` and CIS `restricted` cannot both hold in one namespace.** Pod

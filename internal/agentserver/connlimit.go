@@ -19,6 +19,7 @@ package agentserver
 import (
 	"net"
 	"sync"
+	"sync/atomic"
 )
 
 // PeerLimiter bounds how many connections one peer address may hold open at
@@ -55,14 +56,54 @@ import (
 // small. Nothing here detects it. The agents dial the operator's Service
 // directly, which is a DNAT on the destination and leaves the source alone.
 //
-// # What it does not bound
+// # The fleet bound
 //
-// Connections from *distinct* pods. An attacker holding several is bounded by
-// the NetworkPolicy admitting only pods labelled spawnery.cloud/managed-by,
-// and by nothing here: this bounds one peer, and the sum over peers is what
-// docs/known-issues.md still carries as open. What it does close is the
-// amplification available to a single compromised pod, which is the shape
-// milestone 2a's promise takes.
+// The per-peer bound says nothing about how many peers there are, so a set of
+// compromised pods multiplies it. The obvious answer -- one fixed ceiling on
+// the total -- is the wrong one, and it is worth being exact about why: a
+// fixed ceiling is a number legitimate growth eventually reaches, and the peer
+// it refuses on that day is whoever asked next. That turns one namespace's
+// traffic into another namespace's outage, which is the harm milestone 2a's
+// promise is about, moved rather than removed.
+//
+// What makes a fleet bound safe is that it be derived from the fleet's own
+// size. Expect gives the limiter the count of pods the operator manages, so
+// every legitimate agent in the cluster is counted in the number that bounds
+// it and growth raises the bound in lockstep. There are two of them, in the
+// order they bind:
+//
+//	total >= expected * FleetConnectionsPerAgent
+//	    Every peer's bound drops to FleetConnectionsPerAgent, which is the
+//	    largest shape a legitimate agent has ever been argued to need -- twice
+//	    its measured peak. So this refuses no connection a working agent would
+//	    have asked for. What it takes away is the slack between that and
+//	    MaxConnectionsPerPeer, which exists for a single pod's benefit and has
+//	    no justification multiplied across a fleet.
+//
+//	total >= expected * MaxConnectionsPerPeer
+//	    The connection is refused whatever peer it came from. This is the only
+//	    bound here on the sum across peers, and the multiplier is chosen so
+//	    that reaching it proves something abnormal: no peer may hold more than
+//	    MaxConnectionsPerPeer, so a total of expected * MaxConnectionsPerPeer
+//	    needs at least as many distinct peers as the operator has pods, every
+//	    one of them holding four to eight times what an agent uses. Peers it
+//	    does not manage are the ordinary way to get there, admitted by a
+//	    NetworkPolicy that counts nothing.
+//
+// A legitimate fleet holds one connection per pod, and two per pod through the
+// moment every one of them happens to be renewing at once, so it sits at a
+// quarter of the first threshold at rest and half of it at that worst moment.
+// Both are floored at one peer's worth, because a count of zero is the answer
+// a broken count gives and it must not be the answer that empties the cluster.
+//
+// # What it still does not bound
+//
+// The order. When the second bound binds, the refused connection is whichever
+// arrived next, and it may belong to an agent that has done nothing wrong --
+// that is the harm a fixed ceiling has, kept here on purpose and paid only in
+// a cluster already holding eight times the connections it can account for.
+// The first bound is what keeps the second nearly unreachable, and the reason
+// they are two numbers rather than one.
 type PeerLimiter struct {
 	net.Listener
 
@@ -70,8 +111,17 @@ type PeerLimiter struct {
 	// what the stub operator uses to measure a legitimate agent's peak.
 	limit int
 
-	mu   sync.Mutex
-	open map[string]int
+	// fleet answers how many agents the operator ought to be serving, and
+	// whether it knows yet. Nil, or an answer of unknown, means no fleet bound
+	// -- see Expect.
+	fleet atomic.Pointer[func() (int, bool)]
+
+	mu sync.Mutex
+	// total is the sum of open, kept beside it rather than computed: the fleet
+	// bound reads it on every Accept, and a map walk per connection is a cost
+	// an attacker would be choosing.
+	total int
+	open  map[string]int
 	// peak is the high-water mark per peer, kept for the same measurement.
 	// Bounded by the same set of keys as open: see release.
 	peak map[string]int
@@ -94,6 +144,19 @@ type ConnEvent struct {
 	Open int
 	// Refused says the connection was turned away rather than served.
 	Refused bool
+	// Total is how many connections the whole listener holds after this event.
+	// Open is this peer's share of it.
+	Total int
+	// Limit is the number this event was decided against: the peer's bound,
+	// which is FleetConnectionsPerAgent where the fleet has tightened it, or
+	// the fleet's own ceiling where that is what refused. Bound says which of
+	// the two, and so which of Open and Total to read it against. Zero on a
+	// release, where no bound was consulted.
+	Limit int
+	// Bound names what refused the connection, BoundPeer or BoundFleet, and is
+	// empty on an event that refused nothing. A peer refused under BoundFleet
+	// may be behaving perfectly: what was over its bound was the fleet.
+	Bound string
 	// Refusals is how many this peer has collected without ever dropping back
 	// under its bound. It resets when the peer's last connection closes.
 	Refusals int
@@ -125,6 +188,38 @@ func NewPeerLimiter(inner net.Listener, limit int, observe func(ConnEvent)) *Pee
 	}
 }
 
+// Expect tells the limiter how many agents the operator ought to be serving,
+// as a function it calls once per Accept -- the count moves with the fleet, so
+// a value taken at wiring time would be wrong by the first scale-up.
+//
+// A size of unknown, or no Expect at all, means no fleet bound: the limiter
+// then bounds peers and says nothing about the fleet. That is the fail-open
+// direction on purpose. The count comes from a cache, a cache is empty before
+// it syncs, and a bound that read an empty cache as "this fleet should hold
+// nothing" would refuse every agent in the cluster at exactly the moment the
+// operator restarted. Unknown until counted is what FleetCounter reports, and
+// this is why it bothers to.
+//
+// Zero, once known, is a real answer -- a cluster with no managed pods -- and
+// tightens every peer to FleetConnectionsPerAgent, which is still above any
+// legitimate agent's measured peak.
+func (l *PeerLimiter) Expect(size func() (int, bool)) {
+	if size == nil {
+		l.fleet.Store(nil)
+		return
+	}
+	l.fleet.Store(&size)
+}
+
+// expected reads Expect's answer, or unknown when there is none.
+func (l *PeerLimiter) expected() (int, bool) {
+	size := l.fleet.Load()
+	if size == nil {
+		return 0, false
+	}
+	return (*size)()
+}
+
 // Accept returns the next connection whose peer is under the bound, refusing
 // the ones that are not.
 //
@@ -148,17 +243,46 @@ func (l *PeerLimiter) Accept() (net.Conn, error) {
 		}
 		peer := peerKey(conn.RemoteAddr())
 
+		// Outside the lock: this reaches a cache the limiter does not own, and
+		// holding the mutex across a foreign call would make every accept wait
+		// on it. The count it returns can only be one Accept out of date, and
+		// what it feeds is a multiple of the pod count -- an error of one pod
+		// cannot move a decision that turns on a factor of four.
+		//
+		// A limit of zero is count-without-refusing and stays absolute: the
+		// fleet bounds are not consulted at all, so the stub operator's
+		// measurement cannot be cut short by one.
+		expected, known := 0, false
+		if l.limit > 0 {
+			expected, known = l.expected()
+		}
+
 		l.mu.Lock()
 		count := l.open[peer]
-		if l.limit > 0 && count >= l.limit {
+		limit, bound := l.limit, BoundPeer
+		refuse := limit > 0 && count >= limit
+		if known {
+			if ceiling := atLeastOnePeer(expected*MaxConnectionsPerPeer, MaxConnectionsPerPeer); l.total >= ceiling {
+				// The bound on the sum across peers. It refuses whatever this
+				// peer is holding, which may be nothing at all.
+				limit, bound, refuse = ceiling, BoundFleet, true
+			} else if tight := atLeastOnePeer(expected*FleetConnectionsPerAgent, FleetConnectionsPerAgent); l.total >= tight &&
+				limit > FleetConnectionsPerAgent {
+				limit, bound = FleetConnectionsPerAgent, BoundFleet
+				refuse = count >= limit
+			}
+		}
+		if refuse {
 			l.refused[peer]++
 			refusals := l.refused[peer]
 			peak := l.peak[peer]
+			total := l.total
 			l.mu.Unlock()
-			ConnectionsRefused.Inc()
+			ConnectionsRefused.WithLabelValues(bound).Inc()
 			if l.observe != nil {
 				l.observe(ConnEvent{
-					Peer: peer, Open: count, Refused: true, Refusals: refusals, Peak: peak,
+					Peer: peer, Open: count, Total: total, Refused: true,
+					Refusals: refusals, Peak: peak, Limit: limit, Bound: bound,
 				})
 			}
 			_ = conn.Close()
@@ -166,15 +290,16 @@ func (l *PeerLimiter) Accept() (net.Conn, error) {
 		}
 		count++
 		l.open[peer] = count
+		l.total++
 		if count > l.peak[peer] {
 			l.peak[peer] = count
 		}
-		peak := l.peak[peer]
+		peak, total := l.peak[peer], l.total
 		l.mu.Unlock()
 
 		OpenConnections.Inc()
 		if l.observe != nil {
-			l.observe(ConnEvent{Peer: peer, Open: count, Peak: peak})
+			l.observe(ConnEvent{Peer: peer, Open: count, Total: total, Peak: peak, Limit: limit})
 		}
 		return &countedConn{Conn: conn, limiter: l, peer: peer}, nil
 	}
@@ -196,6 +321,12 @@ func (l *PeerLimiter) release(peer string) {
 
 	peak := l.peak[peer]
 	count := l.open[peer] - 1
+	// Guarded, though countedConn's once already promises one release per
+	// accept: a total that ran negative would not crash, it would quietly
+	// hold the fleet bound open, which is the failure nobody would notice.
+	if l.total > 0 {
+		l.total--
+	}
 	if count <= 0 {
 		delete(l.open, peer)
 		delete(l.peak, peer)
@@ -260,4 +391,20 @@ func isPowerOfTen(n int) bool {
 		n /= 10
 	}
 	return n == 1
+}
+
+// atLeastOnePeer floors a fleet threshold at one peer's worth.
+//
+// The floor is not politeness towards small clusters -- a fleet of one pod is
+// served correctly by the unfloored numbers. It is there because zero is what
+// a count reports when it is wrong: a selector that stopped matching, a cache
+// restricted in a way nobody meant. Unfloored, that mistake refuses every
+// connection in the cluster. Floored, the operator serves one peer's worth
+// while spawnery_agents_expected sits at zero beside a fleet that plainly is
+// not, which is a mistake somebody can see and fix.
+func atLeastOnePeer(threshold, floor int) int {
+	if threshold < floor {
+		return floor
+	}
+	return threshold
 }

@@ -222,34 +222,6 @@ and `ForwardingSecretRotationPending=False/ForwardingSecretInSync`. So the
 nobody opened reports, and the opened case now has a witness rather than only
 tests.
 
-## Preconditions for milestone 6 (Helm, RBAC, E2E)
-
-**Milestone 2a's isolation promise holds against one compromised pod and not
-against a set of them.** The promise of the agent channel reads: a compromised
-game server pod cannot harm any other. For identity and confidentiality it
-holds — the token is audience-bound and accepted nowhere else, the
-`spawnery-server` ServiceAccount has no RoleBinding anywhere, pods run with
-`automountServiceAccountToken: false`, the private CA key never leaves the
-operator secret, and identity comes exclusively from the token and never from
-what the agent claims about itself.
-
-For availability it now holds for one pod, and stops exactly there. Every axis
-a single pod controls is bounded: `MaxConnectionsPerPeer` bounds its
-connections, `MaxConcurrentStreams` the streams on each, and `internal/grpcauth`
-the TokenReviews it can drive. **Nothing bounds the sum across peers.** Ten
-compromised pods are ten times the one-pod bound; the NetworkPolicy admits
-every pod carrying `spawnery.cloud/managed-by` and says nothing about how many
-there may be; and the operator holds no global ceiling — deliberately, because
-a global cap reached by one busy namespace would refuse another namespace's
-agents, which is the harm the promise is about, moved rather than removed.
-
-Closing it needs a number the per-peer bound cannot use: how many agents the
-operator *ought* to be serving, which is the pod count of the groups it owns.
-It has that number in its own caches. Nothing yet compares it to
-`spawnery_agent_open_connections`, and a bound derived from it would be the
-first one in this channel that is a statement about the fleet rather than
-about a peer.
-
 ## From milestone 6a (the operator in a cluster)
 
 6a gives the operator its own OCI image, one publish path for all three images,
