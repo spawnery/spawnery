@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -1212,5 +1213,117 @@ func TestARefusedSecretReadIsSaidOutLoud(t *testing.T) {
 	if !meta.IsStatusConditionTrue(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
 		t.Errorf("Accepted = %+v with the secret read refused, want True",
 			meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted))
+	}
+}
+
+// refusingPolicyWrites is a client that answers Forbidden for any write of a
+// NetworkPolicy and behaves normally for everything else. It stands in for the
+// RBAC misconfiguration this is about -- the operator holding every other verb
+// and not networkpolicies:create -- without having to take a grant away from
+// the fixture's real ServiceAccount, which would fail the reads this test needs
+// as well.
+type refusingPolicyWrites struct {
+	client.Client
+}
+
+func (c refusingPolicyWrites) forbidden(obj client.Object) error {
+	if _, ok := obj.(*networkingv1.NetworkPolicy); !ok {
+		return nil
+	}
+	return apierrors.NewForbidden(
+		schema.GroupResource{Group: "networking.k8s.io", Resource: "networkpolicies"},
+		obj.GetName(),
+		fmt.Errorf("user cannot create resource \"networkpolicies\" in API group \"networking.k8s.io\""))
+}
+
+func (c refusingPolicyWrites) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if err := c.forbidden(obj); err != nil {
+		return err
+	}
+	return c.Client.Create(ctx, obj, opts...)
+}
+
+func (c refusingPolicyWrites) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	if err := c.forbidden(obj); err != nil {
+		return err
+	}
+	return c.Client.Update(ctx, obj, opts...)
+}
+
+func (c refusingPolicyWrites) Patch(ctx context.Context, obj client.Object,
+	patch client.Patch, opts ...client.PatchOption) error {
+	if err := c.forbidden(obj); err != nil {
+		return err
+	}
+	return c.Client.Patch(ctx, obj, patch, opts...)
+}
+
+// TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork closes the half of
+// docs/known-issues.md's entry that said a report naming the cause was
+// available and was not shipped.
+//
+// Returning before any status write left the condition unpersisted, so a fresh
+// Network stayed at nothing and every group in the namespace refused with
+// "network ... has not been accepted yet" -- true and misleading in the same
+// breath, because the network *was* accepted and the acceptance could not be
+// written down. Driven 2026-08-25 with networkpolicies:create removed from
+// both the marker and the audit table, that is exactly what a whole cluster
+// reported, and only the operator's log said why.
+func TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+	r.Client = refusingPolicyWrites{Client: r.Client}
+
+	_, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "production", Namespace: f.ns},
+	})
+	if err == nil {
+		t.Fatal("the reconcile succeeded with the policy write refused")
+	}
+
+	network := &spawneryv1alpha1.Network{}
+	if getErr := f.c.Get(f.ctx,
+		types.NamespacedName{Name: "production", Namespace: f.ns}, network); getErr != nil {
+		t.Fatalf("get network: %v", getErr)
+	}
+	accepted := meta.FindStatusCondition(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil {
+		t.Fatal("Accepted was never persisted, so every group in the namespace reports " +
+			"\"has not been accepted yet\" and nothing says why")
+	}
+	// False, not True. Fail-closed is the whole point: recording True beside a
+	// policy that did not land would release every group in the namespace to
+	// create the pods that policy was meant to fence.
+	if accepted.Status != metav1.ConditionFalse {
+		t.Errorf("Accepted = %s, want False: the namespace must stay closed", accepted.Status)
+	}
+	if accepted.Reason != spawneryv1alpha1.ReasonNetworkPolicyNotWritten {
+		t.Errorf("reason = %q, want %q", accepted.Reason, spawneryv1alpha1.ReasonNetworkPolicyNotWritten)
+	}
+	for _, want := range []string{"NetworkPolicy", "networkpolicies"} {
+		if !strings.Contains(accepted.Message, want) {
+			t.Errorf("message %q does not mention %q, so it does not name the cause",
+				accepted.Message, want)
+		}
+	}
+}
+
+// TestAWritablePolicyStillAcceptsTheNetwork keeps the branch above from being
+// the only outcome. The condition it writes is on the same field the ordinary
+// acceptance uses, so an error in the new branch would show up as a network
+// that is never accepted at all.
+func TestAWritablePolicyStillAcceptsTheNetwork(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+	f.reconcileNetwork(t, r, "production")
+
+	network := &spawneryv1alpha1.Network{}
+	if err := f.c.Get(f.ctx,
+		types.NamespacedName{Name: "production", Namespace: f.ns}, network); err != nil {
+		t.Fatalf("get network: %v", err)
+	}
+	accepted := meta.FindStatusCondition(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionTrue {
+		t.Fatalf("Accepted = %+v, want True", accepted)
 	}
 }

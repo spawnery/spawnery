@@ -378,33 +378,25 @@ What the two `NetworkPolicy` objects buy and what they do not is
 [`network-boundaries.md`](network-boundaries.md): measured scope, not defects.
 One thing from that milestone is a defect and stays here.
 
-**A `Forbidden` on the policy write stops the whole namespace, and it names the
-wrong thing.** `reconcileNetworkPolicy` is called after the `Accepted`
-condition is set on the in-memory object but before any `Status().Update`
-(`internal/controller/network_controller.go`), so an error there returns before
-the condition is ever persisted. Both group controllers gate on
-`Accepted=True`, so a *fresh* `Network` in a cluster where the operator cannot
-write NetworkPolicies never becomes usable, and every group in that namespace
-refuses with `network "..." has not been accepted yet` — true and misleading in
-the same breath, because the network *was* accepted and the acceptance could
-not be written down. An existing `Network` keeps its persisted condition and
-its groups keep running, so only new ones are affected.
+**A `Forbidden` on the policy write is reported, and the audit still cannot
+see the case that produced it.** `reconcileNetworkPolicy` runs before anything
+else the Network reconcile does, and a failure there is fail-closed by design:
+the namespace must not quietly come up unprotected, so every group in it
+refuses. Since 2026-08-26 it is also *named* — `Accepted=False` with reason
+`NetworkPolicyNotWritten` and the API server's own refusal in the message —
+where before the condition was never persisted at all and every group quoted
+`network "..." has not been accepted yet`, which is true and misleading in the
+same breath.
 
-Failing closed is right: an unprotected namespace must not quietly come up. The
-ordering was reviewed and left alone, because persisting `Accepted` before
-writing the policy would let groups start servers in a namespace with no policy
-at all. **What is missing is a report naming the cause**, which was available
-and was not shipped; nothing but the operator log says why.
-
-*Driven 2026-08-25.* `networkpolicies: create` was removed from the kubebuilder
-marker **and** from `internal/rbacaudit`'s table — the sharpest form of the
-case, absent from both, so the audit stays green and only the running operator
-knows. The startup self-check does not catch this one either, for the same
-reason: it checks the table, and the table no longer asks. What did change is
-that the harness now reports it — every `eventually` that gives up reads the
-operator's log and names any denial it finds, so the cause lands in the failure
-message of the scenario that actually stalled instead of in a scenario twenty
-places later that the run never reaches.
+What is still open is upstream of that. *Driven 2026-08-25:*
+`networkpolicies: create` was removed from the kubebuilder marker **and** from
+`internal/rbacaudit`'s table. Absent from both, so the audit is green, and the
+startup self-check does not catch it either — it checks the table, and the
+table no longer asks. **Nothing in this repository compares the required table
+against what the code actually calls.** A verb dropped from both places is
+invisible until a cluster refuses it, and the only reason that case is now
+survivable rather than mysterious is that the refusal reports itself when it
+arrives.
 
 ## From milestone 6e (CI)
 

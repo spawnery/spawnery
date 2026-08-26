@@ -194,18 +194,38 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// The policy, before anything else this reconcile does, and the one
-	// failure below that deliberately does not go through record. A Forbidden
-	// here is a security control failing to land, and it must not pass
-	// silently: returning the error logs it and requeues. Recording
-	// Accepted=True alongside it would release every group in the namespace to
-	// create the pods the policy was meant to fence, so this one stays
-	// fail-closed. It deliberately does not become a condition on the Network
-	// either -- the design's §2.4 argues that this shape needs no report, and
-	// an error that appears only under an RBAC misconfiguration is a fact
-	// about the installation rather than about this object.
+	// The policy, before anything else this reconcile does. A Forbidden here
+	// is a security control failing to land and it must not pass silently:
+	// recording Accepted=True alongside it would release every group in the
+	// namespace to create the pods the policy was meant to fence, so this
+	// stays fail-closed.
+	//
+	// Fail-closed *and named*, which is the part that was missing. Returning
+	// before any status write left the condition unpersisted, so a fresh
+	// Network stayed at whatever it had -- nothing, for a new one -- and every
+	// group in the namespace refused with "network ... has not been accepted
+	// yet". True and misleading in the same breath: the network was accepted,
+	// and the acceptance could not be written down. Nothing but the operator's
+	// own log said which, and the design's §2.4 argued that no report was
+	// needed here because an RBAC misconfiguration is a fact about the
+	// installation rather than about this object. That argument was wrong in
+	// its premise: the shape produces a report anyway, on every group in the
+	// namespace, and it names the wrong thing.
+	//
+	// So Accepted goes to False with the write's own error on it, and then
+	// through record like every other failure. Groups still refuse, for the
+	// same reason and with the same gate -- but what they quote now says the
+	// policy could not be written.
 	if err := r.reconcileNetworkPolicy(ctx, network); err != nil {
-		return ctrl.Result{}, fmt.Errorf("reconcile the network policy: %w", err)
+		meta.SetStatusCondition(&network.Status.Conditions, metav1.Condition{
+			Type:   spawneryv1alpha1.ConditionAccepted,
+			Status: metav1.ConditionFalse,
+			Reason: spawneryv1alpha1.ReasonNetworkPolicyNotWritten,
+			Message: fmt.Sprintf(
+				"this network is otherwise acceptable, but its NetworkPolicy could not be written, "+
+					"so no group in this namespace may start: %s", err),
+		})
+		return record(fmt.Errorf("reconcile the network policy: %w", err))
 	}
 
 	if err := r.countGroups(ctx, network); err != nil {

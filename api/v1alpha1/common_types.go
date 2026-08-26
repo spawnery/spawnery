@@ -145,26 +145,32 @@ const (
 
 // Condition reasons.
 const (
-	ReasonDuplicateNetwork     = "DuplicateNetwork"
-	ReasonNetworkNotFound      = "NetworkNotFound"
-	ReasonNetworkNotAccepted   = "NetworkNotAccepted"
-	ReasonGroupNotFound        = "GroupNotFound"
-	ReasonAccepted             = "Accepted"
-	ReasonCrashLoopBackoff     = "CrashLoopBackoff"
-	ReasonNoFallback           = "NoFallbackAvailable"
-	ReasonNotImplemented       = "NotImplementedInThisVersion"
-	ReasonReconciling          = "Reconciling"
-	ReasonExposeNotImplemented = "ExposeStrategyNotImplemented"
-	ReasonMaxReplicasReached   = "MaxReplicasReached"
-	ReasonWithinLimits         = "WithinLimits"
-	ReasonNoRecentFailures     = "NoRecentFailures"
-	ReasonReadinessDiverged    = "ReadinessDiverged"
-	ReasonReadinessAgrees      = "ReadinessAgrees"
-	ReasonNodeDraining         = "NodeDraining"
-	ReasonNoNodesDraining      = "NoNodesDraining"
-	ReasonPodShapeChanged      = "PodShapeChanged"
-	ReasonPodShapeCurrent      = "PodShapeCurrent"
-	ReasonOrdinalNameTaken     = "OrdinalNameTaken"
+	ReasonDuplicateNetwork   = "DuplicateNetwork"
+	ReasonNetworkNotFound    = "NetworkNotFound"
+	ReasonNetworkNotAccepted = "NetworkNotAccepted"
+	// ReasonNetworkPolicyNotWritten says the Network is otherwise acceptable
+	// and its NetworkPolicy could not be written, so it is refused rather than
+	// left unprotected. It is Accepted=False because every group gates on that
+	// and the namespace must stay closed -- not because anything is wrong with
+	// the Network itself.
+	ReasonNetworkPolicyNotWritten = "NetworkPolicyNotWritten"
+	ReasonGroupNotFound           = "GroupNotFound"
+	ReasonAccepted                = "Accepted"
+	ReasonCrashLoopBackoff        = "CrashLoopBackoff"
+	ReasonNoFallback              = "NoFallbackAvailable"
+	ReasonNotImplemented          = "NotImplementedInThisVersion"
+	ReasonReconciling             = "Reconciling"
+	ReasonExposeNotImplemented    = "ExposeStrategyNotImplemented"
+	ReasonMaxReplicasReached      = "MaxReplicasReached"
+	ReasonWithinLimits            = "WithinLimits"
+	ReasonNoRecentFailures        = "NoRecentFailures"
+	ReasonReadinessDiverged       = "ReadinessDiverged"
+	ReasonReadinessAgrees         = "ReadinessAgrees"
+	ReasonNodeDraining            = "NodeDraining"
+	ReasonNoNodesDraining         = "NoNodesDraining"
+	ReasonPodShapeChanged         = "PodShapeChanged"
+	ReasonPodShapeCurrent         = "PodShapeCurrent"
+	ReasonOrdinalNameTaken        = "OrdinalNameTaken"
 	// ReasonOrdinalDuplicated says more than one Server of the group carries
 	// the same spec.ordinal. The operator refuses to act on such an ordinal
 	// rather than choose between two worlds, so this needs a person.
