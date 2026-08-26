@@ -710,6 +710,16 @@ func (r *ServerReconciler) collectInputs(
 	in.PlayersStale = snap.PlayersStale
 	in.Slots = snap.Slots
 
+	// What the proxies say about this server, which is the half its own agent
+	// cannot see: a player still completing the configuration phase is
+	// counted by neither the backend nor the proxy's own player list, so a
+	// drain used to read the server empty and delete the pod under them.
+	//
+	// Asked of the Server's own namespace and name, which is exactly how the
+	// proxies were told about it (proxyreg.registeredServer uses srv.Name), so
+	// nothing translates between the two vocabularies and nothing can drift.
+	in.ProxyAttached, in.ProxyAttachStale = r.Agents.AttachedTo(srv.Namespace, srv.Name)
+
 	// Only once a pod has existed. The stamp is written on acceptance now, so
 	// without this guard the startup deadline would fire for a Server whose
 	// pod was refused and report it as "did not become ready in time" -- a

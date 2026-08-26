@@ -368,3 +368,57 @@ func TestASecondProxyStreamSupersedesTheFirstWithoutMisreportingWhy(t *testing.T
 		t.Errorf("received %+v, want a RegisterServer for lobby-gggg", msg)
 	}
 }
+
+// TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace is the
+// end-to-end of the drain gap's operator half: a proxy says which backends its
+// players are attached to, and the Server controller's own registry can answer
+// for one of them.
+//
+// The namespace is the assertion worth making here rather than in a unit test.
+// It comes from the authenticated identity and never from the message, which
+// is the rule every other fact on this channel follows -- an agent may lie
+// about itself and is believed about nothing else -- and only a real token
+// against a real API server proves the operator takes it from the right place.
+func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.proxyPod("gateway-aaaa")
+	stream, done := dialProxy(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("the opening message never arrived: %v", err)
+	}
+
+	if err := stream.Send(&agentpb.ProxyMessage{
+		Message: &agentpb.ProxyMessage_BackendPlayers{
+			BackendPlayers: &agentpb.BackendPlayers{
+				Players: map[string]int32{"lobby-0": 2, "lobby-1": 1},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send the backend report: %v", err)
+	}
+
+	// The registry is written from the receive loop, so poll rather than
+	// assume the send has been applied by the time Send returned.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		n, stale := f.agents.AttachedTo(f.ns, "lobby-0")
+		if n == 2 && !stale {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("lobby-0 = %d stale=%v, want 2 and fresh", n, stale)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// And it did not land under some other namespace's name, which is what a
+	// report trusted about its own scope would have allowed.
+	if n, _ := f.agents.AttachedTo("somewhere-else", "lobby-0"); n != 0 {
+		t.Errorf("lobby-0 in another namespace = %d, want 0", n)
+	}
+	if n, _ := f.agents.AttachedTo(f.ns, "lobby-1"); n != 1 {
+		t.Errorf("lobby-1 = %d, want 1", n)
+	}
+}

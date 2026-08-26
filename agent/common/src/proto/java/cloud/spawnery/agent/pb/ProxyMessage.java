@@ -58,6 +58,7 @@ private static final long serialVersionUID = 0L;
     PLAYER_COUNT(2),
     PLAYER_JOINED_SERVER(3),
     HEARTBEAT(4),
+    BACKEND_PLAYERS(5),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -79,6 +80,7 @@ private static final long serialVersionUID = 0L;
         case 2: return PLAYER_COUNT;
         case 3: return PLAYER_JOINED_SERVER;
         case 4: return HEARTBEAT;
+        case 5: return BACKEND_PLAYERS;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -218,6 +220,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.Heartbeat.getDefaultInstance();
   }
 
+  public static final int BACKEND_PLAYERS_FIELD_NUMBER = 5;
+  /**
+   * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+   * @return Whether the backendPlayers field is set.
+   */
+  @java.lang.Override
+  public boolean hasBackendPlayers() {
+    return messageCase_ == 5;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+   * @return The backendPlayers.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.BackendPlayers getBackendPlayers() {
+    if (messageCase_ == 5) {
+       return (cloud.spawnery.agent.pb.BackendPlayers) message_;
+    }
+    return cloud.spawnery.agent.pb.BackendPlayers.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.BackendPlayersOrBuilder getBackendPlayersOrBuilder() {
+    if (messageCase_ == 5) {
+       return (cloud.spawnery.agent.pb.BackendPlayers) message_;
+    }
+    return cloud.spawnery.agent.pb.BackendPlayers.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -244,6 +277,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 4) {
       output.writeMessage(4, (cloud.spawnery.agent.pb.Heartbeat) message_);
     }
+    if (messageCase_ == 5) {
+      output.writeMessage(5, (cloud.spawnery.agent.pb.BackendPlayers) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -263,6 +299,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 4) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(4, (cloud.spawnery.agent.pb.Heartbeat) message_);
+    }
+    if (messageCase_ == 5) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(5, (cloud.spawnery.agent.pb.BackendPlayers) message_);
     }
     return size;
   }
@@ -306,6 +346,10 @@ private static final long serialVersionUID = 0L;
         if (!getHeartbeat()
             .equals(other.getHeartbeat())) return false;
         break;
+      case 5:
+        if (!getBackendPlayers()
+            .equals(other.getBackendPlayers())) return false;
+        break;
       case 0:
       default:
     }
@@ -336,6 +380,10 @@ private static final long serialVersionUID = 0L;
       case 4:
         hash = (37 * hash) + HEARTBEAT_FIELD_NUMBER;
         hash = (53 * hash) + getHeartbeat().hashCode();
+        break;
+      case 5:
+        hash = (37 * hash) + BACKEND_PLAYERS_FIELD_NUMBER;
+        hash = (53 * hash) + getBackendPlayers().hashCode();
         break;
       case 0:
       default:
@@ -483,6 +531,9 @@ private static final long serialVersionUID = 0L;
       if (heartbeatBuilder_ != null) {
         heartbeatBuilder_.clear();
       }
+      if (backendPlayersBuilder_ != null) {
+        backendPlayersBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -540,6 +591,10 @@ private static final long serialVersionUID = 0L;
           heartbeatBuilder_ != null) {
         result.message_ = heartbeatBuilder_.build();
       }
+      if (messageCase_ == 5 &&
+          backendPlayersBuilder_ != null) {
+        result.message_ = backendPlayersBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -569,6 +624,10 @@ private static final long serialVersionUID = 0L;
         }
         case HEARTBEAT: {
           mergeHeartbeat(other.getHeartbeat());
+          break;
+        }
+        case BACKEND_PLAYERS: {
+          mergeBackendPlayers(other.getBackendPlayers());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -629,6 +688,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 4;
               break;
             } // case 34
+            case 42: {
+              input.readMessage(
+                  internalGetBackendPlayersFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 5;
+              break;
+            } // case 42
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1227,6 +1293,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 4;
       onChanged();
       return heartbeatBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.BackendPlayers, cloud.spawnery.agent.pb.BackendPlayers.Builder, cloud.spawnery.agent.pb.BackendPlayersOrBuilder> backendPlayersBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     * @return Whether the backendPlayers field is set.
+     */
+    @java.lang.Override
+    public boolean hasBackendPlayers() {
+      return messageCase_ == 5;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     * @return The backendPlayers.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.BackendPlayers getBackendPlayers() {
+      if (backendPlayersBuilder_ == null) {
+        if (messageCase_ == 5) {
+          return (cloud.spawnery.agent.pb.BackendPlayers) message_;
+        }
+        return cloud.spawnery.agent.pb.BackendPlayers.getDefaultInstance();
+      } else {
+        if (messageCase_ == 5) {
+          return backendPlayersBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.BackendPlayers.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     */
+    public Builder setBackendPlayers(cloud.spawnery.agent.pb.BackendPlayers value) {
+      if (backendPlayersBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        backendPlayersBuilder_.setMessage(value);
+      }
+      messageCase_ = 5;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     */
+    public Builder setBackendPlayers(
+        cloud.spawnery.agent.pb.BackendPlayers.Builder builderForValue) {
+      if (backendPlayersBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        backendPlayersBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 5;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     */
+    public Builder mergeBackendPlayers(cloud.spawnery.agent.pb.BackendPlayers value) {
+      if (backendPlayersBuilder_ == null) {
+        if (messageCase_ == 5 &&
+            message_ != cloud.spawnery.agent.pb.BackendPlayers.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.BackendPlayers.newBuilder((cloud.spawnery.agent.pb.BackendPlayers) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 5) {
+          backendPlayersBuilder_.mergeFrom(value);
+        } else {
+          backendPlayersBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 5;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     */
+    public Builder clearBackendPlayers() {
+      if (backendPlayersBuilder_ == null) {
+        if (messageCase_ == 5) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 5) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        backendPlayersBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     */
+    public cloud.spawnery.agent.pb.BackendPlayers.Builder getBackendPlayersBuilder() {
+      return internalGetBackendPlayersFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.BackendPlayersOrBuilder getBackendPlayersOrBuilder() {
+      if ((messageCase_ == 5) && (backendPlayersBuilder_ != null)) {
+        return backendPlayersBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 5) {
+          return (cloud.spawnery.agent.pb.BackendPlayers) message_;
+        }
+        return cloud.spawnery.agent.pb.BackendPlayers.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.BackendPlayers, cloud.spawnery.agent.pb.BackendPlayers.Builder, cloud.spawnery.agent.pb.BackendPlayersOrBuilder> 
+        internalGetBackendPlayersFieldBuilder() {
+      if (backendPlayersBuilder_ == null) {
+        if (!(messageCase_ == 5)) {
+          message_ = cloud.spawnery.agent.pb.BackendPlayers.getDefaultInstance();
+        }
+        backendPlayersBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.BackendPlayers, cloud.spawnery.agent.pb.BackendPlayers.Builder, cloud.spawnery.agent.pb.BackendPlayersOrBuilder>(
+                (cloud.spawnery.agent.pb.BackendPlayers) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 5;
+      onChanged();
+      return backendPlayersBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.ProxyMessage)

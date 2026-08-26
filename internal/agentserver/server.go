@@ -556,6 +556,15 @@ func (s *Server) handleProxy(logger logr.Logger, id grpcauth.Identity, msg *agen
 		// Nothing. The stream is its own liveness signal and the registry's
 		// staleness rule already derives from ReportInterval. A second liveness
 		// path would be a second truth about the same fact.
+	case *agentpb.ProxyMessage_BackendPlayers:
+		// The namespace comes from the authenticated identity and never from
+		// the message, the same rule every other fact on this channel follows:
+		// an agent may lie about itself and is believed about nothing else.
+		if err := s.opts.Agents.ReportBackends(id.PodUID, id.Namespace,
+			m.BackendPlayers.GetPlayers()); err != nil {
+			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
+			logger.V(1).Info("discarded a backend report", "reason", err.Error())
+		}
 	case *agentpb.ProxyMessage_PlayerJoinedServer:
 		// Accepted and ignored. Nothing in milestones 3 or 4 consumes it —
 		// player counts come from the servers — and it is on the wire for the

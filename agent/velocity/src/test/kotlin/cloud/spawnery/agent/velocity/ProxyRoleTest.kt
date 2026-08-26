@@ -51,6 +51,7 @@ class ProxyRoleTest {
         state = state,
         directory = directory,
         drain = drain,
+        players = players,
         onFirstSync = { syncs++ },
         onSetReady = { },
         log = { message, error -> logs += message to error },
@@ -491,6 +492,7 @@ class ProxyRoleTest {
             state = state,
             directory = directory,
             drain = drain,
+            players = players,
             onFirstSync = onFirstSync,
             onSetReady = onSetReady,
             log = { message, error -> logs += message to error },
@@ -514,4 +516,50 @@ class ProxyRoleTest {
             name,
             java.net.InetSocketAddress.createUnresolved(host, port),
         )
+
+    @Test
+    fun `the periodic report counts players by the backend they are attached to`() {
+        roster.forEach { it.currentServer = "lobby-0" }
+
+        val extras = role.extraReports()
+
+        assertEquals(1, extras.size, "one extra report per tick")
+        assertEquals(
+            mapOf("lobby-0" to 2),
+            extras[0].backendPlayers.playersMap,
+            "both players are on lobby-0",
+        )
+    }
+
+    @Test
+    fun `a player still connecting is counted against the server they are heading for`() {
+        // The case the operator could not see, and the reason this message
+        // exists: no currentServer, because Velocity sets connectedServer only
+        // once the transition completes, and the backend has not counted them
+        // either because it counts a player only in its play phase.
+        roster[0].currentServer = "lobby-0"
+        roster[1].currentServer = null
+        roster[1].attachedServer = "lobby-1"
+
+        val counts = role.extraReports()[0].backendPlayers.playersMap
+
+        assertEquals(
+            mapOf("lobby-0" to 1, "lobby-1" to 1),
+            counts,
+            "the arriving player is invisible to every other count there is",
+        )
+    }
+
+    @Test
+    fun `a backend nobody is on is absent rather than zero`() {
+        roster.forEach { it.currentServer = null }
+
+        val counts = role.extraReports()[0].backendPlayers.playersMap
+
+        // Absence is the answer. That is what makes this a state rather than a
+        // stream of changes -- there is no "left" message to miss -- and it
+        // keeps the message the size of what is happening rather than of the
+        // server list.
+        assertTrue(counts.isEmpty(), "expected an empty map, got $counts")
+    }
 }

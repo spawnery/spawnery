@@ -160,6 +160,21 @@ type Inputs struct {
 	// Slots is the reported capacity. Informational for the decision.
 	Slots int32
 
+	// ProxyAttached is how many players the proxies say are on, or on their
+	// way to, this server, and ProxyAttachStale says a proxy that used to
+	// report stopped. Both come from agent.Registry.AttachedTo.
+	//
+	// They exist because this server's own count cannot see a player who is
+	// arriving. A backend counts a player only once they finish the
+	// configuration phase, so a drain could read a server empty while a
+	// connection to it was still in flight and delete the pod under them.
+	//
+	// Occupied adds them and never subtracts, which is what makes them safe
+	// against a fleet where some proxies are too old to report: such a proxy
+	// contributes zero and the rule is exactly what it was.
+	ProxyAttached    int32
+	ProxyAttachStale bool
+
 	// DrainDeadlineReached is true once drain.timeoutSeconds elapsed.
 	DrainDeadlineReached bool
 	// FailedRetentionElapsed is true once failedRetentionSeconds elapsed.
@@ -178,8 +193,21 @@ type Inputs struct {
 
 // Occupied reports whether the server must be treated as carrying players.
 // A stale count counts as occupied: one server too many beats one kick.
+//
+// Three terms, and every one of them can only make the answer true. That is
+// the property to preserve: a rule that could turn occupied into empty by
+// adding a source would make a fleet's upgrade order load-bearing, and this
+// one does not. The proxy terms come from agents that may be older than this
+// operator and simply say nothing, which is indistinguishable from saying
+// zero and is meant to be.
+//
+// The proxies are asked at all because this server's own count cannot see a
+// player who is arriving: a backend counts a player only once they finish the
+// configuration phase, so a drain read an empty server while a connection to
+// it was still in flight. See Inputs.ProxyAttached.
 func (in Inputs) Occupied() bool {
-	return in.PlayersStale || in.PlayersOnline > 0
+	return in.PlayersStale || in.PlayersOnline > 0 ||
+		in.ProxyAttachStale || in.ProxyAttached > 0
 }
 
 // Decision is what the controller has to do. Next is always set.

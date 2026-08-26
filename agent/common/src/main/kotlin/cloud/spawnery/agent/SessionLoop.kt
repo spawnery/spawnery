@@ -699,7 +699,18 @@ class SessionLoop<Req, Resp>(
         try {
             session.report {
                 scheduler.scheduleAtFixedRate(
-                    { send(session, role.playerCount()) },
+                    {
+                        send(session, role.playerCount())
+                        // After the count and on the same tick, so the two
+                        // describe the same instant as closely as this loop
+                        // can make them. Each is sent on its own: send drops a
+                        // message when there is no stream, and a report that
+                        // is a moment out of date is worth more than one that
+                        // was not sent because a different one could not be.
+                        for (extra in role.extraReports()) {
+                            send(session, extra)
+                        }
+                    },
                     0,
                     seconds.toLong(),
                     TimeUnit.SECONDS,

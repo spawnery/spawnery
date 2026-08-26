@@ -3,6 +3,7 @@ package cloud.spawnery.agent.velocity
 import cloud.spawnery.agent.AgentRole
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.pb.AgentServiceGrpc
+import cloud.spawnery.agent.pb.BackendPlayers
 import cloud.spawnery.agent.pb.Hello
 import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerCount
@@ -49,6 +50,15 @@ class ProxyRole(
     private val state: ProxyState,
     private val directory: ServerDirectory,
     private val drain: Drain,
+    /**
+     * The roster, read live on every periodic report to say which backends
+     * this proxy's players are attached to. See [extraReports].
+     *
+     * The same [Players] instance [Drain] holds, deliberately: the two must
+     * agree about who is on a server, since one reports it to the operator
+     * and the other acts on the operator's answer.
+     */
+    private val players: Players,
     private val onFirstSync: () -> Unit,
     /**
      * Sets the pod's readiness gate.
@@ -161,6 +171,45 @@ class ProxyRole(
                 PlayerCount.newBuilder().setPlayers(state.players).setSlots(state.slots),
             )
             .build()
+
+    /**
+     * How many of this proxy's players are on, or on their way to, each
+     * backend -- the one fact about a draining server that neither the server
+     * nor the operator can obtain any other way.
+     *
+     * [PlayerRef.attachedServer] and not [PlayerRef.currentServer], which is
+     * the entire point: a player mid-handshake toward a backend has no current
+     * server, and the backend has not counted them either, so a drain read the
+     * server empty and the operator deleted the pod under them.
+     *
+     * Read live from the proxy rather than from anything this class keeps.
+     * The alternative -- counting joins and leaves as they happen -- would need
+     * every exit path to be caught exactly once, and a single missed one
+     * leaves a phantom player pinning a server as occupied until the drain
+     * deadline cuts it. A snapshot cannot drift: whatever it misses, the next
+     * one has.
+     *
+     * The map carries only backends with at least one player. An absent server
+     * means nobody is attaching to it, which is what makes this a state rather
+     * than a stream of changes, and it keeps the message the size of what is
+     * happening rather than of the server list.
+     *
+     * Runs on the reporting timer, so it must not block. `proxy.allPlayers` is
+     * a read of a concurrent map and the attachment is two field reads per
+     * player; nothing here waits on Velocity's event thread.
+     */
+    override fun extraReports(): List<ProxyMessage> {
+        val counts = mutableMapOf<String, Int>()
+        for (player in players.all()) {
+            val server = player.attachedServer ?: continue
+            counts[server] = (counts[server] ?: 0) + 1
+        }
+        return listOf(
+            ProxyMessage.newBuilder()
+                .setBackendPlayers(BackendPlayers.newBuilder().putAllPlayers(counts))
+                .build(),
+        )
+    }
 
     /**
      * Applies one operator message, and cannot throw.

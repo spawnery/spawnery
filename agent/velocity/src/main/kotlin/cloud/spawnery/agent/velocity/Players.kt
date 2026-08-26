@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.velocity
 
 import com.velocitypowered.api.proxy.Player
+import com.velocitypowered.proxy.connection.client.ConnectedPlayer
 import com.velocitypowered.api.proxy.ProxyServer
 import com.velocitypowered.api.proxy.server.RegisteredServer
 
@@ -22,6 +23,19 @@ interface PlayerRef {
      * when this reference was handed out.
      */
     val currentServer: String?
+
+    /**
+     * The server this player is on **or on their way to**, which is a
+     * different question from [currentServer] and the whole reason the
+     * operator's drain could delete a pod under somebody.
+     *
+     * A player who is mid-handshake toward a backend has no `currentServer`:
+     * Velocity sets `connectedServer` only once the transition completes.
+     * They are equally invisible to the backend, which counts a player only
+     * in its play phase. So neither side of the pair the operator reads knows
+     * about them, and this is the one thing that does.
+     */
+    val attachedServer: String?
 
     /** Starts moving this player to [target]. See [VelocityPlayers] for what "starts" means. */
     fun moveTo(target: RegisteredServer)
@@ -71,6 +85,28 @@ internal class VelocityPlayer(private val player: Player) : PlayerRef {
 
     override val currentServer: String?
         get() = player.currentServer.map { it.server.serverInfo.name }.orElse(null)
+
+    /**
+     * `ConnectedPlayer.getConnectionInFlightOrConnectedServer()`, which is
+     * literally `connectionInFlight ?: connectedServer` -- read off the
+     * disassembly of velocity 3.5.1 build 615 rather than from a document.
+     *
+     * Reached through a cast to Velocity's own implementation class, because
+     * the API's [Player] exposes `getCurrentServer` and nothing that answers
+     * "where is this player heading". The cast is safe in the way that
+     * matters: `ConnectedPlayer` is the only implementation a running proxy
+     * has, the whole velocity jar is on this module's compile classpath
+     * (`compileOnly(velocityJar)`, no exclude filter), and `as?` degrades to
+     * [currentServer] rather than throwing if a future Velocity ever changes
+     * that. A version that renames the class breaks the build against the
+     * pinned jar, which is the failure worth having: loud, and before the
+     * image is made.
+     */
+    override val attachedServer: String?
+        get() {
+            val internal = player as? ConnectedPlayer ?: return currentServer
+            return internal.connectionInFlightOrConnectedServer?.serverInfo?.name ?: currentServer
+        }
 
     override fun moveTo(target: RegisteredServer) {
         player.createConnectionRequest(target).connectWithIndication()

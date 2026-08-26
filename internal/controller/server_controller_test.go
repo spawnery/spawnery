@@ -2658,3 +2658,87 @@ func TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError(t *testing.T) {
 			"nothing for this pass to do, not an error to log with a stacktrace", bare, got)
 	}
 }
+
+// TestAnArrivingPlayerKeepsTheDrainingPodAlive is the operator's half of the
+// drain gap, driven end to end through the reconciler.
+//
+// The backend reports zero, freshly, and it is telling the truth: a player
+// still completing the configuration phase is counted by neither the backend
+// nor the proxy's own player list -- disassembling velocity 3.5.1 build 615,
+// VelocityRegisteredServer.addPlayer is called only from
+// BackendPlaySessionHandler.activated(), the play phase. So this is exactly
+// the state in which a `kubectl delete` used to take the pod out from under
+// somebody, and the proxy's attachment report is the only thing that can say
+// otherwise.
+func TestAnArrivingPlayerKeepsTheDrainingPodAlive(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	// The backend is genuinely empty as far as it can tell.
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	// A proxy of the same namespace says one player is on their way to it.
+	proxyUID := "gateway-pod-uid"
+	f.agents.Connect(proxyUID, agent.RoleProxy)
+	if err := f.agents.ReportBackends(proxyUID, f.ns, map[string]int32{"lobby-x7k2": 1}); err != nil {
+		t.Fatalf("ReportBackends: %v", err)
+	}
+
+	srv := f.server("lobby-x7k2")
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Draining) {
+		t.Fatalf("phase = %q, want Draining", got)
+	}
+	if _, ok := f.pod("lobby-x7k2"); !ok {
+		t.Fatal("the pod was deleted with a player arriving on it, which is the whole defect")
+	}
+
+	// The player lands and leaves; the proxy says so, and only then does the
+	// pod go. This is what keeps the fix from being a permanent hold.
+	if err := f.agents.ReportBackends(proxyUID, f.ns, map[string]int32{}); err != nil {
+		t.Fatalf("ReportBackends: %v", err)
+	}
+	f.clock.Advance(time.Second)
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Error("the pod outlived the last player the proxies knew about")
+	}
+}
+
+// TestAProxyThatCannotReportBackendsDoesNotHoldEveryServer is the property
+// that lets a fleet upgrade in any order, driven where it would actually bite.
+//
+// An agent too old to send the report says nothing, and reading that as "this
+// proxy may be hiding players" would hold every server in the installation
+// occupied for as long as one un-upgraded proxy ran -- no drain would ever
+// finish anywhere. Silent and old are different states.
+func TestAProxyThatCannotReportBackendsDoesNotHoldEveryServer(t *testing.T) {
+	f := newFixture(t)
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	// A proxy that reports players like any agent and knows nothing about
+	// backends, which is exactly what a pre-0.2.3 Velocity agent is.
+	oldProxy := "old-gateway-uid"
+	f.agents.Connect(oldProxy, agent.RoleProxy)
+	if err := f.agents.ReportPlayers(oldProxy, 5, 500); err != nil {
+		t.Fatalf("ReportPlayers for the proxy: %v", err)
+	}
+
+	srv := f.server("lobby-x7k2")
+	if err := f.c.Delete(f.ctx, srv); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	f.clock.Advance(time.Second)
+	f.reconcile("lobby-x7k2")
+
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Error("an empty server was held occupied by a proxy that simply cannot report backends")
+	}
+}

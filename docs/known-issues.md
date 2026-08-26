@@ -101,46 +101,30 @@ cluster. Criterion 7 (a player can join, automated) is now proven — see
 player rather than disconnecting them) was not, and the reason why is the most
 important finding of this run.
 
-**The drain's exit condition still cannot see a player who is arriving, and
-no milestone owns the question.** `Occupied()`
-(`internal/phase/phase.go`) is `in.PlayersStale || in.PlayersOnline > 0` —
-what the *backend* has reported — so a player whose connection to the draining
-server is still in flight makes it read empty.
+**The drain's exit condition sees an arriving player now, and the window it
+leaves is one report interval wide.** `Occupied()`
+(`internal/phase/phase.go`) used to be `PlayersStale || PlayersOnline > 0` —
+what the *backend* has reported — so a player still completing the
+configuration phase made it read empty, and `kubectl delete` took the pod out
+from under them. It now adds what the proxies say: `BackendPlayers`, a
+per-backend attachment map sent beside `PlayerCount`, built from
+`ConnectedPlayer.getConnectionInFlightOrConnectedServer` — the one thing that
+knows where a player is *heading*.
 
-The agent no longer loses that player: `Drain` remembers which servers are
-draining and moves whoever lands on one afterwards
-(`agent/velocity/.../Drain.kt`, which carries the disassembly the rule rests
-on). What is left is the operator's half. Between the arrival and the move the
-player *is* on the draining server, and the backend's count has not caught up,
-so a `DeletePod` decided in that window still lands on someone. The window is
-now the gap between two events on one proxy rather than a whole backend
-handshake, and it is bounded by nothing stated anywhere.
+Every term of `Occupied()` can only make it true, so a proxy too old to send
+the report contributes nothing and behaves exactly as before. **No deployment
+order is needed**, which is the opposite of what this entry predicted when it
+deferred the work: the operator never trusts the *absence* of a report, only
+its presence.
 
-Reading the proxy's `playersConnected` instead would not have helped, and
-that is worth recording because it is the obvious fix: disassembling velocity
-3.5.1 build 615, `VelocityRegisteredServer.addPlayer` is called only from
-`BackendPlaySessionHandler.activated()` — the backend's *play* phase — so the
-proxy does not count such a player either. Closing this needs the proxy to
-report what only it knows, which is
-`ConnectedPlayer.getConnectionInFlightOrConnectedServer` per backend, as a
-periodic state beside `PlayerCount`. That is a proto change and a deployment
-order — every proxy has to carry it before the operator may trust it — and it
-is deferred rather than done.
-
-None of this branch's reviews caught the original, and why is the transferable
-part. The whole-branch review correctly predicted that a held connection would
-be *counted* on the proxy side, in `status.connectedPlayers`. Nobody asked the
-complementary question: which side does the drain's own exit condition read?
-The two counts live in different structs, are populated by different agents,
-and were never checked against each other until an actual delete on an actual
-held connection forced it. The prediction was also wrong, which nobody noticed
-either: the proxy does not count a held connection.
-
-In production the window is real but small: a real client completes the
-configuration phase within the same round trip. It was found because
-`spawnery-join --hold` freezes a connection there deliberately, which made a
-`kubectl delete` on a held player disconnect them rather than move them —
-`internal/mcjoin`'s `holdOpen` carries what a held connection is and is not.
+What is left is the interval. The map is a periodic state, not an event, so a
+player who arrives just after a report is invisible until the next one —
+`spec.agent.reportInterval`, five seconds by default, and twice that before
+the count is called stale. Closing it further would mean an event on arrival
+beside the state, which brings back exactly the reconnect and
+missed-message problems the periodic snapshot was chosen to avoid. The window
+is bounded and stated rather than unbounded and unnamed, which is the whole of
+what changed.
 
 ## From milestone 4c-1 (the proxy readiness contract)
 

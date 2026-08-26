@@ -78,6 +78,18 @@ type entry struct {
 	emptySince     time.Time
 	lastReportAt   time.Time
 	disconnectedAt time.Time
+
+	// namespace and backends are a proxy's report of how many of its players
+	// are on, or heading to, each backend it knows -- see AttachedTo. Both are
+	// zero for a server agent, which reports about itself and not about
+	// anybody else.
+	namespace string
+	backends  map[string]int32
+	// backendsAt is when that map last arrived. Separate from lastReportAt
+	// because the two messages are separate: an agent that reported players
+	// and not backends is an old agent, and reading its player timestamp as
+	// though it had said something about backends would invent an answer.
+	backendsAt time.Time
 }
 
 // Registry is the in-memory state of all connected agents. It is safe for
@@ -190,6 +202,90 @@ func (r *Registry) ReportPlayers(key string, players, slots int32) error {
 	}
 	e.lastReportAt = r.now()
 	return nil
+}
+
+// ReportBackends records a proxy's per-backend attachment map: how many of its
+// players are on, or on their way to, each backend it has been told about.
+//
+// The whole map replaces the whole map. Every report carries the complete
+// state, so a server that has dropped out of it has nobody attaching to it --
+// there is no separate "left" message to miss, and a dropped report costs one
+// interval of freshness rather than a count stranded forever.
+//
+// namespace comes from the authenticated identity rather than from the
+// message, for the reason the package comment gives about every other fact
+// here: an agent may not say which namespace's servers it is talking about.
+func (r *Registry) ReportBackends(key, namespace string, backends map[string]int32) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	e, ok := r.entries[key]
+	if !ok || !e.connected {
+		return fmt.Errorf("no live stream for %q", key)
+	}
+	if e.role != RoleProxy {
+		// A server agent has no view of anybody else's backends, so a report
+		// from one is a bug in an agent rather than a state to store.
+		return fmt.Errorf("backend report from a %s agent %q", e.role, key)
+	}
+	for name, n := range backends {
+		if n < 0 {
+			return fmt.Errorf("negative backend report for %q: %s=%d", key, name, n)
+		}
+	}
+	e.namespace = namespace
+	e.backends = backends
+	e.backendsAt = r.now()
+	return nil
+}
+
+// AttachedTo reports how many players the proxies say are on, or heading to,
+// one backend, and whether any proxy's answer is too old to believe.
+//
+// # Why this exists beside the backend's own count
+//
+// A backend counts a player only once they have finished the configuration
+// phase. Disassembling velocity 3.5.1 build 615,
+// VelocityRegisteredServer.addPlayer is called from exactly one place --
+// BackendPlaySessionHandler.activated(), the backend's *play* phase -- so a
+// player still handshaking is invisible to the backend and to the proxy's own
+// getPlayersConnected() alike. The drain's exit condition read the first of
+// those and deleted the pod under such a player.
+//
+// # How a caller must use it
+//
+// Add it to occupancy; never subtract from it. A proxy too old to send the
+// report contributes nothing here and the caller behaves exactly as it did
+// before this existed, which is what lets a fleet upgrade in any order. A
+// proxy that does send it can only make the caller more careful.
+//
+// stale is true when a proxy that has reported backends at some point has not
+// done so recently, and it is deliberately not true for a proxy that has never
+// reported at all: that is an old agent, not a silent one, and treating the
+// two the same would hold every server in the installation occupied for as
+// long as one un-upgraded proxy ran.
+func (r *Registry) AttachedTo(namespace, server string) (players int32, stale bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	for _, e := range r.entries {
+		if e.role != RoleProxy || e.namespace != namespace {
+			continue
+		}
+		if e.backendsAt.IsZero() {
+			continue
+		}
+		if !e.connected || r.now().Sub(e.backendsAt) > 2*r.reportInterval {
+			// A proxy whose report has aged out may be holding players on
+			// this backend and no longer saying so. Reported as stale rather
+			// than as a count, so the caller can treat unknown as occupied
+			// the way it does everywhere else.
+			stale = true
+			continue
+		}
+		players += e.backends[server]
+	}
+	return players, stale
 }
 
 // Disconnect records that the stream broke. The last player count is kept, so

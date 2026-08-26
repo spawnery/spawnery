@@ -31,6 +31,10 @@ class FakePlayers(private val roster: List<FakePlayer>) : Players {
         override val username: String get() = fake.username
         override val currentServer: String? get() = fake.currentServer
 
+        // Defaults to currentServer, so every existing fixture keeps meaning
+        // what it meant. A test about the arriving player sets it apart.
+        override val attachedServer: String? get() = fake.attachedServer ?: fake.currentServer
+
         override fun moveTo(target: RegisteredServer) {
             fake.failWith?.let { throw it }
             moves += fake.username to target.serverInfo.name
@@ -56,4 +60,15 @@ class FakePlayer(
     val username: String,
     var currentServer: String? = null,
     var failWith: Throwable? = null,
+    /**
+     * Where this player is heading, when that differs from where they are.
+     *
+     * Null means "the same as currentServer", which is true of every player
+     * who is not mid-handshake and keeps every fixture written before this
+     * existed saying what it said. The case worth setting it for is the one
+     * the operator could not see: currentServer null, attachedServer named --
+     * a player whose connection is in flight and whom neither the backend nor
+     * the proxy's own player list counts.
+     */
+    var attachedServer: String? = null,
 )

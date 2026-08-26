@@ -620,3 +620,50 @@ func TestAPodThatArrivedOutranksTheCreationDeadline(t *testing.T) {
 			got.Next, Starting)
 	}
 }
+
+// TestOccupiedCountsAPlayerOnlyAProxyCanSee is the operator's half of the
+// drain gap. A player still completing the configuration phase is counted by
+// neither the backend nor the proxy's own player list -- disassembling
+// velocity 3.5.1 build 615, VelocityRegisteredServer.addPlayer is called only
+// from BackendPlaySessionHandler.activated(), the play phase -- so this server
+// read empty while a connection to it was in flight, and the pod went.
+func TestOccupiedCountsAPlayerOnlyAProxyCanSee(t *testing.T) {
+	// Exactly the state that used to delete a pod under somebody: the backend
+	// has reported zero, freshly, and a proxy says one player is on their way.
+	in := Inputs{PlayersOnline: 0, PlayersStale: false, ProxyAttached: 1}
+	if !in.Occupied() {
+		t.Error("a server with a player arriving reads as empty")
+	}
+}
+
+// TestOccupiedTreatsASilentProxyAsOccupied applies the same rule the backend's
+// own count already follows: a report we cannot trust counts as occupied,
+// because one server too many beats one kick.
+func TestOccupiedTreatsASilentProxyAsOccupied(t *testing.T) {
+	in := Inputs{PlayersOnline: 0, ProxyAttachStale: true}
+	if !in.Occupied() {
+		t.Error("a proxy that stopped reporting leaves the server readable as empty")
+	}
+}
+
+// TestOccupiedIsUnchangedWithoutProxyReports is the property that lets a fleet
+// upgrade in any order, and the one worth a test of its own: every term of
+// Occupied can only make it true, so an agent too old to report backends
+// contributes zero and the rule is exactly what it was before this existed.
+func TestOccupiedIsUnchangedWithoutProxyReports(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   Inputs
+		want bool
+	}{
+		{"nobody anywhere", Inputs{}, false},
+		{"the backend has players", Inputs{PlayersOnline: 3}, true},
+		{"the backend's count is stale", Inputs{PlayersStale: true}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.in.Occupied(); got != tc.want {
+				t.Errorf("Occupied() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

@@ -305,3 +305,117 @@ func TestEmptyForAcrossStreamChanges(t *testing.T) {
 		})
 	}
 }
+
+// TestAttachedToSumsTheProxiesThatAreCurrent is the query the drain's exit
+// condition rests on: how many players are on, or heading to, one backend,
+// across every proxy that has said so recently.
+func TestAttachedToSumsTheProxiesThatAreCurrent(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+
+	for _, uid := range []string{"proxy-a", "proxy-b"} {
+		r.Connect(uid, RoleProxy)
+	}
+	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{"lobby-0": 2, "lobby-1": 1}); err != nil {
+		t.Fatalf("report from proxy-a: %v", err)
+	}
+	if err := r.ReportBackends("proxy-b", "minecraft", map[string]int32{"lobby-0": 3}); err != nil {
+		t.Fatalf("report from proxy-b: %v", err)
+	}
+
+	if n, stale := r.AttachedTo("minecraft", "lobby-0"); n != 5 || stale {
+		t.Errorf("lobby-0 = %d stale=%v, want 5 and fresh", n, stale)
+	}
+	if n, stale := r.AttachedTo("minecraft", "lobby-1"); n != 1 || stale {
+		t.Errorf("lobby-1 = %d stale=%v, want 1 and fresh", n, stale)
+	}
+	// A backend nobody named has nobody on it. That is what makes the map a
+	// state rather than a stream of changes: absence is an answer.
+	if n, stale := r.AttachedTo("minecraft", "lobby-2"); n != 0 || stale {
+		t.Errorf("lobby-2 = %d stale=%v, want 0 and fresh", n, stale)
+	}
+}
+
+// TestAttachedToIsScopedToItsNamespace keeps one network's proxies from
+// answering about another's. Server names are unique per namespace and not
+// across a cluster, so a sum that ignored the namespace would hold a server
+// occupied because a same-named server elsewhere had players.
+func TestAttachedToIsScopedToItsNamespace(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("proxy-other", RoleProxy)
+	if err := r.ReportBackends("proxy-other", "other", map[string]int32{"lobby-0": 4}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	if n, stale := r.AttachedTo("minecraft", "lobby-0"); n != 0 || stale {
+		t.Errorf("lobby-0 in minecraft = %d stale=%v, want 0 and fresh", n, stale)
+	}
+	if n, _ := r.AttachedTo("other", "lobby-0"); n != 4 {
+		t.Errorf("lobby-0 in other = %d, want 4", n)
+	}
+}
+
+// TestAProxyThatNeverReportedBackendsIsNotStale is the property that lets a
+// fleet upgrade in any order, and it is the one most easily got wrong.
+//
+// An agent too old to send the report says nothing, and reading that as "this
+// proxy may be hiding players" would hold every server in the installation
+// occupied for as long as one un-upgraded proxy ran -- no drain would ever
+// finish. Silent and old are different states and only the first is stale.
+func TestAProxyThatNeverReportedBackendsIsNotStale(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("old-proxy", RoleProxy)
+	// It reports players like any agent, and nothing about backends.
+	if err := r.ReportPlayers("old-proxy", 7, 100); err != nil {
+		t.Fatalf("report players: %v", err)
+	}
+	clock.now = clock.now.Add(time.Hour)
+
+	if n, stale := r.AttachedTo("minecraft", "lobby-0"); n != 0 || stale {
+		t.Errorf("= %d stale=%v, want 0 and fresh: an old agent is silent, not stale", n, stale)
+	}
+}
+
+// TestAProxyThatStoppedReportingBackendsIsStale is the other half. A proxy
+// that used to report and no longer does may be holding players on this
+// backend without saying so, and the caller has to read that as occupied for
+// the same reason it reads a stale player count that way.
+func TestAProxyThatStoppedReportingBackendsIsStale(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("proxy-a", RoleProxy)
+	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{"lobby-0": 1}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	// Inside twice the report interval it still counts.
+	clock.now = clock.now.Add(9 * time.Second)
+	if n, stale := r.AttachedTo("minecraft", "lobby-0"); n != 1 || stale {
+		t.Errorf("at 9s: = %d stale=%v, want 1 and fresh", n, stale)
+	}
+	// Past it, the count is not believed and the caller is told so.
+	clock.now = clock.now.Add(3 * time.Second)
+	if n, stale := r.AttachedTo("minecraft", "lobby-0"); !stale {
+		t.Errorf("at 12s: = %d stale=%v, want stale", n, stale)
+	}
+}
+
+// TestABackendReportFromAServerAgentIsRefused keeps the direction of the
+// channel straight. A server agent knows about itself and about nobody else,
+// so a backend map from one is an agent bug rather than a state to store --
+// and storing it would let one compromised server pin any other server in its
+// namespace as occupied for ever.
+func TestABackendReportFromAServerAgentIsRefused(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("a-server", RoleServer)
+
+	if err := r.ReportBackends("a-server", "minecraft", map[string]int32{"lobby-0": 9}); err == nil {
+		t.Fatal("a server agent's backend report was accepted")
+	}
+	if n, _ := r.AttachedTo("minecraft", "lobby-0"); n != 0 {
+		t.Errorf("= %d, want 0: the refused report was stored anyway", n)
+	}
+}

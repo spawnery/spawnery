@@ -70,5 +70,20 @@ public interface ProxyMessageOrBuilder extends
    */
   cloud.spawnery.agent.pb.HeartbeatOrBuilder getHeartbeatOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+   * @return Whether the backendPlayers field is set.
+   */
+  boolean hasBackendPlayers();
+  /**
+   * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+   * @return The backendPlayers.
+   */
+  cloud.spawnery.agent.pb.BackendPlayers getBackendPlayers();
+  /**
+   * <code>.spawnery.agent.v1alpha1.BackendPlayers backend_players = 5;</code>
+   */
+  cloud.spawnery.agent.pb.BackendPlayersOrBuilder getBackendPlayersOrBuilder();
+
   cloud.spawnery.agent.pb.ProxyMessage.MessageCase getMessageCase();
 }
