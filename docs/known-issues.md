@@ -151,62 +151,34 @@ whether this particular assertion can fail, and answering that means making a
 proxy shut its own listener on a SetReady — a fault injection nothing here
 needs for any other purpose.
 
-## From milestone 4c-2 (proxy rolling updates)
-
-**Which edits roll a proxy group is decided by what reaches the pod, and that
-is not the shape of the CRD.** The digest covers `podspec.BuildProxyPod`'s
-output, so an edit rolls the group exactly when it changes that pod. Read off
-`internal/podspec/proxy.go`: `image`, `resources`, `scheduling`,
-`config.playerLimit`, `routing.fallbackGroups`, `configOverlay` (the
-ConfigMap's *name*, in a volume) and `drain.timeoutSeconds` all roll it, as do
-the `Network` fields the proxy pod inherits — `defaults.resources`,
-`defaults.scheduling`, `defaults.imagePullSecrets` and
-`forwardingSecretRef.name`. `replicas` does not, which is the point of the
-design's §3.1. Neither do `config.motd` and `config.onlineMode`, nor the
-*contents* of a `configOverlay` ConfigMap or of the forwarding secret, because
-the pod names all of those rather than carrying them — those two fields now
-say so themselves, and `kubectl explain` says it with them.
-
-The one worth knowing before an incident: **`spec.drain.timeoutSeconds` rolls
-the group**, because it reaches the pod as `terminationGracePeriodSeconds`.
-Tuning a drain timeout is something an operator does in the middle of an
-incident, and the edit adds a surge pod and a full replacement cycle on top of
-whatever prompted it. Raising it while a drain is already in flight otherwise
-behaves — the marked pod keeps its mark, being now stale as well as draining,
-and the deadline is read from the current spec on every pass.
-`docs/runbook-milestone-4c1-evidence.md` §9 recommends exactly this edit for a
-drain you want to give more room to; since 4c-2 it is not free.
-
 ## From milestone 4c-3 (node drain)
 
-**An operator running cluster-autoscaler must pass `-drain-taint
-ToBeDeletedByClusterAutoscaler`, or a scale-in is invisible to this operator
-until something else cordons the node.** *Measured on `paulwtf` 2026-08-25: it
-passes none.* Its `Deployment`'s args are `--leader-elect`,
-`--startup-deadline`, `--metrics-bind-address` and
-`--health-probe-bind-address`, and nothing else — so the taint branch cannot
-fire on that cluster at all. Harmless there, and worth writing down rather than
-fixing: three fixed bare-metal nodes and no autoscaler, so the branch has
-nothing to react to. It stops being harmless the day one appears, and this is
-the sentence that will be looked for then. `IsDeparting` (`internal/controller/nodes.go`)
-has two ways in: `spec.unschedulable`, which is hardwired, and a taint whose
-key appears in the operator's `-drain-taint` list — repeatable, and empty by
-default. An earlier draft of the design that produced this milestone claimed
-cluster-autoscaler cordons a node in addition to tainting it, so that the
-empty default would still see a scale-in a moment later; that claim did not
-survive the milestone's own review and was corrected in place
-(`bc4122a`, "cluster-autoscaler does not cordon, so say what stays true").
-What is actually true: cluster-autoscaler taints
-`ToBeDeletedByClusterAutoscaler:NoSchedule` and deletes the node without
-touching `spec.unschedulable` unless `--cordon-node-before-terminating` is
-turned on, and that flag defaults to off. Karpenter was not re-checked and is
-not claimed here either way. The default stays empty regardless — a default
-that reacted to another project's taint key would couple this operator to a
-vocabulary that project is free to rename, which is exactly the coupling a
-configurable list exists to avoid — so this is a configuration step every
-cluster-autoscaler user has to take themselves, and nothing in the operator
-will tell them they missed it: an unset flag and a genuinely quiet node look
-identical from here.
+**`paulwtf` passes no `-drain-taint`, so the day an autoscaler appears there
+somebody has to set it.** *Measured 2026-08-25:* the operator `Deployment`'s
+args are `--leader-elect`, `--startup-deadline`, `--metrics-bind-address` and
+`--health-probe-bind-address`, and nothing else. Harmless today — three fixed
+bare-metal nodes and no autoscaler, so the taint branch has nothing to react to
+— and this is the sentence that will be looked for the day one appears.
+
+`IsDeparting` (`internal/controller/nodes.go`) has two ways in:
+`spec.unschedulable`, which is hardwired, and a taint whose key appears in the
+`-drain-taint` list, which is repeatable and empty by default. That default
+stays empty: reacting to another project's taint key by default would couple
+this operator to a vocabulary that project is free to rename, which is the
+coupling a configurable list exists to avoid.
+
+What is no longer true is the rest of the old entry, which said nothing in the
+operator would tell an operator they had missed the flag. It does now: a node
+carrying a well-known drain taint the operator was not configured for produces
+one log line per node naming the project and the flag. Noticing is not
+reacting, and only the second was ever the coupling worth avoiding.
+
+For the record, since a draft of the design that produced this milestone got it
+wrong and was corrected in place (`bc4122a`): cluster-autoscaler taints
+`ToBeDeletedByClusterAutoscaler:NoSchedule` and deletes the node **without**
+touching `spec.unschedulable`, unless `--cordon-node-before-terminating` is on,
+and that flag defaults to off. Karpenter was never re-checked and is not
+claimed here either way.
 
 **A group in create-backoff, or one with a broken Network, condemns without
 replacing.** `size()` (`internal/controller/servergroup_controller.go`) gates

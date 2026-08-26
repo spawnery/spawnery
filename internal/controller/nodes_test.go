@@ -117,3 +117,102 @@ func TestNodeDeparting(t *testing.T) {
 		t.Error("a cordoned node does not read as departing")
 	}
 }
+
+// TestAWellKnownDrainTaintIsNoticedWithoutBeingActedOn is the answer to
+// docs/known-issues.md's "nothing in the operator will tell them they missed
+// it". An unset -drain-taint and a genuinely quiet cluster look identical from
+// inside this operator, and the one thing that tells them apart is a node
+// turning up with a taint that plainly means the node is going.
+//
+// The two halves are asserted together on purpose. Noticing must not become
+// acting: a default that moved pods off another project's taint key would
+// couple this operator to a vocabulary that project is free to rename, which
+// is the coupling the configurable list exists to avoid.
+func TestAWellKnownDrainTaintIsNoticedWithoutBeingActedOn(t *testing.T) {
+	for key, project := range map[string]string{
+		"ToBeDeletedByClusterAutoscaler": "cluster-autoscaler",
+		"karpenter.sh/disrupted":         "Karpenter",
+	} {
+		t.Run(key, func(t *testing.T) {
+			node := &corev1.Node{Spec: corev1.NodeSpec{Taints: []corev1.Taint{
+				{Key: key, Effect: corev1.TaintEffectNoSchedule},
+			}}}
+
+			departing, hint := departingWithHint(node, nil)
+			if departing {
+				t.Error("the operator acted on another project's taint key without being told to")
+			}
+			if hint != project {
+				t.Errorf("hint = %q, want %q", hint, project)
+			}
+		})
+	}
+}
+
+// TestAConfiguredTaintReportsNothingMissing keeps the warning from firing on
+// the cluster that did it right. An operator who passed the flag has nothing
+// to be told, and a line saying otherwise would be noise on exactly the
+// installations that read their logs.
+func TestAConfiguredTaintReportsNothingMissing(t *testing.T) {
+	node := &corev1.Node{Spec: corev1.NodeSpec{Taints: []corev1.Taint{
+		{Key: "ToBeDeletedByClusterAutoscaler", Effect: corev1.TaintEffectNoSchedule},
+	}}}
+
+	departing, hint := departingWithHint(node, []string{"ToBeDeletedByClusterAutoscaler"})
+	if !departing {
+		t.Error("a configured taint key did not make the node departing")
+	}
+	if hint != "" {
+		t.Errorf("hint = %q, want none: nothing is missing", hint)
+	}
+}
+
+// TestACordonedNodeReportsNothingMissing is the same point by the other route
+// into IsDeparting. A cordon is honoured whatever the taints say, so a node
+// that is already departing has nothing missing to report even when it also
+// carries an unconfigured key -- which is exactly what
+// --cordon-node-before-terminating produces.
+func TestACordonedNodeReportsNothingMissing(t *testing.T) {
+	node := &corev1.Node{Spec: corev1.NodeSpec{
+		Unschedulable: true,
+		Taints: []corev1.Taint{
+			{Key: "ToBeDeletedByClusterAutoscaler", Effect: corev1.TaintEffectNoSchedule},
+		},
+	}}
+
+	departing, hint := departingWithHint(node, nil)
+	if !departing || hint != "" {
+		t.Errorf("departing=%v hint=%q, want true and none", departing, hint)
+	}
+}
+
+// TestAPreferNoScheduleWellKnownTaintIsNotEvenNoticed keeps the hint on the
+// same footing as the decision. IsDeparting ignores PreferNoSchedule because
+// it does not stop the scheduler putting a replacement back on the same node;
+// a warning about one would send an operator to add a flag that would then
+// have to be ignored anyway.
+func TestAPreferNoScheduleWellKnownTaintIsNotEvenNoticed(t *testing.T) {
+	node := &corev1.Node{Spec: corev1.NodeSpec{Taints: []corev1.Taint{
+		{Key: "ToBeDeletedByClusterAutoscaler", Effect: corev1.TaintEffectPreferNoSchedule},
+	}}}
+
+	if departing, hint := departingWithHint(node, nil); departing || hint != "" {
+		t.Errorf("departing=%v hint=%q, want false and none", departing, hint)
+	}
+}
+
+// TestTheMissingTaintWarningIsOncePerNode pins the gate rather than the
+// wording. nodeDeparting runs for every pod of every group on every reconcile,
+// so an ungated warning would be several lines a second for as long as the
+// node stood, about something that does not change while it stands.
+func TestTheMissingTaintWarningIsOncePerNode(t *testing.T) {
+	var o once
+	calls := 0
+	for i := 0; i < 5; i++ {
+		o.Do("node-a", func() { calls++ })
+	}
+	o.Do("node-b", func() { calls++ })
+	if calls != 2 {
+		t.Errorf("calls = %d, want 2: one per node, however often it is asked", calls)
+	}
+}

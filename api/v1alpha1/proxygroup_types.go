@@ -216,6 +216,18 @@ type ProxyGroupSpec struct {
 	Routing RoutingSpec `json:"routing"`
 
 	// Drain bounds how long existing sessions may run out on proxy replacement.
+	//
+	// Editing it rolls the whole group, and that is worth knowing before an
+	// incident rather than during one. The value reaches the pod as
+	// terminationGracePeriodSeconds, so it is part of the rendered pod the
+	// group's hash covers -- which means raising a drain timeout, the thing an
+	// operator does in the middle of an incident, adds a surge pod and a full
+	// replacement cycle on top of whatever prompted it.
+	//
+	// Raising it while a drain is already in flight otherwise behaves: the
+	// marked pod keeps its mark, being now stale as well as draining, and the
+	// deadline is read from the current spec on every pass. So the edit is
+	// safe, just not free.
 	// +kubebuilder:default={timeoutSeconds:300}
 	// +optional
 	Drain *DrainSpec `json:"drain,omitempty"`

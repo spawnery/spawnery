@@ -22,11 +22,13 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
@@ -51,21 +53,57 @@ import (
 // from emptying a group; the watch and the resync bring the answer back within
 // seconds.
 func IsDeparting(node *corev1.Node, taintKeys []string) bool {
+	departing, _ := departingWithHint(node, taintKeys)
+	return departing
+}
+
+// wellKnownDrainTaints are keys other projects use to mark a node they are
+// about to remove. This operator does not act on them and will not: a default
+// that reacted to another project's taint key would couple it to a vocabulary
+// that project is free to rename, which is exactly the coupling a configurable
+// -drain-taint list exists to avoid.
+//
+// Noticing is a different thing from reacting, and the coupling it risks is
+// different too. A key that gets renamed here costs a warning that stops
+// appearing; a key that got renamed in the list above would cost a node drain
+// that stops working. So this is a list of things to mention, and nothing
+// downstream branches on it.
+//
+// What it answers is the one thing an operator running an autoscaler cannot
+// find out from here: whether they forgot the flag. An unset -drain-taint and
+// a genuinely quiet cluster look identical from inside this operator -- until
+// a node turns up carrying a taint that plainly means "this node is going" and
+// is not in the list it was told about.
+var wellKnownDrainTaints = map[string]string{
+	"ToBeDeletedByClusterAutoscaler": "cluster-autoscaler",
+	"karpenter.sh/disrupted":         "Karpenter",
+	"karpenter.sh/disruption":        "Karpenter",
+}
+
+// departingWithHint is IsDeparting plus the name of a project whose drain
+// taint this node carries and this operator was not configured for. The hint
+// is empty whenever the node is departing by a route this operator does
+// honour, because there is then nothing missing to report.
+func departingWithHint(node *corev1.Node, taintKeys []string) (bool, string) {
 	if node == nil {
-		return false
+		return false, ""
 	}
 	if node.Spec.Unschedulable {
-		return true
+		return true, ""
 	}
+	var hint string
 	for _, taint := range node.Spec.Taints {
 		if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
 			continue
 		}
 		if slices.Contains(taintKeys, taint.Key) {
-			return true
+			return true, ""
+		}
+		if project, known := wellKnownDrainTaints[taint.Key]; known && hint == "" {
+			hint = project
 		}
 	}
-	return false
+	return false, hint
 }
 
 // nodeDeparting resolves a pod's node and asks IsDeparting about it.
@@ -85,8 +123,37 @@ func nodeDeparting(ctx context.Context, reader client.Reader, nodeName string, t
 	if err := reader.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
 		return false
 	}
-	return IsDeparting(node, taintKeys)
+	departing, hint := departingWithHint(node, taintKeys)
+	if hint != "" {
+		// Once per node, not once per pod on it and not once per pass. This
+		// runs for every pod of every group on every reconcile, so an
+		// ungated log would be several lines a second for as long as the
+		// node stood -- and the thing it reports does not change while it
+		// stands.
+		//
+		// A log line and not a condition: what is wrong is the operator's own
+		// flags, which belong to whoever deployed it, and no group's status is
+		// the place to report a mistake no group's owner can fix.
+		warnedMissingDrainTaint.Do(nodeName, func() {
+			log.FromContext(ctx).Info(
+				"a node carries a drain taint this operator was not configured for; its pods will not be moved",
+				"node", nodeName, "project", hint, "flag", "-drain-taint",
+				"remedy", "pass -drain-taint with that project's key, or cordon the node")
+		})
+	}
+	return departing
 }
+
+// warnedMissingDrainTaint remembers which nodes have already been reported, so
+// the warning above is one line per node rather than one per pod per pass.
+//
+// Never pruned. The keys are node names, so the set is bounded by the nodes
+// this cluster has ever had that carried an unconfigured drain taint -- which
+// is at most the cluster's node count, and in the case this exists for is one
+// or two. A node that comes back after its taint was cleared is not warned
+// about again, which is the right way round: the flag is still missing, and
+// the line already stands in the log.
+var warnedMissingDrainTaint once
 
 // drainingCondition builds the NodeDraining condition from the names of
 // departing nodes carrying at least one of this group's live pods. Both
@@ -121,4 +188,28 @@ func drainingCondition(nodeNames []string) metav1.Condition {
 	cond.Message = fmt.Sprintf("pods are on node(s) %s, which are on their way out of service",
 		strings.Join(names, ", "))
 	return cond
+}
+
+// once is a set of keys each of which runs its function the first time only.
+//
+// sync.Once is per value and this needs per key; sync.Map plus LoadOrStore
+// would run the function on every caller that raced the first. This is the
+// small, obvious version: one mutex, one map, and the function called under it
+// so two goroutines with the same key produce one call.
+type once struct {
+	mu   sync.Mutex
+	seen map[string]bool
+}
+
+func (o *once) Do(key string, f func()) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.seen[key] {
+		return
+	}
+	if o.seen == nil {
+		o.seen = map[string]bool{}
+	}
+	o.seen[key] = true
+	f()
 }
