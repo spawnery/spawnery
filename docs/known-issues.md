@@ -340,28 +340,6 @@ It has that number in its own caches. Nothing yet compares it to
 first one in this channel that is a statement about the fleet rather than
 about a peer.
 
-## From the milestone 6a Task 4 measurement round (2026-08-17)
-
-**A denied permission on a type reached only through the manager's cache
-produces no signal at all — not a late one, an absent one.** Measured by
-removing `pods:list` from every marker that grants it, confirming the
-revocation at the API server, and then watching the operator continuously for
-seven minutes and forty-five seconds, well past `Controller`'s two-minute
-`CacheSyncTimeout`: the log gained not one line past the initial
-`"Starting workers"` burst, `rest_client_requests_total` recorded `200`,
-`201`, `404` and `429` across 24 samples and never `403`, and the restart
-count stayed `0`. So `theOperatorWasNeverDenied` cannot see it, and neither
-can a person reading the log.
-
-The class is now largely covered from the other side. Since
-`testenv.RestrictedClient`, removing `pods:list` turns **231** controller
-tests red, because those tests call through to a live List rather than only
-registering a watch. What is left uncovered is a permission reached
-*exclusively* through `Owns()`, `For()` or one of the restricted caches in
-`cmd/spawnery-operator/main.go`, on a path no controller test drives — and
-for that class a green `make e2e` still proves nothing, because the failure
-mode above is silence.
-
 ## From milestone 6a (the operator in a cluster)
 
 6a gives the operator its own OCI image, one publish path for all three images,
@@ -374,50 +352,27 @@ above — Task 4's
 measurement round — belongs to this milestone too and is not repeated here; the
 first item below is what answered its open question.
 
-**The denial check fires on a write verb, and the shape of what it misses is
-narrower than "reads".** Removing `create` on `pods` from the markers produced
-a quoted `... is forbidden: ... cannot create resource "pods" ...` on the first
-attempt, with the operator still healthy and `theOperatorWasNeverDenied` still
-able to read it — the combination Task 4 tried four ways and could not produce.
+**The denial check reads a log, so an error the code handles well is
+invisible to it — and the self-check that answers the wider question runs
+once.** `hack/e2e.sh`'s §7.2 scenario greps the operator's whole log for
+`is forbidden:`. A revoked *write* verb produces exactly that on the first
+attempt, measured. A revoked cache-backed *list* produces nothing at all,
+measured over seven and three-quarter minutes with `pods: list` gone: no log
+line, no `403` in `rest_client_requests_total` across 24 samples, no restart.
+And `readForwardingSecret` deliberately folds a real 403 into a message
+reading "the operator may not read secret …", with no `is forbidden:` anywhere
+in it — an error handled well is invisible to a check that can only see what
+something logs.
 
-Be exact about the other side, because it is easy to over-read. What was
-revoked and watched is **two cache-backed `list` verbs**: `pods: list`, for
-seven and three-quarter minutes continuously, and `networks: list`. Neither
-produced anything. **No uncached read was ever revoked and watched**, so
-"the check misses read verbs" is not a measured statement — it is the
-conclusion of a hypothesis, and the hypothesis is the one the section above
-declines to assert: that such a read goes through the manager's cache, whose
-initial sync is a watch rather than a `list`, so a revoked verb never reaches a
-request the API server could deny, while a write goes to the API server
-directly and does. That hypothesis would also have to account for the anomaly
-the section above records and does not explain. What is established is the
-asymmetry between a revoked write and those two revoked lists, and no more.
-
-**And a denied read can escape this check for a reason that has nothing to do
-with the cache.** `readForwardingSecret`
-(`internal/controller/forwardingsecret.go`) deliberately uses the *uncached*
-reader, so a missing `secrets: get` in a `Network`'s namespace really is a 403
-from the API server — and the function folds it into a `forwardingRead` whose
-message reads "the operator may not read secret …", with no `is forbidden:`
-substring anywhere in it. The read sits after `network_controller.go`'s
-`Accepted` branch has already returned, so no scenario fails either, and that
-controller makes no logger call at all. The check would stay green through it.
-`hack/e2e.sh` claimed the opposite until this was checked; its comment now says
-so. The general lesson for anyone extending the check: it can only see what
-something logs, so an error the code handles well is invisible to it by the
-same mechanism that makes the handling good.
-
-**A verb is only proven by a test that runs under the operator's own identity
-*and* takes the path needing it, and `make e2e` cannot do the second.**
-`selectRetirement` only nominates when the group holds a Ready server of the
-current generation, and `test/e2e/manifests/e2e.yaml` names an unresolvable
-image on purpose, so nothing in that harness is ever Ready — an image change
-there produces no nomination at all. Since 2026-08-25 the controller tests
-carry the first half instead: `testenv.RestrictedClient` gives every
-reconciler the operator's ServiceAccount and exactly the generated
-ClusterRole, so any path those tests already take proves its own verbs. What
-remains uncovered is a path no controller test takes, and `make e2e` is still
-the only place the operator's real identity meets a real cluster.
+Since 2026-08-26 the operator asks the authorizer directly instead of waiting
+to be refused: a `SelfSubjectAccessReview` per entry of
+`rbacaudit.RequiredCluster` and `RequiredNamespaced` at startup, which sees a
+cache-backed verb exactly as well as any other and names the call site of
+every one it lacks. **That runs once.** A permission revoked while the
+operator is running is still invisible — the same silence, arriving later —
+and closing that would mean 74 reviews on every resync for a state that
+changes when a person changes it. Whether that trade is worth taking is the
+open question; nothing else here is.
 
 **The E2E cluster is a single node, so a whole class of behaviour is
 untouched.** `hack/e2e.sh` creates one `kind` cluster with its default
