@@ -1914,9 +1914,17 @@ func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32)
 	}
 }
 
-// bumpGeneration performs a real spec update, the way an operator rolling a
-// new image would: it moves group.Generation forward, so every server created
-// under the previous value reads as stale to the scaling rules.
+// bumpPodSpec performs a real spec update, the way an operator rolling a new
+// image would. It changes spec.image, which is what reaches
+// podspec.DesiredServerHash, so every server created under the previous value
+// reads as stale to the scaling rules.
+//
+// It was called bumpPodSpec until 7a, and the rename is not cosmetic. The
+// old name described the mechanism the rules used to read, and since 7a a
+// helper that only moved metadata.generation -- by editing spareSlots, say --
+// would make nothing stale at all, while every test built on it went on
+// passing and asserting nothing. The image edit below is the load-bearing
+// line, and the name says so.
 //
 // It also pins spec.update explicitly rather than leaving it unset.
 // spec.update is optional, and an unset one arrives at MaxUnavailable: 0 —
@@ -1945,7 +1953,7 @@ func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32)
 // mid-window, ~70 clear on either side, so this is not fragile today — but a
 // future spareSlots change made for an unrelated reason could silently push
 // assertion 1 (or 5) outside it.
-func (f *fixture) bumpGeneration(t *testing.T) {
+func (f *fixture) bumpPodSpec(t *testing.T) {
 	t.Helper()
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
@@ -1959,6 +1967,14 @@ func (f *fixture) bumpGeneration(t *testing.T) {
 }
 
 // serversOfGeneration filters the group's servers down to one generation.
+//
+// Since 7a the sizing rules read spec.podHash and not this field, so this is a
+// proxy for "of the current spec" rather than the rule itself. It is a sound
+// proxy in every test here for one reason: bumpPodSpec changes spec.image,
+// which moves the render hash and the generation together. A test that edited
+// only capacity would move the generation alone, and this helper would report
+// every server stale while the rules correctly reported none. Use PodHash
+// directly in such a test rather than reaching for this.
 func (f *fixture) serversOfGeneration(t *testing.T, generation int64) []spawneryv1alpha1.Server {
 	t.Helper()
 	var out []spawneryv1alpha1.Server
@@ -2025,11 +2041,11 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 	f.createServer(b)
 	f.markReadyWithPlayers(t, b, 60)
 
-	f.bumpGeneration(t)
+	f.bumpPodSpec(t)
 
 	// 1. Exactly one replacement is created — not zero, and not one per
 	// five-second pass while it boots. At this fixture's spareSlots (150,
-	// see bumpGeneration), this create is explained by ordinary spare-slot
+	// see bumpPodSpec), this create is explained by ordinary spare-slot
 	// demand alone: pass 1 sees provisional=80 (two occupied stale servers,
 	// 40 free each) against spareSlots=150, gap=70, wanted=1 — already 1
 	// before coldStart's own "if cold && create<1" branch is even consulted.
@@ -2078,7 +2094,7 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 	// 5. The retirement above is what leaving() (Task 3) exists to make
 	// possible: the retiring server dropping out of the group's size is what
 	// lets DecideSize notice the capacity it was carrying is gone and order a
-	// replacement for it, in the very same pass — bumpGeneration's spareSlots
+	// replacement for it, in the very same pass — bumpPodSpec's spareSlots
 	// of 150 is chosen so fresh alone cannot cover that gap on its own. If
 	// leaving() stopped including phase.Retiring, the retiring server would
 	// keep holding the group's size, the shortfall would never become
@@ -2102,7 +2118,7 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 //
 // Arithmetic: two stale (old-generation) occupied servers, 60 players each
 // out of maxPlayers 100, for 40 free slots apiece — sum(stale free) = 80.
-// spareSlots is left at the fixture's default of 40 (bumpGeneration is not
+// spareSlots is left at the fixture's default of 40 (bumpPodSpec is not
 // used here precisely because it raises spareSlots to 150; this test needs
 // it left alone). At pass 1: provisional = 80 >= spareSlots = 40, so gap <=
 // 0 and wanted = 0. MinReplicas (1) does not raise create either — alive is
@@ -2123,7 +2139,7 @@ func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
 	f.createServer(b)
 	f.markReadyWithPlayers(t, b, 60)
 
-	// A real spec update, bumping the generation exactly as bumpGeneration
+	// A real spec update, bumping the generation exactly as bumpPodSpec
 	// does, but deliberately not touching spareSlots — it must stay at the
 	// fixture's default of 40 for the arithmetic above to hold.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
@@ -2492,7 +2508,7 @@ func TestGroupStillRetiresWhileItBacksOff(t *testing.T) {
 
 	// The operator's fix in flight: a real generation bump, so the group is
 	// genuinely mid-changeover rather than merely holding one old server.
-	f.bumpGeneration(t)
+	f.bumpPodSpec(t)
 
 	// The current-generation Ready server selectRetirement requires before it
 	// will nominate anything. Its readySince is the watermark the failure
@@ -2535,7 +2551,7 @@ func TestGenerationChangeClearsTheBackoff(t *testing.T) {
 	}
 
 	// The operator's answer to whatever failed.
-	f.bumpGeneration(t)
+	f.bumpPodSpec(t)
 	f.reconcileGroup(t, r)
 
 	g := f.reloadGroup(t)
@@ -2916,7 +2932,7 @@ func TestGenerationChangeClearsAGaveUpGroupsConditions(t *testing.T) {
 	}
 
 	// The operator's answer to whatever failed.
-	f.bumpGeneration(t)
+	f.bumpPodSpec(t)
 	f.reconcileGroup(t, r)
 
 	g := f.reloadGroup(t)
@@ -3053,7 +3069,7 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	f.reconcileGroup(t, r)
 	f.markReady(t, f.oneServerName(t))
 
-	f.bumpGeneration(t) // the changeover begins; the cold start builds one
+	f.bumpPodSpec(t) // the changeover begins; the cold start builds one
 	f.reconcileGroup(t, r)
 	generation := f.reloadGroup(t).Generation
 
