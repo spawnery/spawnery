@@ -782,7 +782,7 @@ func (r *ServerGroupReconciler) size(
 				MaxPlayers:    group.Spec.MaxPlayers,
 				Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
 
-				Generation:     group.Generation,
+				PodHash:        podHash,
 				MaxUnavailable: group.UpdateMaxUnavailable(),
 
 				PendingCreates: int32(len(pendingCreates)),

@@ -409,27 +409,26 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		f.clock.Advance(ResyncInterval)
 	}
 
-	// setMinReplicas performs a real spec update, so the two servers already
-	// up go stale and the cold start orders one replacement. This fixture
-	// never reports for it, so it runs out its startup deadline and fails,
-	// and the corpse is kept: Failed servers are retained for
-	// failedRetentionSeconds (an hour by default), and the 65 passes above,
-	// at one resync each, do not run long enough to clear it.
+	// One live server at the end: the occupied one. The idle server waited out
+	// the stabilization window and was shed, which is what this test is named
+	// for, and nothing was built to replace it.
 	//
-	// The group then builds one more replacement before the loop ends, and
-	// that second attempt is the backoff working rather than a leak. One
-	// failure buys ten seconds; the loop advances five seconds a pass, so
-	// the window closes two passes after the deadline expires and the cold
-	// start is permitted again. Nothing ever reports for that one either, so
-	// it is still starting when the loop stops — live, but not Ready.
+	// It settled on two until 7a, and the second was an accident rather than
+	// this test's subject. setMinReplicas moved metadata.generation, the old
+	// staleness rule read every running server as out of date, and a cold
+	// start ordered a replacement that this fixture never reports for -- so it
+	// failed, left a corpse, and 4d's backoff permitted one further attempt
+	// ten seconds later. All of that was a changeover begun by an edit that
+	// changes nothing about the pods, and since 7a a capacity edit begins
+	// none: staleness is podspec.DesiredServerHash, which spec.scaling never
+	// reaches.
 	//
-	// Until milestone 4d this settled on one live server, because 4b's
-	// cold-start suppression held every further attempt off for the whole
-	// retention hour after a single failure. Retiring that suppression is
-	// what makes the second attempt appear, and the wait that replaces it is
-	// ten seconds rather than an hour. Both live servers and the corpse are
-	// asserted rather than filtered away, so a missing or a doubled one
-	// still fails this test.
+	// The backoff behaviour that half was incidentally exercising has fourteen
+	// envtests of its own -- TestGroupStopsCreatingWhileItBacksOff and
+	// TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter among them --
+	// plus TestDecideBackoffWaitsAndThenAllows for the ten seconds
+	// specifically. Nothing is uncovered by this test asserting only what it
+	// is about.
 	final := f.listServers(t)
 	var live, failed []spawneryv1alpha1.Server
 	for _, s := range final {
@@ -440,49 +439,29 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		live = append(live, s)
 	}
 
-	var survivor, attempt *spawneryv1alpha1.Server
-	for i := range live {
-		if live[i].Name == busy {
-			survivor = &live[i]
-			continue
-		}
-		attempt = &live[i]
-	}
-	if len(live) != 2 || survivor == nil || attempt == nil {
+	if len(live) != 1 || live[0].Name != busy {
 		names := make([]string, 0, len(live))
 		for _, s := range live {
 			names = append(names, s.Name)
 		}
-		t.Fatalf("live servers settled on %v, want the occupied server %q and one further "+
-			"cold-start attempt: the backoff permits a second try ten seconds after the "+
-			"first replacement fails", names, busy)
+		t.Fatalf("live servers settled on %v, want only the occupied server %q: "+
+			"the idle one is shed and a capacity edit replaces nothing", names, busy)
 	}
-	if got := survivor.Status.Phase; got != string(phase.Ready) {
+	if got := live[0].Status.Phase; got != string(phase.Ready) {
 		t.Errorf("phase of the surviving server = %q, want Ready", got)
-	}
-	// The second live server is the attempt the closed window permitted, not
-	// a second survivor: the current generation's, and still starting.
-	if got := attempt.Spec.GroupGeneration; got != f.group.Generation {
-		t.Errorf("second live server's generation = %d, want %d: it is the current "+
-			"generation's next cold start, not a leftover", got, f.group.Generation)
-	}
-	if got := attempt.Status.Phase; got == string(phase.Ready) {
-		t.Errorf("second live server is %q; nothing reports for it in this fixture, so a "+
-			"Ready one means it is not the attempt this assertion is about", got)
 	}
 	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
 		t.Errorf("minAvailable = %d, want 1 — the surviving pod still carries players", got)
 	}
 
-	if len(failed) != 1 {
+	// No corpse either. The doomed replacement existed only because the
+	// capacity edit started a changeover, so there is now nothing to fail.
+	if len(failed) != 0 {
 		names := make([]string, 0, len(failed))
 		for _, s := range failed {
 			names = append(names, s.Name)
 		}
-		t.Fatalf("failed servers = %v, want exactly one — the cold start's doomed replacement", names)
-	}
-	if got := failed[0].Spec.GroupGeneration; got != f.group.Generation {
-		t.Errorf("failed server's generation = %d, want %d: the current generation's cold start, not a leftover", got, f.group.Generation)
+		t.Fatalf("failed servers = %v, want none — no changeover was begun", names)
 	}
 }
 
@@ -1580,18 +1559,20 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	}
 	f.setMinReplicas(t, 1)
 
-	// Four, not three: setMinReplicas performs a real spec update, so the
-	// group's generation moves and the three Ready servers created under the
-	// previous one are stale. With nothing of the current generation up, the
-	// cold start orders exactly one replacement — the changeover beginning,
-	// not the floor being missed. The shrink this test is about happens
-	// below, once the stabilization window elapses.
+	// Three, and this number is the milestone. setMinReplicas performs a real
+	// spec update, so before 7a the group's generation moved, all three Ready
+	// servers read as stale, and a cold start ordered a fourth — a changeover
+	// begun by an edit that changes nothing about the pods. Since 7a
+	// staleness is podspec.DesiredServerHash, which spec.scaling never
+	// reaches, so lowering the floor starts no changeover and creates
+	// nothing. The shrink this test is about happens below, once the
+	// stabilization window elapses.
 	//
-	// All three original servers are empty, but none has waited out the
-	// window yet.
+	// All three servers are empty, but none has waited out the window yet.
 	f.reconcileGroup(t, r)
-	if got := len(f.listServers(t)); got != 4 {
-		t.Fatalf("got %d servers before the window elapsed, want 4", got)
+	if got := len(f.listServers(t)); got != 3 {
+		t.Fatalf("got %d servers before the window elapsed, want 3 — a capacity "+
+			"edit must start no changeover", got)
 	}
 
 	// The window is the CRD default, 300 seconds. The agents keep reporting

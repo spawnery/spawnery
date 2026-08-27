@@ -40,6 +40,7 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/phase"
+	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -339,12 +340,35 @@ func (f *fixture) createServer(name string) *spawneryv1alpha1.Server {
 		Spec: spawneryv1alpha1.ServerSpec{
 			GroupRef:        spawneryv1alpha1.ObjectRef{Name: f.group.Name},
 			GroupGeneration: f.group.Generation,
+			PodHash:         f.desiredPodHash(),
 		},
 	}
 	if err := f.c.Create(f.ctx, srv); err != nil {
 		f.t.Fatalf("create Server: %v", err)
 	}
 	return srv
+}
+
+// desiredPodHash is what the reconciler would stamp on a server it created for
+// this group right now, computed the same way createServer computes it.
+//
+// It is here because since 7a the sizing rules read spec.podHash and not
+// metadata.generation, and a fixture that stamped only the generation would
+// build servers that no spec change can ever make stale: staleSpec adopts an
+// empty hash rather than comparing it. Every rolling-update test in this
+// package creates its starting servers through this helper and then edits the
+// group, so an unstamped fixture would leave them all asserting nothing.
+func (f *fixture) desiredPodHash() string {
+	f.t.Helper()
+	configValues, err := serverConfigValues(f.group)
+	if err != nil {
+		f.t.Fatalf("server config values: %v", err)
+	}
+	hash, err := podspec.DesiredServerHash(f.network, f.group, configValues)
+	if err != nil {
+		f.t.Fatalf("desired server hash: %v", err)
+	}
+	return hash
 }
 
 // reconcile runs the Server reconciler once.
