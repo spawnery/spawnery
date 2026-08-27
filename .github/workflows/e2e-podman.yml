@@ -1,5 +1,26 @@
 name: E2E under rootless podman
 
+# ci.yml's e2e job runs hack/e2e.sh on a hosted runner's Docker daemon and
+# blocks every pull request on it. This runs the invocation a person actually
+# uses -- rootless podman under a systemd scope -- which milestone 6e left
+# exercised by nothing automatic, so a change that broke one container runtime
+# and not the other could sit green in CI indefinitely.
+#
+# Driven 2026-08-27 before this file was believed: run 33043446172, dispatched
+# by hand, green in seven minutes with the Go test time at 141s. What the
+# runner turned out to provide, which is why the diagnostic step below exists
+# and is worth keeping:
+#
+#   podman:  5.8.4          (the author's machine: 5.4.2)
+#   cgroup:  cgroup2fs
+#   subuid:  runner:165536:65536
+#   runtime: /run/user/1001 -- created by the enable-linger below, absent before
+#   deleg:   cpuset cpu io memory pids
+#
+# The same script had been driven under rootless podman on the author's machine
+# earlier the same day, all eighteen scenarios green. Two rootless podmans of
+# different versions now, which is the point.
+
 on:
   schedule:
     # 05:41 UTC, clear of the nightly at 03:17 and the Paper watch at 04:23,
