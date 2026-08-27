@@ -51,6 +51,17 @@ jobs:
       # somewhere with a state: an open issue, which hack/require-no-red-nightly.sh
       # refuses to release over.
       #
+      # Driven 2026-08-27, and until then this step had never run: the only red
+      # night this project has had was 2026-08-22, the day before it landed.
+      # The drive was a throwaway branch carrying one wrong character in
+      # nix/paper.nix's launcher hash -- the same shape of fault that killed the
+      # 2026-08-22 release, and the one this job is the only place to see. Run
+      # 33045207363 went red on `hash mismatch in fixed-output derivation`,
+      # this step opened spawnery/spawnery#3, and
+      # hack/require-no-red-nightly.sh then refused a release with exit 1
+      # against the live repository rather than a fixture. The green run
+      # dispatched afterwards closed it through the step below.
+      #
       # Neither step fires on a cancelled or timed-out run: failure() is false
       # for a cancellation, and that is right. A cancelled run found nothing,
       # and reporting it would put an issue in front of somebody that says

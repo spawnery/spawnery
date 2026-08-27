@@ -545,6 +545,23 @@ acceptance criterion on a schedule — driven once, by a temporary trigger,
 for real; no tag has been pushed by this milestone, and none should be —
 that is the repository owner's decision, not this one's.
 
+Two scheduled workflows have been added since, each closing a gap this
+milestone left and each driven before it was believed rather than after.
+`.github/workflows/paper-watch.yml` asks daily whether PaperMC has published a
+build newer than `nix/paper.nix` names, and turns a newer build into an issue
+rather than a red run, because it persists until somebody acts; the first thing
+it found was that the pin was eight builds behind.
+`.github/workflows/e2e-podman.yml` runs `hack/e2e.sh` under rootless podman —
+the invocation a person uses, which `e2e` above does not exercise, since a
+hosted runner has a Docker daemon — and most of it is teaching a runner to
+accept that invocation at all: dispatched 2026-08-27, green in seven minutes
+against podman 5.8.4. On the same day the `if: failure()` half of
+`nightly.yml`, which had never run because this project's only red night
+predated it, was driven for real on a throwaway branch carrying one wrong
+character in a fixed-output hash: the step opened its issue, the release gate
+refused with exit 1 against the live repository, and the green run dispatched
+afterwards closed it.
+
 The one thing worth naming is what this milestone's own first cold-cache
 run found, because it is the best evidence in this repository for what CI
 is worth. Three local runs and two independent reviewers had all reported

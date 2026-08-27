@@ -173,30 +173,6 @@ and `ForwardingSecretRotationPending=False/ForwardingSecretInSync`. So the
 nobody opened reports, and the opened case now has a witness rather than only
 tests.
 
-## From milestone 6e (CI)
-
-GitHub Actions runs four workflows: `.github/workflows/ci.yml` blocks
-four jobs — `test`, `lint`, `deps`, `e2e` — on every pull request and on
-push to `master`; `.github/workflows/nightly.yml` runs `make image-repro` on
-a schedule plus `workflow_dispatch`; `.github/workflows/release.yml` runs
-`hack/publish.sh` on a `v*` tag; and `.github/workflows/paper-watch.yml`,
-added after that milestone, asks daily whether PaperMC has published a build
-newer than `nix/paper.nix` names. Full account of the first three:
-`docs/handover-milestone-6e.md`.
-
-**The `if: failure()` step that opens a `nightly-red` issue has never run.**
-`9a25874` gave `nightly.yml` that step, an `if: success()` step that closes
-the issue, and `hack/require-no-red-nightly.sh`, which refuses a release while
-one stands. The only red night this project has had was 2026-08-22, the day
-before the step landed, so it has never written anything.
-
-The two pieces downstream of it were driven on 2026-08-25 by standing in for
-the failure: an issue opened by hand with the `nightly-red` label made the
-gate refuse (exit 1, live rather than against a fixture, and that is the
-branch whose silence is permission), and a dispatched green run closed it and
-returned the gate to exit 0. Driving the writing step itself needs a
-genuinely red nightly and nothing stands in for that.
-
 ## From the RKE2 rollout (milestone 6, driven 2026-08-20)
 
 Driven against `paulwtf`; the evidence is `docs/runbook-milestone-6-rollout.md`
