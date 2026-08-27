@@ -111,6 +111,27 @@ type ServerView struct {
 	ResizeError string
 }
 
+// staleSpec reports whether this server was rendered under a spec that is no
+// longer current, by comparing render hashes rather than generations.
+//
+// Either side being empty means "do not compare", and both cases are adoption
+// rather than staleness. A view's empty hash is a server created before
+// spec.podHash existed: nominating it would retire every server in the
+// installation on the first reconcile after the upgrade. An empty want is a
+// pass that could not compute a hash -- an unresolvable Network is the
+// ordinary way, since the digest is gated on mayResize -- and a rule that read
+// that as "everything is stale" would turn a Network outage into a fleet
+// changeover.
+//
+// DecidePersistentSize had this rule inline before this function existed and
+// now calls it, so the two group kinds cannot drift apart on what stale means.
+func staleSpec(v ServerView, want string) bool {
+	if want == "" || v.PodHash == "" {
+		return false
+	}
+	return v.PodHash != want
+}
+
 // isOccupied is the occupancy rule for a server pod. The proxy side has its
 // own, proxyOccupied (proxygroup_controller.go), which answers the same
 // question under a different signature: a proxy has no wasRegistered

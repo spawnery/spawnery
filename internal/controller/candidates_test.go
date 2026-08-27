@@ -546,3 +546,32 @@ func TestPruningKeepsTheFirstFailureWhenTwoShareASecond(t *testing.T) {
 			"tiebreak is the random suffix rather than status.failedAt", pruned)
 	}
 }
+
+func TestStaleSpec(t *testing.T) {
+	cases := []struct {
+		name string
+		view string
+		want string
+		out  bool
+	}{
+		{"same hash is current", "abc123", "abc123", false},
+		{"different hash is stale", "abc123", "def456", true},
+		// Both directions of adoption. A server that predates spec.podHash
+		// carries "", and so does the desired hash on a pass that could not
+		// compute one -- an unresolvable Network, for instance. Neither is
+		// evidence that this server is out of date, and treating it as such
+		// would retire the whole group on the first pass after an upgrade.
+		{"view without a hash is adopted", "", "def456", false},
+		{"no desired hash compares nothing", "abc123", "", false},
+		{"both empty is not stale", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := staleSpec(ServerView{PodHash: tc.view}, tc.want)
+			if got != tc.out {
+				t.Fatalf("staleSpec(view %q, want %q) = %v, want %v",
+					tc.view, tc.want, got, tc.out)
+			}
+		})
+	}
+}
