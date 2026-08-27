@@ -215,3 +215,31 @@ The overlap above is orderly precisely because it keeps trusting the outgoing
 CA for the width of that wait — on the order of a quarter of an hour. That is
 exactly what a compromise cannot afford to do. "Delete the secret, restart all
 pods" stays the answer to that case.
+
+**Nothing starts this on its own: a rotation happens because somebody annotates
+the secret, and for no other reason.** `CALifetime` (`internal/certs/bundle.go`) is ten years, and no path
+in the operator schedules a rotation, checks a threshold, or acts on how much
+life is left. That is deliberate: how many days remaining should worry somebody
+is a fact about a cluster — how quickly its administrators can be reached, how
+much of a maintenance window it can afford — and not a fact about this code.
+
+Ten years is not urgent, and that is exactly the danger. It is far enough away
+that nobody thinks about it until something stops handshaking, and the wait is
+long enough that whoever installed the operator will likely not be the person
+who meets the expiry.
+
+**What is not left to memory is the clock.** Since 2026-08-23 the remaining
+life is published rather than only knowable:
+`spawnery_ca_expiry_timestamp_seconds` and
+`spawnery_serving_cert_expiry_timestamp_seconds` are written from
+`Provider.Set`, so every path that changes what the operator serves updates
+them. The chart ships an optional `PrometheusRule`
+(`metrics.prometheusRule.enabled`) whose `SpawneryCAExpiringSoon` fires at
+`caExpiryWarningDays`, 90 by default, and whose
+`SpawneryServingCertificateNotRenewing` fires when the *serving* certificate —
+which does renew itself, at a third of its life remaining — has stopped doing
+so.
+
+So the decision this page leaves with a person is when to start, not whether
+anybody will notice in time. Start it with time in hand: the procedure above
+has a hold in the middle that waits for one.

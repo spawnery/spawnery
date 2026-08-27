@@ -586,13 +586,20 @@ check itself see more. `chart-lint` still catches neither half of a typo'd
 check in this repository behind a schedule instead of a memory changes
 nothing about what any one of them can see. CI introduces its own version of
 that limit on day one: `make e2e` on a hosted runner proves `hack/e2e.sh`
-under Docker, and from this milestone on nothing automatic proves it under
-the rootless Podman the author's machine has always run it under — CI
-proves Docker, the author's machine proves podman, and neither proves the
-other. `docs/known-issues.md`'s new "From milestone 6e" section carries the
-rest, including the two workflow paths — `nightly.yml`'s `workflow_dispatch`
-and cron, and all of `release.yml` — that exist only on paper until the
-repository owner drives them for real.
+under Docker, and this milestone left nothing automatic proving it under the
+rootless Podman the author's machine has always run it under — CI proved
+Docker, the author's machine proved podman, and neither proved the other.
+It also left three paths that existed only on paper: `nightly.yml`'s
+`if: failure()` reporting, `release.yml` in full, and the podman run itself.
+
+All three have since been driven, and the paragraph above is kept as what the
+milestone left rather than as what is true now.
+`.github/workflows/e2e-podman.yml` runs the podman path nightly, dispatched
+green on 2026-08-27; `release.yml` has published three releases; and the
+`if: failure()` step was fired on 2026-08-27 by a throwaway branch carrying one
+wrong character in a fixed-output hash, which opened its issue and made
+`hack/require-no-red-nightly.sh` refuse a release for real. Each of those
+workflows now carries what it was driven with, in its own header.
 
 Milestone 6 is done: the RKE2 rollout has been driven, from
 [`docs/runbook-milestone-6-rollout.md`](docs/runbook-milestone-6-rollout.md),

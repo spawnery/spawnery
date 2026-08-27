@@ -55,6 +55,14 @@ cannot know the game namespaces an operator will create later, and rendering
 a namespaced grant for a namespace that does not exist yet is not something
 `helm install` can do. Its own header comment explains this in full.
 
+**For the namespaces you do already know, `networkNamespaces` does it for
+you** — and does two things this file cannot. It restricts the grant by
+`resourceNames` to that network's own secrets rather than to every secret in
+the namespace, and it puts the RoleBinding's subject in the release's own
+namespace rather than the hard-coded `spawnery-system` below. Nothing renders
+by default. A namespace nobody listed is still a namespace where this manual
+step is the answer.
+
 Because forgetting this step fails silently rather than loudly (see below),
 `helm install` prints it: `charts/spawnery/templates/NOTES.txt` names the
 step, and when the release namespace is not `spawnery-system` it also prints
@@ -98,8 +106,8 @@ Every key in `values.yaml`:
 | Key | Default | What it does |
 |---|---|---|
 | `image.repository` | `ghcr.io/spawnery/spawnery-operator` | The operator image. |
-| `image.tag` | `"0.1.0"` | Used when `image.digest` is empty. |
-| `image.digest` | `""` | Set, this wins over `image.tag` and the image is referenced by digest (`repository@sha256:...`). This is what `hack/publish.sh`'s `WRITE_DIGEST=1` path writes once a real `make publish` has pushed the operator image. |
+| `image.tag` | `"0.2.4"` | Used when `image.digest` is empty. |
+| `image.digest` | `""` | Set, this wins over `image.tag` and the image is referenced by digest (`repository@sha256:...`). This is what `hack/publish.sh`'s `WRITE_DIGEST=1` path writes once a real `make publish` has pushed the operator image. **The value checked in at any tag describes the release before it, and structurally cannot describe its own.** The digest comes from `skopeo copy --digestfile`, which exists only after the tag has been published, so the commit writing it back is necessarily behind the tag it names — measured on the RKE2 rollout, where a `HelmRelease` installing the chart at `v0.1.0` ran the *tag* rather than a digest. A deployment that wants an immutable reference pins it where the deployment is described, not here. |
 | `image.pullPolicy` | `IfNotPresent` | Passed straight to the container. `hack/e2e.sh` overrides this to `Never` for its own run, so a missing local image fails loudly instead of being fetched. |
 | `resources.requests.cpu` | `100m` | Passed straight to the operator container. |
 | `resources.requests.memory` | `128Mi` | Passed straight to the operator container. |
@@ -107,9 +115,11 @@ Every key in `values.yaml`:
 | `nodeSelector` | `{}` | Passed through to the operator pod unchanged. |
 | `tolerations` | `[]` | Passed through to the operator pod unchanged. On a cluster whose control plane carries a taint, this is often the difference between `Running` and `Pending`. |
 | `affinity` | `{}` | Passed through to the operator pod unchanged. |
-| `networkPolicy.enabled` | `true` | Gates the `NetworkPolicy` in front of the agent endpoint (milestone 6b). Disabling it is the right answer on a cluster that manages its own policies centrally, and makes no difference at all on a CNI that implements no `NetworkPolicy` controller, which is what 6b measured of the CNI in this repository's own end-to-end harness — see `docs/known-issues.md`, "From milestone 6b". |
+| `networkPolicy.enabled` | `true` | Gates the `NetworkPolicy` in front of the agent endpoint (milestone 6b). Disabling it is the right answer on a cluster that manages its own policies centrally, and makes no difference at all on a CNI that implements no `NetworkPolicy` controller, which is what 6b measured of the CNI in this repository's own end-to-end harness — see [`docs/network-boundaries.md`](../../docs/network-boundaries.md), which carries what these objects buy and what they do not. |
 | `operator.startupDeadline` | `5m` | The production value. `hack/e2e.sh` overrides it to `20s` for its own run. |
 | `operator.leaderElect` | `true` | Passed straight to the operator's `--leader-elect` flag. |
+
+| `networkNamespaces` | `[]` | Renders a narrowed `secrets: get` Role and its RoleBinding into each namespace named here, restricted by `resourceNames` to that entry's own secrets, with the binding's subject in the release's own namespace. It is the manual step above, done by the chart for the namespaces you already know — and it renders nothing by default, because a chart installed once cannot know the game namespaces somebody creates later. An entry naming no secrets is refused rather than rendered: a Role with no `resourceNames` grants `get` on *every* secret in that namespace, which is what naming them is meant to avoid. |
 
 `replicas` and `imagePullSecrets` are deliberately not values. `readyz` hangs
 off the leader lock, so a second replica never becomes ready — the Deployment

@@ -7,19 +7,39 @@ for one. A closed entry left standing with a note saying it is closed costs a
 reader the same attention as a live one, which is the whole reason for the
 rule.
 
-Four things that are not open problems live elsewhere.
+Things that are not open problems live elsewhere, and on 2026-08-27 four of
+them moved out of this file to where they belong.
 [`upgrading.md`](upgrading.md) carries what strands an object or rolls a fleet
 when an installation crosses a release — real work for whoever is upgrading
 one, and nothing at all for anyone else.
 [`ca-rotation.md`](ca-rotation.md) carries the CA rotation procedure, which is
-a thing a human drives rather than a thing that is wrong.
+a thing a human drives rather than a thing that is wrong — including that
+nothing schedules one, which is a decision and not an omission, and where the
+clock is published so that nobody has to remember.
 [`persistent-storage.md`](persistent-storage.md) carries what an operator owns
 about a persistent group's claims — that this operator never deletes one, that
 deleting one deletes a world, and how long a group whose storage is broken
 takes to say so.
 [`network-boundaries.md`](network-boundaries.md) carries what the
-`NetworkPolicy` objects buy and what they do not, which is measured scope
-rather than a list of faults. The design decisions live in
+`NetworkPolicy` objects buy and what they do not, and what bounds the number of
+agents that may reach the operator — measured scope rather than a list of
+faults.
+[`charts/spawnery/README.md`](../charts/spawnery/README.md) carries the manual
+grant a chart cannot make for a namespace that does not exist yet, and why the
+digest checked in at any tag describes the release before it.
+
+**Two of the things this file used to carry were facts about one cluster rather
+than about this code, and they now live where that cluster is described** — the
+GitOps repository, beside the `HelmRelease` whose arguments they are about.
+Anything here should be a claim about this repository; a claim about `paulwtf`
+belongs to `paulwtf`.
+
+Older documents in `docs/` name sections of this file that no longer exist.
+That is the rule above working, not rot: a handover or a runbook records what
+was open at its milestone, and rewriting one to match today would falsify a
+record. `git log -p docs/known-issues.md` is where a named section went.
+
+The design decisions live in
 `superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md`, in
 `superpowers/specs/2026-08-08-agent-channel-design.md`, in
 `superpowers/specs/2026-08-09-paper-agent-design.md`, in
@@ -81,126 +101,3 @@ nothing binds, so it discriminates rather than merely agreeing. What is left is
 whether this particular assertion can fail, and answering that means making a
 proxy shut its own listener on a SetReady — a fault injection nothing here
 needs for any other purpose.
-
-## From milestone 4c-3 (node drain)
-
-**`paulwtf` passes no `-drain-taint`, so the day an autoscaler appears there
-somebody has to set it.** *Measured 2026-08-25:* the operator `Deployment`'s
-args are `--leader-elect`, `--startup-deadline`, `--metrics-bind-address` and
-`--health-probe-bind-address`, and nothing else. Harmless today — three fixed
-bare-metal nodes and no autoscaler, so the taint branch has nothing to react to
-— and this is the sentence that will be looked for the day one appears.
-
-`IsDeparting` (`internal/controller/nodes.go`) has two ways in:
-`spec.unschedulable`, which is hardwired, and a taint whose key appears in the
-`-drain-taint` list, which is repeatable and empty by default. That default
-stays empty: reacting to another project's taint key by default would couple
-this operator to a vocabulary that project is free to rename, which is the
-coupling a configurable list exists to avoid.
-
-What is no longer true is the rest of the old entry, which said nothing in the
-operator would tell an operator they had missed the flag. It does now: a node
-carrying a well-known drain taint the operator was not configured for produces
-one log line per node naming the project and the flag. Noticing is not
-reacting, and only the second was ever the coupling worth avoiding.
-
-For the record, since a draft of the design that produced this milestone got it
-wrong and was corrected in place (`bc4122a`): cluster-autoscaler taints
-`ToBeDeletedByClusterAutoscaler:NoSchedule` and deletes the node **without**
-touching `spec.unschedulable`, unless `--cordon-node-before-terminating` is on,
-and that flag defaults to off. Karpenter was never re-checked and is not
-claimed here either way.
-
-## From milestone 5c (detecting forwarding secret rotation)
-
-5c is detection and reporting only: the Network controller reads the forwarding
-secret each resync, records a salted digest of it in
-`status.forwardingSecretHash`, stamps every pod it creates with that digest in
-`spawnery.cloud/forwarding-hash`, and reports the comparison as two conditions
-and two events. It restarts nothing and takes no ordinal down — automatically
-orchestrated rotation stays deferred, unchanged and for the reason the master
-design's §6.5 gives, that it needs registration to become generation-aware. The
-restarts follow `docs/runbook-milestone-5c-secret-rotation.md`. What follows is
-what an operator finds still open, checked against the code as it stands.
-
-**Rotation detection is off until an install step is performed per namespace.**
-The operator's ClusterRole grants no access to Secrets outside its own
-namespace, by design: `config/rbac/forwarding-secret-reader.yaml` has to be
-applied into each namespace holding a Network, and it is deliberately not part
-of `config/deploy/`, for the reasons the manifest itself gives
-(`config/rbac/forwarding-secret-reader.yaml:5-14`) — an administrator opens
-exactly the namespaces that hold a Network, and the operator never creates
-these itself, because one that may write RBAC makes every other restriction on
-it advisory. Until it is applied, the `GET` is denied, the Network reports
-`ForwardingSecretResolved=Unknown/SecretReadForbidden` with a message naming
-the manifest and the `kubectl apply` line
-(`internal/controller/forwardingsecret.go:71-78`), and
-`ForwardingSecretRotationPending` reads `Unknown/SecretUnresolved` because
-there is no digest to compare against. So the gap announces itself rather than
-hiding — but it is a gap, and a namespace nobody opened has rotation detection
-that reports nothing about rotations.
-
-*Narrowed since 2026-08-26, for the namespaces somebody names.*
-`charts/spawnery/values.yaml`'s `networkNamespaces` renders the Role and
-RoleBinding per listed namespace, with `resourceNames` restricted to that
-Network's secret — the narrowing the master design's §8 asks for and the
-hand-applied file cannot afford — and with the RoleBinding's subject in the
-release's own namespace rather than a hard-coded `spawnery-system`. What
-remains is the gap below: a namespace nobody listed is a namespace nobody
-opened.
-
-*Not closed by milestone 6d, on purpose — the design changed rather than the
-gap.* This entry expected the Helm chart to render this Role for each
-configured network namespace; 6d's design
-(`docs/superpowers/specs/2026-08-19-helm-chart-design.md` §2) decided the
-opposite: a chart installed once cannot know the game namespaces a user will
-create later, so `config/rbac/forwarding-secret-reader.yaml` stays a
-hand-applied file, exactly as it was. What 6d changed is elsewhere — an
-operator installed outside the chart's default namespace now needs a manual
-edit to this file's RoleBinding subject before applying it anywhere, and
-`charts/spawnery/README.md` carries that edit in its installation steps. The
-consequence of skipping it is narrower than a first read of the design
-suggests: `ServerGroup`s and `ProxyGroup`s in the namespace keep scheduling,
-and only rotation detection stays blind — see "From milestone 6d" below.
-
-*Observed working, 2026-08-22, which nothing before this had.* The step was
-taken on the one real installation during the RKE2 rollout — `kubectl get role
--n minecraft` shows `spawnery-forwarding-secret-reader` created 2026-08-20 —
-and the whole chain reports healthy on that cluster:
-`ForwardingSecretResolved=True/SecretResolved` naming the secret and its key,
-and `ForwardingSecretRotationPending=False/ForwardingSecretInSync`. So the
-`Unknown/SecretReadForbidden` path this entry describes is what a namespace
-nobody opened reports, and the opened case now has a witness rather than only
-tests.
-
-## From the RKE2 rollout (milestone 6, driven 2026-08-20)
-
-Driven against `paulwtf`; the evidence is `docs/runbook-milestone-6-rollout.md`
-and every claim here is a claim about that cluster on that day.
-
-**No git tag can carry its own operator digest.** `hack/publish.sh` takes the
-digest from `skopeo copy`'s `--digestfile`, which exists only after the tag has
-been published, so the commit that writes it back into
-`charts/spawnery/values.yaml` is necessarily behind the tag it describes. A
-`HelmRelease` installing the chart at tag `v0.1.0` therefore runs the *tag*
-`ghcr.io/spawnery/spawnery-operator:0.1.0`, not the digest — measured, the
-install came up that way. The value in the chart is documentation of the
-previous release, and a deployment that wants a digest pins it where the
-deployment is described. The design's §4 and its acceptance criterion 2 both
-assumed the opposite; both were wrong, and this is structural rather than an
-oversight anyone could have avoided.
-
-## On the agent channel (`internal/certs`, `internal/agentserver`)
-
-**A CA rotation is asked for, never scheduled — but its clock is now
-visible.** (The procedure itself is [`ca-rotation.md`](ca-rotation.md).) `CALifetime` (`internal/certs/bundle.go`) is still ten years, and
-nothing in the operator *starts* a rotation on its own. What changed on
-2026-08-23 is that the remaining life stopped being invisible:
-`spawnery_ca_expiry_timestamp_seconds` and
-`spawnery_serving_cert_expiry_timestamp_seconds` are published from
-`Provider.Set`, so every path that changes what the operator serves updates
-them. The chart ships an optional `PrometheusRule`
-(`metrics.prometheusRule.enabled`) whose `SpawneryCAExpiringSoon` fires at 90
-days by default. The operator still
-holds no threshold of its own: how many days should worry somebody is a fact
-about a cluster, not about this code.
