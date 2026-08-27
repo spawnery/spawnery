@@ -140,19 +140,22 @@
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
           #
-          # 0.2.5 is a Velocity agent change: the proxy reports the read
-          # timeout it actually parsed, which is the deadline the operator
-          # races when a backend's node dies and the one number it could
-          # previously only assume -- a velocity.toml overlay is free to lower
-          # it, and the operator never reads that file. The Paper agent is
-          # untouched and its image rolls for the version alone, which is the
-          # price of one agent version and is argued below.
+          # **0.2.6 does not move this number, and that is the point of it
+          # being a separate one.** Milestone 7a is entirely inside
+          # internal/controller: nothing under agent/ changed, Paper is still
+          # build 119 and Velocity still 3.5.1-615, so both game images would
+          # be published over tags a cluster has already pulled. hack/publish.sh
+          # refuses that, and release.yml invokes it once per image precisely
+          # so the refusal on these two does not stop the operator's push.
           #
-          # That the tag names neither of those is the point of the two
-          # constants: the tag is <upstream>-<imageVersion>, so a Paper build
-          # that moves without this number moving would be published over a
-          # tag a cluster has already pulled. hack/publish.sh refuses that,
-          # which is what makes the bump obligatory rather than tidy.
+          # 0.2.5 was the last release that moved it: a Velocity agent change,
+          # the proxy reporting the read timeout it actually parsed, which is
+          # the deadline the operator races when a backend's node dies.
+          #
+          # The tag is <upstream>-<imageVersion>, so a Paper build that moves
+          # without this number moving would collide the same way. That is what
+          # makes a bump obligatory when the images really do change, rather
+          # than tidy.
           imageVersion = "0.2.5";
 
           # The operator's own version, deliberately not imageVersion.
@@ -161,7 +164,11 @@
           # Hello.version -- and hanging the operator's tag off it would mean a
           # fix in the reconciler claiming a new agent version, and an agent
           # release renaming an unchanged operator image.
-          operatorVersion = "0.2.5";
+          #
+          # 0.2.6 is the first release to exercise that separation in the
+          # direction it was built for: a reconciler change alone, with this
+          # number moving and imageVersion standing still.
+          operatorVersion = "0.2.6";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

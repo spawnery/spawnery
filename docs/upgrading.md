@@ -68,40 +68,6 @@ endpoint above. For those, run the new build against a scratch cluster over
 *the same* manifests and compare the `pod-hash` it stamps with what the
 running pods carry. Different manifests tell you nothing about your fleet.
 
-## An operator upgrade changes which edits roll an ephemeral group
-
-Before milestone 7a, an ephemeral `ServerGroup` treated `metadata.generation`
-as the definition of staleness, so *any* field of its spec moving replaced
-every server it had. Since 7a it compares `podspec.DesiredServerHash`, and only
-an edit that changes the rendered pod or the group's config does that. A
-`ProxyGroup` and a `Persistent` `ServerGroup` already worked this way; the
-ephemeral rule was the last one on generations.
-
-Nothing has to be done for this, and the direction is the safe one: strictly
-fewer changeovers than before, never more. Four things are worth knowing.
-
-**Every ephemeral server that predates the upgrade is adopted, not replaced.**
-Servers created before `spec.podHash` had a reader on this side carry an empty
-hash, and the first reconcile after the upgrade stamps them with the group's
-current one rather than nominating them. So the upgrade itself rolls nothing.
-The cost is a bounded one-time window: a spec edit landing inside that same
-reconcile is adopted along with the old pod instead of triggering a rebuild. It
-closes for good the first time the group reconciles.
-
-**`status.freeSlots` no longer drops to zero on a capacity edit.** It counted
-only servers of the current generation, so before 7a every spec edit briefly
-published a healthy group as having no free capacity at all. It follows the
-render hash now.
-
-**The `Progressing` condition no longer announces a replacement that is not
-happening.** It counted servers "of an earlier generation" the same way, so a
-capacity edit made it report `N server(s) of an earlier generation are still
-being replaced` while nothing was. Its messages now say *spec* rather than
-*generation*, because the generation is no longer what they are about.
-
-**A capacity edit still resets the group's failure streak**, and that is the
-one thing 7a did not change. `docs/known-issues.md` carries why.
-
 ## Upgrade the proxy images before the operator
 
 A new operator against proxy images that predate milestone 4c-1's `SetReady`
@@ -355,6 +321,40 @@ gives up first is the one that kicks the players.
 field reports zero, the registry ignores it, and the operator falls back to the
 shipped default — exactly the reading it took before. The condition then says
 `Unknown` for that namespace rather than inventing an answer.
+
+## 0.2.6: a capacity edit no longer rolls an ephemeral group
+
+Before milestone 7a, an ephemeral `ServerGroup` treated `metadata.generation`
+as the definition of staleness, so *any* field of its spec moving replaced
+every server it had. Since 7a it compares `podspec.DesiredServerHash`, and only
+an edit that changes the rendered pod or the group's config does that. A
+`ProxyGroup` and a `Persistent` `ServerGroup` already worked this way; the
+ephemeral rule was the last one on generations.
+
+Nothing has to be done for this, and the direction is the safe one: strictly
+fewer changeovers than before, never more. Four things are worth knowing.
+
+**Every ephemeral server that predates the upgrade is adopted, not replaced.**
+Servers created before `spec.podHash` had a reader on this side carry an empty
+hash, and the first reconcile after the upgrade stamps them with the group's
+current one rather than nominating them. So the upgrade itself rolls nothing.
+The cost is a bounded one-time window: a spec edit landing inside that same
+reconcile is adopted along with the old pod instead of triggering a rebuild. It
+closes for good the first time the group reconciles.
+
+**`status.freeSlots` no longer drops to zero on a capacity edit.** It counted
+only servers of the current generation, so before 7a every spec edit briefly
+published a healthy group as having no free capacity at all. It follows the
+render hash now.
+
+**The `Progressing` condition no longer announces a replacement that is not
+happening.** It counted servers "of an earlier generation" the same way, so a
+capacity edit made it report `N server(s) of an earlier generation are still
+being replaced` while nothing was. Its messages now say *spec* rather than
+*generation*, because the generation is no longer what they are about.
+
+**A capacity edit still resets the group's failure streak**, and that is the
+one thing 7a did not change. `docs/known-issues.md` carries why.
 
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 

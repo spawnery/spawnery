@@ -143,8 +143,12 @@ one that changed — and `FORCE=1` would get past that only by re-pushing about
 1.4 GB over tags that were already right.
 
 Since milestone 6e, `.github/workflows/release.yml` does this on a `v*` tag,
-and nine releases have been published that way — `v0.1.0` on 2026-08-20
-through `v0.2.5` on 2026-08-27. A local `make publish` is for the case a tag
+and ten releases have been published that way — `v0.1.0` on 2026-08-20
+through `v0.2.6` on 2026-08-27. It invokes the script once per image rather
+than once for all three, which is what lets a release move one version and not
+the others: `v0.2.6` bumped `operatorVersion` alone, so the two game images
+were correctly refused at tags a cluster had already pulled while the
+operator's push went through. A local `make publish` is for the case a tag
 cannot cover.
 
 ## The end-to-end run

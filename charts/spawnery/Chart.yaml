@@ -6,8 +6,8 @@ type: application
 # The chart's own version, and the operator release it installs by default.
 # They move independently: a chart fix that changes no image is a chart
 # version bump alone.
-version: 0.2.5
-appVersion: "0.2.5"
+version: 0.2.6
+appVersion: "0.2.6"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
 # +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec
