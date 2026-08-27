@@ -1059,6 +1059,25 @@ closed_after=$((SECONDS - start))
 # serving: the whole point of closing 8081 rather than shutting down is that
 # established sessions survive while the endpoint drains. A proxy whose own
 # listener went with the gate would have dropped every player still on it.
+#
+# **Observed failing, 2026-08-27, which docs/known-issues.md recorded that it
+# never had been.** This arm could only be seen working if an agent shut its
+# listener on a SetReady, which no correct one does and no fault this harness
+# can inject produces -- so it was a control that had never controlled
+# anything. The answer was a mutation rather than a fault injector kept in the
+# repository: AgentPlugin's `onSetReady` was built once as
+# `if (ready) gate.open() else { gate.close(); proxy.shutdown() }`, the images
+# rebuilt, and this phase run. The 8081 loop above passed, this check failed
+# with its own message, and Velocity's own log carried
+# `Closing endpoint /0.0.0.0:25565` at the moment the gate closed. Reverted and
+# re-run green.
+#
+# What that mutation is not is a listener closing while the JVM lives, which
+# nothing can produce -- Velocity exposes no way to stop listening without
+# stopping. It does not need to be. The claim this guards is that the proxy
+# goes on *serving*, and shutting it down violates that claim in the most
+# direct way there is: every player on it is dropped. `port_open` cannot tell
+# the two apart and does not have to.
 if ! port_open "$NAME4" 25565; then
 	echo "the proxy's own listener on 25565 went down with the ready gate" >&2
 	echo "withdrawing readiness must take this pod out of the Service's endpoints, not out of service: the players already on it have to keep playing" >&2

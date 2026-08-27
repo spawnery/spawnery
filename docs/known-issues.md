@@ -85,19 +85,3 @@ seeing it would mean an uncached read of somebody else's object on every
 reconcile. A cluster that replaces the whole file rather than overlaying it
 lands on Velocity's own 30-second default by luck rather than by agreement, and
 nothing here can tell the two apart.
-
-## From milestone 4c-1 (the proxy readiness contract)
-
-**One assertion in `hack/agent-test.sh` is still argued rather than
-demonstrated.** The post-loop arm of phase 4's withdrawal guard — the 25565
-probe that runs after the gate has closed — would only be seen failing if the
-proxy's own listener went down with the gate, which no correct agent does and
-no fault this harness can inject produces. It is a control that has never been
-observed controlling anything.
-
-The probe underneath it is no longer the unknown: `port_open` is now shown to
-answer true for a bound port (25565, before the gate probe) and false for one
-nothing binds, so it discriminates rather than merely agreeing. What is left is
-whether this particular assertion can fail, and answering that means making a
-proxy shut its own listener on a SetReady — a fault injection nothing here
-needs for any other purpose.
