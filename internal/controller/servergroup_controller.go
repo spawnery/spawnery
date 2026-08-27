@@ -403,13 +403,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 
-		// Adoption runs before sizing, on a persistent group only: a server
+		// Adoption runs before sizing, for both group kinds since 7a: a server
 		// whose spec.podHash is still empty predates the field (ServerSpec.
 		// PodHash's doc comment is what says an empty value means adopt rather
 		// than stale), and this is the pass that gives it the current hash so
 		// a later comparison has one to compare against. It orders no takedown
-		// of its own -- nothing reads podHash to decide a removal yet, which
-		// is Task 4's rule -- so the stamp is the whole effect here.
+		// of its own -- staleSpec adopts a hashless view rather than nominating
+		// it -- so the stamp is the whole effect here.
 		if err := r.adoptServers(ctx, group, servers, podHash); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1509,19 +1509,20 @@ func (r *ServerGroupReconciler) retireServer(
 	return nil
 }
 
-// adoptServers stamps the freshly computed render hash onto every server of a
-// persistent group whose spec.podHash is still empty: one created before this
-// field existed. Adoption applies to persistent groups only; an ephemeral
-// group's servers are skipped outright.
+// adoptServers stamps the freshly computed render hash onto every server whose
+// spec.podHash is still empty: one created before this field existed, or --
+// for an ephemeral group -- before 7a gave the field a reader on this side.
+//
+// It covered persistent groups only until 7a. That was correct while nothing
+// read the field for an ephemeral group, and became a hole the moment
+// staleSpec did: a hashless view is adopted on every pass, so a server that is
+// never stamped is never stale, and no image change would ever replace it.
 func (r *ServerGroupReconciler) adoptServers(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	servers map[string]*spawneryv1alpha1.Server,
 	podHash string,
 ) error {
-	if group.IsEphemeral() {
-		return nil
-	}
 	for _, srv := range servers {
 		// Already adopted. Guards the same cache-lag window retireServer's own
 		// guard does, above: without it, a server this pass (or an earlier one)

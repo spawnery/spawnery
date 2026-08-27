@@ -4931,3 +4931,25 @@ func TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter(t *testing.T) {
 			"the observation was not the backoff after all", got)
 	}
 }
+
+// An ephemeral server created before spec.podHash had a reader on this side
+// must be stamped, not left hashless. staleSpec adopts a hashless view on
+// every pass, so a server that is never stamped is never stale -- immune to
+// every future image change until it churns for an unrelated reason.
+func TestAdoptStampsEphemeralServers(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	srv := f.createServer("lobby-old")
+	// The shape of a server from before the field had a reader here.
+	srv.Spec.PodHash = ""
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("clear podHash: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	if got := f.server("lobby-old").Spec.PodHash; got == "" {
+		t.Fatal("an ephemeral server was left without a render hash: it can never be stale")
+	}
+}
