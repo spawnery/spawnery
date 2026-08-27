@@ -37,6 +37,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Ten is the default and is not enough to see why a build failed
+            # here. Gradle's own "Try: run with --stacktrace / --info / --scan"
+            # block is eight of them, so a failing test's name -- which the
+            # agent build now throws as the failure text -- sits just outside
+            # the window. Measured 2026-08-27, when a Velocity test failed in
+            # CI, passed on a re-run of the identical derivation, and left no
+            # record anywhere of which test it was.
+            log-lines = 40
       - name: make image-repro
         run: nix develop -c make image-repro
 

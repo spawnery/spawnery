@@ -100,6 +100,37 @@ tasks.test {
         showStandardStreams = true
         events("passed", "skipped", "failed")
     }
+
+    // The failures again, at the end. The per-test line above is written where
+    // the test ran, which in a Nix build is somewhere in the middle of a log
+    // Nix then reports as its last ten lines -- so on 2026-08-27 a Velocity
+    // test failed in CI, passed on a re-run of the identical derivation, and
+    // its name was not recoverable from anything the run kept. A flake nobody
+    // can name is a flake nobody can fix.
+    val failures = mutableListOf<String>()
+    afterTest(
+        KotlinClosure2({ descriptor: TestDescriptor, result: TestResult ->
+            if (result.resultType == TestResult.ResultType.FAILURE) {
+                failures += "${descriptor.className}.${descriptor.displayName}"
+            }
+        }),
+    )
+    afterSuite(
+        KotlinClosure2({ descriptor: TestDescriptor, _: TestResult ->
+            // The root suite has no parent, so this runs once per test task.
+            if (descriptor.parent == null && failures.isNotEmpty()) {
+                // Thrown and not merely logged, and that is the whole point. A
+                // logged summary lands before Gradle's own failure block, which
+                // is outside the ten lines Nix quotes when it reports a failed
+                // derivation -- measured, on the first draft of this. Thrown,
+                // the names become the "What went wrong" text, which is inside
+                // it.
+                throw GradleException(
+                    "FAILED TESTS (${failures.size}): " + failures.joinToString("; "),
+                )
+            }
+        }),
+    )
 }
 
 // This jar is an input to :paper's shadowJar and therefore reaches the image.

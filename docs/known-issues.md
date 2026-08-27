@@ -47,11 +47,31 @@ The design decisions live in
 `superpowers/specs/2026-08-10-velocity-image-design.md` and in
 `superpowers/specs/2026-08-11-velocity-agent-design.md`.
 
-## Nothing is open
+## From the 0.2.5 release
 
-There is no entry in this file today. That is a statement about 2026-08-27 and
-not a claim about the code: the last one was closed by asking the proxy for the
-number the operator had been assuming, and the next defect anybody finds
-belongs here the moment they find it.
+**A Velocity unit test failed once in CI and nothing kept its name.** On
+2026-08-27 the `images` job went red on `:velocity:test` — "There were failing
+tests" — and a re-run of the *identical* derivation
+(`nmxzj8ff3bc740035zy07azdhp7skphv-spawnery-agents-0.2.5.drv`, byte-for-byte
+the one this machine had already built) passed. So it is a flake and not a
+disagreement between two trees.
 
-What the file is for, and the rule it keeps, is above.
+Which test it was is not known. Gradle logs each result where it happens, in
+the middle of a build log that Nix then reports as its last ten lines, and the
+failure's own name was outside that window. The nix store holding the full log
+belonged to a runner that is gone.
+
+*What was done about the diagnosis, not about the flake.* The agent build now
+throws the failed test names as the Gradle failure text, so they land in the
+"What went wrong" block; and the workflows set `log-lines = 40`, because
+Gradle's own "Try: run with --stacktrace / --info / --scan" block is eight
+lines and pushed even that outside a ten-line window. Both were driven by
+mutating a test to fail and reading the result. **Neither of them makes the
+test less flaky** — the next occurrence will be diagnosable, which is all.
+
+The likeliest candidate is `ProxyRoleTest`'s 20 000-trial race over
+`onFirstSync` and `onSetReady`, which is the only test in these modules that
+asserts an interleaving; it is written to catch a regression that landed about
+one trial in 570 when the code was wrong, so a failure now would mean a second
+and rarer race the current code still has. That is a guess and is written here
+as one. Nothing has been measured about it.

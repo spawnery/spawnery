@@ -39,6 +39,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Ten is the default and is not enough to see why a build failed
+            # here. Gradle's own "Try: run with --stacktrace / --info / --scan"
+            # block is eight of them, so a failing test's name -- which the
+            # agent build now throws as the failure text -- sits just outside
+            # the window. Measured 2026-08-27, when a Velocity test failed in
+            # CI, passed on a re-run of the identical derivation, and left no
+            # record anywhere of which test it was.
+            log-lines = 40
 
       # Timed on purpose. The store is cold on every hosted runner, and this
       # number is what decides whether a cache is worth its dependency --
@@ -102,6 +110,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Ten is the default and is not enough to see why a build failed
+            # here. Gradle's own "Try: run with --stacktrace / --info / --scan"
+            # block is eight of them, so a failing test's name -- which the
+            # agent build now throws as the failure text -- sits just outside
+            # the window. Measured 2026-08-27, when a Velocity test failed in
+            # CI, passed on a re-run of the identical derivation, and left no
+            # record anywhere of which test it was.
+            log-lines = 40
 
       - name: make lint
         run: nix develop -c make lint
@@ -163,6 +179,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Ten is the default and is not enough to see why a build failed
+            # here. Gradle's own "Try: run with --stacktrace / --info / --scan"
+            # block is eight of them, so a failing test's name -- which the
+            # agent build now throws as the failure text -- sits just outside
+            # the window. Measured 2026-08-27, when a Velocity test failed in
+            # CI, passed on a re-run of the identical derivation, and left no
+            # record anywhere of which test it was.
+            log-lines = 40
 
       # Not `make image-test`: that loads them into a kind cluster and runs a
       # server, which is the e2e job's business. The question here is narrower
@@ -186,6 +210,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Ten is the default and is not enough to see why a build failed
+            # here. Gradle's own "Try: run with --stacktrace / --info / --scan"
+            # block is eight of them, so a failing test's name -- which the
+            # agent build now throws as the failure text -- sits just outside
+            # the window. Measured 2026-08-27, when a Velocity test failed in
+            # CI, passed on a re-run of the identical derivation, and left no
+            # record anywhere of which test it was.
+            log-lines = 40
 
       # The drift guard docs/known-issues.md has been parking since milestone
       # 2c. make agent-deps regenerates agent/deps.json by resolving against
@@ -231,6 +263,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Ten is the default and is not enough to see why a build failed
+            # here. Gradle's own "Try: run with --stacktrace / --info / --scan"
+            # block is eight of them, so a failing test's name -- which the
+            # agent build now throws as the failure text -- sits just outside
+            # the window. Measured 2026-08-27, when a Velocity test failed in
+            # CI, passed on a re-run of the identical derivation, and left no
+            # record anywhere of which test it was.
+            log-lines = 40
 
       # No KIND_EXPERIMENTAL_PROVIDER and no systemd-run: those belong to the
       # rootless-podman invocation hack/e2e.sh documents for the author's
