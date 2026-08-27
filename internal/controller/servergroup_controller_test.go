@@ -409,27 +409,26 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		f.clock.Advance(ResyncInterval)
 	}
 
-	// setMinReplicas performs a real spec update, so the two servers already
-	// up go stale and the cold start orders one replacement. This fixture
-	// never reports for it, so it runs out its startup deadline and fails,
-	// and the corpse is kept: Failed servers are retained for
-	// failedRetentionSeconds (an hour by default), and the 65 passes above,
-	// at one resync each, do not run long enough to clear it.
+	// One live server at the end: the occupied one. The idle server waited out
+	// the stabilization window and was shed, which is what this test is named
+	// for, and nothing was built to replace it.
 	//
-	// The group then builds one more replacement before the loop ends, and
-	// that second attempt is the backoff working rather than a leak. One
-	// failure buys ten seconds; the loop advances five seconds a pass, so
-	// the window closes two passes after the deadline expires and the cold
-	// start is permitted again. Nothing ever reports for that one either, so
-	// it is still starting when the loop stops — live, but not Ready.
+	// It settled on two until 7a, and the second was an accident rather than
+	// this test's subject. setMinReplicas moved metadata.generation, the old
+	// staleness rule read every running server as out of date, and a cold
+	// start ordered a replacement that this fixture never reports for -- so it
+	// failed, left a corpse, and 4d's backoff permitted one further attempt
+	// ten seconds later. All of that was a changeover begun by an edit that
+	// changes nothing about the pods, and since 7a a capacity edit begins
+	// none: staleness is podspec.DesiredServerHash, which spec.scaling never
+	// reaches.
 	//
-	// Until milestone 4d this settled on one live server, because 4b's
-	// cold-start suppression held every further attempt off for the whole
-	// retention hour after a single failure. Retiring that suppression is
-	// what makes the second attempt appear, and the wait that replaces it is
-	// ten seconds rather than an hour. Both live servers and the corpse are
-	// asserted rather than filtered away, so a missing or a doubled one
-	// still fails this test.
+	// The backoff behaviour that half was incidentally exercising has fourteen
+	// envtests of its own -- TestGroupStopsCreatingWhileItBacksOff and
+	// TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter among them --
+	// plus TestDecideBackoffWaitsAndThenAllows for the ten seconds
+	// specifically. Nothing is uncovered by this test asserting only what it
+	// is about.
 	final := f.listServers(t)
 	var live, failed []spawneryv1alpha1.Server
 	for _, s := range final {
@@ -440,49 +439,29 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		live = append(live, s)
 	}
 
-	var survivor, attempt *spawneryv1alpha1.Server
-	for i := range live {
-		if live[i].Name == busy {
-			survivor = &live[i]
-			continue
-		}
-		attempt = &live[i]
-	}
-	if len(live) != 2 || survivor == nil || attempt == nil {
+	if len(live) != 1 || live[0].Name != busy {
 		names := make([]string, 0, len(live))
 		for _, s := range live {
 			names = append(names, s.Name)
 		}
-		t.Fatalf("live servers settled on %v, want the occupied server %q and one further "+
-			"cold-start attempt: the backoff permits a second try ten seconds after the "+
-			"first replacement fails", names, busy)
+		t.Fatalf("live servers settled on %v, want only the occupied server %q: "+
+			"the idle one is shed and a capacity edit replaces nothing", names, busy)
 	}
-	if got := survivor.Status.Phase; got != string(phase.Ready) {
+	if got := live[0].Status.Phase; got != string(phase.Ready) {
 		t.Errorf("phase of the surviving server = %q, want Ready", got)
-	}
-	// The second live server is the attempt the closed window permitted, not
-	// a second survivor: the current generation's, and still starting.
-	if got := attempt.Spec.GroupGeneration; got != f.group.Generation {
-		t.Errorf("second live server's generation = %d, want %d: it is the current "+
-			"generation's next cold start, not a leftover", got, f.group.Generation)
-	}
-	if got := attempt.Status.Phase; got == string(phase.Ready) {
-		t.Errorf("second live server is %q; nothing reports for it in this fixture, so a "+
-			"Ready one means it is not the attempt this assertion is about", got)
 	}
 	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
 		t.Errorf("minAvailable = %d, want 1 — the surviving pod still carries players", got)
 	}
 
-	if len(failed) != 1 {
+	// No corpse either. The doomed replacement existed only because the
+	// capacity edit started a changeover, so there is now nothing to fail.
+	if len(failed) != 0 {
 		names := make([]string, 0, len(failed))
 		for _, s := range failed {
 			names = append(names, s.Name)
 		}
-		t.Fatalf("failed servers = %v, want exactly one — the cold start's doomed replacement", names)
-	}
-	if got := failed[0].Spec.GroupGeneration; got != f.group.Generation {
-		t.Errorf("failed server's generation = %d, want %d: the current generation's cold start, not a leftover", got, f.group.Generation)
+		t.Fatalf("failed servers = %v, want none — no changeover was begun", names)
 	}
 }
 
@@ -1580,18 +1559,20 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	}
 	f.setMinReplicas(t, 1)
 
-	// Four, not three: setMinReplicas performs a real spec update, so the
-	// group's generation moves and the three Ready servers created under the
-	// previous one are stale. With nothing of the current generation up, the
-	// cold start orders exactly one replacement — the changeover beginning,
-	// not the floor being missed. The shrink this test is about happens
-	// below, once the stabilization window elapses.
+	// Three, and this number is the milestone. setMinReplicas performs a real
+	// spec update, so before 7a the group's generation moved, all three Ready
+	// servers read as stale, and a cold start ordered a fourth — a changeover
+	// begun by an edit that changes nothing about the pods. Since 7a
+	// staleness is podspec.DesiredServerHash, which spec.scaling never
+	// reaches, so lowering the floor starts no changeover and creates
+	// nothing. The shrink this test is about happens below, once the
+	// stabilization window elapses.
 	//
-	// All three original servers are empty, but none has waited out the
-	// window yet.
+	// All three servers are empty, but none has waited out the window yet.
 	f.reconcileGroup(t, r)
-	if got := len(f.listServers(t)); got != 4 {
-		t.Fatalf("got %d servers before the window elapsed, want 4", got)
+	if got := len(f.listServers(t)); got != 3 {
+		t.Fatalf("got %d servers before the window elapsed, want 3 — a capacity "+
+			"edit must start no changeover", got)
 	}
 
 	// The window is the CRD default, 300 seconds. The agents keep reporting
@@ -1933,9 +1914,17 @@ func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32)
 	}
 }
 
-// bumpGeneration performs a real spec update, the way an operator rolling a
-// new image would: it moves group.Generation forward, so every server created
-// under the previous value reads as stale to the scaling rules.
+// bumpPodSpec performs a real spec update, the way an operator rolling a new
+// image would. It changes spec.image, which is what reaches
+// podspec.DesiredServerHash, so every server created under the previous value
+// reads as stale to the scaling rules.
+//
+// It was called bumpPodSpec until 7a, and the rename is not cosmetic. The
+// old name described the mechanism the rules used to read, and since 7a a
+// helper that only moved metadata.generation -- by editing spareSlots, say --
+// would make nothing stale at all, while every test built on it went on
+// passing and asserting nothing. The image edit below is the load-bearing
+// line, and the name says so.
 //
 // It also pins spec.update explicitly rather than leaving it unset.
 // spec.update is optional, and an unset one arrives at MaxUnavailable: 0 —
@@ -1964,7 +1953,7 @@ func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32)
 // mid-window, ~70 clear on either side, so this is not fragile today — but a
 // future spareSlots change made for an unrelated reason could silently push
 // assertion 1 (or 5) outside it.
-func (f *fixture) bumpGeneration(t *testing.T) {
+func (f *fixture) bumpPodSpec(t *testing.T) {
 	t.Helper()
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
@@ -1978,6 +1967,14 @@ func (f *fixture) bumpGeneration(t *testing.T) {
 }
 
 // serversOfGeneration filters the group's servers down to one generation.
+//
+// Since 7a the sizing rules read spec.podHash and not this field, so this is a
+// proxy for "of the current spec" rather than the rule itself. It is a sound
+// proxy in every test here for one reason: bumpPodSpec changes spec.image,
+// which moves the render hash and the generation together. A test that edited
+// only capacity would move the generation alone, and this helper would report
+// every server stale while the rules correctly reported none. Use PodHash
+// directly in such a test rather than reaching for this.
 func (f *fixture) serversOfGeneration(t *testing.T, generation int64) []spawneryv1alpha1.Server {
 	t.Helper()
 	var out []spawneryv1alpha1.Server
@@ -2044,11 +2041,11 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 	f.createServer(b)
 	f.markReadyWithPlayers(t, b, 60)
 
-	f.bumpGeneration(t)
+	f.bumpPodSpec(t)
 
 	// 1. Exactly one replacement is created — not zero, and not one per
 	// five-second pass while it boots. At this fixture's spareSlots (150,
-	// see bumpGeneration), this create is explained by ordinary spare-slot
+	// see bumpPodSpec), this create is explained by ordinary spare-slot
 	// demand alone: pass 1 sees provisional=80 (two occupied stale servers,
 	// 40 free each) against spareSlots=150, gap=70, wanted=1 — already 1
 	// before coldStart's own "if cold && create<1" branch is even consulted.
@@ -2097,7 +2094,7 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 	// 5. The retirement above is what leaving() (Task 3) exists to make
 	// possible: the retiring server dropping out of the group's size is what
 	// lets DecideSize notice the capacity it was carrying is gone and order a
-	// replacement for it, in the very same pass — bumpGeneration's spareSlots
+	// replacement for it, in the very same pass — bumpPodSpec's spareSlots
 	// of 150 is chosen so fresh alone cannot cover that gap on its own. If
 	// leaving() stopped including phase.Retiring, the retiring server would
 	// keep holding the group's size, the shortfall would never become
@@ -2121,7 +2118,7 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 //
 // Arithmetic: two stale (old-generation) occupied servers, 60 players each
 // out of maxPlayers 100, for 40 free slots apiece — sum(stale free) = 80.
-// spareSlots is left at the fixture's default of 40 (bumpGeneration is not
+// spareSlots is left at the fixture's default of 40 (bumpPodSpec is not
 // used here precisely because it raises spareSlots to 150; this test needs
 // it left alone). At pass 1: provisional = 80 >= spareSlots = 40, so gap <=
 // 0 and wanted = 0. MinReplicas (1) does not raise create either — alive is
@@ -2142,7 +2139,7 @@ func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
 	f.createServer(b)
 	f.markReadyWithPlayers(t, b, 60)
 
-	// A real spec update, bumping the generation exactly as bumpGeneration
+	// A real spec update, bumping the generation exactly as bumpPodSpec
 	// does, but deliberately not touching spareSlots — it must stay at the
 	// fixture's default of 40 for the arithmetic above to hold.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
@@ -2511,7 +2508,7 @@ func TestGroupStillRetiresWhileItBacksOff(t *testing.T) {
 
 	// The operator's fix in flight: a real generation bump, so the group is
 	// genuinely mid-changeover rather than merely holding one old server.
-	f.bumpGeneration(t)
+	f.bumpPodSpec(t)
 
 	// The current-generation Ready server selectRetirement requires before it
 	// will nominate anything. Its readySince is the watermark the failure
@@ -2554,7 +2551,7 @@ func TestGenerationChangeClearsTheBackoff(t *testing.T) {
 	}
 
 	// The operator's answer to whatever failed.
-	f.bumpGeneration(t)
+	f.bumpPodSpec(t)
 	f.reconcileGroup(t, r)
 
 	g := f.reloadGroup(t)
@@ -2935,7 +2932,7 @@ func TestGenerationChangeClearsAGaveUpGroupsConditions(t *testing.T) {
 	}
 
 	// The operator's answer to whatever failed.
-	f.bumpGeneration(t)
+	f.bumpPodSpec(t)
 	f.reconcileGroup(t, r)
 
 	g := f.reloadGroup(t)
@@ -3072,7 +3069,7 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	f.reconcileGroup(t, r)
 	f.markReady(t, f.oneServerName(t))
 
-	f.bumpGeneration(t) // the changeover begins; the cold start builds one
+	f.bumpPodSpec(t) // the changeover begins; the cold start builds one
 	f.reconcileGroup(t, r)
 	generation := f.reloadGroup(t).Generation
 
@@ -4436,9 +4433,9 @@ func TestACacheOneGenerationBehindIsNotReportedAsASquatter(t *testing.T) {
 // meets; the two that matter most are the last two, which the phase cannot
 // tell apart from the first.
 func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
-	const gen = 7
-	view := func(p phase.Phase, generation int64) ServerView {
-		return ServerView{Phase: p, Generation: generation}
+	const gen = "current"
+	view := func(p phase.Phase, hash string) ServerView {
+		return ServerView{Phase: p, PodHash: hash}
 	}
 	for _, tc := range []struct {
 		name   string
@@ -4459,42 +4456,42 @@ func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
 		{
 			"one up, one still coming",
 			[]ServerView{view(phase.Ready, gen), view(phase.Starting, gen)},
-			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of generation 7",
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of the group's current spec",
 		},
 		{
 			"a pending server counts as coming",
 			[]ServerView{view(phase.Ready, gen), view(phase.Pending, gen)},
-			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of generation 7",
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of the group's current spec",
 		},
 		{
-			"the new generation is up but the old one is still here",
-			[]ServerView{view(phase.Ready, gen), view(phase.Ready, gen-1)},
-			metav1.ConditionTrue, spawneryv1alpha1.ReasonReplacingServers, "earlier generation",
+			"the new spec is up but the old one is still here",
+			[]ServerView{view(phase.Ready, gen), view(phase.Ready, "old")},
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonReplacingServers, "earlier spec",
 		},
 		{
 			"both waits at once say both",
-			[]ServerView{view(phase.Starting, gen), view(phase.Ready, gen-1)},
+			[]ServerView{view(phase.Starting, gen), view(phase.Ready, "old")},
 			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "still being replaced",
 		},
 		{
 			// Being shed on purpose. A scale-down has arrived, it is tidying.
-			"a draining server of the current generation",
+			"a draining server of the current spec",
 			[]ServerView{view(phase.Ready, gen), view(phase.Draining, gen)},
 			metav1.ConditionFalse, spawneryv1alpha1.ReasonAtDesiredState, "",
 		},
 		{
 			// Degraded is what says this, and its replacement will be Pending
 			// on the next pass, which this counts then.
-			"a failed server of the current generation",
+			"a failed server of the current spec",
 			[]ServerView{view(phase.Ready, gen), view(phase.Failed, gen)},
 			metav1.ConditionFalse, spawneryv1alpha1.ReasonAtDesiredState, "",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			group := &spawneryv1alpha1.ServerGroup{
-				ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: gen},
+				ObjectMeta: metav1.ObjectMeta{Name: "lobby"},
 			}
-			reportProgressing(group, tc.views)
+			reportProgressing(group, tc.views, gen)
 			got := meta.FindStatusCondition(group.Status.Conditions,
 				spawneryv1alpha1.ConditionProgressing)
 			if got == nil {
@@ -4810,12 +4807,12 @@ func TestAFailedRetireeIsNamedOnProgressing(t *testing.T) {
 		Spec:       spawneryv1alpha1.ServerGroupSpec{FailedRetentionSeconds: 3600},
 	}
 	views := []ServerView{
-		{Name: "lobby-new", Generation: 2, Phase: phase.Ready},
+		{Name: "lobby-new", PodHash: "current", Phase: phase.Ready},
 		// The stuck one: retiring, and dead.
-		{Name: "lobby-old", Generation: 1, Phase: phase.Failed, Retire: true},
+		{Name: "lobby-old", PodHash: "old", Phase: phase.Failed, Retire: true},
 	}
 
-	reportProgressing(group, views)
+	reportProgressing(group, views, "current")
 
 	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
@@ -4847,9 +4844,9 @@ func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
 		t.Run(string(p), func(t *testing.T) {
 			group.Status.Conditions = nil
 			reportProgressing(group, []ServerView{
-				{Name: "lobby-new", Generation: 2, Phase: phase.Ready},
-				{Name: "lobby-old", Generation: 1, Phase: p, Retire: true},
-			})
+				{Name: "lobby-new", PodHash: "current", Phase: phase.Ready},
+				{Name: "lobby-old", PodHash: "old", Phase: p, Retire: true},
+			}, "current")
 			cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
 			if cond != nil && cond.Reason == spawneryv1alpha1.ReasonRetireeStuck {
 				t.Errorf("a %s retiree was reported as stuck: %q", p, cond.Message)
@@ -4932,5 +4929,105 @@ func TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter(t *testing.T) {
 	if got := f.liveServers(t); got != 1 {
 		t.Fatalf("%d live servers after the window expired, want 1: the count recovers or "+
 			"the observation was not the backoff after all", got)
+	}
+}
+
+// An ephemeral server created before spec.podHash had a reader on this side
+// must be stamped, not left hashless. staleSpec adopts a hashless view on
+// every pass, so a server that is never stamped is never stale -- immune to
+// every future image change until it churns for an unrelated reason.
+func TestAdoptStampsEphemeralServers(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	srv := f.createServer("lobby-old")
+	// The shape of a server from before the field had a reader here.
+	srv.Spec.PodHash = ""
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("clear podHash: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	if got := f.server("lobby-old").Spec.PodHash; got == "" {
+		t.Fatal("an ephemeral server was left without a render hash: it can never be stale")
+	}
+}
+
+// requireNoneRetiring fails if any server of the group has been nominated for
+// retirement. It reads spec.retire, not the phase, because the nomination is
+// what the sizing rule decides and it lands a pass before the transition does.
+//
+// listServers is already scoped to the fixture's namespace, which matters:
+// envtest shares one control plane with no cleanup between tests, so a
+// cluster-wide List would make another test's leftovers this test's result.
+func requireNoneRetiring(t *testing.T, f *fixture, when string) {
+	t.Helper()
+	for _, s := range f.listServers(t) {
+		if s.Spec.Retire {
+			t.Fatalf("%s: server %s was asked to retire and nothing should have", when, s.Name)
+		}
+	}
+}
+
+// The milestone's acceptance criterion, driven through real reconciles rather
+// than against a hand-built ScalingInputs. Every unit test in this milestone
+// supplies PodHash itself, so none of them can fail if `size` passes the wrong
+// value at the call site -- the defect shape setup.go's comment on
+// newServerGroupReconciler describes, and one this package has been bitten by.
+func TestCapacityEditDoesNotRollAnEphemeralGroup(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// Two occupied servers carrying the hash the group renders right now.
+	// Created directly rather than through the floor, which is 1 here.
+	a, b := "lobby-a", "lobby-b"
+	f.createServer(a)
+	f.markReadyWithPlayers(t, a, 60)
+	f.createServer(b)
+	f.markReadyWithPlayers(t, b, 60)
+
+	reconcilePass(t, f, r)
+	requireNoneRetiring(t, f, "before any edit")
+
+	// A capacity edit. metadata.generation moves; the rendered pod does not.
+	// Two servers are already up, so the raised floor needs no new one either
+	// and the only thing this can produce is a retirement -- which is exactly
+	// what must not happen.
+	f.setMinReplicas(t, 2)
+	reconcilePass(t, f, r)
+	requireNoneRetiring(t, f, "after raising minReplicas")
+
+	// The field 4b's open item was actually written about. Same class as
+	// minReplicas -- it never reaches BuildServerPod -- but asserted rather
+	// than assumed. 80 slots are free across the two servers, so 60 keeps the
+	// spare-slot rule satisfied and this edit stays a pure no-op.
+	if err := f.c.Get(f.ctx,
+		types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Scaling.SpareSlots = 60
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("retune spareSlots: %v", err)
+	}
+	reconcilePass(t, f, r)
+	requireNoneRetiring(t, f, "after retuning spareSlots")
+
+	// An image edit. Now the rendered pod really did change, and the
+	// changeover must begin: one replacement first, and only once it is Ready
+	// does exactly one stale server retire, under maxUnavailable.
+	f.bumpPodSpec(t)
+	reconcilePass(t, f, r)
+
+	fresh := f.serversOfGeneration(t, f.group.Generation)
+	if len(fresh) != 1 {
+		t.Fatalf("the image edit created %d replacements, want exactly 1", len(fresh))
+	}
+	f.markReady(t, fresh[0].Name)
+	reconcilePass(t, f, r)
+	reconcilePass(t, f, r)
+
+	if n := f.retiringCount(t); n != 1 {
+		t.Fatalf("%d servers retiring after an image edit, want exactly 1 (maxUnavailable)", n)
 	}
 }

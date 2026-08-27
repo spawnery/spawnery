@@ -403,13 +403,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 
-		// Adoption runs before sizing, on a persistent group only: a server
+		// Adoption runs before sizing, for both group kinds since 7a: a server
 		// whose spec.podHash is still empty predates the field (ServerSpec.
 		// PodHash's doc comment is what says an empty value means adopt rather
 		// than stale), and this is the pass that gives it the current hash so
 		// a later comparison has one to compare against. It orders no takedown
-		// of its own -- nothing reads podHash to decide a removal yet, which
-		// is Task 4's rule -- so the stamp is the whole effect here.
+		// of its own -- staleSpec adopts a hashless view rather than nominating
+		// it -- so the stamp is the whole effect here.
 		if err := r.adoptServers(ctx, group, servers, podHash); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -648,7 +648,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	totals := AggregateGroup(views, group.Generation)
+	totals := AggregateGroup(views, podHash)
 	group.Status.Replicas = totals.Replicas
 	group.Status.ReadyReplicas = totals.ReadyReplicas
 	group.Status.OnlinePlayers = totals.OnlinePlayers
@@ -658,7 +658,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// After derivePhase and independent of it: the two answer different
 	// questions and neither is allowed to move the other. See
 	// ConditionProgressing and reportProgressing.
-	reportProgressing(group, views)
+	reportProgressing(group, views, podHash)
 	// This group's own answer about the forwarding secret. Unlike the proxy
 	// side, this controller works in Servers and holds no pods, so it costs a
 	// list of its own -- label-scoped to this group, over the manager's warm
@@ -782,7 +782,7 @@ func (r *ServerGroupReconciler) size(
 				MaxPlayers:    group.Spec.MaxPlayers,
 				Stabilization: time.Duration(group.Spec.Scaling.ScaleDownStabilizationSeconds) * time.Second,
 
-				Generation:     group.Generation,
+				PodHash:        podHash,
 				MaxUnavailable: group.UpdateMaxUnavailable(),
 
 				PendingCreates: int32(len(pendingCreates)),
@@ -1077,7 +1077,14 @@ func (r *ServerGroupReconciler) groupPods(
 // counted. The first two are being shed on purpose -- a scale-down has arrived,
 // it is just tidying -- and a Failed one is replaced by a Pending one that this
 // counts on the next pass, with Degraded saying meanwhile what went wrong.
-func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) {
+// podHash is the group's desired render digest. It replaced
+// metadata.generation here in 7a for the reason AggregateGroup gives: a
+// generation moves on every field of the spec, so a capacity edit made every
+// running server "of an earlier generation" and this condition announced a
+// replacement that was not happening. An empty podHash compares nothing, so a
+// pass without a usable Network reports no replacement rather than a phantom
+// one.
+func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, podHash string) {
 	var starting, older int32
 	// A retiree that will never retire. spec.retire is the update budget's one
 	// signal (selectRetirement), and it survives the server failing -- so a
@@ -1101,7 +1108,7 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) 
 		if v.Retire && v.Phase == phase.Failed {
 			stuck = append(stuck, v.Name)
 		}
-		if v.Generation != group.Generation {
+		if staleSpec(v, podHash) {
 			older++
 			continue
 		}
@@ -1128,19 +1135,19 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) 
 	case starting > 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = spawneryv1alpha1.ReasonServersStarting
-		condition.Message = fmt.Sprintf("%d server(s) of generation %d are not ready yet",
-			starting, group.Generation)
+		condition.Message = fmt.Sprintf("%d server(s) of the group's current spec are not ready yet",
+			starting)
 		if older > 0 {
-			condition.Message += fmt.Sprintf("; %d of an earlier generation are still being replaced", older)
+			condition.Message += fmt.Sprintf("; %d of an earlier spec are still being replaced", older)
 		}
 	case older > 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = spawneryv1alpha1.ReasonReplacingServers
-		condition.Message = fmt.Sprintf("%d server(s) of an earlier generation are still being replaced", older)
+		condition.Message = fmt.Sprintf("%d server(s) of an earlier spec are still being replaced", older)
 	default:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = spawneryv1alpha1.ReasonAtDesiredState
-		condition.Message = fmt.Sprintf("every server is of generation %d and ready", group.Generation)
+		condition.Message = "every server is of the group's current spec and ready"
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, condition)
 }
@@ -1502,19 +1509,20 @@ func (r *ServerGroupReconciler) retireServer(
 	return nil
 }
 
-// adoptServers stamps the freshly computed render hash onto every server of a
-// persistent group whose spec.podHash is still empty: one created before this
-// field existed. Adoption applies to persistent groups only; an ephemeral
-// group's servers are skipped outright.
+// adoptServers stamps the freshly computed render hash onto every server whose
+// spec.podHash is still empty: one created before this field existed, or --
+// for an ephemeral group -- before 7a gave the field a reader on this side.
+//
+// It covered persistent groups only until 7a. That was correct while nothing
+// read the field for an ephemeral group, and became a hole the moment
+// staleSpec did: a hashless view is adopted on every pass, so a server that is
+// never stamped is never stale, and no image change would ever replace it.
 func (r *ServerGroupReconciler) adoptServers(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	servers map[string]*spawneryv1alpha1.Server,
 	podHash string,
 ) error {
-	if group.IsEphemeral() {
-		return nil
-	}
 	for _, srv := range servers {
 		// Already adopted. Guards the same cache-lag window retireServer's own
 		// guard does, above: without it, a server this pass (or an earlier one)

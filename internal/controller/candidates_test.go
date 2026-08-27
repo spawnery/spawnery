@@ -183,40 +183,49 @@ func TestSelectNeverReturnsAnOccupiedServer(t *testing.T) {
 	}
 }
 
+// hashed stamps a render hash on a view built by view(), which sets only the
+// generation. AggregateGroup and the sizing rules read the hash since 7a; the
+// generation is still what selectFailedForPruning orders corpses by, so both
+// fields stay on the type and tests set whichever they are about.
+func hashed(v ServerView, hash string) ServerView {
+	v.PodHash = hash
+	return v
+}
+
 func TestAggregateGroup(t *testing.T) {
 	views := []ServerView{
-		view("current-a", phase.Ready, 20, 100, false, 7, 0),
-		view("current-b", phase.Ready, 10, 100, false, 7, 10),
-		view("stale-gen", phase.Ready, 40, 100, false, 6, 20),
-		view("starting", phase.Starting, 0, 100, true, 7, 30),
-		view("draining", phase.Draining, 5, 100, false, 7, 40),
+		hashed(view("current-a", phase.Ready, 20, 100, false, 7, 0), "current"),
+		hashed(view("current-b", phase.Ready, 10, 100, false, 7, 10), "current"),
+		hashed(view("stale-spec", phase.Ready, 40, 100, false, 6, 20), "old"),
+		hashed(view("starting", phase.Starting, 0, 100, true, 7, 30), "current"),
+		hashed(view("draining", phase.Draining, 5, 100, false, 7, 40), "current"),
 	}
 
-	got := AggregateGroup(views, 7)
+	got := AggregateGroup(views, "current")
 
 	if got.Replicas != 5 {
 		t.Errorf("Replicas = %d, want 5", got.Replicas)
 	}
 	if got.ReadyReplicas != 3 {
-		t.Errorf("ReadyReplicas = %d, want 3 (two current plus the stale generation)", got.ReadyReplicas)
+		t.Errorf("ReadyReplicas = %d, want 3 (two current plus the stale spec)", got.ReadyReplicas)
 	}
 	if got.OnlinePlayers != 75 {
 		t.Errorf("OnlinePlayers = %d, want 75 across every server that has players", got.OnlinePlayers)
 	}
-	// 80 free on current-a plus 90 on current-b. The old generation does not
-	// count, otherwise a rolling update would never create replacements, and
-	// neither do the starting and draining servers.
+	// 80 free on current-a plus 90 on current-b. The old spec does not count,
+	// otherwise a rolling update would never create replacements, and neither
+	// do the starting and draining servers.
 	if got.FreeSlots != 170 {
-		t.Errorf("FreeSlots = %d, want 170 from the current generation only", got.FreeSlots)
+		t.Errorf("FreeSlots = %d, want 170 from the current spec only", got.FreeSlots)
 	}
 }
 
 func TestAggregateIgnoresStaleCountsForFreeSlots(t *testing.T) {
 	views := []ServerView{
-		view("fresh", phase.Ready, 0, 100, false, 7, 0),
-		view("stale", phase.Ready, 0, 100, true, 7, 10),
+		hashed(view("fresh", phase.Ready, 0, 100, false, 7, 0), "current"),
+		hashed(view("stale", phase.Ready, 0, 100, true, 7, 10), "current"),
 	}
-	if got := AggregateGroup(views, 7).FreeSlots; got != 100 {
+	if got := AggregateGroup(views, "current").FreeSlots; got != 100 {
 		t.Errorf("FreeSlots = %d, want 100 — a server we cannot measure offers no free slots", got)
 	}
 }
@@ -544,5 +553,67 @@ func TestPruningKeepsTheFirstFailureWhenTwoShareASecond(t *testing.T) {
 		t.Errorf("pruned = %v, want [lobby-aaa]: lobby-zzz failed twenty-five seconds "+
 			"earlier and is the one that says what broke. Keeping lobby-aaa means the "+
 			"tiebreak is the random suffix rather than status.failedAt", pruned)
+	}
+}
+
+func TestStaleSpec(t *testing.T) {
+	cases := []struct {
+		name string
+		view string
+		want string
+		out  bool
+	}{
+		{"same hash is current", "abc123", "abc123", false},
+		{"different hash is stale", "abc123", "def456", true},
+		// Both directions of adoption. A server that predates spec.podHash
+		// carries "", and so does the desired hash on a pass that could not
+		// compute one -- an unresolvable Network, for instance. Neither is
+		// evidence that this server is out of date, and treating it as such
+		// would retire the whole group on the first pass after an upgrade.
+		{"view without a hash is adopted", "", "def456", false},
+		{"no desired hash compares nothing", "abc123", "", false},
+		{"both empty is not stale", "", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := staleSpec(ServerView{PodHash: tc.view}, tc.want)
+			if got != tc.out {
+				t.Fatalf("staleSpec(view %q, want %q) = %v, want %v",
+					tc.view, tc.want, got, tc.out)
+			}
+		})
+	}
+}
+
+// A capacity edit does not move the render hash, so every server still counts
+// toward the published free slots. Before 7a this published zero, because the
+// generation had moved and the filter read that as "everything is stale" -- a
+// healthy group reporting FREE SLOTS 0 on its own printcolumn.
+func TestAggregateGroupCapacityEditKeepsFreeSlots(t *testing.T) {
+	views := []ServerView{
+		{Name: "a", Phase: phase.Ready, PodHash: "same", Slots: 100, Players: 30},
+		{Name: "b", Phase: phase.Ready, PodHash: "same", Slots: 100, Players: 10},
+	}
+	if got := AggregateGroup(views, "same"); got.FreeSlots != 160 {
+		t.Fatalf("FreeSlots = %d, want 160", got.FreeSlots)
+	}
+}
+
+// The filter's original job survives: a stale server's free slots must not
+// satisfy the scaler, or a rolling update would never build a replacement.
+func TestAggregateGroupExcludesStaleFreeSlots(t *testing.T) {
+	views := []ServerView{
+		{Name: "old", Phase: phase.Ready, PodHash: "old", Slots: 100, Players: 0},
+		{Name: "new", Phase: phase.Ready, PodHash: "new", Slots: 100, Players: 40},
+	}
+	got := AggregateGroup(views, "new")
+	if got.FreeSlots != 60 {
+		t.Fatalf("FreeSlots = %d, want 60 (only the current server counts)", got.FreeSlots)
+	}
+	// The other three totals count every server whatever its hash, and always
+	// did. Asserting them here is what keeps this change from narrowing them
+	// by accident.
+	if got.Replicas != 2 || got.ReadyReplicas != 2 || got.OnlinePlayers != 40 {
+		t.Fatalf("totals = %+v, want Replicas 2, ReadyReplicas 2, OnlinePlayers 40", got)
 	}
 }

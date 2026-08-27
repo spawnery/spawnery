@@ -220,8 +220,10 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 		v := viewByName(in.Views, name)
 		// An empty view hash is adopted rather than compared -- see
 		// ServerView.PodHash. An empty in.PodHash is the same adoption from
-		// the other side: see PersistentInputs.PodHash.
-		if in.PodHash == "" || v.PodHash == "" || v.PodHash == in.PodHash {
+		// the other side: see PersistentInputs.PodHash. Both live in
+		// staleSpec, which the ephemeral rule calls too, so the two group
+		// kinds cannot drift apart on what stale means.
+		if !staleSpec(v, in.PodHash) {
 			continue
 		}
 		stale = append(stale, ordinal)

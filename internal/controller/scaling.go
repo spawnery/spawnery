@@ -26,7 +26,7 @@ import (
 // ScalingInputs is everything the sizing decision needs. Like the other
 // decisions in this package it is a value type, so the rules are pure and
 // table-tested without a cluster.
-// The group's generation is here, and it is confined to one job. It selects
+// The group's render hash is here, and it is confined to one job. It selects
 // which stale server retires and whether the changeover has begun; it never
 // enters provisionalCapacity or readyFree. A scale-up rule that credited only
 // servers of the current generation would find, the instant any field of the
@@ -54,13 +54,24 @@ type ScalingInputs struct {
 	// PendingDeletes are the servers whose removal it has already asked for
 	// and the cache still shows.
 	PendingDeletes map[string]bool
-	// Generation is the group's current metadata.generation. A view whose
-	// Generation differs is stale.
+	// PodHash is podspec.DesiredServerHash for the group as it stands now: the
+	// digest of the pod and the config this operator would render for one of
+	// its servers. A view whose spec.podHash differs is stale; staleSpec has
+	// what an empty hash on either side means.
 	//
-	// It decides only *which* server retires, never how many get built: the
-	// capacity arithmetic below stays generation-blind, exactly as milestone
-	// 4a left it. See the type comment above.
-	Generation int64
+	// It replaced metadata.generation here in milestone 7a, and the reason is
+	// what a generation could not tell apart. A generation moves on *every*
+	// field of the spec, so raising minReplicas made every running server
+	// stale and the group replaced a fleet of functionally identical pods.
+	// The digest moves only when the rendered pod or the config actually
+	// changes, which is the question a changeover is really asking.
+	//
+	// Its job is unchanged and still confined: it decides only *which* server
+	// retires, never how many get built. The capacity arithmetic below stays
+	// blind to it, exactly as milestone 4a left it. See the type comment
+	// above -- the hazard described there is about filtering that arithmetic
+	// and applies to this field exactly as it applied to the last one.
+	PodHash string
 	// MaxUnavailable is spec.update.maxUnavailable: how many servers this
 	// update may have unavailable at once.
 	MaxUnavailable int32
@@ -296,7 +307,8 @@ func readyFree(views []ServerView) int32 {
 func coldStart(in ScalingInputs) bool {
 	if in.PendingCreates > 0 {
 		// A pending create is of the current generation in every pass but one:
-		// createServer stamps group.Generation on it. The exception is a create
+		// createServer stamps the group's current render hash on it. The
+		// exception is a create
 		// issued under generation N that is still outstanding when the pass
 		// reads N+1 — then this declines a cold start on the strength of a
 		// server that will arrive stale. It costs one pass and no more: either
@@ -311,7 +323,7 @@ func coldStart(in ScalingInputs) bool {
 		if in.PendingDeletes[v.Name] {
 			continue
 		}
-		if v.Generation == in.Generation {
+		if !staleSpec(v, in.PodHash) {
 			if v.countsTowardSize() {
 				current++
 			}
@@ -354,7 +366,7 @@ func selectRetirement(in ScalingInputs) string {
 			unavailable++
 			continue
 		}
-		if v.Generation == in.Generation {
+		if !staleSpec(v, in.PodHash) {
 			// A server already nominated for deletion is not a replacement.
 			// The ceiling branch runs before this one, applies no changeover
 			// filter, and sorts never-took-players first then youngest — which
@@ -468,7 +480,7 @@ func staleRemains(in ScalingInputs) bool {
 		if in.PendingDeletes[v.Name] {
 			continue
 		}
-		if v.Generation != in.Generation && v.countsTowardSize() {
+		if staleSpec(v, in.PodHash) && v.countsTowardSize() {
 			return true
 		}
 	}
@@ -675,7 +687,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 		eligible := make([]ServerView, 0, len(pool))
 		for _, v := range pool {
 			// The changeover rule: stale capacity goes first. See above.
-			if changeover && v.Generation == in.Generation {
+			if changeover && !staleSpec(v, in.PodHash) {
 				continue
 			}
 			// EmptyFor decides nothing on its own: a server that was never

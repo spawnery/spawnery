@@ -1552,8 +1552,8 @@ spec:
                 type: integer
               freeSlots:
                 description: |-
-                  FreeSlots is the sum of free slots across ready servers of the current
-                  generation. Stale servers do not count.
+                  FreeSlots is the sum of free slots across ready servers rendered under
+                  the group's current spec. Servers of an older one do not count.
                 format: int32
                 type: integer
               lastFailureAt:
