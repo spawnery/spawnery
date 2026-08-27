@@ -140,20 +140,20 @@
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
           #
-          # 0.2.4 is the first release where both images earn the bump on
-          # their own. The agent change is in agent/common and so reaches
-          # both: OperatorChannel now sends a keepalive ping, which is the
-          # only clock either agent has on a connection that is up and going
-          # nowhere -- measured at 64 seconds against a stub gone deaf, where
-          # before the wait was over 200 and twice unbounded. And the Paper
-          # image carries Paper 26.2 build 119 where 0.2.3 carried 111.
+          # 0.2.5 is a Velocity agent change: the proxy reports the read
+          # timeout it actually parsed, which is the deadline the operator
+          # races when a backend's node dies and the one number it could
+          # previously only assume -- a velocity.toml overlay is free to lower
+          # it, and the operator never reads that file. The Paper agent is
+          # untouched and its image rolls for the version alone, which is the
+          # price of one agent version and is argued below.
           #
           # That the tag names neither of those is the point of the two
           # constants: the tag is <upstream>-<imageVersion>, so a Paper build
           # that moves without this number moving would be published over a
           # tag a cluster has already pulled. hack/publish.sh refuses that,
           # which is what makes the bump obligatory rather than tidy.
-          imageVersion = "0.2.4";
+          imageVersion = "0.2.5";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -161,7 +161,7 @@
           # Hello.version -- and hanging the operator's tag off it would mean a
           # fix in the reconciler claiming a new agent version, and an agent
           # release renaming an unchanged operator image.
-          operatorVersion = "0.2.4";
+          operatorVersion = "0.2.5";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

@@ -291,7 +291,7 @@ running cluster pulled.
 The operator itself changes nothing a pod renders: `internal/podspec` is
 untouched, so no pod's rendered hash moves, and the agent jars are unchanged.
 
-## The proxies report their read timeout, and a Network says what it means
+## 0.2.5: the proxies report their read timeout, and a Network says what it means
 
 A `Network` gains a `RescueWindowShort` condition. It answers how long the
 operator has to move players off a backend whose node has died before Velocity
