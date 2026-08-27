@@ -488,15 +488,26 @@ type GroupTotals struct {
 	ReadyReplicas int32
 	// OnlinePlayers is the sum of players, whatever their generation.
 	OnlinePlayers int32
-	// FreeSlots counts only Ready servers of the current generation with a
-	// fresh player count. Stale generations are excluded on purpose: without
-	// that, a rolling update would never create replacements, because the old
-	// servers' free slots would satisfy the scaler forever.
+	// FreeSlots counts only Ready servers rendered under the group's current
+	// spec, with a fresh player count. Stale ones are excluded on purpose:
+	// without that, a rolling update would never create replacements, because
+	// the old servers' free slots would satisfy the scaler forever.
 	FreeSlots int32
 }
 
 // AggregateGroup sums the views up for the group status.
-func AggregateGroup(views []ServerView, generation int64) GroupTotals {
+//
+// podHash is the group's desired render digest, and it took over from
+// metadata.generation in 7a for the reason ScalingInputs.PodHash gives: a
+// generation moves on every field of the spec, so a capacity edit used to
+// leave a perfectly healthy group publishing FreeSlots 0 on its own
+// printcolumn. An empty podHash -- the value on a pass where the group's
+// Network is unusable, since the digest is computed under mayResize -- makes
+// staleSpec compare nothing, so every Ready server contributes. That is the
+// better of the two answers there: a group whose Network is gone is not
+// scaling anyway, and publishing the capacity that exists beats publishing
+// zero.
+func AggregateGroup(views []ServerView, podHash string) GroupTotals {
 	var t GroupTotals
 	for _, v := range views {
 		t.Replicas++
@@ -506,7 +517,7 @@ func AggregateGroup(views []ServerView, generation int64) GroupTotals {
 		if !v.Stale {
 			t.OnlinePlayers += v.Players
 		}
-		if v.Phase == phase.Ready && v.Generation == generation && !v.Stale {
+		if v.Phase == phase.Ready && !staleSpec(v, podHash) && !v.Stale {
 			free := v.Slots - v.Players
 			if free > 0 {
 				t.FreeSlots += free

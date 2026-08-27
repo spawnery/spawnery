@@ -4417,9 +4417,9 @@ func TestACacheOneGenerationBehindIsNotReportedAsASquatter(t *testing.T) {
 // meets; the two that matter most are the last two, which the phase cannot
 // tell apart from the first.
 func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
-	const gen = 7
-	view := func(p phase.Phase, generation int64) ServerView {
-		return ServerView{Phase: p, Generation: generation}
+	const gen = "current"
+	view := func(p phase.Phase, hash string) ServerView {
+		return ServerView{Phase: p, PodHash: hash}
 	}
 	for _, tc := range []struct {
 		name   string
@@ -4440,42 +4440,42 @@ func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
 		{
 			"one up, one still coming",
 			[]ServerView{view(phase.Ready, gen), view(phase.Starting, gen)},
-			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of generation 7",
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of the group's current spec",
 		},
 		{
 			"a pending server counts as coming",
 			[]ServerView{view(phase.Ready, gen), view(phase.Pending, gen)},
-			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of generation 7",
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of the group's current spec",
 		},
 		{
-			"the new generation is up but the old one is still here",
-			[]ServerView{view(phase.Ready, gen), view(phase.Ready, gen-1)},
-			metav1.ConditionTrue, spawneryv1alpha1.ReasonReplacingServers, "earlier generation",
+			"the new spec is up but the old one is still here",
+			[]ServerView{view(phase.Ready, gen), view(phase.Ready, "old")},
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonReplacingServers, "earlier spec",
 		},
 		{
 			"both waits at once say both",
-			[]ServerView{view(phase.Starting, gen), view(phase.Ready, gen-1)},
+			[]ServerView{view(phase.Starting, gen), view(phase.Ready, "old")},
 			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "still being replaced",
 		},
 		{
 			// Being shed on purpose. A scale-down has arrived, it is tidying.
-			"a draining server of the current generation",
+			"a draining server of the current spec",
 			[]ServerView{view(phase.Ready, gen), view(phase.Draining, gen)},
 			metav1.ConditionFalse, spawneryv1alpha1.ReasonAtDesiredState, "",
 		},
 		{
 			// Degraded is what says this, and its replacement will be Pending
 			// on the next pass, which this counts then.
-			"a failed server of the current generation",
+			"a failed server of the current spec",
 			[]ServerView{view(phase.Ready, gen), view(phase.Failed, gen)},
 			metav1.ConditionFalse, spawneryv1alpha1.ReasonAtDesiredState, "",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			group := &spawneryv1alpha1.ServerGroup{
-				ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: gen},
+				ObjectMeta: metav1.ObjectMeta{Name: "lobby"},
 			}
-			reportProgressing(group, tc.views)
+			reportProgressing(group, tc.views, gen)
 			got := meta.FindStatusCondition(group.Status.Conditions,
 				spawneryv1alpha1.ConditionProgressing)
 			if got == nil {
@@ -4791,12 +4791,12 @@ func TestAFailedRetireeIsNamedOnProgressing(t *testing.T) {
 		Spec:       spawneryv1alpha1.ServerGroupSpec{FailedRetentionSeconds: 3600},
 	}
 	views := []ServerView{
-		{Name: "lobby-new", Generation: 2, Phase: phase.Ready},
+		{Name: "lobby-new", PodHash: "current", Phase: phase.Ready},
 		// The stuck one: retiring, and dead.
-		{Name: "lobby-old", Generation: 1, Phase: phase.Failed, Retire: true},
+		{Name: "lobby-old", PodHash: "old", Phase: phase.Failed, Retire: true},
 	}
 
-	reportProgressing(group, views)
+	reportProgressing(group, views, "current")
 
 	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
@@ -4828,9 +4828,9 @@ func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
 		t.Run(string(p), func(t *testing.T) {
 			group.Status.Conditions = nil
 			reportProgressing(group, []ServerView{
-				{Name: "lobby-new", Generation: 2, Phase: phase.Ready},
-				{Name: "lobby-old", Generation: 1, Phase: p, Retire: true},
-			})
+				{Name: "lobby-new", PodHash: "current", Phase: phase.Ready},
+				{Name: "lobby-old", PodHash: "old", Phase: p, Retire: true},
+			}, "current")
 			cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
 			if cond != nil && cond.Reason == spawneryv1alpha1.ReasonRetireeStuck {
 				t.Errorf("a %s retiree was reported as stuck: %q", p, cond.Message)

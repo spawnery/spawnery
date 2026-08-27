@@ -648,7 +648,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	totals := AggregateGroup(views, group.Generation)
+	totals := AggregateGroup(views, podHash)
 	group.Status.Replicas = totals.Replicas
 	group.Status.ReadyReplicas = totals.ReadyReplicas
 	group.Status.OnlinePlayers = totals.OnlinePlayers
@@ -658,7 +658,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// After derivePhase and independent of it: the two answer different
 	// questions and neither is allowed to move the other. See
 	// ConditionProgressing and reportProgressing.
-	reportProgressing(group, views)
+	reportProgressing(group, views, podHash)
 	// This group's own answer about the forwarding secret. Unlike the proxy
 	// side, this controller works in Servers and holds no pods, so it costs a
 	// list of its own -- label-scoped to this group, over the manager's warm
@@ -1077,7 +1077,14 @@ func (r *ServerGroupReconciler) groupPods(
 // counted. The first two are being shed on purpose -- a scale-down has arrived,
 // it is just tidying -- and a Failed one is replaced by a Pending one that this
 // counts on the next pass, with Degraded saying meanwhile what went wrong.
-func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) {
+// podHash is the group's desired render digest. It replaced
+// metadata.generation here in 7a for the reason AggregateGroup gives: a
+// generation moves on every field of the spec, so a capacity edit made every
+// running server "of an earlier generation" and this condition announced a
+// replacement that was not happening. An empty podHash compares nothing, so a
+// pass without a usable Network reports no replacement rather than a phantom
+// one.
+func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, podHash string) {
 	var starting, older int32
 	// A retiree that will never retire. spec.retire is the update budget's one
 	// signal (selectRetirement), and it survives the server failing -- so a
@@ -1101,7 +1108,7 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) 
 		if v.Retire && v.Phase == phase.Failed {
 			stuck = append(stuck, v.Name)
 		}
-		if v.Generation != group.Generation {
+		if staleSpec(v, podHash) {
 			older++
 			continue
 		}
@@ -1128,19 +1135,19 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView) 
 	case starting > 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = spawneryv1alpha1.ReasonServersStarting
-		condition.Message = fmt.Sprintf("%d server(s) of generation %d are not ready yet",
-			starting, group.Generation)
+		condition.Message = fmt.Sprintf("%d server(s) of the group's current spec are not ready yet",
+			starting)
 		if older > 0 {
-			condition.Message += fmt.Sprintf("; %d of an earlier generation are still being replaced", older)
+			condition.Message += fmt.Sprintf("; %d of an earlier spec are still being replaced", older)
 		}
 	case older > 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = spawneryv1alpha1.ReasonReplacingServers
-		condition.Message = fmt.Sprintf("%d server(s) of an earlier generation are still being replaced", older)
+		condition.Message = fmt.Sprintf("%d server(s) of an earlier spec are still being replaced", older)
 	default:
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = spawneryv1alpha1.ReasonAtDesiredState
-		condition.Message = fmt.Sprintf("every server is of generation %d and ready", group.Generation)
+		condition.Message = "every server is of the group's current spec and ready"
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, condition)
 }

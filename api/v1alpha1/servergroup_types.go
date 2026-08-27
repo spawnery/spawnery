@@ -257,8 +257,8 @@ type ServerGroupStatus struct {
 	// +optional
 	OnlinePlayers int32 `json:"onlinePlayers"`
 
-	// FreeSlots is the sum of free slots across ready servers of the current
-	// generation. Stale servers do not count.
+	// FreeSlots is the sum of free slots across ready servers rendered under
+	// the group's current spec. Servers of an older one do not count.
 	// +optional
 	FreeSlots int32 `json:"freeSlots"`
 
