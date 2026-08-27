@@ -96,11 +96,15 @@ const (
 //
 // A velocity.toml overlay that lowers read-timeout. The overlay is the user's
 // own ConfigMap, mounted into the pod by name and rendered there by
-// spawnery-config; the operator never reads its contents, and its ConfigMap
-// cache is deliberately restricted to objects carrying the managed-by label,
-// so it could not without an uncached read of somebody else's object. Half of
-// this comparison is therefore knowable at startup and half is not, and the
-// half that is knowable is the one an operator sets by hand.
+// spawnery-config; the operator never reads its contents. Half of this
+// comparison is therefore knowable at startup and half is not, and the half
+// that is knowable is the one an operator sets by hand.
+//
+// The half that is not would be, if the proxy reported it:
+// ProxyServer.getConfiguration().getReadTimeout() is on Velocity's public API,
+// so the agent could send the *effective* timeout rather than leaving the
+// operator to infer it from a file. docs/known-issues.md carries that against
+// the three alternatives and what each costs.
 func RescueWindow(reportInterval time.Duration) time.Duration {
 	return VelocityReadTimeout - 2*reportInterval
 }
