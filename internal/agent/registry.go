@@ -101,6 +101,14 @@ type entry struct {
 	// and not backends is an old agent, and reading its player timestamp as
 	// though it had said something about backends would invent an answer.
 	backendsAt time.Time
+
+	// readTimeout is what a proxy said on its Hello about how long it waits on
+	// a silent backend before disconnecting the players on it. Zero means it
+	// said nothing, which is what an older agent and every server agent send.
+	//
+	// It has no timestamp of its own because it cannot change without the
+	// process restarting, and a restart is a new stream.
+	readTimeout time.Duration
 }
 
 // Registry is the in-memory state of all connected agents. It is safe for
@@ -310,6 +318,56 @@ func (r *Registry) AttachedTo(namespace, server string, since time.Time) (player
 		players += e.backends[server]
 	}
 	return players, stale
+}
+
+// ReportReadTimeout records what a proxy said on its Hello about the deadline
+// the operator is racing when a backend's node dies.
+//
+// Silently ignored for anything but a connected proxy, and for a
+// non-positive value. This is a fact a proxy volunteers about itself, and the
+// only thing that reads it takes the *smallest* one, so accepting a zero would
+// let one silent agent speak for every talkative one.
+func (r *Registry) ReportReadTimeout(key, namespace string, timeout time.Duration) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	e, ok := r.entries[key]
+	if !ok || e.role != RoleProxy || timeout <= 0 {
+		return
+	}
+	// The namespace is set here as well as in ReportBackends, because this
+	// arrives first: the Hello opens the session and the backend map comes a
+	// report interval later, so a proxy that had spoken only once would
+	// otherwise be filtered out of every namespace by ShortestReadTimeout.
+	e.namespace = namespace
+	e.readTimeout = timeout
+}
+
+// ShortestReadTimeout is the smallest read timeout any connected proxy in this
+// namespace has reported, and whether any of them reported one at all.
+//
+// The smallest and not an average: whichever proxy gives up first is the one
+// that kicks the players the operator was about to move, so a fleet is only as
+// patient as its least patient member. A namespace where no proxy has said
+// anything answers false, and the caller falls back to what this repository
+// ships -- the reading it took before proxies reported this at all.
+func (r *Registry) ShortestReadTimeout(namespace string) (time.Duration, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var shortest time.Duration
+	for _, e := range r.entries {
+		if e.role != RoleProxy || !e.connected || e.namespace != namespace {
+			continue
+		}
+		if e.readTimeout <= 0 {
+			continue
+		}
+		if shortest == 0 || e.readTimeout < shortest {
+			shortest = e.readTimeout
+		}
+	}
+	return shortest, shortest > 0
 }
 
 // Disconnect records that the stream broke. The last player count is kept, so

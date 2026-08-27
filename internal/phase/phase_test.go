@@ -837,8 +837,31 @@ func TestTheRescueWindowIsTheReadTimeoutLessWhatStalenessSpends(t *testing.T) {
 		{15 * time.Second, 0},
 		{20 * time.Second, -10 * time.Second},
 	} {
-		if got := RescueWindow(tc.reportInterval); got != tc.want {
-			t.Errorf("RescueWindow(%s) = %s, want %s", tc.reportInterval, got, tc.want)
+		if got := RescueWindow(tc.reportInterval, 0); got != tc.want {
+			t.Errorf("RescueWindow(%s, shipped default) = %s, want %s",
+				tc.reportInterval, got, tc.want)
 		}
+	}
+}
+
+// TestRescueWindowUsesWhatTheProxyReported is the point of the field the proxy
+// now sends: a velocity.toml overlay lowering read-timeout used to close this
+// window with nothing noticing, because the operator could only assume the
+// value this repository ships.
+func TestRescueWindowUsesWhatTheProxyReported(t *testing.T) {
+	// Half the shipped default, at the operator's own report interval: the
+	// window halves with it rather than staying at the shipped twenty.
+	if got, want := RescueWindow(5*time.Second, 15*time.Second), 5*time.Second; got != want {
+		t.Errorf("RescueWindow(5s, 15s) = %s, want %s", got, want)
+	}
+	// A proxy more patient than the default is believed too. The operator is
+	// not entitled to assume the worse of the two.
+	if got, want := RescueWindow(5*time.Second, 60*time.Second), 50*time.Second; got != want {
+		t.Errorf("RescueWindow(5s, 60s) = %s, want %s", got, want)
+	}
+	// Nothing reported falls back to the shipped default, which is the reading
+	// the operator took before any proxy sent this.
+	if got, want := RescueWindow(5*time.Second, 0), RescueWindow(5*time.Second, VelocityReadTimeout); got != want {
+		t.Errorf("an unreported timeout gave %s, want the shipped default's %s", got, want)
 	}
 }

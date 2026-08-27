@@ -141,6 +141,24 @@ const (
 	// Unknown is a real answer here rather than an omission — see
 	// ReasonPodsPredateTracking.
 	ConditionForwardingSecretRotationPending = "ForwardingSecretRotationPending"
+	// ConditionRescueWindowShort is true when the proxies serving this network
+	// give up on a silent backend sooner than the operator can react to one.
+	//
+	// When a backend's node dies the operator has phase.RescueWindow to
+	// deregister it and move its players; Velocity has its own read timeout,
+	// and whichever fires first decides whether those players are moved or
+	// disconnected outright. The window is that timeout less twice the agent
+	// report interval, and both numbers are configurable by different people
+	// in different places -- the interval is the operator's flag, the timeout
+	// is a velocity.toml the operator never reads and a proxy reports on its
+	// Hello.
+	//
+	// It is on the Network because that is where the two meet: proxies and
+	// backends of one namespace. It is not folded into Accepted -- every group
+	// gates on that, and a short rescue window must not stop a namespace from
+	// running. Unknown is a real answer, for a namespace whose proxies have
+	// not said.
+	ConditionRescueWindowShort = "RescueWindowShort"
 )
 
 // Condition reasons.
@@ -154,23 +172,30 @@ const (
 	// and the namespace must stay closed -- not because anything is wrong with
 	// the Network itself.
 	ReasonNetworkPolicyNotWritten = "NetworkPolicyNotWritten"
-	ReasonGroupNotFound           = "GroupNotFound"
-	ReasonAccepted                = "Accepted"
-	ReasonCrashLoopBackoff        = "CrashLoopBackoff"
-	ReasonNoFallback              = "NoFallbackAvailable"
-	ReasonNotImplemented          = "NotImplementedInThisVersion"
-	ReasonReconciling             = "Reconciling"
-	ReasonExposeNotImplemented    = "ExposeStrategyNotImplemented"
-	ReasonMaxReplicasReached      = "MaxReplicasReached"
-	ReasonWithinLimits            = "WithinLimits"
-	ReasonNoRecentFailures        = "NoRecentFailures"
-	ReasonReadinessDiverged       = "ReadinessDiverged"
-	ReasonReadinessAgrees         = "ReadinessAgrees"
-	ReasonNodeDraining            = "NodeDraining"
-	ReasonNoNodesDraining         = "NoNodesDraining"
-	ReasonPodShapeChanged         = "PodShapeChanged"
-	ReasonPodShapeCurrent         = "PodShapeCurrent"
-	ReasonOrdinalNameTaken        = "OrdinalNameTaken"
+	// ReasonRescueWindowTooShort and ReasonRescueWindowSufficient are the two
+	// answers ConditionRescueWindowShort has once a proxy has reported; before
+	// that it is Unknown with ReasonNoProxyReported, which is not the same as
+	// "sufficient" and must not be read as it.
+	ReasonRescueWindowTooShort   = "RescueWindowTooShort"
+	ReasonRescueWindowSufficient = "RescueWindowSufficient"
+	ReasonNoProxyReported        = "NoProxyReported"
+	ReasonGroupNotFound          = "GroupNotFound"
+	ReasonAccepted               = "Accepted"
+	ReasonCrashLoopBackoff       = "CrashLoopBackoff"
+	ReasonNoFallback             = "NoFallbackAvailable"
+	ReasonNotImplemented         = "NotImplementedInThisVersion"
+	ReasonReconciling            = "Reconciling"
+	ReasonExposeNotImplemented   = "ExposeStrategyNotImplemented"
+	ReasonMaxReplicasReached     = "MaxReplicasReached"
+	ReasonWithinLimits           = "WithinLimits"
+	ReasonNoRecentFailures       = "NoRecentFailures"
+	ReasonReadinessDiverged      = "ReadinessDiverged"
+	ReasonReadinessAgrees        = "ReadinessAgrees"
+	ReasonNodeDraining           = "NodeDraining"
+	ReasonNoNodesDraining        = "NoNodesDraining"
+	ReasonPodShapeChanged        = "PodShapeChanged"
+	ReasonPodShapeCurrent        = "PodShapeCurrent"
+	ReasonOrdinalNameTaken       = "OrdinalNameTaken"
 	// ReasonOrdinalDuplicated says more than one Server of the group carries
 	// the same spec.ordinal. The operator refuses to act on such an ordinal
 	// rather than choose between two worlds, so this needs a person.

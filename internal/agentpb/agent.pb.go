@@ -144,9 +144,26 @@ type Hello struct {
 	Version string                 `protobuf:"bytes,1,opt,name=version,proto3" json:"version,omitempty"`
 	// ready is meaningful for server agents only. Readiness is a state, not an
 	// event, so it is repeated on every connect.
-	Ready         bool `protobuf:"varint,2,opt,name=ready,proto3" json:"ready,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Ready bool `protobuf:"varint,2,opt,name=ready,proto3" json:"ready,omitempty"`
+	// read_timeout_millis is meaningful for proxy agents only: how long this
+	// proxy waits on a silent backend before it disconnects the players on it.
+	//
+	// It is the *effective* value, read from
+	// ProxyServer.getConfiguration().getReadTimeout() rather than from any file,
+	// so it survives a velocity.toml overlay, an image that ships its own
+	// defaults, and Velocity's own. The operator races this deadline when a
+	// backend's node dies -- see phase.RescueWindow -- and could otherwise only
+	// assume the value this repository ships.
+	//
+	// Sent on the Hello because it cannot change without the proxy restarting,
+	// and a fact that cannot change does not belong on a periodic report.
+	//
+	// Zero means not reported, which is what a proxy agent older than this field
+	// sends and what every server agent sends. The operator falls back to the
+	// shipped default there, which is the reading it took before this existed.
+	ReadTimeoutMillis int32 `protobuf:"varint,3,opt,name=read_timeout_millis,json=readTimeoutMillis,proto3" json:"read_timeout_millis,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *Hello) Reset() {
@@ -191,6 +208,13 @@ func (x *Hello) GetReady() bool {
 		return x.Ready
 	}
 	return false
+}
+
+func (x *Hello) GetReadTimeoutMillis() int32 {
+	if x != nil {
+		return x.ReadTimeoutMillis
+	}
+	return 0
 }
 
 // PlayerCount is the periodic report.
@@ -1243,10 +1267,11 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\aseconds\x18\x01 \x01(\x05R\aseconds\"u\n" +
 	"\x0fSessionDeadline\x12.\n" +
 	"\x13renew_after_seconds\x18\x01 \x01(\x05R\x11renewAfterSeconds\x122\n" +
-	"\x15hard_deadline_seconds\x18\x02 \x01(\x05R\x13hardDeadlineSeconds\"7\n" +
+	"\x15hard_deadline_seconds\x18\x02 \x01(\x05R\x13hardDeadlineSeconds\"g\n" +
 	"\x05Hello\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12\x14\n" +
-	"\x05ready\x18\x02 \x01(\bR\x05ready\"=\n" +
+	"\x05ready\x18\x02 \x01(\bR\x05ready\x12.\n" +
+	"\x13read_timeout_millis\x18\x03 \x01(\x05R\x11readTimeoutMillis\"=\n" +
 	"\vPlayerCount\x12\x18\n" +
 	"\aplayers\x18\x01 \x01(\x05R\aplayers\x12\x14\n" +
 	"\x05slots\x18\x02 \x01(\x05R\x05slots\"\a\n" +

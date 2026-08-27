@@ -603,7 +603,18 @@ func (s *Server) handleProxy(logger logr.Logger, id grpcauth.Identity, msg *agen
 		// A proxy's readiness is not carried here. The agent serves the pod's
 		// readiness probe itself (design 6.6), so the kubelet has already
 		// written the answer where the ProxyGroup controller reads it.
-		logger.V(1).Info("proxy connected", "version", m.Hello.GetVersion())
+		//
+		// The read timeout is. It is the one thing on this message the
+		// operator cannot find out any other way -- it lives in a file the
+		// operator never reads, which a configOverlay may lower -- and the
+		// operator races it every time a backend's node dies. Zero is what an
+		// older agent sends and the registry ignores it, so the fallback stays
+		// the value this repository ships. The namespace comes from the
+		// authenticated identity, never from the message.
+		logger.V(1).Info("proxy connected", "version", m.Hello.GetVersion(),
+			"readTimeoutMillis", m.Hello.GetReadTimeoutMillis())
+		s.opts.Agents.ReportReadTimeout(id.PodUID, id.Namespace,
+			time.Duration(m.Hello.GetReadTimeoutMillis())*time.Millisecond)
 	case *agentpb.ProxyMessage_PlayerCount:
 		if err := s.opts.Agents.ReportPlayers(id.PodUID,
 			m.PlayerCount.GetPlayers(), m.PlayerCount.GetSlots()); err != nil {

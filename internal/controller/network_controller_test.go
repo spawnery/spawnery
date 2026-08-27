@@ -39,6 +39,8 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/testenv"
+
+	"github.com/spawnery/spawnery/internal/agent"
 )
 
 func networkReconciler(f *fixture) *NetworkReconciler {
@@ -1325,5 +1327,74 @@ func TestAWritablePolicyStillAcceptsTheNetwork(t *testing.T) {
 	accepted := meta.FindStatusCondition(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
 	if accepted == nil || accepted.Status != metav1.ConditionTrue {
 		t.Fatalf("Accepted = %+v, want True", accepted)
+	}
+}
+
+// TestTheRescueWindowConditionReportsWhatTheProxiesSaid is the operator half of
+// the field the proxies now send. The window is Velocity's read timeout less
+// twice the report interval, and until a proxy reported the timeout the
+// operator could only assume the value this repository ships — which a
+// velocity.toml overlay is free to lower without anything noticing.
+func TestTheRescueWindowConditionReportsWhatTheProxiesSaid(t *testing.T) {
+	for _, tc := range []struct {
+		what       string
+		report     func(*agent.Registry, string)
+		wantStatus metav1.ConditionStatus
+		wantReason string
+		wantPhrase string
+	}{
+		{
+			what:       "no proxy has said, which is not the same as sufficient",
+			report:     func(*agent.Registry, string) {},
+			wantStatus: metav1.ConditionUnknown,
+			wantReason: spawneryv1alpha1.ReasonNoProxyReported,
+		},
+		{
+			what: "the shipped timeout leaves the whole window",
+			report: func(r *agent.Registry, ns string) {
+				r.Connect("proxy-ok", agent.RoleProxy)
+				r.ReportReadTimeout("proxy-ok", ns, 30*time.Second)
+			},
+			wantStatus: metav1.ConditionFalse,
+			wantReason: spawneryv1alpha1.ReasonRescueWindowSufficient,
+			wantPhrase: "20s",
+		},
+		{
+			what: "a lowered timeout leaves less than a resync",
+			report: func(r *agent.Registry, ns string) {
+				r.Connect("proxy-impatient", agent.RoleProxy)
+				r.ReportReadTimeout("proxy-impatient", ns, 12*time.Second)
+			},
+			wantStatus: metav1.ConditionTrue,
+			wantReason: spawneryv1alpha1.ReasonRescueWindowTooShort,
+			wantPhrase: "12s",
+		},
+	} {
+		t.Run(tc.what, func(t *testing.T) {
+			f := newFixture(t)
+			registry := agent.New(f.clock.Now, 5*time.Second, f.clock.now)
+			tc.report(registry, f.ns)
+			r, _ := networkReconcilerWithEvents(f)
+			r.Agents = registry
+			r.ReportInterval = 5 * time.Second
+
+			f.reconcileNetwork(t, r, "production")
+
+			c := meta.FindStatusCondition(f.getNetwork(t, "production").Status.Conditions,
+				spawneryv1alpha1.ConditionRescueWindowShort)
+			if c == nil {
+				t.Fatal("no RescueWindowShort condition at all")
+			}
+			if c.Status != tc.wantStatus {
+				t.Errorf("status = %s, want %s (message: %q)", c.Status, tc.wantStatus, c.Message)
+			}
+			if c.Reason != tc.wantReason {
+				t.Errorf("reason = %q, want %q", c.Reason, tc.wantReason)
+			}
+			if tc.wantPhrase != "" && !strings.Contains(c.Message, tc.wantPhrase) {
+				t.Errorf("message = %q, which does not name %q — the number somebody has to "+
+					"change is the point of the message", c.Message, tc.wantPhrase)
+			}
+		})
 	}
 }

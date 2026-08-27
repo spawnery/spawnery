@@ -92,21 +92,29 @@ const (
 // seconds. At anything above fifteen it is negative, and the operator is
 // racing a deadline that has already passed.
 //
-// # What it cannot see
+// # Where readTimeout comes from
 //
-// A velocity.toml overlay that lowers read-timeout. The overlay is the user's
-// own ConfigMap, mounted into the pod by name and rendered there by
-// spawnery-config; the operator never reads its contents. Half of this
-// comparison is therefore knowable at startup and half is not, and the half
-// that is knowable is the one an operator sets by hand.
+// The proxy, on its Hello, since 2026-08-27. It reads
+// ProxyServer.getConfiguration().getReadTimeout(), which is what Velocity
+// actually parsed -- after the image's velocity.toml, after any configOverlay
+// the user mounted, after Velocity's own defaults. The operator can see none
+// of those: the overlay is somebody else's ConfigMap, mounted into the pod by
+// name, and this operator never reads its contents.
 //
-// The half that is not would be, if the proxy reported it:
-// ProxyServer.getConfiguration().getReadTimeout() is on Velocity's public API,
-// so the agent could send the *effective* timeout rather than leaving the
-// operator to infer it from a file. docs/known-issues.md carries that against
-// the three alternatives and what each costs.
-func RescueWindow(reportInterval time.Duration) time.Duration {
-	return VelocityReadTimeout - 2*reportInterval
+// Zero means no proxy has said, which is what an agent older than that field
+// reports and what a namespace with no connected proxy has. It falls back to
+// VelocityReadTimeout, which is the reading the operator took before proxies
+// reported this at all -- so an old fleet behaves exactly as it did.
+//
+// A namespace with several proxies answers with the smallest of them
+// (agent.Registry.ShortestReadTimeout): whichever gives up first is the one
+// that kicks the players, so a fleet is only as patient as its least patient
+// member.
+func RescueWindow(reportInterval, readTimeout time.Duration) time.Duration {
+	if readTimeout <= 0 {
+		readTimeout = VelocityReadTimeout
+	}
+	return readTimeout - 2*reportInterval
 }
 
 // MaxReadinessLosses is the number of readiness losses after which a server is

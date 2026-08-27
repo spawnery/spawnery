@@ -32,4 +32,29 @@ public interface HelloOrBuilder extends
    * @return The ready.
    */
   boolean getReady();
+
+  /**
+   * <pre>
+   * read_timeout_millis is meaningful for proxy agents only: how long this
+   * proxy waits on a silent backend before it disconnects the players on it.
+   *
+   * It is the *effective* value, read from
+   * ProxyServer.getConfiguration().getReadTimeout() rather than from any file,
+   * so it survives a velocity.toml overlay, an image that ships its own
+   * defaults, and Velocity's own. The operator races this deadline when a
+   * backend's node dies -- see phase.RescueWindow -- and could otherwise only
+   * assume the value this repository ships.
+   *
+   * Sent on the Hello because it cannot change without the proxy restarting,
+   * and a fact that cannot change does not belong on a periodic report.
+   *
+   * Zero means not reported, which is what a proxy agent older than this field
+   * sends and what every server agent sends. The operator falls back to the
+   * shipped default there, which is the reading it took before this existed.
+   * </pre>
+   *
+   * <code>int32 read_timeout_millis = 3;</code>
+   * @return The readTimeoutMillis.
+   */
+  int getReadTimeoutMillis();
 }

@@ -59,6 +59,17 @@ class ProxyRole(
      * and the other acts on the operator's answer.
      */
     private val players: Players,
+    /**
+     * How long this proxy waits on a silent backend before it disconnects the
+     * players on it, in milliseconds, reported once on the [hello].
+     *
+     * Declared before the lambdas on purpose. A parameter added after one
+     * silently rebinds a positional caller's trailing lambda, which this class
+     * has been bitten by before; every caller here names its arguments, and
+     * this position means a future one that does not is a compile error rather
+     * than a wrong binding.
+     */
+    private val readTimeoutMillis: Int,
     private val onFirstSync: () -> Unit,
     /**
      * Sets the pod's readiness gate.
@@ -154,7 +165,18 @@ class ProxyRole(
      */
     override fun hello(version: String): ProxyMessage =
         ProxyMessage.newBuilder()
-            .setHello(Hello.newBuilder().setVersion(version))
+            .setHello(
+                Hello.newBuilder()
+                    .setVersion(version)
+                    // The one thing on this message the operator cannot find
+                    // out any other way. It races this deadline when a
+                    // backend's node dies -- it has about twenty seconds at
+                    // its own defaults -- and until this field existed it could
+                    // only assume the value this repository ships, which a
+                    // velocity.toml overlay is free to lower without anything
+                    // noticing.
+                    .setReadTimeoutMillis(readTimeoutMillis),
+            )
             .build()
 
     /**

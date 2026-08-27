@@ -719,8 +719,27 @@ mkdir -p "$WORK/velocity-config"
 # because a Go client cannot authenticate against Microsoft.
 printf 'playerLimit: %s\nonlineMode: true\n' "$PROXY_LIMIT" >"$WORK/velocity-config/config.yaml"
 printf 'test-forwarding-secret\n' >"$WORK/velocity-config/forwarding.secret"
-chmod 0755 "$WORK/velocity-config"
-chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding.secret"
+# An overlay lowering read-timeout, which is the exact shape of the thing the
+# operator could not see: `spec.configOverlay` names the user's own ConfigMap,
+# it is mounted into the pod by name, and spawnery-config folds it into
+# velocity.toml inside the container. The rendered file sets no read-timeout of
+# its own -- internal/render writes config-version, motd, show-max-players and
+# the forwarding keys, and Velocity supplies the rest from its own defaults --
+# so an overlay is the only way the value ever differs, and it is the case
+# worth proving reaches the wire.
+#
+# Under [advanced], which is where Velocity declares it. The first draft of
+# this put it at the top level and spawnery-config refused the whole render --
+# "a key at the wrong depth is not read and not refused" -- which is
+# internal/render's overlay check doing exactly what it exists for, on the way
+# to this assertion rather than in somebody's cluster.
+PROXY_READ_TIMEOUT=12000
+mkdir -p "$WORK/velocity-config/overlay"
+printf '[advanced]\nread-timeout = %s\n' "$PROXY_READ_TIMEOUT" \
+	>"$WORK/velocity-config/overlay/velocity.toml"
+chmod 0755 "$WORK/velocity-config" "$WORK/velocity-config/overlay"
+chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding.secret" \
+	"$WORK/velocity-config/overlay/velocity.toml"
 
 # How long the stub holds the FullSync back, counted from the stream opening.
 # Everything between the agent's Hello and the sync has to fit inside it: the
@@ -849,6 +868,31 @@ until port_open "$NAME4" 25565; do
 	sleep 1
 done
 echo "25565 answers from inside the container"
+
+# The read timeout the proxy actually parsed, on its Hello. It is the one thing
+# on that message the operator cannot find out any other way: the value lives in
+# a velocity.toml the operator never reads, and the operator races that deadline
+# every time a backend's node dies.
+#
+# The assertion is against the *overlay*, not against Velocity's default, and
+# that is what makes it worth having. A proxy reporting 30000 would prove
+# nothing this repository did not already assume -- the number would be right
+# by coincidence, since nothing renders read-timeout and Velocity's own default
+# is 30000. Reporting the overlay's number proves the value came from
+# ProxyServer.getConfiguration(), through a real Velocity that had really read
+# a really mounted overlay, which is the only path a person's lowered timeout
+# can take.
+reported_timeout="$(jq -rs '[.[] | select(.kind == "hello") | .readTimeoutMillis] | first // 0' <"$EVENTS4")"
+if [ "$reported_timeout" != "$PROXY_READ_TIMEOUT" ]; then
+	echo "the proxy reported a read timeout of ${reported_timeout}ms; its overlay sets "\
+		"${PROXY_READ_TIMEOUT}ms" >&2
+	echo "the operator races this deadline when a backend's node dies, and a value it cannot "\
+		"see is one it assumes" >&2
+	jq -rs '[.[] | select(.kind == "hello")]' <"$EVENTS4" >&2
+	"$CONTAINER" exec "$NAME4" cat /data/velocity.toml >&2 || true
+	exit 1
+fi
+echo "the proxy reported the ${reported_timeout}ms read timeout its mounted overlay set"
 
 # The other half of the control, and the half that was missing:
 # docs/known-issues.md recorded that the probe had been shown able to answer

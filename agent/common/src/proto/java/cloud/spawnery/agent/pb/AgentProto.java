@@ -134,60 +134,61 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
       "pawnery.agent.v1alpha1\"!\n\016ReportInterval" +
       "\022\017\n\007seconds\030\001 \001(\005\"M\n\017SessionDeadline\022\033\n\023" +
       "renew_after_seconds\030\001 \001(\005\022\035\n\025hard_deadli" +
-      "ne_seconds\030\002 \001(\005\"\'\n\005Hello\022\017\n\007version\030\001 \001" +
-      "(\t\022\r\n\005ready\030\002 \001(\010\"-\n\013PlayerCount\022\017\n\007play" +
-      "ers\030\001 \001(\005\022\r\n\005slots\030\002 \001(\005\"\007\n\005Ready\"\272\001\n\rSe" +
-      "rverMessage\022/\n\005hello\030\001 \001(\0132\036.spawnery.ag" +
-      "ent.v1alpha1.HelloH\000\022/\n\005ready\030\002 \001(\0132\036.sp" +
-      "awnery.agent.v1alpha1.ReadyH\000\022<\n\014player_" +
-      "count\030\003 \001(\0132$.spawnery.agent.v1alpha1.Pl" +
-      "ayerCountH\000B\t\n\007message\"\247\001\n\020OperatorToSer" +
-      "ver\022B\n\017report_interval\030\001 \001(\0132\'.spawnery." +
-      "agent.v1alpha1.ReportIntervalH\000\022D\n\020sessi" +
-      "on_deadline\030\002 \001(\0132(.spawnery.agent.v1alp" +
-      "ha1.SessionDeadlineH\000B\t\n\007message\"\013\n\tHear" +
-      "tbeat\"4\n\022PlayerJoinedServer\022\016\n\006player\030\001 " +
-      "\001(\t\022\016\n\006server\030\002 \001(\t\"\207\001\n\016BackendPlayers\022E" +
-      "\n\007players\030\001 \003(\01324.spawnery.agent.v1alpha" +
-      "1.BackendPlayers.PlayersEntry\032.\n\014Players" +
-      "Entry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\005:\0028\001\"\322\002" +
-      "\n\014ProxyMessage\022/\n\005hello\030\001 \001(\0132\036.spawnery" +
-      ".agent.v1alpha1.HelloH\000\022<\n\014player_count\030" +
-      "\002 \001(\0132$.spawnery.agent.v1alpha1.PlayerCo" +
-      "untH\000\022K\n\024player_joined_server\030\003 \001(\0132+.sp" +
-      "awnery.agent.v1alpha1.PlayerJoinedServer" +
-      "H\000\0227\n\theartbeat\030\004 \001(\0132\".spawnery.agent.v" +
-      "1alpha1.HeartbeatH\000\022B\n\017backend_players\030\005" +
-      " \001(\0132\'.spawnery.agent.v1alpha1.BackendPl" +
-      "ayersH\000B\t\n\007message\"@\n\020RegisteredServer\022\014" +
-      "\n\004name\030\001 \001(\t\022\017\n\007address\030\002 \001(\t\022\r\n\005group\030\003" +
-      " \001(\t\"F\n\010FullSync\022:\n\007servers\030\001 \003(\0132).spaw" +
-      "nery.agent.v1alpha1.RegisteredServer\"K\n\016" +
-      "RegisterServer\0229\n\006server\030\001 \001(\0132).spawner" +
-      "y.agent.v1alpha1.RegisteredServer\" \n\020Unr" +
-      "egisterServer\022\014\n\004name\030\001 \001(\t\"6\n\014DrainPlay" +
-      "ers\022\023\n\013from_server\030\001 \001(\t\022\021\n\tto_groups\030\002 " +
-      "\003(\t\"\031\n\010SetReady\022\r\n\005ready\030\001 \001(\010\"\342\003\n\017Opera" +
-      "torToProxy\0226\n\tfull_sync\030\001 \001(\0132!.spawnery" +
-      ".agent.v1alpha1.FullSyncH\000\022B\n\017register_s" +
-      "erver\030\002 \001(\0132\'.spawnery.agent.v1alpha1.Re" +
-      "gisterServerH\000\022F\n\021unregister_server\030\003 \001(" +
-      "\0132).spawnery.agent.v1alpha1.UnregisterSe" +
-      "rverH\000\022>\n\rdrain_players\030\004 \001(\0132%.spawnery" +
-      ".agent.v1alpha1.DrainPlayersH\000\022B\n\017report" +
-      "_interval\030\005 \001(\0132\'.spawnery.agent.v1alpha" +
-      "1.ReportIntervalH\000\022D\n\020session_deadline\030\006" +
-      " \001(\0132(.spawnery.agent.v1alpha1.SessionDe" +
-      "adlineH\000\0226\n\tset_ready\030\007 \001(\0132!.spawnery.a" +
-      "gent.v1alpha1.SetReadyH\000B\t\n\007message2\333\001\n\014" +
-      "AgentService\022c\n\014ProxySession\022%.spawnery." +
-      "agent.v1alpha1.ProxyMessage\032(.spawnery.a" +
-      "gent.v1alpha1.OperatorToProxy(\0010\001\022f\n\rSer" +
-      "verSession\022&.spawnery.agent.v1alpha1.Ser" +
-      "verMessage\032).spawnery.agent.v1alpha1.Ope" +
-      "ratorToServer(\0010\001BV\n\027cloud.spawnery.agen" +
-      "t.pbB\nAgentProtoP\001Z-github.com/spawnery/" +
-      "spawnery/internal/agentpbb\006proto3"
+      "ne_seconds\030\002 \001(\005\"D\n\005Hello\022\017\n\007version\030\001 \001" +
+      "(\t\022\r\n\005ready\030\002 \001(\010\022\033\n\023read_timeout_millis" +
+      "\030\003 \001(\005\"-\n\013PlayerCount\022\017\n\007players\030\001 \001(\005\022\r" +
+      "\n\005slots\030\002 \001(\005\"\007\n\005Ready\"\272\001\n\rServerMessage" +
+      "\022/\n\005hello\030\001 \001(\0132\036.spawnery.agent.v1alpha" +
+      "1.HelloH\000\022/\n\005ready\030\002 \001(\0132\036.spawnery.agen" +
+      "t.v1alpha1.ReadyH\000\022<\n\014player_count\030\003 \001(\013" +
+      "2$.spawnery.agent.v1alpha1.PlayerCountH\000" +
+      "B\t\n\007message\"\247\001\n\020OperatorToServer\022B\n\017repo" +
+      "rt_interval\030\001 \001(\0132\'.spawnery.agent.v1alp" +
+      "ha1.ReportIntervalH\000\022D\n\020session_deadline" +
+      "\030\002 \001(\0132(.spawnery.agent.v1alpha1.Session" +
+      "DeadlineH\000B\t\n\007message\"\013\n\tHeartbeat\"4\n\022Pl" +
+      "ayerJoinedServer\022\016\n\006player\030\001 \001(\t\022\016\n\006serv" +
+      "er\030\002 \001(\t\"\207\001\n\016BackendPlayers\022E\n\007players\030\001" +
+      " \003(\01324.spawnery.agent.v1alpha1.BackendPl" +
+      "ayers.PlayersEntry\032.\n\014PlayersEntry\022\013\n\003ke" +
+      "y\030\001 \001(\t\022\r\n\005value\030\002 \001(\005:\0028\001\"\322\002\n\014ProxyMess" +
+      "age\022/\n\005hello\030\001 \001(\0132\036.spawnery.agent.v1al" +
+      "pha1.HelloH\000\022<\n\014player_count\030\002 \001(\0132$.spa" +
+      "wnery.agent.v1alpha1.PlayerCountH\000\022K\n\024pl" +
+      "ayer_joined_server\030\003 \001(\0132+.spawnery.agen" +
+      "t.v1alpha1.PlayerJoinedServerH\000\0227\n\theart" +
+      "beat\030\004 \001(\0132\".spawnery.agent.v1alpha1.Hea" +
+      "rtbeatH\000\022B\n\017backend_players\030\005 \001(\0132\'.spaw" +
+      "nery.agent.v1alpha1.BackendPlayersH\000B\t\n\007" +
+      "message\"@\n\020RegisteredServer\022\014\n\004name\030\001 \001(" +
+      "\t\022\017\n\007address\030\002 \001(\t\022\r\n\005group\030\003 \001(\t\"F\n\010Ful" +
+      "lSync\022:\n\007servers\030\001 \003(\0132).spawnery.agent." +
+      "v1alpha1.RegisteredServer\"K\n\016RegisterSer" +
+      "ver\0229\n\006server\030\001 \001(\0132).spawnery.agent.v1a" +
+      "lpha1.RegisteredServer\" \n\020UnregisterServ" +
+      "er\022\014\n\004name\030\001 \001(\t\"6\n\014DrainPlayers\022\023\n\013from" +
+      "_server\030\001 \001(\t\022\021\n\tto_groups\030\002 \003(\t\"\031\n\010SetR" +
+      "eady\022\r\n\005ready\030\001 \001(\010\"\342\003\n\017OperatorToProxy\022" +
+      "6\n\tfull_sync\030\001 \001(\0132!.spawnery.agent.v1al" +
+      "pha1.FullSyncH\000\022B\n\017register_server\030\002 \001(\013" +
+      "2\'.spawnery.agent.v1alpha1.RegisterServe" +
+      "rH\000\022F\n\021unregister_server\030\003 \001(\0132).spawner" +
+      "y.agent.v1alpha1.UnregisterServerH\000\022>\n\rd" +
+      "rain_players\030\004 \001(\0132%.spawnery.agent.v1al" +
+      "pha1.DrainPlayersH\000\022B\n\017report_interval\030\005" +
+      " \001(\0132\'.spawnery.agent.v1alpha1.ReportInt" +
+      "ervalH\000\022D\n\020session_deadline\030\006 \001(\0132(.spaw" +
+      "nery.agent.v1alpha1.SessionDeadlineH\000\0226\n" +
+      "\tset_ready\030\007 \001(\0132!.spawnery.agent.v1alph" +
+      "a1.SetReadyH\000B\t\n\007message2\333\001\n\014AgentServic" +
+      "e\022c\n\014ProxySession\022%.spawnery.agent.v1alp" +
+      "ha1.ProxyMessage\032(.spawnery.agent.v1alph" +
+      "a1.OperatorToProxy(\0010\001\022f\n\rServerSession\022" +
+      "&.spawnery.agent.v1alpha1.ServerMessage\032" +
+      ").spawnery.agent.v1alpha1.OperatorToServ" +
+      "er(\0010\001BV\n\027cloud.spawnery.agent.pbB\nAgent" +
+      "ProtoP\001Z-github.com/spawnery/spawnery/in" +
+      "ternal/agentpbb\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -210,7 +211,7 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
     internal_static_spawnery_agent_v1alpha1_Hello_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_Hello_descriptor,
-        new java.lang.String[] { "Version", "Ready", });
+        new java.lang.String[] { "Version", "Ready", "ReadTimeoutMillis", });
     internal_static_spawnery_agent_v1alpha1_PlayerCount_descriptor =
       getDescriptor().getMessageType(3);
     internal_static_spawnery_agent_v1alpha1_PlayerCount_fieldAccessorTable = new

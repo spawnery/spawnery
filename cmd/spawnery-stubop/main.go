@@ -978,6 +978,12 @@ func (s *stub) hello(of func(map[string]any) map[string]any, hello *agentpb.Hell
 	s.events.record("hello", of(map[string]any{
 		"version": hello.GetVersion(),
 		"ready":   hello.GetReady(),
+		// A proxy's own read timeout, which the operator races when a
+		// backend's node dies and can find out no other way. Recorded here so
+		// hack/agent-test.sh can assert that a real Velocity sends it, against
+		// a real proxy holding a real velocity.toml -- a Kotlin unit test can
+		// only assert what it passed the constructor.
+		"readTimeoutMillis": hello.GetReadTimeoutMillis(),
 	}))
 }
 

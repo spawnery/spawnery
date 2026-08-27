@@ -100,7 +100,11 @@ func validateAgentFlags(operatorNamespace string, renewAfter, hardDeadline time.
 // phase.RescueWindow says what the arithmetic is and what half of it the
 // operator cannot see.
 func rescueWindowWarning(reportInterval time.Duration) string {
-	window := phase.RescueWindow(reportInterval)
+	// Zero for the timeout, which means the value this repository ships. This
+	// runs before any proxy has connected and is a statement about the flag
+	// alone; what a proxy actually parsed reaches the Network's
+	// RescueWindowShort condition instead, per namespace, once one has said.
+	window := phase.RescueWindow(reportInterval, 0)
 	if window >= controller.ResyncInterval {
 		return ""
 	}
@@ -437,6 +441,7 @@ func main() {
 
 	if err := controller.SetupAll(mgr, controller.Options{
 		Agents:               registry,
+		ReportInterval:       reportInterval,
 		Clock:                time.Now,
 		StartupDeadline:      startupDeadline,
 		PlayerStatusInterval: playerStatusInterval,

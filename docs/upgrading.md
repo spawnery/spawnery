@@ -291,6 +291,37 @@ running cluster pulled.
 The operator itself changes nothing a pod renders: `internal/podspec` is
 untouched, so no pod's rendered hash moves, and the agent jars are unchanged.
 
+## The proxies report their read timeout, and a Network says what it means
+
+A `Network` gains a `RescueWindowShort` condition. It answers how long the
+operator has to move players off a backend whose node has died before Velocity
+disconnects them itself — the proxy's read timeout less twice the agent report
+interval — and it can answer at all because the proxies now report that
+timeout on their `Hello`.
+
+Before this the operator assumed the value this repository ships. A
+`velocity.toml` overlay lowering `advanced.read-timeout` closed that window with
+nothing noticing, which is the last entry `docs/known-issues.md` carried. The
+agent reads `ProxyServer.getConfiguration().getReadTimeout()`, so what reaches
+the operator is what Velocity actually parsed: after the overlay, after
+whatever the image ships, after Velocity's own defaults.
+
+Three readings, and the third is not the second:
+
+| Condition | What it means |
+|---|---|
+| `False/RescueWindowSufficient` | a proxy reported, and the window clears the operator's own resync |
+| `True/RescueWindowTooShort` | a proxy reported, and it does not — players on a dying node may be disconnected rather than moved |
+| `Unknown/NoProxyReported` | no proxy in this namespace has said, which is not the same as sufficient |
+
+A namespace with several proxies is judged by the shortest of them: whichever
+gives up first is the one that kicks the players.
+
+**Nothing to do, and no ordering requirement.** An agent too old to send the
+field reports zero, the registry ignores it, and the operator falls back to the
+shipped default — exactly the reading it took before. The condition then says
+`Unknown` for that namespace rather than inventing an answer.
+
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 
 `v0.1.1` added a fourth `expose` strategy to the `ProxyGroup` CRD's enum. The

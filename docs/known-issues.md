@@ -47,84 +47,11 @@ The design decisions live in
 `superpowers/specs/2026-08-10-velocity-image-design.md` and in
 `superpowers/specs/2026-08-11-velocity-agent-design.md`.
 
-## From milestone 3c (the Velocity agent)
+## Nothing is open
 
-**A backend whose node dies with players on it now has about twenty seconds
-of margin, and that margin is not guaranteed.** Velocity disconnects such
-players outright rather than firing an event: disassembling velocity 3.5.1
-build 615, `ConnectedPlayer.handleConnectionException` falls straight through
-to `disconnect()` when its `safe` argument is false, and
-`BackendPlaySessionHandler` passes false for exactly a `ReadTimeoutException`.
-So no `KickedFromServerEvent` fires, the agent's own `Rescue` never sees them,
-and no plugin can intervene. That is unchanged and unchangeable from this side.
+There is no entry in this file today. That is a statement about 2026-08-27 and
+not a claim about the code: the last one was closed by asking the proxy for the
+number the operator had been assuming, and the next defect anybody finds
+belongs here the moment they find it.
 
-What changed is that the operator now moves them first. A stream that is *up
-and quiet* is the signature of a peer that is gone without TCP having noticed —
-measured through a freezable relay at over 200 seconds before the socket
-reacts — and it is distinguishable from an operator restart, which breaks
-every stream at once and leaves `AgentConnected` false. On that signature the
-server loses readiness, is deregistered so nobody else is sent to it, and is
-drained.
-
-The margin is arithmetic and `phase.RescueWindow` is now that arithmetic:
-Velocity's `read-timeout` less twice the agent report interval, which is twenty
-seconds at the operator's defaults and zero at a report interval of fifteen.
-**Half of it is checked and half of it cannot be.** The operator warns at
-startup when its own `--report-interval` leaves a window shorter than the
-`ResyncInterval` it could act within — that is the half somebody sets by hand,
-and the read timeout it is compared against is pinned to the value
-`internal/render/defaults/velocity.default.toml` ships by a test, so the two
-cannot drift apart silently.
-
-What stays open is the other half: **a `velocity.toml` overlay that lowers
-`read-timeout` closes the gap without anything noticing.** The overlay is the
-user's own ConfigMap, named by `spec.configOverlay`, mounted into the pod by
-name and rendered there by `spawnery-config`. The operator never reads its
-contents. A cluster that replaces the whole file rather than overlaying it
-lands on Velocity's own 30-second default by luck rather than by agreement, and
-nothing here can tell that apart from agreement.
-
-How much this matters is bounded by how it happens: the value moves only if
-somebody sets it, since the shipped default and Velocity's own are both 30000.
-What it costs when it does is not bounded — a proxy whose read timeout is
-shorter than the operator's staleness rule kicks the players the operator was
-about to move, with no event and nothing a plugin can intervene in.
-
-### Four ways to close it, and what each costs
-
-**Do nothing.** Free, and it is what stands. It leaves the failure silent, which
-is the only part that is hard to defend: the arithmetic is already written down
-and already warned about for the half the operator can see, so a reader has
-every reason to believe both halves are checked.
-
-**Read the user's ConfigMap uncached, every reconcile.** Needs no new
-permission — `configmaps: get` is already granted cluster-wide — and costs one
-API call per `ProxyGroup` per `ResyncInterval`, twelve a minute per group,
-deliberately bypassing the cache. The worse cost is not the traffic: the
-operator would have to parse TOML to find the key, which gives it a second
-understanding of a file format `internal/render` already owns, and two parsers
-that can disagree about an overlay are a defect of their own.
-
-**Widen the ConfigMap cache instead.** Removes the uncached read and reverses
-the restriction that exists for a measured reason: the cache would hold every
-ConfigMap in every watched namespace, `kube-root-ca.crt` from each of them
-included, for the sake of one key. Memory proportional to the cluster, in
-exchange for a field.
-
-**Ask the proxy, which knows.** `ProxyServer.getConfiguration().getReadTimeout()`
-is on Velocity's public API — checked by disassembling velocity 3.5.1 build
-615, an `int` in the milliseconds the TOML uses — so the agent can report the
-*effective* timeout: what Velocity actually parsed, after the overlay, after
-whatever the image ships, after Velocity's own defaults. That is the only one
-of the four that answers the question that was asked, rather than inferring it
-from a file. It costs one field on a message the proxy already sends, an agent
-change, and therefore a roll of both fleets on the release that carries it. No
-API traffic, no second parser.
-
-Its own limits, so they are not discovered later: it says nothing until an
-agent has connected, and an agent too old to send it leaves the operator on the
-shipped default — the same reading it takes today, in the same direction.
-
-**The fourth is the one worth building.** It is written here rather than built
-because the roll is a real cost and the value of a knob nobody has turned is a
-judgement, not a measurement.
+What the file is for, and the rule it keeps, is above.

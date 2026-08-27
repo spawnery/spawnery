@@ -109,6 +109,36 @@ private static final long serialVersionUID = 0L;
     return ready_;
   }
 
+  public static final int READ_TIMEOUT_MILLIS_FIELD_NUMBER = 3;
+  private int readTimeoutMillis_ = 0;
+  /**
+   * <pre>
+   * read_timeout_millis is meaningful for proxy agents only: how long this
+   * proxy waits on a silent backend before it disconnects the players on it.
+   *
+   * It is the *effective* value, read from
+   * ProxyServer.getConfiguration().getReadTimeout() rather than from any file,
+   * so it survives a velocity.toml overlay, an image that ships its own
+   * defaults, and Velocity's own. The operator races this deadline when a
+   * backend's node dies -- see phase.RescueWindow -- and could otherwise only
+   * assume the value this repository ships.
+   *
+   * Sent on the Hello because it cannot change without the proxy restarting,
+   * and a fact that cannot change does not belong on a periodic report.
+   *
+   * Zero means not reported, which is what a proxy agent older than this field
+   * sends and what every server agent sends. The operator falls back to the
+   * shipped default there, which is the reading it took before this existed.
+   * </pre>
+   *
+   * <code>int32 read_timeout_millis = 3;</code>
+   * @return The readTimeoutMillis.
+   */
+  @java.lang.Override
+  public int getReadTimeoutMillis() {
+    return readTimeoutMillis_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -129,6 +159,9 @@ private static final long serialVersionUID = 0L;
     if (ready_ != false) {
       output.writeBool(2, ready_);
     }
+    if (readTimeoutMillis_ != 0) {
+      output.writeInt32(3, readTimeoutMillis_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -139,6 +172,10 @@ private static final long serialVersionUID = 0L;
     if (ready_ != false) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(2, ready_);
+    }
+    if (readTimeoutMillis_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(3, readTimeoutMillis_);
     }
     return size;
   }
@@ -168,6 +205,8 @@ private static final long serialVersionUID = 0L;
         .equals(other.getVersion())) return false;
     if (getReady()
         != other.getReady()) return false;
+    if (getReadTimeoutMillis()
+        != other.getReadTimeoutMillis()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -184,6 +223,8 @@ private static final long serialVersionUID = 0L;
     hash = (37 * hash) + READY_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getReady());
+    hash = (37 * hash) + READ_TIMEOUT_MILLIS_FIELD_NUMBER;
+    hash = (53 * hash) + getReadTimeoutMillis();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -322,6 +363,7 @@ private static final long serialVersionUID = 0L;
       bitField0_ = 0;
       version_ = "";
       ready_ = false;
+      readTimeoutMillis_ = 0;
       return this;
     }
 
@@ -361,6 +403,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000002) != 0)) {
         result.ready_ = ready_;
       }
+      if (((from_bitField0_ & 0x00000004) != 0)) {
+        result.readTimeoutMillis_ = readTimeoutMillis_;
+      }
     }
 
     @java.lang.Override
@@ -382,6 +427,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getReady() != false) {
         setReady(other.getReady());
+      }
+      if (other.getReadTimeoutMillis() != 0) {
+        setReadTimeoutMillis(other.getReadTimeoutMillis());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -419,6 +467,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000002;
               break;
             } // case 16
+            case 24: {
+              readTimeoutMillis_ = input.readInt32();
+              bitField0_ |= 0x00000004;
+              break;
+            } // case 24
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -551,6 +604,95 @@ private static final long serialVersionUID = 0L;
     public Builder clearReady() {
       bitField0_ = (bitField0_ & ~0x00000002);
       ready_ = false;
+      onChanged();
+      return this;
+    }
+
+    private int readTimeoutMillis_ ;
+    /**
+     * <pre>
+     * read_timeout_millis is meaningful for proxy agents only: how long this
+     * proxy waits on a silent backend before it disconnects the players on it.
+     *
+     * It is the *effective* value, read from
+     * ProxyServer.getConfiguration().getReadTimeout() rather than from any file,
+     * so it survives a velocity.toml overlay, an image that ships its own
+     * defaults, and Velocity's own. The operator races this deadline when a
+     * backend's node dies -- see phase.RescueWindow -- and could otherwise only
+     * assume the value this repository ships.
+     *
+     * Sent on the Hello because it cannot change without the proxy restarting,
+     * and a fact that cannot change does not belong on a periodic report.
+     *
+     * Zero means not reported, which is what a proxy agent older than this field
+     * sends and what every server agent sends. The operator falls back to the
+     * shipped default there, which is the reading it took before this existed.
+     * </pre>
+     *
+     * <code>int32 read_timeout_millis = 3;</code>
+     * @return The readTimeoutMillis.
+     */
+    @java.lang.Override
+    public int getReadTimeoutMillis() {
+      return readTimeoutMillis_;
+    }
+    /**
+     * <pre>
+     * read_timeout_millis is meaningful for proxy agents only: how long this
+     * proxy waits on a silent backend before it disconnects the players on it.
+     *
+     * It is the *effective* value, read from
+     * ProxyServer.getConfiguration().getReadTimeout() rather than from any file,
+     * so it survives a velocity.toml overlay, an image that ships its own
+     * defaults, and Velocity's own. The operator races this deadline when a
+     * backend's node dies -- see phase.RescueWindow -- and could otherwise only
+     * assume the value this repository ships.
+     *
+     * Sent on the Hello because it cannot change without the proxy restarting,
+     * and a fact that cannot change does not belong on a periodic report.
+     *
+     * Zero means not reported, which is what a proxy agent older than this field
+     * sends and what every server agent sends. The operator falls back to the
+     * shipped default there, which is the reading it took before this existed.
+     * </pre>
+     *
+     * <code>int32 read_timeout_millis = 3;</code>
+     * @param value The readTimeoutMillis to set.
+     * @return This builder for chaining.
+     */
+    public Builder setReadTimeoutMillis(int value) {
+
+      readTimeoutMillis_ = value;
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * read_timeout_millis is meaningful for proxy agents only: how long this
+     * proxy waits on a silent backend before it disconnects the players on it.
+     *
+     * It is the *effective* value, read from
+     * ProxyServer.getConfiguration().getReadTimeout() rather than from any file,
+     * so it survives a velocity.toml overlay, an image that ships its own
+     * defaults, and Velocity's own. The operator races this deadline when a
+     * backend's node dies -- see phase.RescueWindow -- and could otherwise only
+     * assume the value this repository ships.
+     *
+     * Sent on the Hello because it cannot change without the proxy restarting,
+     * and a fact that cannot change does not belong on a periodic report.
+     *
+     * Zero means not reported, which is what a proxy agent older than this field
+     * sends and what every server agent sends. The operator falls back to the
+     * shipped default there, which is the reading it took before this existed.
+     * </pre>
+     *
+     * <code>int32 read_timeout_millis = 3;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearReadTimeoutMillis() {
+      bitField0_ = (bitField0_ & ~0x00000004);
+      readTimeoutMillis_ = 0;
       onChanged();
       return this;
     }

@@ -36,6 +36,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -56,6 +58,16 @@ type NetworkReconciler struct {
 	// OperatorNamespace is where this operator runs, and it is the one value
 	// the policy cannot derive from the Network it protects.
 	OperatorNamespace string
+
+	// Agents is the runtime state reported by the in-game agents. This
+	// controller reads exactly one thing from it -- the shortest read timeout
+	// the namespace's proxies have reported -- and nil is tolerated, because a
+	// Network reconciles correctly without it and the condition says Unknown.
+	Agents *agent.Registry
+	// ReportInterval is how often agents report, which is the other half of
+	// the rescue-window arithmetic. Zero reads as the operator's own default
+	// through phase.RescueWindow's fallback.
+	ReportInterval time.Duration
 
 	// Bootstrap puts the CA bundle and the agent ServiceAccounts into this
 	// Network's namespace. It is the same instance ServerReconciler holds:
@@ -300,6 +312,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	meta.SetStatusCondition(&network.Status.Conditions,
 		rotationCondition(read, forwardingStamps(pods.Items)))
+	meta.SetStatusCondition(&network.Status.Conditions,
+		r.rescueWindowCondition(network.Namespace))
 
 	if err := commit(); err != nil {
 		return ctrl.Result{}, err
@@ -340,6 +354,57 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	return ctrl.Result{RequeueAfter: ResyncInterval}, nil
+}
+
+// rescueWindowCondition reports whether the proxies serving this namespace give
+// up on a silent backend before the operator can react to one.
+//
+// The arithmetic is phase.RescueWindow's and the threshold is ResyncInterval:
+// the operator acts on time-driven transitions at a resync, so a window
+// shorter than one is a window it may spend entirely on not having looked yet.
+// Neither number is a judgement about how much room is comfortable, which is a
+// fact about a cluster; both are facts about this code meeting a number the
+// proxies report.
+//
+// Unknown when no proxy in the namespace has reported one, and that is not the
+// same as sufficient. A namespace with no proxy running, or one whose agents
+// predate the field, has nothing to say -- and saying "sufficient" there would
+// be asserting the shipped default is in force when it may not be.
+func (r *NetworkReconciler) rescueWindowCondition(namespace string) metav1.Condition {
+	unknown := metav1.Condition{
+		Type:   spawneryv1alpha1.ConditionRescueWindowShort,
+		Status: metav1.ConditionUnknown,
+		Reason: spawneryv1alpha1.ReasonNoProxyReported,
+		Message: "no proxy in this namespace has reported its read timeout, so how long the " +
+			"operator has to move players off a backend whose node dies is not known here",
+	}
+	if r.Agents == nil {
+		return unknown
+	}
+	timeout, known := r.Agents.ShortestReadTimeout(namespace)
+	if !known {
+		return unknown
+	}
+
+	window := phase.RescueWindow(r.ReportInterval, timeout)
+	if window >= ResyncInterval {
+		return metav1.Condition{
+			Type:   spawneryv1alpha1.ConditionRescueWindowShort,
+			Status: metav1.ConditionFalse,
+			Reason: spawneryv1alpha1.ReasonRescueWindowSufficient,
+			Message: fmt.Sprintf("%s to move players off a backend whose node dies, from a "+
+				"proxy read timeout of %s", window, timeout),
+		}
+	}
+	return metav1.Condition{
+		Type:   spawneryv1alpha1.ConditionRescueWindowShort,
+		Status: metav1.ConditionTrue,
+		Reason: spawneryv1alpha1.ReasonRescueWindowTooShort,
+		Message: fmt.Sprintf("a proxy here gives up on a silent backend after %s, which leaves "+
+			"%s once a player count has gone stale — less than the %s the operator reconciles "+
+			"on, so players on a backend whose node dies may be disconnected rather than moved",
+			timeout, window, ResyncInterval),
+	}
 }
 
 // reconcileNetworkPolicy keeps the policy that admits only this network's own

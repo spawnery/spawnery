@@ -35,6 +35,10 @@ type Options struct {
 	StartupDeadline time.Duration
 	// PlayerStatusInterval throttles player-count writes into etcd.
 	PlayerStatusInterval time.Duration
+	// ReportInterval is how often the agents are told to report. It is here
+	// because half the rescue-window arithmetic is this number and the other
+	// half is what a proxy reports, and the Network controller compares them.
+	ReportInterval time.Duration
 	// OrphanInterval is how often the orphan sweep runs.
 	OrphanInterval time.Duration
 	// Registrar reaches the proxies. Milestone 1 wires the no-op.
@@ -162,6 +166,11 @@ func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
 		// Bootstrapper takes the same reader for the same reason.
 		SecretReader: mgr.GetAPIReader(),
 		Bootstrap:    opts.Bootstrapper,
+		// The two halves of the rescue-window arithmetic: the interval this
+		// operator dictates, and what the namespace's proxies report about
+		// their own read timeout.
+		Agents:         opts.Agents,
+		ReportInterval: opts.ReportInterval,
 	}
 }
 

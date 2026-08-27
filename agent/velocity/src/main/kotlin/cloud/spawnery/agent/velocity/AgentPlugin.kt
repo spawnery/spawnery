@@ -174,6 +174,12 @@ class AgentPlugin @Inject constructor(
             directory = directory,
             drain = drain,
             players = players,
+            // The effective value, not the file's: getConfiguration() is what
+            // Velocity parsed, after the image's own velocity.toml, after any
+            // configOverlay the user mounted, after Velocity's defaults. That
+            // is the whole reason this is read here rather than by the
+            // operator, which can see none of those.
+            readTimeoutMillis = proxy.configuration.readTimeout,
             onFirstSync = gate::open,
             onSetReady = { ready -> if (ready) gate.open() else gate.close() },
             log = ::warn,

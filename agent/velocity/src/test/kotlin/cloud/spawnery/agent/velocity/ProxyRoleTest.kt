@@ -52,10 +52,20 @@ class ProxyRoleTest {
         directory = directory,
         drain = drain,
         players = players,
+        readTimeoutMillis = 30_000,
         onFirstSync = { syncs++ },
         onSetReady = { },
         log = { message, error -> logs += message to error },
     )
+
+    @Test
+    fun `hello carries the read timeout the proxy actually parsed`() {
+        // The operator races this deadline when a backend's node dies and can
+        // find it out no other way: the value lives in a file the operator
+        // never reads, which a configOverlay is free to lower.
+        val hello = role.hello("test-version").hello
+        assertEquals(30_000, hello.readTimeoutMillis)
+    }
 
     @Test
     fun `hello carries the version and leaves ready unset`() {
@@ -493,6 +503,7 @@ class ProxyRoleTest {
             directory = directory,
             drain = drain,
             players = players,
+            readTimeoutMillis = 30_000,
             onFirstSync = onFirstSync,
             onSetReady = onSetReady,
             log = { message, error -> logs += message to error },

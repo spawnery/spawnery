@@ -515,3 +515,67 @@ func TestLookupCarriesWhenTheCountArrived(t *testing.T) {
 		t.Errorf("PlayersReportedAt = %v, want %v", got, clock.now)
 	}
 }
+
+// TestTheShortestReadTimeoutWins is the rule the whole field exists for: a
+// fleet is only as patient as its least patient proxy, because whichever gives
+// up first is the one that disconnects the players the operator was about to
+// move.
+func TestTheShortestReadTimeoutWins(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+
+	for _, uid := range []string{"proxy-a", "proxy-b"} {
+		r.Connect(uid, RoleProxy)
+	}
+	r.ReportReadTimeout("proxy-a", "minecraft", 30*time.Second)
+	r.ReportReadTimeout("proxy-b", "minecraft", 12*time.Second)
+
+	if got, known := r.ShortestReadTimeout("minecraft"); !known || got != 12*time.Second {
+		t.Errorf("ShortestReadTimeout = %s known=%v, want 12s", got, known)
+	}
+}
+
+// TestAnUnreportedReadTimeoutIsUnknownRatherThanZero keeps the fallback honest.
+// Zero and "the shipped default" are different answers, and the caller has to
+// be able to tell them apart: an agent too old to send the field must leave the
+// operator reading what this repository ships, not reading no patience at all.
+func TestAnUnreportedReadTimeoutIsUnknownRatherThanZero(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+
+	r.Connect("proxy-a", RoleProxy)
+	if got, known := r.ShortestReadTimeout("minecraft"); known {
+		t.Errorf("a proxy that said nothing answered %s as known", got)
+	}
+
+	// A zero is what an older agent's Hello carries, and it must not become an
+	// answer either -- one silent agent would otherwise speak for every
+	// talkative one, since the smallest wins.
+	r.ReportReadTimeout("proxy-a", "minecraft", 0)
+	if got, known := r.ShortestReadTimeout("minecraft"); known {
+		t.Errorf("a reported zero answered %s as known", got)
+	}
+}
+
+// TestTheReadTimeoutIsScopedAndProxyOnly covers the three ways a value must not
+// count: another namespace's proxy, a disconnected one, and a server agent,
+// which reports about itself and has no such timeout at all.
+func TestTheReadTimeoutIsScopedAndProxyOnly(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+
+	r.Connect("elsewhere", RoleProxy)
+	r.ReportReadTimeout("elsewhere", "other", 3*time.Second)
+	r.Connect("a-server", RoleServer)
+	r.ReportReadTimeout("a-server", "minecraft", 4*time.Second)
+	r.Connect("gone", RoleProxy)
+	r.ReportReadTimeout("gone", "minecraft", 5*time.Second)
+	r.Disconnect("gone")
+	r.Connect("here", RoleProxy)
+	r.ReportReadTimeout("here", "minecraft", 20*time.Second)
+
+	if got, known := r.ShortestReadTimeout("minecraft"); !known || got != 20*time.Second {
+		t.Errorf("ShortestReadTimeout = %s known=%v, want the 20s of the one connected proxy "+
+			"in this namespace", got, known)
+	}
+}
