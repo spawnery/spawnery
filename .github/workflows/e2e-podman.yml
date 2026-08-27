@@ -1,0 +1,178 @@
+name: E2E under rootless podman
+
+on:
+  schedule:
+    # 05:41 UTC, clear of the nightly at 03:17 and the Paper watch at 04:23,
+    # and on an odd minute for the reason nightly.yml gives.
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+
+# issues: write for the report. contents: read is the checkout.
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  e2e-podman:
+    runs-on: ubuntu-latest
+    # ci.yml's e2e job allows 45 under Docker. Rootless podman is slower at
+    # everything that touches the image store, and this is a stop for a wedged
+    # run rather than a description of one.
+    timeout-minutes: 60
+    env:
+      # Not nightly-red. hack/require-no-red-nightly.sh refuses a release while
+      # an issue carrying that label is open, and this job must not: it is a
+      # second opinion about the harness, not a gate on what the harness tests.
+      # A change that breaks podman and not Docker is worth an issue and is not
+      # worth stopping a release that Docker proved.
+      PODMAN_LABEL: podman-red
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rootless kind needs cgroup v2 with the controllers delegated to the
+      # user manager, and a user manager to delegate them to. A hosted runner
+      # has neither by default: the job's shell is not a login session, so
+      # there is no user@.service and no XDG_RUNTIME_DIR.
+      #
+      # The order below is load-bearing. A drop-in written after the user
+      # manager has started does not reach it -- delegation is read once, at
+      # its start -- so the drop-in goes first, then the reload, and only then
+      # enable-linger, which is what starts the manager for a user with no
+      # session.
+      - name: Delegate the cgroup controllers rootless kind needs
+        run: |
+          set -euo pipefail
+          sudo mkdir -p /etc/systemd/system/user@.service.d
+          sudo tee /etc/systemd/system/user@.service.d/delegate.conf >/dev/null <<'EOF'
+          [Service]
+          Delegate=cpu cpuset io memory pids
+          EOF
+          sudo systemctl daemon-reload
+          sudo loginctl enable-linger "$(id -un)"
+
+      # Everything a failure would otherwise have to be guessed from. This job
+      # exists because nothing automatic exercises this path, so the first
+      # thing a red run needs to establish is whether the path was exercised at
+      # all or the environment refused to be built.
+      - name: What this runner actually provides
+        run: |
+          set -uo pipefail
+          echo "podman:  $(podman --version 2>&1 || echo absent)"
+          echo "cgroup:  $(stat -fc %T /sys/fs/cgroup)"
+          echo "subuid:  $(grep "^$(id -un):" /etc/subuid 2>/dev/null || echo none)"
+          echo "runtime: ${XDG_RUNTIME_DIR:-unset} -> $(ls -d /run/user/"$(id -u)" 2>&1)"
+          cat /sys/fs/cgroup/user.slice/user-"$(id -u)".slice/user@"$(id -u)".service/cgroup.controllers \
+            2>&1 | sed 's/^/deleg:   /'
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      # The invocation hack/e2e.sh's own header documents for the author's
+      # machine, unchanged. That is the point: this job proves the path a
+      # person uses, so a job that reached the same result by a different
+      # route would prove something else.
+      #
+      # It is still not the same podman. This runner's is the version Ubuntu
+      # ships, with the delegation configured by the step above; the author's
+      # is a distribution's, configured by that distribution. Two rootless
+      # podmans rather than one, which is more than the one this repository had
+      # and less than the claim "podman is covered" would mean.
+      #
+      # XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are set by hand because
+      # the job's shell is not a login session and systemd-run --user needs
+      # both to find the manager that enable-linger just started.
+      - name: make e2e under rootless podman
+        run: |
+          set -euo pipefail
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+          systemd-run --scope --user --property=Delegate=yes -- \
+            nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e
+
+      - name: Report the failure where somebody will meet it
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          gh label create "${PODMAN_LABEL}" \
+            --color d93f0b \
+            --description "The end-to-end run under rootless podman is failing. Closing this is how you say the cause is fixed." \
+            2>/dev/null || true
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${PODMAN_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty')"
+
+          cat >/tmp/podman-body.md <<EOF
+          \`make e2e\` failed under rootless podman.
+
+          | | |
+          |---|---|
+          | latest failing run | ${RUN_URL} |
+          | commit | \`${GITHUB_SHA}\` |
+          | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
+
+          \`ci.yml\`'s \`e2e\` job runs the same unmodified script against a
+          hosted runner's Docker daemon and blocks every pull request on it.
+          This job runs it the way a person does — \`systemd-run --scope --user
+          --property=Delegate=yes\` around
+          \`KIND_EXPERIMENTAL_PROVIDER=podman\` — which is the invocation
+          \`hack/e2e.sh\`'s own header documents and which nothing automatic
+          exercised before this workflow existed.
+
+          **Read the "What this runner actually provides" step first.** Two
+          quite different things fail here and they need opposite responses. If
+          podman is absent, the cgroup filesystem is not \`cgroup2fs\`, or the
+          delegated controllers are missing, then the runner image changed
+          under this job and the fix is here. If all of that is in order and
+          the scenarios themselves failed, then something in this repository
+          works under Docker and not under podman, and that is the gap this job
+          was built to catch.
+
+          This blocks no release. \`hack/require-no-red-nightly.sh\` looks at
+          the \`nightly-red\` label and not at this one, on purpose: a harness
+          that proves Docker has proved something real, and a podman failure
+          should not throw that away.
+
+          Opened automatically by \`.github/workflows/e2e-podman.yml\`.
+          EOF
+
+          if [ -n "${existing}" ]; then
+            gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
+              --body-file /tmp/podman-body.md
+            echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "E2E under rootless podman is failing" \
+              --label "${PODMAN_LABEL}" \
+              --body-file /tmp/podman-body.md
+          fi
+
+      - name: Close the report if there is one
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          # A label that does not exist is an error rather than an empty list,
+          # and is read here as "nothing to close" -- the same reading
+          # nightly.yml takes, safe for the same reason.
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${PODMAN_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty' 2>/dev/null || true)"
+
+          if [ -z "${existing}" ]; then
+            exit 0
+          fi
+
+          gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
+            --comment "Closed by the podman run that passed: ${RUN_URL}"
+          echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"

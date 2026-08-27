@@ -184,17 +184,30 @@ added after that milestone, asks daily whether PaperMC has published a build
 newer than `nix/paper.nix` names. Full account of the first three:
 `docs/handover-milestone-6e.md`.
 
-**The rootless-podman path is now unexercised by anything automatic.**
-Before this milestone there was exactly one way `hack/e2e.sh` ran: by hand,
-on the author's machine, under rootless Podman with `KIND_EXPERIMENTAL_PROVIDER=podman`
-and a `systemd-run --scope --user --property=Delegate=yes` wrapper — so
-there was no gap between what was proven and what anyone relied on.
-`ci.yml`'s `e2e` job now runs the same unmodified script on a hosted
-runner's Docker daemon, which is a genuine second, independent execution of
-it — eighteen scenarios green — but from this point on nothing automatic
-ever exercises the podman path again. CI proves Docker; the author's machine
-proves podman; neither proves the other, and a change that only breaks under
-one container runtime can now sit green in CI indefinitely.
+**The rootless-podman path has a nightly workflow and that workflow has never
+run.** Before milestone 6e there was exactly one way `hack/e2e.sh` ran: by
+hand, on the author's machine, under rootless Podman with
+`KIND_EXPERIMENTAL_PROVIDER=podman` and a
+`systemd-run --scope --user --property=Delegate=yes` wrapper — so there was no
+gap between what was proven and what anyone relied on. `ci.yml`'s `e2e` job
+runs the same unmodified script on a hosted runner's Docker daemon, which is a
+genuine second execution of it, and left the podman path exercised by nothing
+automatic: a change that only broke under one container runtime could sit green
+in CI indefinitely.
+
+`.github/workflows/e2e-podman.yml` is the answer and is not yet the evidence.
+It runs the author's exact invocation nightly, and a hosted runner has to be
+made to accept it first — no user manager, no `XDG_RUNTIME_DIR`, and the cgroup
+controllers rootless kind needs are not delegated until the job writes a
+drop-in and enables lingering. **Whether that works on a hosted runner is
+untested**, and until a run of it has gone green the sentence above is still
+true in practice. The baseline it is meant to automate is not in doubt:
+`make e2e` under rootless podman was driven on the author's machine on
+2026-08-27, all eighteen scenarios green.
+
+One thing it will not close even then. A hosted runner's podman is a version
+Ubuntu ships with a delegation this workflow configures itself; the author's is
+a distribution's. Two rootless podmans, not one, and the workflow says so.
 
 **The `if: failure()` step that opens a `nightly-red` issue has never run.**
 `9a25874` gave `nightly.yml` that step, an `if: success()` step that closes
