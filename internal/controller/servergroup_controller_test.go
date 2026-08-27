@@ -4857,3 +4857,80 @@ func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
 		})
 	}
 }
+
+// liveServers is the count docs/known-issues.md recorded touching zero: the
+// servers that count toward the group's size, which is every one that is
+// neither leaving nor Failed.
+func (f *fixture) liveServers(t *testing.T) int {
+	t.Helper()
+	n := 0
+	for _, s := range f.listServers(t) {
+		if s.Status.Phase != string(phase.Failed) && s.DeletionTimestamp == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter is the
+// explanation for an observation that sat in docs/known-issues.md as
+// uninvestigated: a group's count of live servers briefly touched zero under
+// sustained churn before recovering.
+//
+// It is the backoff, and it is not a defect. Creates are gated on
+// backoff.MayCreate, and a Failed server does not count toward the group's
+// size (ServerView.countsTowardSize), so between the failure of the last live
+// server and the expiry of the window the group genuinely has none. That is
+// the whole point of the window: a group whose servers are failing to start
+// must stop rebuilding them for a while, and at minReplicas 1 "a while with
+// none" is the only shape that can take.
+//
+// What makes it a state rather than a mystery is that the group says so while
+// it lasts. TestBackingOffConditionNamesTheCountAndTheWait pins the condition;
+// this pins the count beside it, and then the recovery, which is the half the
+// original observation reported and nothing asserted.
+//
+// The churn that produced it was Task 5's 20-second startup deadline, which is
+// short enough that every server fails it. Nothing here needs to be that
+// realistic: one failure opens the window, and the window is what the count
+// follows.
+func TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setMinReplicas(t, 1)
+	f.reconcileGroup(t, r)
+
+	name := f.oneServerName(t)
+	if got := f.liveServers(t); got != 1 {
+		t.Fatalf("%d live servers before the failure, want 1", got)
+	}
+
+	f.failServer(t, name)
+	f.reconcileGroup(t, r)
+
+	// Zero live, and no replacement ordered. The corpse is still there --
+	// it is kept for diagnosis -- so status.replicas does not read zero and
+	// only this count does.
+	if got := f.liveServers(t); got != 0 {
+		t.Fatalf("%d live servers inside the backoff window, want 0: the window is the "+
+			"whole reason a replacement is not ordered yet", got)
+	}
+	if got := len(f.listServers(t)); got != 1 {
+		t.Errorf("%d servers exist, want the 1 corpse: a replacement was ordered inside "+
+			"the window", got)
+	}
+	if c := meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions,
+		spawneryv1alpha1.ConditionBackingOff); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("BackingOff = %+v, want True: without it the zero above would be "+
+			"unexplained on the object itself, which is what made it worth recording", c)
+	}
+
+	// Past the first window, which is backoffBase.
+	f.clock.Advance(backoffBase + time.Second)
+	f.reconcileGroup(t, r)
+
+	if got := f.liveServers(t); got != 1 {
+		t.Fatalf("%d live servers after the window expired, want 1: the count recovers or "+
+			"the observation was not the backoff after all", got)
+	}
+}

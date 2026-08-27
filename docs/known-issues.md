@@ -173,23 +173,6 @@ and `ForwardingSecretRotationPending=False/ForwardingSecretInSync`. So the
 nobody opened reports, and the opened case now has a witness rather than only
 tests.
 
-## From milestone 6a (the operator in a cluster)
-
-6a gives the operator its own OCI image, one publish path for all three images,
-and `make e2e`: a `kind` cluster in which the operator runs as a Deployment
-under its own ServiceAccount while a Go test package drives it through twelve
-ordered subtests — design §7.1's nine scenarios, plus the operator's own
-health, plus §7.3's permission table against the real authorizer, plus §7.2's
-last one, which reads the operator's whole log for `is forbidden:`. What that
-grep can and cannot see was measured four ways during Task 4 and is written
-down where it applies, in `theOperatorWasNeverDenied`'s own comment; the
-operator's answer to the wider question — asking the authorizer directly, every
-ten minutes — is `rbacaudit.Checker`.
-
-**A group's count of live servers briefly touched zero under sustained
-churn** before recovering — observed during Task 5, not investigated, and
-recorded here for whoever next looks at backoff and replacement timing.
-
 ## From milestone 6e (CI)
 
 GitHub Actions runs four workflows: `.github/workflows/ci.yml` blocks
