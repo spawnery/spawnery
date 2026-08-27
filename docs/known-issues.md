@@ -47,11 +47,29 @@ The design decisions live in
 `superpowers/specs/2026-08-10-velocity-image-design.md` and in
 `superpowers/specs/2026-08-11-velocity-agent-design.md`.
 
-## Nothing is open
+## A capacity edit still clears a group's failure streak
 
-There is no entry in this file today. That is a statement about 2026-08-27 and
-not a claim about the code: the last one was a flaky test, found by running it
-150 times on a machine kept busy, and the next defect anybody finds belongs
-here the moment they find it.
+`ofGeneration` (`internal/controller/servergroup_controller.go`) narrows an
+ephemeral group's views to the current `metadata.generation` before
+`CountFailures` runs, so raising `minReplicas` resets
+`status.consecutiveFailures` and clears a `Degraded` condition. Scaling a group
+up is not a fix for whatever its servers were failing on.
 
-What the file is for, and the rule it keeps, is above.
+Milestone 7a moved every other staleness comparison onto
+`podspec.DesiredServerHash` and deliberately did not move this one. Failure
+counting runs unconditionally and early, before the hash is computed, and that
+ordering is itself a decision: the hash is gated on the group's Network being
+usable, and a group whose Network was deleted is exactly the one that piles
+failures up. Replacing a value that is always present with one that is
+sometimes empty, on that path, is the wrong trade.
+
+It matters more than it did. The milestone that adds a `/cloud` command turns
+this spec edit into something an admin types, so `/cloud start lobby` would
+clear a `CrashLoopBackoff` and start hammering a broken image from a fresh
+window. That milestone owns the fix and has two options this one did not:
+refuse a scale while the group is `Degraded`, or carry the streak across the
+edit explicitly.
+
+Found by reading, not by a failure: writing 7a's plan against the code showed
+the ordering, and the task that would have changed this was removed from the
+plan rather than left to fail.

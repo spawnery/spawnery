@@ -82,7 +82,24 @@ Two consequences, both wanted:
 2. The three group kinds answer "is this member stale" the same way, which is
    the same symmetry argument the rest of this design rests on.
 
-`metadata.generation` keeps every other job it has. This changes one comparison.
+`metadata.generation` keeps every other job it has, including ordering
+retained failures for pruning — a digest has no order, so that one cannot move
+and does not.
+
+**This sentence used to read "This changes one comparison." It was written
+before the code was read, and it was wrong.** The change is four comparisons in
+`scaling.go`, plus three things the design did not anticipate: the free-slot
+total in `AggregateGroup` and the `Progressing` condition in
+`reportProgressing`, both of which would have started lying about a capacity
+edit rather than merely staying still, and `adoptServers`, which skipped
+ephemeral groups outright while nothing on that side read the field — a hole
+rather than a rename.
+
+One comparison deliberately does **not** move, and `docs/known-issues.md`
+carries it: the failure-count filter runs before the hash is computed and on a
+path where no hash exists, so raising `minReplicas` still clears a group's
+failure streak. That becomes 7c's problem the moment `/cloud start` exists, and
+7c owns it.
 
 ## 3. The API
 
