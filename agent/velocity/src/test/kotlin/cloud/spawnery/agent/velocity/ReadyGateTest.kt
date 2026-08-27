@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.net.BindException
 import java.net.ConnectException
 import java.net.InetSocketAddress
 import java.net.ServerSocket
@@ -116,7 +117,7 @@ class ReadyGateTest {
     }
 
     @Test
-    fun `close releases the port`() {
+    fun `close releases the port`() = retryingOnAStolenPort {
         val gate = ReadyGate(0) { _, _ -> }
         gate.open()
         val port = gate.boundPort
@@ -182,7 +183,7 @@ class ReadyGateTest {
     }
 
     @Test
-    fun `a later bind that fails leaves the proxy alone`() {
+    fun `a later bind that fails leaves the proxy alone`() = retryingOnAStolenPort {
         // The cancelled-drain shape: the gate opened, a SetReady(false) closed
         // it, and the re-open cannot get the port back. This proxy has been in
         // its group's Service and may have players on it right now, so taking
@@ -205,7 +206,7 @@ class ReadyGateTest {
     }
 
     @Test
-    fun `the two failures say different things`() {
+    fun `the two failures say different things`() = retryingOnAStolenPort {
         // The log line is what an operator reads next, and the two cases send
         // them to different places: one is a pod that will never work, the
         // other is a pod that is working and out of service.
@@ -222,5 +223,68 @@ class ReadyGateTest {
         gate.close()
         ServerSocket(port).use { gate.open() }
         assertTrue(later.any { it.contains("keeps the players it has") }, "later bind: $later")
+    }
+
+    /**
+     * Runs [body], and runs it again if the *test's own* bind lost a race for
+     * the port.
+     *
+     * Three tests here ask the kernel for an ephemeral port, hand it straight
+     * back, and then bind it again — to prove the gate released it, or to take
+     * it away from the gate on purpose. Nothing reserves it in between, and an
+     * ephemeral port is exactly what the kernel hands to the next outbound
+     * connection on the machine. Measured 2026-08-27 on a machine kept busy:
+     * ten failures in 150 runs of `:velocity:test`, 6.7%, spread over those
+     * three tests and no other — every one a `java.net.BindException` on the
+     * test's own line. That is almost certainly the flake that turned the
+     * 0.2.5 release's CI red and passed on a re-run of the identical
+     * derivation.
+     *
+     * A retry is sound here and would not be everywhere. What these tests
+     * catch — a gate that leaked its listening socket, a rebind that reports
+     * the wrong thing — is deterministic: it fails on every attempt. A stolen
+     * port fails one. So retrying separates them instead of hiding either, and
+     * twenty attempts against a one-in-fifteen race is a run that never sees
+     * it rather than one that usually does not.
+     *
+     * A BindException can only come from the test's own sockets. [ReadyGate]
+     * catches its own IOException and logs it — that is the behaviour two of
+     * these tests are asserting — so it never throws one outward.
+     *
+     * One test here has the same assumption and is deliberately left alone.
+     * `a fresh gate is closed and refuses connections` asks for a port and then
+     * asserts a *connect* to it is refused, which needs somebody to be
+     * listening rather than merely to have bound — a far rarer thing, measured
+     * at none in 20 000 attempts here and none in 300 loaded runs of this
+     * suite. Its failure would also be an AssertionError rather than a
+     * BindException, so this helper would not catch it. If it ever does fail,
+     * this is the shape of the answer.
+     */
+    private fun retryingOnAStolenPort(body: () -> Unit) {
+        val attempts = 20
+        repeat(attempts) { attempt ->
+            try {
+                body()
+                return
+            } catch (e: BindException) {
+                if (attempt == attempts - 1) {
+                    // Both readings, in the order they are worth suspecting.
+                    // At the measured one-in-fifteen, twenty losses running is
+                    // about one run in 10^23; a gate that is holding the port
+                    // fails every attempt, always. Reporting only the race
+                    // would give a real leak the one diagnosis that sends
+                    // somebody to look at their machine instead of at the
+                    // gate.
+                    throw AssertionError(
+                        "could not bind the port on any of $attempts attempts. Either the gate " +
+                            "is still holding it -- which is what this test exists to catch -- " +
+                            "or this machine lost the race for an ephemeral port $attempts " +
+                            "times running, which at the rate measured on 2026-08-27 is about " +
+                            "one run in 10^23",
+                        e,
+                    )
+                }
+            }
+        }
     }
 }
