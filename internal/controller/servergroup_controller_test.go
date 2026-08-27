@@ -4953,3 +4953,81 @@ func TestAdoptStampsEphemeralServers(t *testing.T) {
 		t.Fatal("an ephemeral server was left without a render hash: it can never be stale")
 	}
 }
+
+// requireNoneRetiring fails if any server of the group has been nominated for
+// retirement. It reads spec.retire, not the phase, because the nomination is
+// what the sizing rule decides and it lands a pass before the transition does.
+//
+// listServers is already scoped to the fixture's namespace, which matters:
+// envtest shares one control plane with no cleanup between tests, so a
+// cluster-wide List would make another test's leftovers this test's result.
+func requireNoneRetiring(t *testing.T, f *fixture, when string) {
+	t.Helper()
+	for _, s := range f.listServers(t) {
+		if s.Spec.Retire {
+			t.Fatalf("%s: server %s was asked to retire and nothing should have", when, s.Name)
+		}
+	}
+}
+
+// The milestone's acceptance criterion, driven through real reconciles rather
+// than against a hand-built ScalingInputs. Every unit test in this milestone
+// supplies PodHash itself, so none of them can fail if `size` passes the wrong
+// value at the call site -- the defect shape setup.go's comment on
+// newServerGroupReconciler describes, and one this package has been bitten by.
+func TestCapacityEditDoesNotRollAnEphemeralGroup(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	// Two occupied servers carrying the hash the group renders right now.
+	// Created directly rather than through the floor, which is 1 here.
+	a, b := "lobby-a", "lobby-b"
+	f.createServer(a)
+	f.markReadyWithPlayers(t, a, 60)
+	f.createServer(b)
+	f.markReadyWithPlayers(t, b, 60)
+
+	reconcilePass(t, f, r)
+	requireNoneRetiring(t, f, "before any edit")
+
+	// A capacity edit. metadata.generation moves; the rendered pod does not.
+	// Two servers are already up, so the raised floor needs no new one either
+	// and the only thing this can produce is a retirement -- which is exactly
+	// what must not happen.
+	f.setMinReplicas(t, 2)
+	reconcilePass(t, f, r)
+	requireNoneRetiring(t, f, "after raising minReplicas")
+
+	// The field 4b's open item was actually written about. Same class as
+	// minReplicas -- it never reaches BuildServerPod -- but asserted rather
+	// than assumed. 80 slots are free across the two servers, so 60 keeps the
+	// spare-slot rule satisfied and this edit stays a pure no-op.
+	if err := f.c.Get(f.ctx,
+		types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	f.group.Spec.Scaling.SpareSlots = 60
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("retune spareSlots: %v", err)
+	}
+	reconcilePass(t, f, r)
+	requireNoneRetiring(t, f, "after retuning spareSlots")
+
+	// An image edit. Now the rendered pod really did change, and the
+	// changeover must begin: one replacement first, and only once it is Ready
+	// does exactly one stale server retire, under maxUnavailable.
+	f.bumpPodSpec(t)
+	reconcilePass(t, f, r)
+
+	fresh := f.serversOfGeneration(t, f.group.Generation)
+	if len(fresh) != 1 {
+		t.Fatalf("the image edit created %d replacements, want exactly 1", len(fresh))
+	}
+	f.markReady(t, fresh[0].Name)
+	reconcilePass(t, f, r)
+	reconcilePass(t, f, r)
+
+	if n := f.retiringCount(t); n != 1 {
+		t.Fatalf("%d servers retiring after an image edit, want exactly 1 (maxUnavailable)", n)
+	}
+}

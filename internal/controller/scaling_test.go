@@ -475,7 +475,7 @@ func TestDecideSizeColdStartsOnlyOnce(t *testing.T) {
 	// again here would create one server per five-second pass for the whole
 	// boot.
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{staleReady("a", 60, 100, "old")},
+		Views:   []ServerView{staleReady("a", 60, 100, "old")},
 		PodHash: "current", PendingCreates: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
@@ -581,7 +581,7 @@ func TestDecideSizeDoesNotRetireWithoutAReadyReplacement(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := DecideSize(ScalingInputs{
-				Views:      []ServerView{staleReady("old", 60, 100, "old"), tc.new},
+				Views:   []ServerView{staleReady("old", 60, 100, "old"), tc.new},
 				PodHash: "current", MaxUnavailable: 1,
 				MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 			})
@@ -599,7 +599,7 @@ func TestDecideSizeRespectsTheUpdateBudget(t *testing.T) {
 	retiring.Phase = phase.Retiring
 	retiring.Retire = true
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{retiring, staleReady("second", 5, 100, "old"), ready("new", 0, 100)},
+		Views:   []ServerView{retiring, staleReady("second", 5, 100, "old"), ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
@@ -616,7 +616,7 @@ func TestDecideSizeCountsAForcedDrainAgainstTheBudget(t *testing.T) {
 	forced.Phase = phase.Draining
 	forced.Retire = true
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{forced, staleReady("second", 5, 100, "old"), ready("new", 0, 100)},
+		Views:   []ServerView{forced, staleReady("second", 5, 100, "old"), ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
@@ -632,7 +632,7 @@ func TestDecideSizeDoesNotCountAScaleDownDrainAgainstTheUpdateBudget(t *testing.
 	unrelated := staleReady("shrinking", 0, 100, "old")
 	unrelated.Phase = phase.Draining // Retire stays false
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{unrelated, staleReady("old", 5, 100, "old"), ready("new", 0, 100)},
+		Views:   []ServerView{unrelated, staleReady("old", 5, 100, "old"), ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
@@ -669,7 +669,7 @@ func TestDecideSizeRetiresEmptyServersFirstThenTheOldest(t *testing.T) {
 	empty.CreatedAt = base.Add(2 * time.Minute)
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{newer, older, empty, ready("new", 0, 100)},
+		Views:   []ServerView{newer, older, empty, ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
@@ -678,7 +678,7 @@ func TestDecideSizeRetiresEmptyServersFirstThenTheOldest(t *testing.T) {
 	}
 
 	got = DecideSize(ScalingInputs{
-		Views:      []ServerView{newer, older, ready("new", 0, 100)},
+		Views:   []ServerView{newer, older, ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
@@ -694,7 +694,7 @@ func TestDecideSizeDoesNotRetireAndShrinkInOnePass(t *testing.T) {
 	idle := staleReady("idle", 0, 100, "old")
 	idle.EmptyFor = time.Hour
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{idle, staleReady("busy", 5, 100, "old"), ready("new", 0, 100)},
+		Views:   []ServerView{idle, staleReady("busy", 5, 100, "old"), ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 		Stabilization: time.Minute,
@@ -725,7 +725,7 @@ func TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved(t *testing.T) {
 	old := staleReady("old", 0, 100, "old")
 	old.EmptyFor = time.Hour
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{old, ready("new", 0, 100)},
+		Views:   []ServerView{old, ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		PendingRetires: map[string]bool{"old": true},
 		MinReplicas:    1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
@@ -768,7 +768,7 @@ func TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart(t *testin
 	fresh.CreatedAt = base.Add(time.Hour)
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{old, fresh},
+		Views:   []ServerView{old, fresh},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 		Stabilization: 5 * time.Minute,
@@ -813,7 +813,7 @@ func TestDecideSizeDoesNotDeleteTheColdStartWhileTheRetirementBudgetIsSpent(t *t
 	fresh.CreatedAt = base.Add(time.Hour)
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{retiring, idle, fresh},
+		Views:   []ServerView{retiring, idle, fresh},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 		Stabilization: 5 * time.Minute,
@@ -850,7 +850,7 @@ func TestDecideSizeStillShedsAStaleServerForLackOfDemand(t *testing.T) {
 	idle.EmptyFor = time.Hour
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{retiring, idle, ready("new", 60, 100)},
+		Views:   []ServerView{retiring, idle, ready("new", 60, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 		Stabilization: 5 * time.Minute,
@@ -870,7 +870,7 @@ func TestDecideSizeDeletesForLackOfDemandWhenNoStaleServerRemains(t *testing.T) 
 	idle.EmptyFor = time.Hour
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{ready("busy", 60, 100), idle},
+		Views:   []ServerView{ready("busy", 60, 100), idle},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 		Stabilization: 5 * time.Minute,
@@ -901,7 +901,7 @@ func TestDecideSizeDoesNotDeleteAServerAlreadyShowingSpecRetire(t *testing.T) {
 	old.Retire = true // the patch landed; the phase write has not
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{old, ready("new", 0, 100)},
+		Views:   []ServerView{old, ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 		Stabilization: 5 * time.Minute,
@@ -930,7 +930,7 @@ func TestDecideSizeDoesNotRetireOnAReplacementNominatedForDeletion(t *testing.T)
 	booting := starting("booting") // current generation, not Ready yet
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{staleReady("old", 60, 100, "old"), ready("new", 0, 100), booting},
+		Views:   []ServerView{staleReady("old", 60, 100, "old"), ready("new", 0, 100), booting},
 		PodHash: "current", MaxUnavailable: 1,
 		PendingDeletes: map[string]bool{"new": true},
 		MinReplicas:    1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
@@ -999,7 +999,7 @@ func TestDecideSizeDoesNotRetireAnUntrustedCountFirst(t *testing.T) {
 	quiet.CreatedAt = base.Add(time.Minute)
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{quiet, busy, ready("new", 0, 100)},
+		Views:   []ServerView{quiet, busy, ready("new", 0, 100)},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
@@ -1035,7 +1035,7 @@ func TestDecideSizeDoesNotSuspendDemandForAStaleServerThatIsAlreadyGone(t *testi
 			idle.EmptyFor = time.Hour
 
 			got := DecideSize(ScalingInputs{
-				Views:      []ServerView{corpse, idle, ready("busy", 60, 100)},
+				Views:   []ServerView{corpse, idle, ready("busy", 60, 100)},
 				PodHash: "current", MaxUnavailable: 1,
 				MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 				Stabilization: 5 * time.Minute,
@@ -1067,7 +1067,7 @@ func TestDecideSizeShedsAnIdleStaleServerToMakeRoomForARefusedColdStart(t *testi
 		}(),
 	}
 	in := ScalingInputs{
-		Views:      views,
+		Views:   views,
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 2, SpareSlots: 40, MaxPlayers: 100,
 		Stabilization: 5 * time.Minute,
@@ -1145,7 +1145,7 @@ func TestDecideSizeDoesNotShedForARealShortfallEvenWhenTheColdStartIsRefused(t *
 	c.EmptyFor = 10 * time.Minute
 
 	got := DecideSize(ScalingInputs{
-		Views:      []ServerView{x, c},
+		Views:   []ServerView{x, c},
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 2, SpareSlots: 100, MaxPlayers: 100,
 		Stabilization: 5 * time.Minute,
@@ -1188,7 +1188,7 @@ func TestDecideSizeOverhangIsMaxUnavailableServersNotOne(t *testing.T) {
 		ready("a", 100, 100), ready("b", 100, 100),
 	}
 	got := DecideSize(ScalingInputs{
-		Views:      views,
+		Views:   views,
 		PodHash: "current", MaxUnavailable: 2,
 		MinReplicas: 1, MaxReplicas: ceiling, SpareSlots: 100, MaxPlayers: 100,
 	})
@@ -1217,7 +1217,7 @@ func TestDecideSizeGrantsASecondRetirementAtBudgetTwo(t *testing.T) {
 	views := []ServerView{retiring, staleReady("second", 5, 100, "old"), ready("new", 0, 100)}
 
 	got := DecideSize(ScalingInputs{
-		Views:      views,
+		Views:   views,
 		PodHash: "current", MaxUnavailable: 2,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
@@ -1230,7 +1230,7 @@ func TestDecideSizeGrantsASecondRetirementAtBudgetTwo(t *testing.T) {
 	// default budget of 1 declines, as TestDecideSizeRespectsTheUpdateBudget
 	// already pins.
 	got = DecideSize(ScalingInputs{
-		Views:      views,
+		Views:   views,
 		PodHash: "current", MaxUnavailable: 1,
 		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
 	})
