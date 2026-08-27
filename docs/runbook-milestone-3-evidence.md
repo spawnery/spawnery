@@ -1,7 +1,7 @@
 # Runbook: milestone 3's two proofs
 
 Status: written at the end of milestone 3c (2026-08-11), for a `x86_64-linux`
-machine with rootless Podman, the same shape `README.md`'s local-cluster
+machine with rootless Podman, the same shape `docs/development.md`'s local-cluster
 section documents. Corrected 2026-08-12 after the first real run against a
 `kind` cluster: six defects in the procedure below stopped that run at
 various points and are fixed in place rather than noted as a fork, and §10 is
@@ -136,7 +136,7 @@ actually print for every step below.
 
 `kind`, not `k3d`: `docs/known-issues.md` under "From milestone 2b" records
 why `k3d` cannot start against a rootless Podman socket at all. The
-`systemd-run` wrapper is required for the same reason `README.md` uses it —
+`systemd-run` wrapper is required for the same reason `docs/development.md` uses it —
 kind needs cgroup delegation kind's own check insists on a scope for, even
 when the property is already set elsewhere.
 
@@ -208,7 +208,7 @@ Expect both `ghcr.io/spawnery/paper:26.2-0.2.0` and
 
 The operator has no image of its own — out of scope for all of milestone 3,
 named as such in design §7 and again in §9 — so it runs here through `go
-run`, exactly as `README.md`'s local-cluster section does, and the same gap
+run`, exactly as `docs/development.md`'s local-cluster section does, and the same gap
 that section documents applies: a pod dials
 `spawnery-operator.minecraft.svc:9443`, and nothing creates that `Service`
 because the operator has no pod for a selector to find. `docs/known-issues.md`
@@ -225,7 +225,7 @@ nix develop -c go run ./cmd/spawnery-operator \
 Rootless Podman's `kind` network cannot be reached at its gateway address
 from inside a pod, and the one address that can reach the host
 (`host.containers.internal`, a pasta link-local address) is rejected by the
-API server in `Endpoints`. `README.md` measures the same wall and its fix —
+API server in `Endpoints`. `docs/development.md` measures the same wall and its fix —
 a one-container relay on the same Podman network — applies verbatim here:
 
 ```bash
@@ -267,7 +267,7 @@ EOF
 
 With a real Docker daemon instead of rootless Podman, skip the relay and
 point the `Endpoints` at the bridge gateway (`172.17.0.1`) directly, the way
-`README.md` notes.
+`docs/development.md` notes.
 
 **`v1 Endpoints` is deprecated as of Kubernetes 1.36**, in favour of
 `discovery.k8s.io/v1 EndpointSlice`. It still works — measured, applying it
