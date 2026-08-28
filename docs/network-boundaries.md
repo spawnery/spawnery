@@ -324,12 +324,28 @@ skipped, and a proxy whose stream is gone contributes nothing, so an operator
 that stops hearing from a proxy stops claiming to know who is online rather
 than serving a frozen list.
 
-What this does **not** do is bound who can read it. Anyone who can reach the
-operator's process — a debugger, a core dump, a memory-reading exploit — reads
-the roster, and no `NetworkPolicy` in this repository is about that. The bounds
-that exist are the ones that already existed: the agent channel is mutually
-authenticated and the namespace comes from the pod's own token rather than from
-the message, so a proxy can assert a roster for its own network and for no
-other. And as of 7b-2 the operator sends the roster to nobody — it has learned
-something it does not yet use, and the milestone that gives it a reason to
-share it is the one that has to decide who may ask.
+What this does **not** do is bound who can read it inside the operator. Anyone
+who can reach that process — a debugger, a core dump, a memory-reading
+exploit — reads the roster, and no `NetworkPolicy` in this repository is about
+that. The bounds that exist are the ones that already existed: the agent
+channel is mutually authenticated and the namespace comes from the pod's own
+token rather than from the message, so a proxy can assert a roster for its own
+network and for no other.
+
+**And since 7b-3 the operator sends it onward.** Every agent in a namespace —
+every Velocity proxy and every Paper backend — receives every player in that
+namespace, by name and UUID, on connect and on each resync, as part of the
+`NetworkState` the plugin API is built on.
+
+That is a widening and is written down as one. A compromised game server pod
+now learns who is on the whole network, where before it could infer its own
+players and nobody else's. Two things bound it and neither is new: the
+namespace is still the horizon, because the state is built from a List scoped
+to the pod's own authenticated namespace; and a backend still cannot ask for
+anything, because the channel carries no request from an agent at all.
+
+What is **not** yet decided is whether a *plugin* should need a permission to
+read the roster. Today nothing has one — 7b-3 delivers the message and no
+agent stores it. The milestone that makes it readable is the milestone that
+has to answer that question, and this paragraph is here so it is answered
+deliberately rather than by the first implementation that compiles.
