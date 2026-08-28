@@ -89,6 +89,10 @@ type ServerGroupReconciler struct {
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/status,verbs=update
+// No create and no update on scaleboosts. This milestone reads them and sweeps
+// the expired ones; the thing that makes one is a command that does not exist
+// yet, and a grant with no caller is one nobody can justify when they find it.
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=scaleboosts,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
