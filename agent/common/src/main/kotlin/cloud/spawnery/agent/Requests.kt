@@ -28,16 +28,12 @@ import java.util.concurrent.atomic.AtomicLong
  * `ConcurrentHashMap` and an `AtomicLong` are the whole of the coordination,
  * and there is no lock because none of these callers may block.
  *
- * @param send builds and sends the message for an id. Called inside [start],
- *   after the entry exists, so an answer that arrives before send returns
- *   still finds something to complete.
  * @param timeoutMillis how long an unanswered request lives. The operator
  *   answers from memory, so this bounds a lost message rather than a slow one.
  * @param clock the time source, injectable so a test asserts a deadline
  *   instead of sleeping through one.
  */
-class Requests<Req>(
-    private val send: (Long) -> Unit,
+class Requests(
     private val timeoutMillis: Long,
     private val clock: () -> Long,
 ) {
@@ -46,9 +42,16 @@ class Requests<Req>(
     private val counter = AtomicLong(0)
     private val pending = ConcurrentHashMap<Long, Pending>()
 
-    /** Starts a request and returns the future its answer completes. */
+    /**
+     * Starts a request and returns the future its answer completes.
+     *
+     * [send] is per call and not per instance, because the payload differs
+     * every time while the correlation does not -- and because the message
+     * that carries it is the platform's, which is the one thing this class
+     * must not know.
+     */
     @Suppress("UNCHECKED_CAST")
-    fun <T> start(): CompletableFuture<T> {
+    fun <T> start(send: (Long) -> Unit): CompletableFuture<T> {
         val id = counter.incrementAndGet()
         val entry = Pending(CompletableFuture(), clock() + timeoutMillis)
         // Entered before the send, so an answer that overtakes send's return

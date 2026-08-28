@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.AgentRole
+import cloud.spawnery.agent.CloudConnector
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.pb.AgentServiceGrpc
@@ -94,6 +95,8 @@ class ProxyRole(
      * gives about position.
      */
     private val mirror: NetworkMirror,
+    /** Where an answer to this agent's own request goes. Last, as ever. */
+    private val connector: CloudConnector,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
      * Whether a `FullSync` has ever been applied, paired with the last
@@ -396,6 +399,10 @@ class ProxyRole(
                     message.sessionDeadline.hardDeadlineSeconds,
                 )
 
+            OperatorToProxy.MessageCase.CLOUD_RESPONSE -> {
+                connector.answer(message.cloudResponse)
+                Directive.None
+            }
             OperatorToProxy.MessageCase.NETWORK_STATE -> {
                 // The whole effect is the side effect, exactly as on the
                 // server side. It sits inside the same runCatching every

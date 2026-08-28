@@ -263,8 +263,11 @@ func TestTheStubNeverClosesAStreamOfItsOwnAccord(t *testing.T) {
 	go func() {
 		done <- serveSession[agentpb.ServerMessage, agentpb.OperatorToServer](
 			served, stream, nil, nil,
-			func(of func(map[string]any) map[string]any, _ *agentpb.ServerMessage) {
+			func(of func(map[string]any) map[string]any, _ *agentpb.ServerMessage) *agentpb.OperatorToServer {
 				served.events.record("observed", of(map[string]any{}))
+				// nil: this test is about the receive loop surviving, not
+				// about an answer. serveSession sends only a non-nil return.
+				return nil
 			})
 	}()
 

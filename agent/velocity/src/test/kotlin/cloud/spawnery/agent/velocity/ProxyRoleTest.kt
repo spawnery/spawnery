@@ -2,6 +2,7 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.NetworkMirror
+import cloud.spawnery.agent.dormantConnector
 import cloud.spawnery.agent.pb.DrainPlayers
 import cloud.spawnery.agent.pb.FullSync
 import cloud.spawnery.agent.pb.NetworkState
@@ -62,6 +63,7 @@ class ProxyRoleTest {
         onSetReady = { },
         log = { message, error -> logs += message to error },
         mirror = mirror,
+        connector = dormantConnector(),
     )
 
     @Test
@@ -533,6 +535,7 @@ class ProxyRoleTest {
             onSetReady = onSetReady,
             log = { message, error -> logs += message to error },
             mirror = mirror,
+            connector = dormantConnector(),
         )
 
     private fun backend(name: String, address: String, group: String): PbServer =
@@ -585,6 +588,7 @@ class ProxyRoleTest {
             onSetReady = { },
             log = { message, error -> logs += message to error },
             mirror = NetworkMirror(),
+            connector = dormantConnector(),
         )
 
         val reports = role.extraReports()

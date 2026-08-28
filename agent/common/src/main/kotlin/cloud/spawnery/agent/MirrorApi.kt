@@ -2,11 +2,14 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.CloudPlayer
 import cloud.spawnery.agent.api.Group
+import cloud.spawnery.agent.api.ConnectResult
 import cloud.spawnery.agent.api.Self
+import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.api.ServerInfo
 import cloud.spawnery.agent.api.SpawneryApi
 import java.util.Optional
 import java.util.UUID
+import java.util.concurrent.CompletionStage
 
 /**
  * The one implementation of [SpawneryApi], for both platforms.
@@ -32,6 +35,11 @@ import java.util.UUID
 class MirrorApi(
     private val mirror: NetworkMirror,
     private val self: Self,
+    /**
+     * How a request reaches the operator. Last, for the reason every other
+     * added parameter in these packages is.
+     */
+    private val connector: CloudConnector,
 ) : SpawneryApi {
     override fun self(): Self = self
 
@@ -49,4 +57,9 @@ class MirrorApi(
 
     override fun player(id: UUID): Optional<CloudPlayer> =
         Optional.ofNullable(mirror.players().firstOrNull { it.id() == id })
+
+    // Delegated whole. Nothing here asks which side it is on, which is the
+    // invariant this class exists to hold.
+    override fun connect(player: UUID, to: Target): CompletionStage<ConnectResult> =
+        connector.connect(player, to)
 }

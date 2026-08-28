@@ -486,3 +486,63 @@ func TestAProxyRosterReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing
 		t.Errorf("roster in another namespace = %+v, want none", got)
 	}
 }
+
+// A connect request over a real stream, answered on the same stream.
+//
+// This is the wire, not the jar: nothing in either agent calls connect until a
+// plugin does, and the first caller is the /cloud command a later milestone
+// builds. What it proves is that a CloudRequest survives the channel and comes
+// back correlated -- which no unit test on either side can see, because both
+// are built from the same generated code and neither crosses a socket.
+func TestAConnectRequestIsAnsweredOnTheStreamThatAsked(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.proxyPod("gateway-aaaa")
+	stream, done := dialProxy(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("the opening message never arrived: %v", err)
+	}
+
+	if err := stream.Send(&agentpb.ProxyMessage{
+		Message: &agentpb.ProxyMessage_CloudRequest{
+			CloudRequest: &agentpb.CloudRequest{
+				Id: 7,
+				Request: &agentpb.CloudRequest_Connect{
+					Connect: &agentpb.ConnectRequest{
+						PlayerUuid: "u-nobody",
+						Target:     &agentpb.ConnectRequest_Server{Server: "lobby-0"},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send the request: %v", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		if resp := msg.GetCloudResponse(); resp != nil {
+			// The id it minted, echoed. Without that a plugin's future would
+			// never complete, and the failure would look like a timeout.
+			if resp.GetId() != 7 {
+				t.Fatalf("answered id %d, want the 7 the agent asked with", resp.GetId())
+			}
+			// NOT_FOUND, because no proxy has reported a roster: the player
+			// does not exist on this network. That it is a refusal and not a
+			// silence is the point.
+			if resp.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
+				t.Fatalf("reason = %v, want NOT_FOUND for a player nobody reported",
+					resp.GetError().GetReason())
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no CloudResponse arrived within ten seconds")
+		}
+	}
+}

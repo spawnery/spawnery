@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.AgentRole
+import cloud.spawnery.agent.CloudConnector
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.pb.AgentServiceGrpc
@@ -25,6 +26,8 @@ class ServerRole(
      * silently, wherever the types happen to match.
      */
     private val mirror: NetworkMirror,
+    /** Where an answer to this agent's own request goes. Last, as ever. */
+    private val connector: CloudConnector,
 ) : AgentRole<ServerMessage, OperatorToServer> {
     override fun open(
         channel: ManagedChannel,
@@ -69,6 +72,10 @@ class ServerRole(
                 // needs no branch for it: `else -> Directive.None` is already
                 // the right answer to the only question that copy models.
                 mirror.apply(message.networkState)
+                Directive.None
+            }
+            OperatorToServer.MessageCase.CLOUD_RESPONSE -> {
+                connector.answer(message.cloudResponse)
                 Directive.None
             }
             else -> Directive.None

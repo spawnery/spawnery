@@ -71,10 +71,36 @@ throws on an unrecognised phase breaks on an operator upgrade that had nothing
 to do with your plugin. Read a phase with `ServerPhase.fromWire`, which never
 throws, rather than `valueOf`, which does.
 
+## Moving a player
+
+```java
+api.connect(player.getUniqueId(), Target.group("lobby"))
+   .thenAccept(r -> getLogger().info("ordered: " + r.ordered() + " -> " + r.target()))
+   .exceptionally(e -> { getLogger().warning("could not move them: " + e); return null; });
+```
+
+`Target.server(...)` says exactly where. `Target.group(...)` says "wherever
+that group has room" and lets the operator pick, which it can do better than
+you can: it compares every backend's occupancy without racing the mirror.
+
+**It returns a `CompletionStage` on both platforms**, including the proxy where
+it need not. Following the platform would make this synchronous on one side
+and not the other, and moving a plugin between them would be a rewrite rather
+than a recompile.
+
+**`ordered` is not `moved`.** The proxy that carries the move does not wait on
+Velocity's own future — blocking a network callback on a round trip to a
+backend is a cost the agent cannot pay — so nothing in this system can tell you
+the player arrived. If you need to know, read `player(uuid)` a moment later.
+
+A failure is ordinary. A player who logged out between your call and the
+operator reading it fails with `NOT_FOUND`; so does a target that is not
+routable yet. Handle it as a normal outcome rather than as a bug.
+
 ## What is not here yet
 
-Reading only. Subscribing to events, moving a player between backends, and
-starting or stopping servers are designed
+Reading and moving a player. Subscribing to events, and starting or stopping
+servers, are designed
 ([`docs/superpowers/specs/2026-08-27-cloud-api-design.md`](../../docs/superpowers/specs/2026-08-27-cloud-api-design.md))
 and not yet built. Methods will be **added** to `SpawneryApi`, never changed:
 plugins consume this interface and do not implement it, so an addition breaks

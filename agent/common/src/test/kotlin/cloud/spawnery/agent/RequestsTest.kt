@@ -14,12 +14,15 @@ class RequestsTest {
     private val sent = mutableListOf<Long>()
 
     private fun requests(timeoutMillis: Long = 1_000) =
-        Requests<Long>(send = { id -> sent += id }, timeoutMillis = timeoutMillis, clock = { now })
+        Requests(timeoutMillis = timeoutMillis, clock = { now })
+
+    private fun <T> Requests.ask(): java.util.concurrent.CompletableFuture<T> =
+        start { id -> sent += id }
 
     @Test
     fun `an answer completes the future that asked`() {
         val r = requests()
-        val pending: CompletableFuture<String> = r.start()
+        val pending: CompletableFuture<String> = r.ask()
 
         r.complete(sent.single(), "moved")
 
@@ -29,8 +32,8 @@ class RequestsTest {
     @Test
     fun `two outstanding requests are told apart by their id`() {
         val r = requests()
-        val first: CompletableFuture<String> = r.start()
-        val second: CompletableFuture<String> = r.start()
+        val first: CompletableFuture<String> = r.ask()
+        val second: CompletableFuture<String> = r.ask()
 
         // Answered out of order, which is the ordinary case: the operator
         // resolves two requests against different objects at different speeds.
@@ -55,7 +58,7 @@ class RequestsTest {
     @Test
     fun `a request that is never answered fails at its deadline`() {
         val r = requests(timeoutMillis = 1_000)
-        val pending: CompletableFuture<String> = r.start()
+        val pending: CompletableFuture<String> = r.ask()
 
         now += 1_001
         r.expire()
@@ -68,7 +71,7 @@ class RequestsTest {
         // The other half of the case above: an expire that fired early would
         // fail a request whose answer is still on its way.
         val r = requests(timeoutMillis = 1_000)
-        val pending: CompletableFuture<String> = r.start()
+        val pending: CompletableFuture<String> = r.ask()
 
         now += 999
         r.expire()
@@ -80,8 +83,8 @@ class RequestsTest {
     @Test
     fun `a stream change fails every outstanding request rather than retrying it`() {
         val r = requests()
-        val first: CompletableFuture<String> = r.start()
-        val second: CompletableFuture<String> = r.start()
+        val first: CompletableFuture<String> = r.ask()
+        val second: CompletableFuture<String> = r.ask()
         val sentBefore = sent.size
 
         r.failAll(IllegalStateException("stream displaced"))
@@ -97,9 +100,9 @@ class RequestsTest {
         // second one with somebody else's result, which is worse than either
         // failing.
         val r = requests()
-        val first: CompletableFuture<String> = r.start()
+        val first: CompletableFuture<String> = r.ask()
         r.complete(sent[0], "first")
-        r.start<String>()
+        r.ask<String>()
 
         assertEquals(2, sent.distinct().size)
         assertEquals("first", first.get())

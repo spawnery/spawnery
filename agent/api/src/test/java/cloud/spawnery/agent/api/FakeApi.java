@@ -19,6 +19,8 @@ package cloud.spawnery.agent.api;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
 
 /** An implementation that answers nothing, for tests about the holder. */
 final class FakeApi implements SpawneryApi {
@@ -37,4 +39,9 @@ final class FakeApi implements SpawneryApi {
     @Override public Optional<ServerInfo> server(String name) { return Optional.empty(); }
     @Override public List<CloudPlayer> players() { return List.of(); }
     @Override public Optional<CloudPlayer> player(UUID id) { return Optional.empty(); }
+
+    @Override
+    public CompletionStage<ConnectResult> connect(UUID player, Target to) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
 }

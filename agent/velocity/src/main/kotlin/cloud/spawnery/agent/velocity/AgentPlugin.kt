@@ -1,6 +1,8 @@
 package cloud.spawnery.agent.velocity
 
+import cloud.spawnery.agent.CloudConnector
 import cloud.spawnery.agent.MirrorApi
+import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.api.ProxySelf
 import cloud.spawnery.agent.api.Spawnery
@@ -8,6 +10,7 @@ import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
+import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerJoinedServer
 import cloud.spawnery.agent.pb.ProxyMessage
@@ -82,6 +85,22 @@ class AgentPlugin @Inject constructor(
 
     /** What the plugin API reads from. See [MirrorApi]. */
     private val mirror = NetworkMirror()
+
+    /**
+     * How a plugin's connect call reaches the operator. The one lambda is the
+     * whole platform seam -- see the Paper plugin's own for the counterpart.
+     */
+    private val connector = CloudConnector(
+        Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = System::currentTimeMillis),
+    ) { id, request ->
+        val loop = this.loop
+            ?: throw IllegalStateException("this agent has no session to the operator")
+        loop.send(
+            ProxyMessage.newBuilder()
+                .setCloudRequest(CloudRequest.newBuilder().setId(id).setConnect(request))
+                .build(),
+        )
+    }
 
     /**
      * Everything below is null while the agent is dormant, and that is what
@@ -188,7 +207,7 @@ class AgentPlugin @Inject constructor(
             override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
             override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
         }
-        Spawnery.install(MirrorApi(mirror, self))
+        Spawnery.install(MirrorApi(mirror, self, connector))
         logger.info(
             "spawnery API installed for network {} group {}",
             self.network(),
@@ -211,6 +230,7 @@ class AgentPlugin @Inject constructor(
             onSetReady = { ready -> if (ready) gate.open() else gate.close() },
             log = ::warn,
             mirror = mirror,
+            connector = connector,
         )
 
         val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->

@@ -339,10 +339,25 @@ namespace, by name and UUID, on connect and on each resync, as part of the
 
 That is a widening and is written down as one. A compromised game server pod
 now learns who is on the whole network, where before it could infer its own
-players and nobody else's. Two things bound it and neither is new: the
-namespace is still the horizon, because the state is built from a List scoped
-to the pod's own authenticated namespace; and a backend still cannot ask for
-anything, because the channel carries no request from an agent at all.
+players and nobody else's. The namespace is still the horizon, because the state is built from a List
+scoped to the pod's own authenticated namespace.
+
+**And since 7b-5 an agent can ask for something.** It can ask that a player be
+moved, and that is the whole of it: no verb creates, deletes or resizes
+anything. A compromised pod can therefore shuffle players around its own
+network — which is new, and is a real thing to be able to do — and cannot
+reach another network at all.
+
+That last part is structural rather than checked. A request names a player and
+a target and carries no namespace, and the operator resolves both inside the
+namespace the pod's own ServiceAccount token authenticated. There is no field
+to put another network's name in, so this is not a guard a later edit can drop.
+
+What bounds the rest is a rate: eight requests back to back per pod, one token
+back per second, counted per pod so that a noisy one cannot spend another's
+budget. `spawnery_agent_requests_refused_total` publishes the refusals by
+reason, and a rising `RATE_LIMITED` is the shape a misbehaving or compromised
+plugin has.
 
 **A plugin needs no permission to read it, and cannot be given one.** That
 looked like an open decision when 7b-3 wrote this section and turned out not

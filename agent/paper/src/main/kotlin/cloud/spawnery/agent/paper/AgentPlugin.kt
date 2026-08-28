@@ -1,6 +1,8 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.CloudConnector
 import cloud.spawnery.agent.MirrorApi
+import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.api.ServerSelf
 import cloud.spawnery.agent.api.Spawnery
@@ -9,6 +11,7 @@ import cloud.spawnery.agent.Environment
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
+import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.OperatorToServer
 import cloud.spawnery.agent.pb.ServerMessage
 import org.bukkit.Bukkit
@@ -33,7 +36,26 @@ import java.util.logging.Level
 class AgentPlugin : JavaPlugin(), Listener {
     private val state = ServerState()
     private val mirror = NetworkMirror()
-    private val role = ServerRole(state, mirror)
+
+    /**
+     * How a plugin's connect call reaches the operator.
+     *
+     * The one lambda is the whole platform seam: it wraps the request in a
+     * ServerMessage, which is the only thing about this that a Paper agent
+     * knows and a Velocity one does not.
+     */
+    private val connector = CloudConnector(
+        Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = System::currentTimeMillis),
+    ) { id, request ->
+        val loop = this.loop
+            ?: throw IllegalStateException("this agent has no session to the operator")
+        loop.send(
+            ServerMessage.newBuilder()
+                .setCloudRequest(CloudRequest.newBuilder().setId(id).setConnect(request))
+                .build(),
+        )
+    }
+    private val role = ServerRole(state, mirror, connector)
     private lateinit var scheduler: ScheduledExecutorService
     private var loop: SessionLoop<ServerMessage, OperatorToServer>? = null
 
@@ -63,7 +85,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                     override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
                     override fun slots(): Int = state.slots
                 }
-                Spawnery.install(MirrorApi(mirror, self))
+                Spawnery.install(MirrorApi(mirror, self, connector))
                 // Info and not fine. This line is how a server owner confirms
                 // the API is there for their own plugins, and it is the only
                 // outward sign that the install path ran at all: installing

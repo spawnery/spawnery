@@ -19,6 +19,7 @@ package cloud.spawnery.agent.api;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CompletionStage;
 
 /**
  * What a plugin can ask the cloud, from either side of the proxy.
@@ -62,4 +63,25 @@ public interface SpawneryApi {
 
     /** One player by UUID, empty if they are not on this network. */
     Optional<CloudPlayer> player(UUID id);
+
+    /**
+     * Asks the operator to move a player.
+     *
+     * <p><b>Asynchronous on both platforms, including the one where it need
+     * not be.</b> On a proxy this could answer locally; on a backend it is a
+     * round trip through the operator. Following the platform would make the
+     * signature synchronous on one side and not the other, and a plugin author
+     * moving between them would have to rewrite rather than recompile. So it
+     * is the shape of the harder case on both.
+     *
+     * <p>The stage fails rather than returning a result when the operator
+     * refuses or cannot answer — including when the stream was renewed while
+     * the request was in flight, which is failed rather than retried because
+     * only you know whether moving that player twice is safe.
+     *
+     * <p>A player who logged out between your call and the operator reading it
+     * is an ordinary failure and not a bug. So is a target that is not
+     * routable yet.
+     */
+    CompletionStage<ConnectResult> connect(UUID player, Target to);
 }
