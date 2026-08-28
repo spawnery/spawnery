@@ -344,8 +344,23 @@ namespace is still the horizon, because the state is built from a List scoped
 to the pod's own authenticated namespace; and a backend still cannot ask for
 anything, because the channel carries no request from an agent at all.
 
-What is **not** yet decided is whether a *plugin* should need a permission to
-read the roster. Today nothing has one — 7b-3 delivers the message and no
-agent stores it. The milestone that makes it readable is the milestone that
-has to answer that question, and this paragraph is here so it is answered
-deliberately rather than by the first implementation that compiles.
+**A plugin needs no permission to read it, and cannot be given one.** That
+looked like an open decision when 7b-3 wrote this section and turned out not
+to be a decision at all. Bukkit permissions attach to a `CommandSender` and
+Velocity's to a `CommandSource`; both are about a player or the console, and
+neither platform has a `Plugin.hasPermission`. A plugin calling
+`Spawnery.api()` presents no identity there is anything to check.
+
+A gate would have to be invented — a list of trusted plugin ids, say — and it
+would be worth nothing. Any plugin on the server already reads the platform's
+own player list, loads classes, and calls whatever the JVM exposes; a check it
+could trivially route around is a check that only reassures.
+
+So the boundary is the one that already exists and is already written down:
+**who may install a plugin**, which is who may create a pod in that namespace,
+which [`charts/spawnery/README.md`](../charts/spawnery/README.md) tells an
+operator to treat as one trust domain.
+
+The `/cloud` command is the different case and does gate. A command has a
+`CommandSource`, so `spawnery.cloud.read` is expressible there, and that is
+where the permission belongs.

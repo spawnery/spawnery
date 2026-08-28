@@ -41,6 +41,16 @@ is no call that reaches another network, and that is structural rather than a
 check: the agent's own credentials are a pod-bound ServiceAccount token, so
 there is nothing to widen.
 
+Reads need no permission, and there is no way to require one: Bukkit and
+Velocity attach permissions to a player or the console, never to a plugin, so
+a plugin calling this API presents no identity to check. A plugin already
+reads the platform's own player list; what this adds is the rest of the
+network. The boundary is who may install a plugin on the server, which is the
+same person who may create a pod in the namespace.
+
+`/cloud` is different and does check a permission, because a command has
+somebody running it.
+
 ## What is a value and what is a moment
 
 `ServerInfo`, `Group` and `CloudPlayer` are records describing what the
