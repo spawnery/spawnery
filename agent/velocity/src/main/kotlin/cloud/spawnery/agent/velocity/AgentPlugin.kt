@@ -182,15 +182,17 @@ class AgentPlugin @Inject constructor(
         //
         // Every value comes from what the operator already puts on the pod --
         // no second reader of the same variables, and nothing guessed.
-        Spawnery.install(
-            MirrorApi(
-                mirror,
-                object : ProxySelf {
-                    override fun name(): String = System.getenv("SPAWNERY_PROXY") ?: ""
-                    override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
-                    override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
-                },
-            ),
+        // Hoisted for the reason the Paper plugin gives at the same point.
+        val self = object : ProxySelf {
+            override fun name(): String = System.getenv("SPAWNERY_PROXY") ?: ""
+            override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
+            override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
+        }
+        Spawnery.install(MirrorApi(mirror, self))
+        logger.info(
+            "spawnery API installed for network {} group {}",
+            self.network(),
+            self.group(),
         )
         val drain = Drain(players, router, ::warn)
         this.drain = drain

@@ -54,16 +54,22 @@ class AgentPlugin : JavaPlugin(), Listener {
                 // pod -- no second reader of the same variables, and nothing
                 // guessed: a missing one is empty rather than derived from a
                 // hostname.
-                Spawnery.install(
-                    MirrorApi(
-                        mirror,
-                        object : ServerSelf {
-                            override fun name(): String = System.getenv("SPAWNERY_SERVER") ?: ""
-                            override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
-                            override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
-                            override fun slots(): Int = state.slots
-                        },
-                    ),
+                // Hoisted, so the line below names the same object the API
+                // was built from rather than a second construction that could
+                // drift from it.
+                val self = object : ServerSelf {
+                    override fun name(): String = System.getenv("SPAWNERY_SERVER") ?: ""
+                    override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
+                    override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
+                    override fun slots(): Int = state.slots
+                }
+                Spawnery.install(MirrorApi(mirror, self))
+                // Info and not fine. This line is how a server owner confirms
+                // the API is there for their own plugins, and it is the only
+                // outward sign that the install path ran at all: installing
+                // leaves no trace on the wire, so nothing upstream can see it.
+                logger.info(
+                    "spawnery API installed for network ${self.network()} group ${self.group()}",
                 )
 
                 scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
