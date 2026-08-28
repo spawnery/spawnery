@@ -44,18 +44,15 @@ class AgentPlugin : JavaPlugin(), Listener {
      *
      * The one lambda is the whole platform seam: it wraps the request in a
      * ServerMessage, which is the only thing about this that a Paper agent
-     * knows and a Velocity one does not.
+     * knows and a Velocity one does not. It does not know which request it is
+     * carrying, and that is why adding a verb touches no platform file.
      */
     private val connector = CloudConnector(
         Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = System::currentTimeMillis),
-    ) { id, request ->
+    ) { request ->
         val loop = this.loop
             ?: throw IllegalStateException("this agent has no session to the operator")
-        loop.send(
-            ServerMessage.newBuilder()
-                .setCloudRequest(CloudRequest.newBuilder().setId(id).setConnect(request))
-                .build(),
-        )
+        loop.send(ServerMessage.newBuilder().setCloudRequest(request).build())
     }
     private val role = ServerRole(state, mirror, connector)
     private lateinit var scheduler: ScheduledExecutorService

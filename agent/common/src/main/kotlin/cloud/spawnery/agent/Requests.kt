@@ -57,9 +57,32 @@ class Requests(
         // Entered before the send, so an answer that overtakes send's return
         // finds an entry rather than being dropped as unknown.
         pending[id] = entry
-        send(id)
+        try {
+            send(id)
+        } catch (failure: Throwable) {
+            // A send that throws fails the future rather than the caller.
+            //
+            // SpawneryApi promises that the stage carries the failure, and an
+            // agent between sessions is exactly when send throws -- so without
+            // this the one documented failure mode would arrive by the one
+            // route the documentation rules out. It reaches a plugin as an
+            // exception from a method that returned a future, and a command
+            // handler as a raw throw into the platform's dispatcher, which
+            // shows a player "an internal error occurred" instead of the
+            // sentence the operator would have sent.
+            fail(id, failure)
+        }
         return entry.future as CompletableFuture<T>
     }
+
+    /**
+     * How many requests are still waiting for an answer.
+     *
+     * For tests: a leak here is invisible from the outside -- every future
+     * completes on its deadline either way -- and an entry per call on a
+     * dormant agent is exactly the shape of leak nothing else would notice.
+     */
+    fun outstanding(): Int = pending.size
 
     /** Completes the request with this id, or does nothing if none is waiting. */
     fun complete(id: Long, value: Any?) {

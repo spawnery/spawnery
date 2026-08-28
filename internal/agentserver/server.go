@@ -222,6 +222,10 @@ type Options struct {
 	// CloudRequest and refused in New with the two fan-outs, for the reason
 	// they are: a nil here is a panic inside a session rather than at start.
 	State netstate.Source
+	// Writer applies the requests that change something, as State answers the
+	// ones that only look. Required for the same reason State is, and narrow
+	// on purpose: see ClusterWriter.
+	Writer ClusterWriter
 	// ReportInterval is how often an agent should report its player count.
 	ReportInterval time.Duration
 	// RenewAfter is when an agent should open its next stream — before the
@@ -278,6 +282,9 @@ func New(opts Options) *Server {
 	}
 	if opts.State.Reader == nil {
 		panic("agentserver: no network state source")
+	}
+	if opts.Writer == nil {
+		panic("agentserver: no cluster writer")
 	}
 	return &Server{opts: opts, sessions: newSessions(), requestRate: newRequestLimiter(opts.Clock)}
 }
@@ -589,18 +596,11 @@ func (s *Server) handle(
 			logger.V(1).Info("discarded a player count", "reason", err.Error())
 		}
 	case *agentpb.ServerMessage_CloudRequest:
-		if c := m.CloudRequest.GetConnect(); c != nil {
-			resp := s.answerConnect(ctx, logger, id, m.CloudRequest.GetId(), c)
-			return &agentpb.OperatorToServer{
-				Message: &agentpb.OperatorToServer_CloudResponse{CloudResponse: resp},
-			}
-		}
-		// Answered rather than ignored, for the reason handleProxy gives.
+		// Every request answered, including one this operator does not know:
+		// see answerCloudRequest for why silence is the expensive option.
 		return &agentpb.OperatorToServer{
 			Message: &agentpb.OperatorToServer_CloudResponse{
-				CloudResponse: refuse(m.CloudRequest.GetId(),
-					agentpb.RequestError_REASON_UNSPECIFIED,
-					"this operator does not know that request"),
+				CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
 			},
 		}
 	}
@@ -764,21 +764,9 @@ func (s *Server) handleProxy(
 		logger.V(1).Info("player joined a server",
 			"player", m.PlayerJoinedServer.GetPlayer(), "server", m.PlayerJoinedServer.GetServer())
 	case *agentpb.ProxyMessage_CloudRequest:
-		if c := m.CloudRequest.GetConnect(); c != nil {
-			resp := s.answerConnect(ctx, logger, id, m.CloudRequest.GetId(), c)
-			return &agentpb.OperatorToProxy{
-				Message: &agentpb.OperatorToProxy_CloudResponse{CloudResponse: resp},
-			}
-		}
-		// A request kind this operator does not know. Answered rather than
-		// ignored: an agent waiting on an id it will never hear about holds
-		// its future until the deadline, and the deadline is the slowest way
-		// to learn that an operator is older than a plugin.
 		return &agentpb.OperatorToProxy{
 			Message: &agentpb.OperatorToProxy_CloudResponse{
-				CloudResponse: refuse(m.CloudRequest.GetId(),
-					agentpb.RequestError_REASON_UNSPECIFIED,
-					"this operator does not know that request"),
+				CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
 			},
 		}
 	}

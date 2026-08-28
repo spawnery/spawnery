@@ -31,5 +31,20 @@ public interface CloudRequestOrBuilder extends
    */
   cloud.spawnery.agent.pb.ConnectRequestOrBuilder getConnectOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   * @return Whether the retire field is set.
+   */
+  boolean hasRetire();
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   * @return The retire.
+   */
+  cloud.spawnery.agent.pb.RetireRequest getRetire();
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   */
+  cloud.spawnery.agent.pb.RetireRequestOrBuilder getRetireOrBuilder();
+
   cloud.spawnery.agent.pb.CloudRequest.RequestCase getRequestCase();
 }

@@ -71,6 +71,7 @@ private static final long serialVersionUID = 0L;
       implements com.google.protobuf.Internal.EnumLite,
           com.google.protobuf.AbstractMessage.InternalOneOfEnum {
     CONNECT(2),
+    RETIRE(3),
     REQUEST_NOT_SET(0);
     private final int value;
     private RequestCase(int value) {
@@ -89,6 +90,7 @@ private static final long serialVersionUID = 0L;
     public static RequestCase forNumber(int value) {
       switch (value) {
         case 2: return CONNECT;
+        case 3: return RETIRE;
         case 0: return REQUEST_NOT_SET;
         default: return null;
       }
@@ -146,6 +148,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.ConnectRequest.getDefaultInstance();
   }
 
+  public static final int RETIRE_FIELD_NUMBER = 3;
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   * @return Whether the retire field is set.
+   */
+  @java.lang.Override
+  public boolean hasRetire() {
+    return requestCase_ == 3;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   * @return The retire.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.RetireRequest getRetire() {
+    if (requestCase_ == 3) {
+       return (cloud.spawnery.agent.pb.RetireRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.RetireRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.RetireRequestOrBuilder getRetireOrBuilder() {
+    if (requestCase_ == 3) {
+       return (cloud.spawnery.agent.pb.RetireRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.RetireRequest.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -166,6 +199,9 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 2) {
       output.writeMessage(2, (cloud.spawnery.agent.pb.ConnectRequest) request_);
     }
+    if (requestCase_ == 3) {
+      output.writeMessage(3, (cloud.spawnery.agent.pb.RetireRequest) request_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -177,6 +213,10 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 2) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(2, (cloud.spawnery.agent.pb.ConnectRequest) request_);
+    }
+    if (requestCase_ == 3) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(3, (cloud.spawnery.agent.pb.RetireRequest) request_);
     }
     return size;
   }
@@ -210,6 +250,10 @@ private static final long serialVersionUID = 0L;
         if (!getConnect()
             .equals(other.getConnect())) return false;
         break;
+      case 3:
+        if (!getRetire()
+            .equals(other.getRetire())) return false;
+        break;
       case 0:
       default:
     }
@@ -231,6 +275,10 @@ private static final long serialVersionUID = 0L;
       case 2:
         hash = (37 * hash) + CONNECT_FIELD_NUMBER;
         hash = (53 * hash) + getConnect().hashCode();
+        break;
+      case 3:
+        hash = (37 * hash) + RETIRE_FIELD_NUMBER;
+        hash = (53 * hash) + getRetire().hashCode();
         break;
       case 0:
       default:
@@ -386,6 +434,9 @@ private static final long serialVersionUID = 0L;
       if (connectBuilder_ != null) {
         connectBuilder_.clear();
       }
+      if (retireBuilder_ != null) {
+        retireBuilder_.clear();
+      }
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -434,6 +485,10 @@ private static final long serialVersionUID = 0L;
           connectBuilder_ != null) {
         result.request_ = connectBuilder_.build();
       }
+      if (requestCase_ == 3 &&
+          retireBuilder_ != null) {
+        result.request_ = retireBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -454,6 +509,10 @@ private static final long serialVersionUID = 0L;
       switch (other.getRequestCase()) {
         case CONNECT: {
           mergeConnect(other.getConnect());
+          break;
+        }
+        case RETIRE: {
+          mergeRetire(other.getRetire());
           break;
         }
         case REQUEST_NOT_SET: {
@@ -498,6 +557,13 @@ private static final long serialVersionUID = 0L;
               requestCase_ = 2;
               break;
             } // case 18
+            case 26: {
+              input.readMessage(
+                  internalGetRetireFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 3;
+              break;
+            } // case 26
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -702,6 +768,148 @@ private static final long serialVersionUID = 0L;
       requestCase_ = 2;
       onChanged();
       return connectBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.RetireRequest, cloud.spawnery.agent.pb.RetireRequest.Builder, cloud.spawnery.agent.pb.RetireRequestOrBuilder> retireBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     * @return Whether the retire field is set.
+     */
+    @java.lang.Override
+    public boolean hasRetire() {
+      return requestCase_ == 3;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     * @return The retire.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.RetireRequest getRetire() {
+      if (retireBuilder_ == null) {
+        if (requestCase_ == 3) {
+          return (cloud.spawnery.agent.pb.RetireRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.RetireRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 3) {
+          return retireBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.RetireRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     */
+    public Builder setRetire(cloud.spawnery.agent.pb.RetireRequest value) {
+      if (retireBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        retireBuilder_.setMessage(value);
+      }
+      requestCase_ = 3;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     */
+    public Builder setRetire(
+        cloud.spawnery.agent.pb.RetireRequest.Builder builderForValue) {
+      if (retireBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        retireBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 3;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     */
+    public Builder mergeRetire(cloud.spawnery.agent.pb.RetireRequest value) {
+      if (retireBuilder_ == null) {
+        if (requestCase_ == 3 &&
+            request_ != cloud.spawnery.agent.pb.RetireRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.RetireRequest.newBuilder((cloud.spawnery.agent.pb.RetireRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 3) {
+          retireBuilder_.mergeFrom(value);
+        } else {
+          retireBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 3;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     */
+    public Builder clearRetire() {
+      if (retireBuilder_ == null) {
+        if (requestCase_ == 3) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 3) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        retireBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     */
+    public cloud.spawnery.agent.pb.RetireRequest.Builder getRetireBuilder() {
+      return internalGetRetireFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.RetireRequestOrBuilder getRetireOrBuilder() {
+      if ((requestCase_ == 3) && (retireBuilder_ != null)) {
+        return retireBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 3) {
+          return (cloud.spawnery.agent.pb.RetireRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.RetireRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.RetireRequest, cloud.spawnery.agent.pb.RetireRequest.Builder, cloud.spawnery.agent.pb.RetireRequestOrBuilder> 
+        internalGetRetireFieldBuilder() {
+      if (retireBuilder_ == null) {
+        if (!(requestCase_ == 3)) {
+          request_ = cloud.spawnery.agent.pb.RetireRequest.getDefaultInstance();
+        }
+        retireBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.RetireRequest, cloud.spawnery.agent.pb.RetireRequest.Builder, cloud.spawnery.agent.pb.RetireRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.RetireRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 3;
+      onChanged();
+      return retireBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudRequest)

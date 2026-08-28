@@ -62,4 +62,7 @@ class MirrorApi(
     // invariant this class exists to hold.
     override fun connect(player: UUID, to: Target): CompletionStage<ConnectResult> =
         connector.connect(player, to)
+
+    override fun retire(server: String): CompletionStage<Void> =
+        connector.retire(server)
 }

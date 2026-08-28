@@ -447,6 +447,7 @@ func main() {
 		Proxies:        proxies,
 		Servers:        servers,
 		State:          state,
+		Writer:         agentserver.KubeWriter{Client: mgr.GetClient()},
 		Fleet:          fleet.Size,
 		ReportInterval: reportInterval,
 		RenewAfter:     renewAfter,

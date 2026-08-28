@@ -11,7 +11,6 @@ import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
-import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerJoinedServer
 import cloud.spawnery.agent.pb.ProxyMessage
@@ -94,14 +93,10 @@ class AgentPlugin @Inject constructor(
      */
     private val connector = CloudConnector(
         Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = System::currentTimeMillis),
-    ) { id, request ->
+    ) { request ->
         val loop = this.loop
             ?: throw IllegalStateException("this agent has no session to the operator")
-        loop.send(
-            ProxyMessage.newBuilder()
-                .setCloudRequest(CloudRequest.newBuilder().setId(id).setConnect(request))
-                .build(),
-        )
+        loop.send(ProxyMessage.newBuilder().setCloudRequest(request).build())
     }
 
     /**

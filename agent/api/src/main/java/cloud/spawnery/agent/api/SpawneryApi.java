@@ -84,4 +84,26 @@ public interface SpawneryApi {
      * routable yet.
      */
     CompletionStage<ConnectResult> connect(UUID player, Target to);
+
+    /**
+     * Asks that one server stop taking joins and empty out.
+     *
+     * <p>Retiring is not stopping. The server takes no further joins, the
+     * players on it finish in their own time, and nobody is moved or
+     * disconnected. Emptied, it is taken down by the same rules that take down
+     * any server its group no longer needs.
+     *
+     * <p>Asynchronous on both platforms for the reason {@link #connect} is,
+     * and on both it is a round trip: this one changes an object in the
+     * cluster, so neither a proxy nor a backend could answer it locally even
+     * in principle.
+     *
+     * <p>The stage completes with no value — the operator's answer names the
+     * server you already named. It fails when the operator refuses, and
+     * <b>asking for a server that is already retiring is a failure</b>: the
+     * operator distinguishes "you retired it" from "somebody had already
+     * asked", and a caller that wants to treat the second as success can do so
+     * far more safely than one that was never told.
+     */
+    CompletionStage<Void> retire(String server);
 }

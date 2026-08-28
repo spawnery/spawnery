@@ -44,4 +44,9 @@ final class FakeApi implements SpawneryApi {
     public CompletionStage<ConnectResult> connect(UUID player, Target to) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }
+
+    @Override
+    public CompletionStage<Void> retire(String server) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
 }

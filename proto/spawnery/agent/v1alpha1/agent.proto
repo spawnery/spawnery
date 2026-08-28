@@ -108,6 +108,7 @@ message CloudRequest {
   uint64 id = 1;
   oneof request {
     ConnectRequest connect = 2;
+    RetireRequest retire = 3;
   }
 }
 
@@ -122,6 +123,7 @@ message CloudResponse {
   oneof result {
     ConnectResult connect = 2;
     RequestError error = 3;
+    RetireResult retire = 4;
   }
 }
 
@@ -166,6 +168,32 @@ message ConnectResult {
   // The server the move was aimed at, or the player's current one when
   // already_there is set.
   string target = 3;
+}
+
+// RetireRequest asks that one server stop taking joins and empty out.
+//
+// It carries no namespace, for the reason ConnectRequest carries none: the
+// server is resolved inside the namespace the pod's own token authenticated,
+// so there is no field an agent could name another network's server in.
+//
+// This is the first request on this channel that *writes*. Everything before
+// it read the operator's picture or instructed a proxy that was already
+// listening; this one changes an object in the cluster, and the operator's
+// answer is therefore about what it wrote rather than about what it saw.
+message RetireRequest {
+  string server = 1;
+}
+
+// RetireResult says the server is now retiring.
+//
+// It has no "was it already retiring" field on purpose: that case is a
+// RequestError with REFUSED, because an operator that answers "done" to the
+// second person to type the command teaches both of them that the command did
+// nothing the first time.
+message RetireResult {
+  // The server that is now retiring, echoed so a caller that asked by a name
+  // it built from a string sees what the operator matched.
+  string server = 1;
 }
 
 // RequestError is why a request was not carried out.

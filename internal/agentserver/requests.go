@@ -18,6 +18,7 @@ package agentserver
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -91,6 +92,99 @@ func (l *requestLimiter) allow(pod string) bool {
 	return true
 }
 
+// answerCloudRequest routes one request to the verb that answers it.
+//
+// One dispatcher and not one per direction: a server session and a proxy
+// session ask the same questions and differ only in the envelope the answer
+// travels in, which each caller wraps. Before this existed the oneof was
+// unpacked at both call sites, and the second verb would have made that four
+// copies of a chain whose last branch -- the answer for a request kind this
+// operator does not know -- is the one nobody would notice going missing.
+//
+// The unknown-request answer is a refusal and not a silence, and that matters
+// more than it looks: an agent waiting on an id it will never hear about holds
+// its caller's future until the deadline, so a silent operator turns "this
+// operator is older than your plugin" into "the cloud is slow".
+func (s *Server) answerCloudRequest(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	req *agentpb.CloudRequest,
+) *agentpb.CloudResponse {
+	// The bound is here and not in each verb, and that placement is the whole
+	// of its reliability: a per-verb check is a line the next verb's author
+	// can forget, and forgetting it is invisible -- the verb works, and only
+	// a pod asking in a loop ever finds out. An unknown request spends a
+	// token too, which is deliberate: it is still work a pod can make the
+	// operator do.
+	if !s.requestRate.allow(id.PodUID) {
+		return refuse(req.GetId(), agentpb.RequestError_RATE_LIMITED,
+			"this pod has asked more often than the operator will answer")
+	}
+
+	switch {
+	case req.GetConnect() != nil:
+		return s.answerConnect(ctx, logger, id, req.GetId(), req.GetConnect())
+	case req.GetRetire() != nil:
+		return s.answerRetire(ctx, logger, id, req.GetId(), req.GetRetire())
+	default:
+		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
+			"this operator does not know that request")
+	}
+}
+
+// answerRetire asks one server to stop taking joins.
+//
+// # The first request that writes, and what bounds it
+//
+// **The namespace bound is structural, as it is for connect.** A RetireRequest
+// names a server and nothing else, and both the resolution and the patch
+// happen inside id.Namespace -- the namespace the pod's own ServiceAccount
+// token authenticated. There is no field an agent could put another network's
+// server in.
+//
+// Unlike connect, this resolves nothing against the network snapshot, and an
+// earlier draft that did was measured to be dead weight: removing the check
+// changed no test, because the writer's own namespaced Get already answers
+// NOT_FOUND for a name this network does not have. A screening step that reads
+// like a bound but cannot fail on its own is worse than none -- the next
+// person to touch this would have to work out, as this comment had to, that
+// the bound is the Get's key and never was the snapshot.
+//
+// Refusing an already-retiring server is the one bound here that is not about
+// safety. The patch is idempotent and a second one would cost nothing; what it
+// would cost is the meaning of the answer. An operator that says "done" to the
+// second admin to type the command has told them the first attempt did
+// nothing, and the thing people do next is type it again harder.
+func (s *Server) answerRetire(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.RetireRequest,
+) *agentpb.CloudResponse {
+	// The namespace is the token's, never the message's, and it is the key
+	// this resolves under -- so a server this network does not have is
+	// answered by the writer rather than screened out beforehand.
+	applied, err := s.opts.Writer.Retire(ctx, id.Namespace, req.GetServer())
+	switch {
+	case errors.Is(err, ErrNoSuchServer):
+		// The snapshot said it was there and the cluster says otherwise --
+		// ordinary, since the snapshot is allowed to be a moment stale.
+		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+			"no server by that name is on this network")
+	case err != nil:
+		logger.V(1).Info("could not retire a server", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not write that just now")
+	case !applied:
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that server is already retiring")
+	}
+
+	return retired(reqID, &agentpb.RetireResult{Server: req.GetServer()})
+}
+
 // answerConnect resolves a move request and says what the operator did with
 // it.
 //
@@ -104,8 +198,10 @@ func (l *requestLimiter) allow(pod string) bool {
 // edit. Milestone 2a's promise that a compromised pod cannot harm another is
 // carried here by the shape rather than by a guard.
 //
-// The remaining two are checks and each has its own test, because a single
-// test asserting "it was refused" passes when the wrong one fired.
+// The remaining checks each have their own test, because a single test
+// asserting "it was refused" passes when the wrong one fired. The rate bound
+// is not among them: it lives in answerCloudRequest, so that every verb has it
+// whether or not its author remembered.
 //
 // # What it promises
 //
@@ -119,11 +215,6 @@ func (s *Server) answerConnect(
 	reqID uint64,
 	req *agentpb.ConnectRequest,
 ) *agentpb.CloudResponse {
-	if !s.requestRate.allow(id.PodUID) {
-		return refuse(reqID, agentpb.RequestError_RATE_LIMITED,
-			"this pod has asked more often than the operator will answer")
-	}
-
 	// The namespace is the token's, never the message's. Everything below
 	// resolves inside it, which is the whole of the cross-network bound.
 	state, err := s.opts.State.Build(ctx, id.Namespace)
@@ -207,6 +298,14 @@ func refuse(reqID uint64, reason agentpb.RequestError_Reason, message string) *a
 		Result: &agentpb.CloudResponse_Error{
 			Error: &agentpb.RequestError{Reason: reason, Message: message},
 		},
+	}
+}
+
+// retired wraps a successful retire answer.
+func retired(reqID uint64, result *agentpb.RetireResult) *agentpb.CloudResponse {
+	return &agentpb.CloudResponse{
+		Id:     reqID,
+		Result: &agentpb.CloudResponse_Retire{Retire: result},
 	}
 }
 
