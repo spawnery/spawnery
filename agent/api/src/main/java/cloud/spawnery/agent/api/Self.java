@@ -35,6 +35,18 @@ public sealed interface Self permits ServerSelf, ProxySelf {
     /** The {@code ServerGroup} or {@code ProxyGroup} this belongs to. */
     String group();
 
-    /** The namespace, which is also the boundary of everything this API can see. */
-    String namespace();
+    /**
+     * The {@code Network} this belongs to, which is also the boundary of
+     * everything this API can see.
+     *
+     * <p>The network's name and not the Kubernetes namespace, for two reasons.
+     * It is the concept a plugin is actually asking about -- one namespace
+     * holds exactly one {@code Network}, so the two identify the same thing,
+     * and only one of them is in this project's own vocabulary. And it is the
+     * one a pod can answer: the operator gives every game pod
+     * {@code SPAWNERY_NETWORK} and no namespace at all, and adding one would
+     * change the rendered pod, which restarts every server and every proxy in
+     * the cluster.
+     */
+    String network();
 }

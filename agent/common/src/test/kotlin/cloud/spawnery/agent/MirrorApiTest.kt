@@ -38,14 +38,14 @@ private fun aRichState(): NetworkState =
 private fun serverSelf(): ServerSelf = object : ServerSelf {
     override fun name(): String = "lobby-a"
     override fun group(): String = "lobby"
-    override fun namespace(): String = "minecraft"
+    override fun network(): String = "production"
     override fun slots(): Int = 100
 }
 
 private fun proxySelf(): ProxySelf = object : ProxySelf {
     override fun name(): String = "gateway-0"
     override fun group(): String = "gateway"
-    override fun namespace(): String = "minecraft"
+    override fun network(): String = "production"
 }
 
 class MirrorApiTest {

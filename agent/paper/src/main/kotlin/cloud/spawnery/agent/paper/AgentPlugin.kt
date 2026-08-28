@@ -1,6 +1,9 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.NetworkMirror
+import cloud.spawnery.agent.api.ServerSelf
+import cloud.spawnery.agent.api.Spawnery
 import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.Environment
 import cloud.spawnery.agent.OperatorChannel
@@ -42,6 +45,27 @@ class AgentPlugin : JavaPlugin(), Listener {
             }
 
             is Environment.Configured -> {
+                // Installed before the loop starts, and after the mirror
+                // exists. A plugin whose own enable ran between those two
+                // points would hold an API whose mirror is empty with no way
+                // to know it is about to fill.
+                //
+                // Every value comes from what the operator already puts on the
+                // pod -- no second reader of the same variables, and nothing
+                // guessed: a missing one is empty rather than derived from a
+                // hostname.
+                Spawnery.install(
+                    MirrorApi(
+                        mirror,
+                        object : ServerSelf {
+                            override fun name(): String = System.getenv("SPAWNERY_SERVER") ?: ""
+                            override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
+                            override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
+                            override fun slots(): Int = state.slots
+                        },
+                    ),
+                )
+
                 scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
                     Thread(runnable, "spawnery-agent").apply { isDaemon = true }
                 }
@@ -101,6 +125,10 @@ class AgentPlugin : JavaPlugin(), Listener {
     }
 
     override fun onDisable() {
+        // Uninstall before anything else: install refuses a second
+        // implementation, so a plugin that enabled twice without this would
+        // throw on the second and take the whole agent down with it.
+        Spawnery.uninstall()
         loop?.stop()
         if (::scheduler.isInitialized) {
             scheduler.shutdownNow()

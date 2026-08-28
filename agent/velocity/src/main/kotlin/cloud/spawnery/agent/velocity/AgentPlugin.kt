@@ -1,6 +1,9 @@
 package cloud.spawnery.agent.velocity
 
+import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.NetworkMirror
+import cloud.spawnery.agent.api.ProxySelf
+import cloud.spawnery.agent.api.Spawnery
 import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
@@ -171,6 +174,24 @@ class AgentPlugin @Inject constructor(
         this.rescue = Rescue(router, ::warn)
         this.fallbackGroups = env.fallbackGroups
         val state = ProxyState(env.playerLimit)
+
+        // Installed before the loop starts, and after the mirror exists, for
+        // the reason the Paper plugin gives at the same point: a plugin
+        // enabling between those two would hold an API whose mirror is empty
+        // with no way to know it is about to fill.
+        //
+        // Every value comes from what the operator already puts on the pod --
+        // no second reader of the same variables, and nothing guessed.
+        Spawnery.install(
+            MirrorApi(
+                mirror,
+                object : ProxySelf {
+                    override fun name(): String = System.getenv("SPAWNERY_PROXY") ?: ""
+                    override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
+                    override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
+                },
+            ),
+        )
         val drain = Drain(players, router, ::warn)
         this.drain = drain
         val role = ProxyRole(
@@ -249,6 +270,9 @@ class AgentPlugin @Inject constructor(
 
     @Subscribe
     fun onShutdown(event: ProxyShutdownEvent) {
+        // First: install refuses a second implementation, so a proxy that
+        // enabled twice without this would throw on the second.
+        Spawnery.uninstall()
         loop?.stop()
         gate?.close()
         sampling?.cancel()

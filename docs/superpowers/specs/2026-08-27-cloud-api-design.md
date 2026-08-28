@@ -179,7 +179,7 @@ here first.
 
 ```java
 public sealed interface Self permits ServerSelf, ProxySelf {
-    String name(); String group(); String namespace();
+    String name(); String group(); String network();
 }
 public non-sealed interface ServerSelf extends Self { int slots(); }
 public non-sealed interface ProxySelf  extends Self { }

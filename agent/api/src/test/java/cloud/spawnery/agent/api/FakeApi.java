@@ -27,7 +27,7 @@ final class FakeApi implements SpawneryApi {
         return new ProxySelf() {
             @Override public String name() { return "gateway-0"; }
             @Override public String group() { return "gateway"; }
-            @Override public String namespace() { return "minecraft"; }
+            @Override public String network() { return "production"; }
         };
     }
 
