@@ -140,16 +140,32 @@ message ConnectRequest {
   }
 }
 
-// ConnectResult is what happened.
+// ConnectResult is what the operator did, which is not the same as what
+// happened to the player.
 //
-// moved is false without an error for the one ordinary case: the player was
-// already on the server they were asked to move to. That is a success a caller
-// may want to tell apart from a move, and it is not a failure.
+// **`ordered` and not `moved`, and the difference is not pedantry.** The proxy
+// that carries a move calls Velocity's connectWithIndication and deliberately
+// does not wait on the future it returns -- PlayerRef.moveTo returns nothing,
+// and VelocityPlayer's comment gives the reason: blocking a gRPC callback
+// thread on a round trip to a backend is a cost this agent cannot pay, and
+// that decision is load-bearing for the drain. So no proxy in this system can
+// report whether a player arrived, and an operator claiming to would be
+// inventing the answer.
+//
+// What a caller does with that: `ordered` says the instruction reached a
+// proxy holding the player. Whether they arrived shows up in the next
+// NetworkState, which is what the mirror is for -- a plugin that needs to know
+// reads players() a moment later rather than trusting this field to mean more
+// than it does.
+//
+// `already_there` is the one case where nothing was ordered and nothing is
+// wrong: the player was on the target when the request arrived.
 message ConnectResult {
-  bool moved = 1;
-  // Where the player is now, which is the target on a move and their existing
-  // server otherwise.
-  string server = 2;
+  bool ordered = 1;
+  bool already_there = 2;
+  // The server the move was aimed at, or the player's current one when
+  // already_there is set.
+  string target = 3;
 }
 
 // RequestError is why a request was not carried out.
@@ -383,6 +399,21 @@ message UnregisterServer {
   string name = 1;
 }
 
+// MovePlayer asks one proxy to move one player.
+//
+// Broadcast to every proxy of the namespace rather than addressed to the one
+// holding the player, because the operator does not know which one that is:
+// Registry.Roster merges the rosters of every proxy and drops which reported
+// what, since every reader until now wanted the union. A proxy that does not
+// have this player does nothing, which makes the broadcast correct rather than
+// merely tolerable -- and cheap, since a namespace has a handful of proxies.
+//
+// The proxy reports no outcome, and cannot: see ConnectResult.
+message MovePlayer {
+  string player_uuid = 1;
+  string target_server = 2;
+}
+
 message DrainPlayers {
   string from_server = 1;
   repeated string to_groups = 2;
@@ -425,5 +456,6 @@ message OperatorToProxy {
     SetReady set_ready = 7;
     NetworkState network_state = 8;
     CloudResponse cloud_response = 9;
+    MovePlayer move_player = 10;
   }
 }

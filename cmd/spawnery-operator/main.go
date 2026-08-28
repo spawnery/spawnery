@@ -446,6 +446,7 @@ func main() {
 		Agents:         registry,
 		Proxies:        proxies,
 		Servers:        servers,
+		State:          state,
 		Fleet:          fleet.Size,
 		ReportInterval: reportInterval,
 		RenewAfter:     renewAfter,

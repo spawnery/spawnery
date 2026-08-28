@@ -11,30 +11,36 @@ public interface ConnectResultOrBuilder extends
     com.google.protobuf.MessageOrBuilder {
 
   /**
-   * <code>bool moved = 1;</code>
-   * @return The moved.
+   * <code>bool ordered = 1;</code>
+   * @return The ordered.
    */
-  boolean getMoved();
+  boolean getOrdered();
+
+  /**
+   * <code>bool already_there = 2;</code>
+   * @return The alreadyThere.
+   */
+  boolean getAlreadyThere();
 
   /**
    * <pre>
-   * Where the player is now, which is the target on a move and their existing
-   * server otherwise.
+   * The server the move was aimed at, or the player's current one when
+   * already_there is set.
    * </pre>
    *
-   * <code>string server = 2;</code>
-   * @return The server.
+   * <code>string target = 3;</code>
+   * @return The target.
    */
-  java.lang.String getServer();
+  java.lang.String getTarget();
   /**
    * <pre>
-   * Where the player is now, which is the target on a move and their existing
-   * server otherwise.
+   * The server the move was aimed at, or the player's current one when
+   * already_there is set.
    * </pre>
    *
-   * <code>string server = 2;</code>
-   * @return The bytes for server.
+   * <code>string target = 3;</code>
+   * @return The bytes for target.
    */
   com.google.protobuf.ByteString
-      getServerBytes();
+      getTargetBytes();
 }

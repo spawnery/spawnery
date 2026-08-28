@@ -344,6 +344,29 @@ func (f *Fleet) broadcast(namespace string, build func(*session) *agentpb.Operat
 	}
 }
 
+// Move asks the proxies of a namespace to move one player to one server.
+//
+// Broadcast rather than addressed, because nothing here knows which proxy has
+// the player: Registry.Roster merges every proxy's roster and drops which one
+// reported what. A proxy without that player does nothing with the message,
+// which makes the broadcast correct and not merely survivable.
+//
+// It reports nothing back, and the operator promises nothing about the
+// outcome: the proxy does not wait on Velocity's own future either. See
+// agentpb.ConnectResult for the whole of that reasoning.
+func (f *Fleet) Move(namespace, playerUUID, targetServer string) {
+	f.broadcast(namespace, func(*session) *agentpb.OperatorToProxy {
+		return &agentpb.OperatorToProxy{
+			Message: &agentpb.OperatorToProxy_MovePlayer{
+				MovePlayer: &agentpb.MovePlayer{
+					PlayerUuid:   playerUUID,
+					TargetServer: targetServer,
+				},
+			},
+		}
+	})
+}
+
 // Register implements controller.Registrar.
 //
 // It returns nil when no proxy is connected. That is not a degraded state: a

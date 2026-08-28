@@ -7,11 +7,26 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * ConnectResult is what happened.
+ * ConnectResult is what the operator did, which is not the same as what
+ * happened to the player.
  *
- * moved is false without an error for the one ordinary case: the player was
- * already on the server they were asked to move to. That is a success a caller
- * may want to tell apart from a move, and it is not a failure.
+ * **`ordered` and not `moved`, and the difference is not pedantry.** The proxy
+ * that carries a move calls Velocity's connectWithIndication and deliberately
+ * does not wait on the future it returns -- PlayerRef.moveTo returns nothing,
+ * and VelocityPlayer's comment gives the reason: blocking a gRPC callback
+ * thread on a round trip to a backend is a cost this agent cannot pay, and
+ * that decision is load-bearing for the drain. So no proxy in this system can
+ * report whether a player arrived, and an operator claiming to would be
+ * inventing the answer.
+ *
+ * What a caller does with that: `ordered` says the instruction reached a
+ * proxy holding the player. Whether they arrived shows up in the next
+ * NetworkState, which is what the mirror is for -- a plugin that needs to know
+ * reads players() a moment later rather than trusting this field to mean more
+ * than it does.
+ *
+ * `already_there` is the one case where nothing was ordered and nothing is
+ * wrong: the player was on the target when the request arrived.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.ConnectResult}
@@ -36,7 +51,7 @@ private static final long serialVersionUID = 0L;
     super(builder);
   }
   private ConnectResult() {
-    server_ = "";
+    target_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -57,60 +72,71 @@ private static final long serialVersionUID = 0L;
             cloud.spawnery.agent.pb.ConnectResult.class, cloud.spawnery.agent.pb.ConnectResult.Builder.class);
   }
 
-  public static final int MOVED_FIELD_NUMBER = 1;
-  private boolean moved_ = false;
+  public static final int ORDERED_FIELD_NUMBER = 1;
+  private boolean ordered_ = false;
   /**
-   * <code>bool moved = 1;</code>
-   * @return The moved.
+   * <code>bool ordered = 1;</code>
+   * @return The ordered.
    */
   @java.lang.Override
-  public boolean getMoved() {
-    return moved_;
+  public boolean getOrdered() {
+    return ordered_;
   }
 
-  public static final int SERVER_FIELD_NUMBER = 2;
-  @SuppressWarnings("serial")
-  private volatile java.lang.Object server_ = "";
+  public static final int ALREADY_THERE_FIELD_NUMBER = 2;
+  private boolean alreadyThere_ = false;
   /**
-   * <pre>
-   * Where the player is now, which is the target on a move and their existing
-   * server otherwise.
-   * </pre>
-   *
-   * <code>string server = 2;</code>
-   * @return The server.
+   * <code>bool already_there = 2;</code>
+   * @return The alreadyThere.
    */
   @java.lang.Override
-  public java.lang.String getServer() {
-    java.lang.Object ref = server_;
+  public boolean getAlreadyThere() {
+    return alreadyThere_;
+  }
+
+  public static final int TARGET_FIELD_NUMBER = 3;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object target_ = "";
+  /**
+   * <pre>
+   * The server the move was aimed at, or the player's current one when
+   * already_there is set.
+   * </pre>
+   *
+   * <code>string target = 3;</code>
+   * @return The target.
+   */
+  @java.lang.Override
+  public java.lang.String getTarget() {
+    java.lang.Object ref = target_;
     if (ref instanceof java.lang.String) {
       return (java.lang.String) ref;
     } else {
       com.google.protobuf.ByteString bs = 
           (com.google.protobuf.ByteString) ref;
       java.lang.String s = bs.toStringUtf8();
-      server_ = s;
+      target_ = s;
       return s;
     }
   }
   /**
    * <pre>
-   * Where the player is now, which is the target on a move and their existing
-   * server otherwise.
+   * The server the move was aimed at, or the player's current one when
+   * already_there is set.
    * </pre>
    *
-   * <code>string server = 2;</code>
-   * @return The bytes for server.
+   * <code>string target = 3;</code>
+   * @return The bytes for target.
    */
   @java.lang.Override
   public com.google.protobuf.ByteString
-      getServerBytes() {
-    java.lang.Object ref = server_;
+      getTargetBytes() {
+    java.lang.Object ref = target_;
     if (ref instanceof java.lang.String) {
       com.google.protobuf.ByteString b = 
           com.google.protobuf.ByteString.copyFromUtf8(
               (java.lang.String) ref);
-      server_ = b;
+      target_ = b;
       return b;
     } else {
       return (com.google.protobuf.ByteString) ref;
@@ -131,22 +157,29 @@ private static final long serialVersionUID = 0L;
   @java.lang.Override
   public void writeTo(com.google.protobuf.CodedOutputStream output)
                       throws java.io.IOException {
-    if (moved_ != false) {
-      output.writeBool(1, moved_);
+    if (ordered_ != false) {
+      output.writeBool(1, ordered_);
     }
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(server_)) {
-      com.google.protobuf.GeneratedMessage.writeString(output, 2, server_);
+    if (alreadyThere_ != false) {
+      output.writeBool(2, alreadyThere_);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(target_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 3, target_);
     }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
     int size = 0;
-    if (moved_ != false) {
+    if (ordered_ != false) {
       size += com.google.protobuf.CodedOutputStream
-        .computeBoolSize(1, moved_);
+        .computeBoolSize(1, ordered_);
     }
-    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(server_)) {
-      size += com.google.protobuf.GeneratedMessage.computeStringSize(2, server_);
+    if (alreadyThere_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(2, alreadyThere_);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(target_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(3, target_);
     }
     return size;
   }
@@ -172,10 +205,12 @@ private static final long serialVersionUID = 0L;
     }
     cloud.spawnery.agent.pb.ConnectResult other = (cloud.spawnery.agent.pb.ConnectResult) obj;
 
-    if (getMoved()
-        != other.getMoved()) return false;
-    if (!getServer()
-        .equals(other.getServer())) return false;
+    if (getOrdered()
+        != other.getOrdered()) return false;
+    if (getAlreadyThere()
+        != other.getAlreadyThere()) return false;
+    if (!getTarget()
+        .equals(other.getTarget())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -187,11 +222,14 @@ private static final long serialVersionUID = 0L;
     }
     int hash = 41;
     hash = (19 * hash) + getDescriptor().hashCode();
-    hash = (37 * hash) + MOVED_FIELD_NUMBER;
+    hash = (37 * hash) + ORDERED_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
-        getMoved());
-    hash = (37 * hash) + SERVER_FIELD_NUMBER;
-    hash = (53 * hash) + getServer().hashCode();
+        getOrdered());
+    hash = (37 * hash) + ALREADY_THERE_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getAlreadyThere());
+    hash = (37 * hash) + TARGET_FIELD_NUMBER;
+    hash = (53 * hash) + getTarget().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -291,11 +329,26 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * ConnectResult is what happened.
+   * ConnectResult is what the operator did, which is not the same as what
+   * happened to the player.
    *
-   * moved is false without an error for the one ordinary case: the player was
-   * already on the server they were asked to move to. That is a success a caller
-   * may want to tell apart from a move, and it is not a failure.
+   * **`ordered` and not `moved`, and the difference is not pedantry.** The proxy
+   * that carries a move calls Velocity's connectWithIndication and deliberately
+   * does not wait on the future it returns -- PlayerRef.moveTo returns nothing,
+   * and VelocityPlayer's comment gives the reason: blocking a gRPC callback
+   * thread on a round trip to a backend is a cost this agent cannot pay, and
+   * that decision is load-bearing for the drain. So no proxy in this system can
+   * report whether a player arrived, and an operator claiming to would be
+   * inventing the answer.
+   *
+   * What a caller does with that: `ordered` says the instruction reached a
+   * proxy holding the player. Whether they arrived shows up in the next
+   * NetworkState, which is what the mirror is for -- a plugin that needs to know
+   * reads players() a moment later rather than trusting this field to mean more
+   * than it does.
+   *
+   * `already_there` is the one case where nothing was ordered and nothing is
+   * wrong: the player was on the target when the request arrived.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.ConnectResult}
@@ -331,8 +384,9 @@ private static final long serialVersionUID = 0L;
     public Builder clear() {
       super.clear();
       bitField0_ = 0;
-      moved_ = false;
-      server_ = "";
+      ordered_ = false;
+      alreadyThere_ = false;
+      target_ = "";
       return this;
     }
 
@@ -367,10 +421,13 @@ private static final long serialVersionUID = 0L;
     private void buildPartial0(cloud.spawnery.agent.pb.ConnectResult result) {
       int from_bitField0_ = bitField0_;
       if (((from_bitField0_ & 0x00000001) != 0)) {
-        result.moved_ = moved_;
+        result.ordered_ = ordered_;
       }
       if (((from_bitField0_ & 0x00000002) != 0)) {
-        result.server_ = server_;
+        result.alreadyThere_ = alreadyThere_;
+      }
+      if (((from_bitField0_ & 0x00000004) != 0)) {
+        result.target_ = target_;
       }
     }
 
@@ -386,12 +443,15 @@ private static final long serialVersionUID = 0L;
 
     public Builder mergeFrom(cloud.spawnery.agent.pb.ConnectResult other) {
       if (other == cloud.spawnery.agent.pb.ConnectResult.getDefaultInstance()) return this;
-      if (other.getMoved() != false) {
-        setMoved(other.getMoved());
+      if (other.getOrdered() != false) {
+        setOrdered(other.getOrdered());
       }
-      if (!other.getServer().isEmpty()) {
-        server_ = other.server_;
-        bitField0_ |= 0x00000002;
+      if (other.getAlreadyThere() != false) {
+        setAlreadyThere(other.getAlreadyThere());
+      }
+      if (!other.getTarget().isEmpty()) {
+        target_ = other.target_;
+        bitField0_ |= 0x00000004;
         onChanged();
       }
       this.mergeUnknownFields(other.getUnknownFields());
@@ -421,15 +481,20 @@ private static final long serialVersionUID = 0L;
               done = true;
               break;
             case 8: {
-              moved_ = input.readBool();
+              ordered_ = input.readBool();
               bitField0_ |= 0x00000001;
               break;
             } // case 8
-            case 18: {
-              server_ = input.readStringRequireUtf8();
+            case 16: {
+              alreadyThere_ = input.readBool();
               bitField0_ |= 0x00000002;
               break;
-            } // case 18
+            } // case 16
+            case 26: {
+              target_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000004;
+              break;
+            } // case 26
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -447,55 +512,87 @@ private static final long serialVersionUID = 0L;
     }
     private int bitField0_;
 
-    private boolean moved_ ;
+    private boolean ordered_ ;
     /**
-     * <code>bool moved = 1;</code>
-     * @return The moved.
+     * <code>bool ordered = 1;</code>
+     * @return The ordered.
      */
     @java.lang.Override
-    public boolean getMoved() {
-      return moved_;
+    public boolean getOrdered() {
+      return ordered_;
     }
     /**
-     * <code>bool moved = 1;</code>
-     * @param value The moved to set.
+     * <code>bool ordered = 1;</code>
+     * @param value The ordered to set.
      * @return This builder for chaining.
      */
-    public Builder setMoved(boolean value) {
+    public Builder setOrdered(boolean value) {
 
-      moved_ = value;
+      ordered_ = value;
       bitField0_ |= 0x00000001;
       onChanged();
       return this;
     }
     /**
-     * <code>bool moved = 1;</code>
+     * <code>bool ordered = 1;</code>
      * @return This builder for chaining.
      */
-    public Builder clearMoved() {
+    public Builder clearOrdered() {
       bitField0_ = (bitField0_ & ~0x00000001);
-      moved_ = false;
+      ordered_ = false;
       onChanged();
       return this;
     }
 
-    private java.lang.Object server_ = "";
+    private boolean alreadyThere_ ;
+    /**
+     * <code>bool already_there = 2;</code>
+     * @return The alreadyThere.
+     */
+    @java.lang.Override
+    public boolean getAlreadyThere() {
+      return alreadyThere_;
+    }
+    /**
+     * <code>bool already_there = 2;</code>
+     * @param value The alreadyThere to set.
+     * @return This builder for chaining.
+     */
+    public Builder setAlreadyThere(boolean value) {
+
+      alreadyThere_ = value;
+      bitField0_ |= 0x00000002;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>bool already_there = 2;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearAlreadyThere() {
+      bitField0_ = (bitField0_ & ~0x00000002);
+      alreadyThere_ = false;
+      onChanged();
+      return this;
+    }
+
+    private java.lang.Object target_ = "";
     /**
      * <pre>
-     * Where the player is now, which is the target on a move and their existing
-     * server otherwise.
+     * The server the move was aimed at, or the player's current one when
+     * already_there is set.
      * </pre>
      *
-     * <code>string server = 2;</code>
-     * @return The server.
+     * <code>string target = 3;</code>
+     * @return The target.
      */
-    public java.lang.String getServer() {
-      java.lang.Object ref = server_;
+    public java.lang.String getTarget() {
+      java.lang.Object ref = target_;
       if (!(ref instanceof java.lang.String)) {
         com.google.protobuf.ByteString bs =
             (com.google.protobuf.ByteString) ref;
         java.lang.String s = bs.toStringUtf8();
-        server_ = s;
+        target_ = s;
         return s;
       } else {
         return (java.lang.String) ref;
@@ -503,21 +600,21 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Where the player is now, which is the target on a move and their existing
-     * server otherwise.
+     * The server the move was aimed at, or the player's current one when
+     * already_there is set.
      * </pre>
      *
-     * <code>string server = 2;</code>
-     * @return The bytes for server.
+     * <code>string target = 3;</code>
+     * @return The bytes for target.
      */
     public com.google.protobuf.ByteString
-        getServerBytes() {
-      java.lang.Object ref = server_;
+        getTargetBytes() {
+      java.lang.Object ref = target_;
       if (ref instanceof String) {
         com.google.protobuf.ByteString b = 
             com.google.protobuf.ByteString.copyFromUtf8(
                 (java.lang.String) ref);
-        server_ = b;
+        target_ = b;
         return b;
       } else {
         return (com.google.protobuf.ByteString) ref;
@@ -525,53 +622,53 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Where the player is now, which is the target on a move and their existing
-     * server otherwise.
+     * The server the move was aimed at, or the player's current one when
+     * already_there is set.
      * </pre>
      *
-     * <code>string server = 2;</code>
-     * @param value The server to set.
+     * <code>string target = 3;</code>
+     * @param value The target to set.
      * @return This builder for chaining.
      */
-    public Builder setServer(
+    public Builder setTarget(
         java.lang.String value) {
       if (value == null) { throw new NullPointerException(); }
-      server_ = value;
-      bitField0_ |= 0x00000002;
+      target_ = value;
+      bitField0_ |= 0x00000004;
       onChanged();
       return this;
     }
     /**
      * <pre>
-     * Where the player is now, which is the target on a move and their existing
-     * server otherwise.
+     * The server the move was aimed at, or the player's current one when
+     * already_there is set.
      * </pre>
      *
-     * <code>string server = 2;</code>
+     * <code>string target = 3;</code>
      * @return This builder for chaining.
      */
-    public Builder clearServer() {
-      server_ = getDefaultInstance().getServer();
-      bitField0_ = (bitField0_ & ~0x00000002);
+    public Builder clearTarget() {
+      target_ = getDefaultInstance().getTarget();
+      bitField0_ = (bitField0_ & ~0x00000004);
       onChanged();
       return this;
     }
     /**
      * <pre>
-     * Where the player is now, which is the target on a move and their existing
-     * server otherwise.
+     * The server the move was aimed at, or the player's current one when
+     * already_there is set.
      * </pre>
      *
-     * <code>string server = 2;</code>
-     * @param value The bytes for server to set.
+     * <code>string target = 3;</code>
+     * @param value The bytes for target to set.
      * @return This builder for chaining.
      */
-    public Builder setServerBytes(
+    public Builder setTargetBytes(
         com.google.protobuf.ByteString value) {
       if (value == null) { throw new NullPointerException(); }
       checkByteStringIsUtf8(value);
-      server_ = value;
-      bitField0_ |= 0x00000002;
+      target_ = value;
+      bitField0_ |= 0x00000004;
       onChanged();
       return this;
     }

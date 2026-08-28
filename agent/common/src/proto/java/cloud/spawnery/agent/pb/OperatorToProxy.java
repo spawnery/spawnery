@@ -63,6 +63,7 @@ private static final long serialVersionUID = 0L;
     SET_READY(7),
     NETWORK_STATE(8),
     CLOUD_RESPONSE(9),
+    MOVE_PLAYER(10),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -89,6 +90,7 @@ private static final long serialVersionUID = 0L;
         case 7: return SET_READY;
         case 8: return NETWORK_STATE;
         case 9: return CLOUD_RESPONSE;
+        case 10: return MOVE_PLAYER;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -383,6 +385,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.CloudResponse.getDefaultInstance();
   }
 
+  public static final int MOVE_PLAYER_FIELD_NUMBER = 10;
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   * @return Whether the movePlayer field is set.
+   */
+  @java.lang.Override
+  public boolean hasMovePlayer() {
+    return messageCase_ == 10;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   * @return The movePlayer.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.MovePlayer getMovePlayer() {
+    if (messageCase_ == 10) {
+       return (cloud.spawnery.agent.pb.MovePlayer) message_;
+    }
+    return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.MovePlayerOrBuilder getMovePlayerOrBuilder() {
+    if (messageCase_ == 10) {
+       return (cloud.spawnery.agent.pb.MovePlayer) message_;
+    }
+    return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -424,6 +457,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 9) {
       output.writeMessage(9, (cloud.spawnery.agent.pb.CloudResponse) message_);
     }
+    if (messageCase_ == 10) {
+      output.writeMessage(10, (cloud.spawnery.agent.pb.MovePlayer) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -463,6 +499,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 9) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(9, (cloud.spawnery.agent.pb.CloudResponse) message_);
+    }
+    if (messageCase_ == 10) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(10, (cloud.spawnery.agent.pb.MovePlayer) message_);
     }
     return size;
   }
@@ -526,6 +566,10 @@ private static final long serialVersionUID = 0L;
         if (!getCloudResponse()
             .equals(other.getCloudResponse())) return false;
         break;
+      case 10:
+        if (!getMovePlayer()
+            .equals(other.getMovePlayer())) return false;
+        break;
       case 0:
       default:
     }
@@ -576,6 +620,10 @@ private static final long serialVersionUID = 0L;
       case 9:
         hash = (37 * hash) + CLOUD_RESPONSE_FIELD_NUMBER;
         hash = (53 * hash) + getCloudResponse().hashCode();
+        break;
+      case 10:
+        hash = (37 * hash) + MOVE_PLAYER_FIELD_NUMBER;
+        hash = (53 * hash) + getMovePlayer().hashCode();
         break;
       case 0:
       default:
@@ -738,6 +786,9 @@ private static final long serialVersionUID = 0L;
       if (cloudResponseBuilder_ != null) {
         cloudResponseBuilder_.clear();
       }
+      if (movePlayerBuilder_ != null) {
+        movePlayerBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -815,6 +866,10 @@ private static final long serialVersionUID = 0L;
           cloudResponseBuilder_ != null) {
         result.message_ = cloudResponseBuilder_.build();
       }
+      if (messageCase_ == 10 &&
+          movePlayerBuilder_ != null) {
+        result.message_ = movePlayerBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -864,6 +919,10 @@ private static final long serialVersionUID = 0L;
         }
         case CLOUD_RESPONSE: {
           mergeCloudResponse(other.getCloudResponse());
+          break;
+        }
+        case MOVE_PLAYER: {
+          mergeMovePlayer(other.getMovePlayer());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -959,6 +1018,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 9;
               break;
             } // case 74
+            case 82: {
+              input.readMessage(
+                  internalGetMovePlayerFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 10;
+              break;
+            } // case 82
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2267,6 +2333,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 9;
       onChanged();
       return cloudResponseBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.MovePlayer, cloud.spawnery.agent.pb.MovePlayer.Builder, cloud.spawnery.agent.pb.MovePlayerOrBuilder> movePlayerBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     * @return Whether the movePlayer field is set.
+     */
+    @java.lang.Override
+    public boolean hasMovePlayer() {
+      return messageCase_ == 10;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     * @return The movePlayer.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.MovePlayer getMovePlayer() {
+      if (movePlayerBuilder_ == null) {
+        if (messageCase_ == 10) {
+          return (cloud.spawnery.agent.pb.MovePlayer) message_;
+        }
+        return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+      } else {
+        if (messageCase_ == 10) {
+          return movePlayerBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public Builder setMovePlayer(cloud.spawnery.agent.pb.MovePlayer value) {
+      if (movePlayerBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        movePlayerBuilder_.setMessage(value);
+      }
+      messageCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public Builder setMovePlayer(
+        cloud.spawnery.agent.pb.MovePlayer.Builder builderForValue) {
+      if (movePlayerBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        movePlayerBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public Builder mergeMovePlayer(cloud.spawnery.agent.pb.MovePlayer value) {
+      if (movePlayerBuilder_ == null) {
+        if (messageCase_ == 10 &&
+            message_ != cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.MovePlayer.newBuilder((cloud.spawnery.agent.pb.MovePlayer) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 10) {
+          movePlayerBuilder_.mergeFrom(value);
+        } else {
+          movePlayerBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public Builder clearMovePlayer() {
+      if (movePlayerBuilder_ == null) {
+        if (messageCase_ == 10) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 10) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        movePlayerBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public cloud.spawnery.agent.pb.MovePlayer.Builder getMovePlayerBuilder() {
+      return internalGetMovePlayerFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.MovePlayerOrBuilder getMovePlayerOrBuilder() {
+      if ((messageCase_ == 10) && (movePlayerBuilder_ != null)) {
+        return movePlayerBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 10) {
+          return (cloud.spawnery.agent.pb.MovePlayer) message_;
+        }
+        return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.MovePlayer, cloud.spawnery.agent.pb.MovePlayer.Builder, cloud.spawnery.agent.pb.MovePlayerOrBuilder> 
+        internalGetMovePlayerFieldBuilder() {
+      if (movePlayerBuilder_ == null) {
+        if (!(messageCase_ == 10)) {
+          message_ = cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+        }
+        movePlayerBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.MovePlayer, cloud.spawnery.agent.pb.MovePlayer.Builder, cloud.spawnery.agent.pb.MovePlayerOrBuilder>(
+                (cloud.spawnery.agent.pb.MovePlayer) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 10;
+      onChanged();
+      return movePlayerBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.OperatorToProxy)

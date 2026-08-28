@@ -145,5 +145,20 @@ public interface OperatorToProxyOrBuilder extends
    */
   cloud.spawnery.agent.pb.CloudResponseOrBuilder getCloudResponseOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   * @return Whether the movePlayer field is set.
+   */
+  boolean hasMovePlayer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   * @return The movePlayer.
+   */
+  cloud.spawnery.agent.pb.MovePlayer getMovePlayer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   */
+  cloud.spawnery.agent.pb.MovePlayerOrBuilder getMovePlayerOrBuilder();
+
   cloud.spawnery.agent.pb.OperatorToProxy.MessageCase getMessageCase();
 }

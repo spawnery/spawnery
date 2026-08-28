@@ -114,6 +114,7 @@ func newChannelFixture(t *testing.T) *channelFixture {
 		Servers: serverreg.New(serverreg.Options{
 			State: netstate.Source{Reader: base.c, Agents: base.agents},
 		}),
+		State:          netstate.Source{Reader: base.c, Agents: base.agents},
 		ReportInterval: 5 * time.Second,
 		RenewAfter:     8 * time.Minute,
 		HardDeadline:   10 * time.Minute,
