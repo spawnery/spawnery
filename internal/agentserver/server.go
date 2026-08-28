@@ -182,6 +182,18 @@ type ProxyFleet interface {
 	Join(ctx context.Context, namespace, group, podUID string) (<-chan *agentpb.OperatorToProxy, func(), error)
 }
 
+// ServerFanout is the backend side's counterpart, narrowed to the one method
+// ServerSession calls for the reasons ProxyFleet gives above -- a package that
+// depended on the whole of internal/serverreg would drag its resync ticker and
+// its metric into every test that opens a stream.
+//
+// A backend joins by namespace and not by group: its mirror is the whole
+// network, where a proxy's FullSync is scoped to what its own group routes to.
+type ServerFanout interface {
+	// Join is *serverreg.Registry.Join: see its doc comment for the contract.
+	Join(ctx context.Context, namespace, podUID string) (<-chan *agentpb.OperatorToServer, func(), error)
+}
+
 // Options configures the server. The three durations are what the operator
 // dictates to its agents; both sides derive their thresholds from them, so
 // they are never guessed twice.
@@ -197,6 +209,11 @@ type Options struct {
 	// The narrow ProxyFleet interface, not *proxyreg.Fleet: see its doc
 	// comment for why.
 	Proxies ProxyFleet
+	// Servers is the fan-out every backend session joins. Required for
+	// ServerSession, and refused in New for the reason a nil Proxies is: a nil
+	// here surfaces as a panic inside a session, minutes after start and in a
+	// goroutine, rather than as a startup error.
+	Servers ServerFanout
 	// ReportInterval is how often an agent should report its player count.
 	ReportInterval time.Duration
 	// RenewAfter is when an agent should open its next stream — before the
@@ -244,6 +261,9 @@ func New(opts Options) *Server {
 	// goroutine, instead of as a startup error.
 	if opts.Proxies == nil {
 		panic("agentserver: no proxy fleet")
+	}
+	if opts.Servers == nil {
+		panic("agentserver: no server fanout")
 	}
 	return &Server{opts: opts, sessions: newSessions()}
 }
@@ -372,6 +392,12 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 	}
 	defer cleanup()
 
+	outbox, leaveFanout, err := s.opts.Servers.Join(ctx, id.Namespace, id.PodUID)
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "join the server fanout: %v", err)
+	}
+	defer leaveFanout()
+
 	received, errs := recvPump(ctx, stream.Recv)
 
 	for {
@@ -385,6 +411,24 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 			return err
 		case msg := <-received:
 			s.handle(logger, id, msg)
+		case msg, ok := <-outbox:
+			if !ok {
+				// The same two-readiness race ProxySession's own branch
+				// explains: a renewal cancels this ctx and closes this outbox
+				// within a few lines of each other, so both cases can be ready
+				// at once and Go picks arbitrarily. ctx.Err() is what tells a
+				// supersede apart from an agent that actually fell behind.
+				if ctx.Err() != nil {
+					return status.Error(codes.Unavailable, "session ended, reconnect with a fresh token")
+				}
+				// Cut loose. Ending the stream is the point: a mirror the
+				// agent cannot know is stale is worse than a reconnect, and
+				// the reconnect rebuilds it from a fresh state.
+				return status.Error(codes.ResourceExhausted, "server fell behind, reconnect for a fresh state")
+			}
+			if err := stream.Send(msg); err != nil {
+				return err
+			}
 		}
 	}
 }

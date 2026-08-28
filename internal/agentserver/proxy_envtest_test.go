@@ -101,6 +101,31 @@ func TestAProxyReceivesItsIntervalDeadlineAndFullSync(t *testing.T) {
 }
 
 // A registration made after the session is up reaches it.
+// recvRegister reads past anything that is not a RegisterServer and returns
+// the first one, or fails.
+//
+// It exists because the snapshot a proxy is sent on join grew a NetworkState
+// in 7b-3, and three tests here read "the next message" and meant "the
+// registration". What they assert is that a registration reaches a connected
+// proxy, never that it arrives in a particular position -- the position is
+// proxyreg's own business and its own test asserts it there.
+func recvRegister(t *testing.T, stream interface {
+	Recv() (*agentpb.OperatorToProxy, error)
+}) *agentpb.RegisterServer {
+	t.Helper()
+	for i := 0; i < 5; i++ {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		if r := msg.GetRegisterServer(); r != nil {
+			return r
+		}
+	}
+	t.Fatal("no RegisterServer in the first five messages")
+	return nil
+}
+
 func TestARegistrationReachesAConnectedProxy(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.proxyPod("gateway-bbbb")
@@ -125,12 +150,8 @@ func TestARegistrationReachesAConnectedProxy(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	msg, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("Recv: %v", err)
-	}
-	if got := msg.GetRegisterServer().GetServer().GetName(); got != "lobby-aaaa" {
-		t.Errorf("received %+v, want a RegisterServer for lobby-aaaa", msg)
+	if got := recvRegister(t, stream).GetServer().GetName(); got != "lobby-aaaa" {
+		t.Errorf("received a RegisterServer for %q, want lobby-aaaa", got)
 	}
 }
 
@@ -177,12 +198,10 @@ func TestAProxyPlayerCountAgainstItsLimitIsAccepted(t *testing.T) {
 	if err := f.proxies.Register(f.ctx, srv); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	msg, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("the stream did not survive an accepted player count: %v", err)
-	}
-	if got := msg.GetRegisterServer().GetServer().GetName(); got != "lobby-bbbb" {
-		t.Errorf("received %+v, want a RegisterServer for lobby-bbbb", msg)
+	// The registration surviving is what says the stream did: a session cut
+	// for a rejected report would have ended before it arrived.
+	if got := recvRegister(t, stream).GetServer().GetName(); got != "lobby-bbbb" {
+		t.Errorf("received a RegisterServer for %q, want lobby-bbbb", got)
 	}
 }
 
@@ -360,12 +379,10 @@ func TestASecondProxyStreamSupersedesTheFirstWithoutMisreportingWhy(t *testing.T
 	if err := f.proxies.Register(f.ctx, srv); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	msg, err := second.Recv()
-	if err != nil {
-		t.Fatalf("the live stream did not survive the superseded one leaving: %v", err)
-	}
-	if got := msg.GetRegisterServer().GetServer().GetName(); got != "lobby-gggg" {
-		t.Errorf("received %+v, want a RegisterServer for lobby-gggg", msg)
+	// Reaching the live stream is what says the superseded one leaving did
+	// not take it down with it.
+	if got := recvRegister(t, second).GetServer().GetName(); got != "lobby-gggg" {
+		t.Errorf("received a RegisterServer for %q, want lobby-gggg", got)
 	}
 }
 
