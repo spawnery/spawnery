@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.Environment
 import cloud.spawnery.agent.OperatorChannel
@@ -28,7 +29,8 @@ import java.util.logging.Level
  */
 class AgentPlugin : JavaPlugin(), Listener {
     private val state = ServerState()
-    private val role = ServerRole(state)
+    private val mirror = NetworkMirror()
+    private val role = ServerRole(state, mirror)
     private lateinit var scheduler: ScheduledExecutorService
     private var loop: SessionLoop<ServerMessage, OperatorToServer>? = null
 

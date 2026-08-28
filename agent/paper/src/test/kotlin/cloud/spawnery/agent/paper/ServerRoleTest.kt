@@ -1,7 +1,10 @@
 package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.Directive
+import cloud.spawnery.agent.NetworkMirror
+import cloud.spawnery.agent.pb.NetworkState
 import cloud.spawnery.agent.pb.OperatorToServer
+import cloud.spawnery.agent.pb.ServerState as PbServerState
 import cloud.spawnery.agent.pb.ReportInterval
 import cloud.spawnery.agent.pb.ServerMessage
 import cloud.spawnery.agent.pb.SessionDeadline
@@ -21,7 +24,7 @@ class ServerRoleTest {
     @Test
     fun `hello carries the version and the current readiness`() {
         val state = ServerState()
-        val role = ServerRole(state)
+        val role = ServerRole(state, NetworkMirror())
 
         val beforeReady = role.hello("26.2-0.2.0")
         assertEquals(ServerMessage.MessageCase.HELLO, beforeReady.messageCase)
@@ -39,7 +42,7 @@ class ServerRoleTest {
     @Test
     fun `the report carries the sampled players and slots`() {
         val state = ServerState()
-        val role = ServerRole(state)
+        val role = ServerRole(state, NetworkMirror())
         state.sample(players = 3, slots = 100)
 
         val report = role.playerCount()
@@ -55,7 +58,7 @@ class ServerRoleTest {
 
     @Test
     fun `a report interval message yields a Report directive`() {
-        val role = ServerRole(ServerState())
+        val role = ServerRole(ServerState(), NetworkMirror())
 
         assertEquals(
             Directive.Report(5),
@@ -69,7 +72,7 @@ class ServerRoleTest {
 
     @Test
     fun `a session deadline message yields a Deadline directive`() {
-        val role = ServerRole(ServerState())
+        val role = ServerRole(ServerState(), NetworkMirror())
 
         assertEquals(
             Directive.Deadline(renewAfterSeconds = 240, hardDeadlineSeconds = 600),
@@ -83,5 +86,24 @@ class ServerRoleTest {
                     .build(),
             ),
         )
+    }
+    @Test
+    fun `a network state reaches the mirror`() {
+        val mirror = NetworkMirror()
+        val role = ServerRole(ServerState(), mirror)
+
+        val directive = role.onMessage(
+            OperatorToServer.newBuilder()
+                .setNetworkState(
+                    NetworkState.newBuilder().addServers(
+                        PbServerState.newBuilder().setName("lobby-a").setGroup("lobby")
+                            .setPhase("Ready").setSlots(100),
+                    ),
+                )
+                .build(),
+        )
+
+        assertEquals(Directive.None, directive)
+        assertEquals(listOf("lobby-a"), mirror.servers().map { it.name() })
     }
 }

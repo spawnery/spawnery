@@ -1,9 +1,12 @@
 package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.Directive
+import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.pb.DrainPlayers
 import cloud.spawnery.agent.pb.FullSync
+import cloud.spawnery.agent.pb.NetworkState
 import cloud.spawnery.agent.pb.OperatorToProxy
+import cloud.spawnery.agent.pb.ServerState as PbServerState
 import cloud.spawnery.agent.pb.ProxyMessage
 import cloud.spawnery.agent.pb.RegisterServer
 import cloud.spawnery.agent.pb.ReportInterval
@@ -44,6 +47,7 @@ class ProxyRoleTest {
     private val players = FakePlayers(roster)
     private val drain = Drain(players, Router(directory)) { message, error -> logs += message to error }
     private val state = ProxyState(slots = 500)
+    private val mirror = NetworkMirror()
 
     /** How many times the role reported a first sync. See the two gate tests. */
     private var syncs = 0
@@ -57,6 +61,7 @@ class ProxyRoleTest {
         onFirstSync = { syncs++ },
         onSetReady = { },
         log = { message, error -> logs += message to error },
+        mirror = mirror,
     )
 
     @Test
@@ -495,6 +500,25 @@ class ProxyRoleTest {
      * above that need their own `onFirstSync`/`onSetReady` rather than the
      * counting ones [role] was built with.
      */
+    @Test
+    fun `a network state reaches the mirror`() {
+        val role = newRole()
+
+        val directive = role.onMessage(
+            OperatorToProxy.newBuilder()
+                .setNetworkState(
+                    NetworkState.newBuilder().addServers(
+                        PbServerState.newBuilder().setName("lobby-a").setGroup("lobby")
+                            .setPhase("Ready").setSlots(100),
+                    ),
+                )
+                .build(),
+        )
+
+        assertEquals(Directive.None, directive)
+        assertEquals(listOf("lobby-a"), mirror.servers().map { it.name() })
+    }
+
     private fun newRole(
         onFirstSync: () -> Unit = { syncs++ },
         onSetReady: (Boolean) -> Unit = { },
@@ -508,6 +532,7 @@ class ProxyRoleTest {
             onFirstSync = onFirstSync,
             onSetReady = onSetReady,
             log = { message, error -> logs += message to error },
+            mirror = mirror,
         )
 
     private fun backend(name: String, address: String, group: String): PbServer =
@@ -559,6 +584,7 @@ class ProxyRoleTest {
             onFirstSync = { },
             onSetReady = { },
             log = { message, error -> logs += message to error },
+            mirror = NetworkMirror(),
         )
 
         val reports = role.extraReports()

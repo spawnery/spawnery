@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.AgentRole
+import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.pb.AgentServiceGrpc
 import cloud.spawnery.agent.pb.BackendPlayers
@@ -87,6 +88,12 @@ class ProxyRole(
      */
     private val onSetReady: (Boolean) -> Unit,
     private val log: (String, Throwable?) -> Unit,
+    /**
+     * Where the operator's picture of the network is kept for the plugin API
+     * to read. Last, for the reason the parameter above [readTimeoutMillis]
+     * gives about position.
+     */
+    private val mirror: NetworkMirror,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
      * Whether a `FullSync` has ever been applied, paired with the last
@@ -389,6 +396,14 @@ class ProxyRole(
                     message.sessionDeadline.hardDeadlineSeconds,
                 )
 
+            OperatorToProxy.MessageCase.NETWORK_STATE -> {
+                // The whole effect is the side effect, exactly as on the
+                // server side. It sits inside the same runCatching every
+                // other branch does, so a malformed state costs this proxy
+                // a mirror update and never its session.
+                mirror.apply(message.networkState)
+                Directive.None
+            }
             // Including MESSAGE_NOT_SET. A newer operator against an older
             // agent has to keep working, exactly as handleProxy's own unknown
             // branch does in the other direction.

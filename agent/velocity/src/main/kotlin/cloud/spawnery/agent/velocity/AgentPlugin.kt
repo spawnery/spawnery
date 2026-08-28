@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.velocity
 
+import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
@@ -75,6 +76,9 @@ class AgentPlugin @Inject constructor(
     private val logger: Logger,
 ) {
     private var gate: ReadyGate? = null
+
+    /** What the plugin API reads from. See [MirrorApi]. */
+    private val mirror = NetworkMirror()
 
     /**
      * Everything below is null while the agent is dormant, and that is what
@@ -183,6 +187,7 @@ class AgentPlugin @Inject constructor(
             onFirstSync = gate::open,
             onSetReady = { ready -> if (ready) gate.open() else gate.close() },
             log = ::warn,
+            mirror = mirror,
         )
 
         val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->

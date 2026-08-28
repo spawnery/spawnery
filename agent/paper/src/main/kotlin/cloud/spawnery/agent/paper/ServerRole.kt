@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.AgentRole
+import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.pb.AgentServiceGrpc
 import cloud.spawnery.agent.pb.Hello
@@ -13,7 +14,18 @@ import io.grpc.ManagedChannel
 import io.grpc.stub.StreamObserver
 
 /** Paper's half of the channel. */
-class ServerRole(private val state: ServerState) : AgentRole<ServerMessage, OperatorToServer> {
+class ServerRole(
+    private val state: ServerState,
+    /**
+     * Where the operator's picture of the network is kept for the plugin API
+     * to read.
+     *
+     * Last, and that position is deliberate: every call site in this package
+     * passes positionally, so a parameter added above would rebind them --
+     * silently, wherever the types happen to match.
+     */
+    private val mirror: NetworkMirror,
+) : AgentRole<ServerMessage, OperatorToServer> {
     override fun open(
         channel: ManagedChannel,
         credentials: CallCredentials,
@@ -51,6 +63,14 @@ class ServerRole(private val state: ServerState) : AgentRole<ServerMessage, Oper
                     message.sessionDeadline.renewAfterSeconds,
                     message.sessionDeadline.hardDeadlineSeconds,
                 )
+            OperatorToServer.MessageCase.NETWORK_STATE -> {
+                // The whole effect is the side effect. The loop is told
+                // nothing, which is why FakeRole's hand copy of this mapping
+                // needs no branch for it: `else -> Directive.None` is already
+                // the right answer to the only question that copy models.
+                mirror.apply(message.networkState)
+                Directive.None
+            }
             else -> Directive.None
         }
 
