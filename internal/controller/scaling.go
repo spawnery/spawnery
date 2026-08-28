@@ -37,8 +37,20 @@ import (
 type ScalingInputs struct {
 	// Views is what the cache shows of the group's servers.
 	Views []ServerView
-	// MinReplicas is the floor the group is held at.
+	// MinReplicas is the floor the group's own spec declares.
+	//
+	// Read through floor() and not directly, because a boost adds to it and a
+	// site that read this field alone would be a group that creates servers it
+	// then deletes -- or refuses to shed capacity nothing asked for.
 	MinReplicas int32
+	// Boost is what live ScaleBoost objects add to the floor.
+	//
+	// Added to the floor and to nothing else. maxReplicas is applied after, and
+	// deliberately: a ceiling is an instruction -- milestone 4a settled that --
+	// and a boost is the one input here that will come from a command somebody
+	// types in a hurry. Zero is every group that has none, which is every group
+	// in every cluster until somebody creates one.
+	Boost int32
 	// MaxReplicas is the ceiling it may not pass.
 	MaxReplicas int32
 	// SpareSlots is the free player capacity the group keeps available.
@@ -79,6 +91,16 @@ type ScalingInputs struct {
 	// the cache has not shown yet.
 	PendingRetires map[string]bool
 }
+
+// floor is how many servers this group is held at: what its spec declares plus
+// whatever live boosts add.
+//
+// One method rather than the addition written at each site, because there are
+// two sites -- the create rule and the guard against shedding below the
+// floor -- and a boost that reached one but not the other would be a group
+// that builds servers and then removes them, or refuses to remove capacity
+// nothing is asking for. A third site added later gets it for free.
+func (in ScalingInputs) floor() int32 { return in.MinReplicas + in.Boost }
 
 // SizeDecision is what the group does about its size this pass.
 type SizeDecision struct {
@@ -540,7 +562,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 	}
 
 	create := wanted
-	if floor := in.MinReplicas - alive; floor > create {
+	if floor := in.floor() - alive; floor > create {
 		create = floor
 	}
 	// demanded is what this group would build with no changeover running: the
@@ -648,7 +670,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 	// group is not short of capacity, but an outstanding create says capacity
 	// is on its way, and removing a server against that is a decision made on
 	// two different readings of the same moment.
-	if in.PendingCreates == 0 && alive > in.MinReplicas {
+	if in.PendingCreates == 0 && alive > in.floor() {
 		pool := deletable(in)
 		free := readyFree(pool)
 		// While a changeover is in progress the group sheds stale capacity

@@ -763,6 +763,22 @@ func (r *ServerGroupReconciler) size(
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
 
+	// Live boosts, read here rather than inside DecideSize so the rule stays a
+	// pure function of its inputs like every other one in this package.
+	//
+	// A failed list is nought and a log line, not an error: a group that
+	// cannot read its boosts must still hold its declared floor, and refusing
+	// to size at all would turn a transient read failure into a group that
+	// stops replacing dead servers. The next pass tries again.
+	var boost int32
+	boosts := &spawneryv1alpha1.ScaleBoostList{}
+	if err := r.List(ctx, boosts, client.InNamespace(group.Namespace)); err != nil {
+		logger.V(1).Info("could not read scale boosts; sizing on the declared floor alone",
+			"group", group.Name, "reason", err.Error())
+	} else {
+		boost = liveBoost(boosts.Items, group.Name, r.Clock())
+	}
+
 	// Before the switch below and outside every one of its branches: the
 	// reservations are what keep condemned() from naming the same server twice
 	// across two passes, so a group that only ever condemns still has to
@@ -781,6 +797,7 @@ func (r *ServerGroupReconciler) size(
 			decision = DecideSize(ScalingInputs{
 				Views:         views,
 				MinReplicas:   group.Spec.Scaling.MinReplicas,
+				Boost:         boost,
 				MaxReplicas:   group.Spec.Scaling.MaxReplicas,
 				SpareSlots:    group.Spec.Scaling.SpareSlots,
 				MaxPlayers:    group.Spec.MaxPlayers,
@@ -1769,6 +1786,12 @@ func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&spawneryv1alpha1.ServerGroup{}).
 		Owns(&spawneryv1alpha1.Server{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		// Owns and not Watches: a boost carries an owner reference to its
+		// group, so the group is woken by one appearing or being swept without
+		// a mapping function of its own. Without this a boost would take up to
+		// a resync to do anything, and a command that seemed to do nothing for
+		// thirty seconds is a command somebody types twice.
+		Owns(&spawneryv1alpha1.ScaleBoost{}).
 		Owns(&corev1.ConfigMap{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
 		// A group refused because its Network is missing or unaccepted has no
