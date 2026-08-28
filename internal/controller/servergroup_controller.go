@@ -784,8 +784,6 @@ func (r *ServerGroupReconciler) size(
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
 
-
-
 	// Before the switch below and outside every one of its branches: the
 	// reservations are what keep condemned() from naming the same server twice
 	// across two passes, so a group that only ever condemns still has to

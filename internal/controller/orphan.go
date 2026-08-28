@@ -189,7 +189,7 @@ func (r *OrphanReconciler) sweepExpiredBoosts(ctx context.Context, logger logr.L
 	now := r.Clock()
 	for i := range boosts.Items {
 		b := &boosts.Items[i]
-		if b.Spec.ExpiresAt == nil || b.Spec.ExpiresAt.Time.After(now) {
+		if b.Spec.ExpiresAt == nil || b.Spec.ExpiresAt.After(now) {
 			continue
 		}
 		logger.V(1).Info("removing an expired scale boost",

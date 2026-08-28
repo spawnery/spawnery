@@ -46,7 +46,7 @@ func liveBoost(boosts []spawneryv1alpha1.ScaleBoost, group string, now time.Time
 		// Expiring exactly now has expired: "until 20:00" means it is over at
 		// 20:00, and a boundary left to whichever way a comparison happened to
 		// be written is a boundary somebody will read the other way.
-		if b.Spec.ExpiresAt != nil && !b.Spec.ExpiresAt.Time.After(now) {
+		if b.Spec.ExpiresAt != nil && !b.Spec.ExpiresAt.After(now) {
 			continue
 		}
 		total += b.Spec.Replicas
