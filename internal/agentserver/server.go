@@ -634,6 +634,30 @@ func (s *Server) handleProxy(logger logr.Logger, id grpcauth.Identity, msg *agen
 			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
 			logger.V(1).Info("discarded a backend report", "reason", err.Error())
 		}
+	case *agentpb.ProxyMessage_PlayerRoster:
+		entries := make([]agent.RosterEntry, 0, len(m.PlayerRoster.GetPlayers()))
+		for _, p := range m.PlayerRoster.GetPlayers() {
+			// An entry with no UUID is dropped rather than stored under "":
+			// the reader keys on UUID, so a second empty one would silently
+			// replace the first and the roster would show one player where
+			// two are on.
+			if p.GetUuid() == "" {
+				continue
+			}
+			entries = append(entries, agent.RosterEntry{
+				UUID:   p.GetUuid(),
+				Name:   p.GetName(),
+				Server: p.GetServer(),
+			})
+		}
+		if err := s.opts.Agents.ReportRoster(id.PodUID, id.Namespace, entries); err != nil {
+			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
+			// V(1), and with no player name in it. This message is the one
+			// thing on this channel that identifies a person, and a rejected
+			// report is an agent bug rather than something an operator acts on
+			// per player.
+			logger.V(1).Info("discarded a roster report", "reason", err.Error())
+		}
 	case *agentpb.ProxyMessage_PlayerJoinedServer:
 		// Accepted and ignored. Nothing in milestones 3 or 4 consumes it —
 		// player counts come from the servers — and it is on the wire for the

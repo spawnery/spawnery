@@ -422,3 +422,50 @@ func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testi
 		t.Errorf("lobby-1 = %d, want 1", n)
 	}
 }
+
+// A roster sent on the stream reaches the registry, keyed by the namespace the
+// token authenticated rather than anything the message said. Modelled on
+// TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace, which is
+// the same shape for the same reason.
+func TestAProxyRosterReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.proxyPod("gateway-aaaa")
+	stream, done := dialProxy(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("the opening message never arrived: %v", err)
+	}
+
+	if err := stream.Send(&agentpb.ProxyMessage{
+		Message: &agentpb.ProxyMessage_PlayerRoster{
+			PlayerRoster: &agentpb.PlayerRoster{
+				Players: []*agentpb.RosterEntry{
+					{Uuid: "u-alice", Name: "alice", Server: "lobby-0"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send the roster: %v", err)
+	}
+
+	// The registry is written from the receive loop, so poll rather than
+	// assume the send has been applied by the time Send returned.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, stale := f.agents.Roster(f.ns)
+		if len(got) == 1 && got[0].UUID == "u-alice" && !stale {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("roster = %+v stale=%v, want one fresh entry for alice", got, stale)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// And it did not land under some other namespace's name, which is what a
+	// report trusted about its own scope would have allowed.
+	if got, _ := f.agents.Roster("somewhere-else"); len(got) != 0 {
+		t.Errorf("roster in another namespace = %+v, want none", got)
+	}
+}
