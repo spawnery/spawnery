@@ -517,15 +517,48 @@ its own.
 
 | | | Depends on |
 |---|---|---|
-| **7b-1** | `agent/api`: the Java module, its types, and the two invariants of §6.2 | nothing |
-| **7b-2** | The server-side fan-out — `ServerSession`'s counterpart to `proxyreg.Fleet` | nothing |
-| **7b-3** | The mirror: the operator pushes network state to both agent kinds, and `SpawneryApi`'s read methods answer from it | 7b-1, 7b-2 |
-| **7b-4** | `CloudRequest`/`CloudResponse`, the operator's bounds, and `connect` | 7b-3 |
+| **7b-1** | `agent/api`: the Java module, its types, and the packaging invariant | nothing |
+| **7b-2** | The operator learns who is online: the proxy reports a roster with identities, the registry keeps and ages it | nothing |
+| **7b-3** | The server-side fan-out — `ServerSession`'s counterpart to `proxyreg.Fleet` — and `NetworkState` delivered on both channels | 7b-2 |
+| **7b-4** | Both agents hold the mirror, `SpawneryApi` answers from it, and §6.2's symmetry test compares the two | 7b-1, 7b-3 |
+| **7b-5** | `CloudRequest`/`CloudResponse`, the operator's bounds, and `connect` | 7b-4 |
 
 7b-1 goes first under any ordering: every other plan depends on those types
 existing, and it is the one that settles the packaging bet — a module that
-cannot be consumed by a third-party plugin makes the other three pointless,
-and §3.3's measurements say that bet is narrower than it looked.
+cannot be consumed by a third-party plugin makes the rest pointless, and
+§3.3's measurements say that bet is narrower than it looked.
+
+**Two things reshaped this table after 7b-1 shipped, and both were found by
+reading rather than by a failure.**
+
+A fan-out with nothing to fan out is not testable software, so the mechanism
+and its first payload cannot be separate plans. That merged what were 7b-2 and
+half of 7b-3.
+
+And `SpawneryApi.players()` shipped in 7b-1 with no source. The Velocity agent
+sends `PlayerJoinedServer` carrying a **username**, the operator's handler
+accepts and ignores it — its own comment says "Nothing in milestones 3 or 4
+consumes it" — and `agent.Registry` keeps counts and never an identity. So the
+operator has no UUID and no stored name for anybody, and the mirror could not
+have answered that method. Building the identities is now 7b-2, ahead of
+everything that reads them, rather than a gap discovered when the mirror was
+already being written.
+
+### The identities, and what holding them costs
+
+The proxy is the only honest source: every player on the network reaches a
+backend through one, and `VelocityPlayers` already reads exactly the state a
+roster needs. `PlayerRef` gains a `uuid` from `Player.getUniqueId()`, which
+`AgentPlugin.onServerConnected` already reads for the rescue set.
+
+This is the first time the operator holds a player's name and UUID rather than
+a count, and that is worth naming rather than sliding past. It stays **in
+memory in `agent.Registry`** and reaches no CR, no etcd, no log line at default
+verbosity, and no metric label — a metric labelled by player name would be
+both a cardinality bomb and a retention decision nobody made. It ages out with
+the report that carried it, on the staleness rule counts already use, so a
+proxy that goes silent stops asserting who is online rather than freezing a
+roster.
 
 ## 9. Acceptance
 
