@@ -963,6 +963,28 @@ func (s *stub) observeProxy(of func(map[string]any) map[string]any, message *age
 			})
 		}
 		s.events.record("backend_players", of(map[string]any{"backends": pairs}))
+	case *agentpb.ProxyMessage_PlayerRoster:
+		// Sorted by UUID for the reason backend_players is sorted by name: a
+		// trace this file exists to be asserted on cannot hand a test an
+		// order that depends on a map iteration.
+		//
+		// The UUID is what a phase asserts. The name is whatever the join tool
+		// was told to use, so asserting it would prove only that a string
+		// travelled; the UUID is what Velocity computed for the player it
+		// authenticated.
+		entries := body.PlayerRoster.GetPlayers()
+		players := make([]map[string]any, 0, len(entries))
+		for _, p := range entries {
+			players = append(players, map[string]any{
+				"uuid":   p.GetUuid(),
+				"name":   p.GetName(),
+				"server": p.GetServer(),
+			})
+		}
+		sort.Slice(players, func(i, j int) bool {
+			return players[i]["uuid"].(string) < players[j]["uuid"].(string)
+		})
+		s.events.record("player_roster", of(map[string]any{"players": players}))
 	case *agentpb.ProxyMessage_Heartbeat:
 		s.events.record("heartbeat", of(map[string]any{}))
 	default:

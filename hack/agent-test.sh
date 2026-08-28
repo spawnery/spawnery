@@ -1130,6 +1130,29 @@ if ! port_open "$NAME4" 25565; then
 fi
 echo "the ready gate closed ${closed_after}s after the operator withdrew readiness, and 25565 still answers"
 
+# The roster, from the real jar.
+#
+# **What this proves and what it does not.** It proves the shipped Velocity
+# plugin builds and sends a PlayerRoster that the operator's own parser reads
+# -- which catches a proto mismatch, a missing import, and a shading problem in
+# the generated Java, none of which any JUnit or Go test can see. It does not
+# prove a UUID is correct, because no player is connected: this harness has
+# never driven a join, and doing so needs a live backend for the proxy to route
+# to, which is its own project rather than a step of this one. The empty roster
+# is exactly what a proxy with nobody on it should send, and sending it at all
+# is the thing this milestone added.
+#
+# docs/runbook-milestone-3-evidence.md is where a real client's join is driven,
+# and is where a real UUID would be observed.
+await_event player_roster "$EVENTS4" "$NAME4"
+roster_players="$(jq -rs '[.[] | select(.kind == "player_roster")] | last | .players | length' <"$EVENTS4")"
+if [ "$roster_players" != "0" ]; then
+	echo "the proxy reported $roster_players players with nobody connected" >&2
+	jq -rs '[.[] | select(.kind == "player_roster")] | last' <"$EVENTS4" >&2
+	exit 1
+fi
+echo "the proxy sends a PlayerRoster the operator can parse, empty with nobody connected"
+
 # ---------------------------------------------------------------------------
 # Phase five: the operator's retirement order, against the proxy.
 #
