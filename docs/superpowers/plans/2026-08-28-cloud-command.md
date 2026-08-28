@@ -451,13 +451,50 @@ the safe state and looks like a bug.
 
 ## Done when
 
-- [ ] `make test`, `make agent`, `make lint` all pass
-- [ ] `make agent-test CONTAINER=podman` passes
-- [ ] Every bound added in Tasks 4 and 5 was mutated on its own
-- [ ] `make manifests` leaves no diff
-- [ ] `grep -rn 'ProxySelf\|ServerSelf\|CommandSourceStack\|CommandSource' agent/common/src/main`
-      finds nothing: the shared tree knows no platform
-- [ ] Nothing was pushed and no tag was created
+- [x] `make test`, `make agent`, `make lint` all pass — 19 Go packages, 197
+      agent tests, `golangci-lint` 0 issues, `nix build .#agents` green
+- [x] `make agent-test CONTAINER=podman` passes
+- [x] Every bound added in Tasks 4 and 5 was mutated on its own — five in Task
+      4, eight in Task 5, plus the new harness check in Task 6
+- [x] `make manifests` leaves no diff
+- [x] `grep -rn 'ProxySelf\|ServerSelf\|CommandSourceStack\|CommandSource' agent/common/src/main`
+      finds nothing: the shared tree knows no platform. **Read the grep before
+      believing it**: three hits remain and all three are comments saying the
+      tree names neither platform. The gate is the same grep with
+      `| grep -vE ':\s*(\*|//)'`, which is empty.
+- [x] Nothing was pushed and no tag was created
+
+## What execution changed about the plan
+
+Four places where the plan was followed and one where it was not, recorded
+because the reasoning is worth more than the instruction was.
+
+**Task 4 dropped a check the plan asked for.** The snapshot lookup before the
+retire write was measured redundant: removing it changed no test, because the
+writer's own namespaced `Get` already answers `NOT_FOUND`. A screening step
+that reads like a bound but cannot fail on its own is worse than none.
+
+**Task 4 moved the rate bound rather than repeating it.** Both stream
+directions unpacked the request oneof themselves; a second verb would have made
+four copies. One dispatcher means the bound is a line every verb passes through
+instead of a line each verb's author must remember.
+
+**Task 5 refuses where the plan said cap.** "Cap the replicas at what
+`maxReplicas` leaves" became a refusal naming the room. A boost that silently
+becomes something other than what was typed is the class of surprise this
+repository avoids everywhere else, and the admin who asked for six and got
+three would find out by counting servers.
+
+**Task 5 added a bound the plan did not have.** Reading the scaler showed a
+boost only reaches `DecideSize` for an ephemeral group with `spec.scaling`. On a
+persistent group the object would be created, counted in
+`status.boostedReplicas`, and change nothing — and mutating the guard away does
+not fail a test, it segfaults the operator on the nil pointer.
+
+**Task 6 took branch 2a.** A console is reachable: a detached `-i` container
+receives what `attach` writes, and Paper's entrypoint ends in `exec java`, so
+the container's stdin is the console's. Measured on a throwaway container
+before anything was built.
 
 ## What 7c-2 leaves
 
