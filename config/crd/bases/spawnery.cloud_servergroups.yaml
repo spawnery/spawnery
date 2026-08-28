@@ -35,6 +35,9 @@ spec:
     - jsonPath: .status.freeSlots
       name: Free Slots
       type: integer
+    - jsonPath: .status.boostedReplicas
+      name: Boosted
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -1477,6 +1480,22 @@ spec:
           status:
             description: ServerGroupStatus is the observed state of a ServerGroup.
             properties:
+              boostedReplicas:
+                description: |-
+                  BoostedReplicas is how much of this group's current floor comes from
+                  ScaleBoost objects rather than from spec.scaling.minReplicas.
+
+                  It exists because the likeliest failure of a boost is not a wrong number
+                  but an unexplained one: a group running four servers with a declared
+                  floor of one and nothing anywhere saying why. A person meeting that will
+                  edit the spec, which is the single thing that would not help -- the
+                  boost is a separate object and the spec is not where it lives.
+
+                  Zero and present rather than absent, so that comparing two groups does
+                  not mean telling "no boost" apart from "this operator is too old to
+                  say".
+                format: int32
+                type: integer
               conditions:
                 description: Conditions follow the standard Kubernetes condition contract.
                 items:

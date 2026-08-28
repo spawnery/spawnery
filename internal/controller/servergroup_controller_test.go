@@ -5031,3 +5031,76 @@ func TestCapacityEditDoesNotRollAnEphemeralGroup(t *testing.T) {
 		t.Fatalf("%d servers retiring after an image edit, want exactly 1 (maxUnavailable)", n)
 	}
 }
+
+// The likeliest failure of a boost is not a wrong number but an unexplained
+// one, so the group has to say how much of its floor is not its own spec.
+func TestAGroupSaysHowMuchOfItsFloorIsABoost(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	expires := metav1.NewTime(f.clock.now.Add(time.Hour))
+	if err := f.c.Create(f.ctx, &spawneryv1alpha1.ScaleBoost{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-boost", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ScaleBoostSpec{
+			GroupRef:  spawneryv1alpha1.ObjectRef{Name: f.group.Name},
+			Replicas:  2,
+			ExpiresAt: &expires,
+		},
+	}); err != nil {
+		t.Fatalf("create the boost: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx,
+		types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get the group: %v", err)
+	}
+	if got := group.Status.BoostedReplicas; got != 2 {
+		t.Errorf("status.boostedReplicas = %d, want 2", got)
+	}
+}
+
+// Zero and present, not absent: an admin comparing two groups should not have
+// to tell "no boost" from "this operator is too old to say".
+func TestAGroupWithNoBoostReportsZero(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx,
+		types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get the group: %v", err)
+	}
+	if got := group.Status.BoostedReplicas; got != 0 {
+		t.Errorf("status.boostedReplicas = %d, want 0", got)
+	}
+}
+
+// And a boost really does build a server, driven through a real reconcile
+// rather than against a hand-built ScalingInputs -- the defect shape where a
+// rule is right and the value never reaches it.
+func TestABoostActuallyCreatesAServer(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	expires := metav1.NewTime(f.clock.now.Add(time.Hour))
+	if err := f.c.Create(f.ctx, &spawneryv1alpha1.ScaleBoost{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-boost", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ScaleBoostSpec{
+			GroupRef:  spawneryv1alpha1.ObjectRef{Name: f.group.Name},
+			Replicas:  2,
+			ExpiresAt: &expires,
+		},
+	}); err != nil {
+		t.Fatalf("create the boost: %v", err)
+	}
+
+	f.reconcileGroup(t, r)
+
+	// The fixture's floor is one; the boost adds two.
+	if got := len(f.listServers(t)); got != 3 {
+		t.Fatalf("got %d servers, want 3: a floor of one plus a boost of two", got)
+	}
+}

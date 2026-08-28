@@ -419,7 +419,24 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash)
+	// Live boosts. Computed here rather than inside size() because two things
+	// read it: the sizing rule, and the status field that explains the number
+	// to whoever is looking at the group.
+	//
+	// A failed list is nought and a log line, not an error: a group that
+	// cannot read its boosts must still hold its declared floor, and refusing
+	// to size at all would turn a transient read failure into a group that
+	// stops replacing dead servers. The next pass tries again.
+	var boost int32
+	boostList := &spawneryv1alpha1.ScaleBoostList{}
+	if err := r.List(ctx, boostList, client.InNamespace(group.Namespace)); err != nil {
+		log.FromContext(ctx).V(1).Info("could not read scale boosts; sizing on the declared floor alone",
+			"group", group.Name, "reason", err.Error())
+	} else {
+		boost = liveBoost(boostList.Items, group.Name, r.Clock())
+	}
+
+	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash, boost)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -657,6 +674,9 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	group.Status.ReadyReplicas = totals.ReadyReplicas
 	group.Status.OnlinePlayers = totals.OnlinePlayers
 	group.Status.FreeSlots = totals.FreeSlots
+	// Published whether or not there is one, so a reader can tell "no boost"
+	// from an operator that does not know the word.
+	group.Status.BoostedReplicas = boost
 	group.Status.ObservedGeneration = group.Generation
 	group.Status.Phase = derivePhase(group, totals)
 	// After derivePhase and independent of it: the two answer different
@@ -759,25 +779,12 @@ func (r *ServerGroupReconciler) size(
 	backoff BackoffDecision,
 	mayResize bool,
 	podHash string,
+	boost int32,
 ) (SizeDecision, error) {
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
 
-	// Live boosts, read here rather than inside DecideSize so the rule stays a
-	// pure function of its inputs like every other one in this package.
-	//
-	// A failed list is nought and a log line, not an error: a group that
-	// cannot read its boosts must still hold its declared floor, and refusing
-	// to size at all would turn a transient read failure into a group that
-	// stops replacing dead servers. The next pass tries again.
-	var boost int32
-	boosts := &spawneryv1alpha1.ScaleBoostList{}
-	if err := r.List(ctx, boosts, client.InNamespace(group.Namespace)); err != nil {
-		logger.V(1).Info("could not read scale boosts; sizing on the declared floor alone",
-			"group", group.Name, "reason", err.Error())
-	} else {
-		boost = liveBoost(boosts.Items, group.Name, r.Clock())
-	}
+
 
 	// Before the switch below and outside every one of its branches: the
 	// reservations are what keep condemned() from naming the same server twice
