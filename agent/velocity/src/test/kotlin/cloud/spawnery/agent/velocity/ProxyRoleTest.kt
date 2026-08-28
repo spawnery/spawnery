@@ -18,6 +18,7 @@ import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import cloud.spawnery.agent.pb.RegisteredServer as PbServer
+import java.util.UUID
 
 /**
  * The mapping between the operator's messages and the four things a proxy
@@ -534,11 +535,49 @@ class ProxyRoleTest {
 
         val extras = role.extraReports()
 
-        assertEquals(1, extras.size, "one extra report per tick")
+        assertEquals(2, extras.size, "the counts and the roster, per tick")
         assertEquals(
             mapOf("lobby-0" to 2),
             extras[0].backendPlayers.playersMap,
             "both players are on lobby-0",
+        )
+    }
+
+    @Test
+    fun `the periodic report carries the roster beside the counts`() {
+        val id = UUID.fromString("00000000-0000-4000-8000-00000000000a")
+        val named = listOf(
+            FakePlayer("alice", currentServer = "lobby-a", uuid = id),
+            FakePlayer("bob"),
+        )
+        val role = ProxyRole(
+            state = state,
+            directory = directory,
+            drain = drain,
+            players = FakePlayers(named),
+            readTimeoutMillis = 30_000,
+            onFirstSync = { },
+            onSetReady = { },
+            log = { message, error -> logs += message to error },
+        )
+
+        val reports = role.extraReports()
+
+        // Both, and the counts first: BackendPlayers is what the drain reads,
+        // and a change here must not reorder what an operator already parses.
+        assertEquals(2, reports.size)
+        assertTrue(reports[0].hasBackendPlayers())
+        assertTrue(reports[1].hasPlayerRoster())
+
+        val entries = reports[1].playerRoster.playersList
+        assertEquals(2, entries.size, "a player on no server is still on this proxy")
+        val alice = entries.single { it.name == "alice" }
+        assertEquals(id.toString(), alice.uuid)
+        assertEquals("lobby-a", alice.server)
+        assertEquals(
+            "",
+            entries.single { it.name == "bob" }.server,
+            "a player attached to nothing carries an empty server, not a missing entry",
         )
     }
 
