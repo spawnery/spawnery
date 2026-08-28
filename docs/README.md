@@ -20,6 +20,7 @@ This page is the index of everything under `docs/`.
 |---|---|
 | [`known-issues.md`](known-issues.md) | Everything open right now. An entry is deleted when it closes, so an empty file means nothing is open |
 | [`development.md`](development.md) | Building, testing, the images, publishing, and the hand-driven local `kind` flow |
+| [`../agent/api/README.md`](../agent/api/README.md) | The plugin API: what a Paper or Velocity plugin can ask the cloud, and the one rule that breaks a consumer |
 | [`history.md`](history.md) | How it was built, milestone by milestone, and what each one measured rather than assumed |
 | [`superpowers/specs/`](superpowers/specs/) | The design documents, one per milestone |
 | [`superpowers/plans/`](superpowers/plans/) | The implementation plans the designs became |

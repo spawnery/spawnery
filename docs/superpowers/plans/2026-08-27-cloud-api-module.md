@@ -243,7 +243,26 @@ gRPC entries:
     api(project(":api"))
 ```
 
-- [ ] **Step 5: Build the agents**
+- [ ] **Step 5: Track the new files before building**
+
+```bash
+git add agent/settings.gradle.kts agent/api agent/common/build.gradle.kts
+```
+
+**This is not tidiness, it is a precondition.** `nix build` filters the source
+tree through the git index, so an untracked directory does not exist inside the
+sandbox. Skipping it gives a failure that reads like a configuration error and
+is not:
+
+```
+No matching variant of project :api was found ... - No variants exist.
+```
+
+`settings.gradle.kts` includes `api`, the directory the sandbox sees is empty,
+and the project therefore produces nothing to depend on. Every later `make
+agent` in this plan has the same requirement.
+
+- [ ] **Step 6: Build the agents**
 
 Run: `nix --extra-experimental-features 'nix-command flakes' develop -c make agent`
 
@@ -255,7 +274,7 @@ it names. If it is `cloud/spawnery/agent/api`, something has gone wrong with
 the package name: the check permits everything under `cloud/spawnery/agent/`
 and that is inside it.
 
-- [ ] **Step 6: Open the jar and look**
+- [ ] **Step 7: Open the jar and look**
 
 A green build says the jar was produced, not that it carries these classes.
 
@@ -282,10 +301,10 @@ If `result*` does not point at the agents build, find the store path with
 `nix --extra-experimental-features 'nix-command flakes' build --no-link
 --print-out-paths .#agents` and use that.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add agent/settings.gradle.kts agent/api agent/common/build.gradle.kts
+git add -A
 git commit -m "$(cat <<'EOF'
 feat(agent): a Java module for the API a plugin compiles against
 
