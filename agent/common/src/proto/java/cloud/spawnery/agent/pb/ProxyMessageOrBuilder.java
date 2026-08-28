@@ -85,5 +85,20 @@ public interface ProxyMessageOrBuilder extends
    */
   cloud.spawnery.agent.pb.BackendPlayersOrBuilder getBackendPlayersOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.PlayerRoster player_roster = 6;</code>
+   * @return Whether the playerRoster field is set.
+   */
+  boolean hasPlayerRoster();
+  /**
+   * <code>.spawnery.agent.v1alpha1.PlayerRoster player_roster = 6;</code>
+   * @return The playerRoster.
+   */
+  cloud.spawnery.agent.pb.PlayerRoster getPlayerRoster();
+  /**
+   * <code>.spawnery.agent.v1alpha1.PlayerRoster player_roster = 6;</code>
+   */
+  cloud.spawnery.agent.pb.PlayerRosterOrBuilder getPlayerRosterOrBuilder();
+
   cloud.spawnery.agent.pb.ProxyMessage.MessageCase getMessageCase();
 }
