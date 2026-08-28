@@ -125,6 +125,7 @@ rules:
   resources:
   - scaleboosts
   verbs:
+  - create
   - delete
   - get
   - list

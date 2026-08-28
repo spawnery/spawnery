@@ -109,6 +109,8 @@ message CloudRequest {
   oneof request {
     ConnectRequest connect = 2;
     RetireRequest retire = 3;
+    BoostRequest boost = 4;
+    StopBoostRequest stop_boost = 5;
   }
 }
 
@@ -124,6 +126,8 @@ message CloudResponse {
     ConnectResult connect = 2;
     RequestError error = 3;
     RetireResult retire = 4;
+    BoostResult boost = 5;
+    StopBoostResult stop_boost = 6;
   }
 }
 
@@ -194,6 +198,56 @@ message RetireResult {
   // The server that is now retiring, echoed so a caller that asked by a name
   // it built from a string sees what the operator matched.
   string server = 1;
+}
+
+// BoostRequest asks for extra capacity on a group, for a while.
+//
+// It carries no namespace, for the reason RetireRequest carries none.
+//
+// **A duration and not an instant.** The agent and the operator do not share a
+// clock, and an absolute expiry from a pod whose clock is minutes fast would
+// create a boost that ends early or late by exactly that error -- silently,
+// since nothing on either side can see the difference. A duration is
+// interpreted against the operator's own clock, which is the clock the scaler
+// then reads.
+message BoostRequest {
+  string group = 1;
+  int32 replicas = 2;
+  // Zero means the operator's default. The operator also bounds the maximum;
+  // see its own answer for what it refuses and why.
+  int64 duration_seconds = 3;
+}
+
+// BoostResult is the boost that now exists.
+//
+// It repeats the replica count back rather than assuming the caller's, because
+// the request may have been for zero seconds and this says what the default
+// resolved to.
+message BoostResult {
+  int32 replicas = 1;
+  // When it stops counting, as seconds since the epoch on the operator's
+  // clock. An instant here and a duration on the way in, and the asymmetry is
+  // the point: the operator is the side with the authoritative clock, so it
+  // states the answer and the agent states the ask.
+  int64 expires_at_unix = 2;
+}
+
+// StopBoostRequest ends a group's boosts early.
+//
+// Every boost on the group, not one: a partial reduction across several boosts
+// with different expiries is arithmetic nobody asked for, and "stop" is what a
+// person means when they want the extra servers gone.
+message StopBoostRequest {
+  string group = 1;
+}
+
+// StopBoostResult says how many boosts were removed.
+//
+// Zero is an ordinary answer and not an error: it means the group had no
+// boosts, which is what an admin needs to hear when they expected it to have
+// some.
+message StopBoostResult {
+  int32 removed = 1;
 }
 
 // RequestError is why a request was not carried out.

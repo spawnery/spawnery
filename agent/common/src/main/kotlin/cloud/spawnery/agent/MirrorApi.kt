@@ -2,12 +2,14 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.CloudPlayer
 import cloud.spawnery.agent.api.Group
+import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
 import cloud.spawnery.agent.api.Self
 import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.api.ServerInfo
 import cloud.spawnery.agent.api.SpawneryApi
 import java.util.Optional
+import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.CompletionStage
 
@@ -65,4 +67,10 @@ class MirrorApi(
 
     override fun retire(server: String): CompletionStage<Void> =
         connector.retire(server)
+
+    override fun boost(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<BoostResult> =
+        connector.boost(group, replicas, forHowLong)
+
+    override fun stopBoosts(group: String): CompletionStage<Int> =
+        connector.stopBoosts(group)
 }

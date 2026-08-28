@@ -101,11 +101,18 @@ spec:
               retire:
                 description: |-
                   Retire asks this server to stop taking joins and empty out, without its
-                  players being moved. The ServerGroup controller sets it during a
-                  rolling update; a user never does. It is also the single signal for
-                  spec.update.maxUnavailable: a server counts against that budget while
-                  this is true, which is what tells a retirement apart from a drain a
-                  scale-down or a deletion started.
+                  players being moved. The ServerGroup controller sets it during a rolling
+                  update, and -- since the /cloud command -- an administrator can too,
+                  through the agent endpoint's retire request rather than by editing this
+                  object. It is also the single signal for spec.update.maxUnavailable: a
+                  server counts against that budget while this is true, which is what
+                  tells a retirement apart from a drain a scale-down or a deletion
+                  started.
+
+                  That second writer is why the controller's own retireServer checks the
+                  flag before patching: it can now find a server already retiring for a
+                  reason it did not cause, and must treat that as done rather than as a
+                  state to correct.
                 type: boolean
             required:
             - groupRef

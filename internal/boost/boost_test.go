@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+package boost
 
 import (
 	"testing"
@@ -44,7 +44,7 @@ func TestBoostsAddUpRatherThanReplacing(t *testing.T) {
 	now := time.Unix(1000, 0)
 	later := now.Add(time.Hour)
 
-	got := liveBoost([]spawneryv1alpha1.ScaleBoost{
+	got := Live([]spawneryv1alpha1.ScaleBoost{
 		boostFor("lobby", 2, &later),
 		boostFor("lobby", 3, &later),
 	}, "lobby", now)
@@ -58,7 +58,7 @@ func TestAnExpiredBoostCountsForNothing(t *testing.T) {
 	now := time.Unix(1000, 0)
 	past := now.Add(-time.Second)
 
-	if got := liveBoost([]spawneryv1alpha1.ScaleBoost{boostFor("lobby", 4, &past)}, "lobby", now); got != 0 {
+	if got := Live([]spawneryv1alpha1.ScaleBoost{boostFor("lobby", 4, &past)}, "lobby", now); got != 0 {
 		t.Errorf("boost = %d, want 0 for an expired one", got)
 	}
 }
@@ -66,7 +66,7 @@ func TestAnExpiredBoostCountsForNothing(t *testing.T) {
 func TestABoostWithNoExpiryCountsForever(t *testing.T) {
 	now := time.Unix(1000, 0)
 
-	if got := liveBoost([]spawneryv1alpha1.ScaleBoost{boostFor("lobby", 2, nil)}, "lobby", now); got != 2 {
+	if got := Live([]spawneryv1alpha1.ScaleBoost{boostFor("lobby", 2, nil)}, "lobby", now); got != 2 {
 		t.Errorf("boost = %d, want 2: no expiry means no end", got)
 	}
 }
@@ -75,7 +75,7 @@ func TestAnotherGroupsBoostIsNotThisGroupsCapacity(t *testing.T) {
 	now := time.Unix(1000, 0)
 	later := now.Add(time.Hour)
 
-	if got := liveBoost([]spawneryv1alpha1.ScaleBoost{boostFor("arena", 9, &later)}, "lobby", now); got != 0 {
+	if got := Live([]spawneryv1alpha1.ScaleBoost{boostFor("arena", 9, &later)}, "lobby", now); got != 0 {
 		t.Errorf("boost = %d, want 0: a boost names one group", got)
 	}
 }
@@ -85,7 +85,7 @@ func TestABoostExpiringExactlyNowHasExpired(t *testing.T) {
 	// happened to be written. "Until 20:00" means it is over at 20:00.
 	now := time.Unix(1000, 0)
 
-	if got := liveBoost([]spawneryv1alpha1.ScaleBoost{boostFor("lobby", 2, &now)}, "lobby", now); got != 0 {
+	if got := Live([]spawneryv1alpha1.ScaleBoost{boostFor("lobby", 2, &now)}, "lobby", now); got != 0 {
 		t.Errorf("boost = %d, want 0: expiring now means expired", got)
 	}
 }

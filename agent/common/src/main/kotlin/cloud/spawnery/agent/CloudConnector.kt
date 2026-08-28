@@ -1,12 +1,17 @@
 package cloud.spawnery.agent
 
+import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
 import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.ConnectRequest
+import cloud.spawnery.agent.pb.BoostRequest
 import cloud.spawnery.agent.pb.RetireRequest
+import cloud.spawnery.agent.pb.StopBoostRequest
 import cloud.spawnery.agent.pb.RequestError
+import java.time.Duration
+import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
@@ -67,6 +72,42 @@ class CloudConnector(
         }
 
     /**
+     * Asks for extra capacity on a group, for a while.
+     *
+     * A duration on the wire and never an instant: the two sides do not share
+     * a clock, and an expiry computed here would be wrong by this pod's clock
+     * error with nothing on either side able to see it. Null means the
+     * operator's default, which is why zero is what goes on the wire -- the
+     * proto documents zero as "the operator decides", and a duration this
+     * agent invented would take that choice away from the side that owns it.
+     */
+    fun boost(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<BoostResult> =
+        requests.start<BoostResult> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setBoost(
+                        BoostRequest.newBuilder()
+                            .setGroup(group)
+                            .setReplicas(replicas)
+                            .setDurationSeconds(forHowLong?.seconds ?: 0L),
+                    )
+                    .build(),
+            )
+        }
+
+    /** Ends every boost on a group and reports how many there were. */
+    fun stopBoosts(group: String): CompletionStage<Int> =
+        requests.start<Int> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setStopBoost(StopBoostRequest.newBuilder().setGroup(group))
+                    .build(),
+            )
+        }
+
+    /**
      * Routes an answer to whoever is waiting on it.
      *
      * An answer for an id nobody holds is dropped by [Requests], which is what
@@ -86,6 +127,14 @@ class CloudConnector(
                 ),
             )
             response.hasRetire() -> requests.complete(response.id, null)
+            response.hasBoost() -> requests.complete(
+                response.id,
+                BoostResult(
+                    response.boost.replicas,
+                    Instant.ofEpochSecond(response.boost.expiresAtUnix),
+                ),
+            )
+            response.hasStopBoost() -> requests.complete(response.id, response.stopBoost.removed)
             // A result kind this agent does not know. Failed rather than
             // ignored: a plugin holding a future to its deadline learns
             // nothing, where a failure names the version skew.

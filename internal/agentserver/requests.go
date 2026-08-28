@@ -19,6 +19,7 @@ package agentserver
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -39,6 +40,22 @@ const (
 	RequestBurst = 8
 	// RequestRefill is how long one token takes to come back.
 	RequestRefill = time.Second
+
+	// BoostDefaultDuration is how long a boost runs when the request names no
+	// duration.
+	//
+	// An hour. What /cloud start usually means is an event, a rush, a Saturday
+	// night, and the failure mode of a permanent one is well known: the boost
+	// from last weekend is still there in March and nobody remembers why the
+	// lobby runs four servers.
+	BoostDefaultDuration = time.Hour
+	// BoostMaxDuration is the longest one a request may ask for.
+	//
+	// Twelve hours, which covers any single evening and no more. A need that
+	// outlives an evening belongs in the group's own file, where a person
+	// reviews it -- and this bound is the only thing that makes an admin
+	// discover that file rather than typing a week-long boost every week.
+	BoostMaxDuration = 12 * time.Hour
 )
 
 // requestLimiter is a token bucket per pod.
@@ -127,6 +144,10 @@ func (s *Server) answerCloudRequest(
 		return s.answerConnect(ctx, logger, id, req.GetId(), req.GetConnect())
 	case req.GetRetire() != nil:
 		return s.answerRetire(ctx, logger, id, req.GetId(), req.GetRetire())
+	case req.GetBoost() != nil:
+		return s.answerBoost(ctx, logger, id, req.GetId(), req.GetBoost())
+	case req.GetStopBoost() != nil:
+		return s.answerStopBoost(ctx, logger, id, req.GetId(), req.GetStopBoost())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")
@@ -183,6 +204,122 @@ func (s *Server) answerRetire(
 	}
 
 	return retired(reqID, &agentpb.RetireResult{Server: req.GetServer()})
+}
+
+// answerBoost adds capacity to a group for a while.
+//
+// # What it refuses, and why each refusal is separate
+//
+// The namespace bound is structural, as it is for retire: the group is
+// resolved under id.Namespace and the request has no field that could name
+// another.
+//
+// Four things are refused and each says which one it was, because an admin who
+// is told only "refused" retypes the same command. **A group with no
+// spec.scaling**, because a boost on a persistent group would be created,
+// counted in the status, and change nothing -- see ErrGroupNotScalable. **Too
+// long**, at BoostMaxDuration, which is the bound that makes somebody discover
+// the file they should be editing instead. **Too many**, at what the group's
+// own ceiling leaves, because §4.4's rule is that a ceiling is an instruction
+// and a command typed in a chat window must not lift it. And **fewer than one
+// server**, which is not a boost.
+//
+// Refused rather than quietly capped. A boost that silently becomes something
+// other than what was typed is the class of surprise this repository avoids
+// everywhere else, and the admin who asked for six and got three would find
+// out only by counting servers.
+func (s *Server) answerBoost(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.BoostRequest,
+) *agentpb.CloudResponse {
+	if req.GetReplicas() < 1 {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"a boost has to add at least one server")
+	}
+
+	// A duration on the wire and an instant here: the two sides do not share a
+	// clock, so the operator's is the one that decides when this ends. See
+	// agentpb.BoostRequest.
+	duration := time.Duration(req.GetDurationSeconds()) * time.Second
+	if duration <= 0 {
+		duration = BoostDefaultDuration
+	}
+	if duration > BoostMaxDuration {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			fmt.Sprintf("the longest a boost may run is %s; a need that outlives an evening "+
+				"belongs in the group's own file", BoostMaxDuration))
+	}
+
+	headroom, err := s.opts.Writer.Headroom(ctx, id.Namespace, req.GetGroup())
+	switch {
+	case errors.Is(err, ErrNoSuchGroup):
+		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+			"no group by that name is on this network")
+	case errors.Is(err, ErrGroupNotScalable):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group is sized by its own replica count, so a boost would change nothing")
+	case err != nil:
+		logger.V(1).Info("could not read a group for a boost request", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not read that group just now")
+	}
+	if room := headroom.Room(); req.GetReplicas() > room {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			fmt.Sprintf("that group has room for %d more, not %d", room, req.GetReplicas()))
+	}
+
+	expiresAt := s.opts.Clock().Add(duration)
+	if err := s.opts.Writer.Boost(ctx, id.Namespace, req.GetGroup(), req.GetReplicas(), expiresAt); err != nil {
+		if errors.Is(err, ErrNoSuchGroup) {
+			// Deleted between the two calls. Ordinary.
+			return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+				"no group by that name is on this network")
+		}
+		logger.V(1).Info("could not create a boost", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not write that just now")
+	}
+
+	return &agentpb.CloudResponse{
+		Id: reqID,
+		Result: &agentpb.CloudResponse_Boost{Boost: &agentpb.BoostResult{
+			Replicas:      req.GetReplicas(),
+			ExpiresAtUnix: expiresAt.Unix(),
+		}},
+	}
+}
+
+// answerStopBoost ends a group's boosts early.
+//
+// It refuses nothing but a read it could not do. A group with no boosts
+// answers zero, which is what an admin who expected some needs to hear -- and
+// a group that does not exist answers zero as well, because there is nothing
+// to distinguish and nothing that a person would do differently. That last
+// choice is the one worth stating: an admin who mistypes a group name is told
+// "no boosts", not "no such group", and the two readings agree on the only
+// thing that matters, which is that nothing was removed.
+func (s *Server) answerStopBoost(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.StopBoostRequest,
+) *agentpb.CloudResponse {
+	removed, err := s.opts.Writer.StopBoosts(ctx, id.Namespace, req.GetGroup())
+	if err != nil {
+		logger.V(1).Info("could not stop boosts", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not write that just now")
+	}
+	return &agentpb.CloudResponse{
+		Id: reqID,
+		Result: &agentpb.CloudResponse_StopBoost{
+			StopBoost: &agentpb.StopBoostResult{Removed: int32(removed)},
+		},
+	}
 }
 
 // answerConnect resolves a move request and says what the operator did with

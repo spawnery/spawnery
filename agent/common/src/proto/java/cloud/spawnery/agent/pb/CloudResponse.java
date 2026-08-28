@@ -66,6 +66,8 @@ private static final long serialVersionUID = 0L;
     CONNECT(2),
     ERROR(3),
     RETIRE(4),
+    BOOST(5),
+    STOP_BOOST(6),
     RESULT_NOT_SET(0);
     private final int value;
     private ResultCase(int value) {
@@ -86,6 +88,8 @@ private static final long serialVersionUID = 0L;
         case 2: return CONNECT;
         case 3: return ERROR;
         case 4: return RETIRE;
+        case 5: return BOOST;
+        case 6: return STOP_BOOST;
         case 0: return RESULT_NOT_SET;
         default: return null;
       }
@@ -205,6 +209,68 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.RetireResult.getDefaultInstance();
   }
 
+  public static final int BOOST_FIELD_NUMBER = 5;
+  /**
+   * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+   * @return Whether the boost field is set.
+   */
+  @java.lang.Override
+  public boolean hasBoost() {
+    return resultCase_ == 5;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+   * @return The boost.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.BoostResult getBoost() {
+    if (resultCase_ == 5) {
+       return (cloud.spawnery.agent.pb.BoostResult) result_;
+    }
+    return cloud.spawnery.agent.pb.BoostResult.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.BoostResultOrBuilder getBoostOrBuilder() {
+    if (resultCase_ == 5) {
+       return (cloud.spawnery.agent.pb.BoostResult) result_;
+    }
+    return cloud.spawnery.agent.pb.BoostResult.getDefaultInstance();
+  }
+
+  public static final int STOP_BOOST_FIELD_NUMBER = 6;
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+   * @return Whether the stopBoost field is set.
+   */
+  @java.lang.Override
+  public boolean hasStopBoost() {
+    return resultCase_ == 6;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+   * @return The stopBoost.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StopBoostResult getStopBoost() {
+    if (resultCase_ == 6) {
+       return (cloud.spawnery.agent.pb.StopBoostResult) result_;
+    }
+    return cloud.spawnery.agent.pb.StopBoostResult.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StopBoostResultOrBuilder getStopBoostOrBuilder() {
+    if (resultCase_ == 6) {
+       return (cloud.spawnery.agent.pb.StopBoostResult) result_;
+    }
+    return cloud.spawnery.agent.pb.StopBoostResult.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -231,6 +297,12 @@ private static final long serialVersionUID = 0L;
     if (resultCase_ == 4) {
       output.writeMessage(4, (cloud.spawnery.agent.pb.RetireResult) result_);
     }
+    if (resultCase_ == 5) {
+      output.writeMessage(5, (cloud.spawnery.agent.pb.BoostResult) result_);
+    }
+    if (resultCase_ == 6) {
+      output.writeMessage(6, (cloud.spawnery.agent.pb.StopBoostResult) result_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -250,6 +322,14 @@ private static final long serialVersionUID = 0L;
     if (resultCase_ == 4) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(4, (cloud.spawnery.agent.pb.RetireResult) result_);
+    }
+    if (resultCase_ == 5) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(5, (cloud.spawnery.agent.pb.BoostResult) result_);
+    }
+    if (resultCase_ == 6) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(6, (cloud.spawnery.agent.pb.StopBoostResult) result_);
     }
     return size;
   }
@@ -291,6 +371,14 @@ private static final long serialVersionUID = 0L;
         if (!getRetire()
             .equals(other.getRetire())) return false;
         break;
+      case 5:
+        if (!getBoost()
+            .equals(other.getBoost())) return false;
+        break;
+      case 6:
+        if (!getStopBoost()
+            .equals(other.getStopBoost())) return false;
+        break;
       case 0:
       default:
     }
@@ -320,6 +408,14 @@ private static final long serialVersionUID = 0L;
       case 4:
         hash = (37 * hash) + RETIRE_FIELD_NUMBER;
         hash = (53 * hash) + getRetire().hashCode();
+        break;
+      case 5:
+        hash = (37 * hash) + BOOST_FIELD_NUMBER;
+        hash = (53 * hash) + getBoost().hashCode();
+        break;
+      case 6:
+        hash = (37 * hash) + STOP_BOOST_FIELD_NUMBER;
+        hash = (53 * hash) + getStopBoost().hashCode();
         break;
       case 0:
       default:
@@ -474,6 +570,12 @@ private static final long serialVersionUID = 0L;
       if (retireBuilder_ != null) {
         retireBuilder_.clear();
       }
+      if (boostBuilder_ != null) {
+        boostBuilder_.clear();
+      }
+      if (stopBoostBuilder_ != null) {
+        stopBoostBuilder_.clear();
+      }
       resultCase_ = 0;
       result_ = null;
       return this;
@@ -530,6 +632,14 @@ private static final long serialVersionUID = 0L;
           retireBuilder_ != null) {
         result.result_ = retireBuilder_.build();
       }
+      if (resultCase_ == 5 &&
+          boostBuilder_ != null) {
+        result.result_ = boostBuilder_.build();
+      }
+      if (resultCase_ == 6 &&
+          stopBoostBuilder_ != null) {
+        result.result_ = stopBoostBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -558,6 +668,14 @@ private static final long serialVersionUID = 0L;
         }
         case RETIRE: {
           mergeRetire(other.getRetire());
+          break;
+        }
+        case BOOST: {
+          mergeBoost(other.getBoost());
+          break;
+        }
+        case STOP_BOOST: {
+          mergeStopBoost(other.getStopBoost());
           break;
         }
         case RESULT_NOT_SET: {
@@ -616,6 +734,20 @@ private static final long serialVersionUID = 0L;
               resultCase_ = 4;
               break;
             } // case 34
+            case 42: {
+              input.readMessage(
+                  internalGetBoostFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              resultCase_ = 5;
+              break;
+            } // case 42
+            case 50: {
+              input.readMessage(
+                  internalGetStopBoostFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              resultCase_ = 6;
+              break;
+            } // case 50
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1104,6 +1236,290 @@ private static final long serialVersionUID = 0L;
       resultCase_ = 4;
       onChanged();
       return retireBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.BoostResult, cloud.spawnery.agent.pb.BoostResult.Builder, cloud.spawnery.agent.pb.BoostResultOrBuilder> boostBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     * @return Whether the boost field is set.
+     */
+    @java.lang.Override
+    public boolean hasBoost() {
+      return resultCase_ == 5;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     * @return The boost.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.BoostResult getBoost() {
+      if (boostBuilder_ == null) {
+        if (resultCase_ == 5) {
+          return (cloud.spawnery.agent.pb.BoostResult) result_;
+        }
+        return cloud.spawnery.agent.pb.BoostResult.getDefaultInstance();
+      } else {
+        if (resultCase_ == 5) {
+          return boostBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.BoostResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     */
+    public Builder setBoost(cloud.spawnery.agent.pb.BoostResult value) {
+      if (boostBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        result_ = value;
+        onChanged();
+      } else {
+        boostBuilder_.setMessage(value);
+      }
+      resultCase_ = 5;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     */
+    public Builder setBoost(
+        cloud.spawnery.agent.pb.BoostResult.Builder builderForValue) {
+      if (boostBuilder_ == null) {
+        result_ = builderForValue.build();
+        onChanged();
+      } else {
+        boostBuilder_.setMessage(builderForValue.build());
+      }
+      resultCase_ = 5;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     */
+    public Builder mergeBoost(cloud.spawnery.agent.pb.BoostResult value) {
+      if (boostBuilder_ == null) {
+        if (resultCase_ == 5 &&
+            result_ != cloud.spawnery.agent.pb.BoostResult.getDefaultInstance()) {
+          result_ = cloud.spawnery.agent.pb.BoostResult.newBuilder((cloud.spawnery.agent.pb.BoostResult) result_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          result_ = value;
+        }
+        onChanged();
+      } else {
+        if (resultCase_ == 5) {
+          boostBuilder_.mergeFrom(value);
+        } else {
+          boostBuilder_.setMessage(value);
+        }
+      }
+      resultCase_ = 5;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     */
+    public Builder clearBoost() {
+      if (boostBuilder_ == null) {
+        if (resultCase_ == 5) {
+          resultCase_ = 0;
+          result_ = null;
+          onChanged();
+        }
+      } else {
+        if (resultCase_ == 5) {
+          resultCase_ = 0;
+          result_ = null;
+        }
+        boostBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     */
+    public cloud.spawnery.agent.pb.BoostResult.Builder getBoostBuilder() {
+      return internalGetBoostFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.BoostResultOrBuilder getBoostOrBuilder() {
+      if ((resultCase_ == 5) && (boostBuilder_ != null)) {
+        return boostBuilder_.getMessageOrBuilder();
+      } else {
+        if (resultCase_ == 5) {
+          return (cloud.spawnery.agent.pb.BoostResult) result_;
+        }
+        return cloud.spawnery.agent.pb.BoostResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.BoostResult boost = 5;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.BoostResult, cloud.spawnery.agent.pb.BoostResult.Builder, cloud.spawnery.agent.pb.BoostResultOrBuilder> 
+        internalGetBoostFieldBuilder() {
+      if (boostBuilder_ == null) {
+        if (!(resultCase_ == 5)) {
+          result_ = cloud.spawnery.agent.pb.BoostResult.getDefaultInstance();
+        }
+        boostBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.BoostResult, cloud.spawnery.agent.pb.BoostResult.Builder, cloud.spawnery.agent.pb.BoostResultOrBuilder>(
+                (cloud.spawnery.agent.pb.BoostResult) result_,
+                getParentForChildren(),
+                isClean());
+        result_ = null;
+      }
+      resultCase_ = 5;
+      onChanged();
+      return boostBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StopBoostResult, cloud.spawnery.agent.pb.StopBoostResult.Builder, cloud.spawnery.agent.pb.StopBoostResultOrBuilder> stopBoostBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     * @return Whether the stopBoost field is set.
+     */
+    @java.lang.Override
+    public boolean hasStopBoost() {
+      return resultCase_ == 6;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     * @return The stopBoost.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.StopBoostResult getStopBoost() {
+      if (stopBoostBuilder_ == null) {
+        if (resultCase_ == 6) {
+          return (cloud.spawnery.agent.pb.StopBoostResult) result_;
+        }
+        return cloud.spawnery.agent.pb.StopBoostResult.getDefaultInstance();
+      } else {
+        if (resultCase_ == 6) {
+          return stopBoostBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.StopBoostResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     */
+    public Builder setStopBoost(cloud.spawnery.agent.pb.StopBoostResult value) {
+      if (stopBoostBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        result_ = value;
+        onChanged();
+      } else {
+        stopBoostBuilder_.setMessage(value);
+      }
+      resultCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     */
+    public Builder setStopBoost(
+        cloud.spawnery.agent.pb.StopBoostResult.Builder builderForValue) {
+      if (stopBoostBuilder_ == null) {
+        result_ = builderForValue.build();
+        onChanged();
+      } else {
+        stopBoostBuilder_.setMessage(builderForValue.build());
+      }
+      resultCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     */
+    public Builder mergeStopBoost(cloud.spawnery.agent.pb.StopBoostResult value) {
+      if (stopBoostBuilder_ == null) {
+        if (resultCase_ == 6 &&
+            result_ != cloud.spawnery.agent.pb.StopBoostResult.getDefaultInstance()) {
+          result_ = cloud.spawnery.agent.pb.StopBoostResult.newBuilder((cloud.spawnery.agent.pb.StopBoostResult) result_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          result_ = value;
+        }
+        onChanged();
+      } else {
+        if (resultCase_ == 6) {
+          stopBoostBuilder_.mergeFrom(value);
+        } else {
+          stopBoostBuilder_.setMessage(value);
+        }
+      }
+      resultCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     */
+    public Builder clearStopBoost() {
+      if (stopBoostBuilder_ == null) {
+        if (resultCase_ == 6) {
+          resultCase_ = 0;
+          result_ = null;
+          onChanged();
+        }
+      } else {
+        if (resultCase_ == 6) {
+          resultCase_ = 0;
+          result_ = null;
+        }
+        stopBoostBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     */
+    public cloud.spawnery.agent.pb.StopBoostResult.Builder getStopBoostBuilder() {
+      return internalGetStopBoostFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.StopBoostResultOrBuilder getStopBoostOrBuilder() {
+      if ((resultCase_ == 6) && (stopBoostBuilder_ != null)) {
+        return stopBoostBuilder_.getMessageOrBuilder();
+      } else {
+        if (resultCase_ == 6) {
+          return (cloud.spawnery.agent.pb.StopBoostResult) result_;
+        }
+        return cloud.spawnery.agent.pb.StopBoostResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopBoostResult stop_boost = 6;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StopBoostResult, cloud.spawnery.agent.pb.StopBoostResult.Builder, cloud.spawnery.agent.pb.StopBoostResultOrBuilder> 
+        internalGetStopBoostFieldBuilder() {
+      if (stopBoostBuilder_ == null) {
+        if (!(resultCase_ == 6)) {
+          result_ = cloud.spawnery.agent.pb.StopBoostResult.getDefaultInstance();
+        }
+        stopBoostBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.StopBoostResult, cloud.spawnery.agent.pb.StopBoostResult.Builder, cloud.spawnery.agent.pb.StopBoostResultOrBuilder>(
+                (cloud.spawnery.agent.pb.StopBoostResult) result_,
+                getParentForChildren(),
+                isClean());
+        result_ = null;
+      }
+      resultCase_ = 6;
+      onChanged();
+      return stopBoostBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudResponse)

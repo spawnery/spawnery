@@ -44,6 +44,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	boostpkg "github.com/spawnery/spawnery/internal/boost"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/render"
@@ -89,10 +90,12 @@ type ServerGroupReconciler struct {
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/status,verbs=update
-// No create and no update on scaleboosts. This milestone reads them and sweeps
-// the expired ones; the thing that makes one is a command that does not exist
-// yet, and a grant with no caller is one nobody can justify when they find it.
-// +kubebuilder:rbac:groups=spawnery.cloud,resources=scaleboosts,verbs=get;list;watch;delete
+// Create arrived with its caller: /cloud boost is the thing that makes one, and
+// until it existed a grant here would have been one nobody could justify when
+// they found it. Still no update -- nothing edits a boost, and an edit would be
+// a second way to change a group's floor with none of the expiry that makes the
+// first one safe.
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=scaleboosts,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
@@ -433,7 +436,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		log.FromContext(ctx).V(1).Info("could not read scale boosts; sizing on the declared floor alone",
 			"group", group.Name, "reason", err.Error())
 	} else {
-		boost = liveBoost(boostList.Items, group.Name, r.Clock())
+		boost = boostpkg.Live(boostList.Items, group.Name, r.Clock())
 	}
 
 	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash, boost)

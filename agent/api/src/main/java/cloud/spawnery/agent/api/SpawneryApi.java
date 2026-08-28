@@ -16,6 +16,7 @@ limitations under the License.
 
 package cloud.spawnery.agent.api;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -106,4 +107,42 @@ public interface SpawneryApi {
      * far more safely than one that was never told.
      */
     CompletionStage<Void> retire(String server);
+
+    /**
+     * Asks for extra capacity on a group, for a while.
+     *
+     * <p><b>It adds to what the group tries for and never to what it may
+     * reach.</b> The group's own {@code maxReplicas} still binds — a ceiling
+     * is an instruction, and a call from inside a game server must not be able
+     * to lift one. A request for more than the ceiling leaves is refused
+     * rather than trimmed, so what you asked for is what you got or you were
+     * told why not.
+     *
+     * <p><b>It expires.</b> Pass {@code null} for the operator's default,
+     * which is an hour. The operator also bounds how long you may ask for; a
+     * need that outlives an evening belongs in the group's own definition,
+     * where a person reviews it, and this call deliberately cannot make one.
+     *
+     * <p>Boosts add rather than replace. Two calls make two boosts, and the
+     * second does not overwrite the first — which is what makes "somebody
+     * else already boosted this" a non-event rather than a race.
+     *
+     * <p>The stage fails when the operator refuses: a group it does not have,
+     * a group sized by a fixed replica count rather than by scaling, more than
+     * the ceiling leaves, or longer than it allows. Each says which.
+     *
+     * @param forHowLong how long the boost should run, or {@code null} for the
+     *     operator's default.
+     */
+    CompletionStage<BoostResult> boost(String group, int replicas, Duration forHowLong);
+
+    /**
+     * Ends every boost on a group and reports how many there were.
+     *
+     * <p>Every one, not the newest: a partial reduction across boosts with
+     * different expiries is arithmetic nobody asked for. Zero is an ordinary
+     * answer — the group had no boosts — and not a failure, which is what a
+     * caller who expected some needs to be able to tell.
+     */
+    CompletionStage<Integer> stopBoosts(String group);
 }

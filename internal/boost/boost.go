@@ -14,7 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package controller
+// Package boost holds the one rule for what a ScaleBoost is currently worth.
+//
+// Its own package because two things need it and neither may import the
+// other: the ServerGroup controller adds live boosts to a group's floor, and
+// the agent endpoint subtracts them when bounding a new one. A copy in each
+// would be two definitions of "live" that agree until somebody changes one,
+// and the disagreement would show up as a group sized differently from what
+// the command that sized it said.
+package boost
 
 import (
 	"time"
@@ -22,7 +30,7 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// liveBoost is how many extra servers a group's unexpired boosts ask for.
+// Live is how many extra servers a group's unexpired boosts ask for.
 //
 // **The clock is the rule, and the sweep is not.** A boost stops counting the
 // moment it expires, which is not the same as when the sweep next removes the
@@ -36,7 +44,7 @@ import (
 // Boosts add. Two on one group are two boosts and a second does not replace a
 // first, which is what makes "somebody else already boosted this" a non-event
 // rather than a race between two people typing.
-func liveBoost(boosts []spawneryv1alpha1.ScaleBoost, group string, now time.Time) int32 {
+func Live(boosts []spawneryv1alpha1.ScaleBoost, group string, now time.Time) int32 {
 	var total int32
 	for i := range boosts {
 		b := &boosts[i]

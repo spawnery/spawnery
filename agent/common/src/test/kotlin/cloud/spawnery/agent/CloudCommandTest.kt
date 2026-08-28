@@ -3,10 +3,12 @@ package cloud.spawnery.agent
 import cloud.spawnery.agent.api.ProxySelf
 import cloud.spawnery.agent.api.SpawneryApi
 import cloud.spawnery.agent.pb.CloudRequest
+import cloud.spawnery.agent.pb.BoostResult
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.GroupState
 import cloud.spawnery.agent.pb.RequestError
 import cloud.spawnery.agent.pb.RetireResult
+import cloud.spawnery.agent.pb.StopBoostResult
 import cloud.spawnery.agent.pb.NetworkState
 import cloud.spawnery.agent.pb.ServerState
 import com.mojang.brigadier.CommandDispatcher
@@ -31,7 +33,7 @@ private fun aNetwork(): NetworkState =
 
 class CloudCommandTest {
     private val sent = mutableListOf<String>()
-    private var permissions = setOf(PERMISSION_READ, PERMISSION_RETIRE)
+    private var permissions = setOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE)
     private val asked = mutableListOf<String>()
 
     // An Int as the source, which is the cheapest way to say that the tree
@@ -124,15 +126,17 @@ class CloudCommandTest {
     }
 
     @Test
-    fun `the tree asks the platform for nothing but the two permissions it declares`() {
+    fun `the tree asks the platform for nothing but the permissions it declares`() {
         // The structural claim, asserted. A tree that reached for anything
         // else could not have been written against this adapter, so what this
         // really guards is the adapter staying two methods.
         run("cloud list")
         run("cloud info lobby-a")
         run("cloud retire lobby-a")
+        run("cloud start lobby")
+        run("cloud stop lobby")
 
-        assertEquals(setOf(PERMISSION_READ, PERMISSION_RETIRE), asked.toSet())
+        assertEquals(setOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE), asked.toSet())
     }
 
     @Test
@@ -193,6 +197,96 @@ class CloudCommandTest {
         run("cloud retire lobby-a", dormant)
 
         assertTrue(sent.single().contains("no session"), "the source was not told why: $sent")
+    }
+
+    @Test
+    fun `start says what it created, that it is temporary, and where a lasting change lives`() {
+        run("cloud start lobby 2 for 30m")
+
+        val request = requested.single().boost
+        assertEquals("lobby", request.group)
+        assertEquals(2, request.replicas)
+        assertEquals(1_800L, request.durationSeconds)
+
+        answer {
+            setBoost(
+                BoostResult.newBuilder()
+                    .setReplicas(2)
+                    .setExpiresAtUnix(java.time.Instant.parse("2026-08-28T20:00:00Z").epochSecond),
+            )
+        }
+
+        // Section 5.3's three sentences. The second and third are not
+        // optional: without them the command looks like a permanent change,
+        // and an admin who never learns otherwise types it again every week
+        // instead of editing the file once.
+        assertEquals(3, sent.size, "the three lines section 5.3 requires: $sent")
+        assertTrue(sent[0].contains("+2 servers") && sent[0].contains("20:00"), sent[0])
+        assertTrue(sent[1].contains("not a spec change"), sent[1])
+        assertTrue(sent[1].contains("/cloud stop lobby"), "it did not say how to end it early: ${sent[1]}")
+        assertTrue(sent[2].contains("edit the ServerGroup"), sent[2])
+    }
+
+    @Test
+    fun `start without a count asks for one`() {
+        // A person typing in a hurry means "one more". Refusing them for a
+        // missing argument would be pedantry at the moment they are busiest.
+        run("cloud start lobby")
+
+        assertEquals(1, requested.single().boost.replicas)
+        // And no duration, so the operator picks its own default rather than
+        // this agent inventing one on a clock the operator does not share.
+        assertEquals(0L, requested.single().boost.durationSeconds)
+    }
+
+    @Test
+    fun `an unreadable duration is named rather than silently defaulted`() {
+        // Treating "2hh" as the default hour is how somebody comes to believe
+        // they set a length they did not.
+        run("cloud start lobby 2 for 2hh")
+
+        assertTrue(requested.isEmpty(), "an unreadable duration still reached the operator: $requested")
+        assertTrue(sent.single().contains("2hh"), "the answer did not name what it could not read: $sent")
+    }
+
+    @Test
+    fun `stop says how many it removed`() {
+        run("cloud stop lobby")
+
+        assertEquals("lobby", requested.single().stopBoost.group)
+
+        answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(2)) }
+
+        assertTrue(sent.single().contains("removed 2 boosts"), sent.toString())
+    }
+
+    @Test
+    fun `stopping a group with no boosts says so plainly`() {
+        // Not dressed up as a success: an admin who expected boosts has to
+        // learn there were none, because what they do next depends on it.
+        run("cloud stop lobby")
+
+        answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(0)) }
+
+        assertTrue(sent.single().contains("no boosts running"), sent.toString())
+    }
+
+    @Test
+    fun `scaling is invisible without its own permission`() {
+        permissions = setOf(PERMISSION_READ, PERMISSION_RETIRE)
+
+        assertFailsWith<CommandSyntaxException> { run("cloud start lobby") }
+        assertFailsWith<CommandSyntaxException> { run("cloud stop lobby") }
+        assertTrue(requested.isEmpty(), "an unpermitted source reached the operator: $requested")
+    }
+
+    @Test
+    fun `holding only scale still opens the root`() {
+        permissions = setOf(PERMISSION_SCALE)
+
+        run("cloud start lobby")
+
+        assertEquals("lobby", requested.single().boost.group)
     }
 
     @Test
