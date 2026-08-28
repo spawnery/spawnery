@@ -140,6 +140,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		Client:   mgr.GetClient(),
 		Agents:   opts.Agents,
 		Interval: opts.OrphanInterval,
+		Clock:    opts.Clock,
 	}); err != nil {
 		return fmt.Errorf("add orphan sweep: %w", err)
 	}
