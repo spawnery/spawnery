@@ -50,6 +50,9 @@ stdenv.mkDerivation (finalAttrs: {
   # the whole of it.
   postPatch = ''
     ln -sfn ${paper.repo} paper/paper-repo
+    # :common compiles its command tree against Brigadier, which it takes from
+    # the same repository rather than from Maven -- see its build file for why.
+    ln -sfn ${paper.repo} common/paper-repo
     ln -sfn ${velocity.jar} velocity/velocity.jar
   '';
 
