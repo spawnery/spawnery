@@ -40,5 +40,20 @@ public interface OperatorToServerOrBuilder extends
    */
   cloud.spawnery.agent.pb.SessionDeadlineOrBuilder getSessionDeadlineOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+   * @return Whether the networkState field is set.
+   */
+  boolean hasNetworkState();
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+   * @return The networkState.
+   */
+  cloud.spawnery.agent.pb.NetworkState getNetworkState();
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+   */
+  cloud.spawnery.agent.pb.NetworkStateOrBuilder getNetworkStateOrBuilder();
+
   cloud.spawnery.agent.pb.OperatorToServer.MessageCase getMessageCase();
 }

@@ -56,6 +56,7 @@ private static final long serialVersionUID = 0L;
           com.google.protobuf.AbstractMessage.InternalOneOfEnum {
     REPORT_INTERVAL(1),
     SESSION_DEADLINE(2),
+    NETWORK_STATE(3),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -75,6 +76,7 @@ private static final long serialVersionUID = 0L;
       switch (value) {
         case 1: return REPORT_INTERVAL;
         case 2: return SESSION_DEADLINE;
+        case 3: return NETWORK_STATE;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -152,6 +154,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.SessionDeadline.getDefaultInstance();
   }
 
+  public static final int NETWORK_STATE_FIELD_NUMBER = 3;
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+   * @return Whether the networkState field is set.
+   */
+  @java.lang.Override
+  public boolean hasNetworkState() {
+    return messageCase_ == 3;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+   * @return The networkState.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.NetworkState getNetworkState() {
+    if (messageCase_ == 3) {
+       return (cloud.spawnery.agent.pb.NetworkState) message_;
+    }
+    return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.NetworkStateOrBuilder getNetworkStateOrBuilder() {
+    if (messageCase_ == 3) {
+       return (cloud.spawnery.agent.pb.NetworkState) message_;
+    }
+    return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -172,6 +205,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 2) {
       output.writeMessage(2, (cloud.spawnery.agent.pb.SessionDeadline) message_);
     }
+    if (messageCase_ == 3) {
+      output.writeMessage(3, (cloud.spawnery.agent.pb.NetworkState) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -183,6 +219,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 2) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(2, (cloud.spawnery.agent.pb.SessionDeadline) message_);
+    }
+    if (messageCase_ == 3) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(3, (cloud.spawnery.agent.pb.NetworkState) message_);
     }
     return size;
   }
@@ -218,6 +258,10 @@ private static final long serialVersionUID = 0L;
         if (!getSessionDeadline()
             .equals(other.getSessionDeadline())) return false;
         break;
+      case 3:
+        if (!getNetworkState()
+            .equals(other.getNetworkState())) return false;
+        break;
       case 0:
       default:
     }
@@ -240,6 +284,10 @@ private static final long serialVersionUID = 0L;
       case 2:
         hash = (37 * hash) + SESSION_DEADLINE_FIELD_NUMBER;
         hash = (53 * hash) + getSessionDeadline().hashCode();
+        break;
+      case 3:
+        hash = (37 * hash) + NETWORK_STATE_FIELD_NUMBER;
+        hash = (53 * hash) + getNetworkState().hashCode();
         break;
       case 0:
       default:
@@ -381,6 +429,9 @@ private static final long serialVersionUID = 0L;
       if (sessionDeadlineBuilder_ != null) {
         sessionDeadlineBuilder_.clear();
       }
+      if (networkStateBuilder_ != null) {
+        networkStateBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -430,6 +481,10 @@ private static final long serialVersionUID = 0L;
           sessionDeadlineBuilder_ != null) {
         result.message_ = sessionDeadlineBuilder_.build();
       }
+      if (messageCase_ == 3 &&
+          networkStateBuilder_ != null) {
+        result.message_ = networkStateBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -451,6 +506,10 @@ private static final long serialVersionUID = 0L;
         }
         case SESSION_DEADLINE: {
           mergeSessionDeadline(other.getSessionDeadline());
+          break;
+        }
+        case NETWORK_STATE: {
+          mergeNetworkState(other.getNetworkState());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -497,6 +556,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 2;
               break;
             } // case 18
+            case 26: {
+              input.readMessage(
+                  internalGetNetworkStateFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 3;
+              break;
+            } // case 26
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -811,6 +877,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 2;
       onChanged();
       return sessionDeadlineBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.NetworkState, cloud.spawnery.agent.pb.NetworkState.Builder, cloud.spawnery.agent.pb.NetworkStateOrBuilder> networkStateBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     * @return Whether the networkState field is set.
+     */
+    @java.lang.Override
+    public boolean hasNetworkState() {
+      return messageCase_ == 3;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     * @return The networkState.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.NetworkState getNetworkState() {
+      if (networkStateBuilder_ == null) {
+        if (messageCase_ == 3) {
+          return (cloud.spawnery.agent.pb.NetworkState) message_;
+        }
+        return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+      } else {
+        if (messageCase_ == 3) {
+          return networkStateBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     */
+    public Builder setNetworkState(cloud.spawnery.agent.pb.NetworkState value) {
+      if (networkStateBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        networkStateBuilder_.setMessage(value);
+      }
+      messageCase_ = 3;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     */
+    public Builder setNetworkState(
+        cloud.spawnery.agent.pb.NetworkState.Builder builderForValue) {
+      if (networkStateBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        networkStateBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 3;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     */
+    public Builder mergeNetworkState(cloud.spawnery.agent.pb.NetworkState value) {
+      if (networkStateBuilder_ == null) {
+        if (messageCase_ == 3 &&
+            message_ != cloud.spawnery.agent.pb.NetworkState.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.NetworkState.newBuilder((cloud.spawnery.agent.pb.NetworkState) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 3) {
+          networkStateBuilder_.mergeFrom(value);
+        } else {
+          networkStateBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 3;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     */
+    public Builder clearNetworkState() {
+      if (networkStateBuilder_ == null) {
+        if (messageCase_ == 3) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 3) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        networkStateBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     */
+    public cloud.spawnery.agent.pb.NetworkState.Builder getNetworkStateBuilder() {
+      return internalGetNetworkStateFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.NetworkStateOrBuilder getNetworkStateOrBuilder() {
+      if ((messageCase_ == 3) && (networkStateBuilder_ != null)) {
+        return networkStateBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 3) {
+          return (cloud.spawnery.agent.pb.NetworkState) message_;
+        }
+        return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 3;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.NetworkState, cloud.spawnery.agent.pb.NetworkState.Builder, cloud.spawnery.agent.pb.NetworkStateOrBuilder> 
+        internalGetNetworkStateFieldBuilder() {
+      if (networkStateBuilder_ == null) {
+        if (!(messageCase_ == 3)) {
+          message_ = cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+        }
+        networkStateBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.NetworkState, cloud.spawnery.agent.pb.NetworkState.Builder, cloud.spawnery.agent.pb.NetworkStateOrBuilder>(
+                (cloud.spawnery.agent.pb.NetworkState) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 3;
+      onChanged();
+      return networkStateBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.OperatorToServer)

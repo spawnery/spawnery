@@ -106,6 +106,7 @@ message OperatorToServer {
   oneof message {
     ReportInterval report_interval = 1;
     SessionDeadline session_deadline = 2;
+    NetworkState network_state = 3;
   }
 }
 
@@ -189,6 +190,71 @@ message RosterEntry {
   string server = 3;
 }
 
+// NetworkState is the whole picture of one namespace, as the operator sees it.
+//
+// The mirror the plugin API reads from. It goes to both agent kinds, in the
+// same shape, because the API's whole premise is that a plugin author moving
+// between a backend and a proxy does not have to think differently -- and two
+// shapes here would make that a lie one layer down.
+//
+// A state and not a diff. Every message carries the whole picture, so a
+// reconnect needs no catch-up and a dropped one costs a resync interval of
+// freshness. That is the same rule FullSync follows, for the same reason.
+//
+// The phase is a string rather than an enum, and deliberately: the operator's
+// phase vocabulary lives in internal/phase and gains values, and an agent that
+// is older than a value must read it as "something I do not know" rather than
+// fail to parse the message it arrived in. The plugin API's own
+// ServerPhase.fromWire is the other half of that decision.
+message NetworkState {
+  repeated GroupState groups = 1;
+  repeated ServerState servers = 2;
+  // Every player on this network, aggregated across the proxies. Empty when
+  // no proxy has reported recently -- which is a real state and not an error,
+  // and is why the API documents an empty list as ordinary.
+  repeated RosterEntry players = 3;
+}
+
+// GroupState is one group as the operator's status fields describe it.
+message GroupState {
+  // Which sizing rule the group answers to.
+  //
+  // KIND_UNSPECIFIED is what an operator sends for a kind this proto predates,
+  // and what a proto3 default gives an agent that predates a value. Both read
+  // as "unknown" rather than as a specific kind, which is the only reading
+  // that cannot be wrong.
+  enum Kind {
+    KIND_UNSPECIFIED = 0;
+    EPHEMERAL = 1;
+    PERSISTENT = 2;
+    PROXY = 3;
+  }
+
+  string name = 1;
+  Kind kind = 2;
+  int32 replicas = 3;
+  int32 ready_replicas = 4;
+  int32 online_players = 5;
+  // The operator's own figure, which counts only ready servers of the group's
+  // current spec. Not a sum an agent could compute from the servers below, and
+  // the two can disagree while a rolling update is in flight.
+  int32 free_slots = 6;
+}
+
+// ServerState is one backend as the operator last observed it.
+message ServerState {
+  string name = 1;
+  string group = 2;
+  // The operator's phase spelling -- see NetworkState on why this is a string.
+  string phase = 3;
+  int32 players = 4;
+  int32 slots = 5;
+  // Whether the proxies have this server in their routing tables. A server can
+  // be Ready and not registered -- that is the first half of a drain -- so a
+  // plugin choosing where to send somebody wants this and not the phase.
+  bool registered = 6;
+}
+
 message ProxyMessage {
   oneof message {
     Hello hello = 1;
@@ -260,5 +326,6 @@ message OperatorToProxy {
     ReportInterval report_interval = 5;
     SessionDeadline session_deadline = 6;
     SetReady set_ready = 7;
+    NetworkState network_state = 8;
   }
 }

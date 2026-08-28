@@ -35,6 +35,64 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Which sizing rule the group answers to.
+//
+// KIND_UNSPECIFIED is what an operator sends for a kind this proto predates,
+// and what a proto3 default gives an agent that predates a value. Both read
+// as "unknown" rather than as a specific kind, which is the only reading
+// that cannot be wrong.
+type GroupState_Kind int32
+
+const (
+	GroupState_KIND_UNSPECIFIED GroupState_Kind = 0
+	GroupState_EPHEMERAL        GroupState_Kind = 1
+	GroupState_PERSISTENT       GroupState_Kind = 2
+	GroupState_PROXY            GroupState_Kind = 3
+)
+
+// Enum value maps for GroupState_Kind.
+var (
+	GroupState_Kind_name = map[int32]string{
+		0: "KIND_UNSPECIFIED",
+		1: "EPHEMERAL",
+		2: "PERSISTENT",
+		3: "PROXY",
+	}
+	GroupState_Kind_value = map[string]int32{
+		"KIND_UNSPECIFIED": 0,
+		"EPHEMERAL":        1,
+		"PERSISTENT":       2,
+		"PROXY":            3,
+	}
+)
+
+func (x GroupState_Kind) Enum() *GroupState_Kind {
+	p := new(GroupState_Kind)
+	*p = x
+	return p
+}
+
+func (x GroupState_Kind) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (GroupState_Kind) Descriptor() protoreflect.EnumDescriptor {
+	return file_spawnery_agent_v1alpha1_agent_proto_enumTypes[0].Descriptor()
+}
+
+func (GroupState_Kind) Type() protoreflect.EnumType {
+	return &file_spawnery_agent_v1alpha1_agent_proto_enumTypes[0]
+}
+
+func (x GroupState_Kind) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use GroupState_Kind.Descriptor instead.
+func (GroupState_Kind) EnumDescriptor() ([]byte, []int) {
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{13, 0}
+}
+
 // ReportInterval is how often the agent should report. The operator dictates
 // it so both sides derive the staleness threshold from the same number.
 type ReportInterval struct {
@@ -419,6 +477,7 @@ type OperatorToServer struct {
 	//
 	//	*OperatorToServer_ReportInterval
 	//	*OperatorToServer_SessionDeadline
+	//	*OperatorToServer_NetworkState
 	Message       isOperatorToServer_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -479,6 +538,15 @@ func (x *OperatorToServer) GetSessionDeadline() *SessionDeadline {
 	return nil
 }
 
+func (x *OperatorToServer) GetNetworkState() *NetworkState {
+	if x != nil {
+		if x, ok := x.Message.(*OperatorToServer_NetworkState); ok {
+			return x.NetworkState
+		}
+	}
+	return nil
+}
+
 type isOperatorToServer_Message interface {
 	isOperatorToServer_Message()
 }
@@ -491,9 +559,15 @@ type OperatorToServer_SessionDeadline struct {
 	SessionDeadline *SessionDeadline `protobuf:"bytes,2,opt,name=session_deadline,json=sessionDeadline,proto3,oneof"`
 }
 
+type OperatorToServer_NetworkState struct {
+	NetworkState *NetworkState `protobuf:"bytes,3,opt,name=network_state,json=networkState,proto3,oneof"`
+}
+
 func (*OperatorToServer_ReportInterval) isOperatorToServer_Message() {}
 
 func (*OperatorToServer_SessionDeadline) isOperatorToServer_Message() {}
+
+func (*OperatorToServer_NetworkState) isOperatorToServer_Message() {}
 
 type Heartbeat struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -788,6 +862,262 @@ func (x *RosterEntry) GetServer() string {
 	return ""
 }
 
+// NetworkState is the whole picture of one namespace, as the operator sees it.
+//
+// The mirror the plugin API reads from. It goes to both agent kinds, in the
+// same shape, because the API's whole premise is that a plugin author moving
+// between a backend and a proxy does not have to think differently -- and two
+// shapes here would make that a lie one layer down.
+//
+// A state and not a diff. Every message carries the whole picture, so a
+// reconnect needs no catch-up and a dropped one costs a resync interval of
+// freshness. That is the same rule FullSync follows, for the same reason.
+//
+// The phase is a string rather than an enum, and deliberately: the operator's
+// phase vocabulary lives in internal/phase and gains values, and an agent that
+// is older than a value must read it as "something I do not know" rather than
+// fail to parse the message it arrived in. The plugin API's own
+// ServerPhase.fromWire is the other half of that decision.
+type NetworkState struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Groups  []*GroupState          `protobuf:"bytes,1,rep,name=groups,proto3" json:"groups,omitempty"`
+	Servers []*ServerState         `protobuf:"bytes,2,rep,name=servers,proto3" json:"servers,omitempty"`
+	// Every player on this network, aggregated across the proxies. Empty when
+	// no proxy has reported recently -- which is a real state and not an error,
+	// and is why the API documents an empty list as ordinary.
+	Players       []*RosterEntry `protobuf:"bytes,3,rep,name=players,proto3" json:"players,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NetworkState) Reset() {
+	*x = NetworkState{}
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NetworkState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NetworkState) ProtoMessage() {}
+
+func (x *NetworkState) ProtoReflect() protoreflect.Message {
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NetworkState.ProtoReflect.Descriptor instead.
+func (*NetworkState) Descriptor() ([]byte, []int) {
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *NetworkState) GetGroups() []*GroupState {
+	if x != nil {
+		return x.Groups
+	}
+	return nil
+}
+
+func (x *NetworkState) GetServers() []*ServerState {
+	if x != nil {
+		return x.Servers
+	}
+	return nil
+}
+
+func (x *NetworkState) GetPlayers() []*RosterEntry {
+	if x != nil {
+		return x.Players
+	}
+	return nil
+}
+
+// GroupState is one group as the operator's status fields describe it.
+type GroupState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Kind          GroupState_Kind        `protobuf:"varint,2,opt,name=kind,proto3,enum=spawnery.agent.v1alpha1.GroupState_Kind" json:"kind,omitempty"`
+	Replicas      int32                  `protobuf:"varint,3,opt,name=replicas,proto3" json:"replicas,omitempty"`
+	ReadyReplicas int32                  `protobuf:"varint,4,opt,name=ready_replicas,json=readyReplicas,proto3" json:"ready_replicas,omitempty"`
+	OnlinePlayers int32                  `protobuf:"varint,5,opt,name=online_players,json=onlinePlayers,proto3" json:"online_players,omitempty"`
+	// The operator's own figure, which counts only ready servers of the group's
+	// current spec. Not a sum an agent could compute from the servers below, and
+	// the two can disagree while a rolling update is in flight.
+	FreeSlots     int32 `protobuf:"varint,6,opt,name=free_slots,json=freeSlots,proto3" json:"free_slots,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GroupState) Reset() {
+	*x = GroupState{}
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GroupState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GroupState) ProtoMessage() {}
+
+func (x *GroupState) ProtoReflect() protoreflect.Message {
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GroupState.ProtoReflect.Descriptor instead.
+func (*GroupState) Descriptor() ([]byte, []int) {
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *GroupState) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *GroupState) GetKind() GroupState_Kind {
+	if x != nil {
+		return x.Kind
+	}
+	return GroupState_KIND_UNSPECIFIED
+}
+
+func (x *GroupState) GetReplicas() int32 {
+	if x != nil {
+		return x.Replicas
+	}
+	return 0
+}
+
+func (x *GroupState) GetReadyReplicas() int32 {
+	if x != nil {
+		return x.ReadyReplicas
+	}
+	return 0
+}
+
+func (x *GroupState) GetOnlinePlayers() int32 {
+	if x != nil {
+		return x.OnlinePlayers
+	}
+	return 0
+}
+
+func (x *GroupState) GetFreeSlots() int32 {
+	if x != nil {
+		return x.FreeSlots
+	}
+	return 0
+}
+
+// ServerState is one backend as the operator last observed it.
+type ServerState struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Group string                 `protobuf:"bytes,2,opt,name=group,proto3" json:"group,omitempty"`
+	// The operator's phase spelling -- see NetworkState on why this is a string.
+	Phase   string `protobuf:"bytes,3,opt,name=phase,proto3" json:"phase,omitempty"`
+	Players int32  `protobuf:"varint,4,opt,name=players,proto3" json:"players,omitempty"`
+	Slots   int32  `protobuf:"varint,5,opt,name=slots,proto3" json:"slots,omitempty"`
+	// Whether the proxies have this server in their routing tables. A server can
+	// be Ready and not registered -- that is the first half of a drain -- so a
+	// plugin choosing where to send somebody wants this and not the phase.
+	Registered    bool `protobuf:"varint,6,opt,name=registered,proto3" json:"registered,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ServerState) Reset() {
+	*x = ServerState{}
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ServerState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ServerState) ProtoMessage() {}
+
+func (x *ServerState) ProtoReflect() protoreflect.Message {
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ServerState.ProtoReflect.Descriptor instead.
+func (*ServerState) Descriptor() ([]byte, []int) {
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ServerState) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ServerState) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
+}
+
+func (x *ServerState) GetPhase() string {
+	if x != nil {
+		return x.Phase
+	}
+	return ""
+}
+
+func (x *ServerState) GetPlayers() int32 {
+	if x != nil {
+		return x.Players
+	}
+	return 0
+}
+
+func (x *ServerState) GetSlots() int32 {
+	if x != nil {
+		return x.Slots
+	}
+	return 0
+}
+
+func (x *ServerState) GetRegistered() bool {
+	if x != nil {
+		return x.Registered
+	}
+	return false
+}
+
 type ProxyMessage struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Message:
@@ -805,7 +1135,7 @@ type ProxyMessage struct {
 
 func (x *ProxyMessage) Reset() {
 	*x = ProxyMessage{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[12]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -817,7 +1147,7 @@ func (x *ProxyMessage) String() string {
 func (*ProxyMessage) ProtoMessage() {}
 
 func (x *ProxyMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[12]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -830,7 +1160,7 @@ func (x *ProxyMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProxyMessage.ProtoReflect.Descriptor instead.
 func (*ProxyMessage) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{12}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ProxyMessage) GetMessage() isProxyMessage_Message {
@@ -945,7 +1275,7 @@ type RegisteredServer struct {
 
 func (x *RegisteredServer) Reset() {
 	*x = RegisteredServer{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[13]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -957,7 +1287,7 @@ func (x *RegisteredServer) String() string {
 func (*RegisteredServer) ProtoMessage() {}
 
 func (x *RegisteredServer) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[13]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -970,7 +1300,7 @@ func (x *RegisteredServer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisteredServer.ProtoReflect.Descriptor instead.
 func (*RegisteredServer) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{13}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *RegisteredServer) GetName() string {
@@ -1005,7 +1335,7 @@ type FullSync struct {
 
 func (x *FullSync) Reset() {
 	*x = FullSync{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[14]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1017,7 +1347,7 @@ func (x *FullSync) String() string {
 func (*FullSync) ProtoMessage() {}
 
 func (x *FullSync) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[14]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1030,7 +1360,7 @@ func (x *FullSync) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FullSync.ProtoReflect.Descriptor instead.
 func (*FullSync) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{14}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *FullSync) GetServers() []*RegisteredServer {
@@ -1049,7 +1379,7 @@ type RegisterServer struct {
 
 func (x *RegisterServer) Reset() {
 	*x = RegisterServer{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1061,7 +1391,7 @@ func (x *RegisterServer) String() string {
 func (*RegisterServer) ProtoMessage() {}
 
 func (x *RegisterServer) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1074,7 +1404,7 @@ func (x *RegisterServer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterServer.ProtoReflect.Descriptor instead.
 func (*RegisterServer) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{15}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RegisterServer) GetServer() *RegisteredServer {
@@ -1093,7 +1423,7 @@ type UnregisterServer struct {
 
 func (x *UnregisterServer) Reset() {
 	*x = UnregisterServer{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[16]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1105,7 +1435,7 @@ func (x *UnregisterServer) String() string {
 func (*UnregisterServer) ProtoMessage() {}
 
 func (x *UnregisterServer) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[16]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1118,7 +1448,7 @@ func (x *UnregisterServer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnregisterServer.ProtoReflect.Descriptor instead.
 func (*UnregisterServer) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{16}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *UnregisterServer) GetName() string {
@@ -1138,7 +1468,7 @@ type DrainPlayers struct {
 
 func (x *DrainPlayers) Reset() {
 	*x = DrainPlayers{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[17]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1150,7 +1480,7 @@ func (x *DrainPlayers) String() string {
 func (*DrainPlayers) ProtoMessage() {}
 
 func (x *DrainPlayers) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[17]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1163,7 +1493,7 @@ func (x *DrainPlayers) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DrainPlayers.ProtoReflect.Descriptor instead.
 func (*DrainPlayers) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{17}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *DrainPlayers) GetFromServer() string {
@@ -1211,7 +1541,7 @@ type SetReady struct {
 
 func (x *SetReady) Reset() {
 	*x = SetReady{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[18]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1223,7 +1553,7 @@ func (x *SetReady) String() string {
 func (*SetReady) ProtoMessage() {}
 
 func (x *SetReady) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[18]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1236,7 +1566,7 @@ func (x *SetReady) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetReady.ProtoReflect.Descriptor instead.
 func (*SetReady) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{18}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *SetReady) GetReady() bool {
@@ -1257,6 +1587,7 @@ type OperatorToProxy struct {
 	//	*OperatorToProxy_ReportInterval
 	//	*OperatorToProxy_SessionDeadline
 	//	*OperatorToProxy_SetReady
+	//	*OperatorToProxy_NetworkState
 	Message       isOperatorToProxy_Message `protobuf_oneof:"message"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1264,7 +1595,7 @@ type OperatorToProxy struct {
 
 func (x *OperatorToProxy) Reset() {
 	*x = OperatorToProxy{}
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[19]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1276,7 +1607,7 @@ func (x *OperatorToProxy) String() string {
 func (*OperatorToProxy) ProtoMessage() {}
 
 func (x *OperatorToProxy) ProtoReflect() protoreflect.Message {
-	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[19]
+	mi := &file_spawnery_agent_v1alpha1_agent_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1289,7 +1620,7 @@ func (x *OperatorToProxy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperatorToProxy.ProtoReflect.Descriptor instead.
 func (*OperatorToProxy) Descriptor() ([]byte, []int) {
-	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{19}
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *OperatorToProxy) GetMessage() isOperatorToProxy_Message {
@@ -1362,6 +1693,15 @@ func (x *OperatorToProxy) GetSetReady() *SetReady {
 	return nil
 }
 
+func (x *OperatorToProxy) GetNetworkState() *NetworkState {
+	if x != nil {
+		if x, ok := x.Message.(*OperatorToProxy_NetworkState); ok {
+			return x.NetworkState
+		}
+	}
+	return nil
+}
+
 type isOperatorToProxy_Message interface {
 	isOperatorToProxy_Message()
 }
@@ -1394,6 +1734,10 @@ type OperatorToProxy_SetReady struct {
 	SetReady *SetReady `protobuf:"bytes,7,opt,name=set_ready,json=setReady,proto3,oneof"`
 }
 
+type OperatorToProxy_NetworkState struct {
+	NetworkState *NetworkState `protobuf:"bytes,8,opt,name=network_state,json=networkState,proto3,oneof"`
+}
+
 func (*OperatorToProxy_FullSync) isOperatorToProxy_Message() {}
 
 func (*OperatorToProxy_RegisterServer) isOperatorToProxy_Message() {}
@@ -1407,6 +1751,8 @@ func (*OperatorToProxy_ReportInterval) isOperatorToProxy_Message() {}
 func (*OperatorToProxy_SessionDeadline) isOperatorToProxy_Message() {}
 
 func (*OperatorToProxy_SetReady) isOperatorToProxy_Message() {}
+
+func (*OperatorToProxy_NetworkState) isOperatorToProxy_Message() {}
 
 var File_spawnery_agent_v1alpha1_agent_proto protoreflect.FileDescriptor
 
@@ -1430,10 +1776,11 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\x05hello\x18\x01 \x01(\v2\x1e.spawnery.agent.v1alpha1.HelloH\x00R\x05hello\x126\n" +
 	"\x05ready\x18\x02 \x01(\v2\x1e.spawnery.agent.v1alpha1.ReadyH\x00R\x05ready\x12I\n" +
 	"\fplayer_count\x18\x03 \x01(\v2$.spawnery.agent.v1alpha1.PlayerCountH\x00R\vplayerCountB\t\n" +
-	"\amessage\"\xc8\x01\n" +
+	"\amessage\"\x96\x02\n" +
 	"\x10OperatorToServer\x12R\n" +
 	"\x0freport_interval\x18\x01 \x01(\v2'.spawnery.agent.v1alpha1.ReportIntervalH\x00R\x0ereportInterval\x12U\n" +
-	"\x10session_deadline\x18\x02 \x01(\v2(.spawnery.agent.v1alpha1.SessionDeadlineH\x00R\x0fsessionDeadlineB\t\n" +
+	"\x10session_deadline\x18\x02 \x01(\v2(.spawnery.agent.v1alpha1.SessionDeadlineH\x00R\x0fsessionDeadline\x12L\n" +
+	"\rnetwork_state\x18\x03 \x01(\v2%.spawnery.agent.v1alpha1.NetworkStateH\x00R\fnetworkStateB\t\n" +
 	"\amessage\"\v\n" +
 	"\tHeartbeat\"D\n" +
 	"\x12PlayerJoinedServer\x12\x16\n" +
@@ -1449,7 +1796,35 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\vRosterEntry\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
-	"\x06server\x18\x03 \x01(\tR\x06server\"\xe3\x03\n" +
+	"\x06server\x18\x03 \x01(\tR\x06server\"\xcb\x01\n" +
+	"\fNetworkState\x12;\n" +
+	"\x06groups\x18\x01 \x03(\v2#.spawnery.agent.v1alpha1.GroupStateR\x06groups\x12>\n" +
+	"\aservers\x18\x02 \x03(\v2$.spawnery.agent.v1alpha1.ServerStateR\aservers\x12>\n" +
+	"\aplayers\x18\x03 \x03(\v2$.spawnery.agent.v1alpha1.RosterEntryR\aplayers\"\xaf\x02\n" +
+	"\n" +
+	"GroupState\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12<\n" +
+	"\x04kind\x18\x02 \x01(\x0e2(.spawnery.agent.v1alpha1.GroupState.KindR\x04kind\x12\x1a\n" +
+	"\breplicas\x18\x03 \x01(\x05R\breplicas\x12%\n" +
+	"\x0eready_replicas\x18\x04 \x01(\x05R\rreadyReplicas\x12%\n" +
+	"\x0eonline_players\x18\x05 \x01(\x05R\ronlinePlayers\x12\x1d\n" +
+	"\n" +
+	"free_slots\x18\x06 \x01(\x05R\tfreeSlots\"F\n" +
+	"\x04Kind\x12\x14\n" +
+	"\x10KIND_UNSPECIFIED\x10\x00\x12\r\n" +
+	"\tEPHEMERAL\x10\x01\x12\x0e\n" +
+	"\n" +
+	"PERSISTENT\x10\x02\x12\t\n" +
+	"\x05PROXY\x10\x03\"\x9d\x01\n" +
+	"\vServerState\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
+	"\x05group\x18\x02 \x01(\tR\x05group\x12\x14\n" +
+	"\x05phase\x18\x03 \x01(\tR\x05phase\x12\x18\n" +
+	"\aplayers\x18\x04 \x01(\x05R\aplayers\x12\x14\n" +
+	"\x05slots\x18\x05 \x01(\x05R\x05slots\x12\x1e\n" +
+	"\n" +
+	"registered\x18\x06 \x01(\bR\n" +
+	"registered\"\xe3\x03\n" +
 	"\fProxyMessage\x126\n" +
 	"\x05hello\x18\x01 \x01(\v2\x1e.spawnery.agent.v1alpha1.HelloH\x00R\x05hello\x12I\n" +
 	"\fplayer_count\x18\x02 \x01(\v2$.spawnery.agent.v1alpha1.PlayerCountH\x00R\vplayerCount\x12_\n" +
@@ -1473,7 +1848,7 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"fromServer\x12\x1b\n" +
 	"\tto_groups\x18\x02 \x03(\tR\btoGroups\" \n" +
 	"\bSetReady\x12\x14\n" +
-	"\x05ready\x18\x01 \x01(\bR\x05ready\"\xc7\x04\n" +
+	"\x05ready\x18\x01 \x01(\bR\x05ready\"\x95\x05\n" +
 	"\x0fOperatorToProxy\x12@\n" +
 	"\tfull_sync\x18\x01 \x01(\v2!.spawnery.agent.v1alpha1.FullSyncH\x00R\bfullSync\x12R\n" +
 	"\x0fregister_server\x18\x02 \x01(\v2'.spawnery.agent.v1alpha1.RegisterServerH\x00R\x0eregisterServer\x12X\n" +
@@ -1481,7 +1856,8 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\rdrain_players\x18\x04 \x01(\v2%.spawnery.agent.v1alpha1.DrainPlayersH\x00R\fdrainPlayers\x12R\n" +
 	"\x0freport_interval\x18\x05 \x01(\v2'.spawnery.agent.v1alpha1.ReportIntervalH\x00R\x0ereportInterval\x12U\n" +
 	"\x10session_deadline\x18\x06 \x01(\v2(.spawnery.agent.v1alpha1.SessionDeadlineH\x00R\x0fsessionDeadline\x12@\n" +
-	"\tset_ready\x18\a \x01(\v2!.spawnery.agent.v1alpha1.SetReadyH\x00R\bsetReadyB\t\n" +
+	"\tset_ready\x18\a \x01(\v2!.spawnery.agent.v1alpha1.SetReadyH\x00R\bsetReady\x12L\n" +
+	"\rnetwork_state\x18\b \x01(\v2%.spawnery.agent.v1alpha1.NetworkStateH\x00R\fnetworkStateB\t\n" +
 	"\amessage2\xdb\x01\n" +
 	"\fAgentService\x12c\n" +
 	"\fProxySession\x12%.spawnery.agent.v1alpha1.ProxyMessage\x1a(.spawnery.agent.v1alpha1.OperatorToProxy(\x010\x01\x12f\n" +
@@ -1501,62 +1877,73 @@ func file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP() []byte {
 	return file_spawnery_agent_v1alpha1_agent_proto_rawDescData
 }
 
-var file_spawnery_agent_v1alpha1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_spawnery_agent_v1alpha1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_spawnery_agent_v1alpha1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 24)
 var file_spawnery_agent_v1alpha1_agent_proto_goTypes = []any{
-	(*ReportInterval)(nil),     // 0: spawnery.agent.v1alpha1.ReportInterval
-	(*SessionDeadline)(nil),    // 1: spawnery.agent.v1alpha1.SessionDeadline
-	(*Hello)(nil),              // 2: spawnery.agent.v1alpha1.Hello
-	(*PlayerCount)(nil),        // 3: spawnery.agent.v1alpha1.PlayerCount
-	(*Ready)(nil),              // 4: spawnery.agent.v1alpha1.Ready
-	(*ServerMessage)(nil),      // 5: spawnery.agent.v1alpha1.ServerMessage
-	(*OperatorToServer)(nil),   // 6: spawnery.agent.v1alpha1.OperatorToServer
-	(*Heartbeat)(nil),          // 7: spawnery.agent.v1alpha1.Heartbeat
-	(*PlayerJoinedServer)(nil), // 8: spawnery.agent.v1alpha1.PlayerJoinedServer
-	(*BackendPlayers)(nil),     // 9: spawnery.agent.v1alpha1.BackendPlayers
-	(*PlayerRoster)(nil),       // 10: spawnery.agent.v1alpha1.PlayerRoster
-	(*RosterEntry)(nil),        // 11: spawnery.agent.v1alpha1.RosterEntry
-	(*ProxyMessage)(nil),       // 12: spawnery.agent.v1alpha1.ProxyMessage
-	(*RegisteredServer)(nil),   // 13: spawnery.agent.v1alpha1.RegisteredServer
-	(*FullSync)(nil),           // 14: spawnery.agent.v1alpha1.FullSync
-	(*RegisterServer)(nil),     // 15: spawnery.agent.v1alpha1.RegisterServer
-	(*UnregisterServer)(nil),   // 16: spawnery.agent.v1alpha1.UnregisterServer
-	(*DrainPlayers)(nil),       // 17: spawnery.agent.v1alpha1.DrainPlayers
-	(*SetReady)(nil),           // 18: spawnery.agent.v1alpha1.SetReady
-	(*OperatorToProxy)(nil),    // 19: spawnery.agent.v1alpha1.OperatorToProxy
-	nil,                        // 20: spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
+	(GroupState_Kind)(0),       // 0: spawnery.agent.v1alpha1.GroupState.Kind
+	(*ReportInterval)(nil),     // 1: spawnery.agent.v1alpha1.ReportInterval
+	(*SessionDeadline)(nil),    // 2: spawnery.agent.v1alpha1.SessionDeadline
+	(*Hello)(nil),              // 3: spawnery.agent.v1alpha1.Hello
+	(*PlayerCount)(nil),        // 4: spawnery.agent.v1alpha1.PlayerCount
+	(*Ready)(nil),              // 5: spawnery.agent.v1alpha1.Ready
+	(*ServerMessage)(nil),      // 6: spawnery.agent.v1alpha1.ServerMessage
+	(*OperatorToServer)(nil),   // 7: spawnery.agent.v1alpha1.OperatorToServer
+	(*Heartbeat)(nil),          // 8: spawnery.agent.v1alpha1.Heartbeat
+	(*PlayerJoinedServer)(nil), // 9: spawnery.agent.v1alpha1.PlayerJoinedServer
+	(*BackendPlayers)(nil),     // 10: spawnery.agent.v1alpha1.BackendPlayers
+	(*PlayerRoster)(nil),       // 11: spawnery.agent.v1alpha1.PlayerRoster
+	(*RosterEntry)(nil),        // 12: spawnery.agent.v1alpha1.RosterEntry
+	(*NetworkState)(nil),       // 13: spawnery.agent.v1alpha1.NetworkState
+	(*GroupState)(nil),         // 14: spawnery.agent.v1alpha1.GroupState
+	(*ServerState)(nil),        // 15: spawnery.agent.v1alpha1.ServerState
+	(*ProxyMessage)(nil),       // 16: spawnery.agent.v1alpha1.ProxyMessage
+	(*RegisteredServer)(nil),   // 17: spawnery.agent.v1alpha1.RegisteredServer
+	(*FullSync)(nil),           // 18: spawnery.agent.v1alpha1.FullSync
+	(*RegisterServer)(nil),     // 19: spawnery.agent.v1alpha1.RegisterServer
+	(*UnregisterServer)(nil),   // 20: spawnery.agent.v1alpha1.UnregisterServer
+	(*DrainPlayers)(nil),       // 21: spawnery.agent.v1alpha1.DrainPlayers
+	(*SetReady)(nil),           // 22: spawnery.agent.v1alpha1.SetReady
+	(*OperatorToProxy)(nil),    // 23: spawnery.agent.v1alpha1.OperatorToProxy
+	nil,                        // 24: spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
 }
 var file_spawnery_agent_v1alpha1_agent_proto_depIdxs = []int32{
-	2,  // 0: spawnery.agent.v1alpha1.ServerMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
-	4,  // 1: spawnery.agent.v1alpha1.ServerMessage.ready:type_name -> spawnery.agent.v1alpha1.Ready
-	3,  // 2: spawnery.agent.v1alpha1.ServerMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
-	0,  // 3: spawnery.agent.v1alpha1.OperatorToServer.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
-	1,  // 4: spawnery.agent.v1alpha1.OperatorToServer.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
-	20, // 5: spawnery.agent.v1alpha1.BackendPlayers.players:type_name -> spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
-	11, // 6: spawnery.agent.v1alpha1.PlayerRoster.players:type_name -> spawnery.agent.v1alpha1.RosterEntry
-	2,  // 7: spawnery.agent.v1alpha1.ProxyMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
-	3,  // 8: spawnery.agent.v1alpha1.ProxyMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
-	8,  // 9: spawnery.agent.v1alpha1.ProxyMessage.player_joined_server:type_name -> spawnery.agent.v1alpha1.PlayerJoinedServer
-	7,  // 10: spawnery.agent.v1alpha1.ProxyMessage.heartbeat:type_name -> spawnery.agent.v1alpha1.Heartbeat
-	9,  // 11: spawnery.agent.v1alpha1.ProxyMessage.backend_players:type_name -> spawnery.agent.v1alpha1.BackendPlayers
-	10, // 12: spawnery.agent.v1alpha1.ProxyMessage.player_roster:type_name -> spawnery.agent.v1alpha1.PlayerRoster
-	13, // 13: spawnery.agent.v1alpha1.FullSync.servers:type_name -> spawnery.agent.v1alpha1.RegisteredServer
-	13, // 14: spawnery.agent.v1alpha1.RegisterServer.server:type_name -> spawnery.agent.v1alpha1.RegisteredServer
-	14, // 15: spawnery.agent.v1alpha1.OperatorToProxy.full_sync:type_name -> spawnery.agent.v1alpha1.FullSync
-	15, // 16: spawnery.agent.v1alpha1.OperatorToProxy.register_server:type_name -> spawnery.agent.v1alpha1.RegisterServer
-	16, // 17: spawnery.agent.v1alpha1.OperatorToProxy.unregister_server:type_name -> spawnery.agent.v1alpha1.UnregisterServer
-	17, // 18: spawnery.agent.v1alpha1.OperatorToProxy.drain_players:type_name -> spawnery.agent.v1alpha1.DrainPlayers
-	0,  // 19: spawnery.agent.v1alpha1.OperatorToProxy.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
-	1,  // 20: spawnery.agent.v1alpha1.OperatorToProxy.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
-	18, // 21: spawnery.agent.v1alpha1.OperatorToProxy.set_ready:type_name -> spawnery.agent.v1alpha1.SetReady
-	12, // 22: spawnery.agent.v1alpha1.AgentService.ProxySession:input_type -> spawnery.agent.v1alpha1.ProxyMessage
-	5,  // 23: spawnery.agent.v1alpha1.AgentService.ServerSession:input_type -> spawnery.agent.v1alpha1.ServerMessage
-	19, // 24: spawnery.agent.v1alpha1.AgentService.ProxySession:output_type -> spawnery.agent.v1alpha1.OperatorToProxy
-	6,  // 25: spawnery.agent.v1alpha1.AgentService.ServerSession:output_type -> spawnery.agent.v1alpha1.OperatorToServer
-	24, // [24:26] is the sub-list for method output_type
-	22, // [22:24] is the sub-list for method input_type
-	22, // [22:22] is the sub-list for extension type_name
-	22, // [22:22] is the sub-list for extension extendee
-	0,  // [0:22] is the sub-list for field type_name
+	3,  // 0: spawnery.agent.v1alpha1.ServerMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
+	5,  // 1: spawnery.agent.v1alpha1.ServerMessage.ready:type_name -> spawnery.agent.v1alpha1.Ready
+	4,  // 2: spawnery.agent.v1alpha1.ServerMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
+	1,  // 3: spawnery.agent.v1alpha1.OperatorToServer.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
+	2,  // 4: spawnery.agent.v1alpha1.OperatorToServer.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
+	13, // 5: spawnery.agent.v1alpha1.OperatorToServer.network_state:type_name -> spawnery.agent.v1alpha1.NetworkState
+	24, // 6: spawnery.agent.v1alpha1.BackendPlayers.players:type_name -> spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
+	12, // 7: spawnery.agent.v1alpha1.PlayerRoster.players:type_name -> spawnery.agent.v1alpha1.RosterEntry
+	14, // 8: spawnery.agent.v1alpha1.NetworkState.groups:type_name -> spawnery.agent.v1alpha1.GroupState
+	15, // 9: spawnery.agent.v1alpha1.NetworkState.servers:type_name -> spawnery.agent.v1alpha1.ServerState
+	12, // 10: spawnery.agent.v1alpha1.NetworkState.players:type_name -> spawnery.agent.v1alpha1.RosterEntry
+	0,  // 11: spawnery.agent.v1alpha1.GroupState.kind:type_name -> spawnery.agent.v1alpha1.GroupState.Kind
+	3,  // 12: spawnery.agent.v1alpha1.ProxyMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
+	4,  // 13: spawnery.agent.v1alpha1.ProxyMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
+	9,  // 14: spawnery.agent.v1alpha1.ProxyMessage.player_joined_server:type_name -> spawnery.agent.v1alpha1.PlayerJoinedServer
+	8,  // 15: spawnery.agent.v1alpha1.ProxyMessage.heartbeat:type_name -> spawnery.agent.v1alpha1.Heartbeat
+	10, // 16: spawnery.agent.v1alpha1.ProxyMessage.backend_players:type_name -> spawnery.agent.v1alpha1.BackendPlayers
+	11, // 17: spawnery.agent.v1alpha1.ProxyMessage.player_roster:type_name -> spawnery.agent.v1alpha1.PlayerRoster
+	17, // 18: spawnery.agent.v1alpha1.FullSync.servers:type_name -> spawnery.agent.v1alpha1.RegisteredServer
+	17, // 19: spawnery.agent.v1alpha1.RegisterServer.server:type_name -> spawnery.agent.v1alpha1.RegisteredServer
+	18, // 20: spawnery.agent.v1alpha1.OperatorToProxy.full_sync:type_name -> spawnery.agent.v1alpha1.FullSync
+	19, // 21: spawnery.agent.v1alpha1.OperatorToProxy.register_server:type_name -> spawnery.agent.v1alpha1.RegisterServer
+	20, // 22: spawnery.agent.v1alpha1.OperatorToProxy.unregister_server:type_name -> spawnery.agent.v1alpha1.UnregisterServer
+	21, // 23: spawnery.agent.v1alpha1.OperatorToProxy.drain_players:type_name -> spawnery.agent.v1alpha1.DrainPlayers
+	1,  // 24: spawnery.agent.v1alpha1.OperatorToProxy.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
+	2,  // 25: spawnery.agent.v1alpha1.OperatorToProxy.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
+	22, // 26: spawnery.agent.v1alpha1.OperatorToProxy.set_ready:type_name -> spawnery.agent.v1alpha1.SetReady
+	13, // 27: spawnery.agent.v1alpha1.OperatorToProxy.network_state:type_name -> spawnery.agent.v1alpha1.NetworkState
+	16, // 28: spawnery.agent.v1alpha1.AgentService.ProxySession:input_type -> spawnery.agent.v1alpha1.ProxyMessage
+	6,  // 29: spawnery.agent.v1alpha1.AgentService.ServerSession:input_type -> spawnery.agent.v1alpha1.ServerMessage
+	23, // 30: spawnery.agent.v1alpha1.AgentService.ProxySession:output_type -> spawnery.agent.v1alpha1.OperatorToProxy
+	7,  // 31: spawnery.agent.v1alpha1.AgentService.ServerSession:output_type -> spawnery.agent.v1alpha1.OperatorToServer
+	30, // [30:32] is the sub-list for method output_type
+	28, // [28:30] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_spawnery_agent_v1alpha1_agent_proto_init() }
@@ -1572,8 +1959,9 @@ func file_spawnery_agent_v1alpha1_agent_proto_init() {
 	file_spawnery_agent_v1alpha1_agent_proto_msgTypes[6].OneofWrappers = []any{
 		(*OperatorToServer_ReportInterval)(nil),
 		(*OperatorToServer_SessionDeadline)(nil),
+		(*OperatorToServer_NetworkState)(nil),
 	}
-	file_spawnery_agent_v1alpha1_agent_proto_msgTypes[12].OneofWrappers = []any{
+	file_spawnery_agent_v1alpha1_agent_proto_msgTypes[15].OneofWrappers = []any{
 		(*ProxyMessage_Hello)(nil),
 		(*ProxyMessage_PlayerCount)(nil),
 		(*ProxyMessage_PlayerJoinedServer)(nil),
@@ -1581,7 +1969,7 @@ func file_spawnery_agent_v1alpha1_agent_proto_init() {
 		(*ProxyMessage_BackendPlayers)(nil),
 		(*ProxyMessage_PlayerRoster)(nil),
 	}
-	file_spawnery_agent_v1alpha1_agent_proto_msgTypes[19].OneofWrappers = []any{
+	file_spawnery_agent_v1alpha1_agent_proto_msgTypes[22].OneofWrappers = []any{
 		(*OperatorToProxy_FullSync)(nil),
 		(*OperatorToProxy_RegisterServer)(nil),
 		(*OperatorToProxy_UnregisterServer)(nil),
@@ -1589,19 +1977,21 @@ func file_spawnery_agent_v1alpha1_agent_proto_init() {
 		(*OperatorToProxy_ReportInterval)(nil),
 		(*OperatorToProxy_SessionDeadline)(nil),
 		(*OperatorToProxy_SetReady)(nil),
+		(*OperatorToProxy_NetworkState)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_spawnery_agent_v1alpha1_agent_proto_rawDesc), len(file_spawnery_agent_v1alpha1_agent_proto_rawDesc)),
-			NumEnums:      0,
-			NumMessages:   21,
+			NumEnums:      1,
+			NumMessages:   24,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
 		GoTypes:           file_spawnery_agent_v1alpha1_agent_proto_goTypes,
 		DependencyIndexes: file_spawnery_agent_v1alpha1_agent_proto_depIdxs,
+		EnumInfos:         file_spawnery_agent_v1alpha1_agent_proto_enumTypes,
 		MessageInfos:      file_spawnery_agent_v1alpha1_agent_proto_msgTypes,
 	}.Build()
 	File_spawnery_agent_v1alpha1_agent_proto = out.File

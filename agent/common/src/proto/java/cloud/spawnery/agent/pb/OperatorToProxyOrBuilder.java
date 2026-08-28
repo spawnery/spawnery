@@ -115,5 +115,20 @@ public interface OperatorToProxyOrBuilder extends
    */
   cloud.spawnery.agent.pb.SetReadyOrBuilder getSetReadyOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+   * @return Whether the networkState field is set.
+   */
+  boolean hasNetworkState();
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+   * @return The networkState.
+   */
+  cloud.spawnery.agent.pb.NetworkState getNetworkState();
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+   */
+  cloud.spawnery.agent.pb.NetworkStateOrBuilder getNetworkStateOrBuilder();
+
   cloud.spawnery.agent.pb.OperatorToProxy.MessageCase getMessageCase();
 }
