@@ -46,6 +46,14 @@ sourceSets.main {
 // :velocity) names the generated message types in its own sources, so those
 // types have to reach its compile classpath and not merely its runtime one.
 dependencies {
+    // `api` and not `implementation`: the module's types appear in signatures
+    // :paper and :velocity will implement, so both need it on their compile
+    // classpath, and both shadowJars need it on their runtime one. This is
+    // also what carries it into the shipped jars at all -- nothing else
+    // references it yet, and a module nothing depends on is a module the
+    // shaded jars do not carry.
+    api(project(":api"))
+
     api("io.grpc:grpc-api:1.83.1")
     api("io.grpc:grpc-protobuf:1.83.1")
     api("io.grpc:grpc-stub:1.83.1")
