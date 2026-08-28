@@ -2726,6 +2726,129 @@ metadata:
   annotations:
     helm.sh/resource-policy: keep
     controller-gen.kubebuilder.io/version: v0.21.0
+  name: scaleboosts.spawnery.cloud
+spec:
+  group: spawnery.cloud
+  names:
+    kind: ScaleBoost
+    listKind: ScaleBoostList
+    plural: scaleboosts
+    shortNames:
+    - boost
+    singular: scaleboost
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.groupRef.name
+      name: Group
+      type: string
+    - jsonPath: .spec.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .spec.expiresAt
+      name: Expires
+      type: date
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ScaleBoost is extra capacity for a group, for a while.
+
+          It exists as its own object rather than as a field on the group, and the
+          reason is not tidiness. The operator has no write access to a ServerGroup's
+          spec -- its ClusterRole grants get, list and watch -- and on a
+          GitOps-managed cluster that spec is owned by a file, so a floor the operator
+          raised there would be reverted at the next reconciliation. An admin would
+          type a command, watch the count rise, and find it back where the file has
+          it. This object is the operator's own, and nothing outside the cluster
+          claims it.
+
+          It adds to the group's floor and never to its ceiling. spec.scaling.
+          maxReplicas still binds, because a ceiling is an instruction -- milestone 4a
+          established that -- and a boost is the one thing here that a person might
+          create in a hurry.
+
+          It has no status. There is nothing about a boost that the operator observes
+          and the object does not already say: whether it is live is its expiry
+          against the clock, and what it did is on the group it names, as
+          status.boostedReplicas. A status here would be a second place to read one
+          fact.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: ScaleBoostSpec is extra capacity for one group, for a while.
+            properties:
+              expiresAt:
+                description: |-
+                  ExpiresAt is when this boost stops counting.
+
+                  Optional in the type and supplied by everything that creates one. A
+                  boost with none never expires, which is a real need -- a maintenance
+                  window somebody is watching -- and a real hazard: the boost from last
+                  weekend still running in March, with nobody left who remembers why the
+                  lobby has four servers. Whatever creates these gives them a default, and
+                  the type does not, because a type that invented a time would make an
+                  explicit "forever" impossible to write.
+                format: date-time
+                type: string
+              groupRef:
+                description: |-
+                  GroupRef names the ServerGroup this adds capacity to. Immutable in
+                  practice: nothing edits a boost, and moving one between groups would be
+                  two decisions wearing one object.
+                properties:
+                  name:
+                    description: Name of the referenced object.
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              replicas:
+                description: |-
+                  Replicas is how many servers to add to the group's own floor.
+
+                  Added, not set: two boosts on one group are two boosts, and a second
+                  does not replace a first. That is what makes "somebody else already
+                  boosted this" a non-event rather than a race.
+                format: int32
+                minimum: 1
+                type: integer
+            required:
+            - groupRef
+            - replicas
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+    controller-gen.kubebuilder.io/version: v0.21.0
   name: servergroups.spawnery.cloud
 spec:
   group: spawnery.cloud
