@@ -60,6 +60,7 @@ private static final long serialVersionUID = 0L;
     HEARTBEAT(4),
     BACKEND_PLAYERS(5),
     PLAYER_ROSTER(6),
+    CLOUD_REQUEST(7),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -83,6 +84,7 @@ private static final long serialVersionUID = 0L;
         case 4: return HEARTBEAT;
         case 5: return BACKEND_PLAYERS;
         case 6: return PLAYER_ROSTER;
+        case 7: return CLOUD_REQUEST;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -284,6 +286,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.PlayerRoster.getDefaultInstance();
   }
 
+  public static final int CLOUD_REQUEST_FIELD_NUMBER = 7;
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+   * @return Whether the cloudRequest field is set.
+   */
+  @java.lang.Override
+  public boolean hasCloudRequest() {
+    return messageCase_ == 7;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+   * @return The cloudRequest.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.CloudRequest getCloudRequest() {
+    if (messageCase_ == 7) {
+       return (cloud.spawnery.agent.pb.CloudRequest) message_;
+    }
+    return cloud.spawnery.agent.pb.CloudRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.CloudRequestOrBuilder getCloudRequestOrBuilder() {
+    if (messageCase_ == 7) {
+       return (cloud.spawnery.agent.pb.CloudRequest) message_;
+    }
+    return cloud.spawnery.agent.pb.CloudRequest.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -316,6 +349,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 6) {
       output.writeMessage(6, (cloud.spawnery.agent.pb.PlayerRoster) message_);
     }
+    if (messageCase_ == 7) {
+      output.writeMessage(7, (cloud.spawnery.agent.pb.CloudRequest) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -343,6 +379,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 6) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(6, (cloud.spawnery.agent.pb.PlayerRoster) message_);
+    }
+    if (messageCase_ == 7) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(7, (cloud.spawnery.agent.pb.CloudRequest) message_);
     }
     return size;
   }
@@ -394,6 +434,10 @@ private static final long serialVersionUID = 0L;
         if (!getPlayerRoster()
             .equals(other.getPlayerRoster())) return false;
         break;
+      case 7:
+        if (!getCloudRequest()
+            .equals(other.getCloudRequest())) return false;
+        break;
       case 0:
       default:
     }
@@ -432,6 +476,10 @@ private static final long serialVersionUID = 0L;
       case 6:
         hash = (37 * hash) + PLAYER_ROSTER_FIELD_NUMBER;
         hash = (53 * hash) + getPlayerRoster().hashCode();
+        break;
+      case 7:
+        hash = (37 * hash) + CLOUD_REQUEST_FIELD_NUMBER;
+        hash = (53 * hash) + getCloudRequest().hashCode();
         break;
       case 0:
       default:
@@ -585,6 +633,9 @@ private static final long serialVersionUID = 0L;
       if (playerRosterBuilder_ != null) {
         playerRosterBuilder_.clear();
       }
+      if (cloudRequestBuilder_ != null) {
+        cloudRequestBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -650,6 +701,10 @@ private static final long serialVersionUID = 0L;
           playerRosterBuilder_ != null) {
         result.message_ = playerRosterBuilder_.build();
       }
+      if (messageCase_ == 7 &&
+          cloudRequestBuilder_ != null) {
+        result.message_ = cloudRequestBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -687,6 +742,10 @@ private static final long serialVersionUID = 0L;
         }
         case PLAYER_ROSTER: {
           mergePlayerRoster(other.getPlayerRoster());
+          break;
+        }
+        case CLOUD_REQUEST: {
+          mergeCloudRequest(other.getCloudRequest());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -761,6 +820,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 6;
               break;
             } // case 50
+            case 58: {
+              input.readMessage(
+                  internalGetCloudRequestFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 7;
+              break;
+            } // case 58
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1643,6 +1709,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 6;
       onChanged();
       return playerRosterBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.CloudRequest, cloud.spawnery.agent.pb.CloudRequest.Builder, cloud.spawnery.agent.pb.CloudRequestOrBuilder> cloudRequestBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     * @return Whether the cloudRequest field is set.
+     */
+    @java.lang.Override
+    public boolean hasCloudRequest() {
+      return messageCase_ == 7;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     * @return The cloudRequest.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.CloudRequest getCloudRequest() {
+      if (cloudRequestBuilder_ == null) {
+        if (messageCase_ == 7) {
+          return (cloud.spawnery.agent.pb.CloudRequest) message_;
+        }
+        return cloud.spawnery.agent.pb.CloudRequest.getDefaultInstance();
+      } else {
+        if (messageCase_ == 7) {
+          return cloudRequestBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.CloudRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     */
+    public Builder setCloudRequest(cloud.spawnery.agent.pb.CloudRequest value) {
+      if (cloudRequestBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        cloudRequestBuilder_.setMessage(value);
+      }
+      messageCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     */
+    public Builder setCloudRequest(
+        cloud.spawnery.agent.pb.CloudRequest.Builder builderForValue) {
+      if (cloudRequestBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        cloudRequestBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     */
+    public Builder mergeCloudRequest(cloud.spawnery.agent.pb.CloudRequest value) {
+      if (cloudRequestBuilder_ == null) {
+        if (messageCase_ == 7 &&
+            message_ != cloud.spawnery.agent.pb.CloudRequest.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.CloudRequest.newBuilder((cloud.spawnery.agent.pb.CloudRequest) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 7) {
+          cloudRequestBuilder_.mergeFrom(value);
+        } else {
+          cloudRequestBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     */
+    public Builder clearCloudRequest() {
+      if (cloudRequestBuilder_ == null) {
+        if (messageCase_ == 7) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 7) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        cloudRequestBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     */
+    public cloud.spawnery.agent.pb.CloudRequest.Builder getCloudRequestBuilder() {
+      return internalGetCloudRequestFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.CloudRequestOrBuilder getCloudRequestOrBuilder() {
+      if ((messageCase_ == 7) && (cloudRequestBuilder_ != null)) {
+        return cloudRequestBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 7) {
+          return (cloud.spawnery.agent.pb.CloudRequest) message_;
+        }
+        return cloud.spawnery.agent.pb.CloudRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 7;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.CloudRequest, cloud.spawnery.agent.pb.CloudRequest.Builder, cloud.spawnery.agent.pb.CloudRequestOrBuilder> 
+        internalGetCloudRequestFieldBuilder() {
+      if (cloudRequestBuilder_ == null) {
+        if (!(messageCase_ == 7)) {
+          message_ = cloud.spawnery.agent.pb.CloudRequest.getDefaultInstance();
+        }
+        cloudRequestBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.CloudRequest, cloud.spawnery.agent.pb.CloudRequest.Builder, cloud.spawnery.agent.pb.CloudRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.CloudRequest) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 7;
+      onChanged();
+      return cloudRequestBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.ProxyMessage)

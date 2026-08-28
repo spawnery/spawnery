@@ -130,5 +130,20 @@ public interface OperatorToProxyOrBuilder extends
    */
   cloud.spawnery.agent.pb.NetworkStateOrBuilder getNetworkStateOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+   * @return Whether the cloudResponse field is set.
+   */
+  boolean hasCloudResponse();
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+   * @return The cloudResponse.
+   */
+  cloud.spawnery.agent.pb.CloudResponse getCloudResponse();
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+   */
+  cloud.spawnery.agent.pb.CloudResponseOrBuilder getCloudResponseOrBuilder();
+
   cloud.spawnery.agent.pb.OperatorToProxy.MessageCase getMessageCase();
 }

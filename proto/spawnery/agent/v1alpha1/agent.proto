@@ -89,6 +89,100 @@ message PlayerCount {
   int32 slots = 2;
 }
 
+// ---- requests (milestone 7b-5) ----
+
+// CloudRequest is an agent asking the operator for something.
+//
+// **The first message on this channel that is a question.** Until 7b-5 an
+// agent reported upward and the operator instructed downward; nothing asked,
+// and the three things that follow from asking are all new here.
+//
+// The id is the *agent's*, minted per stream and monotonic. The operator
+// echoes it on the answer and never remembers one across a reconnect, so a
+// renewal leaves nothing to reconcile on either side -- which matters because
+// SessionLoop renews make-before-break and two streams are briefly live at
+// once. An in-flight request does not survive that changeover: the agent fails
+// it rather than resending on the new stream, because only the caller knows
+// whether their request is safe to repeat and none of these is.
+message CloudRequest {
+  uint64 id = 1;
+  oneof request {
+    ConnectRequest connect = 2;
+  }
+}
+
+// CloudResponse answers exactly one CloudRequest.
+//
+// An answer for an id nobody is waiting on is dropped by the agent rather than
+// treated as an error: a late answer to a request that already reached its
+// deadline is ordinary, and throwing on one inside a gRPC callback would cost
+// the agent every other request it has outstanding.
+message CloudResponse {
+  uint64 id = 1;
+  oneof result {
+    ConnectResult connect = 2;
+    RequestError error = 3;
+  }
+}
+
+// ConnectRequest asks that a player be moved.
+//
+// The target is a oneof rather than a string the operator parses, so the
+// difference between "this server" and "wherever that group has room" is on
+// the wire instead of in a convention two sides have to agree about. Naming a
+// group hands the choice to the operator, which is the only side that knows
+// what every backend's occupancy is.
+message ConnectRequest {
+  string player_uuid = 1;
+  oneof target {
+    string server = 2;
+    string group = 3;
+  }
+}
+
+// ConnectResult is what happened.
+//
+// moved is false without an error for the one ordinary case: the player was
+// already on the server they were asked to move to. That is a success a caller
+// may want to tell apart from a move, and it is not a failure.
+message ConnectResult {
+  bool moved = 1;
+  // Where the player is now, which is the target on a move and their existing
+  // server otherwise.
+  string server = 2;
+}
+
+// RequestError is why a request was not carried out.
+//
+// The reason is an enum and the message is free text, and the split is
+// deliberate: a caller branches on the reason, a person reads the message. A
+// reason carried as a string would have every caller matching on prose the
+// operator is free to reword, which is a compatibility break nobody would see
+// coming.
+message RequestError {
+  // REASON_UNSPECIFIED is both what a newer operator sends for a reason this
+  // agent predates and what proto3 hands an older one. Reading either as
+  // "something went wrong and I do not know what" is the only reading that
+  // cannot be wrong.
+  enum Reason {
+    REASON_UNSPECIFIED = 0;
+    // The player or the target is not on this network. Also what an agent
+    // gets for a player who logged out between the call and the request, which
+    // is ordinary rather than exceptional.
+    NOT_FOUND = 1;
+    // The operator understood and declined -- a bound, not a mistake.
+    REFUSED = 2;
+    // This pod has asked too often. See the operator's own bound.
+    RATE_LIMITED = 3;
+    // The operator could not carry it out right now: no proxy has the player,
+    // or the one that does has no live stream.
+    UNAVAILABLE = 4;
+  }
+
+  Reason reason = 1;
+  string message = 2;
+}
+
 // ---- server direction ----
 
 // Ready is the immediate notification that the server finished loading.
@@ -99,6 +193,7 @@ message ServerMessage {
     Hello hello = 1;
     Ready ready = 2;
     PlayerCount player_count = 3;
+    CloudRequest cloud_request = 4;
   }
 }
 
@@ -107,6 +202,7 @@ message OperatorToServer {
     ReportInterval report_interval = 1;
     SessionDeadline session_deadline = 2;
     NetworkState network_state = 3;
+    CloudResponse cloud_response = 4;
   }
 }
 
@@ -263,6 +359,7 @@ message ProxyMessage {
     Heartbeat heartbeat = 4;
     BackendPlayers backend_players = 5;
     PlayerRoster player_roster = 6;
+    CloudRequest cloud_request = 7;
   }
 }
 
@@ -327,5 +424,6 @@ message OperatorToProxy {
     SessionDeadline session_deadline = 6;
     SetReady set_ready = 7;
     NetworkState network_state = 8;
+    CloudResponse cloud_response = 9;
   }
 }
