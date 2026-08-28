@@ -714,9 +714,12 @@ func answerCloudRequest(of func(map[string]any) map[string]any, events recorderL
 
 // networkState is the mirror both agent kinds are sent on connect.
 //
-// One group and one server, which is enough for the only thing the phases can
-// assert today: that a shipped jar receives a message it does not understand
-// and keeps its session. Neither agent consumes this yet.
+// One group and one server. That was once enough for the only thing the phases
+// could assert -- that a shipped jar receives a message it does not understand
+// and keeps its session -- and both agents consume it now: it is what fills
+// NetworkMirror, and hack/agent-test.sh drives `cloud list` against it from the
+// server's console. The group's name is spelled in that script as
+// SYNCED_GROUP, which checks it still matches this file.
 func networkState() *agentpb.NetworkState {
 	return &agentpb.NetworkState{
 		Groups: []*agentpb.GroupState{{

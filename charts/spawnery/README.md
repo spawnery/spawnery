@@ -129,6 +129,38 @@ feature. `imagePullSecrets` is absent because all three of this project's
 images are public and unauthenticated by decision; if that changes, it is a
 field and a test to add, not a restructuring.
 
+## The `/cloud` permissions
+
+The agents register a `/cloud` command on every Paper server and every Velocity
+proxy. **Nobody holds any of these permissions by default**, so on a fresh
+upgrade the command answers "unknown command" to every player. That is the safe
+state, and it looks exactly like a broken install — grant one of these in
+whatever permissions plugin the network runs, and it appears.
+
+The console holds all three by default, which is why an operator can drive
+`/cloud` from `kubectl attach` without granting anything to anybody. On Paper
+that is how the console sender answers every permission; on Velocity the
+console starts with `PermissionFunction.ALWAYS_TRUE` — checked in the pinned
+`velocity-3.5.1-615.jar` — and a permissions plugin that handles
+`PermissionsSetupEvent` may replace it. Most grant the console everything, but
+if `/cloud` is invisible from a proxy console that is where to look.
+
+| Permission | What somebody holding it can do | What a player would notice |
+|---|---|---|
+| `spawnery.cloud.read` | `/cloud list`, `/cloud info <name>` — read the network as this agent last saw it. | Nothing. It changes nothing and costs nothing; the figures are the same ones `kubectl get servergroups` shows. |
+| `spawnery.cloud.retire` | `/cloud retire <server>` — ask one server to stop taking joins and empty out. | Anyone already on that server stays, finishes, and is not kicked; the server disappears once it is empty. Nobody new lands there. Reversible only by the server's own lifetime running out — there is no un-retire. |
+| `spawnery.cloud.scale` | `/cloud start <group> [n] [for <duration>]` and `/cloud stop <group>` — add capacity for a while, or end it early. | More servers, and **a larger bill**: each one is a pod with the group's own CPU and memory requests. Bounded by the group's `maxReplicas`, which this cannot lift, and by a twelve-hour ceiling on how long one boost may run. |
+
+Give `.read` freely; it is a read of a picture the agent already holds. Treat
+`.retire` as a moderator power — it moves nobody, but it takes a server out of
+rotation and only the cluster can put one back. Treat `.scale` as a spending
+power.
+
+**None of these can change what a group is.** `/cloud start` creates a
+`ScaleBoost`, which expires; it never edits the `ServerGroup`, and the
+operator's own ClusterRole has no write on `servergroups` at all. A group that
+needs to be permanently bigger needs its file edited by a person.
+
 ## Uninstalling
 
 ```bash

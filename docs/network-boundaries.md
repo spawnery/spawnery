@@ -389,5 +389,17 @@ which [`charts/spawnery/README.md`](../charts/spawnery/README.md) tells an
 operator to treat as one trust domain.
 
 The `/cloud` command is the different case and does gate. A command has a
-`CommandSource`, so `spawnery.cloud.read` is expressible there, and that is
-where the permission belongs.
+source, so a permission is expressible there, and that is where it belongs. It
+carries three — `spawnery.cloud.read`, `.retire` and `.scale`, listed with what
+each costs in
+[`charts/spawnery/README.md`](../charts/spawnery/README.md#the-cloud-permissions)
+— and the split is not cosmetic: reading the network is what a moderator gets,
+and adding servers spends money.
+
+**That gate binds a person, not a pod.** A plugin calling `SpawneryApi`
+directly is behind the boundary above and no permission is checked, because
+there is nobody to check one against. The operator's own bounds are what hold
+there instead — a ceiling a boost cannot lift, a duration it cannot exceed, and
+a namespace it structurally cannot leave — and they apply to the command too,
+underneath its permission. A permission decides who may ask; the operator
+decides what may be asked for.

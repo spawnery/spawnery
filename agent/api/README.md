@@ -97,10 +97,40 @@ A failure is ordinary. A player who logged out between your call and the
 operator reading it fails with `NOT_FOUND`; so does a target that is not
 routable yet. Handle it as a normal outcome rather than as a bug.
 
+## Changing the fleet
+
+Two calls write, and both are round trips through the operator on either
+platform — nothing local can answer them.
+
+`retire(server)` asks one server to stop taking joins and empty out. **It is
+not a stop.** Nobody is moved and nobody is kicked; the players on it finish in
+their own time, and the server goes away once it is empty. Asking for a server
+that is already retiring **fails**, on purpose: the operator distinguishes "you
+retired it" from "somebody had already asked", and a caller that wants to treat
+the second as success can do that far more safely than one that was never told.
+
+`boost(group, replicas, forHowLong)` adds capacity for a while, as a
+`ScaleBoost` object rather than as an edit to the group. Pass `null` for the
+operator's default of an hour.
+
+**It adds to what a group tries for and never to what it may reach.** The
+group's `maxReplicas` still binds, and a request for more than the ceiling
+leaves is refused rather than trimmed — so what you asked for is what you got,
+or you were told why not. The operator also bounds how long you may ask for.
+Boosts add rather than replace: two calls make two boosts, which is what makes
+"somebody else already boosted this" a non-event rather than a race.
+
+`stopBoosts(group)` ends all of them and reports how many there were. Zero is
+an ordinary answer, not a failure.
+
+**Neither call can change what a group is.** A boost expires; a group that
+needs to be permanently bigger needs its `ServerGroup` edited by a person, and
+this API deliberately cannot do that — the operator holds no write on
+`servergroups` at all.
+
 ## What is not here yet
 
-Reading and moving a player. Subscribing to events, and starting or stopping
-servers, are designed
+Subscribing to events is designed
 ([`docs/superpowers/specs/2026-08-27-cloud-api-design.md`](../../docs/superpowers/specs/2026-08-27-cloud-api-design.md))
 and not yet built. Methods will be **added** to `SpawneryApi`, never changed:
 plugins consume this interface and do not implement it, so an addition breaks

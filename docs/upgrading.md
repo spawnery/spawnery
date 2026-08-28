@@ -491,3 +491,43 @@ is safe precisely because nothing republishes the condition.
 the codebase and is kept anyway: it is the exact string an operator meets on
 that stale condition, and deleting it would make the string unsearchable in
 the repository it came from.
+
+## The agents gain a `/cloud` command, granted to nobody
+
+Every Paper server and every Velocity proxy running the new agent registers
+`/cloud`. **No permission is granted to anybody by default**, so immediately
+after the upgrade the command answers "unknown command" to every player on the
+network.
+
+That is the safe state, and it is worth saying plainly because it looks like a
+bug. Brigadier hides a branch a source may not use rather than refusing it —
+which is the platforms' own convention, and better than a lecture — so an
+ungranted player cannot tell "you may not" from "there is no such command".
+
+The three permissions and what each one costs are in
+[the chart's README](../charts/spawnery/README.md#the-cloud-permissions). The
+short version: `spawnery.cloud.read` changes nothing, `spawnery.cloud.retire`
+takes a server out of rotation without moving anybody, and
+`spawnery.cloud.scale` spends money.
+
+**The console holds all three without being granted anything**, by default on
+both platforms. So
+
+```bash
+kubectl attach -it lobby-a3f9 -c minecraft
+```
+
+reaches `/cloud` on a network where no player has any of these. That is also
+how to check the upgrade worked without granting a permission first: `cloud
+list` names the groups the operator has told this agent about — and it is what
+`hack/agent-test.sh` drives against the shipped image, so the path is measured
+rather than assumed.
+
+On a Velocity proxy the console's permissions come from a
+`PermissionFunction` that a permissions plugin is free to replace; the default
+is `ALWAYS_TRUE`. On Paper the console answers every permission itself.
+
+**Nothing about this upgrade moves a running server.** The command is
+registered at plugin enable, which happens on a pod that is starting anyway.
+Whether the agents roll at all is decided by the image change, exactly as it
+was before this feature existed.
