@@ -302,3 +302,34 @@ be wrong for whichever Service lacks an endpoint on a given node — and it mean
 a cluster whose address pool is exhausted must choose between real client
 addresses and a shared address.
 
+
+## What the operator knows about a person
+
+The operator holds, for every player on a network, their Minecraft UUID, their
+username, and the backend they are on. Before milestone 7b-2 it held counts and
+no identity at all: the proxy's `PlayerJoinedServer` carried a username, the
+operator's handler discarded it, and the registry kept numbers.
+
+**It is in memory and nowhere else.** `agent.Registry` keeps it per proxy
+session; it reaches no custom resource, no etcd, no log line at default
+verbosity and no metric label. The last of those is deliberate twice over: a
+metric labelled by player name would multiply every series by the player base,
+and it would turn a live figure into whatever the monitoring stack's retention
+is — a decision nobody made and one this project should not make by accident.
+The one log line that can mention a roster is the refusal at `V(1)`, and it
+carries the reason and no player.
+
+It expires on its own. A roster older than twice the report interval is
+skipped, and a proxy whose stream is gone contributes nothing, so an operator
+that stops hearing from a proxy stops claiming to know who is online rather
+than serving a frozen list.
+
+What this does **not** do is bound who can read it. Anyone who can reach the
+operator's process — a debugger, a core dump, a memory-reading exploit — reads
+the roster, and no `NetworkPolicy` in this repository is about that. The bounds
+that exist are the ones that already existed: the agent channel is mutually
+authenticated and the namespace comes from the pod's own token rather than from
+the message, so a proxy can assert a roster for its own network and for no
+other. And as of 7b-2 the operator sends the roster to nobody — it has learned
+something it does not yet use, and the milestone that gives it a reason to
+share it is the one that has to decide who may ask.
