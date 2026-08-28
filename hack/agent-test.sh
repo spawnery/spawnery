@@ -345,6 +345,18 @@ echo "the agent reported readiness"
 # as having no free slots. The plugin now samples once in onEnable, before the
 # session starts, and this asserts the number that crosses the seam rather than
 # working around it.
+# The report arrives *after* the stub has already sent a NetworkState this jar
+# has no branch for, and that is the assertion rather than a side effect.
+#
+# Every additive change to this proto rests on one property: a shipped agent
+# receives a message it does not recognise and keeps its session. A jar that
+# ended its stream on one would fail against the first operator that sent it --
+# a fleet-wide outage on an operator upgrade, looking like a network problem
+# the whole way through -- and no JUnit or Go test on either side can see it,
+# because both sides are built from the same generated code.
+#
+# So the stub sends one to both agent kinds on connect, and every phase that
+# follows is the measurement. This is the first of them.
 await_event player_count
 # The stub appends a line at a time, so a read can catch a partial one. Retried
 # until it parses rather than guarded with `|| echo 0`, which would turn an

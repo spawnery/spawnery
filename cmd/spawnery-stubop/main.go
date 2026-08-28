@@ -680,6 +680,24 @@ func (s *stub) enter(current *live) {
 	time.Sleep(retirementHeadStart)
 }
 
+// networkState is the mirror both agent kinds are sent on connect.
+//
+// One group and one server, which is enough for the only thing the phases can
+// assert today: that a shipped jar receives a message it does not understand
+// and keeps its session. Neither agent consumes this yet.
+func networkState() *agentpb.NetworkState {
+	return &agentpb.NetworkState{
+		Groups: []*agentpb.GroupState{{
+			Name: syncedGroup, Kind: agentpb.GroupState_EPHEMERAL,
+			Replicas: 1, ReadyReplicas: 1, FreeSlots: 100,
+		}},
+		Servers: []*agentpb.ServerState{{
+			Name: syncedName, Group: syncedGroup, Phase: "Ready",
+			Players: 0, Slots: 100, Registered: true,
+		}},
+	}
+}
+
 func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) error {
 	return serveSession(s, stream, []*agentpb.OperatorToServer{
 		{Message: &agentpb.OperatorToServer_ReportInterval{
@@ -691,6 +709,11 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 				HardDeadlineSeconds: s.hardDeadline,
 			},
 		}},
+		// Sent to an agent that does not consume it, on purpose. What the
+		// phase asserts is that the jar keeps its session afterwards -- the
+		// property every additive proto change rests on, and one no unit test
+		// on either side can observe.
+		{Message: &agentpb.OperatorToServer_NetworkState{NetworkState: networkState()}},
 	}, nil, s.observeServer)
 }
 
@@ -743,6 +766,10 @@ func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) erro
 				HardDeadlineSeconds: s.hardDeadline,
 			},
 		}},
+		// The same message and the same reason as ServerSession's. Ahead of
+		// the FullSync deliberately: if an unknown message could unseat the
+		// gate's opening, this is where it would.
+		{Message: &agentpb.OperatorToProxy_NetworkState{NetworkState: networkState()}},
 	}, later, s.observeProxy)
 }
 
