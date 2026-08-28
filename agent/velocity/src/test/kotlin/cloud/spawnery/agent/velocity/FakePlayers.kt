@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.velocity
 
 import com.velocitypowered.api.proxy.server.RegisteredServer
+import java.util.UUID
 
 /**
  * A [Players] fixture for [DrainTest]: a fixed roster of [FakePlayer]s built up
@@ -28,6 +29,7 @@ class FakePlayers(private val roster: List<FakePlayer>) : Players {
      * comparing two different fakes.
      */
     fun ref(fake: FakePlayer): PlayerRef = object : PlayerRef {
+        override val uuid: UUID get() = fake.uuid
         override val username: String get() = fake.username
         override val currentServer: String? get() = fake.currentServer
 
@@ -71,4 +73,16 @@ class FakePlayer(
      * the proxy's own player list counts.
      */
     var attachedServer: String? = null,
+    /**
+     * Defaulted from the username, so every fixture written before identities
+     * existed keeps compiling and two players still get two distinct UUIDs. A
+     * test that is about identity passes one explicitly.
+     *
+     * **Last on purpose.** Every existing call site here passes its arguments
+     * positionally, so a parameter added anywhere above rebinds them -- which
+     * this one did, loudly, because UUID and String differ. A String parameter
+     * in the same place would have compiled and bound the wrong value, which
+     * is the failure this position avoids rather than survives.
+     */
+    val uuid: UUID = UUID.nameUUIDFromBytes(username.toByteArray()),
 )
