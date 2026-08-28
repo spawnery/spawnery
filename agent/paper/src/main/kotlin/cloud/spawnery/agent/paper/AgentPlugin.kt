@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
@@ -14,6 +15,7 @@ import cloud.spawnery.agent.TokenSource
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.OperatorToServer
 import cloud.spawnery.agent.pb.ServerMessage
+import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
@@ -85,7 +87,19 @@ class AgentPlugin : JavaPlugin(), Listener {
                     override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
                     override fun slots(): Int = state.slots
                 }
-                Spawnery.install(MirrorApi(mirror, self, connector))
+                val api = MirrorApi(mirror, self, connector)
+                Spawnery.install(api)
+                // Registered inside the COMMANDS lifecycle event because that
+                // is the only window Paper accepts a Brigadier node in; a
+                // direct call from onEnable throws. The node is built from the
+                // same `api` the install above handed out, so a player asking
+                // /cloud list and a plugin calling the API read one mirror.
+                lifecycleManager.registerEventHandler(LifecycleEvents.COMMANDS) { event ->
+                    event.registrar().register(
+                        cloudCommand(api, PaperSource).build(),
+                        "Spawnery cloud commands",
+                    )
+                }
                 // Info and not fine. This line is how a server owner confirms
                 // the API is there for their own plugins, and it is the only
                 // outward sign that the install path ran at all: installing

@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
@@ -15,6 +16,7 @@ import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerJoinedServer
 import cloud.spawnery.agent.pb.ProxyMessage
 import com.google.inject.Inject
+import com.velocitypowered.api.command.BrigadierCommand
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.connection.DisconnectEvent
 import com.velocitypowered.api.event.player.KickedFromServerEvent
@@ -207,7 +209,19 @@ class AgentPlugin @Inject constructor(
             override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
             override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
         }
-        Spawnery.install(MirrorApi(mirror, self, connector))
+        val api = MirrorApi(mirror, self, connector)
+        Spawnery.install(api)
+        // Velocity takes the node whenever, so this sits next to the install
+        // rather than in an event handler -- the one shape difference from the
+        // Paper agent, and it is Velocity's, not ours. The meta is built the
+        // long way because the one-argument register() is deprecated: it files
+        // the command under no plugin, and `/velocity dump` then reports an
+        // orphan whose owner nobody can name.
+        val command = BrigadierCommand(cloudCommand(api, VelocitySource).build())
+        proxy.commandManager.register(
+            proxy.commandManager.metaBuilder(command).plugin(this).build(),
+            command,
+        )
         logger.info(
             "spawnery API installed for network {} group {}",
             self.network(),
