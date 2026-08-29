@@ -1,7 +1,7 @@
 package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.FeedAudience
-import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.minimessage.MiniMessage
 import org.bukkit.Bukkit
 import java.util.UUID
 
@@ -24,6 +24,6 @@ object PaperAudience : FeedAudience {
     override fun send(player: UUID, message: String) {
         // Null for somebody who left between the list and this call, which is
         // ordinary rather than exceptional.
-        Bukkit.getPlayer(player)?.sendMessage(Component.text(message))
+        Bukkit.getPlayer(player)?.sendMessage(MiniMessage.miniMessage().deserialize(message))
     }
 }

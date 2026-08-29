@@ -97,8 +97,11 @@ class CloudCommandTest {
     fun `list names every group and what it is doing`() {
         run("cloud list")
 
-        assertTrue(sent.any { it.contains("lobby") }, "the output named no group: $sent")
-        assertTrue(sent.single().contains("12 players"), "the output did not say what the group is doing: $sent")
+        assertTrue(sent.any { plain(it).contains("lobby") }, "the output named no group: $sent")
+        assertTrue(
+            plain(sent.single()).contains("12 players"),
+            "the output did not say what the group is doing: $sent",
+        )
     }
 
     @Test
@@ -124,10 +127,46 @@ class CloudCommandTest {
     }
 
     @Test
+    fun `taking joins and not taking joins are told apart by colour, not only by words`() {
+        // The one field in this tree where colour earns its place rather than
+        // decorating. "Can I send somebody there" is the question, and this
+        // field is the answer -- it disagrees with the phase during a drain,
+        // so somebody scanning a list needs to see it without reading it.
+        run("cloud info lobby-a")
+
+        val line = sent.single()
+        assertTrue(line.contains("<green>taking joins</green>"), line)
+        // And the words still say it, for anyone whose client shows no colour
+        // and for the console's log.
+        assertTrue(plain(line).contains("taking joins"), plain(line))
+    }
+
+    @Test
+    fun `an operator message carrying a tag reaches chat as text`() {
+        // The operator's refusals are free text and reach chat verbatim. One
+        // containing a `<` would otherwise be eaten by the parser -- or make
+        // it throw inside a network callback, which costs the session.
+        run("cloud retire lobby-a")
+
+        answer {
+            setError(
+                RequestError.newBuilder()
+                    .setReason(RequestError.Reason.REFUSED)
+                    .setMessage("room for <red>0</red>, not 9"),
+            )
+        }
+
+        val line = sent.single()
+        assertTrue(line.contains("\\<red>"), "the operator's tag was not escaped: $line")
+        assertTrue(plain(line).contains("room for <red>0</red>, not 9"),
+            "the operator's words did not survive: ${plain(line)}")
+    }
+
+    @Test
     fun `info about a group works through the same argument`() {
         run("cloud info lobby")
 
-        assertTrue(sent.single().contains("88 free slots"), sent.toString())
+        assertTrue(plain(sent.single()).contains("88 free slots"), sent.toString())
     }
 
     @Test
@@ -187,7 +226,7 @@ class CloudCommandTest {
             )
         }
 
-        val line = sent.single()
+        val line = plain(sent.single())
         assertTrue(line.contains("already retiring"), "the operator's reason was lost: $line")
         // And the plumbing is not in it. A CompletionStage wraps failures, and
         // "java.util.concurrent.CompletionException: ..." in a chat line tells
@@ -276,7 +315,7 @@ class CloudCommandTest {
 
         answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(2)) }
 
-        assertTrue(sent.single().contains("removed 2 boosts"), sent.toString())
+        assertTrue(plain(sent.single()).contains("removed 2 boosts"), sent.toString())
     }
 
     @Test

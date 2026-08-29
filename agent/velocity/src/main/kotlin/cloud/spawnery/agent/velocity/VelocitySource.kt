@@ -3,7 +3,7 @@ package cloud.spawnery.agent.velocity
 import cloud.spawnery.agent.SourceAdapter
 import com.velocitypowered.api.command.CommandSource
 import com.velocitypowered.api.proxy.Player
-import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.minimessage.MiniMessage
 import java.util.UUID
 
 /**
@@ -17,7 +17,7 @@ object VelocitySource : SourceAdapter<CommandSource> {
         source.hasPermission(permission)
 
     override fun send(source: CommandSource, message: String) {
-        source.sendMessage(Component.text(message))
+        source.sendMessage(MiniMessage.miniMessage().deserialize(message))
     }
 
     // On this platform a Player *is* a CommandSource, which is the asymmetry

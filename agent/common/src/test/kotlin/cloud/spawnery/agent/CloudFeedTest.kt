@@ -128,7 +128,10 @@ class CloudFeedTest {
         // discovered by whoever first scales a group to forty.
         val many = (1..40).map { event("ReadyGatePassed", "lobby-%02d".format(it), "lobby") }
 
-        val line = coalesce(many).single()
+        // Measured as a person reads it, not as it is written. The markup is
+        // several times the length of the words and none of it reaches a chat
+        // line's width.
+        val line = plain(coalesce(many).single())
 
         assertTrue(line.contains("40"), "the total is missing: $line")
         assertTrue(line.length < 200, "the line is ${line.length} characters: $line")

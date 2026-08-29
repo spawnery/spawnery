@@ -2,7 +2,7 @@ package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.SourceAdapter
 import io.papermc.paper.command.brigadier.CommandSourceStack
-import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.minimessage.MiniMessage
 import org.bukkit.entity.Player
 import java.util.UUID
 
@@ -19,7 +19,7 @@ object PaperSource : SourceAdapter<CommandSourceStack> {
         source.sender.hasPermission(permission)
 
     override fun send(source: CommandSourceStack, message: String) {
-        source.sender.sendMessage(Component.text(message))
+        source.sender.sendMessage(MiniMessage.miniMessage().deserialize(message))
     }
 
     // The sender and not getPlayerOrThrow(): that throws for a console, and a

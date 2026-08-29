@@ -1,5 +1,6 @@
 package cloud.spawnery.agent
 
+import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.ServerInfo
 import cloud.spawnery.agent.api.SpawneryApi
 import com.mojang.brigadier.arguments.IntegerArgumentType
@@ -90,13 +91,12 @@ fun <S> cloudCommand(
                         // network and an operator this agent has not heard
                         // from look identical otherwise, and the second is the
                         // one somebody needs to act on.
-                        adapter.send(ctx.source, "no groups on this network yet")
+                        adapter.send(ctx.source, Style.quiet("no groups on this network yet"))
                     }
                     for (group in groups) {
                         adapter.send(
                             ctx.source,
-                            "${group.name()} (${group.kind()}): ${group.readyReplicas()}/${group.replicas()} ready, " +
-                                "${group.onlinePlayers()} players, ${group.freeSlots()} free slots",
+                            describeGroup(group),
                         )
                     }
                     groups.size
@@ -119,8 +119,7 @@ fun <S> cloudCommand(
                                 val g = group.get()
                                 adapter.send(
                                     ctx.source,
-                                    "${g.name()} (${g.kind()}): ${g.readyReplicas()}/${g.replicas()} ready, " +
-                                        "${g.onlinePlayers()} players, ${g.freeSlots()} free slots",
+                                    describeGroup(g),
                                 )
                                 return@executes 1
                             }
@@ -128,7 +127,11 @@ fun <S> cloudCommand(
                             // leaves an admin unsure whether they mistyped or
                             // the thing is gone, and an empty line leaves them
                             // unsure whether the command works at all.
-                            adapter.send(ctx.source, "no server or group called \"$name\" on this network")
+                            adapter.send(
+                                ctx.source,
+                                Style.bad("no server or group called") + " " + Style.name(name) +
+                                    Style.quiet(" on this network"),
+                            )
                             0
                         },
                 ),
@@ -153,8 +156,11 @@ fun <S> cloudCommand(
                                     // forty people does something worse next.
                                     adapter.send(
                                         source,
-                                        "$name is retiring. It takes no new joins; the players on it " +
-                                            "finish in their own time and nobody is kicked.",
+                                        Style.name(name) + Style.good(" is retiring.") +
+                                            Style.quiet(
+                                                " It takes no new joins; the players on it finish in " +
+                                                    "their own time and nobody is kicked.",
+                                            ),
                                     )
                                 } else {
                                     // The operator's own words. Every refusal
@@ -162,7 +168,11 @@ fun <S> cloudCommand(
                                     // already retiring, no such server, asked
                                     // too often -- and rewording them here
                                     // would only lose which one it was.
-                                    adapter.send(source, "could not retire $name: ${reason(failure)}")
+                                    adapter.send(
+                                        source,
+                                        Style.bad("could not retire") + " " + Style.name(name) +
+                                            Style.quiet(": ") + Style.bad(reason(failure)),
+                                    )
                                 }
                             }
                             // One, meaning the request went out -- not that it
@@ -201,8 +211,12 @@ fun <S> cloudCommand(
                                                 if (span == null) {
                                                     adapter.send(
                                                         ctx.source,
-                                                        "could not read \"$text\" as a length of time. " +
-                                                            "Try 30m, 2h, or 90s.",
+                                                        Style.bad("could not read") + " " +
+                                                            Style.name(text) +
+                                                            Style.quiet(" as a length of time. Try ") +
+                                                            Style.number("30m") + Style.quiet(", ") +
+                                                            Style.number("2h") + Style.quiet(" or ") +
+                                                            Style.number("90s") + Style.quiet("."),
                                                     )
                                                     return@executes 0
                                                 }
@@ -224,18 +238,27 @@ fun <S> cloudCommand(
                             api.stopBoosts(name).whenComplete { removed, failure ->
                                 when {
                                     failure != null ->
-                                        adapter.send(source, "could not stop boosts on $name: ${reason(failure)}")
+                                        adapter.send(
+                                            source,
+                                            Style.bad("could not stop boosts on") + " " + Style.name(name) +
+                                                Style.quiet(": ") + Style.bad(reason(failure)),
+                                        )
                                     // Zero said plainly rather than dressed up
                                     // as a success. An admin who expected
                                     // boosts has to learn there were none,
                                     // because the next thing they do depends
                                     // on it.
                                     removed == 0 ->
-                                        adapter.send(source, "$name had no boosts running")
+                                        adapter.send(
+                                            source,
+                                            Style.name(name) + Style.quiet(" had no boosts running"),
+                                        )
                                     else -> adapter.send(
                                         source,
-                                        "$name: removed $removed boost${if (removed == 1) "" else "s"}. " +
-                                            "The group returns to its own floor as servers empty.",
+                                        Style.name(name) + Style.quiet(": removed ") +
+                                            Style.number(removed) +
+                                            Style.good(" boost${if (removed == 1) "" else "s"}.") +
+                                            Style.quiet(" The group returns to its own floor as servers empty."),
                                     )
                                 }
                             }
@@ -277,21 +300,24 @@ private fun <S> setFeed(adapter: SourceAdapter<S>, feed: FeedState, source: S, o
         // possible behaviours here.
         adapter.send(
             source,
-            "the console cannot turn the cloud feed off: it is not a player, and these " +
-                "lines are already in its log",
+            Style.bad("the console cannot turn the cloud feed off") +
+                Style.quiet(": it is not a player, and these lines are already in its log"),
         )
         return 0
     }
     if (on) {
         feed.optIn(player)
-        adapter.send(source, "The cloud feed is on for you.")
+        adapter.send(source, Style.good("The cloud feed is on for you."))
     } else {
         feed.optOut(player)
         adapter.send(
             source,
-            "The cloud feed is off for you. It comes back when you rejoin -- this setting " +
-                "lives for the session, on purpose: the proxy has nowhere to keep it, and one " +
-                "platform remembering while the other forgets would be worse than neither.",
+            Style.good("The cloud feed is off for you.") +
+                Style.quiet(
+                    " It comes back when you rejoin -- this setting lives for the session, on " +
+                        "purpose: the proxy has nowhere to keep it, and one platform remembering " +
+                        "while the other forgets would be worse than neither.",
+                ),
         )
     }
     return 1
@@ -326,19 +352,26 @@ private fun <S> startBoost(
 ): Int {
     api.boost(group, replicas, forHowLong).whenComplete { result, failure ->
         if (failure != null) {
-            adapter.send(source, "could not boost $group: ${reason(failure)}")
+            adapter.send(
+                source,
+                Style.bad("could not boost") + " " + Style.name(group) +
+                    Style.quiet(": ") + Style.bad(reason(failure)),
+            )
             return@whenComplete
         }
         adapter.send(
             source,
-            "$group: +${result.replicas()} server${if (result.replicas() == 1) "" else "s"} " +
-                "until ${AT_MINUTE_UTC.format(result.expiresAt())} UTC",
+            Style.name(group) + Style.quiet(": ") +
+                Style.good("+${result.replicas()} server${if (result.replicas() == 1) "" else "s"}") +
+                Style.quiet(" until ") + Style.number(AT_MINUTE_UTC.format(result.expiresAt())) +
+                Style.quiet(" UTC"),
         )
         adapter.send(
             source,
-            "This is a boost, not a spec change. It expires on its own; /cloud stop $group ends it early.",
+            Style.quiet("This is a boost, not a spec change. It expires on its own; ") +
+                Style.number("/cloud stop $group") + Style.quiet(" ends it early."),
         )
-        adapter.send(source, "For a lasting change, edit the ServerGroup.")
+        adapter.send(source, Style.quiet("For a lasting change, edit the ServerGroup."))
     }
     return 1
 }
@@ -384,8 +417,26 @@ private fun reason(failure: Throwable): String {
 }
 
 private fun describe(server: ServerInfo): String =
-    "${server.name()} in ${server.group()}: ${server.phase()}, " +
-        "${server.players()}/${server.slots()} players, " +
+    Style.name(server.name()) + Style.quiet(" in ") + Style.name(server.group()) +
+        Style.quiet(": ") + Style.number(server.phase()) + Style.quiet(", ") +
+        Style.number("${server.players()}/${server.slots()}") + Style.quiet(" players, ") +
         // Registered and not the phase, because they disagree during a drain
         // and this is the one that says whether anybody new can reach it.
-        (if (server.registered()) "taking joins" else "not taking joins")
+        //
+        // The one field in this whole tree where colour earns its place rather
+        // than decorating: "can I send somebody there" is the question being
+        // asked, and green against red answers it before the words are read.
+        (if (server.registered()) Style.good("taking joins") else Style.bad("not taking joins"))
+
+/**
+ * One group as a line, written once because `list` and `info` both print it.
+ *
+ * They were two copies of the same interpolation until colour made each of
+ * them four times as long -- at which point two copies would have been two
+ * palettes the day somebody improved one.
+ */
+private fun describeGroup(group: Group): String =
+    Style.name(group.name()) + Style.quiet(" (") + Style.number(group.kind()) + Style.quiet("): ") +
+        Style.number("${group.readyReplicas()}/${group.replicas()}") + Style.quiet(" ready, ") +
+        Style.number(group.onlinePlayers()) + Style.quiet(" players, ") +
+        Style.number(group.freeSlots()) + Style.quiet(" free slots")

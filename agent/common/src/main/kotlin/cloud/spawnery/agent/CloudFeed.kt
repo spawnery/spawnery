@@ -40,7 +40,9 @@ fun coalesce(events: List<CloudEvent>): List<String> {
     val (warnings, ordinary) = events.partition { it.warning }
 
     for (w in warnings) {
-        lines += "[cloud] ${w.subject}: ${w.message}"
+        // A warning is the one line in this feed somebody has to see, so it
+        // is the one that is red rather than merely prefixed.
+        lines += "${Style.feedPrefix} ${Style.name(w.subject)}${Style.quiet(": ")}${Style.bad(w.message)}"
     }
 
     // LinkedHashMap, so the order events arrived is the order they are read.
@@ -58,13 +60,14 @@ fun coalesce(events: List<CloudEvent>): List<String> {
             // One event keeps its sentence. A count of one is not a summary,
             // and "1 ReadyGatePassed in lobby (lobby-a)" says less than the
             // operator already said.
-            lines += "[cloud] ${only.subject}: ${only.message}"
+            lines += "${Style.feedPrefix} ${Style.name(only.subject)}${Style.quiet(": ")}${Style.quiet(only.message)}"
             continue
         }
-        val shown = collapsed.take(NAMES_SHOWN).joinToString(", ") { it.subject }
+        val shown = collapsed.take(NAMES_SHOWN).joinToString(Style.quiet(", ")) { Style.name(it.subject) }
         val rest = collapsed.size - minOf(collapsed.size, NAMES_SHOWN)
-        val names = if (rest > 0) "$shown and $rest more" else shown
-        lines += "[cloud] ${collapsed.size} $kind in $groupName ($names)"
+        val names = if (rest > 0) shown + Style.quiet(" and $rest more") else shown
+        lines += "${Style.feedPrefix} ${Style.number(collapsed.size)} ${Style.good(kind)}" +
+            "${Style.quiet(" in ")}${Style.name(groupName)}${Style.quiet(" (")}$names${Style.quiet(")")}"
     }
     return lines
 }
