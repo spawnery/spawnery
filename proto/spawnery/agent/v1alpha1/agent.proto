@@ -250,6 +250,58 @@ message StopBoostResult {
   int32 removed = 1;
 }
 
+// CloudEvent is something that happened, on its way to somebody's chat.
+//
+// **A feed and not a ledger.** An agent that was disconnected missed what
+// happened while it was gone, and nothing here resends it: the NetworkState it
+// re-syncs on reconnect is the correction, and a better one than a replay
+// would be -- it says what is true now rather than what was true in an order
+// nobody was watching.
+//
+// It is derived from the event the operator records to Kubernetes rather than
+// computed beside it. Two independent derivations of the same fact eventually
+// disagree, and the one in the chat is the one nobody can audit.
+message CloudEvent {
+  // The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
+  // PodRejected. A string and not an enum, for the reason NetworkState.phase
+  // is a string: the operator's vocabulary gains values, and an agent older
+  // than a value must show it rather than fail to parse the message it
+  // arrived in.
+  string kind = 1;
+  // The object this is about -- a server name, or a group name for an event
+  // about a group.
+  string subject = 2;
+  // The group the subject belongs to, and the subject itself when the subject
+  // is a group. Never empty, so that collapsing by group needs no special
+  // case for the events that are about one.
+  string group = 3;
+  // One sentence for a person. The operator's own words, carried verbatim, so
+  // that rewording them in an agent cannot make the chat disagree with
+  // kubectl about the same fact.
+  string message = 4;
+  // Whether this is the ordinary case or the one somebody should look at.
+  bool warning = 5;
+}
+
+// EventInterest says whether this agent has anybody to show events to.
+//
+// **A state and not a subscription.** Every message carries the whole answer,
+// so a reconnect needs no catch-up and the operator remembers nothing across
+// the make-before-break renewal that briefly runs two streams -- which is the
+// same reason CloudRequest ids are not remembered either.
+//
+// The agent sends one whenever the answer changes: an administrator holding
+// the permission joined or left, or somebody typed `/cloud events off`. It
+// sends one on every new stream regardless, because the operator's answer for
+// a session it has never seen is "no".
+//
+// It is an optimisation and not a bound. An agent that lied and asked for
+// events would receive events about its own namespace, which it can already
+// see in its NetworkState.
+message EventInterest {
+  bool wanted = 1;
+}
+
 // RequestError is why a request was not carried out.
 //
 // The reason is an enum and the message is free text, and the split is
@@ -292,6 +344,7 @@ message ServerMessage {
     Ready ready = 2;
     PlayerCount player_count = 3;
     CloudRequest cloud_request = 4;
+    EventInterest event_interest = 5;
   }
 }
 
@@ -301,6 +354,7 @@ message OperatorToServer {
     SessionDeadline session_deadline = 2;
     NetworkState network_state = 3;
     CloudResponse cloud_response = 4;
+    CloudEvent cloud_event = 5;
   }
 }
 
@@ -458,6 +512,7 @@ message ProxyMessage {
     BackendPlayers backend_players = 5;
     PlayerRoster player_roster = 6;
     CloudRequest cloud_request = 7;
+    EventInterest event_interest = 8;
   }
 }
 
@@ -539,5 +594,6 @@ message OperatorToProxy {
     NetworkState network_state = 8;
     CloudResponse cloud_response = 9;
     MovePlayer move_player = 10;
+    CloudEvent cloud_event = 11;
   }
 }

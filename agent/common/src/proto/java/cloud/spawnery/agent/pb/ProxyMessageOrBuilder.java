@@ -115,5 +115,20 @@ public interface ProxyMessageOrBuilder extends
    */
   cloud.spawnery.agent.pb.CloudRequestOrBuilder getCloudRequestOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+   * @return Whether the eventInterest field is set.
+   */
+  boolean hasEventInterest();
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+   * @return The eventInterest.
+   */
+  cloud.spawnery.agent.pb.EventInterest getEventInterest();
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+   */
+  cloud.spawnery.agent.pb.EventInterestOrBuilder getEventInterestOrBuilder();
+
   cloud.spawnery.agent.pb.ProxyMessage.MessageCase getMessageCase();
 }

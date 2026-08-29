@@ -70,5 +70,20 @@ public interface ServerMessageOrBuilder extends
    */
   cloud.spawnery.agent.pb.CloudRequestOrBuilder getCloudRequestOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 5;</code>
+   * @return Whether the eventInterest field is set.
+   */
+  boolean hasEventInterest();
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 5;</code>
+   * @return The eventInterest.
+   */
+  cloud.spawnery.agent.pb.EventInterest getEventInterest();
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 5;</code>
+   */
+  cloud.spawnery.agent.pb.EventInterestOrBuilder getEventInterestOrBuilder();
+
   cloud.spawnery.agent.pb.ServerMessage.MessageCase getMessageCase();
 }
