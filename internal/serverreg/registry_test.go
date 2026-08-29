@@ -28,6 +28,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/serverreg"
 )
@@ -184,5 +185,100 @@ func TestASecondStreamFromOnePodSupersedesTheFirst(t *testing.T) {
 	}
 	if (<-second).GetNetworkState() == nil {
 		t.Error("the superseding session did not get its own state")
+	}
+}
+
+// The interest state, and one test per claim.
+//
+// cloudEventsIn is bounded rather than a bare receive: a test that proves
+// nothing arrives by blocking forever hangs the suite instead of failing it.
+// It skips the other messages a joining session is sent -- the NetworkState
+// comes first on every stream.
+func cloudEventsIn(ch <-chan *agentpb.OperatorToServer) []*agentpb.CloudEvent {
+	var got []*agentpb.CloudEvent
+	deadline := time.After(250 * time.Millisecond)
+	for {
+		select {
+		case msg := <-ch:
+			if ev := msg.GetCloudEvent(); ev != nil {
+				got = append(got, ev)
+			}
+		case <-deadline:
+			return got
+		}
+	}
+}
+
+func TestAnEventReachesOnlyTheSessionsThatWantOne(t *testing.T) {
+	// The whole point of the interest state. A broadcast that ignored it would
+	// pass every other test in this file.
+	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
+	watching, leaveA, err := r.Join(context.Background(), "ns", "pod-watching")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leaveA()
+	quiet, leaveB, err := r.Join(context.Background(), "ns", "pod-quiet")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leaveB()
+	r.SetInterest("pod-watching", true)
+
+	r.Publish("ns", &agentpb.CloudEvent{Kind: "ReadyGatePassed", Subject: "lobby-a"})
+
+	if got := cloudEventsIn(watching); len(got) != 1 || got[0].GetSubject() != "lobby-a" {
+		t.Errorf("the interested session got %+v, want one event for lobby-a", got)
+	}
+	if got := cloudEventsIn(quiet); len(got) != 0 {
+		t.Errorf("a session that never asked for events received %+v", got)
+	}
+}
+
+func TestInterestIsForgottenWithTheSession(t *testing.T) {
+	// Otherwise the map grows for the operator's lifetime, and a pod that
+	// reconnects into a fresh session would inherit an answer it never gave.
+	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
+	_, leave, err := r.Join(context.Background(), "ns", "pod-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	r.SetInterest("pod-a", true)
+	leave()
+
+	if r.Interested("pod-a") {
+		t.Error("interest outlived the session that declared it")
+	}
+}
+
+func TestAnEventDoesNotCrossANamespace(t *testing.T) {
+	// Structural everywhere else in this project; a check here, because
+	// Publish takes the namespace as an argument rather than deriving it from
+	// a token. A check is exactly what needs its own test.
+	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"), group("other", "lobby"))
+	other, leave, err := r.Join(context.Background(), "other", "pod-other")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	r.SetInterest("pod-other", true)
+
+	r.Publish("ns", &agentpb.CloudEvent{Kind: "ReadyGatePassed", Subject: "lobby-a"})
+
+	if got := cloudEventsIn(other); len(got) != 0 {
+		t.Errorf("an event reached a session in another namespace: %+v", got)
+	}
+}
+
+func TestInterestForAPodWithNoSessionIsIgnored(t *testing.T) {
+	// A report can arrive from a session that a renewal has just displaced.
+	// Creating an entry for it would leak one per reconnect, and the operator
+	// would then be holding interest for a stream that no longer exists.
+	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
+
+	r.SetInterest("pod-that-never-joined", true)
+
+	if r.Interested("pod-that-never-joined") {
+		t.Error("interest was recorded for a pod with no session")
 	}
 }

@@ -23,12 +23,17 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/cloudevent"
 )
 
 // Options are the knobs the operator binary passes to the controllers.
 type Options struct {
 	// Agents is the shared runtime state of all connected agents.
 	Agents *agent.Registry
+	// Events is where a recorded event's copy goes on its way to somebody's
+	// chat. Nil means no feed, which is what every test that does not care
+	// about one passes -- see cloudevent.Recorder.
+	Events cloudevent.Sink
 	// Clock is the time source. Injectable for tests.
 	Clock func() time.Time
 	// StartupDeadline is how long a server may take to reach Ready.
@@ -116,7 +121,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	if err := (&ServerReconciler{
 		Client:               mgr.GetClient(),
 		Scheme:               mgr.GetScheme(),
-		Recorder:             mgr.GetEventRecorder("server"),
+		Recorder:             cloudevent.Recorder{Inner: mgr.GetEventRecorder("server"), Sink: opts.Events},
 		Agents:               opts.Agents,
 		Clock:                opts.Clock,
 		StartupDeadline:      opts.StartupDeadline,
@@ -161,7 +166,7 @@ func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
 	return &NetworkReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
-		Recorder:          mgr.GetEventRecorder("network"),
+		Recorder:          cloudevent.Recorder{Inner: mgr.GetEventRecorder("network"), Sink: opts.Events},
 		OperatorNamespace: opts.OperatorNamespace,
 		// Uncached, for the reason SecretReader's own comment gives. The
 		// Bootstrapper takes the same reader for the same reason.
@@ -198,7 +203,7 @@ func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconc
 	return &ServerGroupReconciler{
 		Client:         mgr.GetClient(),
 		Scheme:         mgr.GetScheme(),
-		Recorder:       mgr.GetEventRecorder("servergroup"),
+		Recorder:       cloudevent.Recorder{Inner: mgr.GetEventRecorder("servergroup"), Sink: opts.Events},
 		Agents:         opts.Agents,
 		Clock:          opts.Clock,
 		Expectations:   newExpectations(opts.Clock),
@@ -210,7 +215,7 @@ func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconcil
 	return &ProxyGroupReconciler{
 		Client:         mgr.GetClient(),
 		Scheme:         mgr.GetScheme(),
-		Recorder:       mgr.GetEventRecorder("proxygroup"),
+		Recorder:       cloudevent.Recorder{Inner: mgr.GetEventRecorder("proxygroup"), Sink: opts.Events},
 		Agents:         opts.Agents,
 		Bootstrap:      opts.Bootstrapper,
 		AgentEndpoint:  opts.AgentEndpoint,

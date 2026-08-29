@@ -184,6 +184,10 @@ type ProxyFleet interface {
 	// Move is *proxyreg.Fleet.Move: it broadcasts and reports nothing, which
 	// is why it returns nothing here either.
 	Move(namespace, playerUUID, targetServer string)
+	// SetInterest records whether this pod's agent has anybody to show cloud
+	// events to. It reports nothing: an agent that says so about a session
+	// that no longer exists is ordinary, not an error.
+	SetInterest(podUID string, wanted bool)
 }
 
 // ServerFanout is the backend side's counterpart, narrowed to the one method
@@ -196,6 +200,9 @@ type ProxyFleet interface {
 type ServerFanout interface {
 	// Join is *serverreg.Registry.Join: see its doc comment for the contract.
 	Join(ctx context.Context, namespace, podUID string) (<-chan *agentpb.OperatorToServer, func(), error)
+	// SetInterest records whether this pod's agent has anybody to show cloud
+	// events to. It reports nothing, for the reason ProxyFleet's does.
+	SetInterest(podUID string, wanted bool)
 }
 
 // Options configures the server. The three durations are what the operator
@@ -585,6 +592,10 @@ func (s *Server) handle(
 		if m.Hello.GetReady() {
 			s.opts.Agents.MarkReady(id.PodUID)
 		}
+	case *agentpb.ServerMessage_EventInterest:
+		// A state, so the last one wins and nothing is remembered across a
+		// stream: see agentpb.EventInterest.
+		s.opts.Servers.SetInterest(id.PodUID, m.EventInterest.GetWanted())
 	case *agentpb.ServerMessage_Ready:
 		s.opts.Agents.MarkReady(id.PodUID)
 	case *agentpb.ServerMessage_PlayerCount:
@@ -757,6 +768,8 @@ func (s *Server) handleProxy(
 			// per player.
 			logger.V(1).Info("discarded a roster report", "reason", err.Error())
 		}
+	case *agentpb.ProxyMessage_EventInterest:
+		s.opts.Proxies.SetInterest(id.PodUID, m.EventInterest.GetWanted())
 	case *agentpb.ProxyMessage_PlayerJoinedServer:
 		// Accepted and ignored. Nothing in milestones 3 or 4 consumes it —
 		// player counts come from the servers — and it is on the wire for the

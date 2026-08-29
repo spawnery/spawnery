@@ -91,6 +91,14 @@ type session struct {
 	// closed guards against a double close: a session ends either because its
 	// stream left or because it fell behind, and both can happen.
 	closed bool
+	// wantsEvents is what this agent last reported about whether anybody is
+	// there to read a cloud event.
+	//
+	// It belongs to the session and not to the Registry, for the reason
+	// proxyreg's lastReady does: a new stream starts without one, so the
+	// answer is re-asserted on reconnect without the operator having to know a
+	// reconnect happened -- and it cannot outlive the stream that gave it.
+	wantsEvents bool
 }
 
 // Registry is every live backend session. Safe for concurrent use.
@@ -194,6 +202,76 @@ func (r *Registry) send(s *session, msg *agentpb.OperatorToServer) {
 		SessionsCut.Inc()
 		r.close(s)
 	}
+}
+
+// broadcast sends one message to every session in a namespace.
+//
+// A build that returns nil sends nothing, which is what lets one helper serve
+// both "everybody in this namespace" and "only the sessions that asked" -- the
+// filter lives in the caller's build, where the reason for it is readable,
+// rather than as a second broadcast that would drift from this one.
+//
+// Modelled on internal/proxyreg.Fleet.broadcast. The duplication is the same
+// one this package's own comment argues for: two fan-outs over two message
+// types, kept as two readable copies rather than one generic that neither side
+// could follow.
+func (r *Registry) broadcast(namespace string, build func(*session) *agentpb.OperatorToServer) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.sessions {
+		if s.namespace != namespace {
+			continue
+		}
+		if msg := build(s); msg != nil {
+			r.send(s, msg)
+		}
+	}
+}
+
+// SetInterest records whether this session's agent has anybody to show events
+// to.
+//
+// An unknown pod is ignored rather than remembered. A report can arrive from a
+// session a renewal has just displaced, and creating an entry for it would
+// leak one per reconnect and leave the operator holding interest for a stream
+// that no longer exists.
+func (r *Registry) SetInterest(podUID string, wanted bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s, ok := r.sessions[podUID]; ok {
+		s.wantsEvents = wanted
+	}
+}
+
+// Interested reports what SetInterest last recorded.
+//
+// Exported for tests, and that is a cost paid deliberately: the alternative is
+// asserting a leak through a channel that stays empty whether or not the entry
+// is there, which is the same as not asserting it.
+func (r *Registry) Interested(podUID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[podUID]
+	return ok && s.wantsEvents
+}
+
+// Publish sends one event to every session in the namespace that asked for
+// events. It implements cloudevent.Sink.
+//
+// It reports nothing, and cannot: this is called from inside a reconcile, and
+// a feed nobody is watching must not be able to fail one. A session whose
+// outbox is full is cut by send, exactly as it is for every other message --
+// agentpb.CloudEvent documents a missed event as ordinary rather than an
+// error, and the NetworkState that follows is the correction.
+func (r *Registry) Publish(namespace string, ev *agentpb.CloudEvent) {
+	r.broadcast(namespace, func(s *session) *agentpb.OperatorToServer {
+		if !s.wantsEvents {
+			return nil
+		}
+		return &agentpb.OperatorToServer{
+			Message: &agentpb.OperatorToServer_CloudEvent{CloudEvent: ev},
+		}
+	})
 }
 
 // Resync re-sends every live session its namespace's state.

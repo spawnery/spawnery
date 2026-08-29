@@ -77,6 +77,8 @@ func (stubFanout) Join(context.Context, string, string) (<-chan *agentpb.Operato
 	return nil, func() {}, nil
 }
 
+func (stubFanout) SetInterest(string, bool) {}
+
 // stubFleet satisfies ProxyFleet so the test above reaches the Servers check
 // rather than stopping at the one before it.
 type stubFleet struct{}
@@ -86,6 +88,8 @@ func (stubFleet) Join(context.Context, string, string, string) (<-chan *agentpb.
 }
 
 func (stubFleet) Move(string, string, string) {}
+
+func (stubFleet) SetInterest(string, bool) {}
 
 // The opening sends are the one part of a session nothing could end.
 //

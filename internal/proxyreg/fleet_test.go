@@ -808,3 +808,87 @@ func TestAJoiningProxyIsSentTheNetworkStateAfterItsFullSync(t *testing.T) {
 		t.Errorf("servers = %v, want lobby-0", state.GetServers())
 	}
 }
+
+// The interest state, tested on its own rather than assumed from serverreg's.
+//
+// The two fan-outs carry different session structs over different message
+// types, and "it is the same shape" is how the copy that is subtly not the
+// same gets in.
+func proxyCloudEventsIn(ch <-chan *agentpb.OperatorToProxy) []*agentpb.CloudEvent {
+	var got []*agentpb.CloudEvent
+	deadline := time.After(250 * time.Millisecond)
+	for {
+		select {
+		case msg := <-ch:
+			if ev := msg.GetCloudEvent(); ev != nil {
+				got = append(got, ev)
+			}
+		case <-deadline:
+			return got
+		}
+	}
+}
+
+func TestAnEventReachesOnlyTheProxySessionsThatWantOne(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+	watching, leaveA, err := f.Join(context.Background(), ns, group, "uid-watching")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leaveA()
+	quiet, leaveB, err := f.Join(context.Background(), ns, group, "uid-quiet")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leaveB()
+	f.SetInterest("uid-watching", true)
+
+	f.Publish(ns, &agentpb.CloudEvent{Kind: "ReadyGatePassed", Subject: "lobby-a"})
+
+	if got := proxyCloudEventsIn(watching); len(got) != 1 || got[0].GetSubject() != "lobby-a" {
+		t.Errorf("the interested session got %+v, want one event for lobby-a", got)
+	}
+	if got := proxyCloudEventsIn(quiet); len(got) != 0 {
+		t.Errorf("a session that never asked for events received %+v", got)
+	}
+}
+
+func TestProxyInterestIsForgottenWithTheSession(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+	_, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	f.SetInterest("uid-1", true)
+	leave()
+
+	if f.Interested("uid-1") {
+		t.Error("interest outlived the session that declared it")
+	}
+}
+
+func TestAnEventDoesNotCrossANamespaceOnTheProxySide(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+	other, leave, err := f.Join(context.Background(), "somewhere-else", group, "uid-other")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	f.SetInterest("uid-other", true)
+
+	f.Publish(ns, &agentpb.CloudEvent{Kind: "ReadyGatePassed", Subject: "lobby-a"})
+
+	if got := proxyCloudEventsIn(other); len(got) != 0 {
+		t.Errorf("an event reached a session in another namespace: %+v", got)
+	}
+}
+
+func TestProxyInterestForAPodWithNoSessionIsIgnored(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"))
+
+	f.SetInterest("uid-that-never-joined", true)
+
+	if f.Interested("uid-that-never-joined") {
+		t.Error("interest was recorded for a pod with no session")
+	}
+}

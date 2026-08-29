@@ -95,6 +95,10 @@ type session struct {
 	// operator having to know a reconnect happened.
 	lastReady    bool
 	lastReadySet bool
+	// wantsEvents is what this agent last reported about whether anybody is
+	// there to read a cloud event. It belongs to the session for the reason
+	// lastReady does: a new stream starts without one.
+	wantsEvents bool
 }
 
 // Fleet is every live proxy session. Safe for concurrent use.
@@ -340,8 +344,60 @@ func (f *Fleet) broadcast(namespace string, build func(*session) *agentpb.Operat
 		if s.namespace != namespace {
 			continue
 		}
-		f.send(s, build(s))
+		// A build that returns nil sends nothing. That is what lets one
+		// broadcast serve both "everybody in this namespace" and "only the
+		// sessions that asked for events": the filter lives in the caller's
+		// build, where its reason is readable, rather than in a second
+		// broadcast that would drift from this one.
+		if msg := build(s); msg != nil {
+			f.send(s, msg)
+		}
 	}
+}
+
+// SetInterest records whether this session's agent has anybody to show events
+// to.
+//
+// An unknown pod is ignored rather than remembered. A report can arrive from a
+// session a renewal has just displaced, and creating an entry for it would
+// leak one per reconnect and leave the operator holding interest for a stream
+// that no longer exists.
+func (f *Fleet) SetInterest(podUID string, wanted bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if s, ok := f.sessions[podUID]; ok {
+		s.wantsEvents = wanted
+	}
+}
+
+// Interested reports what SetInterest last recorded.
+//
+// Exported for tests, and that is a cost paid deliberately: the alternative is
+// asserting a leak through a channel that stays empty whether or not the entry
+// is there, which is the same as not asserting it.
+func (f *Fleet) Interested(podUID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.sessions[podUID]
+	return ok && s.wantsEvents
+}
+
+// Publish sends one event to every session in the namespace that asked for
+// events. It implements cloudevent.Sink.
+//
+// It reports nothing, and cannot: this is called from inside a reconcile, and
+// a feed nobody is watching must not be able to fail one. A build that returns
+// nil sends nothing, which is what lets broadcast serve both "everybody" and
+// "only the sessions that asked" without a second helper to drift from it.
+func (f *Fleet) Publish(namespace string, ev *agentpb.CloudEvent) {
+	f.broadcast(namespace, func(s *session) *agentpb.OperatorToProxy {
+		if !s.wantsEvents {
+			return nil
+		}
+		return &agentpb.OperatorToProxy{
+			Message: &agentpb.OperatorToProxy_CloudEvent{CloudEvent: ev},
+		}
+	})
 }
 
 // Move asks the proxies of a namespace to move one player to one server.
