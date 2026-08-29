@@ -233,6 +233,14 @@ const (
 	ReasonSecretReadForbidden = "SecretReadForbidden"
 	ReasonSecretReadFailed    = "SecretReadFailed"
 
+	// ReasonPluginVolumeUnusable says spec.extraPlugins names a claim that is
+	// missing, or that cannot be mounted by every server of the group.
+	ReasonPluginVolumeUnusable = "PluginVolumeUnusable"
+	// ReasonPluginVolumesDisabled says spec.extraPlugins is set on an
+	// installation whose operator was not started with
+	// --allow-plugin-volumes.
+	ReasonPluginVolumesDisabled = "PluginVolumesDisabled"
+
 	// The four ForwardingSecretRotationPending reasons.
 	// ReasonPodsPredateTracking is the Unknown that keeps an operator upgrade
 	// from reading as a rotation: after an upgrade no running pod carries a
@@ -314,6 +322,34 @@ type Defaults struct {
 // Mount is a single file mount into a managed pod. V1 supports ConfigMaps and
 // Secrets only; the layered template system is a later project.
 // +kubebuilder:validation:XValidation:rule="has(self.configMap) != has(self.secret)",message="exactly one of configMap or secret must be set"
+// ExtraPlugins names a volume whose contents are copied into the server's
+// plugins directory on every start.
+//
+// **The claim's contents are the truth, on every start.** A plugin that
+// rewrites its own configuration at runtime loses that change when the pod is
+// replaced. For an ephemeral group it would lose it anyway -- spec.type
+// Ephemeral gives /data an emptyDir -- so this costs nothing there and makes
+// the persistent case predictable rather than accumulating.
+//
+// Nothing about the contents reaches podspec.DesiredServerHash: the operator
+// holds a claim name, not a filesystem. So changing a plugin does not roll a
+// fleet, which is the point of this field existing -- and a change therefore
+// takes effect when the group next restarts, which somebody triggers.
+type ExtraPlugins struct {
+	// ClaimName is a PersistentVolumeClaim in this object's own namespace.
+	//
+	// It must be ReadWriteMany. A ReadWriteOnce claim mounts on one node, so
+	// the second server of a group would sit Pending with a scheduling error
+	// naming volume affinity rather than the actual cause; the operator
+	// refuses it instead. That refusal also catches a single-replica group,
+	// for which ReadWriteOnce would in fact work -- the simpler rule was
+	// chosen because maxReplicas can be raised by an edit that has nothing to
+	// do with storage, and a group that worked until somebody scaled it is a
+	// worse failure than one that never started.
+	// +kubebuilder:validation:MinLength=1
+	ClaimName string `json:"claimName"`
+}
+
 type Mount struct {
 	// Name of the volume inside the pod.
 	// +kubebuilder:validation:MinLength=1

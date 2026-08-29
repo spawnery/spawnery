@@ -158,6 +158,11 @@ type ServerGroupSpec struct {
 	// +listMapKey=name
 	Mounts []Mount `json:"mounts,omitempty"`
 
+	// ExtraPlugins names a volume whose plugins and their configuration are
+	// copied into this group's servers on every start. See ExtraPlugins.
+	// +optional
+	ExtraPlugins *ExtraPlugins `json:"extraPlugins,omitempty"`
+
 	// ConfigOverlay names a ConfigMap whose keys are configuration files to
 	// merge over the rendered defaults — "server.properties",
 	// "paper-global.yml" or "velocity.toml", in the target's own dialect.

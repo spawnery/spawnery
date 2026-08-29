@@ -109,6 +109,31 @@ spec:
                 required:
                 - timeoutSeconds
                 type: object
+              extraPlugins:
+                description: |-
+                  ExtraPlugins names a volume whose plugins and their configuration are
+                  copied into this group's servers on every start. See ExtraPlugins.
+                properties:
+                  claimName:
+                    description: |-
+                      ClaimName is a PersistentVolumeClaim in this object's own namespace.
+
+                      It must be ReadWriteMany. A ReadWriteOnce claim mounts on one node, so
+                      the second server of a group would sit Pending with a scheduling error
+                      naming volume affinity rather than the actual cause; the operator
+                      refuses it instead. That refusal also catches a single-replica group,
+                      for which ReadWriteOnce would in fact work -- the simpler rule was
+                      chosen because maxReplicas can be raised by an edit that has nothing to
+                      do with storage, and a group that worked until somebody scaled it is a
+                      worse failure than one that never started.
+                    minLength: 1
+                    type: string
+                required:
+                - claimName
+                type: object
+                x-kubernetes-validations:
+                - message: exactly one of configMap or secret must be set
+                  rule: has(self.configMap) != has(self.secret)
               failedRetentionSeconds:
                 default: 3600
                 description: FailedRetentionSeconds is how long a Failed server is
@@ -130,9 +155,6 @@ spec:
               mounts:
                 description: Mounts are extra ConfigMap and Secret mounts.
                 items:
-                  description: |-
-                    Mount is a single file mount into a managed pod. V1 supports ConfigMaps and
-                    Secrets only; the layered template system is a later project.
                   properties:
                     configMap:
                       description: ConfigMap source.
@@ -275,9 +297,6 @@ spec:
                   - mountPath
                   - name
                   type: object
-                  x-kubernetes-validations:
-                  - message: exactly one of configMap or secret must be set
-                    rule: has(self.configMap) != has(self.secret)
                 type: array
                 x-kubernetes-list-map-keys:
                 - name

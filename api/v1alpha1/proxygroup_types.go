@@ -279,6 +279,11 @@ type ProxyGroupSpec struct {
 	// measurement, so a mistyped key there is still only an unused one.
 	// +optional
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
+
+	// ExtraPlugins names a volume whose plugins and their configuration are
+	// copied into this group's servers on every start. See ExtraPlugins.
+	// +optional
+	ExtraPlugins *ExtraPlugins `json:"extraPlugins,omitempty"`
 }
 
 // ProxyGroupStatus is the observed state of a ProxyGroup.
