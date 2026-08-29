@@ -319,9 +319,6 @@ type Defaults struct {
 	Scheduling *Scheduling `json:"scheduling,omitempty"`
 }
 
-// Mount is a single file mount into a managed pod. V1 supports ConfigMaps and
-// Secrets only; the layered template system is a later project.
-// +kubebuilder:validation:XValidation:rule="has(self.configMap) != has(self.secret)",message="exactly one of configMap or secret must be set"
 // ExtraPlugins names a volume whose contents are copied into the server's
 // plugins directory on every start.
 //
@@ -350,6 +347,9 @@ type ExtraPlugins struct {
 	ClaimName string `json:"claimName"`
 }
 
+// Mount is a single file mount into a managed pod. V1 supports ConfigMaps and
+// Secrets only; the layered template system is a later project.
+// +kubebuilder:validation:XValidation:rule="has(self.configMap) != has(self.secret)",message="exactly one of configMap or secret must be set"
 type Mount struct {
 	// Name of the volume inside the pod.
 	// +kubebuilder:validation:MinLength=1

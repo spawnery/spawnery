@@ -131,9 +131,6 @@ spec:
                 required:
                 - claimName
                 type: object
-                x-kubernetes-validations:
-                - message: exactly one of configMap or secret must be set
-                  rule: has(self.configMap) != has(self.secret)
               failedRetentionSeconds:
                 default: 3600
                 description: FailedRetentionSeconds is how long a Failed server is
@@ -155,6 +152,9 @@ spec:
               mounts:
                 description: Mounts are extra ConfigMap and Secret mounts.
                 items:
+                  description: |-
+                    Mount is a single file mount into a managed pod. V1 supports ConfigMaps and
+                    Secrets only; the layered template system is a later project.
                   properties:
                     configMap:
                       description: ConfigMap source.
@@ -297,6 +297,9 @@ spec:
                   - mountPath
                   - name
                   type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of configMap or secret must be set
+                    rule: has(self.configMap) != has(self.secret)
                 type: array
                 x-kubernetes-list-map-keys:
                 - name

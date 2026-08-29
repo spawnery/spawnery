@@ -309,9 +309,6 @@ spec:
                 required:
                 - claimName
                 type: object
-                x-kubernetes-validations:
-                - message: exactly one of configMap or secret must be set
-                  rule: has(self.configMap) != has(self.secret)
               image:
                 description: Image is the Velocity base image. A digest reference
                   is recommended.

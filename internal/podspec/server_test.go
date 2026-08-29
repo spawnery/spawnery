@@ -18,6 +18,7 @@ package podspec
 
 import (
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1147,5 +1148,69 @@ func TestTheServerContainerKeepsStdinOpenForTheConsole(t *testing.T) {
 	// terminal: the harness drives `cloud list` over a plain pipe.
 	if c.TTY {
 		t.Error("a TTY was allocated; the console needs stdin, not a terminal")
+	}
+}
+
+func TestExtraPluginsMountsTheClaimReadOnlyOutsideData(t *testing.T) {
+	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.ExtraPlugins = &spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"}
+	})
+
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == PluginSourceVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatal("no plugin source volume was rendered")
+	}
+	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "plugins" {
+		t.Fatalf("volume source = %+v, want the named claim", vol.VolumeSource)
+	}
+	// Read-only at the volume as well as at the mount. One claim may serve
+	// several groups, and a group that could write it could change what every
+	// other group loads.
+	if !vol.PersistentVolumeClaim.ReadOnly {
+		t.Error("the claim is mounted writable")
+	}
+
+	var mount *corev1.VolumeMount
+	for i := range pod.Spec.Containers[0].VolumeMounts {
+		if pod.Spec.Containers[0].VolumeMounts[i].Name == PluginSourceVolumeName {
+			mount = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatal("the plugin source volume is not mounted")
+	}
+	if !mount.ReadOnly {
+		t.Error("the plugin source is mounted writable")
+	}
+	if mount.MountPath != PluginSourceMountPath {
+		t.Errorf("mountPath = %q, want %q", mount.MountPath, PluginSourceMountPath)
+	}
+	// The bound that makes this work at all: a read-only mount under
+	// /data/plugins fails the entrypoint's own copy under `set -eu`.
+	if isPathUnder(path.Clean(mount.MountPath), path.Clean(DataMountPath)) {
+		t.Errorf("mountPath %q is under %s, where a read-only mount breaks the start",
+			mount.MountPath, DataMountPath)
+	}
+}
+
+func TestNoExtraPluginsRendersNoVolume(t *testing.T) {
+	// Every installation that never asks for this must get the pod it got
+	// before -- which is also what keeps the golden digests still for them.
+	pod := build(t, nil)
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == PluginSourceVolumeName {
+			t.Fatal("a plugin source volume was rendered for a group that named none")
+		}
+	}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == PluginSourceVolumeName {
+			t.Fatal("a plugin source mount was rendered for a group that named none")
+		}
 	}
 }
