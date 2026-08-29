@@ -482,6 +482,58 @@ func TestTheAgentJarWinsOverOneOnTheVolume(t *testing.T) {
 	}
 }
 
+func TestLostAndFoundIsSkippedRatherThanCopied(t *testing.T) {
+	// Every ext4 filesystem has one, mode 0700 and owned by root, and Longhorn
+	// formats ext4 by default -- so this is the ordinary case for a plugin
+	// claim rather than an exotic one. A non-root container cannot read it,
+	// and a copy that tried would fail the whole start under `set -eu`.
+	//
+	// Measured on a live claim before this guard existed: `cp -a` reported
+	// "can't preserve ownership of '.../lost+found'" and exited 1.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "lost+found"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugin.jar"), []byte("jar"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_PLUGIN_SOURCE="+source); err != nil {
+		t.Fatalf("a source carrying lost+found failed the start: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "plugins", "lost+found")); err == nil {
+		t.Error("lost+found was copied into the plugins directory")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "plugins", "plugin.jar")); err != nil {
+		t.Errorf("the real plugin did not survive the skip: %v", err)
+	}
+}
+
+func TestADotfileOnTheVolumeIsCopiedToo(t *testing.T) {
+	// The loop iterates two globs because a single `*` skips dotfiles, and a
+	// plugin's data directory may well carry one. Without the second glob this
+	// would silently drop them, which is the kind of gap nobody notices until
+	// a plugin behaves oddly.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, ".keep"), []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_PLUGIN_SOURCE="+source); err != nil {
+		t.Fatalf("entrypoint: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "plugins", ".keep")); err != nil {
+		t.Errorf("a dotfile on the volume was not copied: %v", err)
+	}
+}
+
 func TestNoSourceDirectoryIsNotAnError(t *testing.T) {
 	// The overwhelmingly common case: a group with no extraPlugins renders no
 	// volume, so the path does not exist. Under `set -eu` a missing guard here

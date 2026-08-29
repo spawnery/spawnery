@@ -43,7 +43,29 @@ spawnery-config --flavor velocity
 PLUGIN_SOURCE="${SPAWNERY_PLUGIN_SOURCE:-/var/run/spawnery/plugins}"
 if [ -d "$PLUGIN_SOURCE" ]; then
 	mkdir -p plugins
-	cp -a "$PLUGIN_SOURCE/." plugins/
+	# cp -R and not cp -a, and lost+found skipped by name. Both were measured
+	# on a live Longhorn claim on 2026-08-29, and either one alone kills the
+	# start under `set -eu`:
+	#
+	#   cp: can't preserve ownership of '.../lost+found': Operation not permitted
+	#   cp: can't preserve ownership of '.../.': Operation not permitted
+	#
+	# `-a` implies --preserve=all, and this container is not root, so it cannot
+	# set an owner on anything -- not even on the destination directory. `-R`
+	# copies the tree and leaves ownership to the process, which is what a
+	# non-root container can actually do. chmod below then makes it writable.
+	#
+	# lost+found is created by mkfs on every ext4 filesystem and is mode 0700
+	# owned by root, so a non-root copy cannot read it at all. Longhorn formats
+	# ext4 by default, which makes this the ordinary case rather than an exotic
+	# one. It is never a plugin, so skipping it by name loses nothing.
+	for entry in "$PLUGIN_SOURCE"/* "$PLUGIN_SOURCE"/.[!.]*; do
+		[ -e "$entry" ] || continue
+		case "${entry##*/}" in
+		lost+found) continue ;;
+		esac
+		cp -R "$entry" plugins/
+	done
 	# The mount is read-only, so the copies arrive read-only too. Paper writes
 	# its plugins' data folders inside this directory, and a plugin that cannot
 	# rewrite its own config file fails in its own way rather than in one the
