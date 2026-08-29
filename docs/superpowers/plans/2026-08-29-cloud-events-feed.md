@@ -1853,16 +1853,47 @@ a spec that quietly loses a requirement is one nobody can review against.
 
 ## Done when
 
-- [ ] `make test`, `make agent`, `make lint` all pass
-- [ ] `make agent-test CONTAINER=podman` passes
-- [ ] The Go suite is run as `go test -p 1 ./internal/... ./api/...` and every
+- [x] `make test`, `make agent`, `make lint` all pass — 229 agent tests, 20 Go
+      packages, `golangci-lint` 0 issues, `nix build .#agents` green
+- [x] `make agent-test CONTAINER=podman` passes
+- [x] The Go suite is run as `go test -p 1 ./internal/... ./api/...` and every
       package is `ok`
-- [ ] Every bound and every collapsing rule was mutated on its own, and the
-      *named* test that failed was read each time
-- [ ] `make manifests` leaves no diff
-- [ ] `grep -rn 'ProxySelf\|ServerSelf\|CommandSourceStack\|CommandSource' agent/common/src/main | grep -vE ':\s*(\*|//)'`
-      is empty — the naive grep matches comments, so read it before believing it
-- [ ] Nothing was pushed and no tag was created
+- [x] Every bound and every collapsing rule was mutated on its own, and the
+      *named* test that failed was read each time — 21 mutations across the
+      seven tasks
+- [x] `make manifests` leaves no diff
+- [x] `grep -rn 'ProxySelf\|ServerSelf\|CommandSourceStack\|CommandSource' agent/common/src/main | grep -vE ':\s*(\*|//)'`
+      is empty
+- [x] Nothing was pushed and no tag was created
+
+## What execution changed about the plan
+
+**A dead hook from 7b turned up, and Task 4 fixed it.**
+`CloudConnector.onStreamChanged` had no caller anywhere, not even in a test, so
+7b-5's documented promise — an in-flight request is failed on a renewal rather
+than resent, because only the caller knows whether repeating one is safe — was
+never kept. A request in flight sat until its ten-second deadline. This
+milestone needed the same hook for `lastInterest`, so `SessionLoop` gained an
+`onStreamChanged` callback and a test that counts it across a renewal.
+
+**A mutation that came back green was the finding, not the outcome.** Swapping
+`LinkedHashMap` for `HashMap` in `coalesce` failed nothing: the ordering test
+asserted "twice the same", which a `HashMap` satisfies too. The claim worth
+holding is that the feed reads in the order things happened, and the two-group
+test passed by luck. Rewritten with six groups, it fails as it should.
+
+**One test does not exist and the code says why.** The recorder's
+`len(args) > 0` guard defends a note carrying a bare percent sign, and `go vet`
+refuses such a note at a direct call site, through a variadic forwarder, and as
+a non-constant format string. Every way of writing the test is something vet
+will not compile. The branch stays because vet is a lint rather than a
+compiler; the comment records that it is deliberately unasserted.
+
+**Task 6 took branch 2b, as the plan predicted it might.** A console is
+reachable but is not a player, so chat delivery is not observable in the
+harness. The phase asserts the interest report instead — and the `jq -e`
+assertion was itself checked against synthetic input, because one that passed
+on an empty selection would have made the phase decorative.
 
 ## What 7c-3 leaves
 
