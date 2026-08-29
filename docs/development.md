@@ -143,19 +143,23 @@ one that changed — and `FORCE=1` would get past that only by re-pushing about
 1.4 GB over tags that were already right.
 
 Since milestone 6e, `.github/workflows/release.yml` does this on a `v*` tag,
-and fourteen releases have been published that way — `v0.1.0` on 2026-08-20
-through `v0.2.10` on 2026-08-29. It invokes the script once per image rather
+and fifteen releases have been published that way — `v0.1.0` on 2026-08-20
+through `v0.2.11` on 2026-08-30. It invokes the script once per image rather
 than once for all three, which is what lets a release move one version and not
-the others, and the five most recent have put that through all three modes:
-`v0.2.6` and `v0.2.8` bumped `operatorVersion` alone, so the two game images
-were correctly refused at tags a cluster had already pulled while the
-operator's push went through; `v0.2.7` and `v0.2.9` moved both, because each
-changed the operator and the agents together; and `v0.2.10` moved
-`imageVersion` alone, because its whole change is `image/entrypoint.sh`, which
-ships in the game images and not in the operator. `imageVersion` therefore
-reads `0.2.5, 0.2.7, 0.2.9, 0.2.10` — the gaps are the honest record that no
-agent was built in the releases between. A local `make publish` is for the case
-a tag cannot cover.
+the others, and the six most recent have put that through both directions
+repeatedly: `v0.2.6`, `v0.2.8` and `v0.2.11` bumped `operatorVersion` alone, so
+the two game images were correctly refused at tags a cluster had already pulled
+while the operator's push went through; `v0.2.7` and `v0.2.9` moved both,
+because each changed the operator and the agents together; and `v0.2.10` moved
+`imageVersion` alone, because its whole change was `image/entrypoint.sh`, which
+ships in the game images and not in the operator.
+
+**Both numbers therefore have gaps, and none of them is a miscount.**
+`imageVersion` reads `0.2.5, 0.2.7, 0.2.9, 0.2.10`; `operatorVersion` reads
+`…, 0.2.9, 0.2.11`. A missing number is the record of a release that built
+nothing on that side, and giving an artefact a number from a release it was not
+in would be the lie. A local `make publish` is for the case a tag cannot
+cover.
 
 ## The end-to-end run
 

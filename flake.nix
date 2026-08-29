@@ -171,13 +171,16 @@
           # and the agents together -- 0.2.9 brings plugins from a volume on
           # this side and colour on the other.
           #
-          # **0.2.10 does not move this.** Its whole change is
+          # 0.2.10 did not move this -- its whole change was
           # image/entrypoint.sh, which nix/operator-image.nix does not
-          # reference -- checked, not assumed. The operator binary is
-          # unchanged, so hack/publish.sh correctly refuses to overwrite a tag
-          # a cluster has already pulled, and release.yml's one-image-at-a-time
-          # invocation means that refusal does not stop the two that moved.
-          operatorVersion = "0.2.9";
+          # reference -- so **this number now has a gap too**, exactly as
+          # imageVersion does: spawnery-operator:0.2.10 does not exist, and the
+          # gap is the honest record of a release that built no operator.
+          #
+          # 0.2.11 moves it alone: the change is inside internal/controller and
+          # nothing under agent/ or image/ is different, so both game images
+          # keep the 0.2.10 tags a cluster has already pulled.
+          operatorVersion = "0.2.11";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
