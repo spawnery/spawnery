@@ -140,21 +140,22 @@
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
           #
-          # **0.2.9 moves it: /cloud writes in colour now**, which is entirely
-          # inside the shipped jars. 0.2.8 did not, because its one change was
-          # a line of internal/podspec.
+          # **0.2.10 moves this and only this**, which is a third mode the
+          # separation had not yet been put through: nothing under agent/
+          # changed, but image/entrypoint.sh did, and that ships inside the
+          # game images rather than in the operator. So the two game tags move
+          # and operatorVersion stands -- the mirror of 0.2.6 and 0.2.8, where
+          # it stood and the operator moved.
           #
-          # The sequence so far, and it is not a miscount: 0.2.5, 0.2.7, 0.2.9.
-          # 0.2.6 and 0.2.8 built no agent, so
+          # The sequence so far, and none of it is a miscount: 0.2.5, 0.2.7,
+          # 0.2.9, 0.2.10. 0.2.6 and 0.2.8 built no agent, so
           # ghcr.io/spawnery/paper:26.2-0.2.6 and -0.2.8 simply do not exist,
           # and each gap is the honest record of a release that carried no jar.
-          # Numbering a jar after one of them would name it for a release that
-          # never contained it.
           #
           # A Paper build that moves without this number moving would collide,
           # which is what makes a bump obligatory when the images really do
           # change rather than tidy.
-          imageVersion = "0.2.9";
+          imageVersion = "0.2.10";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -169,6 +170,13 @@
           # case. 0.2.7 and 0.2.9 move both, because both changed the operator
           # and the agents together -- 0.2.9 brings plugins from a volume on
           # this side and colour on the other.
+          #
+          # **0.2.10 does not move this.** Its whole change is
+          # image/entrypoint.sh, which nix/operator-image.nix does not
+          # reference -- checked, not assumed. The operator binary is
+          # unchanged, so hack/publish.sh correctly refuses to overwrite a tag
+          # a cluster has already pulled, and release.yml's one-image-at-a-time
+          # invocation means that refusal does not stop the two that moved.
           operatorVersion = "0.2.9";
 
           spawnery-slp = pkgs.buildGoModule {
