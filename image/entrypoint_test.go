@@ -377,3 +377,119 @@ func TestTheJVMStillPreTouchesUnderALimit(t *testing.T) {
 		})
 	}
 }
+
+func TestPluginsFromTheVolumeAreCopiedInWithTheirConfiguration(t *testing.T) {
+	dir := t.TempDir()
+
+	// The volume, as the operator would have mounted it: a jar and a nested
+	// configuration file. The configuration is half the point -- jars alone
+	// would leave every plugin at its defaults on an ephemeral group, whose
+	// /data is an emptyDir.
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "LuckPerms"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "luckperms.jar"), []byte("jar"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "LuckPerms", "config.yml"),
+		[]byte("server: lobby"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_PLUGIN_SOURCE="+source); err != nil {
+		t.Fatalf("entrypoint: %v", err)
+	}
+
+	jar, err := os.ReadFile(filepath.Join(dir, "plugins", "luckperms.jar"))
+	if err != nil {
+		t.Fatalf("the jar did not reach the plugins directory: %v", err)
+	}
+	if string(jar) != "jar" {
+		t.Errorf("plugins/luckperms.jar = %q, want the volume's copy", jar)
+	}
+	cfg, err := os.ReadFile(filepath.Join(dir, "plugins", "LuckPerms", "config.yml"))
+	if err != nil {
+		t.Fatalf("the nested configuration did not reach the plugins directory: %v", err)
+	}
+	if string(cfg) != "server: lobby" {
+		t.Errorf("plugins/LuckPerms/config.yml = %q, want the volume's copy", cfg)
+	}
+}
+
+func TestCopiedPluginFilesAreWritable(t *testing.T) {
+	// The mount is read-only, so every file arrives read-only. Paper writes
+	// its plugins' data folders inside this directory, and a plugin that
+	// cannot rewrite its own config fails in its own way rather than in one
+	// the server reports.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugin.jar"), []byte("jar"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_PLUGIN_SOURCE="+source); err != nil {
+		t.Fatalf("entrypoint: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(dir, "plugins", "plugin.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm()&0o200 == 0 {
+		t.Errorf("plugins/plugin.jar is %v, want it writable by its owner", info.Mode().Perm())
+	}
+}
+
+func TestTheAgentJarWinsOverOneOnTheVolume(t *testing.T) {
+	// The bound. Somebody pinning an older agent by dropping it on the volume
+	// would otherwise leave the operator talking to a version it never
+	// published -- and every object in the cluster would say the right thing.
+	dir := t.TempDir()
+
+	paperHome := filepath.Join(dir, "opt", "paper")
+	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paperHome, "agent", "spawnery-agent.jar"),
+		[]byte("from the image"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "spawnery-agent.jar"),
+		[]byte("from the volume"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0,
+		"PAPER_HOME="+paperHome, "SPAWNERY_PLUGIN_SOURCE="+source); err != nil {
+		t.Fatalf("entrypoint: %v", err)
+	}
+
+	got, err := os.ReadFile(filepath.Join(dir, "plugins", "spawnery-agent.jar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "from the image" {
+		t.Errorf("plugins/spawnery-agent.jar = %q, want the image's copy to win", got)
+	}
+}
+
+func TestNoSourceDirectoryIsNotAnError(t *testing.T) {
+	// The overwhelmingly common case: a group with no extraPlugins renders no
+	// volume, so the path does not exist. Under `set -eu` a missing guard here
+	// would fail every start in every installation.
+	dir := t.TempDir()
+
+	if _, err := runEntrypoint(t, dir, 0,
+		"SPAWNERY_PLUGIN_SOURCE="+filepath.Join(dir, "nothing-here")); err != nil {
+		t.Fatalf("a missing plugin source failed the start: %v", err)
+	}
+}
