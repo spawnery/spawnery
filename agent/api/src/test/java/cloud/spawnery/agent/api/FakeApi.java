@@ -60,4 +60,11 @@ final class FakeApi implements SpawneryApi {
     public CompletionStage<Integer> stopBoosts(String group) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }
+
+    // A bus nobody publishes to, which is what every test here wants: the
+    // subscription is real and the handle closes, and no event ever arrives.
+    @Override
+    public EventBus events() {
+        return listener -> () -> { };
+    }
 }

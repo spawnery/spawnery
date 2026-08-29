@@ -128,10 +128,47 @@ needs to be permanently bigger needs its `ServerGroup` edited by a person, and
 this API deliberately cannot do that — the operator holds no write on
 `servergroups` at all.
 
+## Hearing what happened
+
+`events()` hands back an `EventBus`, the same one every time, so a plugin may
+hold it. `subscribe(listener)` returns an `AutoCloseable` — close it on
+disable, or the listener outlives your plugin in a classloader the platform is
+trying to unload, which is the ordinary way a reload turns into a memory leak.
+Closing twice is fine.
+
+```java
+try (AutoCloseable events = Spawnery.get().events().subscribe(e -> {
+        if (e.warning()) {
+            getLogger().warning(e.subject() + ": " + e.message());
+        }
+})) {
+    // ...
+}
+```
+
+**A feed and not a ledger.** An agent that was disconnected missed what
+happened while it was gone, and nothing replays it: the network picture it
+re-syncs on reconnect is the correction, and a better one than a replay would
+be — it says what is true now rather than what was true in an order nobody was
+watching. If you need a ledger, watch the objects.
+
+**You get the facts, one per transition.** What a player sees in chat is a
+collapsed summary — ten `Ready` transitions become one line — and you get the
+ten. The `message` is the operator's own sentence, the same one `kubectl get
+events` shows, so logging it puts you in agreement with whoever is reading the
+cluster.
+
+**`kind` is a string and not an enum.** The operator's vocabulary gains values,
+and an agent older than one has to show it rather than fail to parse the
+message it arrived in. Match on the ones you know; pass the rest through.
+
+**Your listener runs on a network callback thread.** Do not block it and do not
+touch the world from it — hand the work to your platform's scheduler. A
+listener that throws is dropped from the next dispatch rather than taking the
+session down with it, but it is still your bug and nothing tells you twice.
+
 ## What is not here yet
 
-Subscribing to events is designed
-([`docs/superpowers/specs/2026-08-27-cloud-api-design.md`](../../docs/superpowers/specs/2026-08-27-cloud-api-design.md))
-and not yet built. Methods will be **added** to `SpawneryApi`, never changed:
-plugins consume this interface and do not implement it, so an addition breaks
-no caller.
+Nothing from the design remains unbuilt at this layer. Methods will be
+**added** to `SpawneryApi`, never changed: plugins consume this interface and
+do not implement it, so an addition breaks no caller.

@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.FeedState
@@ -137,6 +138,12 @@ class AgentPlugin @Inject constructor(
     private var feed: Feed? = null
 
     /**
+     * A plugin's own listeners. Built here rather than in start(), so a plugin
+     * that subscribed before this agent connected keeps its subscription.
+     */
+    private val events = CloudEvents()
+
+    /**
      * The last EventInterest this agent sent, or null on a stream it has not
      * reported on.
      *
@@ -245,7 +252,7 @@ class AgentPlugin @Inject constructor(
         }
         val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis)
         this.feed = feed
-        val api = MirrorApi(mirror, self, connector)
+        val api = MirrorApi(mirror, self, connector, events)
         Spawnery.install(api)
         // Velocity takes the node whenever, so this sits next to the install
         // rather than in an event handler -- the one shape difference from the
@@ -283,6 +290,7 @@ class AgentPlugin @Inject constructor(
             mirror = mirror,
             connector = connector,
             feed = feed,
+            events = events,
         )
 
         val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->

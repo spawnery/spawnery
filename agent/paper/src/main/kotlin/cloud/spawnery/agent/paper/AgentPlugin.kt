@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.Requests
@@ -59,7 +60,8 @@ class AgentPlugin : JavaPlugin(), Listener {
     }
     private val feedState = FeedState()
     private val feed = Feed(PaperAudience, feedState, System::currentTimeMillis)
-    private val role = ServerRole(state, mirror, connector, feed)
+    private val events = CloudEvents()
+    private val role = ServerRole(state, mirror, connector, feed, events)
 
     /**
      * The last EventInterest this agent sent, or null on a stream it has not
@@ -102,7 +104,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                     override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
                     override fun slots(): Int = state.slots
                 }
-                val api = MirrorApi(mirror, self, connector)
+                val api = MirrorApi(mirror, self, connector, events)
                 Spawnery.install(api)
                 // Registered inside the COMMANDS lifecycle event because that
                 // is the only window Paper accepts a Brigadier node in; a

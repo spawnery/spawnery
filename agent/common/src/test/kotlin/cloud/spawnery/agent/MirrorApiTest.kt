@@ -58,7 +58,7 @@ class MirrorApiTest {
     ) { request -> requested += request }
 
     private fun api(self: Self, state: NetworkState = aRichState()): MirrorApi =
-        MirrorApi(NetworkMirror().also { it.apply(state) }, self, connector())
+        MirrorApi(NetworkMirror().also { it.apply(state) }, self, connector(), CloudEvents())
 
     @Test
     fun `a lookup by name finds what the list holds`() {
@@ -74,7 +74,7 @@ class MirrorApiTest {
         // Optional and not null, because a plugin that forgot a null check
         // gets an NPE at some later line while an empty Optional refuses at
         // the point of use.
-        val api = MirrorApi(NetworkMirror(), serverSelf(), connector())
+        val api = MirrorApi(NetworkMirror(), serverSelf(), connector(), CloudEvents())
 
         assertTrue(api.server("nothing-here").isEmpty)
         assertTrue(api.group("nothing-here").isEmpty)
@@ -84,7 +84,7 @@ class MirrorApiTest {
     @Test
     fun `self is whatever the platform supplied`() {
         val self = serverSelf()
-        val api = MirrorApi(NetworkMirror(), self, connector())
+        val api = MirrorApi(NetworkMirror(), self, connector(), CloudEvents())
 
         assertSame(self, api.self())
         // The type is how a plugin asks which side it is on, so it has to
@@ -100,8 +100,8 @@ class MirrorApiTest {
     @Test
     fun `both sides answer every read identically from one state`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
-        val onServer = MirrorApi(mirror, serverSelf(), connector())
-        val onProxy = MirrorApi(mirror, proxySelf(), connector())
+        val onServer = MirrorApi(mirror, serverSelf(), connector(), CloudEvents())
+        val onProxy = MirrorApi(mirror, proxySelf(), connector(), CloudEvents())
 
         assertEquals(onServer.groups(), onProxy.groups())
         assertEquals(onServer.servers(), onProxy.servers())
@@ -118,8 +118,8 @@ class MirrorApiTest {
     @Test
     fun `both sides build the same request for the same connect`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
-        MirrorApi(mirror, serverSelf(), connector()).connect(richPlayer, Target.group("lobby"))
-        MirrorApi(mirror, proxySelf(), connector()).connect(richPlayer, Target.group("lobby"))
+        MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).connect(richPlayer, Target.group("lobby"))
+        MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).connect(richPlayer, Target.group("lobby"))
 
         assertEquals(2, requested.size)
         // The verb's own payload and not the envelope: the envelope carries a
@@ -136,8 +136,8 @@ class MirrorApiTest {
     @Test
     fun `both sides build the same request for the same retire`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
-        MirrorApi(mirror, serverSelf(), connector()).retire("lobby-a")
-        MirrorApi(mirror, proxySelf(), connector()).retire("lobby-a")
+        MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).retire("lobby-a")
+        MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).retire("lobby-a")
 
         assertEquals(2, requested.size)
         assertEquals(requested[0].retire, requested[1].retire)

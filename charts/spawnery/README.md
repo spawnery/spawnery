@@ -150,11 +150,23 @@ if `/cloud` is invisible from a proxy console that is where to look.
 | `spawnery.cloud.read` | `/cloud list`, `/cloud info <name>` — read the network as this agent last saw it. | Nothing. It changes nothing and costs nothing; the figures are the same ones `kubectl get servergroups` shows. |
 | `spawnery.cloud.retire` | `/cloud retire <server>` — ask one server to stop taking joins and empty out. | Anyone already on that server stays, finishes, and is not kicked; the server disappears once it is empty. Nobody new lands there. Reversible only by the server's own lifetime running out — there is no un-retire. |
 | `spawnery.cloud.scale` | `/cloud start <group> [n] [for <duration>]` and `/cloud stop <group>` — add capacity for a while, or end it early. | More servers, and **a larger bill**: each one is a pod with the group's own CPU and memory requests. Bounded by the group's `maxReplicas`, which this cannot lift, and by a twelve-hour ceiling on how long one boost may run. |
+| `spawnery.cloud.events` | See cloud events in chat as they happen, and `/cloud events on\|off` to choose. | Chat lines, for the holder alone — servers becoming ready, retiring, failing. **On as soon as it is granted**; `/cloud events off` lasts for the session and the feed is back after a rejoin. It changes nothing and costs nothing. |
 
 Give `.read` freely; it is a read of a picture the agent already holds. Treat
 `.retire` as a moderator power — it moves nobody, but it takes a server out of
 rotation and only the cluster can put one back. Treat `.scale` as a spending
 power.
+
+`.events` is the one to grant to whoever is on call. The lines are the same
+transitions `kubectl get events` shows, derived from the same call rather than
+computed twice, so somebody watching chat and somebody watching the cluster
+never disagree about what happened. A rolling update arrives as one line —
+`[cloud] 3 ReadyGatePassed in lobby (…)` — because ten lines is a feed people
+turn off. **Warnings are never collapsed into it**, and each keeps the
+operator's own sentence.
+
+Nothing is delivered to an agent whose server has nobody holding `.events`
+online, so a network that grants it to nobody carries no extra traffic at all.
 
 **None of these can change what a group is.** `/cloud start` creates a
 `ScaleBoost`, which expires; it never edits the `ServerGroup`, and the

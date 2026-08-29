@@ -531,3 +531,43 @@ is `ALWAYS_TRUE`. On Paper the console answers every permission itself.
 registered at plugin enable, which happens on a pod that is starting anyway.
 Whether the agents roll at all is decided by the image change, exactly as it
 was before this feature existed.
+
+## Cloud events reach chat, and are silent until somebody is granted them
+
+An administrator holding `spawnery.cloud.events` now sees things happening in
+the cloud as chat lines — a server becoming ready, retiring, failing to be
+scheduled. Nobody holds it by default, so **the feed is silent immediately
+after the upgrade**, exactly as `/cloud` itself is.
+
+**They are the events `kubectl get events` already shows.** The operator
+records through one recorder, and the chat copy is derived from that same call
+rather than computed beside it. Two independent derivations of one fact
+eventually disagree, and the one in the chat is the one nobody can audit — so
+there is only one. If a line appears in chat, `kubectl get events` has it, with
+the same sentence.
+
+**The feed collapses.** A rolling update of a ten-server group produces ten
+`Ready` transitions in a few seconds, and arrives as one line:
+
+```
+[cloud] 3 ReadyGatePassed in lobby (lobby-a3f9, lobby-b71c, lobby-c02e)
+```
+
+Warnings are never folded into such a line and each keeps the operator's own
+sentence — a failure hidden inside "3 servers ready" is the one event somebody
+actually needs to see.
+
+**`/cloud events off` lasts for the session.** Paper could persist it per
+player and Velocity has no equivalent, so symmetry won and the command says so
+in its own output. The feed is back after a rejoin.
+
+**Nothing is sent to a server nobody is watching.** Each agent tells the
+operator whether anybody holding the permission is online, and the operator
+sends events only to those that said yes. On a network that grants `.events` to
+nobody, this feature costs no traffic at all.
+
+Plugins can subscribe too, through `SpawneryApi.events()`. They receive the
+events one at a time rather than the collapsed summary — see
+[`agent/api/README.md`](../agent/api/README.md). It is a feed and not a ledger:
+an agent that was disconnected missed what happened while it was gone, and the
+network picture it re-syncs on reconnect is the correction.

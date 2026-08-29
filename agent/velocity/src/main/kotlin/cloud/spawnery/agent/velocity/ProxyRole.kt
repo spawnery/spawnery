@@ -2,6 +2,7 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.AgentRole
 import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.Feed
@@ -98,8 +99,10 @@ class ProxyRole(
     private val mirror: NetworkMirror,
     /** Where an answer to this agent's own request goes. Last, as ever. */
     private val connector: CloudConnector,
-    /** Where a cloud event goes on its way to somebody's chat. Last, as ever. */
+    /** Where a cloud event goes on its way to somebody's chat. */
     private val feed: Feed,
+    /** Where the same event goes on its way to a plugin. Last, as ever. */
+    private val events: CloudEvents,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
      * Whether a `FullSync` has ever been applied, paired with the last
@@ -411,6 +414,7 @@ class ProxyRole(
                 // thread, and the window that turns ten Ready transitions into
                 // one line closes on the proxy's own timer.
                 feed.onEvent(message.cloudEvent)
+                events.publish(message.cloudEvent)
                 Directive.None
             }
             OperatorToProxy.MessageCase.NETWORK_STATE -> {

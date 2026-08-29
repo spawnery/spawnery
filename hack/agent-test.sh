@@ -416,6 +416,33 @@ echo "the agent connected"
 # require_cloud_list for what this proves that no JUnit test can.
 require_cloud_list "$NAME"
 
+# The agent tells the operator whether anybody is there to read cloud events,
+# and with an empty server the answer is no.
+#
+# **What this phase cannot show, and why.** The obvious check would be to
+# trigger an event and watch it arrive in chat. It cannot: the feed goes to
+# online players holding spawnery.cloud.events, and this container has none --
+# there is no Minecraft client in this harness and there will not be one. The
+# console is not a player either; it holds every permission on Paper but
+# PaperAudience lists players, so the feed deliberately passes it by. Delivery
+# to a player's chat is covered by JUnit in :common (FeedTest) and by nothing
+# that runs the real jar. That is written down rather than worked around,
+# because a harness contorted into proving it would prove something else.
+#
+# What is reachable is the half the operator depends on: an agent with nobody
+# watching says so, and the operator sends nothing to it. Asserting the value
+# and not merely the message matters -- an agent that reported "yes" by default
+# would make the whole interest state pointless while every other check here
+# still passed.
+echo "waiting for the agent to report that nobody is watching for cloud events..."
+await_event event_interest
+if ! jq -e 'select(.kind == "event_interest") | select(.wanted == false)' <"$EVENTS" >/dev/null; then
+	echo "the agent asked for cloud events on a server with nobody online" >&2
+	jq -c 'select(.kind == "event_interest")' <"$EVENTS" >&2
+	exit 1
+fi
+echo "the agent reports no interest in events while nobody is online"
+
 # Reaching this line at all is the relocation proof: the agent cannot have
 # greeted without SessionLoop, OperatorChannel and BearerCredentials - the only
 # classes that import io.grpc - having been constructed and run inside Paper's

@@ -2,6 +2,7 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.NetworkMirror
+import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.FeedAudience
 import cloud.spawnery.agent.FeedState
@@ -81,6 +82,7 @@ class ProxyRoleTest {
         mirror = mirror,
         connector = dormantConnector(),
         feed = inertFeed(),
+        events = CloudEvents(),
     )
 
     @Test
@@ -554,6 +556,7 @@ class ProxyRoleTest {
             mirror = mirror,
             connector = dormantConnector(),
             feed = inertFeed(),
+            events = CloudEvents(),
         )
 
     private fun backend(name: String, address: String, group: String): PbServer =
@@ -608,6 +611,7 @@ class ProxyRoleTest {
             mirror = NetworkMirror(),
             connector = dormantConnector(),
             feed = inertFeed(),
+            events = CloudEvents(),
         )
 
         val reports = role.extraReports()

@@ -145,4 +145,13 @@ public interface SpawneryApi {
      * caller who expected some needs to be able to tell.
      */
     CompletionStage<Integer> stopBoosts(String group);
+
+    /**
+     * Where to hear about things happening in the cloud.
+     *
+     * <p>The same object every time, so a plugin may hold it. See
+     * {@link EventBus} for what it does and does not promise — most of all
+     * that it is a feed and not a ledger.
+     */
+    EventBus events();
 }

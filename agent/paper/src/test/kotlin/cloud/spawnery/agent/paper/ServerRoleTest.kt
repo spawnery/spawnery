@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.FeedAudience
@@ -42,7 +43,7 @@ class ServerRoleTest {
     @Test
     fun `hello carries the version and the current readiness`() {
         val state = ServerState()
-        val role = ServerRole(state, NetworkMirror(), dormantConnector(), aFeed())
+        val role = ServerRole(state, NetworkMirror(), dormantConnector(), aFeed(), CloudEvents())
 
         val beforeReady = role.hello("26.2-0.2.0")
         assertEquals(ServerMessage.MessageCase.HELLO, beforeReady.messageCase)
@@ -60,7 +61,7 @@ class ServerRoleTest {
     @Test
     fun `the report carries the sampled players and slots`() {
         val state = ServerState()
-        val role = ServerRole(state, NetworkMirror(), dormantConnector(), aFeed())
+        val role = ServerRole(state, NetworkMirror(), dormantConnector(), aFeed(), CloudEvents())
         state.sample(players = 3, slots = 100)
 
         val report = role.playerCount()
@@ -76,7 +77,7 @@ class ServerRoleTest {
 
     @Test
     fun `a report interval message yields a Report directive`() {
-        val role = ServerRole(ServerState(), NetworkMirror(), dormantConnector(), aFeed())
+        val role = ServerRole(ServerState(), NetworkMirror(), dormantConnector(), aFeed(), CloudEvents())
 
         assertEquals(
             Directive.Report(5),
@@ -90,7 +91,7 @@ class ServerRoleTest {
 
     @Test
     fun `a session deadline message yields a Deadline directive`() {
-        val role = ServerRole(ServerState(), NetworkMirror(), dormantConnector(), aFeed())
+        val role = ServerRole(ServerState(), NetworkMirror(), dormantConnector(), aFeed(), CloudEvents())
 
         assertEquals(
             Directive.Deadline(renewAfterSeconds = 240, hardDeadlineSeconds = 600),
@@ -108,7 +109,7 @@ class ServerRoleTest {
     @Test
     fun `a network state reaches the mirror`() {
         val mirror = NetworkMirror()
-        val role = ServerRole(ServerState(), mirror, dormantConnector(), aFeed())
+        val role = ServerRole(ServerState(), mirror, dormantConnector(), aFeed(), CloudEvents())
 
         val directive = role.onMessage(
             OperatorToServer.newBuilder()

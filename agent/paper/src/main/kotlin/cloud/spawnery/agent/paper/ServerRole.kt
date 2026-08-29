@@ -2,6 +2,7 @@ package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.AgentRole
 import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.Feed
@@ -29,8 +30,15 @@ class ServerRole(
     private val mirror: NetworkMirror,
     /** Where an answer to this agent's own request goes. */
     private val connector: CloudConnector,
-    /** Where a cloud event goes on its way to somebody's chat. Last, as ever. */
+    /** Where a cloud event goes on its way to somebody's chat. */
     private val feed: Feed,
+    /**
+     * Where the same event goes on its way to a plugin. Separate from the
+     * feed on purpose: the feed collapses ten transitions into one readable
+     * line, and a plugin should get the facts rather than somebody else's
+     * editorial decision. Last, as ever.
+     */
+    private val events: CloudEvents,
 ) : AgentRole<ServerMessage, OperatorToServer> {
     override fun open(
         channel: ManagedChannel,
@@ -86,6 +94,7 @@ class ServerRole(
                 // thread, and the window that turns ten Ready transitions into
                 // one line closes on the plugin's own timer.
                 feed.onEvent(message.cloudEvent)
+                events.publish(message.cloudEvent)
                 Directive.None
             }
             else -> Directive.None

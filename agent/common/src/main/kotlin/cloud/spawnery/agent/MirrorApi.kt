@@ -4,6 +4,7 @@ import cloud.spawnery.agent.api.CloudPlayer
 import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
+import cloud.spawnery.agent.api.EventBus
 import cloud.spawnery.agent.api.Self
 import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.api.ServerInfo
@@ -42,6 +43,12 @@ class MirrorApi(
      * added parameter in these packages is.
      */
     private val connector: CloudConnector,
+    /**
+     * Where a plugin's own listeners live. Last, as ever -- a parameter added
+     * above would rebind every positional caller, silently wherever the types
+     * happen to match.
+     */
+    private val events: CloudEvents,
 ) : SpawneryApi {
     override fun self(): Self = self
 
@@ -73,4 +80,6 @@ class MirrorApi(
 
     override fun stopBoosts(group: String): CompletionStage<Int> =
         connector.stopBoosts(group)
+
+    override fun events(): EventBus = events
 }

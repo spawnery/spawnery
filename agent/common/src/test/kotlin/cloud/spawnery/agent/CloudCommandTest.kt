@@ -78,6 +78,7 @@ class CloudCommandTest {
             override fun network(): String = "production"
         },
         connector,
+        CloudEvents(),
     )
 
     private fun run(command: String, api: SpawneryApi = api()): Int {
@@ -209,6 +210,7 @@ class CloudCommandTest {
                 override fun network(): String = "production"
             },
             dormantConnector(),
+            CloudEvents(),
         )
 
         run("cloud retire lobby-a", dormant)

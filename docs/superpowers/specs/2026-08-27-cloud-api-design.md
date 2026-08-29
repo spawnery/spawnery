@@ -526,8 +526,17 @@ The load-bearing test is not about the API at all:
   `SourceAdapter` — the pattern `FakeOperator` and `FakeRole` already set.
 - The feed's coalescing is a pure function over a list of events and a window,
   tested as one.
-- An E2E scenario drives `/cloud start` and asserts the `ServerGroup`'s
-  `minReplicas` moved and **no server retired**, which is 7a and 7c meeting.
+- An E2E scenario drives `/cloud start` and asserts a `ScaleBoost` exists, the
+  group's `status.boostedReplicas` rose, and **no server retired** — which is
+  7a and 7c meeting.
+
+  *This bullet asked for `minReplicas` to have moved until 2026-08-29.* It was
+  written before §4.4 existed, and §4.4 is the reason it cannot: `/cloud start`
+  writes no group spec at all, the operator holds no write on `servergroups`,
+  and a `minReplicas` it wrote would be reverted by the next Flux
+  reconciliation. Corrected rather than deleted — a spec that quietly loses a
+  requirement is one nobody can review against. 7c-1 covers the boost and the
+  status field; 7c-2 covers the command.
 
 ## 7. Facts this design asserts about the code already here
 
