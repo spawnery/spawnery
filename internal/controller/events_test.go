@@ -236,7 +236,10 @@ var knownActions = map[string]string{
 // subpackage would have done the same silently. Changing this number is
 // therefore a deliberate act with a diff, which is what it should be: adding
 // an event is a change to the operator's output.
-const wantEventfSites = 28
+//
+// 28 -> 30 on 2026-08-29: spec.extraPlugins gained a refusal on each group
+// kind, each announcing once on the transition into it.
+const wantEventfSites = 30
 
 // TestEveryEventfCallSitePassesAKnownAction reads this package's own source.
 //
