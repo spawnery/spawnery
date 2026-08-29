@@ -504,3 +504,24 @@ func TestDesiredProxyHashSeparatesHostPortFromTheServiceStrategies(t *testing.T)
 			"match the strategy", hostPort)
 	}
 }
+
+func TestTheProxyContainerKeepsStdinOpenForTheConsole(t *testing.T) {
+	// The same reasoning as the server's, and asserted separately because the
+	// two pods are built by two functions -- "it is the same shape" is how the
+	// one that is subtly not the same gets in.
+	pod, err := BuildProxyPod(testNetwork(), testProxyGroup(), "gateway-abcd", testEndpoint, nil)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+	c := pod.Spec.Containers[0]
+
+	if !c.Stdin {
+		t.Error("the container closes stdin, so the console cannot be reached at all")
+	}
+	if c.StdinOnce {
+		t.Error("StdinOnce is set: the console would work once and then never again")
+	}
+	if c.TTY {
+		t.Error("a TTY was allocated; the console needs stdin, not a terminal")
+	}
+}

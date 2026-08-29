@@ -1121,3 +1121,31 @@ func TestAMountAtThePluginsDirectoryIsRefused(t *testing.T) {
 		})
 	}
 }
+
+func TestTheServerContainerKeepsStdinOpenForTheConsole(t *testing.T) {
+	// Without this, `kubectl attach` connects and the keystrokes go nowhere:
+	// the container gets /dev/null on stdin, so the server's console reader
+	// sees EOF immediately and no command ever arrives. Measured on a live
+	// 0.2.7 lobby before this was added, and it is what makes /cloud usable by
+	// an operator who has granted nobody a permission.
+	pod := build(t, nil)
+	c := pod.Spec.Containers[0]
+
+	if !c.Stdin {
+		t.Error("the container closes stdin, so the console cannot be reached at all")
+	}
+	// The one that is easy to add and ruins it. StdinOnce closes the
+	// container's stdin the moment the first attaching client disconnects, so
+	// the console would answer exactly one session and be dead for the rest of
+	// the pod's life -- and the second operator to try it would find a command
+	// that used to work.
+	if c.StdinOnce {
+		t.Error("StdinOnce is set: the console would work once and then never again")
+	}
+	// No TTY, deliberately. Paper switches to its terminal console when it has
+	// one, which changes how its output is written, and nothing here needs a
+	// terminal: the harness drives `cloud list` over a plain pipe.
+	if c.TTY {
+		t.Error("a TTY was allocated; the console needs stdin, not a terminal")
+	}
+}

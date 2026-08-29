@@ -254,6 +254,9 @@ func renderProxyPod(
 	container := corev1.Container{
 		Name:  ProxyContainerName,
 		Image: group.Spec.Image,
+		// See BuildServerPod's own note: stdin open, StdinOnce false, no TTY.
+		Stdin: true,
+
 		Ports: []corev1.ContainerPort{
 			minecraft,
 			{

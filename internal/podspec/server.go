@@ -363,6 +363,25 @@ func BuildServerPod(
 	container := corev1.Container{
 		Name:  ContainerName,
 		Image: group.Spec.Image,
+		// Stdin, so `kubectl attach` can reach the console.
+		//
+		// Without it the container gets /dev/null on stdin, the server's
+		// console reader sees EOF at once, and an attaching client's
+		// keystrokes go nowhere -- which is exactly what a live 0.2.7 lobby
+		// did before this was set. It is what lets an operator run /cloud on a
+		// network where nobody has been granted a permission yet.
+		//
+		// StdinOnce is deliberately left false. It would close the container's
+		// stdin the moment the first attaching client disconnects, so the
+		// console would answer exactly one session and be dead for the rest of
+		// the pod's life -- and the second person to try it would find a
+		// command that used to work.
+		//
+		// No TTY either. Paper and Velocity both switch to a terminal console
+		// when they have one, which changes how their output is written, and
+		// nothing needs a terminal here: a command arrives over a plain pipe.
+		Stdin: true,
+
 		Ports: []corev1.ContainerPort{{
 			Name:          MinecraftPortName,
 			ContainerPort: MinecraftPort,

@@ -144,10 +144,17 @@ answers every permission, and on Velocity the console starts with
 `PermissionsSetupEvent` may replace that, which is where to look if `/cloud` is
 invisible from a proxy console.
 
-**That does not give you a way in on a running pod.** The operator renders
-containers without `stdin`, so `kubectl attach` connects and delivers nothing —
-measured on 2026-08-29 against a live 0.2.7 lobby. Granting a permission to a
-player is the only route today.
+**On v0.2.7 that gave you no way in**: those pods were rendered without
+`stdin`, so `kubectl attach` connected and delivered nothing — measured against
+a live 0.2.7 lobby. From the next release the container keeps stdin open, so
+
+```bash
+kubectl attach -i <server-pod> -n <namespace> -c minecraft
+```
+
+reaches the console, and `cloud list` answers without anybody being granted
+anything. The change rolls every group once, because the container spec is part
+of the pod hash.
 
 | Permission | What somebody holding it can do | What a player would notice |
 |---|---|---|

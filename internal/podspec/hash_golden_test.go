@@ -63,11 +63,23 @@ import (
 // goldenProxyDigest is DesiredProxyHash over goldenNetwork/goldenProxyGroup,
 // goldenAgentEndpoint and goldenConfigValues. See the comment above before
 // changing it.
-const goldenProxyDigest = "f08967aaf278196b"
+//
+// Moved on 2026-08-29, from f08967aaf278196b, and deliberately: the container
+// now keeps stdin open so `kubectl attach` can reach the console. The next
+// operator upgrade therefore rolls every proxy group in every installation
+// once, moving players off their pods, and every server group with them. That
+// is the price of the console being reachable at all -- before this, /cloud
+// could only be used by granting a permission to a player, which an operator
+// bringing a network up for the first time has nobody to grant to.
+const goldenProxyDigest = "c52b89c65d114de2"
 
 // goldenServerDigest is DesiredServerHash over goldenNetwork/goldenServerGroup
 // and goldenConfigValues. See the comment above before changing it.
-const goldenServerDigest = "67445461adf39969"
+//
+// Moved on 2026-08-29, from 67445461adf39969, for the reason goldenProxyDigest
+// gives. For servers a roll means worlds stopped and restarted, and players
+// finishing their sessions on pods being replaced.
+const goldenServerDigest = "85fe4733710a4013"
 
 // goldenAgentEndpoint is an input to DesiredProxyHash and not to
 // DesiredServerHash -- the asymmetry is deliberate and DesiredServerHash's own

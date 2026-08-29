@@ -511,22 +511,28 @@ takes a server out of rotation without moving anybody, and
 `spawnery.cloud.scale` spends money.
 
 **The console holds all three without being granted anything**, by default on
-both platforms — but on a pod this operator renders you cannot reach it.
-`internal/podspec` sets neither `stdin` nor `tty` on the container, so
-`kubectl attach` connects and the keystrokes go nowhere: the command never
-reaches the server. Measured on 2026-08-29 against a live 0.2.7 lobby —
-`kubectl attach -i` returned cleanly and `cloud list` produced no line in the
-log.
+both platforms. **On a pod rendered by v0.2.7 you cannot reach it**, and on
+anything later you can: v0.2.7 set neither `stdin` nor `tty` on the container,
+so `kubectl attach` connected and the keystrokes went nowhere — measured on a
+live 0.2.7 lobby, where `cloud list` produced no line in the log at all. The
+release after it sets `stdin`, so
 
-An earlier draft of this section said `kubectl attach` was the way to check the
-upgrade without granting anything. **It is not, and there is no console route
-on a rendered pod today.** To use `/cloud`, grant one of these permissions to a
-player.
+```bash
+kubectl attach -i lobby-a3f9 -n minecraft -c minecraft
+```
 
-The console path itself is real and is exercised: `hack/agent-test.sh` drives
-`cloud list` into a container it starts with `-i` and asserts the answer. What
-is missing is `stdin: true` on the pod the operator renders, which is a change
-to `internal/podspec` and not to anything here.
+reaches the console and `cloud list` answers. That is how to check an upgrade
+worked without granting a permission to anybody first — and on a network being
+brought up, there is nobody to grant one to.
+
+**That fix rolls every group once.** The container spec is part of the pod
+hash, so the operator upgrade that brings it replaces every proxy and every
+server: players moved off proxies, worlds stopped and restarted. It is a
+one-time cost and it is recorded in `internal/podspec/hash_golden_test.go`
+rather than discovered.
+
+If you are on v0.2.7 and cannot upgrade yet, granting a permission to a player
+is the only route in.
 
 On a Velocity proxy the console's permissions come from a
 `PermissionFunction` that a permissions plugin is free to replace; the default
