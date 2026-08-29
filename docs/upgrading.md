@@ -582,3 +582,32 @@ events one at a time rather than the collapsed summary — see
 [`agent/api/README.md`](../agent/api/README.md). It is a feed and not a ledger:
 an agent that was disconnected missed what happened while it was gone, and the
 network picture it re-syncs on reconnect is the correction.
+
+## Plugins can come from a volume, and nothing moves until you ask
+
+`ServerGroup` and `ProxyGroup` gain `spec.extraPlugins.claimName`: a
+`ReadWriteMany` claim whose contents are copied into every server's plugins
+directory on start. It exists so a plugin change costs a restart rather than an
+image rebuild and a release. [`plugins.md`](plugins.md) is the whole of it.
+
+**This upgrade moves no pod.** A group that names no claim renders exactly the
+pod it rendered before, so both golden pod digests in
+`internal/podspec/hash_golden_test.go` are unchanged — checked, not assumed.
+Worth saying plainly, because "a new field" reads as "something is about to
+change".
+
+**It is inert twice over.** The operator refuses a group naming a claim unless
+it was started with `--allow-plugin-volumes`, which the chart renders as
+`false`; and nothing happens without the field. An installation that wants
+neither has nothing to do.
+
+Turning it on and adding the field to a group *does* roll that group, because
+the rendered pod really is different — one group, when you edit it, not the
+fleet on upgrade.
+
+The two refusals both land on the group as `Accepted=False` with an event on
+the transition: `PluginVolumesDisabled` names the operator flag, and
+`PluginVolumeUnusable` names the claim and its access modes. Neither creates
+servers — a group whose volume cannot be mounted would otherwise fill with pods
+sitting `Pending` on a claim that will not attach, and look like a scheduling
+problem rather than a spec one.

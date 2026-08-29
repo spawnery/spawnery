@@ -13,6 +13,7 @@ This page is the index of everything under `docs/`.
 | [`runbook-milestone-5c-secret-rotation.md`](runbook-milestone-5c-secret-rotation.md) | Rotating a network's Velocity forwarding secret |
 | [`persistent-storage.md`](persistent-storage.md) | How persistent worlds are stored, and why a claim outlives its server on purpose |
 | [`network-boundaries.md`](network-boundaries.md) | What the two `NetworkPolicy` objects buy, and what they do not. Read before treating them as protection |
+| [`plugins.md`](plugins.md) | Loading third-party plugins from a volume, without rebuilding an image — and what Longhorn's `ReadWriteMany` adds to the failure surface |
 
 ## Working on Spawnery
 

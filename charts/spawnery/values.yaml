@@ -75,6 +75,15 @@ operator:
   # The production value. hack/e2e.sh overrides it for its own run.
   startupDeadline: 5m
   leaderElect: true
+  # Lets a group name a spec.extraPlugins claim, whose contents are copied into
+  # every server's plugins directory on start. See docs/plugins.md.
+  #
+  # Off by default, and NOT as a security control: a PersistentVolumeClaim is a
+  # namespaced object in the same trust domain as the group naming it, so
+  # anybody who can write one can write the other. What this buys is an
+  # operator being able to say "this installation runs no third-party plugins"
+  # and have that be a fact rather than a convention.
+  allowPluginVolumes: false
 
 # The namespaces that hold a Network, and the forwarding secret in each.
 #

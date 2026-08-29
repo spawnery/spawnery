@@ -129,6 +129,10 @@
         "leaderElect": {
           "type": "boolean",
           "description": "A bool, not a YAML string. `yes` is a string here, and the flag parser refuses it at container start."
+        },
+        "allowPluginVolumes": {
+          "type": "boolean",
+          "description": "A bool, for the reason leaderElect is one. Lets a group name a spec.extraPlugins claim; see docs/plugins.md. Not a security control -- a PersistentVolumeClaim is in the same trust domain as the group naming it."
         }
       }
     },
