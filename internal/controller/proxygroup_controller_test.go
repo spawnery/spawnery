@@ -136,6 +136,10 @@ func proxyGroupReconciler(f *fixture) *ProxyGroupReconciler {
 		// cannot nil-dereference in a test that stumbled into it. A test that
 		// wants to read the events replaces this with its own handle.
 		Recorder: newRecorder(),
+		// The fixture's client is not cache-restricted, so this is the same
+		// object either way here -- but production must pass an uncached
+		// reader, and a reconciler built without one panics inside Reconcile.
+		ClaimReader: f.c,
 	}
 }
 

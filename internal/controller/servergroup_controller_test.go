@@ -63,6 +63,10 @@ func groupReconciler(f *fixture) *ServerGroupReconciler {
 		Agents:       f.agents,
 		Clock:        f.clock.Now,
 		Expectations: newExpectations(f.clock.Now),
+		// The fixture's client is not cache-restricted, so this is the same
+		// object either way here -- but production must pass an uncached
+		// reader, and a reconciler built without one panics inside Reconcile.
+		ClaimReader: f.c,
 	}
 }
 

@@ -172,6 +172,24 @@ type ProxyGroupReconciler struct {
 	// AllowPluginVolumes is Options.AllowPluginVolumes -- an operational
 	// switch and not a security boundary. See that field.
 	AllowPluginVolumes bool
+
+	// ClaimReader reads a group's spec.extraPlugins claim, and it must be
+	// uncached.
+	//
+	// **The manager's cache holds only PersistentVolumeClaims carrying our own
+	// managed-by label** -- see the ByObject restriction in
+	// cmd/spawnery-operator/main.go, whose comment already warns that a claim
+	// missing the label is invisible through it. A plugin claim is created by
+	// an administrator and carries no label of ours, so the cached client
+	// answers NotFound for one that is plainly there -- and the refusal then
+	// says "does not exist in this namespace", which sends somebody looking
+	// for an object they can see with kubectl.
+	//
+	// Measured on a live cluster on 2026-08-29, which is how this was found;
+	// no test caught it, because envtest's client is not cache-restricted the
+	// same way. Labelling the claim would have been the wrong fix twice over:
+	// it is not our object, and the orphan sweep deletes by that label.
+	ClaimReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
@@ -234,7 +252,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// volume that will not attach, and the group would look like a scheduling
 	// problem rather than a spec one.
 	if reason, message, ok := checkExtraPlugins(
-		ctx, r.Client, group.Namespace, group.Spec.ExtraPlugins, r.AllowPluginVolumes); !ok {
+		ctx, r.ClaimReader, group.Namespace, group.Spec.ExtraPlugins, r.AllowPluginVolumes); !ok {
 		// Announced on the transition only, following the rule
 		// network_controller.go states: this runs on every pass for as long as
 		// the claim is wrong, and an event per resync forever is not a report,

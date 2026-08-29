@@ -223,6 +223,10 @@ func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconc
 		Expectations:       newExpectations(opts.Clock),
 		DrainTaintKeys:     opts.DrainTaintKeys,
 		AllowPluginVolumes: opts.AllowPluginVolumes,
+		// Uncached, for the reason ClaimReader's own comment gives: the
+		// manager's cache holds only claims carrying our label, and a plugin
+		// claim carries none.
+		ClaimReader: mgr.GetAPIReader(),
 	}
 }
 
@@ -240,5 +244,9 @@ func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconcil
 		Divergence:         newReadinessDivergence(opts.Clock),
 		DrainTaintKeys:     opts.DrainTaintKeys,
 		AllowPluginVolumes: opts.AllowPluginVolumes,
+		// Uncached, for the reason ClaimReader's own comment gives: the
+		// manager's cache holds only claims carrying our label, and a plugin
+		// claim carries none.
+		ClaimReader: mgr.GetAPIReader(),
 	}
 }
