@@ -34,6 +34,20 @@ type Options struct {
 	// chat. Nil means no feed, which is what every test that does not care
 	// about one passes -- see cloudevent.Recorder.
 	Events cloudevent.Sink
+	// AllowPluginVolumes lets a group name a spec.extraPlugins claim.
+	//
+	// **An operational switch and not a security boundary.** A
+	// PersistentVolumeClaim is a namespaced object in the same trust domain as
+	// the group that names it: anybody who can write one can write the other,
+	// so this stops nobody who was not already stopped. What it is for is an
+	// operator being able to say "this installation runs no third-party
+	// plugins" and have that be true rather than a convention.
+	//
+	// Off by default for that reason and not for safety. Documenting it as a
+	// security control would be the kind of check that reads like a bound and
+	// cannot fail, which is worse than no check -- the next reader would trust
+	// it.
+	AllowPluginVolumes bool
 	// Clock is the time source. Injectable for tests.
 	Clock func() time.Time
 	// StartupDeadline is how long a server may take to reach Ready.
@@ -201,28 +215,30 @@ func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
 // fail. SetupAll has no seam a test can reach through, and these do.
 func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconciler {
 	return &ServerGroupReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		Recorder:       cloudevent.Recorder{Inner: mgr.GetEventRecorder("servergroup"), Sink: opts.Events},
-		Agents:         opts.Agents,
-		Clock:          opts.Clock,
-		Expectations:   newExpectations(opts.Clock),
-		DrainTaintKeys: opts.DrainTaintKeys,
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		Recorder:           cloudevent.Recorder{Inner: mgr.GetEventRecorder("servergroup"), Sink: opts.Events},
+		Agents:             opts.Agents,
+		Clock:              opts.Clock,
+		Expectations:       newExpectations(opts.Clock),
+		DrainTaintKeys:     opts.DrainTaintKeys,
+		AllowPluginVolumes: opts.AllowPluginVolumes,
 	}
 }
 
 func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconciler {
 	return &ProxyGroupReconciler{
-		Client:         mgr.GetClient(),
-		Scheme:         mgr.GetScheme(),
-		Recorder:       cloudevent.Recorder{Inner: mgr.GetEventRecorder("proxygroup"), Sink: opts.Events},
-		Agents:         opts.Agents,
-		Bootstrap:      opts.Bootstrapper,
-		AgentEndpoint:  opts.AgentEndpoint,
-		Proxies:        opts.Proxies,
-		Clock:          opts.Clock,
-		Expectations:   newExpectations(opts.Clock),
-		Divergence:     newReadinessDivergence(opts.Clock),
-		DrainTaintKeys: opts.DrainTaintKeys,
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		Recorder:           cloudevent.Recorder{Inner: mgr.GetEventRecorder("proxygroup"), Sink: opts.Events},
+		Agents:             opts.Agents,
+		Bootstrap:          opts.Bootstrapper,
+		AgentEndpoint:      opts.AgentEndpoint,
+		Proxies:            opts.Proxies,
+		Clock:              opts.Clock,
+		Expectations:       newExpectations(opts.Clock),
+		Divergence:         newReadinessDivergence(opts.Clock),
+		DrainTaintKeys:     opts.DrainTaintKeys,
+		AllowPluginVolumes: opts.AllowPluginVolumes,
 	}
 }

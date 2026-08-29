@@ -228,6 +228,30 @@ func renderProxyPod(
 		})
 	}
 
+	// The group's own plugin volume, if it named one. Read-only at the volume
+	// as well as at the mount: one claim may serve several groups, and a group
+	// that could write it could change what every other group loads.
+	//
+	// Mounted outside DataMountPath -- see PluginSourceMountPath. The
+	// entrypoint copies out of it; it is not the plugins directory itself,
+	// which a read-only mount could not be.
+	if group.Spec.ExtraPlugins != nil {
+		volumes = append(volumes, corev1.Volume{
+			Name: PluginSourceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: group.Spec.ExtraPlugins.ClaimName,
+					ReadOnly:  true,
+				},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      PluginSourceVolumeName,
+			MountPath: PluginSourceMountPath,
+			ReadOnly:  true,
+		})
+	}
+
 	minecraft := corev1.ContainerPort{
 		Name:          MinecraftPortName,
 		ContainerPort: MinecraftPort,

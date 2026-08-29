@@ -5104,3 +5104,119 @@ func TestABoostActuallyCreatesAServer(t *testing.T) {
 		t.Fatalf("got %d servers, want 3: a floor of one plus a boost of two", got)
 	}
 }
+
+// pluginPVC creates a claim in the fixture's namespace with the given modes.
+func (f *fixture) pluginPVC(t *testing.T, name string, modes ...corev1.PersistentVolumeAccessMode) {
+	t.Helper()
+	if err := f.c.Create(f.ctx, &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: modes,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("create claim %s: %v", name, err)
+	}
+}
+
+// setExtraPlugins points the fixture's group at a claim.
+func (f *fixture) setExtraPlugins(t *testing.T, claim string) {
+	t.Helper()
+	f.group.Spec.ExtraPlugins = &spawneryv1alpha1.ExtraPlugins{ClaimName: claim}
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+}
+
+func TestAGroupWithAReadWriteOnceClaimIsRefusedAndCreatesNothing(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	r.AllowPluginVolumes = true
+	f.pluginPVC(t, "plugins", corev1.ReadWriteOnce)
+	f.setExtraPlugins(t, "plugins")
+
+	f.reconcileGroup(t, r)
+
+	group := f.reloadGroup(t)
+	accepted := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
+		accepted.Reason != spawneryv1alpha1.ReasonPluginVolumeUnusable {
+		t.Fatalf("Accepted = %+v, want False/%s", accepted, spawneryv1alpha1.ReasonPluginVolumeUnusable)
+	}
+	// The assertion that matters. Setting a condition and creating the servers
+	// anyway would decorate the group and change nothing it does: every pod
+	// would sit Pending on a volume that will not attach, and the group would
+	// look like a scheduling problem rather than a spec one.
+	if servers := f.listServers(t); len(servers) != 0 {
+		t.Errorf("the group created %d servers despite an unusable plugin claim", len(servers))
+	}
+}
+
+func TestAGroupWithAReadWriteManyClaimIsAcceptedAndCreatesItsFloor(t *testing.T) {
+	// The other half. Without this, a check that refused everything would pass
+	// the test above and nobody would notice until a working claim was tried.
+	f := newFixture(t)
+	r := groupReconciler(f)
+	r.AllowPluginVolumes = true
+	f.pluginPVC(t, "plugins", corev1.ReadWriteMany)
+	f.setExtraPlugins(t, "plugins")
+
+	f.reconcileGroup(t, r)
+
+	group := f.reloadGroup(t)
+	if accepted := meta.FindStatusCondition(group.Status.Conditions,
+		spawneryv1alpha1.ConditionAccepted); accepted == nil ||
+		accepted.Status != metav1.ConditionTrue {
+		t.Fatalf("Accepted = %+v, want True for a ReadWriteMany claim", accepted)
+	}
+	if servers := f.listServers(t); len(servers) != 1 {
+		t.Errorf("got %d servers, want the group's floor", len(servers))
+	}
+}
+
+func TestAGroupNamingAClaimOnADisabledInstallationIsRefused(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	// AllowPluginVolumes is false, which is the default an operator gets.
+	f.pluginPVC(t, "plugins", corev1.ReadWriteMany)
+	f.setExtraPlugins(t, "plugins")
+
+	f.reconcileGroup(t, r)
+
+	group := f.reloadGroup(t)
+	accepted := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
+	if accepted == nil || accepted.Reason != spawneryv1alpha1.ReasonPluginVolumesDisabled {
+		t.Fatalf("Accepted = %+v, want False/%s", accepted, spawneryv1alpha1.ReasonPluginVolumesDisabled)
+	}
+	// The claim is perfectly good, so the message has to send somebody to the
+	// operator's arguments and nowhere else.
+	if !strings.Contains(accepted.Message, "--allow-plugin-volumes") {
+		t.Errorf("message = %q, want it to name the flag", accepted.Message)
+	}
+}
+
+func TestTheRefusalIsAnnouncedOnceAndNotEveryResync(t *testing.T) {
+	// This branch runs on every pass for as long as the claim is wrong. An
+	// event per resync forever is not a report, it is noise that buries the
+	// one that mattered -- the rule network_controller.go states and this
+	// follows.
+	f := newFixture(t)
+	r := groupReconciler(f)
+	r.AllowPluginVolumes = true
+	f.pluginPVC(t, "plugins", corev1.ReadWriteOnce)
+	f.setExtraPlugins(t, "plugins")
+
+	f.reconcileGroup(t, r)
+	f.reconcileGroup(t, r)
+	f.reconcileGroup(t, r)
+
+	rec, ok := r.Recorder.(*nonBlockingRecorder)
+	if !ok {
+		t.Fatalf("recorder is %T, want the test recorder", r.Recorder)
+	}
+	if got := scalingEvents(rec, spawneryv1alpha1.ReasonPluginVolumeUnusable); got != 1 {
+		t.Errorf("recorded %d refusal events across three reconciles, want one on the transition", got)
+	}
+}

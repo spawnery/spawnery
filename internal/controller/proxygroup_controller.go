@@ -168,6 +168,10 @@ type ProxyGroupReconciler struct {
 	// DrainTaintKeys is Options.DrainTaintKeys. Nil means only cordoned nodes
 	// count.
 	DrainTaintKeys []string
+
+	// AllowPluginVolumes is Options.AllowPluginVolumes -- an operational
+	// switch and not a security boundary. See that field.
+	AllowPluginVolumes bool
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
@@ -217,6 +221,29 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if !meta.IsStatusConditionTrue(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonNetworkNotAccepted,
 			networkNotAcceptedMessage(network))
+		return r.refuse(ctx, group)
+	}
+
+	// After the network checks on purpose. A group whose Network is missing has
+	// a bigger problem than its plugin volume, and reporting the smaller one
+	// first would send somebody to their storage while the real cause sits one
+	// condition away.
+	//
+	// refuse() returns before anything creates a pod, so this stops the group
+	// rather than decorating it: every proxy would otherwise sit Pending on a
+	// volume that will not attach, and the group would look like a scheduling
+	// problem rather than a spec one.
+	if reason, message, ok := checkExtraPlugins(
+		ctx, r.Client, group.Namespace, group.Spec.ExtraPlugins, r.AllowPluginVolumes); !ok {
+		// Announced on the transition only, following the rule
+		// network_controller.go states: this runs on every pass for as long as
+		// the claim is wrong, and an event per resync forever is not a report,
+		// it is noise that buries the one that mattered.
+		if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, reason) {
+			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, reason, actionSyncStatus,
+				"%s", message)
+		}
+		setProxyGroupAccepted(group, false, reason, message)
 		return r.refuse(ctx, group)
 	}
 

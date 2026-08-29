@@ -245,6 +245,28 @@ STUB_PID="$(start_stub "$EVENTS" "$WORK/stub.log" "passive" \
 # Measured before it was built, on a throwaway alpine container: a detached
 # `-i` container receives what attach writes. Without that measurement the
 # obvious next move would have been to contort this harness into a TTY.
+# A plugin on the group's own volume, for the phase further down.
+#
+# Placed inside $WORK/agent, which start_agent already mounts read-only at
+# /var/run/spawnery -- so this appears at /var/run/spawnery/plugins, which is
+# internal/podspec.PluginSourceMountPath and the entrypoint's own default. No
+# second mount is needed, and the read-only parent is the shape a real mount
+# has.
+#
+# **This simulates the result and not the mechanism.** In a cluster the plugins
+# are their own PersistentVolumeClaim mounted at that path; here they are a
+# subdirectory of a mount that already exists. What the entrypoint sees is
+# identical, and the entrypoint's half is all this harness can test -- there is
+# no Kubernetes here and there never will be.
+#
+# The jar is deliberately not a jar. Paper complains about a file in plugins/
+# that it cannot load, and that complaint is the proof: it is produced only for
+# a file Paper found where it looks. A jar that loaded would be testing Paper's
+# plugin loader, which is not this project's to test.
+mkdir -p "$WORK/agent/plugins/ProbePlugin"
+printf 'not a jar\n' >"$WORK/agent/plugins/probe-plugin.jar"
+printf 'probe: true\n' >"$WORK/agent/plugins/ProbePlugin/config.yml"
+
 start_agent "$NAME" "$VOLUME" "$WORK/agent" "$WORK/config" "stubop:19443" "$IMAGE" -i
 
 # A dormant agent is silent by design, and silence is also what a hung one
@@ -442,6 +464,52 @@ if ! jq -e 'select(.kind == "event_interest") | select(.wanted == false)' <"$EVE
 	exit 1
 fi
 echo "the agent reports no interest in events while nobody is online"
+
+# The group's plugin volume reaches the plugins directory of the shipped image.
+#
+# Two things are asserted and they are different: that the jar arrived, and
+# that its nested configuration arrived with it. A mechanism that carried jars
+# and not their configuration would leave every plugin at its defaults on an
+# ephemeral group, whose /data is an emptyDir.
+#
+# **Read out of the container rather than grepped from the log**, and that is a
+# correction rather than a preference. The first version of this phase asserted
+# on Paper complaining about a file in plugins/ it could not load -- an
+# assumption about Paper that was never measured, and is wrong: it ignores such
+# a file in silence. Measured on this image on 2026-08-29, the files do arrive
+# and Paper says nothing at all about them. What is observable is the
+# filesystem, so that is what this reads.
+#
+# Waited for rather than read once: the entrypoint copies before Paper starts,
+# but `exec` reaches the container as soon as it is up, which can be before the
+# copy has run.
+#
+# **What this does not prove.** The operator's half -- the claim, the volume it
+# renders, and the refusal of one that is not ReadWriteMany -- is covered by
+# envtest in internal/controller and by nothing that runs the real jar. This
+# harness has no Kubernetes.
+echo "waiting for the plugin volume's contents to reach the shipped image..."
+start=$SECONDS
+until "$CONTAINER" exec "$NAME" sh -c 'cat /data/plugins/probe-plugin.jar' 2>/dev/null | grep -q 'not a jar'; do
+	if [ -z "$("$CONTAINER" ps -q --filter "name=^${NAME}$")" ]; then
+		echo "the container exited before the plugin volume was copied" >&2
+		"$CONTAINER" logs "$NAME" >&2
+		exit 1
+	fi
+	if [ $((SECONDS - start)) -gt "$DEADLINE" ]; then
+		echo "the plugin from the group's volume never reached /data/plugins within ${DEADLINE}s" >&2
+		echo "the entrypoint's copy is covered by go test ./image; this is the only check that runs it inside the shipped image" >&2
+		"$CONTAINER" exec "$NAME" sh -c 'ls -la /var/run/spawnery/plugins /data/plugins 2>&1' >&2 || true
+		exit 1
+	fi
+	sleep 2
+done
+if ! "$CONTAINER" exec "$NAME" sh -c 'cat /data/plugins/ProbePlugin/config.yml' 2>/dev/null | grep -q 'probe: true'; then
+	echo "the jar arrived and its configuration did not, so the copy is not carrying the tree" >&2
+	"$CONTAINER" exec "$NAME" sh -c 'ls -la /data/plugins /data/plugins/* 2>&1' >&2 || true
+	exit 1
+fi
+echo "a plugin and its configuration reached the shipped image from the group's volume"
 
 # Reaching this line at all is the relocation proof: the agent cannot have
 # greeted without SessionLoop, OperatorChannel and BearerCredentials - the only

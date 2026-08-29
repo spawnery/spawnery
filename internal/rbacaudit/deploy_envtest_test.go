@@ -765,6 +765,10 @@ func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
 		"startup-deadline",
 		"metrics-bind-address",
 		"health-probe-bind-address",
+		// Added deliberately on 2026-08-29 with the flag itself. It is off by
+		// default and the chart renders it either way, so the value a cluster
+		// gets is visible in the manifest rather than implied by its absence.
+		"allow-plugin-volumes",
 	}
 	for _, name := range want {
 		if _, ok := args[name]; !ok {

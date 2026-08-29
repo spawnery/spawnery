@@ -273,6 +273,7 @@ func main() {
 		renewAfter              time.Duration
 		hardDeadline            time.Duration
 		drainTaints             taintKeys
+		allowPluginVolumes      bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
@@ -308,6 +309,14 @@ func main() {
 			"from a typo by anything here, so confirm with `kubectl describe node` that the taint "+
 			"is present with one of those two effects; the operator warns only for the well-known "+
 			"keys it recognises.")
+
+	flag.BoolVar(&allowPluginVolumes, "allow-plugin-volumes", false,
+		"allow a group to name a spec.extraPlugins claim, whose contents are copied into "+
+			"every server's plugins directory on start. Off by default -- an installation that "+
+			"has not turned this on refuses a group that names one, so \"this cluster runs no "+
+			"third-party plugins\" is a fact rather than a convention. It is not a security "+
+			"boundary: a PersistentVolumeClaim is a namespaced object in the same trust domain "+
+			"as the group that names it.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -467,6 +476,7 @@ func main() {
 	if err := controller.SetupAll(mgr, controller.Options{
 		Agents:               registry,
 		Events:               bothFanouts{servers: servers, proxies: proxies},
+		AllowPluginVolumes:   allowPluginVolumes,
 		ReportInterval:       reportInterval,
 		Clock:                time.Now,
 		StartupDeadline:      startupDeadline,

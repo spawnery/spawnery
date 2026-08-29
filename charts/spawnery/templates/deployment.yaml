@@ -51,6 +51,7 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - --leader-elect={{ .Values.operator.leaderElect }}
+            - --allow-plugin-volumes={{ .Values.operator.allowPluginVolumes }}
             # .Values.operator.startupDeadline defaults to the production
             # value (see values.yaml); hack/e2e.sh overrides it with
             # --set operator.startupDeadline=20s for its own run, so there is

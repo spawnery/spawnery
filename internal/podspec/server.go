@@ -68,6 +68,23 @@ const (
 	// refused on its own account.
 	PluginsMountPath = DataMountPath + "/plugins"
 
+	// PluginSourceVolumeName and PluginSourceMountPath are where a group's
+	// spec.extraPlugins claim is mounted.
+	//
+	// **Outside DataMountPath, and that is the whole reason for a second
+	// path.** A user mount may not target PluginsMountPath -- the comment
+	// above says why -- and every mount this package renders is read-only, so
+	// the claim cannot simply *be* the plugins directory. It is a source the
+	// entrypoint copies out of, exactly as it copies the agent jar out of the
+	// read-only part of the image.
+	//
+	// A constant known to both sides rather than a path the user chooses,
+	// because the entrypoint has to find it. A chosen path would have to reach
+	// the entrypoint through an environment variable, which is a second place
+	// for the two to disagree.
+	PluginSourceVolumeName = "extra-plugins"
+	PluginSourceMountPath  = "/var/run/spawnery/plugins"
+
 	// SLPHealthBinary is the Server-List-Ping tool baked into the base image.
 	// Kubelet knows no SLP probe type, and a tcpSocket probe on 25565 turns
 	// green before the world is loaded.
@@ -356,6 +373,30 @@ func BuildServerPod(
 		mounts = append(mounts, corev1.VolumeMount{
 			Name:      m.Name,
 			MountPath: m.MountPath,
+			ReadOnly:  true,
+		})
+	}
+
+	// The group's own plugin volume, if it named one. Read-only at the volume
+	// as well as at the mount: one claim may serve several groups, and a group
+	// that could write it could change what every other group loads.
+	//
+	// Mounted outside DataMountPath -- see PluginSourceMountPath. The
+	// entrypoint copies out of it; it is not the plugins directory itself,
+	// which a read-only mount could not be.
+	if group.Spec.ExtraPlugins != nil {
+		volumes = append(volumes, corev1.Volume{
+			Name: PluginSourceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: group.Spec.ExtraPlugins.ClaimName,
+					ReadOnly:  true,
+				},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      PluginSourceVolumeName,
+			MountPath: PluginSourceMountPath,
 			ReadOnly:  true,
 		})
 	}

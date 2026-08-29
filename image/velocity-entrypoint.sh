@@ -16,6 +16,41 @@ VELOCITY_HOME="${VELOCITY_HOME:-/opt/velocity}"
 # what lets a test double stand in for it in image/entrypoint_test.go.
 spawnery-config --flavor velocity
 
+# Plugins from the group's own volume, if it has one.
+#
+# The default is internal/podspec.PluginSourceMountPath. The operator mounts
+# exactly there and passes nothing -- the variable is overridable only so the
+# tests can point it at a temporary directory, which is the same seam PAPER_HOME
+# already is. Creating /var/run/spawnery/plugins needs root, so without it this
+# copy would have no test at all.
+#
+# The whole tree, not just *.jar. A plugin's configuration lives at
+# plugins/<Name>/config.yml, and copying jars without it would leave every
+# plugin at its defaults on an ephemeral group, whose /data is an emptyDir.
+#
+# The source wins on every start. A plugin that rewrote its own config at
+# runtime loses that change here: on an ephemeral group it was going anyway,
+# and this makes the persistent case predictable rather than accumulating.
+#
+# The trailing dot copies the directory's *contents*. Without it the tree lands
+# at plugins/plugins.
+#
+# **This runs before the agent jar below, and the order is the bound.** That
+# copy overwrites whatever landed here, so a spawnery-agent.jar on the volume
+# cannot displace the one the operator shipped -- otherwise somebody pinning an
+# older agent would leave the operator talking to a version it never published,
+# with every object in the cluster saying the right thing.
+PLUGIN_SOURCE="${SPAWNERY_PLUGIN_SOURCE:-/var/run/spawnery/plugins}"
+if [ -d "$PLUGIN_SOURCE" ]; then
+	mkdir -p plugins
+	cp -a "$PLUGIN_SOURCE/." plugins/
+	# The mount is read-only, so the copies arrive read-only too. Paper writes
+	# its plugins' data folders inside this directory, and a plugin that cannot
+	# rewrite its own config file fails in its own way rather than in one the
+	# server reports.
+	chmod -R u+w plugins
+fi
+
 # The agent plugin. It ships in the read-only part of the image and is copied
 # out on every start, unconditionally: the image is the truth, not whatever a
 # previous start left in the volume. The copy predates the jar -- it was written
