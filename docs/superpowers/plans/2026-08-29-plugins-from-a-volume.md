@@ -990,17 +990,49 @@ worth stating because "a new field" reads as "something is about to change".
 
 ## Done when
 
-- [ ] `make test`, `make agent`, `make lint` all pass
-- [ ] `make agent-test CONTAINER=podman` passes
-- [ ] The Go suite is run as `go test -p 1 ./internal/... ./api/...` and every
+- [x] `make test`, `make agent`, `make lint` all pass — 21 Go packages,
+      `golangci-lint` 0 issues, `nix build .#agents` green
+- [x] `make agent-test CONTAINER=podman` passes
+- [x] The Go suite is run as `go test -p 1 ./internal/... ./api/...` and every
       package is `ok`
-- [ ] **The golden pod digests did not move**, and that was verified rather
-      than assumed: this feature renders nothing for a group that names no
-      claim, so no installation is rolled by adopting it
-- [ ] Every bound was mutated on its own and the *named* test that failed was
-      read each time
-- [ ] `make manifests` leaves no diff
-- [ ] Nothing was pushed and no tag was created
+- [x] **The golden pod digests did not move**, verified by name:
+      `TestTheServerPodDigestHasNotMoved` and `TestTheProxyPodDigestHasNotMoved`
+      pass and both constants are untouched
+- [x] Every bound was mutated on its own and the *named* test that failed was
+      read each time — 13 mutations across the six tasks
+- [x] `make manifests` leaves no diff
+- [x] Nothing was pushed and no tag was created
+
+## What execution changed about the plan
+
+**A mutation that came back green found a weak test, twice over.** In Task 1,
+moving the switch below the claim read failed nothing: the reason returned was
+still correct and the read was merely wasted. "Refuses before the claim is even
+read" is a claim about a call that does not happen, and a returned value cannot
+see one — so it now has a reader that counts `Get`s and a test of its own.
+
+**Setting a condition was not enough, and only reading the code showed it.**
+Task 4 found that server creation is gated on `networkUsable`, not on
+`Accepted`. The refusal would have decorated the group and changed nothing it
+does. `mayResize` is now `networkUsable && pluginsOK`, and the envtest asserts
+on servers rather than on a condition for exactly that reason.
+
+**Task 5's assertion was wrong, not the code.** The plan decided to assert on
+Paper complaining about a file in `plugins/` it could not load — an assumption
+about Paper never measured, and false: it ignores such a file in silence.
+Probed directly against the image, the files arrive and Paper says nothing. The
+phase reads the filesystem instead.
+
+**Three guards written for other purposes caught things.** `reloadGroup`
+already existed and the duplicate would not compile. `wantEventfSites` moved
+28 → 30, which that guard exists to make deliberate. And
+`TestTheOperatorDeploymentCarriesProductionFlags` refused a flag it did not
+know about, which is how the chart value got declared in `values.schema.json`
+rather than only in prose.
+
+**The plan's own Task 3 ordering was wrong** — it listed the implementation
+before the tests, which would have made them impossible to see fail. Executed
+tests-first.
 
 ## What this leaves
 
