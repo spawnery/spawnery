@@ -3,6 +3,8 @@ package cloud.spawnery.agent.paper
 import cloud.spawnery.agent.SourceAdapter
 import io.papermc.paper.command.brigadier.CommandSourceStack
 import net.kyori.adventure.text.Component
+import org.bukkit.entity.Player
+import java.util.UUID
 
 /**
  * Paper's half of the two things the command tree may ask of a platform.
@@ -19,4 +21,10 @@ object PaperSource : SourceAdapter<CommandSourceStack> {
     override fun send(source: CommandSourceStack, message: String) {
         source.sender.sendMessage(Component.text(message))
     }
+
+    // The sender and not getPlayerOrThrow(): that throws for a console, and a
+    // console running /cloud events is an ordinary thing to be told about
+    // rather than an exception to catch.
+    override fun playerId(source: CommandSourceStack): UUID? =
+        (source.sender as? Player)?.uniqueId
 }

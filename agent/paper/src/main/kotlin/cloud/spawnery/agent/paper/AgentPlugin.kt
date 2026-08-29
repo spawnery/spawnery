@@ -111,7 +111,11 @@ class AgentPlugin : JavaPlugin(), Listener {
                 // /cloud list and a plugin calling the API read one mirror.
                 lifecycleManager.registerEventHandler(LifecycleEvents.COMMANDS) { event ->
                     event.registrar().register(
-                        cloudCommand(api, PaperSource).build(),
+                        // feedState and not a second one: the command writes
+                        // the opt-out that the feed above reads, and two
+                        // instances would leave `/cloud events off` looking as
+                        // though it worked while the lines kept arriving.
+                        cloudCommand(api, PaperSource, feedState).build(),
                         "Spawnery cloud commands",
                     )
                 }

@@ -3,11 +3,15 @@ package cloud.spawnery.agent
 /**
  * The whole of what the command tree may ask of a platform.
  *
- * Two methods, and the number is the design. Every branch this adapter does
+ * Three methods, and the number is the design. Every branch this adapter does
  * not offer is a branch the tree cannot take, so a decision that depends on
  * which side it is running on becomes impossible to write rather than merely
  * discouraged -- which is the argument [MirrorApi] makes by taking a
  * [cloud.spawnery.agent.api.Self] instead of asking.
+ *
+ * It said two until `/cloud events` needed to know who was typing. Growing it
+ * is meant to cost an argument each time, which is why the number is written
+ * down rather than left to be counted.
  *
  * [send] takes a String and not an Adventure Component, though both platforms
  * speak Adventure. A Component in this signature would put a platform type in
@@ -32,4 +36,23 @@ interface SourceAdapter<S> {
 
     /** Sends one line to whoever ran the command. */
     fun send(source: S, message: String)
+
+    /**
+     * The id of the player behind this source, or null when there is not one.
+     *
+     * It earns its place because `/cloud events off` is a setting *for
+     * somebody*, and the tree has no other way to ask who is typing. It is
+     * deliberately not a way to reach the player: [send] is still the only
+     * thing that talks, so a branch cannot start doing something to a player
+     * merely because it can now name one.
+     *
+     * Null for the console, and that is a real answer rather than a gap. The
+     * console is not a player, has no chat the feed would reach, and already
+     * has every one of these lines in its own log.
+     *
+     * Note that this is *not* the type [FeedAudience] hands back ids for --
+     * they are the same UUIDs, but the audience is a separate interface
+     * because a Paper `CommandSourceStack` cannot be built from a player.
+     */
+    fun playerId(source: S): java.util.UUID?
 }

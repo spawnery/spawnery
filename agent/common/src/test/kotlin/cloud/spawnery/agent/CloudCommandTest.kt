@@ -13,6 +13,7 @@ import cloud.spawnery.agent.pb.NetworkState
 import cloud.spawnery.agent.pb.ServerState
 import com.mojang.brigadier.CommandDispatcher
 import com.mojang.brigadier.exceptions.CommandSyntaxException
+import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -33,7 +34,8 @@ private fun aNetwork(): NetworkState =
 
 class CloudCommandTest {
     private val sent = mutableListOf<String>()
-    private var permissions = setOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE)
+    private var permissions =
+        setOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE, PERMISSION_EVENTS)
     private val asked = mutableListOf<String>()
 
     // An Int as the source, which is the cheapest way to say that the tree
@@ -47,7 +49,18 @@ class CloudCommandTest {
         override fun send(source: Int, message: String) {
             sent += message
         }
+
+        override fun playerId(source: Int): UUID? = sourcePlayer
     }
+
+    /**
+     * Who is typing. Null is the console, which is a real case rather than a
+     * gap -- `/cloud events` is the one branch that has to tell them apart.
+     */
+    private var sourcePlayer: UUID? = UUID.nameUUIDFromBytes("admin".toByteArray())
+
+    /** The opt-out state the tree writes into. */
+    private val feed = FeedState()
 
     // A connector whose wire the test holds: requests land in `requested`,
     // and the test answers them the way the operator would. Nothing here fakes
@@ -69,7 +82,7 @@ class CloudCommandTest {
 
     private fun run(command: String, api: SpawneryApi = api()): Int {
         val dispatcher = CommandDispatcher<Int>()
-        dispatcher.register(cloudCommand(api, adapter))
+        dispatcher.register(cloudCommand(api, adapter, feed))
         return dispatcher.execute(command, 0)
     }
 
@@ -135,8 +148,12 @@ class CloudCommandTest {
         run("cloud retire lobby-a")
         run("cloud start lobby")
         run("cloud stop lobby")
+        run("cloud events off")
 
-        assertEquals(setOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE), asked.toSet())
+        assertEquals(
+            setOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE, PERMISSION_EVENTS),
+            asked.toSet(),
+        )
     }
 
     @Test
@@ -287,6 +304,71 @@ class CloudCommandTest {
         run("cloud start lobby")
 
         assertEquals("lobby", requested.single().boost.group)
+    }
+
+    @Test
+    fun `events off tells the player it lasts for this session only`() {
+        // The sentence section 5.5 asks for. A setting that quietly comes back
+        // after a rejoin is a setting people report as a bug.
+        run("cloud events off")
+
+        val line = sent.single()
+        assertTrue(line.contains("off"), line)
+        assertTrue(
+            line.contains("rejoin") || line.contains("session"),
+            "it did not say the setting is for this session: $line",
+        )
+    }
+
+    @Test
+    fun `events off then on leaves the player wanting them again`() {
+        run("cloud events off")
+        assertFalse(feed.wants(sourcePlayer!!), "off did not take effect")
+
+        run("cloud events on")
+        assertTrue(feed.wants(sourcePlayer!!), "on did not undo off")
+    }
+
+    @Test
+    fun `one player's opt-out is not another's`() {
+        // The state is keyed by player, and a single boolean would have passed
+        // every other test here while silencing the whole server.
+        val other = UUID.nameUUIDFromBytes("someone-else".toByteArray())
+        run("cloud events off")
+
+        assertFalse(feed.wants(sourcePlayer!!))
+        assertTrue(feed.wants(other), "one player's opt-out silenced another")
+    }
+
+    @Test
+    fun `the console is told it cannot opt out rather than silently failing`() {
+        // playerId is null for a console. Without this the command would
+        // appear to work and change nothing, which is the worst of the three
+        // possible behaviours.
+        sourcePlayer = null
+
+        run("cloud events off")
+
+        assertTrue(sent.single().contains("console"), sent.toString())
+    }
+
+    @Test
+    fun `events is invisible without its own permission`() {
+        permissions = setOf(PERMISSION_READ)
+
+        assertFailsWith<CommandSyntaxException> { run("cloud events off") }
+    }
+
+    @Test
+    fun `holding only events still opens the root`() {
+        // A root that demanded any of the other three would hide the whole
+        // tree from somebody granted only this one, and hide it in the worst
+        // way: the command would look as though it does not exist.
+        permissions = setOf(PERMISSION_EVENTS)
+
+        run("cloud events off")
+
+        assertFalse(feed.wants(sourcePlayer!!))
     }
 
     @Test

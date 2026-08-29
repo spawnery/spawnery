@@ -2,7 +2,9 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.SourceAdapter
 import com.velocitypowered.api.command.CommandSource
+import com.velocitypowered.api.proxy.Player
 import net.kyori.adventure.text.Component
+import java.util.UUID
 
 /**
  * Velocity's half. See [cloud.spawnery.agent.paper.PaperSource]'s counterpart
@@ -17,4 +19,9 @@ object VelocitySource : SourceAdapter<CommandSource> {
     override fun send(source: CommandSource, message: String) {
         source.sendMessage(Component.text(message))
     }
+
+    // On this platform a Player *is* a CommandSource, which is the asymmetry
+    // FeedAudience exists for -- see its comment.
+    override fun playerId(source: CommandSource): UUID? =
+        (source as? Player)?.uniqueId
 }

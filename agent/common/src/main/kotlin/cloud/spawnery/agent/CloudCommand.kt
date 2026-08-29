@@ -33,6 +33,10 @@ const val PERMISSION_RETIRE: String = "spawnery.cloud.retire"
  */
 const val PERMISSION_SCALE: String = "spawnery.cloud.scale"
 
+// PERMISSION_EVENTS lives in Feed.kt, beside the thing that reads it: the feed
+// asks for it once a tick to decide whether this agent wants events at all,
+// and a permission split from its only reader is one that drifts.
+
 /**
  * The `/cloud` command, written once for both platforms.
  *
@@ -54,7 +58,11 @@ const val PERMISSION_SCALE: String = "spawnery.cloud.scale"
  * makes that safe, and it is the reason [SourceAdapter] has exactly those two
  * methods and no way to ask for anything a main thread would have to own.
  */
-fun <S> cloudCommand(api: SpawneryApi, adapter: SourceAdapter<S>): LiteralArgumentBuilder<S> =
+fun <S> cloudCommand(
+    api: SpawneryApi,
+    adapter: SourceAdapter<S>,
+    feed: FeedState,
+): LiteralArgumentBuilder<S> =
     LiteralArgumentBuilder.literal<S>("cloud")
         // On the root as well as on each branch: without it, `/cloud` with no
         // arguments would be visible to everybody and answer with usage for
@@ -69,7 +77,8 @@ fun <S> cloudCommand(api: SpawneryApi, adapter: SourceAdapter<S>): LiteralArgume
         .requires {
             adapter.hasPermission(it, PERMISSION_READ) ||
                 adapter.hasPermission(it, PERMISSION_RETIRE) ||
-                adapter.hasPermission(it, PERMISSION_SCALE)
+                adapter.hasPermission(it, PERMISSION_SCALE) ||
+                adapter.hasPermission(it, PERMISSION_EVENTS)
         }
         .then(
             LiteralArgumentBuilder.literal<S>("list")
@@ -234,6 +243,59 @@ fun <S> cloudCommand(api: SpawneryApi, adapter: SourceAdapter<S>): LiteralArgume
                         },
                 ),
         )
+
+        .then(
+            LiteralArgumentBuilder.literal<S>("events")
+                .requires { adapter.hasPermission(it, PERMISSION_EVENTS) }
+                // Two literals rather than one argument, so tab-completion
+                // offers `on` and `off` and a typo is an unknown command
+                // instead of a silent no-op.
+                .then(
+                    LiteralArgumentBuilder.literal<S>("on")
+                        .executes { ctx -> setFeed(adapter, feed, ctx.source, on = true) },
+                )
+                .then(
+                    LiteralArgumentBuilder.literal<S>("off")
+                        .executes { ctx -> setFeed(adapter, feed, ctx.source, on = false) },
+                ),
+        )
+
+/**
+ * Turns the feed on or off for whoever typed it.
+ *
+ * The `off` line says the setting lasts for the session, and section 5.5 asks
+ * for that sentence rather than leaving it out. Paper could persist this in a
+ * player's PersistentDataContainer and Velocity has no equivalent, so symmetry
+ * won -- and a setting that quietly comes back after a rejoin is a setting
+ * people report as a bug.
+ */
+private fun <S> setFeed(adapter: SourceAdapter<S>, feed: FeedState, source: S, on: Boolean): Int {
+    val player = adapter.playerId(source)
+    if (player == null) {
+        // Said rather than silently doing nothing. A console whose command
+        // appeared to work and changed nothing is the worst of the three
+        // possible behaviours here.
+        adapter.send(
+            source,
+            "the console cannot turn the cloud feed off: it is not a player, and these " +
+                "lines are already in its log",
+        )
+        return 0
+    }
+    if (on) {
+        feed.optIn(player)
+        adapter.send(source, "The cloud feed is on for you.")
+    } else {
+        feed.optOut(player)
+        adapter.send(
+            source,
+            "The cloud feed is off for you. It comes back when you rejoin -- this setting " +
+                "lives for the session, on purpose: the proxy has nowhere to keep it, and one " +
+                "platform remembering while the other forgets would be worse than neither.",
+        )
+    }
+    return 1
+}
 
 private fun <S> group(ctx: com.mojang.brigadier.context.CommandContext<S>): String =
     StringArgumentType.getString(ctx, "group")
