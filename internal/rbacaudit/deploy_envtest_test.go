@@ -168,6 +168,12 @@ var renderedObjectKeys = []string{
 	"ClusterRoleBinding/spawnery-operator",
 	"CustomResourceDefinition/networks.spawnery.cloud",
 	"CustomResourceDefinition/proxygroups.spawnery.cloud",
+	// A CRD, and what audits it is the same thing that audits the other four:
+	// the operator's own grants on the resource are rows in required.go, and
+	// TestTheAuthorizerActuallyDenies drives them against a real authorizer.
+	// Nothing extra is needed for the schema itself -- api/v1alpha1's own
+	// envtest installs it and round-trips an object through it.
+	"CustomResourceDefinition/scaleboosts.spawnery.cloud",
 	"CustomResourceDefinition/servergroups.spawnery.cloud",
 	"CustomResourceDefinition/servers.spawnery.cloud",
 	"Deployment/spawnery-operator",

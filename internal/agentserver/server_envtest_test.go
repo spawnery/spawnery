@@ -154,6 +154,10 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 	// The picture both fan-outs send, built once, exactly as the operator
 	// binary builds it.
 	state := netstate.Source{Reader: c, Agents: registry}
+	// The real writer against the envtest API server, not a stub: a retire
+	// that patches nothing would pass every assertion below about the answer
+	// while leaving spec.retire false, and the answer is not the point.
+	writer := agentserver.KubeWriter{Client: c, Clock: now}
 	fleet := proxyreg.New(proxyreg.Options{Reader: c, OutboxSize: proxyOutboxSize, State: state})
 	servers := serverreg.New(serverreg.Options{State: state})
 	var proxies agentserver.ProxyFleet = fleet
@@ -179,6 +183,7 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 		Proxies:        proxies,
 		Servers:        servers,
 		State:          state,
+		Writer:         writer,
 		ReportInterval: 5 * time.Second,
 		RenewAfter:     renewAfter,
 		HardDeadline:   hardDeadline,

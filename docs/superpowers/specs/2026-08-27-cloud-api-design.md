@@ -152,7 +152,13 @@ public interface SpawneryApi {
 }
 
 public interface Lifecycle {
-    CompletionStage<ScaleResult> scale(String group, int by);
+    /**
+     * Adds capacity to a group for a while. See §4.4: this creates a boost
+     * object and does not touch the group's own spec.
+     */
+    CompletionStage<BoostResult> boost(String group, int replicas, Duration forHowLong);
+
+    /** Asks one server to empty out. Servers only -- see below. */
     CompletionStage<RetireResult> retire(String server);
 }
 ```
@@ -160,15 +166,30 @@ public interface Lifecycle {
 Every type in those signatures is `java.*` or the module's own. That is the
 whole constraint.
 
-**`scale` moves a different field per group kind**, and that is deliberate:
-`scaling.minReplicas` on an ephemeral `ServerGroup`, `spec.replicas` on a
-persistent one and on a `ProxyGroup`. The caller names a group and a delta; the
-operator knows which field that group's floor lives in, and `ScaleResult`
-reports the field it moved by name so the caller never has to encode the
-mapping. A caller that had to branch on group kind would be doing the operator's
-job with worse information.
+**`scale` writes no group's spec at all**, and the reason is measured rather
+than chosen. Two things came out of reading the cluster this project runs on:
 
-**`retire` is `Server` objects only.** A proxy has no per-instance retirement:
+The operator's ClusterRole grants `get, list, watch` on `servergroups` and
+write access only to `servergroups/status` and `/finalizers`. Scaling by
+editing `spec.scaling.minReplicas` would need a new grant on the *declared*
+object — write access to what a person wrote down — which is a large thing to
+hand an operator for a convenience.
+
+And it would not work anyway. The `ServerGroup` on this project's own cluster
+lives in a Flux-managed file, so a `minReplicas` the operator wrote would be
+reverted at the next reconciliation. An admin would type a command, watch the
+count rise, and find it back where the file has it a few minutes later — which
+is worse than a command that does not exist.
+
+An annotation is no escape: writing one still needs `patch` on `servergroups`,
+which is the same grant. **A separate object is the only shape where the
+operator writes nothing a person declared**, and §4.4 is what it looks like.
+
+**`retire` is `Server` objects only**, and it works with what the operator
+already has: its ClusterRole carries `create, delete, get, list, patch,
+update, watch` on `servers`, and a `Server` is an object the operator made
+rather than one a person declared, so nothing in a GitOps repository owns it.
+That is the whole difference between this verb and the one above. A proxy has no per-instance retirement:
 `ProxyGroup` withdraws a pod through 4c-2's rollout, which chooses the pod
 itself, and there is no field a person sets on one proxy. `retire` on a proxy
 name fails with `NotRetirable` rather than being quietly reinterpreted as
@@ -338,6 +359,52 @@ a requirement: **the chat feed shows the events `kubectl get events` shows.**
 Two independent derivations of the same fact eventually disagree, and the one
 in the chat is the one nobody can audit.
 
+## 4.4 Extra capacity, and where it lives
+
+`/cloud start lobby 2` creates a **`ScaleBoost`**: a namespaced object owned by
+the group it names, holding a replica count and an expiry.
+
+```yaml
+apiVersion: spawnery.cloud/v1alpha1
+kind: ScaleBoost
+metadata:
+  generateName: lobby-
+  namespace: minecraft
+  ownerReferences: [{kind: ServerGroup, name: lobby, ...}]
+spec:
+  groupRef: {name: lobby}
+  replicas: 2
+  expiresAt: "2026-08-28T20:00:00Z"
+```
+
+**The scaler adds live boosts to the group's own floor and to nothing else.**
+`maxReplicas` still binds — a ceiling is an instruction, which is what 4a
+established and what a command typed in a chat window must not be able to
+lift. A boost raises what the group tries for; it never raises what it may
+reach.
+
+**It expires, and by default it expires soon.** An hour unless the command says
+otherwise. What `/cloud start` usually means is an event, a rush, a Saturday
+night — and the failure mode of a permanent one is well known: the boost from
+last weekend is still there in March and nobody remembers why the lobby runs
+four servers. A need that outlives an evening belongs in the file GitOps owns,
+where a person reviews it.
+
+**Nothing about it moves `metadata.generation`,** because it is a different
+object. Two things follow, and the second was not designed for:
+
+The group's servers do not become stale, so no boost rolls a fleet. That is
+true whatever the staleness rule is, but it is worth stating beside 7a's work
+rather than inferred from it.
+
+And the group's failure streak is untouched. `ofGeneration` filters
+`CountFailures`'s input by `group.Generation`, which a boost does not move —
+so `/cloud start lobby` cannot clear a `CrashLoopBackoff`. `docs/known-issues.md`
+recorded that hazard as this milestone's to solve; the GitOps constraint solved
+it by forcing a design that never edits the group. The underlying entry stays
+open, because a *person* editing `minReplicas` still clears the streak; what
+goes is the claim that a command would.
+
 ## 5. `/cloud` and the feed
 
 ### 5.1 One command tree
@@ -366,8 +433,8 @@ tree stays one implementation; the cost is an abstraction, not a fork.
 | Command | Effect | Permission |
 |---|---|---|
 | `/cloud list`, `/cloud info <x>` | Read the local mirror | `spawnery.cloud.read` |
-| `/cloud start <group> [n]` | Raise the group's floor by `n` | `spawnery.cloud.scale` |
-| `/cloud stop <group> [n]` | Lower it by `n` | `spawnery.cloud.scale` |
+| `/cloud start <group> [n] [for <duration>]` | Create a `ScaleBoost` (§4.4) | `spawnery.cloud.scale` |
+| `/cloud stop <group>` | Delete that group's boosts | `spawnery.cloud.scale` |
 | `/cloud retire <server>` | `spec.retire = true` on one `Server` | `spawnery.cloud.retire` |
 | `/cloud send <player> <target>` | `connect` | `spawnery.cloud.send` |
 | `/cloud events on\|off` | The feed, for the caller | `spawnery.cloud.events` |
@@ -384,13 +451,16 @@ finish in their own time.
 ### 5.3 `/cloud start` says what it did
 
 ```
-lobby: scaling.minReplicas 1 -> 3
-This is the new floor. /cloud stop lobby 2 lowers it again.
+lobby: +2 servers for 1h (until 20:00 UTC)
+This is a boost, not a spec change. It expires on its own; /cloud stop lobby
+ends it early. For a lasting change, edit the ServerGroup.
 ```
 
-The field is named rather than implied, because it is not the same field for
-every group kind (§3.2) and because the next thing an admin does is often to
-look at the object.
+Three sentences and each earns its place. The first says what was created, the
+second that it is temporary and how to end it, and the third points at the
+thing a person should edit when the need is not temporary — because the
+command deliberately cannot do that, and an admin who does not know why will
+type it again next week.
 
 A command that permanently changes desired state while looking like a one-shot
 nudge is the class of surprise this repository avoids everywhere else. The
@@ -456,8 +526,17 @@ The load-bearing test is not about the API at all:
   `SourceAdapter` — the pattern `FakeOperator` and `FakeRole` already set.
 - The feed's coalescing is a pure function over a list of events and a window,
   tested as one.
-- An E2E scenario drives `/cloud start` and asserts the `ServerGroup`'s
-  `minReplicas` moved and **no server retired**, which is 7a and 7c meeting.
+- An E2E scenario drives `/cloud start` and asserts a `ScaleBoost` exists, the
+  group's `status.boostedReplicas` rose, and **no server retired** — which is
+  7a and 7c meeting.
+
+  *This bullet asked for `minReplicas` to have moved until 2026-08-29.* It was
+  written before §4.4 existed, and §4.4 is the reason it cannot: `/cloud start`
+  writes no group spec at all, the operator holds no write on `servergroups`,
+  and a `minReplicas` it wrote would be reverted by the next Flux
+  reconciliation. Corrected rather than deleted — a spec that quietly loses a
+  requirement is one nobody can review against. 7c-1 covers the boost and the
+  status field; 7c-2 covers the command.
 
 ## 7. Facts this design asserts about the code already here
 
@@ -492,8 +571,11 @@ Each was measured on 2026-08-27 and each is a thing a plan may rely on:
 
 ## 8. What this milestone does not do
 
-- **No new CRD.** Everything the API mutates is a field that already exists on
-  an object that already exists.
+- **One new CRD, and it was not the plan.** §8 of this document said "no new
+  CRD: everything the API mutates is a field that already exists". That held
+  until the operator's own RBAC and this project's GitOps repository were read
+  — see §3.2. `ScaleBoost` exists because the alternative was write access to
+  what a person declared, for an effect that a Flux reconciliation would undo.
 - **No cross-namespace anything.** A pod's namespace is its horizon, in every
   direction, for every verb.
 - **No persistence of a player's preferences.** §5.5.
@@ -507,6 +589,28 @@ Each was measured on 2026-08-27 and each is a thing a plan may rely on:
   agent that was disconnected missed what happened while it was gone, and the
   mirror it re-syncs on reconnect is the correction. A plugin that needs a
   ledger should watch the objects.
+
+## 9.2 How 7c is cut
+
+Three plans, and the split follows what each needs rather than what each is
+about.
+
+| | | Needs |
+|---|---|---|
+| **7c-1** | `ScaleBoost`: the CRD, the scaler reading it, the sweep of expired ones | a CRD and a chart change |
+| **7c-2** | `/cloud` — one Brigadier tree over both platforms, and the permissions | 7c-1, for `start`/`stop` |
+| **7c-3** | `CloudEvent`, the interest state, the coalescing, and the chat feed | 7c-2, for `/cloud events` |
+
+7c-1 goes first and alone because it is the only one that touches the sizing
+rule, and 7a's lesson is that a load-bearing rule and a feature in one
+milestone give a regression two possible causes. It also ships something
+useful on its own: `kubectl create` of a boost works without any command
+existing.
+
+Both platforms speak `com.mojang.brigadier` — measured 2026-08-28: Paper ships
+`brigadier-1.3.10.jar` with 54 classes plus 45 of its own wrapper, and the
+pinned Velocity jar carries 97 — so 7c-2's tree is one implementation over a
+generic source type.
 
 ## 9.1 How 7b is cut
 

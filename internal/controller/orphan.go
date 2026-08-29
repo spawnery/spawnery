@@ -48,6 +48,10 @@ type OrphanReconciler struct {
 	Agents *agent.Registry
 	// Interval is how often Start runs the sweep. Zero means the default.
 	Interval time.Duration
+	// Clock is the time source, for the boost expiry. Injectable for the same
+	// reason every other clock in this package is: a test asserts a boundary
+	// rather than racing one.
+	Clock func() time.Time
 }
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list;delete
@@ -158,6 +162,42 @@ func (r *OrphanReconciler) Sweep(ctx context.Context) error {
 		}
 	}
 
+	return r.sweepExpiredBoosts(ctx, logger)
+}
+
+// sweepExpiredBoosts removes ScaleBoost objects whose time has passed.
+//
+// It lives in this sweep rather than in a reconciler of its own because this
+// sweep already exists to remove objects that should no longer be there, and
+// an expired boost is exactly that -- a second Runnable would be another timer
+// for one List and one Delete.
+//
+// **It is not what makes a boost stop counting.** liveBoost reads the clock,
+// so the effect ends at the time the object states and this only tidies the
+// object away afterwards. Without that split the resolution of every expiry
+// would be the sweep interval, and a boost would go on inflating a group after
+// its own `kubectl get` said it was over.
+//
+// Cluster-wide rather than per namespace, like every other List here: the
+// sweep answers to no group and has no namespace of its own to scope to.
+func (r *OrphanReconciler) sweepExpiredBoosts(ctx context.Context, logger logr.Logger) error {
+	boosts := &spawneryv1alpha1.ScaleBoostList{}
+	if err := r.List(ctx, boosts); err != nil {
+		return err
+	}
+
+	now := r.Clock()
+	for i := range boosts.Items {
+		b := &boosts.Items[i]
+		if b.Spec.ExpiresAt == nil || b.Spec.ExpiresAt.After(now) {
+			continue
+		}
+		logger.V(1).Info("removing an expired scale boost",
+			"boost", b.Name, "namespace", b.Namespace, "group", b.Spec.GroupRef.Name)
+		if err := r.Delete(ctx, b); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+	}
 	return nil
 }
 

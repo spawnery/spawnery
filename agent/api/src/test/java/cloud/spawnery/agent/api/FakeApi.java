@@ -17,6 +17,7 @@ limitations under the License.
 package cloud.spawnery.agent.api;
 
 import java.util.List;
+import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -43,5 +44,27 @@ final class FakeApi implements SpawneryApi {
     @Override
     public CompletionStage<ConnectResult> connect(UUID player, Target to) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
+    public CompletionStage<Void> retire(String server) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
+    public CompletionStage<BoostResult> boost(String group, int replicas, Duration forHowLong) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
+    public CompletionStage<Integer> stopBoosts(String group) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    // A bus nobody publishes to, which is what every test here wants: the
+    // subscription is real and the handle closes, and no event ever arrives.
+    @Override
+    public EventBus events() {
+        return listener -> () -> { };
     }
 }

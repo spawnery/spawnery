@@ -714,9 +714,12 @@ func answerCloudRequest(of func(map[string]any) map[string]any, events recorderL
 
 // networkState is the mirror both agent kinds are sent on connect.
 //
-// One group and one server, which is enough for the only thing the phases can
-// assert today: that a shipped jar receives a message it does not understand
-// and keeps its session. Neither agent consumes this yet.
+// One group and one server. That was once enough for the only thing the phases
+// could assert -- that a shipped jar receives a message it does not understand
+// and keeps its session -- and both agents consume it now: it is what fills
+// NetworkMirror, and hack/agent-test.sh drives `cloud list` against it from the
+// server's console. The group's name is spelled in that script as
+// SYNCED_GROUP, which checks it still matches this file.
 func networkState() *agentpb.NetworkState {
 	return &agentpb.NetworkState{
 		Groups: []*agentpb.GroupState{{
@@ -991,6 +994,12 @@ func (s *stub) observeServer(of func(map[string]any) map[string]any, message *ag
 		s.events.record("ready", of(map[string]any{}))
 	case *agentpb.ServerMessage_PlayerCount:
 		s.playerCount(of, body.PlayerCount)
+	case *agentpb.ServerMessage_EventInterest:
+		// Recorded so a phase can assert the agent reports it at all. The
+		// value matters as much as the fact: an agent with nobody online must
+		// say "no", or the operator would broadcast to every pod in the
+		// namespace for nobody's benefit.
+		s.events.record("event_interest", of(map[string]any{"wanted": body.EventInterest.GetWanted()}))
 	case *agentpb.ServerMessage_CloudRequest:
 		return &agentpb.OperatorToServer{
 			Message: &agentpb.OperatorToServer_CloudResponse{
@@ -1067,6 +1076,8 @@ func (s *stub) observeProxy(of func(map[string]any) map[string]any, message *age
 		s.events.record("player_roster", of(map[string]any{"players": players}))
 	case *agentpb.ProxyMessage_Heartbeat:
 		s.events.record("heartbeat", of(map[string]any{}))
+	case *agentpb.ProxyMessage_EventInterest:
+		s.events.record("event_interest", of(map[string]any{"wanted": body.EventInterest.GetWanted()}))
 	case *agentpb.ProxyMessage_CloudRequest:
 		return &agentpb.OperatorToProxy{
 			Message: &agentpb.OperatorToProxy_CloudResponse{

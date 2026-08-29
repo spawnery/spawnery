@@ -3,6 +3,7 @@ package cloud.spawnery.agent
 import java.util.concurrent.CompletableFuture
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
@@ -106,5 +107,30 @@ class RequestsTest {
 
         assertEquals(2, sent.distinct().size)
         assertEquals("first", first.get())
+    }
+
+    @Test
+    fun `a send that throws fails the future rather than the caller`() {
+        // The agent between sessions: the platform seam has no loop to hand
+        // the request to and throws. SpawneryApi documents that the stage
+        // carries such a failure, so it must not come out of the call.
+        val requests = Requests(timeoutMillis = 1_000, clock = { 0L })
+
+        val future = requests.start<String> { throw IllegalStateException("no session") }
+
+        assertTrue(future.isCompletedExceptionally, "the throw escaped instead of failing the future")
+        val failure = assertFailsWith<java.util.concurrent.ExecutionException> { future.get() }
+        assertEquals("no session", failure.cause?.message)
+    }
+
+    @Test
+    fun `a failed send leaves nothing pending to expire later`() {
+        // Otherwise the id would sit in the map until its deadline and then be
+        // failed a second time -- harmless on a completed future, but it would
+        // mean a permanently dormant agent accumulates one entry per call.
+        val requests = Requests(timeoutMillis = 1_000, clock = { 0L })
+        requests.start<String> { throw IllegalStateException("no session") }
+
+        assertEquals(0, requests.outstanding(), "a failed send left an entry behind")
     }
 }

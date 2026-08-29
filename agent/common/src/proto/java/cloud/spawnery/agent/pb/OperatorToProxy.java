@@ -64,6 +64,7 @@ private static final long serialVersionUID = 0L;
     NETWORK_STATE(8),
     CLOUD_RESPONSE(9),
     MOVE_PLAYER(10),
+    CLOUD_EVENT(11),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -91,6 +92,7 @@ private static final long serialVersionUID = 0L;
         case 8: return NETWORK_STATE;
         case 9: return CLOUD_RESPONSE;
         case 10: return MOVE_PLAYER;
+        case 11: return CLOUD_EVENT;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -416,6 +418,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
   }
 
+  public static final int CLOUD_EVENT_FIELD_NUMBER = 11;
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+   * @return Whether the cloudEvent field is set.
+   */
+  @java.lang.Override
+  public boolean hasCloudEvent() {
+    return messageCase_ == 11;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+   * @return The cloudEvent.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.CloudEvent getCloudEvent() {
+    if (messageCase_ == 11) {
+       return (cloud.spawnery.agent.pb.CloudEvent) message_;
+    }
+    return cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.CloudEventOrBuilder getCloudEventOrBuilder() {
+    if (messageCase_ == 11) {
+       return (cloud.spawnery.agent.pb.CloudEvent) message_;
+    }
+    return cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -460,6 +493,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 10) {
       output.writeMessage(10, (cloud.spawnery.agent.pb.MovePlayer) message_);
     }
+    if (messageCase_ == 11) {
+      output.writeMessage(11, (cloud.spawnery.agent.pb.CloudEvent) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -503,6 +539,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 10) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(10, (cloud.spawnery.agent.pb.MovePlayer) message_);
+    }
+    if (messageCase_ == 11) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(11, (cloud.spawnery.agent.pb.CloudEvent) message_);
     }
     return size;
   }
@@ -570,6 +610,10 @@ private static final long serialVersionUID = 0L;
         if (!getMovePlayer()
             .equals(other.getMovePlayer())) return false;
         break;
+      case 11:
+        if (!getCloudEvent()
+            .equals(other.getCloudEvent())) return false;
+        break;
       case 0:
       default:
     }
@@ -624,6 +668,10 @@ private static final long serialVersionUID = 0L;
       case 10:
         hash = (37 * hash) + MOVE_PLAYER_FIELD_NUMBER;
         hash = (53 * hash) + getMovePlayer().hashCode();
+        break;
+      case 11:
+        hash = (37 * hash) + CLOUD_EVENT_FIELD_NUMBER;
+        hash = (53 * hash) + getCloudEvent().hashCode();
         break;
       case 0:
       default:
@@ -789,6 +837,9 @@ private static final long serialVersionUID = 0L;
       if (movePlayerBuilder_ != null) {
         movePlayerBuilder_.clear();
       }
+      if (cloudEventBuilder_ != null) {
+        cloudEventBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -870,6 +921,10 @@ private static final long serialVersionUID = 0L;
           movePlayerBuilder_ != null) {
         result.message_ = movePlayerBuilder_.build();
       }
+      if (messageCase_ == 11 &&
+          cloudEventBuilder_ != null) {
+        result.message_ = cloudEventBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -923,6 +978,10 @@ private static final long serialVersionUID = 0L;
         }
         case MOVE_PLAYER: {
           mergeMovePlayer(other.getMovePlayer());
+          break;
+        }
+        case CLOUD_EVENT: {
+          mergeCloudEvent(other.getCloudEvent());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -1025,6 +1084,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 10;
               break;
             } // case 82
+            case 90: {
+              input.readMessage(
+                  internalGetCloudEventFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 11;
+              break;
+            } // case 90
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2475,6 +2541,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 10;
       onChanged();
       return movePlayerBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.CloudEvent, cloud.spawnery.agent.pb.CloudEvent.Builder, cloud.spawnery.agent.pb.CloudEventOrBuilder> cloudEventBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     * @return Whether the cloudEvent field is set.
+     */
+    @java.lang.Override
+    public boolean hasCloudEvent() {
+      return messageCase_ == 11;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     * @return The cloudEvent.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.CloudEvent getCloudEvent() {
+      if (cloudEventBuilder_ == null) {
+        if (messageCase_ == 11) {
+          return (cloud.spawnery.agent.pb.CloudEvent) message_;
+        }
+        return cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance();
+      } else {
+        if (messageCase_ == 11) {
+          return cloudEventBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     */
+    public Builder setCloudEvent(cloud.spawnery.agent.pb.CloudEvent value) {
+      if (cloudEventBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        cloudEventBuilder_.setMessage(value);
+      }
+      messageCase_ = 11;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     */
+    public Builder setCloudEvent(
+        cloud.spawnery.agent.pb.CloudEvent.Builder builderForValue) {
+      if (cloudEventBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        cloudEventBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 11;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     */
+    public Builder mergeCloudEvent(cloud.spawnery.agent.pb.CloudEvent value) {
+      if (cloudEventBuilder_ == null) {
+        if (messageCase_ == 11 &&
+            message_ != cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.CloudEvent.newBuilder((cloud.spawnery.agent.pb.CloudEvent) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 11) {
+          cloudEventBuilder_.mergeFrom(value);
+        } else {
+          cloudEventBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 11;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     */
+    public Builder clearCloudEvent() {
+      if (cloudEventBuilder_ == null) {
+        if (messageCase_ == 11) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 11) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        cloudEventBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     */
+    public cloud.spawnery.agent.pb.CloudEvent.Builder getCloudEventBuilder() {
+      return internalGetCloudEventFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.CloudEventOrBuilder getCloudEventOrBuilder() {
+      if ((messageCase_ == 11) && (cloudEventBuilder_ != null)) {
+        return cloudEventBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 11) {
+          return (cloud.spawnery.agent.pb.CloudEvent) message_;
+        }
+        return cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudEvent cloud_event = 11;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.CloudEvent, cloud.spawnery.agent.pb.CloudEvent.Builder, cloud.spawnery.agent.pb.CloudEventOrBuilder> 
+        internalGetCloudEventFieldBuilder() {
+      if (cloudEventBuilder_ == null) {
+        if (!(messageCase_ == 11)) {
+          message_ = cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance();
+        }
+        cloudEventBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.CloudEvent, cloud.spawnery.agent.pb.CloudEvent.Builder, cloud.spawnery.agent.pb.CloudEventOrBuilder>(
+                (cloud.spawnery.agent.pb.CloudEvent) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 11;
+      onChanged();
+      return cloudEventBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.OperatorToProxy)

@@ -61,6 +61,7 @@ private static final long serialVersionUID = 0L;
     BACKEND_PLAYERS(5),
     PLAYER_ROSTER(6),
     CLOUD_REQUEST(7),
+    EVENT_INTEREST(8),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -85,6 +86,7 @@ private static final long serialVersionUID = 0L;
         case 5: return BACKEND_PLAYERS;
         case 6: return PLAYER_ROSTER;
         case 7: return CLOUD_REQUEST;
+        case 8: return EVENT_INTEREST;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -317,6 +319,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.CloudRequest.getDefaultInstance();
   }
 
+  public static final int EVENT_INTEREST_FIELD_NUMBER = 8;
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+   * @return Whether the eventInterest field is set.
+   */
+  @java.lang.Override
+  public boolean hasEventInterest() {
+    return messageCase_ == 8;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+   * @return The eventInterest.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.EventInterest getEventInterest() {
+    if (messageCase_ == 8) {
+       return (cloud.spawnery.agent.pb.EventInterest) message_;
+    }
+    return cloud.spawnery.agent.pb.EventInterest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.EventInterestOrBuilder getEventInterestOrBuilder() {
+    if (messageCase_ == 8) {
+       return (cloud.spawnery.agent.pb.EventInterest) message_;
+    }
+    return cloud.spawnery.agent.pb.EventInterest.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -352,6 +385,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 7) {
       output.writeMessage(7, (cloud.spawnery.agent.pb.CloudRequest) message_);
     }
+    if (messageCase_ == 8) {
+      output.writeMessage(8, (cloud.spawnery.agent.pb.EventInterest) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -383,6 +419,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 7) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(7, (cloud.spawnery.agent.pb.CloudRequest) message_);
+    }
+    if (messageCase_ == 8) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(8, (cloud.spawnery.agent.pb.EventInterest) message_);
     }
     return size;
   }
@@ -438,6 +478,10 @@ private static final long serialVersionUID = 0L;
         if (!getCloudRequest()
             .equals(other.getCloudRequest())) return false;
         break;
+      case 8:
+        if (!getEventInterest()
+            .equals(other.getEventInterest())) return false;
+        break;
       case 0:
       default:
     }
@@ -480,6 +524,10 @@ private static final long serialVersionUID = 0L;
       case 7:
         hash = (37 * hash) + CLOUD_REQUEST_FIELD_NUMBER;
         hash = (53 * hash) + getCloudRequest().hashCode();
+        break;
+      case 8:
+        hash = (37 * hash) + EVENT_INTEREST_FIELD_NUMBER;
+        hash = (53 * hash) + getEventInterest().hashCode();
         break;
       case 0:
       default:
@@ -636,6 +684,9 @@ private static final long serialVersionUID = 0L;
       if (cloudRequestBuilder_ != null) {
         cloudRequestBuilder_.clear();
       }
+      if (eventInterestBuilder_ != null) {
+        eventInterestBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -705,6 +756,10 @@ private static final long serialVersionUID = 0L;
           cloudRequestBuilder_ != null) {
         result.message_ = cloudRequestBuilder_.build();
       }
+      if (messageCase_ == 8 &&
+          eventInterestBuilder_ != null) {
+        result.message_ = eventInterestBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -746,6 +801,10 @@ private static final long serialVersionUID = 0L;
         }
         case CLOUD_REQUEST: {
           mergeCloudRequest(other.getCloudRequest());
+          break;
+        }
+        case EVENT_INTEREST: {
+          mergeEventInterest(other.getEventInterest());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -827,6 +886,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 7;
               break;
             } // case 58
+            case 66: {
+              input.readMessage(
+                  internalGetEventInterestFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 8;
+              break;
+            } // case 66
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1851,6 +1917,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 7;
       onChanged();
       return cloudRequestBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.EventInterest, cloud.spawnery.agent.pb.EventInterest.Builder, cloud.spawnery.agent.pb.EventInterestOrBuilder> eventInterestBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     * @return Whether the eventInterest field is set.
+     */
+    @java.lang.Override
+    public boolean hasEventInterest() {
+      return messageCase_ == 8;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     * @return The eventInterest.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.EventInterest getEventInterest() {
+      if (eventInterestBuilder_ == null) {
+        if (messageCase_ == 8) {
+          return (cloud.spawnery.agent.pb.EventInterest) message_;
+        }
+        return cloud.spawnery.agent.pb.EventInterest.getDefaultInstance();
+      } else {
+        if (messageCase_ == 8) {
+          return eventInterestBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.EventInterest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     */
+    public Builder setEventInterest(cloud.spawnery.agent.pb.EventInterest value) {
+      if (eventInterestBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        eventInterestBuilder_.setMessage(value);
+      }
+      messageCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     */
+    public Builder setEventInterest(
+        cloud.spawnery.agent.pb.EventInterest.Builder builderForValue) {
+      if (eventInterestBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        eventInterestBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     */
+    public Builder mergeEventInterest(cloud.spawnery.agent.pb.EventInterest value) {
+      if (eventInterestBuilder_ == null) {
+        if (messageCase_ == 8 &&
+            message_ != cloud.spawnery.agent.pb.EventInterest.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.EventInterest.newBuilder((cloud.spawnery.agent.pb.EventInterest) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 8) {
+          eventInterestBuilder_.mergeFrom(value);
+        } else {
+          eventInterestBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     */
+    public Builder clearEventInterest() {
+      if (eventInterestBuilder_ == null) {
+        if (messageCase_ == 8) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 8) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        eventInterestBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     */
+    public cloud.spawnery.agent.pb.EventInterest.Builder getEventInterestBuilder() {
+      return internalGetEventInterestFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.EventInterestOrBuilder getEventInterestOrBuilder() {
+      if ((messageCase_ == 8) && (eventInterestBuilder_ != null)) {
+        return eventInterestBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 8) {
+          return (cloud.spawnery.agent.pb.EventInterest) message_;
+        }
+        return cloud.spawnery.agent.pb.EventInterest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.EventInterest event_interest = 8;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.EventInterest, cloud.spawnery.agent.pb.EventInterest.Builder, cloud.spawnery.agent.pb.EventInterestOrBuilder> 
+        internalGetEventInterestFieldBuilder() {
+      if (eventInterestBuilder_ == null) {
+        if (!(messageCase_ == 8)) {
+          message_ = cloud.spawnery.agent.pb.EventInterest.getDefaultInstance();
+        }
+        eventInterestBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.EventInterest, cloud.spawnery.agent.pb.EventInterest.Builder, cloud.spawnery.agent.pb.EventInterestOrBuilder>(
+                (cloud.spawnery.agent.pb.EventInterest) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 8;
+      onChanged();
+      return eventInterestBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.ProxyMessage)

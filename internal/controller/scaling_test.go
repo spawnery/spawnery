@@ -1495,3 +1495,59 @@ func TestDecideSizeAdoptsHashlessServers(t *testing.T) {
 		t.Fatalf("hashless servers were retired: %v", got.Retire)
 	}
 }
+
+func TestABoostRaisesTheFloor(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100,
+		Boost:   2,
+		PodHash: "current",
+	})
+	if got.Create != 3 {
+		t.Errorf("Create = %d, want 3: a floor of 1 plus a boost of 2", got.Create)
+	}
+}
+
+func TestTheCeilingStillBindsAgainstABoost(t *testing.T) {
+	// The one somebody could get wrong in a hurry, and the reason the boost is
+	// added to the floor rather than to both: maxReplicas is an instruction,
+	// and a command typed in a chat window must not lift it.
+	got := DecideSize(ScalingInputs{
+		MinReplicas: 1, MaxReplicas: 2,
+		SpareSlots: 40, MaxPlayers: 100,
+		Boost:   50,
+		PodHash: "current",
+	})
+	if got.Create > 2 {
+		t.Errorf("Create = %d, want at most the ceiling of 2", got.Create)
+	}
+}
+
+func TestABoostOfZeroChangesNothing(t *testing.T) {
+	// The ordinary case: no boost objects exist. It must produce exactly what
+	// the group produced before this field existed, which is the state every
+	// group in every cluster is in today.
+	base := ScalingInputs{MinReplicas: 2, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100, PodHash: "current"}
+	boosted := base
+	boosted.Boost = 0
+
+	if with, without := DecideSize(boosted), DecideSize(base); with.Create != without.Create {
+		t.Errorf("a zero boost changed the decision: %d vs %d", with.Create, without.Create)
+	}
+}
+
+func TestABoostAlsoHoldsCapacityAgainstAScaleDown(t *testing.T) {
+	// The second floor site. A boost that reached the create rule and not this
+	// one would build servers and then shed them on the next pass.
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{ready("a", 0, 100), ready("b", 0, 100), ready("c", 0, 100)},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 0,
+		Boost:         2,
+		PodHash:       "current",
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: three servers is exactly the boosted floor", got.Delete)
+	}
+}

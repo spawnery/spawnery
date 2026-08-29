@@ -184,6 +184,10 @@ type ProxyFleet interface {
 	// Move is *proxyreg.Fleet.Move: it broadcasts and reports nothing, which
 	// is why it returns nothing here either.
 	Move(namespace, playerUUID, targetServer string)
+	// SetInterest records whether this pod's agent has anybody to show cloud
+	// events to. It reports nothing: an agent that says so about a session
+	// that no longer exists is ordinary, not an error.
+	SetInterest(podUID string, wanted bool)
 }
 
 // ServerFanout is the backend side's counterpart, narrowed to the one method
@@ -196,6 +200,9 @@ type ProxyFleet interface {
 type ServerFanout interface {
 	// Join is *serverreg.Registry.Join: see its doc comment for the contract.
 	Join(ctx context.Context, namespace, podUID string) (<-chan *agentpb.OperatorToServer, func(), error)
+	// SetInterest records whether this pod's agent has anybody to show cloud
+	// events to. It reports nothing, for the reason ProxyFleet's does.
+	SetInterest(podUID string, wanted bool)
 }
 
 // Options configures the server. The three durations are what the operator
@@ -222,6 +229,10 @@ type Options struct {
 	// CloudRequest and refused in New with the two fan-outs, for the reason
 	// they are: a nil here is a panic inside a session rather than at start.
 	State netstate.Source
+	// Writer applies the requests that change something, as State answers the
+	// ones that only look. Required for the same reason State is, and narrow
+	// on purpose: see ClusterWriter.
+	Writer ClusterWriter
 	// ReportInterval is how often an agent should report its player count.
 	ReportInterval time.Duration
 	// RenewAfter is when an agent should open its next stream — before the
@@ -278,6 +289,9 @@ func New(opts Options) *Server {
 	}
 	if opts.State.Reader == nil {
 		panic("agentserver: no network state source")
+	}
+	if opts.Writer == nil {
+		panic("agentserver: no cluster writer")
 	}
 	return &Server{opts: opts, sessions: newSessions(), requestRate: newRequestLimiter(opts.Clock)}
 }
@@ -578,6 +592,10 @@ func (s *Server) handle(
 		if m.Hello.GetReady() {
 			s.opts.Agents.MarkReady(id.PodUID)
 		}
+	case *agentpb.ServerMessage_EventInterest:
+		// A state, so the last one wins and nothing is remembered across a
+		// stream: see agentpb.EventInterest.
+		s.opts.Servers.SetInterest(id.PodUID, m.EventInterest.GetWanted())
 	case *agentpb.ServerMessage_Ready:
 		s.opts.Agents.MarkReady(id.PodUID)
 	case *agentpb.ServerMessage_PlayerCount:
@@ -589,18 +607,11 @@ func (s *Server) handle(
 			logger.V(1).Info("discarded a player count", "reason", err.Error())
 		}
 	case *agentpb.ServerMessage_CloudRequest:
-		if c := m.CloudRequest.GetConnect(); c != nil {
-			resp := s.answerConnect(ctx, logger, id, m.CloudRequest.GetId(), c)
-			return &agentpb.OperatorToServer{
-				Message: &agentpb.OperatorToServer_CloudResponse{CloudResponse: resp},
-			}
-		}
-		// Answered rather than ignored, for the reason handleProxy gives.
+		// Every request answered, including one this operator does not know:
+		// see answerCloudRequest for why silence is the expensive option.
 		return &agentpb.OperatorToServer{
 			Message: &agentpb.OperatorToServer_CloudResponse{
-				CloudResponse: refuse(m.CloudRequest.GetId(),
-					agentpb.RequestError_REASON_UNSPECIFIED,
-					"this operator does not know that request"),
+				CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
 			},
 		}
 	}
@@ -757,6 +768,8 @@ func (s *Server) handleProxy(
 			// per player.
 			logger.V(1).Info("discarded a roster report", "reason", err.Error())
 		}
+	case *agentpb.ProxyMessage_EventInterest:
+		s.opts.Proxies.SetInterest(id.PodUID, m.EventInterest.GetWanted())
 	case *agentpb.ProxyMessage_PlayerJoinedServer:
 		// Accepted and ignored. Nothing in milestones 3 or 4 consumes it —
 		// player counts come from the servers — and it is on the wire for the
@@ -764,21 +777,9 @@ func (s *Server) handleProxy(
 		logger.V(1).Info("player joined a server",
 			"player", m.PlayerJoinedServer.GetPlayer(), "server", m.PlayerJoinedServer.GetServer())
 	case *agentpb.ProxyMessage_CloudRequest:
-		if c := m.CloudRequest.GetConnect(); c != nil {
-			resp := s.answerConnect(ctx, logger, id, m.CloudRequest.GetId(), c)
-			return &agentpb.OperatorToProxy{
-				Message: &agentpb.OperatorToProxy_CloudResponse{CloudResponse: resp},
-			}
-		}
-		// A request kind this operator does not know. Answered rather than
-		// ignored: an agent waiting on an id it will never hear about holds
-		// its future until the deadline, and the deadline is the slowest way
-		// to learn that an operator is older than a plugin.
 		return &agentpb.OperatorToProxy{
 			Message: &agentpb.OperatorToProxy_CloudResponse{
-				CloudResponse: refuse(m.CloudRequest.GetId(),
-					agentpb.RequestError_REASON_UNSPECIFIED,
-					"this operator does not know that request"),
+				CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
 			},
 		}
 	}

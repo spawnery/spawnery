@@ -44,6 +44,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	boostpkg "github.com/spawnery/spawnery/internal/boost"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/render"
@@ -89,6 +90,12 @@ type ServerGroupReconciler struct {
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/status,verbs=update
+// Create arrived with its caller: /cloud boost is the thing that makes one, and
+// until it existed a grant here would have been one nobody could justify when
+// they found it. Still no update -- nothing edits a boost, and an edit would be
+// a second way to change a group's floor with none of the expiry that makes the
+// first one safe.
+// +kubebuilder:rbac:groups=spawnery.cloud,resources=scaleboosts,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
@@ -415,7 +422,24 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash)
+	// Live boosts. Computed here rather than inside size() because two things
+	// read it: the sizing rule, and the status field that explains the number
+	// to whoever is looking at the group.
+	//
+	// A failed list is nought and a log line, not an error: a group that
+	// cannot read its boosts must still hold its declared floor, and refusing
+	// to size at all would turn a transient read failure into a group that
+	// stops replacing dead servers. The next pass tries again.
+	var boost int32
+	boostList := &spawneryv1alpha1.ScaleBoostList{}
+	if err := r.List(ctx, boostList, client.InNamespace(group.Namespace)); err != nil {
+		log.FromContext(ctx).V(1).Info("could not read scale boosts; sizing on the declared floor alone",
+			"group", group.Name, "reason", err.Error())
+	} else {
+		boost = boostpkg.Live(boostList.Items, group.Name, r.Clock())
+	}
+
+	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash, boost)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -653,6 +677,9 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	group.Status.ReadyReplicas = totals.ReadyReplicas
 	group.Status.OnlinePlayers = totals.OnlinePlayers
 	group.Status.FreeSlots = totals.FreeSlots
+	// Published whether or not there is one, so a reader can tell "no boost"
+	// from an operator that does not know the word.
+	group.Status.BoostedReplicas = boost
 	group.Status.ObservedGeneration = group.Generation
 	group.Status.Phase = derivePhase(group, totals)
 	// After derivePhase and independent of it: the two answer different
@@ -755,6 +782,7 @@ func (r *ServerGroupReconciler) size(
 	backoff BackoffDecision,
 	mayResize bool,
 	podHash string,
+	boost int32,
 ) (SizeDecision, error) {
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
@@ -777,6 +805,7 @@ func (r *ServerGroupReconciler) size(
 			decision = DecideSize(ScalingInputs{
 				Views:         views,
 				MinReplicas:   group.Spec.Scaling.MinReplicas,
+				Boost:         boost,
 				MaxReplicas:   group.Spec.Scaling.MaxReplicas,
 				SpareSlots:    group.Spec.Scaling.SpareSlots,
 				MaxPlayers:    group.Spec.MaxPlayers,
@@ -1765,6 +1794,12 @@ func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&spawneryv1alpha1.ServerGroup{}).
 		Owns(&spawneryv1alpha1.Server{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		// Owns and not Watches: a boost carries an owner reference to its
+		// group, so the group is woken by one appearing or being swept without
+		// a mapping function of its own. Without this a boost would take up to
+		// a resync to do anything, and a command that seemed to do nothing for
+		// thirty seconds is a command somebody types twice.
+		Owns(&spawneryv1alpha1.ScaleBoost{}).
 		Owns(&corev1.ConfigMap{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
 		// A group refused because its Network is missing or unaccepted has no

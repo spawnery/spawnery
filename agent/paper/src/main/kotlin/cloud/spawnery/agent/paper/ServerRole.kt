@@ -2,8 +2,10 @@ package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.AgentRole
 import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
+import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.pb.AgentServiceGrpc
 import cloud.spawnery.agent.pb.Hello
 import cloud.spawnery.agent.pb.OperatorToServer
@@ -26,8 +28,17 @@ class ServerRole(
      * silently, wherever the types happen to match.
      */
     private val mirror: NetworkMirror,
-    /** Where an answer to this agent's own request goes. Last, as ever. */
+    /** Where an answer to this agent's own request goes. */
     private val connector: CloudConnector,
+    /** Where a cloud event goes on its way to somebody's chat. */
+    private val feed: Feed,
+    /**
+     * Where the same event goes on its way to a plugin. Separate from the
+     * feed on purpose: the feed collapses ten transitions into one readable
+     * line, and a plugin should get the facts rather than somebody else's
+     * editorial decision. Last, as ever.
+     */
+    private val events: CloudEvents,
 ) : AgentRole<ServerMessage, OperatorToServer> {
     override fun open(
         channel: ManagedChannel,
@@ -76,6 +87,14 @@ class ServerRole(
             }
             OperatorToServer.MessageCase.CLOUD_RESPONSE -> {
                 connector.answer(message.cloudResponse)
+                Directive.None
+            }
+            OperatorToServer.MessageCase.CLOUD_EVENT -> {
+                // Buffered rather than sent. This runs on a gRPC callback
+                // thread, and the window that turns ten Ready transitions into
+                // one line closes on the plugin's own timer.
+                feed.onEvent(message.cloudEvent)
+                events.publish(message.cloudEvent)
                 Directive.None
             }
             else -> Directive.None

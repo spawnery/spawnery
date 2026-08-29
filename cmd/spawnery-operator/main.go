@@ -41,6 +41,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/agentserver"
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/controller"
@@ -354,7 +355,12 @@ func main() {
 		Name:      certs.SecretName,
 		DNSNames:  certs.ServingDNSNames(podspec.AgentServiceName, operatorNamespace),
 		Clock:     time.Now,
-		Recorder:  mgr.GetEventRecorder("certs"),
+		// Not wrapped in a cloudevent.Recorder, and that is deliberate rather
+		// than an omission: this one reports on Secrets in the operator's own
+		// namespace, which cloudevent.Derive drops -- there are no agents
+		// there and nobody to show it to. Wrapping it would add a
+		// construction that can only ever produce nothing.
+		Recorder: mgr.GetEventRecorder("certs"),
 		// The same value the agent endpoint below cuts streams off with. A CA
 		// rotation waits it out before switching the serving certificate, so
 		// that every stream opened before the new CA was published has been
@@ -447,6 +453,7 @@ func main() {
 		Proxies:        proxies,
 		Servers:        servers,
 		State:          state,
+		Writer:         agentserver.KubeWriter{Client: mgr.GetClient(), Clock: time.Now},
 		Fleet:          fleet.Size,
 		ReportInterval: reportInterval,
 		RenewAfter:     renewAfter,
@@ -459,6 +466,7 @@ func main() {
 
 	if err := controller.SetupAll(mgr, controller.Options{
 		Agents:               registry,
+		Events:               bothFanouts{servers: servers, proxies: proxies},
 		ReportInterval:       reportInterval,
 		Clock:                time.Now,
 		StartupDeadline:      startupDeadline,
@@ -497,4 +505,24 @@ func main() {
 		setupLog.Error(err, "manager exited with an error")
 		os.Exit(1)
 	}
+}
+
+// bothFanouts sends a cloud event to the backends and to the proxies.
+//
+// Both, because an administrator may be standing on a game server or on a
+// proxy and the operator cannot know which -- and each fan-out already drops
+// the event for every session that did not ask for one, so the cost of the
+// one that has nobody watching is a map walk.
+//
+// A named type rather than a closure so that the nil case is one thing to
+// reason about: cloudevent.Recorder treats a nil Sink as "no feed", and a nil
+// *this* would be a panic inside a reconcile.
+type bothFanouts struct {
+	servers *serverreg.Registry
+	proxies *proxyreg.Fleet
+}
+
+func (b bothFanouts) Publish(namespace string, ev *agentpb.CloudEvent) {
+	b.servers.Publish(namespace, ev)
+	b.proxies.Publish(namespace, ev)
 }

@@ -108,6 +108,9 @@ message CloudRequest {
   uint64 id = 1;
   oneof request {
     ConnectRequest connect = 2;
+    RetireRequest retire = 3;
+    BoostRequest boost = 4;
+    StopBoostRequest stop_boost = 5;
   }
 }
 
@@ -122,6 +125,9 @@ message CloudResponse {
   oneof result {
     ConnectResult connect = 2;
     RequestError error = 3;
+    RetireResult retire = 4;
+    BoostResult boost = 5;
+    StopBoostResult stop_boost = 6;
   }
 }
 
@@ -168,6 +174,134 @@ message ConnectResult {
   string target = 3;
 }
 
+// RetireRequest asks that one server stop taking joins and empty out.
+//
+// It carries no namespace, for the reason ConnectRequest carries none: the
+// server is resolved inside the namespace the pod's own token authenticated,
+// so there is no field an agent could name another network's server in.
+//
+// This is the first request on this channel that *writes*. Everything before
+// it read the operator's picture or instructed a proxy that was already
+// listening; this one changes an object in the cluster, and the operator's
+// answer is therefore about what it wrote rather than about what it saw.
+message RetireRequest {
+  string server = 1;
+}
+
+// RetireResult says the server is now retiring.
+//
+// It has no "was it already retiring" field on purpose: that case is a
+// RequestError with REFUSED, because an operator that answers "done" to the
+// second person to type the command teaches both of them that the command did
+// nothing the first time.
+message RetireResult {
+  // The server that is now retiring, echoed so a caller that asked by a name
+  // it built from a string sees what the operator matched.
+  string server = 1;
+}
+
+// BoostRequest asks for extra capacity on a group, for a while.
+//
+// It carries no namespace, for the reason RetireRequest carries none.
+//
+// **A duration and not an instant.** The agent and the operator do not share a
+// clock, and an absolute expiry from a pod whose clock is minutes fast would
+// create a boost that ends early or late by exactly that error -- silently,
+// since nothing on either side can see the difference. A duration is
+// interpreted against the operator's own clock, which is the clock the scaler
+// then reads.
+message BoostRequest {
+  string group = 1;
+  int32 replicas = 2;
+  // Zero means the operator's default. The operator also bounds the maximum;
+  // see its own answer for what it refuses and why.
+  int64 duration_seconds = 3;
+}
+
+// BoostResult is the boost that now exists.
+//
+// It repeats the replica count back rather than assuming the caller's, because
+// the request may have been for zero seconds and this says what the default
+// resolved to.
+message BoostResult {
+  int32 replicas = 1;
+  // When it stops counting, as seconds since the epoch on the operator's
+  // clock. An instant here and a duration on the way in, and the asymmetry is
+  // the point: the operator is the side with the authoritative clock, so it
+  // states the answer and the agent states the ask.
+  int64 expires_at_unix = 2;
+}
+
+// StopBoostRequest ends a group's boosts early.
+//
+// Every boost on the group, not one: a partial reduction across several boosts
+// with different expiries is arithmetic nobody asked for, and "stop" is what a
+// person means when they want the extra servers gone.
+message StopBoostRequest {
+  string group = 1;
+}
+
+// StopBoostResult says how many boosts were removed.
+//
+// Zero is an ordinary answer and not an error: it means the group had no
+// boosts, which is what an admin needs to hear when they expected it to have
+// some.
+message StopBoostResult {
+  int32 removed = 1;
+}
+
+// CloudEvent is something that happened, on its way to somebody's chat.
+//
+// **A feed and not a ledger.** An agent that was disconnected missed what
+// happened while it was gone, and nothing here resends it: the NetworkState it
+// re-syncs on reconnect is the correction, and a better one than a replay
+// would be -- it says what is true now rather than what was true in an order
+// nobody was watching.
+//
+// It is derived from the event the operator records to Kubernetes rather than
+// computed beside it. Two independent derivations of the same fact eventually
+// disagree, and the one in the chat is the one nobody can audit.
+message CloudEvent {
+  // The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
+  // PodRejected. A string and not an enum, for the reason NetworkState.phase
+  // is a string: the operator's vocabulary gains values, and an agent older
+  // than a value must show it rather than fail to parse the message it
+  // arrived in.
+  string kind = 1;
+  // The object this is about -- a server name, or a group name for an event
+  // about a group.
+  string subject = 2;
+  // The group the subject belongs to, and the subject itself when the subject
+  // is a group. Never empty, so that collapsing by group needs no special
+  // case for the events that are about one.
+  string group = 3;
+  // One sentence for a person. The operator's own words, carried verbatim, so
+  // that rewording them in an agent cannot make the chat disagree with
+  // kubectl about the same fact.
+  string message = 4;
+  // Whether this is the ordinary case or the one somebody should look at.
+  bool warning = 5;
+}
+
+// EventInterest says whether this agent has anybody to show events to.
+//
+// **A state and not a subscription.** Every message carries the whole answer,
+// so a reconnect needs no catch-up and the operator remembers nothing across
+// the make-before-break renewal that briefly runs two streams -- which is the
+// same reason CloudRequest ids are not remembered either.
+//
+// The agent sends one whenever the answer changes: an administrator holding
+// the permission joined or left, or somebody typed `/cloud events off`. It
+// sends one on every new stream regardless, because the operator's answer for
+// a session it has never seen is "no".
+//
+// It is an optimisation and not a bound. An agent that lied and asked for
+// events would receive events about its own namespace, which it can already
+// see in its NetworkState.
+message EventInterest {
+  bool wanted = 1;
+}
+
 // RequestError is why a request was not carried out.
 //
 // The reason is an enum and the message is free text, and the split is
@@ -210,6 +344,7 @@ message ServerMessage {
     Ready ready = 2;
     PlayerCount player_count = 3;
     CloudRequest cloud_request = 4;
+    EventInterest event_interest = 5;
   }
 }
 
@@ -219,6 +354,7 @@ message OperatorToServer {
     SessionDeadline session_deadline = 2;
     NetworkState network_state = 3;
     CloudResponse cloud_response = 4;
+    CloudEvent cloud_event = 5;
   }
 }
 
@@ -376,6 +512,7 @@ message ProxyMessage {
     BackendPlayers backend_players = 5;
     PlayerRoster player_roster = 6;
     CloudRequest cloud_request = 7;
+    EventInterest event_interest = 8;
   }
 }
 
@@ -457,5 +594,6 @@ message OperatorToProxy {
     NetworkState network_state = 8;
     CloudResponse cloud_response = 9;
     MovePlayer move_player = 10;
+    CloudEvent cloud_event = 11;
   }
 }

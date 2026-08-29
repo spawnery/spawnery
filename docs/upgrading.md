@@ -356,6 +356,49 @@ being replaced` while nothing was. Its messages now say *spec* rather than
 **A capacity edit still resets the group's failure streak**, and that is the
 one thing 7a did not change. `docs/known-issues.md` carries why.
 
+## A chart upgrade brings a fifth CRD, and moves nothing
+
+`ScaleBoost` is installed by the chart from this release on. **Nothing uses it
+until somebody creates one**, so the upgrade changes no running group — worth
+saying plainly, because "a new CRD" reads as "something is about to move".
+
+What it is: extra capacity for a group, for a while, as an object rather than
+as an edit to the group's spec.
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: spawnery.cloud/v1alpha1
+kind: ScaleBoost
+metadata:
+  generateName: lobby-
+  namespace: minecraft
+spec:
+  groupRef: {name: lobby}
+  replicas: 2
+  expiresAt: "2026-08-28T20:00:00Z"
+EOF
+```
+
+It **adds to the group's floor and never to its ceiling**: `maxReplicas` still
+binds. Two boosts on one group add up. One with no `expiresAt` never expires,
+which is a real need and the known way to end up with four servers in March
+and nobody who remembers why.
+
+`kubectl get servergroups` gains a `BOOSTED` column, and the group's
+`status.boostedReplicas` says how much of its current floor is not its own
+spec. That column is the answer to "why is this group bigger than its
+minReplicas", which is otherwise a question with no visible answer.
+
+**It exists because the operator cannot edit a group's spec, and should not.**
+Its ClusterRole grants `get, list, watch` on `servergroups` and no write; and
+on a GitOps-managed cluster that spec belongs to a file, so a floor the
+operator raised would be reverted at the next reconciliation. A boost is the
+operator's own object and nothing outside the cluster claims it.
+
+**For a lasting change, edit the `ServerGroup`.** A group that needs four
+servers every Saturday needs that in the file a person reviews, not a boost
+somebody creates every Saturday.
+
 ## A cluster still on `v0.1.1`'s chart has the old CRDs
 
 `v0.1.1` added a fourth `expose` strategy to the `ProxyGroup` CRD's enum. The
@@ -448,3 +491,83 @@ is safe precisely because nothing republishes the condition.
 the codebase and is kept anyway: it is the exact string an operator meets on
 that stale condition, and deleting it would make the string unsearchable in
 the repository it came from.
+
+## The agents gain a `/cloud` command, granted to nobody
+
+Every Paper server and every Velocity proxy running the new agent registers
+`/cloud`. **No permission is granted to anybody by default**, so immediately
+after the upgrade the command answers "unknown command" to every player on the
+network.
+
+That is the safe state, and it is worth saying plainly because it looks like a
+bug. Brigadier hides a branch a source may not use rather than refusing it —
+which is the platforms' own convention, and better than a lecture — so an
+ungranted player cannot tell "you may not" from "there is no such command".
+
+The three permissions and what each one costs are in
+[the chart's README](../charts/spawnery/README.md#the-cloud-permissions). The
+short version: `spawnery.cloud.read` changes nothing, `spawnery.cloud.retire`
+takes a server out of rotation without moving anybody, and
+`spawnery.cloud.scale` spends money.
+
+**The console holds all three without being granted anything**, by default on
+both platforms. So
+
+```bash
+kubectl attach -it lobby-a3f9 -c minecraft
+```
+
+reaches `/cloud` on a network where no player has any of these. That is also
+how to check the upgrade worked without granting a permission first: `cloud
+list` names the groups the operator has told this agent about — and it is what
+`hack/agent-test.sh` drives against the shipped image, so the path is measured
+rather than assumed.
+
+On a Velocity proxy the console's permissions come from a
+`PermissionFunction` that a permissions plugin is free to replace; the default
+is `ALWAYS_TRUE`. On Paper the console answers every permission itself.
+
+**Nothing about this upgrade moves a running server.** The command is
+registered at plugin enable, which happens on a pod that is starting anyway.
+Whether the agents roll at all is decided by the image change, exactly as it
+was before this feature existed.
+
+## Cloud events reach chat, and are silent until somebody is granted them
+
+An administrator holding `spawnery.cloud.events` now sees things happening in
+the cloud as chat lines — a server becoming ready, retiring, failing to be
+scheduled. Nobody holds it by default, so **the feed is silent immediately
+after the upgrade**, exactly as `/cloud` itself is.
+
+**They are the events `kubectl get events` already shows.** The operator
+records through one recorder, and the chat copy is derived from that same call
+rather than computed beside it. Two independent derivations of one fact
+eventually disagree, and the one in the chat is the one nobody can audit — so
+there is only one. If a line appears in chat, `kubectl get events` has it, with
+the same sentence.
+
+**The feed collapses.** A rolling update of a ten-server group produces ten
+`Ready` transitions in a few seconds, and arrives as one line:
+
+```
+[cloud] 3 ReadyGatePassed in lobby (lobby-a3f9, lobby-b71c, lobby-c02e)
+```
+
+Warnings are never folded into such a line and each keeps the operator's own
+sentence — a failure hidden inside "3 servers ready" is the one event somebody
+actually needs to see.
+
+**`/cloud events off` lasts for the session.** Paper could persist it per
+player and Velocity has no equivalent, so symmetry won and the command says so
+in its own output. The feed is back after a rejoin.
+
+**Nothing is sent to a server nobody is watching.** Each agent tells the
+operator whether anybody holding the permission is online, and the operator
+sends events only to those that said yes. On a network that grants `.events` to
+nobody, this feature costs no traffic at all.
+
+Plugins can subscribe too, through `SpawneryApi.events()`. They receive the
+events one at a time rather than the collapsed summary — see
+[`agent/api/README.md`](../agent/api/README.md). It is a feed and not a ledger:
+an agent that was disconnected missed what happened while it was gone, and the
+network picture it re-syncs on reconnect is the correction.

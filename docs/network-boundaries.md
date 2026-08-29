@@ -303,6 +303,18 @@ a cluster whose address pool is exhausted must choose between real client
 addresses and a shared address.
 
 
+## What the operator may delete
+
+Since `ScaleBoost` exists, the operator deletes an object a person may have
+created by hand. It is bounded twice and both bounds are in the grant rather
+than in code: the verb list carries `delete` on `scaleboosts` and on nothing
+else it does not already own, and the sweep removes only boosts whose own
+`expiresAt` has passed.
+
+It has **no** `create` and no `update` on them. Making one is a person's act
+today, and the milestone that adds a command will add the verb with the
+caller — a grant with no caller is one nobody can justify when they find it.
+
 ## What the operator knows about a person
 
 The operator holds, for every player on a network, their Minecraft UUID, their
@@ -377,5 +389,17 @@ which [`charts/spawnery/README.md`](../charts/spawnery/README.md) tells an
 operator to treat as one trust domain.
 
 The `/cloud` command is the different case and does gate. A command has a
-`CommandSource`, so `spawnery.cloud.read` is expressible there, and that is
-where the permission belongs.
+source, so a permission is expressible there, and that is where it belongs. It
+carries three — `spawnery.cloud.read`, `.retire` and `.scale`, listed with what
+each costs in
+[`charts/spawnery/README.md`](../charts/spawnery/README.md#the-cloud-permissions)
+— and the split is not cosmetic: reading the network is what a moderator gets,
+and adding servers spends money.
+
+**That gate binds a person, not a pod.** A plugin calling `SpawneryApi`
+directly is behind the boundary above and no permission is checked, because
+there is nobody to check one against. The operator's own bounds are what hold
+there instead — a ceiling a boost cannot lift, a duration it cannot exceed, and
+a namespace it structurally cannot leave — and they apply to the command too,
+underneath its permission. A permission decides who may ask; the operator
+decides what may be asked for.

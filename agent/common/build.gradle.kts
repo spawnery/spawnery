@@ -45,7 +45,29 @@ sourceSets.main {
 // api rather than implementation for the stub artifacts: :paper (and later
 // :velocity) names the generated message types in its own sources, so those
 // types have to reach its compile classpath and not merely its runtime one.
+// Brigadier, from the copy Paper's own artifact set already carries.
+//
+// A fileTree and not a version in a path, so a Paper bump moves it without
+// this line. Not a Maven coordinate either: com.mojang:brigadier is not on
+// Maven Central, and adding a repository for one jar both platforms already
+// ship would be a build change out of all proportion.
+//
+// **compileOnly, and that is load-bearing.** Both platforms provide their own
+// at runtime -- Paper as a library, Velocity bundled -- and bundling a third
+// would put it through shadowJar's relocation, where the platform's Brigadier
+// and the plugin's would be two unrelated types with one name.
+//
+// Compiled against Paper's 1.3.10, which is a strict superset of Velocity's:
+// measured 2026-08-28, 54 classes against 52, and the two extra are
+// ContextChain and ContextChain$Stage. Nothing is in Velocity's copy and
+// missing from Paper's. CloudCommandCompatibilityTest is what keeps the tree
+// out of those two.
+val brigadier = fileTree("paper-repo/libraries/com/mojang/brigadier") { include("**/*.jar") }
+
 dependencies {
+    compileOnly(brigadier)
+    testImplementation(brigadier)
+
     // `api` and not `implementation`: the module's types appear in signatures
     // :paper and :velocity will implement, so both need it on their compile
     // classpath, and both shadowJars need it on their runtime one. This is

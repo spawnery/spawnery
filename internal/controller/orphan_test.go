@@ -2,6 +2,7 @@ package controller
 
 import (
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -41,6 +42,7 @@ func orphanReconciler(f *fixture) *OrphanReconciler {
 	return &OrphanReconciler{
 		Client: f.rc,
 		Agents: f.agents,
+		Clock:  f.clock.Now,
 	}
 }
 
@@ -387,5 +389,65 @@ func TestSweepKeepsTheAgentOfADrainingPod(t *testing.T) {
 		t.Errorf("the sweep forgot the agent of a pod that is terminating but still there: %+v. "+
 			"A draining proxy has players on it until the drain ends, and this registry entry "+
 			"is what the operator knows about them", snap)
+	}
+}
+
+// Both boosts in one test, because a sweep that deleted everything would pass
+// a test that only asserted the expired one was gone.
+func TestTheSweepRemovesAnExpiredBoostAndLeavesALiveOne(t *testing.T) {
+	f := newFixture(t)
+	past := metav1.NewTime(f.clock.now.Add(-time.Minute))
+	future := metav1.NewTime(f.clock.now.Add(time.Hour))
+	for name, expires := range map[string]metav1.Time{"stale": past, "live": future} {
+		if err := f.c.Create(f.ctx, &spawneryv1alpha1.ScaleBoost{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+			Spec: spawneryv1alpha1.ScaleBoostSpec{
+				GroupRef:  spawneryv1alpha1.ObjectRef{Name: f.group.Name},
+				Replicas:  1,
+				ExpiresAt: &expires,
+			},
+		}); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+
+	if err := orphanReconciler(f).Sweep(f.ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	boosts := &spawneryv1alpha1.ScaleBoostList{}
+	if err := f.c.List(f.ctx, boosts, ctrlclientInNamespace(f.ns)); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(boosts.Items) != 1 || boosts.Items[0].Name != "live" {
+		t.Fatalf("boosts = %v, want only the live one", boosts.Items)
+	}
+}
+
+// A boost with no expiry is the "forever" case, and the sweep must leave it
+// alone -- otherwise the type's own optional field would mean the opposite of
+// what its comment says.
+func TestTheSweepLeavesABoostWithNoExpiry(t *testing.T) {
+	f := newFixture(t)
+	if err := f.c.Create(f.ctx, &spawneryv1alpha1.ScaleBoost{
+		ObjectMeta: metav1.ObjectMeta{Name: "forever", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ScaleBoostSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: f.group.Name},
+			Replicas: 1,
+		},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	if err := orphanReconciler(f).Sweep(f.ctx); err != nil {
+		t.Fatalf("Sweep: %v", err)
+	}
+
+	boosts := &spawneryv1alpha1.ScaleBoostList{}
+	if err := f.c.List(f.ctx, boosts, ctrlclientInNamespace(f.ns)); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(boosts.Items) != 1 {
+		t.Fatalf("boosts = %v, want the one with no expiry left standing", boosts.Items)
 	}
 }

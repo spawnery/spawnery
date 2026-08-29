@@ -117,6 +117,7 @@ class SessionLoopTest {
         // that bound overrides it, and every other test here is answered long
         // before it could matter.
         fallbackAnswerBoundMillis: Long = SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS,
+        onStreamChanged: () -> Unit = {},
     ): SessionLoop<ServerMessage, OperatorToServer> {
         val token = dir.resolve("token")
         Files.writeString(token, "test-token")
@@ -129,6 +130,7 @@ class SessionLoopTest {
             log = { _, _ -> },
             jitter = jitter,
             fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
+            onStreamChanged = onStreamChanged,
         )
     }
 
@@ -1043,5 +1045,40 @@ class SessionLoopTest {
         assertEquals(4_000L, delays[2])
         assertTrue(delays.all { it <= 30_000L }, "capped at 30s: $delays")
         assertEquals(30_000L, delays.last())
+    }
+
+    @Test
+    fun `every stream that becomes current tells the agent it changed`(@TempDir dir: Path) {
+        // The hook two per-stream things depend on: the requests in flight,
+        // which CloudConnector fails rather than resends, and any state the
+        // operator does not remember across a renewal. Both were written
+        // before anything called them -- CloudConnector.onStreamChanged had no
+        // caller at all until this parameter existed -- so the count is the
+        // assertion.
+        val changes = java.util.concurrent.atomic.AtomicInteger(0)
+        FakeOperator("stream-changed").use { operator ->
+            val role = FakeRole().apply { markReady() }
+
+            loopAgainst(operator, role, dir, onStreamChanged = { changes.incrementAndGet() }).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                assertEquals(1, changes.get(), "the first stream did not report a change")
+
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(3),
+                        )
+                        .build(),
+                )
+
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                assertEquals(2, changes.get(), "the renewal's stream did not report a change")
+            }
+        }
     }
 }

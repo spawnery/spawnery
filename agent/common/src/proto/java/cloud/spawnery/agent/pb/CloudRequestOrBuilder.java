@@ -31,5 +31,50 @@ public interface CloudRequestOrBuilder extends
    */
   cloud.spawnery.agent.pb.ConnectRequestOrBuilder getConnectOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   * @return Whether the retire field is set.
+   */
+  boolean hasRetire();
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   * @return The retire.
+   */
+  cloud.spawnery.agent.pb.RetireRequest getRetire();
+  /**
+   * <code>.spawnery.agent.v1alpha1.RetireRequest retire = 3;</code>
+   */
+  cloud.spawnery.agent.pb.RetireRequestOrBuilder getRetireOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.BoostRequest boost = 4;</code>
+   * @return Whether the boost field is set.
+   */
+  boolean hasBoost();
+  /**
+   * <code>.spawnery.agent.v1alpha1.BoostRequest boost = 4;</code>
+   * @return The boost.
+   */
+  cloud.spawnery.agent.pb.BoostRequest getBoost();
+  /**
+   * <code>.spawnery.agent.v1alpha1.BoostRequest boost = 4;</code>
+   */
+  cloud.spawnery.agent.pb.BoostRequestOrBuilder getBoostOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopBoostRequest stop_boost = 5;</code>
+   * @return Whether the stopBoost field is set.
+   */
+  boolean hasStopBoost();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopBoostRequest stop_boost = 5;</code>
+   * @return The stopBoost.
+   */
+  cloud.spawnery.agent.pb.StopBoostRequest getStopBoost();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopBoostRequest stop_boost = 5;</code>
+   */
+  cloud.spawnery.agent.pb.StopBoostRequestOrBuilder getStopBoostOrBuilder();
+
   cloud.spawnery.agent.pb.CloudRequest.RequestCase getRequestCase();
 }

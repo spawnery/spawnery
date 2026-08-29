@@ -115,6 +115,7 @@ func newChannelFixture(t *testing.T) *channelFixture {
 			State: netstate.Source{Reader: base.c, Agents: base.agents},
 		}),
 		State:          netstate.Source{Reader: base.c, Agents: base.agents},
+		Writer:         agentserver.KubeWriter{Client: base.c},
 		ReportInterval: 5 * time.Second,
 		RenewAfter:     8 * time.Minute,
 		HardDeadline:   10 * time.Minute,

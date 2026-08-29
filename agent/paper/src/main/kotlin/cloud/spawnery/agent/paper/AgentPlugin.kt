@@ -1,6 +1,8 @@
 package cloud.spawnery.agent.paper
 
 import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.CloudEvents
+import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
@@ -8,12 +10,16 @@ import cloud.spawnery.agent.api.ServerSelf
 import cloud.spawnery.agent.api.Spawnery
 import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.Environment
+import cloud.spawnery.agent.Feed
+import cloud.spawnery.agent.FeedState
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
 import cloud.spawnery.agent.pb.CloudRequest
+import cloud.spawnery.agent.pb.EventInterest
 import cloud.spawnery.agent.pb.OperatorToServer
 import cloud.spawnery.agent.pb.ServerMessage
+import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
 import org.bukkit.event.Listener
@@ -42,20 +48,33 @@ class AgentPlugin : JavaPlugin(), Listener {
      *
      * The one lambda is the whole platform seam: it wraps the request in a
      * ServerMessage, which is the only thing about this that a Paper agent
-     * knows and a Velocity one does not.
+     * knows and a Velocity one does not. It does not know which request it is
+     * carrying, and that is why adding a verb touches no platform file.
      */
     private val connector = CloudConnector(
         Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = System::currentTimeMillis),
-    ) { id, request ->
+    ) { request ->
         val loop = this.loop
             ?: throw IllegalStateException("this agent has no session to the operator")
-        loop.send(
-            ServerMessage.newBuilder()
-                .setCloudRequest(CloudRequest.newBuilder().setId(id).setConnect(request))
-                .build(),
-        )
+        loop.send(ServerMessage.newBuilder().setCloudRequest(request).build())
     }
-    private val role = ServerRole(state, mirror, connector)
+    private val feedState = FeedState()
+    private val feed = Feed(PaperAudience, feedState, System::currentTimeMillis)
+    private val events = CloudEvents()
+    private val role = ServerRole(state, mirror, connector, feed, events)
+
+    /**
+     * The last EventInterest this agent sent, or null on a stream it has not
+     * reported on.
+     *
+     * Null and not false: the operator's answer for a session it has never
+     * seen is "no" and it remembers nothing across a renewal, so a new stream
+     * has to be told even when the answer has not moved. Without that a
+     * renewal would leave the operator believing "no" while this agent
+     * believed it had already said "yes", and the feed would go silent until
+     * somebody's permissions happened to change.
+     */
+    private var lastInterest: Boolean? = null
     private lateinit var scheduler: ScheduledExecutorService
     private var loop: SessionLoop<ServerMessage, OperatorToServer>? = null
 
@@ -85,7 +104,23 @@ class AgentPlugin : JavaPlugin(), Listener {
                     override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
                     override fun slots(): Int = state.slots
                 }
-                Spawnery.install(MirrorApi(mirror, self, connector))
+                val api = MirrorApi(mirror, self, connector, events)
+                Spawnery.install(api)
+                // Registered inside the COMMANDS lifecycle event because that
+                // is the only window Paper accepts a Brigadier node in; a
+                // direct call from onEnable throws. The node is built from the
+                // same `api` the install above handed out, so a player asking
+                // /cloud list and a plugin calling the API read one mirror.
+                lifecycleManager.registerEventHandler(LifecycleEvents.COMMANDS) { event ->
+                    event.registrar().register(
+                        // feedState and not a second one: the command writes
+                        // the opt-out that the feed above reads, and two
+                        // instances would leave `/cloud events off` looking as
+                        // though it worked while the lines kept arriving.
+                        cloudCommand(api, PaperSource, feedState).build(),
+                        "Spawnery cloud commands",
+                    )
+                }
                 // Info and not fine. This line is how a server owner confirms
                 // the API is there for their own plugins, and it is the only
                 // outward sign that the install path ran at all: installing
@@ -122,6 +157,19 @@ class AgentPlugin : JavaPlugin(), Listener {
                     // from on its own — the server itself is healthy; only its
                     // connection to the operator is not.
                     log = { message, error -> logger.log(Level.WARNING, message, error) },
+                    // Two things are per-stream and nothing else would tell
+                    // them a renewal happened. The connector fails what is in
+                    // flight rather than resending it, because only the caller
+                    // knows whether repeating a request is safe. And the
+                    // interest is forgotten, because the operator's answer for
+                    // a session it has never seen is "no" -- without this the
+                    // agent would believe it had already said "yes" and the
+                    // feed would go silent until somebody's permissions
+                    // happened to change.
+                    onStreamChanged = {
+                        connector.onStreamChanged()
+                        lastInterest = null
+                    },
                 )
                 loop = session
 
@@ -132,6 +180,13 @@ class AgentPlugin : JavaPlugin(), Listener {
                 // ever reads what this wrote.
                 server.scheduler.runTaskTimer(this, Runnable {
                     state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
+                    // The feed's window closes here, on the main thread, and
+                    // the interest is recomputed on the same tick: a player
+                    // joining, leaving or gaining a permission all change the
+                    // answer, and watching for each of those separately is
+                    // three subscriptions to get wrong.
+                    feed.tick()
+                    reportInterest(feed.wanted())
                 }, 0L, SAMPLE_TICKS)
 
                 // Once here, before the first stream exists, because the timer
@@ -150,6 +205,24 @@ class AgentPlugin : JavaPlugin(), Listener {
                 logger.info("spawnery agent connecting to ${env.endpoint}")
             }
         }
+    }
+
+    /**
+     * Tells the operator whether anybody is here to read events.
+     *
+     * Sent only when the answer changes. EventInterest is a state, and one
+     * resent every second would be a report the operator has to read in order
+     * to learn nothing.
+     */
+    private fun reportInterest(wanted: Boolean) {
+        if (lastInterest == wanted) return
+        val loop = this.loop ?: return
+        lastInterest = wanted
+        loop.send(
+            ServerMessage.newBuilder()
+                .setEventInterest(EventInterest.newBuilder().setWanted(wanted))
+                .build(),
+        )
     }
 
     override fun onDisable() {

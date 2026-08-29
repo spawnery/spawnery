@@ -262,6 +262,21 @@ type ServerGroupStatus struct {
 	// +optional
 	FreeSlots int32 `json:"freeSlots"`
 
+	// BoostedReplicas is how much of this group's current floor comes from
+	// ScaleBoost objects rather than from spec.scaling.minReplicas.
+	//
+	// It exists because the likeliest failure of a boost is not a wrong number
+	// but an unexplained one: a group running four servers with a declared
+	// floor of one and nothing anywhere saying why. A person meeting that will
+	// edit the spec, which is the single thing that would not help -- the
+	// boost is a separate object and the spec is not where it lives.
+	//
+	// Zero and present rather than absent, so that comparing two groups does
+	// not mean telling "no boost" apart from "this operator is too old to
+	// say".
+	// +optional
+	BoostedReplicas int32 `json:"boostedReplicas"`
+
 	// ObservedGeneration is the spec generation this status was computed from.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
@@ -303,6 +318,7 @@ type ServerGroupStatus struct {
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Players",type=integer,JSONPath=`.status.onlinePlayers`
 // +kubebuilder:printcolumn:name="Free Slots",type=integer,JSONPath=`.status.freeSlots`
+// +kubebuilder:printcolumn:name="Boosted",type=integer,JSONPath=`.status.boostedReplicas`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // ServerGroup is a group of interchangeable Minecraft servers.

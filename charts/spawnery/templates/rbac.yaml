@@ -123,6 +123,16 @@ rules:
 - apiGroups:
   - spawnery.cloud
   resources:
+  - scaleboosts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - spawnery.cloud
+  resources:
   - servers
   verbs:
   - create

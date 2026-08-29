@@ -164,6 +164,12 @@ var RequiredCluster = []Permission{
 	// group as owner, and that sets blockOwnerDeletion on the reference.
 	{Group: "spawnery.cloud", Resource: "servergroups", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the owner references of Server and PodDisruptionBudget"},
 
+	{Group: "spawnery.cloud", Resource: "scaleboosts", Verb: "get", Why: "resolving a boost's group"},
+	{Group: "spawnery.cloud", Resource: "scaleboosts", Verb: "list", Why: "ServerGroupReconciler adds live boosts to the floor"},
+	{Group: "spawnery.cloud", Resource: "scaleboosts", Verb: "create", Why: "/cloud boost adds capacity for a while"},
+	{Group: "spawnery.cloud", Resource: "scaleboosts", Verb: "delete", Why: "the orphan sweep removes expired boosts, and /cloud stop ends one early"},
+	{Group: "spawnery.cloud", Resource: "scaleboosts", Verb: "watch", Why: "a boost created or deleted has to wake its group rather than wait out a resync"},
+
 	{Group: "spawnery.cloud", Resource: "servers", Verb: "get", Why: "ServerReconciler.Reconcile"},
 	{Group: "spawnery.cloud", Resource: "servers", Verb: "list", Why: "ServerGroupReconciler.collectViews and the orphan sweep"},
 	{Group: "spawnery.cloud", Resource: "servers", Verb: "watch", Why: "ServerReconciler For(&Server{})"},

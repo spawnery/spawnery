@@ -97,11 +97,78 @@ A failure is ordinary. A player who logged out between your call and the
 operator reading it fails with `NOT_FOUND`; so does a target that is not
 routable yet. Handle it as a normal outcome rather than as a bug.
 
+## Changing the fleet
+
+Two calls write, and both are round trips through the operator on either
+platform — nothing local can answer them.
+
+`retire(server)` asks one server to stop taking joins and empty out. **It is
+not a stop.** Nobody is moved and nobody is kicked; the players on it finish in
+their own time, and the server goes away once it is empty. Asking for a server
+that is already retiring **fails**, on purpose: the operator distinguishes "you
+retired it" from "somebody had already asked", and a caller that wants to treat
+the second as success can do that far more safely than one that was never told.
+
+`boost(group, replicas, forHowLong)` adds capacity for a while, as a
+`ScaleBoost` object rather than as an edit to the group. Pass `null` for the
+operator's default of an hour.
+
+**It adds to what a group tries for and never to what it may reach.** The
+group's `maxReplicas` still binds, and a request for more than the ceiling
+leaves is refused rather than trimmed — so what you asked for is what you got,
+or you were told why not. The operator also bounds how long you may ask for.
+Boosts add rather than replace: two calls make two boosts, which is what makes
+"somebody else already boosted this" a non-event rather than a race.
+
+`stopBoosts(group)` ends all of them and reports how many there were. Zero is
+an ordinary answer, not a failure.
+
+**Neither call can change what a group is.** A boost expires; a group that
+needs to be permanently bigger needs its `ServerGroup` edited by a person, and
+this API deliberately cannot do that — the operator holds no write on
+`servergroups` at all.
+
+## Hearing what happened
+
+`events()` hands back an `EventBus`, the same one every time, so a plugin may
+hold it. `subscribe(listener)` returns an `AutoCloseable` — close it on
+disable, or the listener outlives your plugin in a classloader the platform is
+trying to unload, which is the ordinary way a reload turns into a memory leak.
+Closing twice is fine.
+
+```java
+try (AutoCloseable events = Spawnery.get().events().subscribe(e -> {
+        if (e.warning()) {
+            getLogger().warning(e.subject() + ": " + e.message());
+        }
+})) {
+    // ...
+}
+```
+
+**A feed and not a ledger.** An agent that was disconnected missed what
+happened while it was gone, and nothing replays it: the network picture it
+re-syncs on reconnect is the correction, and a better one than a replay would
+be — it says what is true now rather than what was true in an order nobody was
+watching. If you need a ledger, watch the objects.
+
+**You get the facts, one per transition.** What a player sees in chat is a
+collapsed summary — ten `Ready` transitions become one line — and you get the
+ten. The `message` is the operator's own sentence, the same one `kubectl get
+events` shows, so logging it puts you in agreement with whoever is reading the
+cluster.
+
+**`kind` is a string and not an enum.** The operator's vocabulary gains values,
+and an agent older than one has to show it rather than fail to parse the
+message it arrived in. Match on the ones you know; pass the rest through.
+
+**Your listener runs on a network callback thread.** Do not block it and do not
+touch the world from it — hand the work to your platform's scheduler. A
+listener that throws is dropped from the next dispatch rather than taking the
+session down with it, but it is still your bug and nothing tells you twice.
+
 ## What is not here yet
 
-Reading and moving a player. Subscribing to events, and starting or stopping
-servers, are designed
-([`docs/superpowers/specs/2026-08-27-cloud-api-design.md`](../../docs/superpowers/specs/2026-08-27-cloud-api-design.md))
-and not yet built. Methods will be **added** to `SpawneryApi`, never changed:
-plugins consume this interface and do not implement it, so an addition breaks
-no caller.
+Nothing from the design remains unbuilt at this layer. Methods will be
+**added** to `SpawneryApi`, never changed: plugins consume this interface and
+do not implement it, so an addition breaks no caller.

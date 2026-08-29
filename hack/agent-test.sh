@@ -72,6 +72,18 @@ DEADLINE="${DEADLINE:-240}"
 # and a phase that wanted its own would say so by declaring its own, the way
 # phase 3 does with MUTE_LIMIT.
 RENEW_AFTER=5
+
+# The group cmd/spawnery-stubop syncs to every agent, spelled here so the
+# console check below can assert the agent read it. Kept in step by hand with
+# syncedGroup in that file, and it is asserted rather than merely used: a
+# rename there would otherwise make this check pass by never matching anything
+# -- which is the failure mode of every grep-for-a-string test.
+SYNCED_GROUP=lobby
+if ! grep -q "syncedGroup   = \"$SYNCED_GROUP\"" "$(dirname "$0")/../cmd/spawnery-stubop/main.go"; then
+	echo "SYNCED_GROUP no longer matches syncedGroup in cmd/spawnery-stubop/main.go" >&2
+	echo "the console check below would look for a string nothing sends and pass by never matching" >&2
+	exit 1
+fi
 WINDOW=30
 RENEWALS=$((WINDOW / RENEW_AFTER))
 # At most two streams per renewal plus slack: one per renewal is correct, and
@@ -221,7 +233,19 @@ STUB_PID="$(start_stub "$EVENTS" "$WORK/stub.log" "passive" \
 	--renew-after "$RENEW_AFTER" \
 	--hard-deadline 20)"
 
-start_agent "$NAME" "$VOLUME" "$WORK/agent" "$WORK/config" "stubop:19443" "$IMAGE"
+# -i on this one container only, and deliberately not on the others.
+#
+# A Kubernetes pod runs with stdin closed, so keeping it open everywhere would
+# make every phase exercise a shape no pod has. This phase is the exception
+# because it is the only one that drives the server's console, which is how a
+# real administrator reaches /cloud when no player is online -- Paper's
+# entrypoint ends in `exec java ... --nogui`, so the container's stdin is the
+# console's stdin, and podman delivers it through `attach --no-stdin=false`.
+#
+# Measured before it was built, on a throwaway alpine container: a detached
+# `-i` container receives what attach writes. Without that measurement the
+# obvious next move would have been to contort this harness into a TTY.
+start_agent "$NAME" "$VOLUME" "$WORK/agent" "$WORK/config" "stubop:19443" "$IMAGE" -i
 
 # A dormant agent is silent by design, and silence is also what a hung one
 # looks like from here. The agent logs its reason on the way to dormancy, so
@@ -268,6 +292,52 @@ require_api_installed() {
 	# the honest answer for a pod the operator did not render, and not
 	# something to assert against.
 	echo "the plugin API is installed and available to other plugins"
+}
+
+# console <container> <line> - type one line into the server's console.
+#
+# Paper's entrypoint ends in `exec java ... --nogui`, so the container's stdin
+# is the console's stdin. Both runtimes attach stdin by default, and
+# --sig-proxy=false keeps a Ctrl-C here from stopping the container. The
+# timeout is the whole reason this is a function: attach returns when its own
+# stdin closes, and a runtime that ever stops doing that would hang this script
+# rather than fail it.
+console() {
+	local name="$1" line="$2"
+	printf '%s\n' "$line" | timeout 10 "$CONTAINER" attach --sig-proxy=false "$name" >/dev/null 2>&1 || true
+}
+
+# The command tree, run inside the shipped jar against a mirror the operator
+# filled.
+#
+# This is the first thing in the project that proves the whole path end to end:
+# the plugin registered a command with the platform, the operator's NetworkState
+# reached the mirror, the tree read it, and the adapter put the answer where a
+# person would see it. Every other test of that path is JUnit against a fake
+# source, and none of them runs the jar that ships.
+#
+# Retried rather than typed once. Two things lag: the platform buffers its own
+# stdout, and the mirror is empty until the first NetworkState arrives. A single
+# attempt would be a race between this script and both of them, and the failure
+# would look like a broken command rather than an early one.
+require_cloud_list() {
+	local name="$1" start=$SECONDS
+	until "$CONTAINER" logs "$name" 2>&1 | grep -q "$SYNCED_GROUP ("; do
+		if [ -z "$("$CONTAINER" ps -q --filter "name=^${name}$")" ]; then
+			echo "the container exited before answering a console command" >&2
+			"$CONTAINER" logs "$name" >&2
+			exit 1
+		fi
+		if [ $((SECONDS - start)) -gt "$DEADLINE" ]; then
+			echo "/cloud list never named the group the stub synced, within ${DEADLINE}s" >&2
+			echo "the tree is covered by JUnit against a fake source; this is the only check that runs it inside the shipped jar" >&2
+			"$CONTAINER" logs "$name" 2>&1 | tail -30 >&2
+			exit 1
+		fi
+		console "$name" "cloud list"
+		sleep 2
+	done
+	echo "/cloud list answered from inside the shipped jar and named the synced group"
 }
 
 # await_event <kind> [events file] [container] - the second phase runs its own
@@ -341,6 +411,37 @@ echo "waiting up to ${DEADLINE}s for the agent to greet..."
 await_event hello
 require_api_installed "$NAME"
 echo "the agent connected"
+
+# The console is reachable and the command answers from it. See
+# require_cloud_list for what this proves that no JUnit test can.
+require_cloud_list "$NAME"
+
+# The agent tells the operator whether anybody is there to read cloud events,
+# and with an empty server the answer is no.
+#
+# **What this phase cannot show, and why.** The obvious check would be to
+# trigger an event and watch it arrive in chat. It cannot: the feed goes to
+# online players holding spawnery.cloud.events, and this container has none --
+# there is no Minecraft client in this harness and there will not be one. The
+# console is not a player either; it holds every permission on Paper but
+# PaperAudience lists players, so the feed deliberately passes it by. Delivery
+# to a player's chat is covered by JUnit in :common (FeedTest) and by nothing
+# that runs the real jar. That is written down rather than worked around,
+# because a harness contorted into proving it would prove something else.
+#
+# What is reachable is the half the operator depends on: an agent with nobody
+# watching says so, and the operator sends nothing to it. Asserting the value
+# and not merely the message matters -- an agent that reported "yes" by default
+# would make the whole interest state pointless while every other check here
+# still passed.
+echo "waiting for the agent to report that nobody is watching for cloud events..."
+await_event event_interest
+if ! jq -e 'select(.kind == "event_interest") | select(.wanted == false)' <"$EVENTS" >/dev/null; then
+	echo "the agent asked for cloud events on a server with nobody online" >&2
+	jq -c 'select(.kind == "event_interest")' <"$EVENTS" >&2
+	exit 1
+fi
+echo "the agent reports no interest in events while nobody is online"
 
 # Reaching this line at all is the relocation proof: the agent cannot have
 # greeted without SessionLoop, OperatorChannel and BearerCredentials - the only

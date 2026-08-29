@@ -63,12 +63,20 @@ usable, and a group whose Network was deleted is exactly the one that piles
 failures up. Replacing a value that is always present with one that is
 sometimes empty, on that path, is the wrong trade.
 
-It matters more than it did. The milestone that adds a `/cloud` command turns
-this spec edit into something an admin types, so `/cloud start lobby` would
-clear a `CrashLoopBackoff` and start hammering a broken image from a fresh
-window. That milestone owns the fix and has two options this one did not:
-refuse a scale while the group is `Degraded`, or carry the streak across the
-edit explicitly.
+**This entry once said the `/cloud` milestone would inherit the hazard, and it
+will not.** The claim was that `/cloud start lobby` would be a spec edit an
+admin types, and so would clear a `CrashLoopBackoff` and start hammering a
+broken image from a fresh window. That command turned out not to edit the
+group at all: the operator has no write access to a `ServerGroup`'s spec, and
+the one on this project's own cluster is Flux-managed, so a `minReplicas` it
+wrote would be reverted. Extra capacity became its own object instead
+(`ScaleBoost`), which does not move `metadata.generation` and therefore cannot
+touch the streak.
+
+So what remains is the plain fact above and no consequence beyond it: a
+**person** editing `minReplicas` still clears their group's failure count.
+Whether that is worth fixing is a smaller question than it looked, and nothing
+currently forces it.
 
 Found by reading, not by a failure: writing 7a's plan against the code showed
 the ordering, and the task that would have changed this was removed from the
