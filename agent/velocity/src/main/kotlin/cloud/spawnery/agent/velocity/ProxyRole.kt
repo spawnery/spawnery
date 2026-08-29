@@ -4,6 +4,7 @@ import cloud.spawnery.agent.AgentRole
 import cloud.spawnery.agent.CloudConnector
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
+import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.pb.AgentServiceGrpc
 import cloud.spawnery.agent.pb.BackendPlayers
 import cloud.spawnery.agent.pb.PlayerRoster
@@ -97,6 +98,8 @@ class ProxyRole(
     private val mirror: NetworkMirror,
     /** Where an answer to this agent's own request goes. Last, as ever. */
     private val connector: CloudConnector,
+    /** Where a cloud event goes on its way to somebody's chat. Last, as ever. */
+    private val feed: Feed,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
      * Whether a `FullSync` has ever been applied, paired with the last
@@ -401,6 +404,13 @@ class ProxyRole(
 
             OperatorToProxy.MessageCase.CLOUD_RESPONSE -> {
                 connector.answer(message.cloudResponse)
+                Directive.None
+            }
+            OperatorToProxy.MessageCase.CLOUD_EVENT -> {
+                // Buffered rather than sent: this runs on a gRPC callback
+                // thread, and the window that turns ten Ready transitions into
+                // one line closes on the proxy's own timer.
+                feed.onEvent(message.cloudEvent)
                 Directive.None
             }
             OperatorToProxy.MessageCase.NETWORK_STATE -> {

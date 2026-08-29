@@ -2,6 +2,9 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.NetworkMirror
+import cloud.spawnery.agent.Feed
+import cloud.spawnery.agent.FeedAudience
+import cloud.spawnery.agent.FeedState
 import cloud.spawnery.agent.dormantConnector
 import cloud.spawnery.agent.pb.DrainPlayers
 import cloud.spawnery.agent.pb.FullSync
@@ -40,6 +43,19 @@ import java.util.UUID
  * real observable effects cannot pass against a role that called a mock in a
  * way the production wiring would not.
  */
+/**
+ * A feed with nobody online. None of these tests is about the feed, and an
+ * audience that answers "nobody" makes the dependency inert rather than mocked.
+ */
+private fun inertFeed(): Feed = Feed(
+    object : FeedAudience {
+        override fun holders(permission: String): List<UUID> = emptyList()
+        override fun send(player: UUID, message: String) = Unit
+    },
+    FeedState(),
+    System::currentTimeMillis,
+)
+
 class ProxyRoleTest {
     private val registry = FakeRegistry()
     private val logs = mutableListOf<Pair<String, Throwable?>>()
@@ -64,6 +80,7 @@ class ProxyRoleTest {
         log = { message, error -> logs += message to error },
         mirror = mirror,
         connector = dormantConnector(),
+        feed = inertFeed(),
     )
 
     @Test
@@ -536,6 +553,7 @@ class ProxyRoleTest {
             log = { message, error -> logs += message to error },
             mirror = mirror,
             connector = dormantConnector(),
+            feed = inertFeed(),
         )
 
     private fun backend(name: String, address: String, group: String): PbServer =
@@ -589,6 +607,7 @@ class ProxyRoleTest {
             log = { message, error -> logs += message to error },
             mirror = NetworkMirror(),
             connector = dormantConnector(),
+            feed = inertFeed(),
         )
 
         val reports = role.extraReports()

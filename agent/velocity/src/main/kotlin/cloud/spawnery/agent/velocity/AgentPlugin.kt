@@ -2,6 +2,8 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.CloudConnector
 import cloud.spawnery.agent.cloudCommand
+import cloud.spawnery.agent.Feed
+import cloud.spawnery.agent.FeedState
 import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
@@ -11,6 +13,7 @@ import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
+import cloud.spawnery.agent.pb.EventInterest
 import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerJoinedServer
 import cloud.spawnery.agent.pb.ProxyMessage
@@ -124,6 +127,42 @@ class AgentPlugin @Inject constructor(
     private var router: Router? = null
     private var rescue: Rescue? = null
     private var drain: Drain? = null
+
+    /**
+     * Who has turned the feed off. Built here rather than in start(), because
+     * it outlives a reconnect and a player who typed the command should not
+     * find it undone by one.
+     */
+    private val feedState = FeedState()
+    private var feed: Feed? = null
+
+    /**
+     * The last EventInterest this agent sent, or null on a stream it has not
+     * reported on.
+     *
+     * Null and not false: the operator's answer for a session it has never
+     * seen is "no" and it remembers nothing across a renewal, so a new stream
+     * has to be told even when the answer has not moved.
+     */
+    private var lastInterest: Boolean? = null
+
+    /**
+     * Tells the operator whether anybody is here to read events.
+     *
+     * Sent only when the answer changes. EventInterest is a state, and one
+     * resent every second would be a report the operator has to read in order
+     * to learn nothing.
+     */
+    private fun reportInterest(wanted: Boolean) {
+        if (lastInterest == wanted) return
+        val loop = this.loop ?: return
+        lastInterest = wanted
+        loop.send(
+            ProxyMessage.newBuilder()
+                .setEventInterest(EventInterest.newBuilder().setWanted(wanted))
+                .build(),
+        )
+    }
     private var fallbackGroups: List<String> = emptyList()
     private var sampling: ScheduledTask? = null
     private var scheduler: ScheduledExecutorService? = null
@@ -204,6 +243,8 @@ class AgentPlugin @Inject constructor(
             override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
             override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
         }
+        val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis)
+        this.feed = feed
         val api = MirrorApi(mirror, self, connector)
         Spawnery.install(api)
         // Velocity takes the node whenever, so this sits next to the install
@@ -240,6 +281,7 @@ class AgentPlugin @Inject constructor(
             log = ::warn,
             mirror = mirror,
             connector = connector,
+            feed = feed,
         )
 
         val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -258,7 +300,21 @@ class AgentPlugin @Inject constructor(
         // Through the Players seam rather than proxy.playerCount directly, so
         // the sampling path is the one Router and Drain are tested against.
         sampling = proxy.scheduler
-            .buildTask(this, Runnable { state.sample(players.count()) })
+            .buildTask(
+                this,
+                Runnable {
+                    state.sample(players.count())
+                    // The feed's window closes here, and the interest is
+                    // recomputed on the same tick: a player joining, leaving
+                    // or gaining a permission all change the answer, and
+                    // watching for each separately is three subscriptions to
+                    // get wrong.
+                    this.feed?.let {
+                        it.tick()
+                        reportInterest(it.wanted())
+                    }
+                },
+            )
             .repeat(SAMPLE_SECONDS, TimeUnit.SECONDS)
             .schedule()
 
@@ -292,6 +348,13 @@ class AgentPlugin @Inject constructor(
             // the failure is already visible in `kubectl get pods`, and these
             // lines are what say why.
             log = ::warn,
+            // See Paper's AgentPlugin: the connector fails what is in flight
+            // rather than resending it, and the interest is forgotten because
+            // the operator's answer for a session it has never seen is "no".
+            onStreamChanged = {
+                connector.onStreamChanged()
+                lastInterest = null
+            },
         )
         loop = session
         session.start()

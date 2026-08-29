@@ -355,6 +355,21 @@ class SessionLoop<Req, Resp>(
      * Injected only so tests need not wait it out.
      */
     private val fallbackAnswerBoundMillis: Long = FALLBACK_ANSWER_BOUND_MILLIS,
+    /**
+     * Called once for every stream that becomes this loop's current one.
+     *
+     * The hook exists because two things an agent holds are per-stream and
+     * nothing else could tell them a renewal happened: the requests in flight,
+     * which [CloudConnector.onStreamChanged] fails rather than resends because
+     * only the caller knows whether repeating one is safe, and any state the
+     * operator does not remember across a changeover -- EventInterest being
+     * the first of those.
+     *
+     * Last, with a default that does nothing, so no existing construction
+     * changes. It runs on the thread that installed the stream, before the
+     * agent sends anything on it.
+     */
+    private val onStreamChanged: () -> Unit = {},
 ) : AutoCloseable {
     private val current = AtomicReference<Session<Req>?>(null)
     private val attempt = AtomicInteger(0)
@@ -530,6 +545,9 @@ class SessionLoop<Req, Resp>(
         // onNext, once the operator has answered. This is also why the renewal
         // path below has no close() of its own.
         current.set(session)
+        // Before anything is sent on it: a report that raced this would be
+        // sent on the new stream and then immediately undone by a reset.
+        onStreamChanged()
 
         // The obligation the outgoing stream just gave up needs a floor: this
         // attempt now owes the agent its next stream, and an operator that
