@@ -140,25 +140,21 @@
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
           #
-          # **0.2.8 does not move this number.** The change it carries is one
-          # line of internal/podspec -- the rendered container keeps stdin open
-          # -- and nothing under agent/ is different, so both game images keep
-          # the 0.2.7 tags a cluster has already pulled. That the operator
-          # upgrade nonetheless rolls every pod is a property of the pod hash
-          # and not of the images: what a cluster pulls is unchanged, what it
-          # renders is not.
+          # **0.2.9 moves it: /cloud writes in colour now**, which is entirely
+          # inside the shipped jars. 0.2.8 did not, because its one change was
+          # a line of internal/podspec.
           #
-          # 0.2.7 moved it and 0.2.6 did not, which is the separation working
-          # in both directions within two releases: 0.2.6 was a reconciler
-          # change alone, 0.2.7 was a whole /cloud command tree inside the
-          # shipped jars. 0.2.6 is therefore missing from the tag sequence
-          # entirely -- ghcr.io/spawnery/paper:26.2-0.2.6 does not exist -- and
-          # the gap is the honest record that no agent was built then.
+          # The sequence so far, and it is not a miscount: 0.2.5, 0.2.7, 0.2.9.
+          # 0.2.6 and 0.2.8 built no agent, so
+          # ghcr.io/spawnery/paper:26.2-0.2.6 and -0.2.8 simply do not exist,
+          # and each gap is the honest record of a release that carried no jar.
+          # Numbering a jar after one of them would name it for a release that
+          # never contained it.
           #
           # A Paper build that moves without this number moving would collide,
           # which is what makes a bump obligatory when the images really do
           # change rather than tidy.
-          imageVersion = "0.2.7";
+          imageVersion = "0.2.9";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -169,11 +165,11 @@
           #
           # 0.2.6 was the first release to exercise that separation in the
           # direction it was built for: a reconciler change alone, with this
-          # number moving and imageVersion standing still. 0.2.7 moved both,
-          # because milestone 7c changed both sides. 0.2.8 is the reconciler
-          # case again -- internal/podspec renders stdin open so that the
-          # console v0.2.7's /cloud command needs is reachable at all.
-          operatorVersion = "0.2.8";
+          # number moving and imageVersion standing still. 0.2.8 was the same
+          # case. 0.2.7 and 0.2.9 move both, because both changed the operator
+          # and the agents together -- 0.2.9 brings plugins from a volume on
+          # this side and colour on the other.
+          operatorVersion = "0.2.9";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
