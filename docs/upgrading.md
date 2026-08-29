@@ -511,17 +511,22 @@ takes a server out of rotation without moving anybody, and
 `spawnery.cloud.scale` spends money.
 
 **The console holds all three without being granted anything**, by default on
-both platforms. So
+both platforms — but on a pod this operator renders you cannot reach it.
+`internal/podspec` sets neither `stdin` nor `tty` on the container, so
+`kubectl attach` connects and the keystrokes go nowhere: the command never
+reaches the server. Measured on 2026-08-29 against a live 0.2.7 lobby —
+`kubectl attach -i` returned cleanly and `cloud list` produced no line in the
+log.
 
-```bash
-kubectl attach -it lobby-a3f9 -c minecraft
-```
+An earlier draft of this section said `kubectl attach` was the way to check the
+upgrade without granting anything. **It is not, and there is no console route
+on a rendered pod today.** To use `/cloud`, grant one of these permissions to a
+player.
 
-reaches `/cloud` on a network where no player has any of these. That is also
-how to check the upgrade worked without granting a permission first: `cloud
-list` names the groups the operator has told this agent about — and it is what
-`hack/agent-test.sh` drives against the shipped image, so the path is measured
-rather than assumed.
+The console path itself is real and is exercised: `hack/agent-test.sh` drives
+`cloud list` into a container it starts with `-i` and asserts the answer. What
+is missing is `stdin: true` on the pod the operator renders, which is a change
+to `internal/podspec` and not to anything here.
 
 On a Velocity proxy the console's permissions come from a
 `PermissionFunction` that a permissions plugin is free to replace; the default

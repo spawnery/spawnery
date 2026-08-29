@@ -137,13 +137,17 @@ upgrade the command answers "unknown command" to every player. That is the safe
 state, and it looks exactly like a broken install — grant one of these in
 whatever permissions plugin the network runs, and it appears.
 
-The console holds all three by default, which is why an operator can drive
-`/cloud` from `kubectl attach` without granting anything to anybody. On Paper
-that is how the console sender answers every permission; on Velocity the
-console starts with `PermissionFunction.ALWAYS_TRUE` — checked in the pinned
-`velocity-3.5.1-615.jar` — and a permissions plugin that handles
-`PermissionsSetupEvent` may replace it. Most grant the console everything, but
-if `/cloud` is invisible from a proxy console that is where to look.
+The console holds all four by default — on Paper that is how the console sender
+answers every permission, and on Velocity the console starts with
+`PermissionFunction.ALWAYS_TRUE`, checked in the pinned
+`velocity-3.5.1-615.jar`. A Velocity permissions plugin that handles
+`PermissionsSetupEvent` may replace that, which is where to look if `/cloud` is
+invisible from a proxy console.
+
+**That does not give you a way in on a running pod.** The operator renders
+containers without `stdin`, so `kubectl attach` connects and delivers nothing —
+measured on 2026-08-29 against a live 0.2.7 lobby. Granting a permission to a
+player is the only route today.
 
 | Permission | What somebody holding it can do | What a player would notice |
 |---|---|---|
