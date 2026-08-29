@@ -106,7 +106,7 @@ Every key in `values.yaml`:
 | Key | Default | What it does |
 |---|---|---|
 | `image.repository` | `ghcr.io/spawnery/spawnery-operator` | The operator image. |
-| `image.tag` | `"0.2.6"` | Used when `image.digest` is empty. |
+| `image.tag` | `"0.2.7"` | Used when `image.digest` is empty. |
 | `image.digest` | `""` | Set, this wins over `image.tag` and the image is referenced by digest (`repository@sha256:...`). This is what `hack/publish.sh`'s `WRITE_DIGEST=1` path writes once a real `make publish` has pushed the operator image. **The value checked in at any tag describes the release before it, and structurally cannot describe its own.** The digest comes from `skopeo copy --digestfile`, which exists only after the tag has been published, so the commit writing it back is necessarily behind the tag it names — measured on the RKE2 rollout, where a `HelmRelease` installing the chart at `v0.1.0` ran the *tag* rather than a digest. A deployment that wants an immutable reference pins it where the deployment is described, not here. |
 | `image.pullPolicy` | `IfNotPresent` | Passed straight to the container. `hack/e2e.sh` overrides this to `Never` for its own run, so a missing local image fails loudly instead of being fetched. |
 | `resources.requests.cpu` | `100m` | Passed straight to the operator container. |

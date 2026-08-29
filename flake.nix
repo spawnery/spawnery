@@ -140,23 +140,24 @@
           # never drift apart the way the agent derivation's and
           # paper-image.nix's separate defaults once could.
           #
-          # **0.2.6 does not move this number, and that is the point of it
-          # being a separate one.** Milestone 7a is entirely inside
-          # internal/controller: nothing under agent/ changed, Paper is still
-          # build 119 and Velocity still 3.5.1-615, so both game images would
-          # be published over tags a cluster has already pulled. hack/publish.sh
-          # refuses that, and release.yml invokes it once per image precisely
-          # so the refusal on these two does not stop the operator's push.
+          # **0.2.7 moves it and 0.2.6 did not**, which is the separation
+          # working in both directions within two releases. 0.2.6 was milestone
+          # 7a, entirely inside internal/controller: nothing under agent/
+          # changed, so both game images kept the 0.2.5 tags a cluster had
+          # already pulled. Milestone 7c is the opposite -- a /cloud command
+          # tree, a chat feed and an EventBus, all of it inside the shipped
+          # jars -- so the images really do change and the tag has to say so.
           #
-          # 0.2.5 was the last release that moved it: a Velocity agent change,
-          # the proxy reporting the read timeout it actually parsed, which is
-          # the deadline the operator races when a backend's node dies.
+          # It skips 0.2.6 rather than counting to it. The tag is
+          # <upstream>-<imageVersion>, so ghcr.io/spawnery/paper:26.2-0.2.6
+          # simply does not exist, and that gap is the honest record: there was
+          # no agent build in that release. Numbering it 0.2.6 now would name a
+          # jar after a release that never contained one.
           #
-          # The tag is <upstream>-<imageVersion>, so a Paper build that moves
-          # without this number moving would collide the same way. That is what
-          # makes a bump obligatory when the images really do change, rather
-          # than tidy.
-          imageVersion = "0.2.5";
+          # A Paper build that moves without this number moving would collide
+          # the same way, which is what makes a bump obligatory when the images
+          # really do change rather than tidy.
+          imageVersion = "0.2.7";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -165,10 +166,13 @@
           # fix in the reconciler claiming a new agent version, and an agent
           # release renaming an unchanged operator image.
           #
-          # 0.2.6 is the first release to exercise that separation in the
+          # 0.2.6 was the first release to exercise that separation in the
           # direction it was built for: a reconciler change alone, with this
-          # number moving and imageVersion standing still.
-          operatorVersion = "0.2.6";
+          # number moving and imageVersion standing still. 0.2.7 moves both,
+          # because milestone 7c changed both sides -- the operator gained a
+          # ScaleBoost reader, a writing request path and a CloudEvent
+          # recorder, and the agents gained everything that reads them.
+          operatorVersion = "0.2.7";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
