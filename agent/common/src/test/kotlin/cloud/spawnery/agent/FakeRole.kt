@@ -101,6 +101,11 @@ class FakeRole(
  * alternative that was rejected. `ServerRole.onMessage` carries a note pointing
  * back here.
  */
+// NETWORK_STATE is deliberately absent below and falls to `else`, which is the
+// right answer rather than an omission: ServerRole's own branch for it returns
+// Directive.None too, and its whole effect is a side effect on the mirror --
+// something this copy does not model and the loop cannot observe. The two
+// agree on the only thing this function claims to say.
 private fun asServerRoleWould(message: OperatorToServer): Directive =
     when (message.messageCase) {
         OperatorToServer.MessageCase.REPORT_INTERVAL ->

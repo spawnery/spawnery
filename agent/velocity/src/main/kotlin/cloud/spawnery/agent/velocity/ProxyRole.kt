@@ -1,9 +1,13 @@
 package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.AgentRole
+import cloud.spawnery.agent.CloudConnector
+import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.pb.AgentServiceGrpc
 import cloud.spawnery.agent.pb.BackendPlayers
+import cloud.spawnery.agent.pb.PlayerRoster
+import cloud.spawnery.agent.pb.RosterEntry
 import cloud.spawnery.agent.pb.Hello
 import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerCount
@@ -85,6 +89,14 @@ class ProxyRole(
      */
     private val onSetReady: (Boolean) -> Unit,
     private val log: (String, Throwable?) -> Unit,
+    /**
+     * Where the operator's picture of the network is kept for the plugin API
+     * to read. Last, for the reason the parameter above [readTimeoutMillis]
+     * gives about position.
+     */
+    private val mirror: NetworkMirror,
+    /** Where an answer to this agent's own request goes. Last, as ever. */
+    private val connector: CloudConnector,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
      * Whether a `FullSync` has ever been applied, paired with the last
@@ -221,14 +233,37 @@ class ProxyRole(
      * player; nothing here waits on Velocity's event thread.
      */
     override fun extraReports(): List<ProxyMessage> {
+        // One read of the roster, two messages from it. Reading players.all()
+        // twice would let a join land between them and put a player in the
+        // roster who is not in the counts -- two answers to one question, from
+        // one tick.
+        val snapshot = players.all()
+
         val counts = mutableMapOf<String, Int>()
-        for (player in players.all()) {
-            val server = player.attachedServer ?: continue
-            counts[server] = (counts[server] ?: 0) + 1
+        val roster = PlayerRoster.newBuilder()
+        for (player in snapshot) {
+            val attached = player.attachedServer
+            if (attached != null) {
+                counts[attached] = (counts[attached] ?: 0) + 1
+            }
+            // Everyone, including a player attached to nothing: they are on
+            // this proxy, which is what the roster is about. The counts skip
+            // them because they are on no backend, which is what those are
+            // about. The two differ here on purpose.
+            roster.addPlayers(
+                RosterEntry.newBuilder()
+                    .setUuid(player.uuid.toString())
+                    .setName(player.username)
+                    .setServer(attached ?: ""),
+            )
         }
+
         return listOf(
             ProxyMessage.newBuilder()
                 .setBackendPlayers(BackendPlayers.newBuilder().putAllPlayers(counts))
+                .build(),
+            ProxyMessage.newBuilder()
+                .setPlayerRoster(roster)
                 .build(),
         )
     }
@@ -364,6 +399,18 @@ class ProxyRole(
                     message.sessionDeadline.hardDeadlineSeconds,
                 )
 
+            OperatorToProxy.MessageCase.CLOUD_RESPONSE -> {
+                connector.answer(message.cloudResponse)
+                Directive.None
+            }
+            OperatorToProxy.MessageCase.NETWORK_STATE -> {
+                // The whole effect is the side effect, exactly as on the
+                // server side. It sits inside the same runCatching every
+                // other branch does, so a malformed state costs this proxy
+                // a mirror update and never its session.
+                mirror.apply(message.networkState)
+                Directive.None
+            }
             // Including MESSAGE_NOT_SET. A newer operator against an older
             // agent has to keep working, exactly as handleProxy's own unknown
             // branch does in the other direction.

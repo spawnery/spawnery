@@ -680,6 +680,56 @@ func (s *stub) enter(current *live) {
 	time.Sleep(retirementHeadStart)
 }
 
+// recorderLike is what answerCloudRequest needs of the stub's event log.
+type recorderLike interface {
+	record(kind string, fields map[string]any)
+}
+
+// answerCloudRequest records a request and answers it.
+//
+// The stub answers every connect with ordered=true and the target it was
+// given. It is not deciding anything -- the operator's own resolution is
+// tested in internal/agentserver -- and what the phase using this asserts is
+// the round trip: a real jar built a request, correlated the answer, and
+// completed the future a plugin would be holding.
+func answerCloudRequest(of func(map[string]any) map[string]any, events recorderLike, req *agentpb.CloudRequest) *agentpb.CloudResponse {
+	c := req.GetConnect()
+	events.record("cloud_request", of(map[string]any{
+		"id":     req.GetId(),
+		"player": c.GetPlayerUuid(),
+		"server": c.GetServer(),
+		"group":  c.GetGroup(),
+	}))
+	target := c.GetServer()
+	if target == "" {
+		target = c.GetGroup()
+	}
+	return &agentpb.CloudResponse{
+		Id: req.GetId(),
+		Result: &agentpb.CloudResponse_Connect{
+			Connect: &agentpb.ConnectResult{Ordered: true, Target: target},
+		},
+	}
+}
+
+// networkState is the mirror both agent kinds are sent on connect.
+//
+// One group and one server, which is enough for the only thing the phases can
+// assert today: that a shipped jar receives a message it does not understand
+// and keeps its session. Neither agent consumes this yet.
+func networkState() *agentpb.NetworkState {
+	return &agentpb.NetworkState{
+		Groups: []*agentpb.GroupState{{
+			Name: syncedGroup, Kind: agentpb.GroupState_EPHEMERAL,
+			Replicas: 1, ReadyReplicas: 1, FreeSlots: 100,
+		}},
+		Servers: []*agentpb.ServerState{{
+			Name: syncedName, Group: syncedGroup, Phase: "Ready",
+			Players: 0, Slots: 100, Registered: true,
+		}},
+	}
+}
+
 func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) error {
 	return serveSession(s, stream, []*agentpb.OperatorToServer{
 		{Message: &agentpb.OperatorToServer_ReportInterval{
@@ -691,6 +741,11 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 				HardDeadlineSeconds: s.hardDeadline,
 			},
 		}},
+		// Sent to an agent that does not consume it, on purpose. What the
+		// phase asserts is that the jar keeps its session afterwards -- the
+		// property every additive proto change rests on, and one no unit test
+		// on either side can observe.
+		{Message: &agentpb.OperatorToServer_NetworkState{NetworkState: networkState()}},
 	}, nil, s.observeServer)
 }
 
@@ -743,6 +798,10 @@ func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) erro
 				HardDeadlineSeconds: s.hardDeadline,
 			},
 		}},
+		// The same message and the same reason as ServerSession's. Ahead of
+		// the FullSync deliberately: if an unknown message could unseat the
+		// gate's opening, this is where it would.
+		{Message: &agentpb.OperatorToProxy_NetworkState{NetworkState: networkState()}},
 	}, later, s.observeProxy)
 }
 
@@ -778,7 +837,11 @@ func serveSession[In, Out any](
 	stream grpc.BidiStreamingServer[In, Out],
 	opening []*Out,
 	later []delayed[Out],
-	observe func(func(map[string]any) map[string]any, *In),
+	// observe records one received message and may answer it. A non-nil
+	// return is sent on this stream, which is how a CloudRequest gets its
+	// CloudResponse: the answer belongs to the stream that asked, exactly as
+	// it does in the real operator.
+	observe func(func(map[string]any) map[string]any, *In) *Out,
 ) error {
 	index := s.streams.Add(1) - 1
 	// Verbatim. The script compares this against "Bearer <token>" character for
@@ -870,7 +933,12 @@ func serveSession[In, Out any](
 				// the expected outcome here, not a failure of the stub.
 				return nil
 			}
-			observe(of, message)
+			if answer := observe(of, message); answer != nil {
+				if err := stream.Send(answer); err != nil {
+					s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
+					return nil
+				}
+			}
 		}
 	}
 
@@ -904,13 +972,18 @@ func serveSession[In, Out any](
 			s.events.record("stream_closed", of(map[string]any{"error": closeReason(err)}))
 			return nil
 		case message := <-received:
-			observe(of, message)
+			if answer := observe(of, message); answer != nil {
+				if err := stream.Send(answer); err != nil {
+					s.events.record("stream_closed", of(map[string]any{"error": err.Error()}))
+					return nil
+				}
+			}
 		}
 	}
 }
 
 // observeServer records one message from a server agent.
-func (s *stub) observeServer(of func(map[string]any) map[string]any, message *agentpb.ServerMessage) {
+func (s *stub) observeServer(of func(map[string]any) map[string]any, message *agentpb.ServerMessage) *agentpb.OperatorToServer {
 	switch body := message.Message.(type) {
 	case *agentpb.ServerMessage_Hello:
 		s.hello(of, body.Hello)
@@ -918,9 +991,16 @@ func (s *stub) observeServer(of func(map[string]any) map[string]any, message *ag
 		s.events.record("ready", of(map[string]any{}))
 	case *agentpb.ServerMessage_PlayerCount:
 		s.playerCount(of, body.PlayerCount)
+	case *agentpb.ServerMessage_CloudRequest:
+		return &agentpb.OperatorToServer{
+			Message: &agentpb.OperatorToServer_CloudResponse{
+				CloudResponse: answerCloudRequest(of, s.events, body.CloudRequest),
+			},
+		}
 	default:
 		s.events.record("unknown", of(map[string]any{}))
 	}
+	return nil
 }
 
 // observeProxy records one message from a proxy agent.
@@ -928,7 +1008,7 @@ func (s *stub) observeServer(of func(map[string]any) map[string]any, message *ag
 // There is no Ready: a proxy's readiness reaches the operator through the
 // kubelet's probe on the agent's own port and nowhere else, which is why
 // hack/agent-test.sh probes that port rather than reading this trace for it.
-func (s *stub) observeProxy(of func(map[string]any) map[string]any, message *agentpb.ProxyMessage) {
+func (s *stub) observeProxy(of func(map[string]any) map[string]any, message *agentpb.ProxyMessage) *agentpb.OperatorToProxy {
 	switch body := message.Message.(type) {
 	case *agentpb.ProxyMessage_Hello:
 		s.hello(of, body.Hello)
@@ -963,11 +1043,40 @@ func (s *stub) observeProxy(of func(map[string]any) map[string]any, message *age
 			})
 		}
 		s.events.record("backend_players", of(map[string]any{"backends": pairs}))
+	case *agentpb.ProxyMessage_PlayerRoster:
+		// Sorted by UUID for the reason backend_players is sorted by name: a
+		// trace this file exists to be asserted on cannot hand a test an
+		// order that depends on a map iteration.
+		//
+		// The UUID is what a phase asserts. The name is whatever the join tool
+		// was told to use, so asserting it would prove only that a string
+		// travelled; the UUID is what Velocity computed for the player it
+		// authenticated.
+		entries := body.PlayerRoster.GetPlayers()
+		players := make([]map[string]any, 0, len(entries))
+		for _, p := range entries {
+			players = append(players, map[string]any{
+				"uuid":   p.GetUuid(),
+				"name":   p.GetName(),
+				"server": p.GetServer(),
+			})
+		}
+		sort.Slice(players, func(i, j int) bool {
+			return players[i]["uuid"].(string) < players[j]["uuid"].(string)
+		})
+		s.events.record("player_roster", of(map[string]any{"players": players}))
 	case *agentpb.ProxyMessage_Heartbeat:
 		s.events.record("heartbeat", of(map[string]any{}))
+	case *agentpb.ProxyMessage_CloudRequest:
+		return &agentpb.OperatorToProxy{
+			Message: &agentpb.OperatorToProxy_CloudResponse{
+				CloudResponse: answerCloudRequest(of, s.events, body.CloudRequest),
+			},
+		}
 	default:
 		s.events.record("unknown", of(map[string]any{}))
 	}
+	return nil
 }
 
 // hello and playerCount are what the two observers share. The field names are

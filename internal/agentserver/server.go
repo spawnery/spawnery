@@ -45,6 +45,7 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/netstate"
 )
 
 const (
@@ -180,6 +181,21 @@ const (
 type ProxyFleet interface {
 	// Join is *proxyreg.Fleet.Join: see its doc comment for the contract.
 	Join(ctx context.Context, namespace, group, podUID string) (<-chan *agentpb.OperatorToProxy, func(), error)
+	// Move is *proxyreg.Fleet.Move: it broadcasts and reports nothing, which
+	// is why it returns nothing here either.
+	Move(namespace, playerUUID, targetServer string)
+}
+
+// ServerFanout is the backend side's counterpart, narrowed to the one method
+// ServerSession calls for the reasons ProxyFleet gives above -- a package that
+// depended on the whole of internal/serverreg would drag its resync ticker and
+// its metric into every test that opens a stream.
+//
+// A backend joins by namespace and not by group: its mirror is the whole
+// network, where a proxy's FullSync is scoped to what its own group routes to.
+type ServerFanout interface {
+	// Join is *serverreg.Registry.Join: see its doc comment for the contract.
+	Join(ctx context.Context, namespace, podUID string) (<-chan *agentpb.OperatorToServer, func(), error)
 }
 
 // Options configures the server. The three durations are what the operator
@@ -197,6 +213,15 @@ type Options struct {
 	// The narrow ProxyFleet interface, not *proxyreg.Fleet: see its doc
 	// comment for why.
 	Proxies ProxyFleet
+	// Servers is the fan-out every backend session joins. Required for
+	// ServerSession, and refused in New for the reason a nil Proxies is: a nil
+	// here surfaces as a panic inside a session, minutes after start and in a
+	// goroutine, rather than as a startup error.
+	Servers ServerFanout
+	// State builds the picture a request is resolved against. Required for
+	// CloudRequest and refused in New with the two fan-outs, for the reason
+	// they are: a nil here is a panic inside a session rather than at start.
+	State netstate.Source
 	// ReportInterval is how often an agent should report its player count.
 	ReportInterval time.Duration
 	// RenewAfter is when an agent should open its next stream — before the
@@ -223,6 +248,9 @@ type Server struct {
 
 	opts     Options
 	sessions *sessions
+	// requestRate bounds how often one pod may ask for something. Its own
+	// bucket and not grpcauth's: see requestLimiter for why two.
+	requestRate *requestLimiter
 	// addr is the address the kernel actually handed out. It is written once
 	// by Start and read from other goroutines, hence the atomic.
 	addr atomic.Pointer[string]
@@ -245,7 +273,13 @@ func New(opts Options) *Server {
 	if opts.Proxies == nil {
 		panic("agentserver: no proxy fleet")
 	}
-	return &Server{opts: opts, sessions: newSessions()}
+	if opts.Servers == nil {
+		panic("agentserver: no server fanout")
+	}
+	if opts.State.Reader == nil {
+		panic("agentserver: no network state source")
+	}
+	return &Server{opts: opts, sessions: newSessions(), requestRate: newRequestLimiter(opts.Clock)}
 }
 
 // Addr is the address the listener actually bound, empty until Start has one.
@@ -372,6 +406,12 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 	}
 	defer cleanup()
 
+	outbox, leaveFanout, err := s.opts.Servers.Join(ctx, id.Namespace, id.PodUID)
+	if err != nil {
+		return status.Errorf(codes.Unavailable, "join the server fanout: %v", err)
+	}
+	defer leaveFanout()
+
 	received, errs := recvPump(ctx, stream.Recv)
 
 	for {
@@ -384,7 +424,29 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 			}
 			return err
 		case msg := <-received:
-			s.handle(logger, id, msg)
+			if answer := s.handle(ctx, logger, id, msg); answer != nil {
+				if err := stream.Send(answer); err != nil {
+					return err
+				}
+			}
+		case msg, ok := <-outbox:
+			if !ok {
+				// The same two-readiness race ProxySession's own branch
+				// explains: a renewal cancels this ctx and closes this outbox
+				// within a few lines of each other, so both cases can be ready
+				// at once and Go picks arbitrarily. ctx.Err() is what tells a
+				// supersede apart from an agent that actually fell behind.
+				if ctx.Err() != nil {
+					return status.Error(codes.Unavailable, "session ended, reconnect with a fresh token")
+				}
+				// Cut loose. Ending the stream is the point: a mirror the
+				// agent cannot know is stale is worse than a reconnect, and
+				// the reconnect rebuilds it from a fresh state.
+				return status.Error(codes.ResourceExhausted, "server fell behind, reconnect for a fresh state")
+			}
+			if err := stream.Send(msg); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -501,7 +563,14 @@ func (s *Server) sessionPrologue(streamCtx context.Context, role agent.Role, sen
 
 // handle applies one message. An unknown branch is ignored so a newer agent
 // against an older operator keeps working.
-func (s *Server) handle(logger logr.Logger, id grpcauth.Identity, msg *agentpb.ServerMessage) {
+// The return is the answer to a request, or nil, for the reason handleProxy's
+// own comment gives: an answer belongs to the stream that asked.
+func (s *Server) handle(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	msg *agentpb.ServerMessage,
+) *agentpb.OperatorToServer {
 	switch m := msg.GetMessage().(type) {
 	case *agentpb.ServerMessage_Hello:
 		// Ready is a state, not an event: the agent repeats it on every
@@ -519,7 +588,23 @@ func (s *Server) handle(logger logr.Logger, id grpcauth.Identity, msg *agentpb.S
 			RejectedReports.WithLabelValues(string(agent.RoleServer)).Inc()
 			logger.V(1).Info("discarded a player count", "reason", err.Error())
 		}
+	case *agentpb.ServerMessage_CloudRequest:
+		if c := m.CloudRequest.GetConnect(); c != nil {
+			resp := s.answerConnect(ctx, logger, id, m.CloudRequest.GetId(), c)
+			return &agentpb.OperatorToServer{
+				Message: &agentpb.OperatorToServer_CloudResponse{CloudResponse: resp},
+			}
+		}
+		// Answered rather than ignored, for the reason handleProxy gives.
+		return &agentpb.OperatorToServer{
+			Message: &agentpb.OperatorToServer_CloudResponse{
+				CloudResponse: refuse(m.CloudRequest.GetId(),
+					agentpb.RequestError_REASON_UNSPECIFIED,
+					"this operator does not know that request"),
+			},
+		}
 	}
+	return nil
 }
 
 // ProxySession is the Velocity agent's channel. It reads from the fan-out and
@@ -569,7 +654,11 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 			}
 			return err
 		case msg := <-received:
-			s.handleProxy(logger, id, msg)
+			if answer := s.handleProxy(ctx, logger, id, msg); answer != nil {
+				if err := stream.Send(answer); err != nil {
+					return err
+				}
+			}
 		case msg, ok := <-outbox:
 			if !ok {
 				// A renewal cancels this session's ctx and closes its outbox
@@ -597,7 +686,17 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 
 // handleProxy applies one message from a proxy. An unknown branch is ignored so
 // a newer agent against an older operator keeps working.
-func (s *Server) handleProxy(logger logr.Logger, id grpcauth.Identity, msg *agentpb.ProxyMessage) {
+// The return is the answer to a request, or nil. It goes back on the stream
+// the request arrived on rather than through the fan-out, because an answer
+// belongs to one stream and not to the pod: a renewal that displaced the
+// asking stream has already failed that request on the agent's side, and
+// delivering to the successor would complete an id it never minted.
+func (s *Server) handleProxy(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	msg *agentpb.ProxyMessage,
+) *agentpb.OperatorToProxy {
 	switch m := msg.GetMessage().(type) {
 	case *agentpb.ProxyMessage_Hello:
 		// A proxy's readiness is not carried here. The agent serves the pod's
@@ -634,13 +733,56 @@ func (s *Server) handleProxy(logger logr.Logger, id grpcauth.Identity, msg *agen
 			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
 			logger.V(1).Info("discarded a backend report", "reason", err.Error())
 		}
+	case *agentpb.ProxyMessage_PlayerRoster:
+		entries := make([]agent.RosterEntry, 0, len(m.PlayerRoster.GetPlayers()))
+		for _, p := range m.PlayerRoster.GetPlayers() {
+			// An entry with no UUID is dropped rather than stored under "":
+			// the reader keys on UUID, so a second empty one would silently
+			// replace the first and the roster would show one player where
+			// two are on.
+			if p.GetUuid() == "" {
+				continue
+			}
+			entries = append(entries, agent.RosterEntry{
+				UUID:   p.GetUuid(),
+				Name:   p.GetName(),
+				Server: p.GetServer(),
+			})
+		}
+		if err := s.opts.Agents.ReportRoster(id.PodUID, id.Namespace, entries); err != nil {
+			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
+			// V(1), and with no player name in it. This message is the one
+			// thing on this channel that identifies a person, and a rejected
+			// report is an agent bug rather than something an operator acts on
+			// per player.
+			logger.V(1).Info("discarded a roster report", "reason", err.Error())
+		}
 	case *agentpb.ProxyMessage_PlayerJoinedServer:
 		// Accepted and ignored. Nothing in milestones 3 or 4 consumes it —
 		// player counts come from the servers — and it is on the wire for the
 		// dashboard in project 4.
 		logger.V(1).Info("player joined a server",
 			"player", m.PlayerJoinedServer.GetPlayer(), "server", m.PlayerJoinedServer.GetServer())
+	case *agentpb.ProxyMessage_CloudRequest:
+		if c := m.CloudRequest.GetConnect(); c != nil {
+			resp := s.answerConnect(ctx, logger, id, m.CloudRequest.GetId(), c)
+			return &agentpb.OperatorToProxy{
+				Message: &agentpb.OperatorToProxy_CloudResponse{CloudResponse: resp},
+			}
+		}
+		// A request kind this operator does not know. Answered rather than
+		// ignored: an agent waiting on an id it will never hear about holds
+		// its future until the deadline, and the deadline is the slowest way
+		// to learn that an operator is older than a plugin.
+		return &agentpb.OperatorToProxy{
+			Message: &agentpb.OperatorToProxy_CloudResponse{
+				CloudResponse: refuse(m.CloudRequest.GetId(),
+					agentpb.RequestError_REASON_UNSPECIFIED,
+					"this operator does not know that request"),
+			},
+		}
 	}
+	return nil
 }
 
 // recvPump moves a stream's receive side onto channels, because Recv blocks

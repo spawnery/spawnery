@@ -38,6 +38,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
@@ -60,6 +61,14 @@ type Options struct {
 	ResyncInterval time.Duration
 	// OutboxSize bounds a session's queue. Zero means DefaultOutboxSize.
 	OutboxSize int
+	// State builds the NetworkState a session is sent after its FullSync.
+	//
+	// Zero-valued when a caller has none -- the tests that predate the mirror
+	// construct a Fleet without one -- and snapshot then simply sends no state
+	// message. A proxy that receives no mirror routes exactly as it did
+	// before; a proxy that receives no FullSync cannot route at all, and that
+	// asymmetry is why one is optional here and the other is not.
+	State netstate.Source
 }
 
 // session is one live proxy stream's queue.
@@ -262,6 +271,26 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 	for _, srv := range draining {
 		out = append(out, drainMessage(srv, fallbacks))
 	}
+
+	// Last, after the FullSync and the drains. ProxyRole opens the pod's
+	// readiness gate on the FullSync, so a message ahead of it would reach an
+	// agent that is not yet routable -- and the drains have to follow the list
+	// they refer to.
+	//
+	// A state that cannot be built is logged and skipped rather than failing
+	// the snapshot. Routing is what keeps players connected and the mirror is
+	// what a plugin reads; losing the second must not cost the first.
+	if f.opts.State.Reader != nil {
+		state, err := f.opts.State.Build(ctx, namespace)
+		if err != nil {
+			log.FromContext(ctx).V(1).Info("skipped a proxy's network state",
+				"namespace", namespace, "reason", err.Error())
+		} else {
+			out = append(out, &agentpb.OperatorToProxy{
+				Message: &agentpb.OperatorToProxy_NetworkState{NetworkState: state},
+			})
+		}
+	}
 	return out, nil
 }
 
@@ -313,6 +342,29 @@ func (f *Fleet) broadcast(namespace string, build func(*session) *agentpb.Operat
 		}
 		f.send(s, build(s))
 	}
+}
+
+// Move asks the proxies of a namespace to move one player to one server.
+//
+// Broadcast rather than addressed, because nothing here knows which proxy has
+// the player: Registry.Roster merges every proxy's roster and drops which one
+// reported what. A proxy without that player does nothing with the message,
+// which makes the broadcast correct and not merely survivable.
+//
+// It reports nothing back, and the operator promises nothing about the
+// outcome: the proxy does not wait on Velocity's own future either. See
+// agentpb.ConnectResult for the whole of that reasoning.
+func (f *Fleet) Move(namespace, playerUUID, targetServer string) {
+	f.broadcast(namespace, func(*session) *agentpb.OperatorToProxy {
+		return &agentpb.OperatorToProxy{
+			Message: &agentpb.OperatorToProxy_MovePlayer{
+				MovePlayer: &agentpb.MovePlayer{
+					PlayerUuid:   playerUUID,
+					TargetServer: targetServer,
+				},
+			},
+		}
+	})
 }
 
 // Register implements controller.Registrar.

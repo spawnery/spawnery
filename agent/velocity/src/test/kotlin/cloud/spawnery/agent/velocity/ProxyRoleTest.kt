@@ -1,9 +1,13 @@
 package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.Directive
+import cloud.spawnery.agent.NetworkMirror
+import cloud.spawnery.agent.dormantConnector
 import cloud.spawnery.agent.pb.DrainPlayers
 import cloud.spawnery.agent.pb.FullSync
+import cloud.spawnery.agent.pb.NetworkState
 import cloud.spawnery.agent.pb.OperatorToProxy
+import cloud.spawnery.agent.pb.ServerState as PbServerState
 import cloud.spawnery.agent.pb.ProxyMessage
 import cloud.spawnery.agent.pb.RegisterServer
 import cloud.spawnery.agent.pb.ReportInterval
@@ -18,6 +22,7 @@ import java.util.concurrent.CyclicBarrier
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import cloud.spawnery.agent.pb.RegisteredServer as PbServer
+import java.util.UUID
 
 /**
  * The mapping between the operator's messages and the four things a proxy
@@ -43,6 +48,7 @@ class ProxyRoleTest {
     private val players = FakePlayers(roster)
     private val drain = Drain(players, Router(directory)) { message, error -> logs += message to error }
     private val state = ProxyState(slots = 500)
+    private val mirror = NetworkMirror()
 
     /** How many times the role reported a first sync. See the two gate tests. */
     private var syncs = 0
@@ -56,6 +62,8 @@ class ProxyRoleTest {
         onFirstSync = { syncs++ },
         onSetReady = { },
         log = { message, error -> logs += message to error },
+        mirror = mirror,
+        connector = dormantConnector(),
     )
 
     @Test
@@ -494,6 +502,25 @@ class ProxyRoleTest {
      * above that need their own `onFirstSync`/`onSetReady` rather than the
      * counting ones [role] was built with.
      */
+    @Test
+    fun `a network state reaches the mirror`() {
+        val role = newRole()
+
+        val directive = role.onMessage(
+            OperatorToProxy.newBuilder()
+                .setNetworkState(
+                    NetworkState.newBuilder().addServers(
+                        PbServerState.newBuilder().setName("lobby-a").setGroup("lobby")
+                            .setPhase("Ready").setSlots(100),
+                    ),
+                )
+                .build(),
+        )
+
+        assertEquals(Directive.None, directive)
+        assertEquals(listOf("lobby-a"), mirror.servers().map { it.name() })
+    }
+
     private fun newRole(
         onFirstSync: () -> Unit = { syncs++ },
         onSetReady: (Boolean) -> Unit = { },
@@ -507,6 +534,8 @@ class ProxyRoleTest {
             onFirstSync = onFirstSync,
             onSetReady = onSetReady,
             log = { message, error -> logs += message to error },
+            mirror = mirror,
+            connector = dormantConnector(),
         )
 
     private fun backend(name: String, address: String, group: String): PbServer =
@@ -534,11 +563,51 @@ class ProxyRoleTest {
 
         val extras = role.extraReports()
 
-        assertEquals(1, extras.size, "one extra report per tick")
+        assertEquals(2, extras.size, "the counts and the roster, per tick")
         assertEquals(
             mapOf("lobby-0" to 2),
             extras[0].backendPlayers.playersMap,
             "both players are on lobby-0",
+        )
+    }
+
+    @Test
+    fun `the periodic report carries the roster beside the counts`() {
+        val id = UUID.fromString("00000000-0000-4000-8000-00000000000a")
+        val named = listOf(
+            FakePlayer("alice", currentServer = "lobby-a", uuid = id),
+            FakePlayer("bob"),
+        )
+        val role = ProxyRole(
+            state = state,
+            directory = directory,
+            drain = drain,
+            players = FakePlayers(named),
+            readTimeoutMillis = 30_000,
+            onFirstSync = { },
+            onSetReady = { },
+            log = { message, error -> logs += message to error },
+            mirror = NetworkMirror(),
+            connector = dormantConnector(),
+        )
+
+        val reports = role.extraReports()
+
+        // Both, and the counts first: BackendPlayers is what the drain reads,
+        // and a change here must not reorder what an operator already parses.
+        assertEquals(2, reports.size)
+        assertTrue(reports[0].hasBackendPlayers())
+        assertTrue(reports[1].hasPlayerRoster())
+
+        val entries = reports[1].playerRoster.playersList
+        assertEquals(2, entries.size, "a player on no server is still on this proxy")
+        val alice = entries.single { it.name == "alice" }
+        assertEquals(id.toString(), alice.uuid)
+        assertEquals("lobby-a", alice.server)
+        assertEquals(
+            "",
+            entries.single { it.name == "bob" }.server,
+            "a player attached to nothing carries an empty server, not a missing entry",
         )
     }
 

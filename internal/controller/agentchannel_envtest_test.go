@@ -38,9 +38,11 @@ import (
 	"github.com/spawnery/spawnery/internal/agentserver"
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/proxyreg"
+	"github.com/spawnery/spawnery/internal/serverreg"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -104,8 +106,15 @@ func newChannelFixture(t *testing.T) *channelFixture {
 			Pods:     &grpcauth.ClientPodChecker{Client: base.c},
 			Audience: podspec.AgentTokenAudience,
 		},
-		Agents:         base.agents,
-		Proxies:        proxyreg.New(proxyreg.Options{Reader: base.c}),
+		Agents:  base.agents,
+		Proxies: proxyreg.New(proxyreg.Options{Reader: base.c}),
+		// The backend side's fan-out, which ServerSession joins. This fixture
+		// found the wiring on its own: agentserver.New panics without one, and
+		// that panic is what this line answers rather than a compile error.
+		Servers: serverreg.New(serverreg.Options{
+			State: netstate.Source{Reader: base.c, Agents: base.agents},
+		}),
+		State:          netstate.Source{Reader: base.c, Agents: base.agents},
 		ReportInterval: 5 * time.Second,
 		RenewAfter:     8 * time.Minute,
 		HardDeadline:   10 * time.Minute,

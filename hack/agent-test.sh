@@ -235,6 +235,41 @@ explain_silence() {
 	fi
 }
 
+# The plugin API loaded inside the shipped jar.
+#
+# Every test of that API is a JUnit test against a fake mirror, and installing
+# one leaves no trace on the wire -- the stub sees a session and nothing about
+# what the plugin did with its own process. This log line is the only thing in
+# the project that says the install path ran at all, which is why the phase
+# fails on its absence rather than noting it.
+require_api_installed() {
+	local name="$1" start=$SECONDS
+	# Waited for rather than grepped once. The first version of this check read
+	# the log the moment the stub saw a hello and failed on a line that was
+	# already written -- the platform buffers its own stdout, so `logs` lags
+	# the process by a moment. Every other check in this file waits; this one
+	# had no reason to be the exception.
+	until "$CONTAINER" logs "$name" 2>&1 | grep -q 'spawnery API installed'; do
+		if [ -z "$("$CONTAINER" ps -q --filter "name=^${name}$")" ]; then
+			echo "the container exited before installing its plugin API" >&2
+			"$CONTAINER" logs "$name" >&2
+			exit 1
+		fi
+		if [ $((SECONDS - start)) -gt "$DEADLINE" ]; then
+			echo "the agent never installed its plugin API within ${DEADLINE}s" >&2
+			echo "every other test of that API is JUnit against a fake; this line is the only thing that says the install path runs inside the shipped jar" >&2
+			"$CONTAINER" logs "$name" 2>&1 | grep -i spawnery >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	# The line's presence and not its content. This harness sets no
+	# SPAWNERY_NETWORK or SPAWNERY_GROUP, so both read empty here -- which is
+	# the honest answer for a pod the operator did not render, and not
+	# something to assert against.
+	echo "the plugin API is installed and available to other plugins"
+}
+
 # await_event <kind> [events file] [container] - the second phase runs its own
 # container against its own stub, so neither is assumed here.
 await_event() {
@@ -304,6 +339,7 @@ port_open() {
 
 echo "waiting up to ${DEADLINE}s for the agent to greet..."
 await_event hello
+require_api_installed "$NAME"
 echo "the agent connected"
 
 # Reaching this line at all is the relocation proof: the agent cannot have
@@ -345,6 +381,18 @@ echo "the agent reported readiness"
 # as having no free slots. The plugin now samples once in onEnable, before the
 # session starts, and this asserts the number that crosses the seam rather than
 # working around it.
+# The report arrives *after* the stub has already sent a NetworkState this jar
+# has no branch for, and that is the assertion rather than a side effect.
+#
+# Every additive change to this proto rests on one property: a shipped agent
+# receives a message it does not recognise and keeps its session. A jar that
+# ended its stream on one would fail against the first operator that sent it --
+# a fleet-wide outage on an operator upgrade, looking like a network problem
+# the whole way through -- and no JUnit or Go test on either side can see it,
+# because both sides are built from the same generated code.
+#
+# So the stub sends one to both agent kinds on connect, and every phase that
+# follows is the measurement. This is the first of them.
 await_event player_count
 # The stub appends a line at a time, so a read can catch a partial one. Retried
 # until it parses rather than guarded with `|| echo 0`, which would turn an
@@ -816,6 +864,7 @@ start_agent "$NAME4" "$VOLUME4" "$WORK/agent-proxy" "$WORK/velocity-config" "stu
 
 echo "waiting up to ${DEADLINE}s for the proxy agent to greet..."
 await_event hello "$EVENTS4" "$NAME4"
+require_api_installed "$NAME4"
 echo "the proxy agent connected"
 
 # The same character-for-character check the Paper phase makes. ProxyRole.open()
@@ -1129,6 +1178,29 @@ if ! port_open "$NAME4" 25565; then
 	exit 1
 fi
 echo "the ready gate closed ${closed_after}s after the operator withdrew readiness, and 25565 still answers"
+
+# The roster, from the real jar.
+#
+# **What this proves and what it does not.** It proves the shipped Velocity
+# plugin builds and sends a PlayerRoster that the operator's own parser reads
+# -- which catches a proto mismatch, a missing import, and a shading problem in
+# the generated Java, none of which any JUnit or Go test can see. It does not
+# prove a UUID is correct, because no player is connected: this harness has
+# never driven a join, and doing so needs a live backend for the proxy to route
+# to, which is its own project rather than a step of this one. The empty roster
+# is exactly what a proxy with nobody on it should send, and sending it at all
+# is the thing this milestone added.
+#
+# docs/runbook-milestone-3-evidence.md is where a real client's join is driven,
+# and is where a real UUID would be observed.
+await_event player_roster "$EVENTS4" "$NAME4"
+roster_players="$(jq -rs '[.[] | select(.kind == "player_roster")] | last | .players | length' <"$EVENTS4")"
+if [ "$roster_players" != "0" ]; then
+	echo "the proxy reported $roster_players players with nobody connected" >&2
+	jq -rs '[.[] | select(.kind == "player_roster")] | last' <"$EVENTS4" >&2
+	exit 1
+fi
+echo "the proxy sends a PlayerRoster the operator can parse, empty with nobody connected"
 
 # ---------------------------------------------------------------------------
 # Phase five: the operator's retirement order, against the proxy.

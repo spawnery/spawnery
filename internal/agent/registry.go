@@ -25,6 +25,7 @@ package agent
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -96,6 +97,19 @@ type entry struct {
 	// anybody else.
 	namespace string
 	backends  map[string]int32
+	// roster is who this proxy said it was serving, and when. Kept beside
+	// backends rather than derived from it: that map is counts, and this is
+	// the only place in the operator that holds a person's name.
+	//
+	// In memory and nowhere else. It reaches no CR, no etcd, no log line at
+	// default verbosity and no metric label -- a metric labelled by player
+	// name is a cardinality bomb and a retention decision nobody made.
+	roster []RosterEntry
+	// rosterAt is when that list last arrived, separate from backendsAt for
+	// the reason that one is separate from lastReportAt: an agent old enough
+	// to send counts and not a roster must not have its count timestamp read
+	// as though it had said something about identities.
+	rosterAt time.Time
 	// backendsAt is when that map last arrived. Separate from lastReportAt
 	// because the two messages are separate: an agent that reported players
 	// and not backends is an old agent, and reading its player timestamp as
@@ -256,6 +270,96 @@ func (r *Registry) ReportBackends(key, namespace string, backends map[string]int
 	e.backends = backends
 	e.backendsAt = r.now()
 	return nil
+}
+
+// RosterEntry is one player as a proxy last saw them.
+type RosterEntry struct {
+	// UUID is the Minecraft UUID, and the identity everything else keys on: a
+	// name can be changed and reused, a UUID cannot.
+	UUID string
+	// Name is the username, for something a person recognises.
+	Name string
+	// Server is the backend this player is on or heading for, empty for
+	// neither. The same field BackendPlayers counts, so the two agree by
+	// construction rather than by two implementations staying in step.
+	Server string
+}
+
+// ReportRoster records who a proxy is serving.
+//
+// namespace comes from the authenticated identity rather than from the
+// message, for the reason the package comment gives about every other fact
+// here: an agent may not say which namespace's players it is talking about.
+func (r *Registry) ReportRoster(key, namespace string, players []RosterEntry) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	e, ok := r.entries[key]
+	if !ok || !e.connected {
+		return fmt.Errorf("no live stream for %q", key)
+	}
+	if e.role != RoleProxy {
+		// A backend sees its own players and no UUIDs at all, so a roster from
+		// one is a bug in an agent rather than a state to store. Same rule and
+		// same reason as ReportBackends.
+		return fmt.Errorf("roster from a %s agent %q", e.role, key)
+	}
+	e.namespace = namespace
+	e.roster = players
+	e.rosterAt = r.now()
+	return nil
+}
+
+// Roster is every player the live proxies of a namespace say they are serving,
+// and whether any proxy's answer is too old to believe.
+//
+// A player is on exactly one proxy, but not for the whole of a proxy
+// changeover: during a handover both may report them for a report interval or
+// two. They are one person, so the entry with the newer report wins -- a
+// plugin iterating this to message everybody must not message somebody twice
+// because a rollout was in flight.
+//
+// Staleness is the rule AttachedTo uses, for the same reason: a proxy that
+// stopped reporting must stop asserting who is online rather than freezing a
+// roster nobody can correct.
+func (r *Registry) Roster(namespace string) ([]RosterEntry, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	type dated struct {
+		entry RosterEntry
+		at    time.Time
+	}
+	byPlayer := make(map[string]dated)
+	stale := false
+
+	for _, e := range r.entries {
+		if e.role != RoleProxy || e.namespace != namespace {
+			continue
+		}
+		if e.rosterAt.IsZero() {
+			continue
+		}
+		if !e.connected || r.now().Sub(e.rosterAt) > 2*r.reportInterval {
+			stale = true
+			continue
+		}
+		for _, p := range e.roster {
+			if prev, ok := byPlayer[p.UUID]; ok && prev.at.After(e.rosterAt) {
+				continue
+			}
+			byPlayer[p.UUID] = dated{entry: p, at: e.rosterAt}
+		}
+	}
+
+	out := make([]RosterEntry, 0, len(byPlayer))
+	for _, d := range byPlayer {
+		out = append(out, d.entry)
+	}
+	// Sorted so a caller gets a stable order out of a map, and so a test can
+	// assert a list rather than a set.
+	sort.Slice(out, func(i, j int) bool { return out[i].UUID < out[j].UUID })
+	return out, stale
 }
 
 // AttachedTo reports how many players the proxies say are on, or heading to,

@@ -4,6 +4,7 @@ import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer
 import com.velocitypowered.api.proxy.ProxyServer
 import com.velocitypowered.api.proxy.server.RegisteredServer
+import java.util.UUID
 
 /**
  * One connected player, as much of one as the agent needs.
@@ -14,6 +15,20 @@ import com.velocitypowered.api.proxy.server.RegisteredServer
  * a running proxy.
  */
 interface PlayerRef {
+    /**
+     * This player's Minecraft UUID.
+     *
+     * The operator has no other source for it. `PlayerJoinedServer` carries a
+     * username and the operator's handler discards it -- its own comment says
+     * nothing consumes it -- and the registry keeps counts. So until 7b-2
+     * nothing upstream could name a person, which is why the plugin API's
+     * player list shipped in 7b-1 with no way to be answered.
+     *
+     * A UUID and not the username, because a name can be changed and reused
+     * and this is what everything upstream keys on.
+     */
+    val uuid: UUID
+
     val username: String
 
     /**
@@ -80,6 +95,9 @@ class VelocityPlayers(private val proxy: ProxyServer) : Players {
  * already named.
  */
 internal class VelocityPlayer(private val player: Player) : PlayerRef {
+    override val uuid: UUID
+        get() = player.uniqueId
+
     override val username: String
         get() = player.username
 

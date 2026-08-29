@@ -44,8 +44,10 @@ import (
 	"github.com/spawnery/spawnery/internal/agentserver"
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/proxyreg"
+	"github.com/spawnery/spawnery/internal/serverreg"
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
@@ -149,7 +151,11 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 	}
 
 	registry := agent.New(now, 5*time.Second, now())
-	fleet := proxyreg.New(proxyreg.Options{Reader: c, OutboxSize: proxyOutboxSize})
+	// The picture both fan-outs send, built once, exactly as the operator
+	// binary builds it.
+	state := netstate.Source{Reader: c, Agents: registry}
+	fleet := proxyreg.New(proxyreg.Options{Reader: c, OutboxSize: proxyOutboxSize, State: state})
+	servers := serverreg.New(serverreg.Options{State: state})
 	var proxies agentserver.ProxyFleet = fleet
 	if wrap != nil {
 		proxies = wrap(fleet)
@@ -171,6 +177,8 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 		},
 		Agents:         registry,
 		Proxies:        proxies,
+		Servers:        servers,
+		State:          state,
 		ReportInterval: 5 * time.Second,
 		RenewAfter:     renewAfter,
 		HardDeadline:   hardDeadline,
@@ -892,5 +900,31 @@ func TestTheServerBoundsConnectionsPerPeer(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatalf("connection %d neither succeeded nor failed",
 			agentserver.MaxConnectionsPerPeer+1)
+	}
+}
+
+// A backend receives the mirror. Until 7b-3 this stream carried two messages
+// when it opened and nothing ever again.
+func TestAServerAgentReceivesItsNetworkState(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.pod("lobby-aaaa")
+	stream, done := dialAgent(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+
+	// The two opening messages come first; the state follows. Read until it
+	// arrives rather than assuming a position -- the opening sends and the
+	// fan-out's join are two different code paths and their order is not a
+	// contract this test should pin.
+	var state *agentpb.NetworkState
+	for i := 0; i < 5 && state == nil; i++ {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		state = msg.GetNetworkState()
+	}
+	if state == nil {
+		t.Fatal("no NetworkState arrived in the first five messages of a server session")
 	}
 }

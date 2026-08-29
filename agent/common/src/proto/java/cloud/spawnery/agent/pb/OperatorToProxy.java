@@ -61,6 +61,9 @@ private static final long serialVersionUID = 0L;
     REPORT_INTERVAL(5),
     SESSION_DEADLINE(6),
     SET_READY(7),
+    NETWORK_STATE(8),
+    CLOUD_RESPONSE(9),
+    MOVE_PLAYER(10),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -85,6 +88,9 @@ private static final long serialVersionUID = 0L;
         case 5: return REPORT_INTERVAL;
         case 6: return SESSION_DEADLINE;
         case 7: return SET_READY;
+        case 8: return NETWORK_STATE;
+        case 9: return CLOUD_RESPONSE;
+        case 10: return MOVE_PLAYER;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -317,6 +323,99 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.SetReady.getDefaultInstance();
   }
 
+  public static final int NETWORK_STATE_FIELD_NUMBER = 8;
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+   * @return Whether the networkState field is set.
+   */
+  @java.lang.Override
+  public boolean hasNetworkState() {
+    return messageCase_ == 8;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+   * @return The networkState.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.NetworkState getNetworkState() {
+    if (messageCase_ == 8) {
+       return (cloud.spawnery.agent.pb.NetworkState) message_;
+    }
+    return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.NetworkStateOrBuilder getNetworkStateOrBuilder() {
+    if (messageCase_ == 8) {
+       return (cloud.spawnery.agent.pb.NetworkState) message_;
+    }
+    return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+  }
+
+  public static final int CLOUD_RESPONSE_FIELD_NUMBER = 9;
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+   * @return Whether the cloudResponse field is set.
+   */
+  @java.lang.Override
+  public boolean hasCloudResponse() {
+    return messageCase_ == 9;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+   * @return The cloudResponse.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.CloudResponse getCloudResponse() {
+    if (messageCase_ == 9) {
+       return (cloud.spawnery.agent.pb.CloudResponse) message_;
+    }
+    return cloud.spawnery.agent.pb.CloudResponse.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.CloudResponseOrBuilder getCloudResponseOrBuilder() {
+    if (messageCase_ == 9) {
+       return (cloud.spawnery.agent.pb.CloudResponse) message_;
+    }
+    return cloud.spawnery.agent.pb.CloudResponse.getDefaultInstance();
+  }
+
+  public static final int MOVE_PLAYER_FIELD_NUMBER = 10;
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   * @return Whether the movePlayer field is set.
+   */
+  @java.lang.Override
+  public boolean hasMovePlayer() {
+    return messageCase_ == 10;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   * @return The movePlayer.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.MovePlayer getMovePlayer() {
+    if (messageCase_ == 10) {
+       return (cloud.spawnery.agent.pb.MovePlayer) message_;
+    }
+    return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.MovePlayerOrBuilder getMovePlayerOrBuilder() {
+    if (messageCase_ == 10) {
+       return (cloud.spawnery.agent.pb.MovePlayer) message_;
+    }
+    return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -352,6 +451,15 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 7) {
       output.writeMessage(7, (cloud.spawnery.agent.pb.SetReady) message_);
     }
+    if (messageCase_ == 8) {
+      output.writeMessage(8, (cloud.spawnery.agent.pb.NetworkState) message_);
+    }
+    if (messageCase_ == 9) {
+      output.writeMessage(9, (cloud.spawnery.agent.pb.CloudResponse) message_);
+    }
+    if (messageCase_ == 10) {
+      output.writeMessage(10, (cloud.spawnery.agent.pb.MovePlayer) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -383,6 +491,18 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 7) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(7, (cloud.spawnery.agent.pb.SetReady) message_);
+    }
+    if (messageCase_ == 8) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(8, (cloud.spawnery.agent.pb.NetworkState) message_);
+    }
+    if (messageCase_ == 9) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(9, (cloud.spawnery.agent.pb.CloudResponse) message_);
+    }
+    if (messageCase_ == 10) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(10, (cloud.spawnery.agent.pb.MovePlayer) message_);
     }
     return size;
   }
@@ -438,6 +558,18 @@ private static final long serialVersionUID = 0L;
         if (!getSetReady()
             .equals(other.getSetReady())) return false;
         break;
+      case 8:
+        if (!getNetworkState()
+            .equals(other.getNetworkState())) return false;
+        break;
+      case 9:
+        if (!getCloudResponse()
+            .equals(other.getCloudResponse())) return false;
+        break;
+      case 10:
+        if (!getMovePlayer()
+            .equals(other.getMovePlayer())) return false;
+        break;
       case 0:
       default:
     }
@@ -480,6 +612,18 @@ private static final long serialVersionUID = 0L;
       case 7:
         hash = (37 * hash) + SET_READY_FIELD_NUMBER;
         hash = (53 * hash) + getSetReady().hashCode();
+        break;
+      case 8:
+        hash = (37 * hash) + NETWORK_STATE_FIELD_NUMBER;
+        hash = (53 * hash) + getNetworkState().hashCode();
+        break;
+      case 9:
+        hash = (37 * hash) + CLOUD_RESPONSE_FIELD_NUMBER;
+        hash = (53 * hash) + getCloudResponse().hashCode();
+        break;
+      case 10:
+        hash = (37 * hash) + MOVE_PLAYER_FIELD_NUMBER;
+        hash = (53 * hash) + getMovePlayer().hashCode();
         break;
       case 0:
       default:
@@ -636,6 +780,15 @@ private static final long serialVersionUID = 0L;
       if (setReadyBuilder_ != null) {
         setReadyBuilder_.clear();
       }
+      if (networkStateBuilder_ != null) {
+        networkStateBuilder_.clear();
+      }
+      if (cloudResponseBuilder_ != null) {
+        cloudResponseBuilder_.clear();
+      }
+      if (movePlayerBuilder_ != null) {
+        movePlayerBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -705,6 +858,18 @@ private static final long serialVersionUID = 0L;
           setReadyBuilder_ != null) {
         result.message_ = setReadyBuilder_.build();
       }
+      if (messageCase_ == 8 &&
+          networkStateBuilder_ != null) {
+        result.message_ = networkStateBuilder_.build();
+      }
+      if (messageCase_ == 9 &&
+          cloudResponseBuilder_ != null) {
+        result.message_ = cloudResponseBuilder_.build();
+      }
+      if (messageCase_ == 10 &&
+          movePlayerBuilder_ != null) {
+        result.message_ = movePlayerBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -746,6 +911,18 @@ private static final long serialVersionUID = 0L;
         }
         case SET_READY: {
           mergeSetReady(other.getSetReady());
+          break;
+        }
+        case NETWORK_STATE: {
+          mergeNetworkState(other.getNetworkState());
+          break;
+        }
+        case CLOUD_RESPONSE: {
+          mergeCloudResponse(other.getCloudResponse());
+          break;
+        }
+        case MOVE_PLAYER: {
+          mergeMovePlayer(other.getMovePlayer());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -827,6 +1004,27 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 7;
               break;
             } // case 58
+            case 66: {
+              input.readMessage(
+                  internalGetNetworkStateFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 8;
+              break;
+            } // case 66
+            case 74: {
+              input.readMessage(
+                  internalGetCloudResponseFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 9;
+              break;
+            } // case 74
+            case 82: {
+              input.readMessage(
+                  internalGetMovePlayerFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 10;
+              break;
+            } // case 82
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1851,6 +2049,432 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 7;
       onChanged();
       return setReadyBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.NetworkState, cloud.spawnery.agent.pb.NetworkState.Builder, cloud.spawnery.agent.pb.NetworkStateOrBuilder> networkStateBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     * @return Whether the networkState field is set.
+     */
+    @java.lang.Override
+    public boolean hasNetworkState() {
+      return messageCase_ == 8;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     * @return The networkState.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.NetworkState getNetworkState() {
+      if (networkStateBuilder_ == null) {
+        if (messageCase_ == 8) {
+          return (cloud.spawnery.agent.pb.NetworkState) message_;
+        }
+        return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+      } else {
+        if (messageCase_ == 8) {
+          return networkStateBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     */
+    public Builder setNetworkState(cloud.spawnery.agent.pb.NetworkState value) {
+      if (networkStateBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        networkStateBuilder_.setMessage(value);
+      }
+      messageCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     */
+    public Builder setNetworkState(
+        cloud.spawnery.agent.pb.NetworkState.Builder builderForValue) {
+      if (networkStateBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        networkStateBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     */
+    public Builder mergeNetworkState(cloud.spawnery.agent.pb.NetworkState value) {
+      if (networkStateBuilder_ == null) {
+        if (messageCase_ == 8 &&
+            message_ != cloud.spawnery.agent.pb.NetworkState.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.NetworkState.newBuilder((cloud.spawnery.agent.pb.NetworkState) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 8) {
+          networkStateBuilder_.mergeFrom(value);
+        } else {
+          networkStateBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     */
+    public Builder clearNetworkState() {
+      if (networkStateBuilder_ == null) {
+        if (messageCase_ == 8) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 8) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        networkStateBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     */
+    public cloud.spawnery.agent.pb.NetworkState.Builder getNetworkStateBuilder() {
+      return internalGetNetworkStateFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.NetworkStateOrBuilder getNetworkStateOrBuilder() {
+      if ((messageCase_ == 8) && (networkStateBuilder_ != null)) {
+        return networkStateBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 8) {
+          return (cloud.spawnery.agent.pb.NetworkState) message_;
+        }
+        return cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.NetworkState network_state = 8;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.NetworkState, cloud.spawnery.agent.pb.NetworkState.Builder, cloud.spawnery.agent.pb.NetworkStateOrBuilder> 
+        internalGetNetworkStateFieldBuilder() {
+      if (networkStateBuilder_ == null) {
+        if (!(messageCase_ == 8)) {
+          message_ = cloud.spawnery.agent.pb.NetworkState.getDefaultInstance();
+        }
+        networkStateBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.NetworkState, cloud.spawnery.agent.pb.NetworkState.Builder, cloud.spawnery.agent.pb.NetworkStateOrBuilder>(
+                (cloud.spawnery.agent.pb.NetworkState) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 8;
+      onChanged();
+      return networkStateBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.CloudResponse, cloud.spawnery.agent.pb.CloudResponse.Builder, cloud.spawnery.agent.pb.CloudResponseOrBuilder> cloudResponseBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     * @return Whether the cloudResponse field is set.
+     */
+    @java.lang.Override
+    public boolean hasCloudResponse() {
+      return messageCase_ == 9;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     * @return The cloudResponse.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.CloudResponse getCloudResponse() {
+      if (cloudResponseBuilder_ == null) {
+        if (messageCase_ == 9) {
+          return (cloud.spawnery.agent.pb.CloudResponse) message_;
+        }
+        return cloud.spawnery.agent.pb.CloudResponse.getDefaultInstance();
+      } else {
+        if (messageCase_ == 9) {
+          return cloudResponseBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.CloudResponse.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     */
+    public Builder setCloudResponse(cloud.spawnery.agent.pb.CloudResponse value) {
+      if (cloudResponseBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        cloudResponseBuilder_.setMessage(value);
+      }
+      messageCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     */
+    public Builder setCloudResponse(
+        cloud.spawnery.agent.pb.CloudResponse.Builder builderForValue) {
+      if (cloudResponseBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        cloudResponseBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     */
+    public Builder mergeCloudResponse(cloud.spawnery.agent.pb.CloudResponse value) {
+      if (cloudResponseBuilder_ == null) {
+        if (messageCase_ == 9 &&
+            message_ != cloud.spawnery.agent.pb.CloudResponse.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.CloudResponse.newBuilder((cloud.spawnery.agent.pb.CloudResponse) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 9) {
+          cloudResponseBuilder_.mergeFrom(value);
+        } else {
+          cloudResponseBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     */
+    public Builder clearCloudResponse() {
+      if (cloudResponseBuilder_ == null) {
+        if (messageCase_ == 9) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 9) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        cloudResponseBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     */
+    public cloud.spawnery.agent.pb.CloudResponse.Builder getCloudResponseBuilder() {
+      return internalGetCloudResponseFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.CloudResponseOrBuilder getCloudResponseOrBuilder() {
+      if ((messageCase_ == 9) && (cloudResponseBuilder_ != null)) {
+        return cloudResponseBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 9) {
+          return (cloud.spawnery.agent.pb.CloudResponse) message_;
+        }
+        return cloud.spawnery.agent.pb.CloudResponse.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.CloudResponse cloud_response = 9;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.CloudResponse, cloud.spawnery.agent.pb.CloudResponse.Builder, cloud.spawnery.agent.pb.CloudResponseOrBuilder> 
+        internalGetCloudResponseFieldBuilder() {
+      if (cloudResponseBuilder_ == null) {
+        if (!(messageCase_ == 9)) {
+          message_ = cloud.spawnery.agent.pb.CloudResponse.getDefaultInstance();
+        }
+        cloudResponseBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.CloudResponse, cloud.spawnery.agent.pb.CloudResponse.Builder, cloud.spawnery.agent.pb.CloudResponseOrBuilder>(
+                (cloud.spawnery.agent.pb.CloudResponse) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 9;
+      onChanged();
+      return cloudResponseBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.MovePlayer, cloud.spawnery.agent.pb.MovePlayer.Builder, cloud.spawnery.agent.pb.MovePlayerOrBuilder> movePlayerBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     * @return Whether the movePlayer field is set.
+     */
+    @java.lang.Override
+    public boolean hasMovePlayer() {
+      return messageCase_ == 10;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     * @return The movePlayer.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.MovePlayer getMovePlayer() {
+      if (movePlayerBuilder_ == null) {
+        if (messageCase_ == 10) {
+          return (cloud.spawnery.agent.pb.MovePlayer) message_;
+        }
+        return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+      } else {
+        if (messageCase_ == 10) {
+          return movePlayerBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public Builder setMovePlayer(cloud.spawnery.agent.pb.MovePlayer value) {
+      if (movePlayerBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        movePlayerBuilder_.setMessage(value);
+      }
+      messageCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public Builder setMovePlayer(
+        cloud.spawnery.agent.pb.MovePlayer.Builder builderForValue) {
+      if (movePlayerBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        movePlayerBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public Builder mergeMovePlayer(cloud.spawnery.agent.pb.MovePlayer value) {
+      if (movePlayerBuilder_ == null) {
+        if (messageCase_ == 10 &&
+            message_ != cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.MovePlayer.newBuilder((cloud.spawnery.agent.pb.MovePlayer) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 10) {
+          movePlayerBuilder_.mergeFrom(value);
+        } else {
+          movePlayerBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public Builder clearMovePlayer() {
+      if (movePlayerBuilder_ == null) {
+        if (messageCase_ == 10) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 10) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        movePlayerBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    public cloud.spawnery.agent.pb.MovePlayer.Builder getMovePlayerBuilder() {
+      return internalGetMovePlayerFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.MovePlayerOrBuilder getMovePlayerOrBuilder() {
+      if ((messageCase_ == 10) && (movePlayerBuilder_ != null)) {
+        return movePlayerBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 10) {
+          return (cloud.spawnery.agent.pb.MovePlayer) message_;
+        }
+        return cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.MovePlayer move_player = 10;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.MovePlayer, cloud.spawnery.agent.pb.MovePlayer.Builder, cloud.spawnery.agent.pb.MovePlayerOrBuilder> 
+        internalGetMovePlayerFieldBuilder() {
+      if (movePlayerBuilder_ == null) {
+        if (!(messageCase_ == 10)) {
+          message_ = cloud.spawnery.agent.pb.MovePlayer.getDefaultInstance();
+        }
+        movePlayerBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.MovePlayer, cloud.spawnery.agent.pb.MovePlayer.Builder, cloud.spawnery.agent.pb.MovePlayerOrBuilder>(
+                (cloud.spawnery.agent.pb.MovePlayer) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 10;
+      onChanged();
+      return movePlayerBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.OperatorToProxy)

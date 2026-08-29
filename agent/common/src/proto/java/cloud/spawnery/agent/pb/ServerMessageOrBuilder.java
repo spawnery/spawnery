@@ -55,5 +55,20 @@ public interface ServerMessageOrBuilder extends
    */
   cloud.spawnery.agent.pb.PlayerCountOrBuilder getPlayerCountOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 4;</code>
+   * @return Whether the cloudRequest field is set.
+   */
+  boolean hasCloudRequest();
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 4;</code>
+   * @return The cloudRequest.
+   */
+  cloud.spawnery.agent.pb.CloudRequest getCloudRequest();
+  /**
+   * <code>.spawnery.agent.v1alpha1.CloudRequest cloud_request = 4;</code>
+   */
+  cloud.spawnery.agent.pb.CloudRequestOrBuilder getCloudRequestOrBuilder();
+
   cloud.spawnery.agent.pb.ServerMessage.MessageCase getMessageCase();
 }

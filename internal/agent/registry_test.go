@@ -579,3 +579,113 @@ func TestTheReadTimeoutIsScopedAndProxyOnly(t *testing.T) {
 			"in this namespace", got, known)
 	}
 }
+
+func TestRosterMergesEveryProxyInTheNamespace(t *testing.T) {
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	for _, uid := range []string{"proxy-a", "proxy-b"} {
+		r.Connect(uid, RoleProxy)
+	}
+	if err := r.ReportRoster("proxy-a", "minecraft", []RosterEntry{
+		{UUID: "u-alice", Name: "alice", Server: "lobby-0"},
+	}); err != nil {
+		t.Fatalf("report from proxy-a: %v", err)
+	}
+	if err := r.ReportRoster("proxy-b", "minecraft", []RosterEntry{
+		{UUID: "u-bob", Name: "bob", Server: "lobby-1"},
+	}); err != nil {
+		t.Fatalf("report from proxy-b: %v", err)
+	}
+
+	got, stale := r.Roster("minecraft")
+	if stale {
+		t.Error("stale = true with two fresh reports")
+	}
+	if len(got) != 2 || got[0].UUID != "u-alice" || got[1].UUID != "u-bob" {
+		t.Fatalf("roster = %+v, want both players sorted by UUID", got)
+	}
+}
+
+func TestRosterKeepsOneEntryPerPlayerAcrossProxies(t *testing.T) {
+	// A player appears on two proxies while a rollout hands them over. They
+	// are one person and must be counted once -- a plugin iterating this to
+	// message everybody would otherwise message them twice.
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("proxy-a", RoleProxy)
+	r.Connect("proxy-b", RoleProxy)
+
+	if err := r.ReportRoster("proxy-a", "minecraft", []RosterEntry{
+		{UUID: "u-alice", Name: "alice", Server: "lobby-0"},
+	}); err != nil {
+		t.Fatalf("report from proxy-a: %v", err)
+	}
+	clock.now = clock.now.Add(time.Second)
+	if err := r.ReportRoster("proxy-b", "minecraft", []RosterEntry{
+		{UUID: "u-alice", Name: "alice", Server: "lobby-1"},
+	}); err != nil {
+		t.Fatalf("report from proxy-b: %v", err)
+	}
+
+	got, _ := r.Roster("minecraft")
+	if len(got) != 1 {
+		t.Fatalf("roster = %+v, want one entry for one player", got)
+	}
+	if got[0].Server != "lobby-1" {
+		t.Errorf("server = %q, want the most recently reported one", got[0].Server)
+	}
+}
+
+func TestRosterSkipsAProxyWhoseReportWentStale(t *testing.T) {
+	// The rule the counts already use: older than twice the report interval.
+	// A proxy that stopped reporting must stop asserting who is online rather
+	// than freezing a roster.
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("proxy-a", RoleProxy)
+	if err := r.ReportRoster("proxy-a", "minecraft", []RosterEntry{
+		{UUID: "u-alice", Name: "alice", Server: "lobby-0"},
+	}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	clock.now = clock.now.Add(11 * time.Second) // > 2 * 5s
+
+	got, stale := r.Roster("minecraft")
+	if !stale {
+		t.Error("stale = false for a report older than twice the interval")
+	}
+	if len(got) != 0 {
+		t.Errorf("roster = %+v, want nothing from a stale proxy", got)
+	}
+}
+
+func TestARosterFromAServerAgentIsRefused(t *testing.T) {
+	// A backend has no view of anybody but its own players and no UUIDs at
+	// all, so a roster from one is a bug in an agent rather than a state to
+	// store. Same rule, same reason, as ReportBackends.
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("pod-uid-1", RoleServer)
+
+	if err := r.ReportRoster("pod-uid-1", "minecraft", nil); err == nil {
+		t.Error("a server agent's roster was accepted")
+	}
+}
+
+func TestRosterIsScopedToItsNamespace(t *testing.T) {
+	// namespace comes from the authenticated identity at the call site, never
+	// from the message. This asserts the reader's half.
+	clock := &fakeClock{now: time.Unix(1000, 0)}
+	r := New(clock.Now, 5*time.Second, clock.now)
+	r.Connect("proxy-other", RoleProxy)
+	if err := r.ReportRoster("proxy-other", "minecraft", []RosterEntry{
+		{UUID: "u-alice", Name: "alice", Server: "lobby-0"},
+	}); err != nil {
+		t.Fatalf("report: %v", err)
+	}
+
+	if got, _ := r.Roster("other"); len(got) != 0 {
+		t.Errorf("roster = %+v, want nothing from another namespace", got)
+	}
+}

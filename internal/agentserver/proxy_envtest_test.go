@@ -101,6 +101,31 @@ func TestAProxyReceivesItsIntervalDeadlineAndFullSync(t *testing.T) {
 }
 
 // A registration made after the session is up reaches it.
+// recvRegister reads past anything that is not a RegisterServer and returns
+// the first one, or fails.
+//
+// It exists because the snapshot a proxy is sent on join grew a NetworkState
+// in 7b-3, and three tests here read "the next message" and meant "the
+// registration". What they assert is that a registration reaches a connected
+// proxy, never that it arrives in a particular position -- the position is
+// proxyreg's own business and its own test asserts it there.
+func recvRegister(t *testing.T, stream interface {
+	Recv() (*agentpb.OperatorToProxy, error)
+}) *agentpb.RegisterServer {
+	t.Helper()
+	for i := 0; i < 5; i++ {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		if r := msg.GetRegisterServer(); r != nil {
+			return r
+		}
+	}
+	t.Fatal("no RegisterServer in the first five messages")
+	return nil
+}
+
 func TestARegistrationReachesAConnectedProxy(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.proxyPod("gateway-bbbb")
@@ -125,12 +150,8 @@ func TestARegistrationReachesAConnectedProxy(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	msg, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("Recv: %v", err)
-	}
-	if got := msg.GetRegisterServer().GetServer().GetName(); got != "lobby-aaaa" {
-		t.Errorf("received %+v, want a RegisterServer for lobby-aaaa", msg)
+	if got := recvRegister(t, stream).GetServer().GetName(); got != "lobby-aaaa" {
+		t.Errorf("received a RegisterServer for %q, want lobby-aaaa", got)
 	}
 }
 
@@ -177,12 +198,10 @@ func TestAProxyPlayerCountAgainstItsLimitIsAccepted(t *testing.T) {
 	if err := f.proxies.Register(f.ctx, srv); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	msg, err := stream.Recv()
-	if err != nil {
-		t.Fatalf("the stream did not survive an accepted player count: %v", err)
-	}
-	if got := msg.GetRegisterServer().GetServer().GetName(); got != "lobby-bbbb" {
-		t.Errorf("received %+v, want a RegisterServer for lobby-bbbb", msg)
+	// The registration surviving is what says the stream did: a session cut
+	// for a rejected report would have ended before it arrived.
+	if got := recvRegister(t, stream).GetServer().GetName(); got != "lobby-bbbb" {
+		t.Errorf("received a RegisterServer for %q, want lobby-bbbb", got)
 	}
 }
 
@@ -360,12 +379,10 @@ func TestASecondProxyStreamSupersedesTheFirstWithoutMisreportingWhy(t *testing.T
 	if err := f.proxies.Register(f.ctx, srv); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	msg, err := second.Recv()
-	if err != nil {
-		t.Fatalf("the live stream did not survive the superseded one leaving: %v", err)
-	}
-	if got := msg.GetRegisterServer().GetServer().GetName(); got != "lobby-gggg" {
-		t.Errorf("received %+v, want a RegisterServer for lobby-gggg", msg)
+	// Reaching the live stream is what says the superseded one leaving did
+	// not take it down with it.
+	if got := recvRegister(t, second).GetServer().GetName(); got != "lobby-gggg" {
+		t.Errorf("received a RegisterServer for %q, want lobby-gggg", got)
 	}
 }
 
@@ -420,5 +437,112 @@ func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testi
 	}
 	if n, _ := f.agents.AttachedTo(f.ns, "lobby-1", time.Time{}); n != 1 {
 		t.Errorf("lobby-1 = %d, want 1", n)
+	}
+}
+
+// A roster sent on the stream reaches the registry, keyed by the namespace the
+// token authenticated rather than anything the message said. Modelled on
+// TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace, which is
+// the same shape for the same reason.
+func TestAProxyRosterReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.proxyPod("gateway-aaaa")
+	stream, done := dialProxy(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("the opening message never arrived: %v", err)
+	}
+
+	if err := stream.Send(&agentpb.ProxyMessage{
+		Message: &agentpb.ProxyMessage_PlayerRoster{
+			PlayerRoster: &agentpb.PlayerRoster{
+				Players: []*agentpb.RosterEntry{
+					{Uuid: "u-alice", Name: "alice", Server: "lobby-0"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send the roster: %v", err)
+	}
+
+	// The registry is written from the receive loop, so poll rather than
+	// assume the send has been applied by the time Send returned.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		got, stale := f.agents.Roster(f.ns)
+		if len(got) == 1 && got[0].UUID == "u-alice" && !stale {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("roster = %+v stale=%v, want one fresh entry for alice", got, stale)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// And it did not land under some other namespace's name, which is what a
+	// report trusted about its own scope would have allowed.
+	if got, _ := f.agents.Roster("somewhere-else"); len(got) != 0 {
+		t.Errorf("roster in another namespace = %+v, want none", got)
+	}
+}
+
+// A connect request over a real stream, answered on the same stream.
+//
+// This is the wire, not the jar: nothing in either agent calls connect until a
+// plugin does, and the first caller is the /cloud command a later milestone
+// builds. What it proves is that a CloudRequest survives the channel and comes
+// back correlated -- which no unit test on either side can see, because both
+// are built from the same generated code and neither crosses a socket.
+func TestAConnectRequestIsAnsweredOnTheStreamThatAsked(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.proxyPod("gateway-aaaa")
+	stream, done := dialProxy(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("the opening message never arrived: %v", err)
+	}
+
+	if err := stream.Send(&agentpb.ProxyMessage{
+		Message: &agentpb.ProxyMessage_CloudRequest{
+			CloudRequest: &agentpb.CloudRequest{
+				Id: 7,
+				Request: &agentpb.CloudRequest_Connect{
+					Connect: &agentpb.ConnectRequest{
+						PlayerUuid: "u-nobody",
+						Target:     &agentpb.ConnectRequest_Server{Server: "lobby-0"},
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("send the request: %v", err)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv: %v", err)
+		}
+		if resp := msg.GetCloudResponse(); resp != nil {
+			// The id it minted, echoed. Without that a plugin's future would
+			// never complete, and the failure would look like a timeout.
+			if resp.GetId() != 7 {
+				t.Fatalf("answered id %d, want the 7 the agent asked with", resp.GetId())
+			}
+			// NOT_FOUND, because no proxy has reported a roster: the player
+			// does not exist on this network. That it is a refusal and not a
+			// silence is the point.
+			if resp.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
+				t.Fatalf("reason = %v, want NOT_FOUND for a player nobody reported",
+					resp.GetError().GetReason())
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no CloudResponse arrived within ten seconds")
+		}
 	}
 }

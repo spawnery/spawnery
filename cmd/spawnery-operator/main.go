@@ -45,10 +45,12 @@ import (
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/controller"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/proxyreg"
 	"github.com/spawnery/spawnery/internal/rbacaudit"
+	"github.com/spawnery/spawnery/internal/serverreg"
 	"github.com/spawnery/spawnery/internal/version"
 )
 
@@ -402,7 +404,21 @@ func main() {
 	// One Fleet for the whole process: the controllers write into it and the
 	// gRPC endpoint reads from it. Two would mean a registration reaching a
 	// fan-out nobody is streaming from.
-	proxies := proxyreg.New(proxyreg.Options{Reader: mgr.GetClient()})
+	// The picture both fan-outs send, built once. Two Sources reading the same
+	// cache would answer the same today and are two places to change when the
+	// mirror gains a field -- and the promise the plugin API makes is exactly
+	// that a backend and a proxy get the same answer.
+	state := netstate.Source{Reader: mgr.GetClient(), Agents: registry}
+
+	proxies := proxyreg.New(proxyreg.Options{Reader: mgr.GetClient(), State: state})
+
+	// The backend side's fan-out. A Runnable like the Fleet, and leader-bound
+	// for the same reason: only the leader holds the streams it sends to.
+	servers := serverreg.New(serverreg.Options{State: state})
+	if err := mgr.Add(servers); err != nil {
+		setupLog.Error(err, "unable to add the server fanout")
+		os.Exit(1)
+	}
 	if err := mgr.Add(proxies); err != nil {
 		setupLog.Error(err, "unable to add the proxy resync")
 		os.Exit(1)
@@ -429,6 +445,8 @@ func main() {
 		},
 		Agents:         registry,
 		Proxies:        proxies,
+		Servers:        servers,
+		State:          state,
 		Fleet:          fleet.Size,
 		ReportInterval: reportInterval,
 		RenewAfter:     renewAfter,

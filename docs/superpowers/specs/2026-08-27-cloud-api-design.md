@@ -130,30 +130,35 @@ the wire.
 
 ### 3.2 The surface
 
-A new Gradle module `agent/api`, with **no platform dependency and no
-protobuf or gRPC dependency**. It is types and interfaces only.
+A new Gradle module `agent/api`, with **no platform dependency, no protobuf or
+gRPC dependency, and no Kotlin**. It is types and interfaces only, written in
+Java — §3.3 is why the language and the package name are both forced rather
+than chosen.
 
-```kotlin
-package cloud.spawnery.api
+```java
+package cloud.spawnery.agent.api;
 
-interface SpawneryApi {
-    val self: Self
-    fun groups(): List<Group>
-    fun group(name: String): Group?
-    fun servers(): List<ServerInfo>
-    fun server(name: String): ServerInfo?
-    fun players(): List<CloudPlayer>
-    fun player(id: UUID): CloudPlayer?
-    fun events(): EventBus
-    fun connect(player: UUID, to: Target): CompletionStage<ConnectResult>
-    fun lifecycle(): Lifecycle
+public interface SpawneryApi {
+    Self self();
+    List<Group> groups();
+    Optional<Group> group(String name);
+    List<ServerInfo> servers();
+    Optional<ServerInfo> server(String name);
+    List<CloudPlayer> players();
+    Optional<CloudPlayer> player(UUID id);
+    EventBus events();
+    CompletionStage<ConnectResult> connect(UUID player, Target to);
+    Lifecycle lifecycle();
 }
 
-interface Lifecycle {
-    fun scale(group: String, by: Int): CompletionStage<ScaleResult>
-    fun retire(server: String): CompletionStage<RetireResult>
+public interface Lifecycle {
+    CompletionStage<ScaleResult> scale(String group, int by);
+    CompletionStage<RetireResult> retire(String server);
 }
 ```
+
+Every type in those signatures is `java.*` or the module's own. That is the
+whole constraint.
 
 **`scale` moves a different field per group kind**, and that is deliberate:
 `scaling.minReplicas` on an ephemeral `ServerGroup`, `spec.replicas` on a
@@ -172,16 +177,18 @@ here first.
 
 `Self` says which role it is rather than being absent on one side:
 
-```kotlin
-sealed interface Self { val name: String; val group: String; val namespace: String }
-interface ServerSelf : Self { val slots: Int }
-interface ProxySelf  : Self
+```java
+public sealed interface Self permits ServerSelf, ProxySelf {
+    String name(); String group(); String network();
+}
+public non-sealed interface ServerSelf extends Self { int slots(); }
+public non-sealed interface ProxySelf  extends Self { }
 ```
 
 The entry point is one line, and it is the *same* line on both platforms:
 
-```kotlin
-val api = Spawnery.api()
+```java
+SpawneryApi api = Spawnery.api();
 ```
 
 Behind it, each agent's plugin registers the implementation with its own
@@ -197,10 +204,46 @@ carried a protobuf or gRPC class would be uncallable: a third-party plugin
 compiles against `com.google.protobuf.X` and finds only
 `cloud.spawnery.agent.shaded.com.google.protobuf.X` at runtime.
 
-`cloud.spawnery.api` is therefore a package the relocation list must never
-catch, and the module it comes from must never gain a dependency that would put
-one of those types in a signature. **This is an invariant a test enforces, not
-a convention** — see §6.2.
+**This section said only that until the shipped jar was opened, and the jar had
+two more things to say.** Both were measured on 2026-08-27 against
+`spawnery-agents-0.2.0`'s Velocity jar, and both change the design rather than
+decorate it.
+
+**The Kotlin standard library is relocated too, so the API cannot be written in
+Kotlin.** The relocate list ends with `"kotlin"`, and the jar carries **0**
+entries under `kotlin/` against **1045** under
+`cloud/spawnery/agent/shaded/kotlin/`. `ProxyRole.class` carries
+`Lcloud/spawnery/agent/shaded/kotlin/Metadata;` and not `Lkotlin/Metadata;`.
+
+Two consequences follow. A Kotlin compiler reading the shipped jar finds no
+Kotlin metadata at all and treats every class as plain Java — no nullability,
+no default arguments, no data-class semantics. And any signature carrying a
+Kotlin function type would demand
+`cloud.spawnery.agent.shaded.kotlin.jvm.functions.Function1` from a caller
+compiled against the real one, which is a `NoSuchMethodError` at the call
+rather than a compile error anywhere.
+
+So `agent/api` is **Java**. The alternatives were considered and declined: the
+Kotlin stdlib could be excluded from relocation, but the "relocate all of it"
+rule exists because Paper ships its own copies and an earlier list-based
+version of it went stale; or the API could stay Kotlin with signatures
+restricted to JVM-mapped types, which keeps the metadata loss and holds only
+by a test nobody would think to write. Java is the one option where a
+third-party plugin — Kotlin or Java — sees exactly what it compiled against.
+The rest of the agent stays Kotlin; this module is a thin boundary of
+interfaces and value types, which is what Java expresses well.
+
+**The package is `cloud.spawnery.agent.api`, not `cloud.spawnery.api`.**
+`hack/agent-jar-check.sh` fails on any class outside `cloud/spawnery/agent/`,
+by design: that check is what catches a dependency that shipped unrelocated,
+and its message says so. A package one level up would be reported as exactly
+that failure. The name sits inside the prefix and is still not a relocation
+target, since the list relocates *source* prefixes into
+`cloud.spawnery.agent.shaded.*` and never touches this one.
+
+The module must also never gain a dependency that would put a relocated type
+in a signature. **This is an invariant a test enforces, not a convention** —
+see §6.2.
 
 ### 3.4 How a plugin depends on it
 
@@ -225,6 +268,15 @@ messages:
 | agent → operator | `CloudRequest { id, oneof }` | `connect`, `scale`, `retire` |
 | operator → agent | `CloudResponse { id, oneof }` | the answer to that `id` |
 | operator → agent | `CloudEvent { oneof }` | unsolicited: phase transitions |
+
+**There is also no way to deliver any of this to a Paper agent today.**
+`ServerSession` sends exactly two messages when a stream opens -- ReportInterval
+and SessionDeadline -- and then never sends again. `internal/proxyreg.Fleet`,
+with its `Join`, `broadcast`, `snapshot` and `Resync`, exists for proxies
+alone. The server side has no registry, no per-session channel and no fan-out
+at all, so 7b's largest single piece is the one this design did not name: the
+server-side counterpart of `Fleet`. It is why 7b is a sequence of plans rather
+than one (§9.1).
 
 This is the first *request* this channel has ever carried. Until now an agent
 reports and the operator instructs; nothing asks. Three things follow that do
@@ -426,6 +478,17 @@ Each was measured on 2026-08-27 and each is a thing a plan may rely on:
 7. `AgentRole` has no seam for an outbound request. `hello`, `playerCount` and
    `extraReports` all produce messages on a timer; nothing produces one on
    demand. 7b adds that seam.
+8. **The Kotlin standard library is relocated.** The shipped Velocity jar
+   carries 0 entries under `kotlin/` and 1045 under
+   `cloud/spawnery/agent/shaded/kotlin/`, and `ProxyRole.class` references
+   `Lcloud/spawnery/agent/shaded/kotlin/Metadata;`. This is why `agent/api` is
+   Java (§3.3).
+9. **`hack/agent-jar-check.sh` fails on any class outside
+   `cloud/spawnery/agent/`.** This is why the API package sits inside that
+   prefix rather than beside it (§3.3).
+10. **`ServerSession` has no downstream path after its opening two sends**, and
+    `proxyreg.Fleet` covers proxies only. Building the server side's
+    counterpart is 7b's largest piece (§4.1).
 
 ## 8. What this milestone does not do
 
@@ -438,12 +501,64 @@ Each was measured on 2026-08-27 and each is a thing a plan may rely on:
   declared; declaring is still `kubectl` or GitOps. A command that creates
   groups needs a template concept this design does not have and does not want
   to guess at.
-- **No stability promise below the API.** `cloud.spawnery.api` is a contract.
+- **No stability promise below the API.** `cloud.spawnery.agent.api` is a contract.
   `spawnery.cloud/v1alpha1` underneath it is not, and may still move.
 - **No guarantee an event is delivered.** Events are a feed, not a ledger. An
   agent that was disconnected missed what happened while it was gone, and the
   mirror it re-syncs on reconnect is the correction. A plugin that needs a
   ledger should watch the objects.
+
+## 9.1 How 7b is cut
+
+7b is four plans, not one, and the reason is §4.1: the largest piece is the
+server-side fan-out this design did not name, and it is independent of the API
+surface it will eventually carry. Each produces working, testable software on
+its own.
+
+| | | Depends on |
+|---|---|---|
+| **7b-1** | `agent/api`: the Java module, its types, and the packaging invariant | nothing |
+| **7b-2** | The operator learns who is online: the proxy reports a roster with identities, the registry keeps and ages it | nothing |
+| **7b-3** | The server-side fan-out — `ServerSession`'s counterpart to `proxyreg.Fleet` — and `NetworkState` delivered on both channels | 7b-2 |
+| **7b-4** | Both agents hold the mirror, `SpawneryApi` answers from it, and §6.2's symmetry test compares the two | 7b-1, 7b-3 |
+| **7b-5** | `CloudRequest`/`CloudResponse`, the operator's bounds, and `connect` | 7b-4 |
+
+7b-1 goes first under any ordering: every other plan depends on those types
+existing, and it is the one that settles the packaging bet — a module that
+cannot be consumed by a third-party plugin makes the rest pointless, and
+§3.3's measurements say that bet is narrower than it looked.
+
+**Two things reshaped this table after 7b-1 shipped, and both were found by
+reading rather than by a failure.**
+
+A fan-out with nothing to fan out is not testable software, so the mechanism
+and its first payload cannot be separate plans. That merged what were 7b-2 and
+half of 7b-3.
+
+And `SpawneryApi.players()` shipped in 7b-1 with no source. The Velocity agent
+sends `PlayerJoinedServer` carrying a **username**, the operator's handler
+accepts and ignores it — its own comment says "Nothing in milestones 3 or 4
+consumes it" — and `agent.Registry` keeps counts and never an identity. So the
+operator has no UUID and no stored name for anybody, and the mirror could not
+have answered that method. Building the identities is now 7b-2, ahead of
+everything that reads them, rather than a gap discovered when the mirror was
+already being written.
+
+### The identities, and what holding them costs
+
+The proxy is the only honest source: every player on the network reaches a
+backend through one, and `VelocityPlayers` already reads exactly the state a
+roster needs. `PlayerRef` gains a `uuid` from `Player.getUniqueId()`, which
+`AgentPlugin.onServerConnected` already reads for the rescue set.
+
+This is the first time the operator holds a player's name and UUID rather than
+a count, and that is worth naming rather than sliding past. It stays **in
+memory in `agent.Registry`** and reaches no CR, no etcd, no log line at default
+verbosity, and no metric label — a metric labelled by player name would be
+both a cardinality bomb and a retention decision nobody made. It ages out with
+the report that carried it, on the staleness rule counts already use, so a
+proxy that goes silent stops asserting who is online rather than freezing a
+roster.
 
 ## 9. Acceptance
 
@@ -451,7 +566,7 @@ Each was measured on 2026-08-27 and each is a thing a plan may rely on:
 `image` changes and every server does, one at a time. Driven in envtest, and
 observed once in a real cluster before 7b begins.
 
-**7b** — a plugin compiled only against `cloud.spawnery.api`, bundling nothing,
+**7b** — a plugin compiled only against `cloud.spawnery.agent.api`, bundling nothing,
 loads on both a Paper server and a Velocity proxy from the shipped images,
 calls the same four read methods and the same `connect`, and gets the same
 answers in the same types. A `scale` beyond `maxReplicas` is refused by the

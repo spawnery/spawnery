@@ -20,6 +20,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -27,7 +28,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/proxyreg"
 )
@@ -757,5 +760,51 @@ func TestTheFallbackListHasOneSourceForJoinAndForDrain(t *testing.T) {
 	// Against the CRD too, so the two cannot agree by being equally wrong.
 	if want := strings.Join(fallbacks, ","); env != want {
 		t.Errorf("%s = %q, spec.routing.fallbackGroups = %v", podspec.EnvFallbackGroups, env, fallbacks)
+	}
+}
+
+// The mirror reaches a proxy, and it reaches it last.
+//
+// The position is the assertion. ProxyRole opens the pod's readiness gate on
+// the FullSync, so a message ahead of that one would be applied by an agent
+// that is not yet routable -- and a DrainPlayers has to follow the list it
+// names servers from.
+func TestAJoiningProxyIsSentTheNetworkStateAfterItsFullSync(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	start := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	reader := newReader(t, proxyGroup(), registered("lobby-0", "10.0.0.1:25565"))
+	f := proxyreg.New(proxyreg.Options{
+		Reader: reader,
+		State: netstate.Source{
+			Reader: reader,
+			Agents: agent.New(func() time.Time { return start }, 5*time.Second, start),
+		},
+	})
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "proxy-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+
+	first := <-outbox
+	if first.GetFullSync() == nil {
+		t.Fatalf("the first message was %T, want the FullSync", first.GetMessage())
+	}
+
+	var state *agentpb.NetworkState
+	for len(outbox) > 0 {
+		if s := (<-outbox).GetNetworkState(); s != nil {
+			state = s
+		}
+	}
+	if state == nil {
+		t.Fatal("no NetworkState followed the FullSync")
+	}
+	if len(state.GetServers()) != 1 || state.GetServers()[0].GetName() != "lobby-0" {
+		t.Errorf("servers = %v, want lobby-0", state.GetServers())
 	}
 }

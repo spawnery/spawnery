@@ -17,12 +17,15 @@ limitations under the License.
 package agentserver
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/spawnery/spawnery/internal/agentpb"
 )
 
 // Without a fleet, ProxySession would panic on its first stream — in a gRPC
@@ -37,6 +40,52 @@ func TestNewRefusesWithoutAProxyFleet(t *testing.T) {
 	}()
 	New(Options{})
 }
+
+// The same guard on the other half of the fleet, and it needed its own test
+// for a reason worth writing down: this milestone tried to mutation-check the
+// operator binary's wiring instead -- delete `Servers:` from its options and
+// watch something fail -- and nothing did. `go vet` does not run main, and no
+// unit test in this repository constructs the operator's own Options. The
+// binary's wiring is guarded by this panic and by `make e2e`, which starts the
+// real process, and by nothing in between.
+//
+// So the panic is what a test can see, and this is that test.
+func TestNewRefusesWithoutAServerFanout(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New accepted a nil Servers fanout instead of panicking")
+		}
+	}()
+	New(Options{Proxies: stubFleet{}})
+}
+
+// And the third, for the source a request is resolved against. Same guard,
+// same reason: without it answerConnect would panic inside a session.
+func TestNewRefusesWithoutANetworkStateSource(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("New accepted a zero netstate.Source instead of panicking")
+		}
+	}()
+	New(Options{Proxies: stubFleet{}, Servers: stubFanout{}})
+}
+
+// stubFanout satisfies ServerFanout so the test above reaches the State check.
+type stubFanout struct{}
+
+func (stubFanout) Join(context.Context, string, string) (<-chan *agentpb.OperatorToServer, func(), error) {
+	return nil, func() {}, nil
+}
+
+// stubFleet satisfies ProxyFleet so the test above reaches the Servers check
+// rather than stopping at the one before it.
+type stubFleet struct{}
+
+func (stubFleet) Join(context.Context, string, string, string) (<-chan *agentpb.OperatorToProxy, func(), error) {
+	return nil, func() {}, nil
+}
+
+func (stubFleet) Move(string, string, string) {}
 
 // The opening sends are the one part of a session nothing could end.
 //

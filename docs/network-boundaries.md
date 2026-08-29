@@ -302,3 +302,80 @@ be wrong for whichever Service lacks an endpoint on a given node — and it mean
 a cluster whose address pool is exhausted must choose between real client
 addresses and a shared address.
 
+
+## What the operator knows about a person
+
+The operator holds, for every player on a network, their Minecraft UUID, their
+username, and the backend they are on. Before milestone 7b-2 it held counts and
+no identity at all: the proxy's `PlayerJoinedServer` carried a username, the
+operator's handler discarded it, and the registry kept numbers.
+
+**It is in memory and nowhere else.** `agent.Registry` keeps it per proxy
+session; it reaches no custom resource, no etcd, no log line at default
+verbosity and no metric label. The last of those is deliberate twice over: a
+metric labelled by player name would multiply every series by the player base,
+and it would turn a live figure into whatever the monitoring stack's retention
+is — a decision nobody made and one this project should not make by accident.
+The one log line that can mention a roster is the refusal at `V(1)`, and it
+carries the reason and no player.
+
+It expires on its own. A roster older than twice the report interval is
+skipped, and a proxy whose stream is gone contributes nothing, so an operator
+that stops hearing from a proxy stops claiming to know who is online rather
+than serving a frozen list.
+
+What this does **not** do is bound who can read it inside the operator. Anyone
+who can reach that process — a debugger, a core dump, a memory-reading
+exploit — reads the roster, and no `NetworkPolicy` in this repository is about
+that. The bounds that exist are the ones that already existed: the agent
+channel is mutually authenticated and the namespace comes from the pod's own
+token rather than from the message, so a proxy can assert a roster for its own
+network and for no other.
+
+**And since 7b-3 the operator sends it onward.** Every agent in a namespace —
+every Velocity proxy and every Paper backend — receives every player in that
+namespace, by name and UUID, on connect and on each resync, as part of the
+`NetworkState` the plugin API is built on.
+
+That is a widening and is written down as one. A compromised game server pod
+now learns who is on the whole network, where before it could infer its own
+players and nobody else's. The namespace is still the horizon, because the state is built from a List
+scoped to the pod's own authenticated namespace.
+
+**And since 7b-5 an agent can ask for something.** It can ask that a player be
+moved, and that is the whole of it: no verb creates, deletes or resizes
+anything. A compromised pod can therefore shuffle players around its own
+network — which is new, and is a real thing to be able to do — and cannot
+reach another network at all.
+
+That last part is structural rather than checked. A request names a player and
+a target and carries no namespace, and the operator resolves both inside the
+namespace the pod's own ServiceAccount token authenticated. There is no field
+to put another network's name in, so this is not a guard a later edit can drop.
+
+What bounds the rest is a rate: eight requests back to back per pod, one token
+back per second, counted per pod so that a noisy one cannot spend another's
+budget. `spawnery_agent_requests_refused_total` publishes the refusals by
+reason, and a rising `RATE_LIMITED` is the shape a misbehaving or compromised
+plugin has.
+
+**A plugin needs no permission to read it, and cannot be given one.** That
+looked like an open decision when 7b-3 wrote this section and turned out not
+to be a decision at all. Bukkit permissions attach to a `CommandSender` and
+Velocity's to a `CommandSource`; both are about a player or the console, and
+neither platform has a `Plugin.hasPermission`. A plugin calling
+`Spawnery.api()` presents no identity there is anything to check.
+
+A gate would have to be invented — a list of trusted plugin ids, say — and it
+would be worth nothing. Any plugin on the server already reads the platform's
+own player list, loads classes, and calls whatever the JVM exposes; a check it
+could trivially route around is a check that only reassures.
+
+So the boundary is the one that already exists and is already written down:
+**who may install a plugin**, which is who may create a pod in that namespace,
+which [`charts/spawnery/README.md`](../charts/spawnery/README.md) tells an
+operator to treat as one trust domain.
+
+The `/cloud` command is the different case and does gate. A command has a
+`CommandSource`, so `spawnery.cloud.read` is expressible there, and that is
+where the permission belongs.
