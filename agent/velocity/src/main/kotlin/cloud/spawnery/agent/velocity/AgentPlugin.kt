@@ -261,7 +261,7 @@ class AgentPlugin @Inject constructor(
         // the command under no plugin, and `/velocity dump` then reports an
         // orphan whose owner nobody can name.
         // feedState and not a second one: see the Paper plugin's own note.
-        val command = BrigadierCommand(cloudCommand(api, VelocitySource, feedState).build())
+        val command = BrigadierCommand(cloudCommand(api, VelocitySource, feedState, mirror::feedFormat).build())
         proxy.commandManager.register(
             proxy.commandManager.metaBuilder(command).plugin(this).build(),
             command,

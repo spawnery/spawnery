@@ -131,3 +131,34 @@ roll the group, because the rendered pod really is different.
 - **Not two-way.** The copy runs one direction on every start.
 - **Not in any image.** No third-party plugin ships in a Spawnery image, and
   this mechanism exists so none has to.
+
+## Styling what the agent says
+
+`Network.spec.defaults.feedFormat` sets the shape of every line the agent
+writes into chat — both an announcement about the cloud and a reply to a
+`/cloud` command. One field rather than two, because they come from the same
+plugin and a network that styles one should not have to style the other to
+match.
+
+It is [MiniMessage](https://docs.advntr.dev/minimessage/format.html), which
+both Paper and Velocity parse. `$EVENT_MESSAGE` is replaced by what the line
+has to say; everything around it is yours. The default:
+
+```yaml
+spec:
+  defaults:
+    feedFormat: "<gray>»</gray> <gradient:aqua:green>Spawnery</gradient> <dark_gray>|</dark_gray> <gray>$EVENT_MESSAGE"
+```
+
+**Changing it rolls nothing.** The format travels in the network picture the
+operator already sends, not in the pod — a pod's environment is part of the
+pod hash, so a format carried there would make re-wording a chat line replace
+every server on the network. An edit takes effect within a resync interval.
+
+A blank value falls back to that default rather than printing nothing, which is
+also what an agent does when talking to an operator too old to send the field.
+
+**Colour is used where it carries meaning, and the format cannot change that
+part.** Inside `$EVENT_MESSAGE` a server that takes joins is green and one that
+does not is red — that is the question somebody is actually asking, and it
+disagrees with the phase during a drain. Warnings are red for the same reason.

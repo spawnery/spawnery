@@ -62,6 +62,13 @@ class CloudCommandTest {
     /** The opt-out state the tree writes into. */
     private val feed = FeedState()
 
+    /**
+     * The line's shape. Bare by default, so every assertion in this file about
+     * *wording* stays about wording rather than about the wrapper -- the
+     * wrapper has its own tests below.
+     */
+    private var format = Feed.MESSAGE_TOKEN
+
     // A connector whose wire the test holds: requests land in `requested`,
     // and the test answers them the way the operator would. Nothing here fakes
     // SpawneryApi itself -- the real MirrorApi and the real CloudConnector are
@@ -83,7 +90,7 @@ class CloudCommandTest {
 
     private fun run(command: String, api: SpawneryApi = api()): Int {
         val dispatcher = CommandDispatcher<Int>()
-        dispatcher.register(cloudCommand(api, adapter, feed))
+        dispatcher.register(cloudCommand(api, adapter, feed, { format }))
         return dispatcher.execute(command, 0)
     }
 
@@ -91,6 +98,55 @@ class CloudCommandTest {
     private fun answer(build: CloudResponse.Builder.() -> Unit) {
         val id = requested.single().id
         connector.answer(CloudResponse.newBuilder().setId(id).apply(build).build())
+    }
+
+    @Test
+    fun `command output wears the network's own format`() {
+        // The complaint this answers: the event feed followed the network's
+        // format and command replies did not, so one plugin spoke in two
+        // voices.
+        format = "<gray>PREFIX</gray> ${Feed.MESSAGE_TOKEN}"
+
+        run("cloud list")
+
+        val line = sent.single()
+        assertTrue(line.startsWith("<gray>PREFIX</gray> "), line)
+        assertTrue(plain(line).contains("lobby"), "the answer itself was lost: ${plain(line)}")
+    }
+
+    @Test
+    fun `every reply wears it, not only the first`() {
+        // `/cloud start` says three things, and a wrapper applied at one call
+        // site out of eighteen would look like a bug in the command rather
+        // than a missing wrapper.
+        format = "<gray>PREFIX</gray> ${Feed.MESSAGE_TOKEN}"
+
+        run("cloud start lobby 2")
+        answer {
+            setBoost(
+                BoostResult.newBuilder().setReplicas(2)
+                    .setExpiresAtUnix(java.time.Instant.parse("2026-08-30T20:00:00Z").epochSecond),
+            )
+        }
+
+        assertEquals(3, sent.size, sent.toString())
+        for (line in sent) {
+            assertTrue(line.startsWith("<gray>PREFIX</gray> "), "unwrapped: $line")
+        }
+    }
+
+    @Test
+    fun `a blank format still says something`() {
+        // Blank is what an operator older than the field sends. Reading it as
+        // "print nothing" would silence the command on exactly the upgrade
+        // that introduces the field.
+        format = ""
+
+        run("cloud list")
+
+        val line = plain(sent.single())
+        assertTrue(line.contains("Spawnery"), "the default format was not used: $line")
+        assertTrue(line.contains("lobby"), "the answer itself was lost: $line")
     }
 
     @Test

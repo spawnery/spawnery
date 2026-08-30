@@ -117,7 +117,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                         // the opt-out that the feed above reads, and two
                         // instances would leave `/cloud events off` looking as
                         // though it worked while the lines kept arriving.
-                        cloudCommand(api, PaperSource, feedState).build(),
+                        cloudCommand(api, PaperSource, feedState, mirror::feedFormat).build(),
                         "Spawnery cloud commands",
                     )
                 }

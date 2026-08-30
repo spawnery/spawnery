@@ -63,6 +63,20 @@ fun <S> cloudCommand(
     api: SpawneryApi,
     adapter: SourceAdapter<S>,
     feed: FeedState,
+    /**
+     * The same shape the chat feed uses, from the Network's own spec.
+     *
+     * One field and not two: a reply to a command and an announcement about
+     * the cloud come from the same plugin, and a network that styles one
+     * should not have to style the other to match. `$EVENT_MESSAGE` keeps its
+     * name because it is what an installation already wrote down; what it
+     * stands for is simply "what this line has to say".
+     *
+     * A lambda for the reason [Feed]'s own is one: the format arrives in the
+     * NetworkState and an edit must land at the next resync rather than at the
+     * next pod.
+     */
+    format: () -> String = { Feed.DEFAULT_FORMAT },
 ): LiteralArgumentBuilder<S> =
     LiteralArgumentBuilder.literal<S>("cloud")
         // On the root as well as on each branch: without it, `/cloud` with no
@@ -91,10 +105,10 @@ fun <S> cloudCommand(
                         // network and an operator this agent has not heard
                         // from look identical otherwise, and the second is the
                         // one somebody needs to act on.
-                        adapter.send(ctx.source, Style.quiet("no groups on this network yet"))
+                        reply(adapter, format, ctx.source, Style.quiet("no groups on this network yet"))
                     }
                     for (group in groups) {
-                        adapter.send(
+                        reply(adapter, format, 
                             ctx.source,
                             describeGroup(group),
                         )
@@ -111,13 +125,13 @@ fun <S> cloudCommand(
                             val name = StringArgumentType.getString(ctx, "name")
                             val server = api.server(name)
                             if (server.isPresent) {
-                                adapter.send(ctx.source, describe(server.get()))
+                                reply(adapter, format, ctx.source, describe(server.get()))
                                 return@executes 1
                             }
                             val group = api.group(name)
                             if (group.isPresent) {
                                 val g = group.get()
-                                adapter.send(
+                                reply(adapter, format, 
                                     ctx.source,
                                     describeGroup(g),
                                 )
@@ -127,7 +141,7 @@ fun <S> cloudCommand(
                             // leaves an admin unsure whether they mistyped or
                             // the thing is gone, and an empty line leaves them
                             // unsure whether the command works at all.
-                            adapter.send(
+                            reply(adapter, format, 
                                 ctx.source,
                                 Style.bad("no server or group called") + " " + Style.name(name) +
                                     Style.quiet(" on this network"),
@@ -154,7 +168,7 @@ fun <S> cloudCommand(
                                     // has not read the design, and an admin
                                     // who believes they just disconnected
                                     // forty people does something worse next.
-                                    adapter.send(
+                                    reply(adapter, format, 
                                         source,
                                         Style.name(name) + Style.good(" is retiring.") +
                                             Style.quiet(
@@ -168,7 +182,7 @@ fun <S> cloudCommand(
                                     // already retiring, no such server, asked
                                     // too often -- and rewording them here
                                     // would only lose which one it was.
-                                    adapter.send(
+                                    reply(adapter, format, 
                                         source,
                                         Style.bad("could not retire") + " " + Style.name(name) +
                                             Style.quiet(": ") + Style.bad(reason(failure)),
@@ -193,11 +207,11 @@ fun <S> cloudCommand(
                         // typing `/cloud start lobby` in a hurry means "one
                         // more", and refusing them for a missing argument
                         // would be pedantry at the exact moment they are busy.
-                        .executes { ctx -> startBoost(api, adapter, ctx.source, group(ctx), 1, null) }
+                        .executes { ctx -> startBoost(api, adapter, format, ctx.source, group(ctx), 1, null) }
                         .then(
                             RequiredArgumentBuilder.argument<S, Int>("count", IntegerArgumentType.integer(1))
                                 .executes { ctx ->
-                                    startBoost(api, adapter, ctx.source, group(ctx), count(ctx), null)
+                                    startBoost(api, adapter, format, ctx.source, group(ctx), count(ctx), null)
                                 }
                                 .then(
                                     LiteralArgumentBuilder.literal<S>("for")
@@ -209,7 +223,7 @@ fun <S> cloudCommand(
                                                 val text = StringArgumentType.getString(ctx, "duration")
                                                 val span = parseDuration(text)
                                                 if (span == null) {
-                                                    adapter.send(
+                                                    reply(adapter, format, 
                                                         ctx.source,
                                                         Style.bad("could not read") + " " +
                                                             Style.name(text) +
@@ -220,7 +234,7 @@ fun <S> cloudCommand(
                                                     )
                                                     return@executes 0
                                                 }
-                                                startBoost(api, adapter, ctx.source, group(ctx), count(ctx), span)
+                                                startBoost(api, adapter, format, ctx.source, group(ctx), count(ctx), span)
                                             },
                                         ),
                                 ),
@@ -238,7 +252,7 @@ fun <S> cloudCommand(
                             api.stopBoosts(name).whenComplete { removed, failure ->
                                 when {
                                     failure != null ->
-                                        adapter.send(
+                                        reply(adapter, format, 
                                             source,
                                             Style.bad("could not stop boosts on") + " " + Style.name(name) +
                                                 Style.quiet(": ") + Style.bad(reason(failure)),
@@ -249,11 +263,11 @@ fun <S> cloudCommand(
                                     // because the next thing they do depends
                                     // on it.
                                     removed == 0 ->
-                                        adapter.send(
+                                        reply(adapter, format, 
                                             source,
                                             Style.name(name) + Style.quiet(" had no boosts running"),
                                         )
-                                    else -> adapter.send(
+                                    else -> reply(adapter, format, 
                                         source,
                                         Style.name(name) + Style.quiet(": removed ") +
                                             Style.number(removed) +
@@ -275,11 +289,11 @@ fun <S> cloudCommand(
                 // instead of a silent no-op.
                 .then(
                     LiteralArgumentBuilder.literal<S>("on")
-                        .executes { ctx -> setFeed(adapter, feed, ctx.source, on = true) },
+                        .executes { ctx -> setFeed(adapter, format, feed, ctx.source, on = true) },
                 )
                 .then(
                     LiteralArgumentBuilder.literal<S>("off")
-                        .executes { ctx -> setFeed(adapter, feed, ctx.source, on = false) },
+                        .executes { ctx -> setFeed(adapter, format, feed, ctx.source, on = false) },
                 ),
         )
 
@@ -292,13 +306,19 @@ fun <S> cloudCommand(
  * won -- and a setting that quietly comes back after a rejoin is a setting
  * people report as a bug.
  */
-private fun <S> setFeed(adapter: SourceAdapter<S>, feed: FeedState, source: S, on: Boolean): Int {
+private fun <S> setFeed(
+    adapter: SourceAdapter<S>,
+    format: () -> String,
+    feed: FeedState,
+    source: S,
+    on: Boolean,
+): Int {
     val player = adapter.playerId(source)
     if (player == null) {
         // Said rather than silently doing nothing. A console whose command
         // appeared to work and changed nothing is the worst of the three
         // possible behaviours here.
-        adapter.send(
+        reply(adapter, format, 
             source,
             Style.bad("the console cannot turn the cloud feed off") +
                 Style.quiet(": it is not a player, and these lines are already in its log"),
@@ -307,10 +327,10 @@ private fun <S> setFeed(adapter: SourceAdapter<S>, feed: FeedState, source: S, o
     }
     if (on) {
         feed.optIn(player)
-        adapter.send(source, Style.good("The cloud feed is on for you."))
+        reply(adapter, format, source, Style.good("The cloud feed is on for you."))
     } else {
         feed.optOut(player)
-        adapter.send(
+        reply(adapter, format, 
             source,
             Style.good("The cloud feed is off for you.") +
                 Style.quiet(
@@ -321,6 +341,23 @@ private fun <S> setFeed(adapter: SourceAdapter<S>, feed: FeedState, source: S, o
         )
     }
     return 1
+}
+
+/**
+ * One line of command output, wrapped in the network's own format.
+ *
+ * Every reply in this file goes through it rather than calling
+ * [SourceAdapter.send] directly, and that is the point: eighteen call sites are
+ * eighteen chances to forget the format at one of them, and the one that
+ * forgot would look like a bug in the command rather than a missing wrapper.
+ *
+ * A blank format falls back to the built-in default, for the reason [Feed]
+ * does the same: blank is what an operator older than the field sends, and
+ * reading it as "print nothing" would silence the command on exactly the
+ * upgrade that introduces it.
+ */
+private fun <S> reply(adapter: SourceAdapter<S>, format: () -> String, source: S, message: String) {
+    adapter.send(source, format().ifBlank { Feed.DEFAULT_FORMAT }.replace(Feed.MESSAGE_TOKEN, message))
 }
 
 private fun <S> group(ctx: com.mojang.brigadier.context.CommandContext<S>): String =
@@ -345,6 +382,7 @@ private fun <S> count(ctx: com.mojang.brigadier.context.CommandContext<S>): Int 
 private fun <S> startBoost(
     api: SpawneryApi,
     adapter: SourceAdapter<S>,
+    format: () -> String,
     source: S,
     group: String,
     replicas: Int,
@@ -352,26 +390,26 @@ private fun <S> startBoost(
 ): Int {
     api.boost(group, replicas, forHowLong).whenComplete { result, failure ->
         if (failure != null) {
-            adapter.send(
+            reply(adapter, format, 
                 source,
                 Style.bad("could not boost") + " " + Style.name(group) +
                     Style.quiet(": ") + Style.bad(reason(failure)),
             )
             return@whenComplete
         }
-        adapter.send(
+        reply(adapter, format, 
             source,
             Style.name(group) + Style.quiet(": ") +
                 Style.good("+${result.replicas()} server${if (result.replicas() == 1) "" else "s"}") +
                 Style.quiet(" until ") + Style.number(AT_MINUTE_UTC.format(result.expiresAt())) +
                 Style.quiet(" UTC"),
         )
-        adapter.send(
+        reply(adapter, format, 
             source,
             Style.quiet("This is a boost, not a spec change. It expires on its own; ") +
                 Style.number("/cloud stop $group") + Style.quiet(" ends it early."),
         )
-        adapter.send(source, Style.quiet("For a lasting change, edit the ServerGroup."))
+        reply(adapter, format, source, Style.quiet("For a lasting change, edit the ServerGroup."))
     }
     return 1
 }

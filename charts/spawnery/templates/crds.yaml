@@ -64,11 +64,18 @@ spec:
                     default: <gray>»</gray> <gradient:aqua:green>Spawnery</gradient>
                       <dark_gray>|</dark_gray> <gray>$EVENT_MESSAGE
                     description: |-
-                      FeedFormat is the line a cloud event becomes in chat.
+                      FeedFormat is the line the agent's chat output wears.
+
+                      It covers both halves of what the plugin says: an announcement about the
+                      cloud and a reply to a `/cloud` command. One field and not two, because
+                      they come from the same plugin and a network that styles one should not
+                      have to style the other to match.
 
                       MiniMessage, which both platforms parse -- see the agent's own Style for
                       why that rather than the deprecated section-sign codes. `$EVENT_MESSAGE`
-                      is replaced by what happened; everything around it is yours.
+                      is replaced by what the line has to say; everything around it is yours.
+                      The token keeps its name because an installation has already written it
+                      down.
 
                       **Nothing about this reaches podspec.DesiredServerHash.** It travels in
                       the NetworkState the operator already sends, so changing it rolls no
