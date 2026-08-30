@@ -148,14 +148,14 @@
           # it stood and the operator moved.
           #
           # The sequence so far, and none of it is a miscount: 0.2.5, 0.2.7,
-          # 0.2.9, 0.2.10. 0.2.6 and 0.2.8 built no agent, so
-          # ghcr.io/spawnery/paper:26.2-0.2.6 and -0.2.8 simply do not exist,
-          # and each gap is the honest record of a release that carried no jar.
+          # 0.2.9, 0.2.10, 0.2.12. 0.2.6, 0.2.8 and 0.2.11 built no agent, so
+          # ghcr.io/spawnery/paper:26.2-0.2.6, -0.2.8 and -0.2.11 simply do not
+          # exist, and each gap records a release that carried no jar.
           #
           # A Paper build that moves without this number moving would collide,
           # which is what makes a bump obligatory when the images really do
           # change rather than tidy.
-          imageVersion = "0.2.10";
+          imageVersion = "0.2.12";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -177,10 +177,11 @@
           # imageVersion does: spawnery-operator:0.2.10 does not exist, and the
           # gap is the honest record of a release that built no operator.
           #
-          # 0.2.11 moves it alone: the change is inside internal/controller and
-          # nothing under agent/ or image/ is different, so both game images
-          # keep the 0.2.10 tags a cluster has already pulled.
-          operatorVersion = "0.2.11";
+          # 0.2.11 moved it alone: the change was inside internal/controller and
+          # nothing under agent/ or image/ was different. 0.2.12 moves both
+          # numbers again -- the chat feed's format is a Network field the
+          # operator carries and the agents read.
+          operatorVersion = "0.2.12";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
