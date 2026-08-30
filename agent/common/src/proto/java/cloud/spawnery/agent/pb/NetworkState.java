@@ -50,6 +50,7 @@ private static final long serialVersionUID = 0L;
     groups_ = java.util.Collections.emptyList();
     servers_ = java.util.Collections.emptyList();
     players_ = java.util.Collections.emptyList();
+    feedFormat_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -223,6 +224,69 @@ private static final long serialVersionUID = 0L;
     return players_.get(index);
   }
 
+  public static final int FEED_FORMAT_FIELD_NUMBER = 4;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object feedFormat_ = "";
+  /**
+   * <pre>
+   * The line a cloud event becomes in chat, from the Network's own spec.
+   *
+   * Carried in this state message rather than in the pod, and that placement
+   * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+   * a format in one would make re-wording a chat line replace every server on
+   * the network. Here a change costs a resync interval and rolls nothing.
+   *
+   * Empty is what an operator older than this field sends, and the agent reads
+   * it as "use my own default" rather than as "print nothing".
+   * </pre>
+   *
+   * <code>string feed_format = 4;</code>
+   * @return The feedFormat.
+   */
+  @java.lang.Override
+  public java.lang.String getFeedFormat() {
+    java.lang.Object ref = feedFormat_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      feedFormat_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * The line a cloud event becomes in chat, from the Network's own spec.
+   *
+   * Carried in this state message rather than in the pod, and that placement
+   * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+   * a format in one would make re-wording a chat line replace every server on
+   * the network. Here a change costs a resync interval and rolls nothing.
+   *
+   * Empty is what an operator older than this field sends, and the agent reads
+   * it as "use my own default" rather than as "print nothing".
+   * </pre>
+   *
+   * <code>string feed_format = 4;</code>
+   * @return The bytes for feedFormat.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getFeedFormatBytes() {
+    java.lang.Object ref = feedFormat_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      feedFormat_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -245,6 +309,9 @@ private static final long serialVersionUID = 0L;
     }
     for (int i = 0; i < players_.size(); i++) {
       output.writeMessage(3, players_.get(i));
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(feedFormat_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 4, feedFormat_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -277,6 +344,9 @@ private static final long serialVersionUID = 0L;
           }
           size += 1 * count;
         }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(feedFormat_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(4, feedFormat_);
+    }
     return size;
   }
   @java.lang.Override
@@ -307,6 +377,8 @@ private static final long serialVersionUID = 0L;
         .equals(other.getServersList())) return false;
     if (!getPlayersList()
         .equals(other.getPlayersList())) return false;
+    if (!getFeedFormat()
+        .equals(other.getFeedFormat())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -330,6 +402,8 @@ private static final long serialVersionUID = 0L;
       hash = (37 * hash) + PLAYERS_FIELD_NUMBER;
       hash = (53 * hash) + getPlayersList().hashCode();
     }
+    hash = (37 * hash) + FEED_FORMAT_FIELD_NUMBER;
+    hash = (53 * hash) + getFeedFormat().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -501,6 +575,7 @@ private static final long serialVersionUID = 0L;
         playersBuilder_.clear();
       }
       bitField0_ = (bitField0_ & ~0x00000004);
+      feedFormat_ = "";
       return this;
     }
 
@@ -565,6 +640,9 @@ private static final long serialVersionUID = 0L;
 
     private void buildPartial0(cloud.spawnery.agent.pb.NetworkState result) {
       int from_bitField0_ = bitField0_;
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.feedFormat_ = feedFormat_;
+      }
     }
 
     @java.lang.Override
@@ -657,6 +735,11 @@ private static final long serialVersionUID = 0L;
           }
         }
       }
+      if (!other.getFeedFormat().isEmpty()) {
+        feedFormat_ = other.feedFormat_;
+        bitField0_ |= 0x00000008;
+        onChanged();
+      }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -722,6 +805,11 @@ private static final long serialVersionUID = 0L;
               }
               break;
             } // case 26
+            case 34: {
+              feedFormat_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000008;
+              break;
+            } // case 34
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1565,6 +1653,138 @@ private static final long serialVersionUID = 0L;
         players_ = null;
       }
       return playersBuilder_;
+    }
+
+    private java.lang.Object feedFormat_ = "";
+    /**
+     * <pre>
+     * The line a cloud event becomes in chat, from the Network's own spec.
+     *
+     * Carried in this state message rather than in the pod, and that placement
+     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+     * a format in one would make re-wording a chat line replace every server on
+     * the network. Here a change costs a resync interval and rolls nothing.
+     *
+     * Empty is what an operator older than this field sends, and the agent reads
+     * it as "use my own default" rather than as "print nothing".
+     * </pre>
+     *
+     * <code>string feed_format = 4;</code>
+     * @return The feedFormat.
+     */
+    public java.lang.String getFeedFormat() {
+      java.lang.Object ref = feedFormat_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        feedFormat_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * The line a cloud event becomes in chat, from the Network's own spec.
+     *
+     * Carried in this state message rather than in the pod, and that placement
+     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+     * a format in one would make re-wording a chat line replace every server on
+     * the network. Here a change costs a resync interval and rolls nothing.
+     *
+     * Empty is what an operator older than this field sends, and the agent reads
+     * it as "use my own default" rather than as "print nothing".
+     * </pre>
+     *
+     * <code>string feed_format = 4;</code>
+     * @return The bytes for feedFormat.
+     */
+    public com.google.protobuf.ByteString
+        getFeedFormatBytes() {
+      java.lang.Object ref = feedFormat_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        feedFormat_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * The line a cloud event becomes in chat, from the Network's own spec.
+     *
+     * Carried in this state message rather than in the pod, and that placement
+     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+     * a format in one would make re-wording a chat line replace every server on
+     * the network. Here a change costs a resync interval and rolls nothing.
+     *
+     * Empty is what an operator older than this field sends, and the agent reads
+     * it as "use my own default" rather than as "print nothing".
+     * </pre>
+     *
+     * <code>string feed_format = 4;</code>
+     * @param value The feedFormat to set.
+     * @return This builder for chaining.
+     */
+    public Builder setFeedFormat(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      feedFormat_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The line a cloud event becomes in chat, from the Network's own spec.
+     *
+     * Carried in this state message rather than in the pod, and that placement
+     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+     * a format in one would make re-wording a chat line replace every server on
+     * the network. Here a change costs a resync interval and rolls nothing.
+     *
+     * Empty is what an operator older than this field sends, and the agent reads
+     * it as "use my own default" rather than as "print nothing".
+     * </pre>
+     *
+     * <code>string feed_format = 4;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearFeedFormat() {
+      feedFormat_ = getDefaultInstance().getFeedFormat();
+      bitField0_ = (bitField0_ & ~0x00000008);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The line a cloud event becomes in chat, from the Network's own spec.
+     *
+     * Carried in this state message rather than in the pod, and that placement
+     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+     * a format in one would make re-wording a chat line replace every server on
+     * the network. Here a change costs a resync interval and rolls nothing.
+     *
+     * Empty is what an operator older than this field sends, and the agent reads
+     * it as "use my own default" rather than as "print nothing".
+     * </pre>
+     *
+     * <code>string feed_format = 4;</code>
+     * @param value The bytes for feedFormat to set.
+     * @return This builder for chaining.
+     */
+    public Builder setFeedFormatBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      feedFormat_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.NetworkState)

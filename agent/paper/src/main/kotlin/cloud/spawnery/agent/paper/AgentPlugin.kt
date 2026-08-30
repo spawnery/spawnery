@@ -59,7 +59,7 @@ class AgentPlugin : JavaPlugin(), Listener {
         loop.send(ServerMessage.newBuilder().setCloudRequest(request).build())
     }
     private val feedState = FeedState()
-    private val feed = Feed(PaperAudience, feedState, System::currentTimeMillis)
+    private val feed = Feed(PaperAudience, feedState, System::currentTimeMillis, format = mirror::feedFormat)
     private val events = CloudEvents()
     private val role = ServerRole(state, mirror, connector, feed, events)
 
@@ -186,7 +186,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                     // answer, and watching for each of those separately is
                     // three subscriptions to get wrong.
                     feed.tick()
-                    reportInterest(feed.wanted())
+                    reportInterest(feed.wanted(events.size()))
                 }, 0L, SAMPLE_TICKS)
 
                 // Once here, before the first stream exists, because the timer

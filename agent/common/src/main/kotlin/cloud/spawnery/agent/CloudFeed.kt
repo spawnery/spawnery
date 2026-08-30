@@ -13,7 +13,12 @@ import cloud.spawnery.agent.pb.CloudEvent
 private const val NAMES_SHOWN = 6
 
 /**
- * Collapses one window of events into the lines a person reads.
+ * Collapses one window of events into what happened, without deciding how the
+ * line looks.
+ *
+ * The surrounding format is [Feed]'s and comes from the Network's own spec, so
+ * an installation can re-word its prefix without this file knowing. What is
+ * here is the part that has to be true.
  *
  * **Pure, and that is the whole design.** It takes a list and returns strings:
  * no clock, no platform, no I/O. The window is [CloudFeedBuffer]'s problem,
@@ -42,7 +47,7 @@ fun coalesce(events: List<CloudEvent>): List<String> {
     for (w in warnings) {
         // A warning is the one line in this feed somebody has to see, so it
         // is the one that is red rather than merely prefixed.
-        lines += "${Style.feedPrefix} ${Style.name(w.subject)}${Style.quiet(": ")}${Style.bad(w.message)}"
+        lines += "${Style.name(w.subject)}${Style.quiet(": ")}${Style.bad(w.message)}"
     }
 
     // LinkedHashMap, so the order events arrived is the order they are read.
@@ -60,13 +65,13 @@ fun coalesce(events: List<CloudEvent>): List<String> {
             // One event keeps its sentence. A count of one is not a summary,
             // and "1 ReadyGatePassed in lobby (lobby-a)" says less than the
             // operator already said.
-            lines += "${Style.feedPrefix} ${Style.name(only.subject)}${Style.quiet(": ")}${Style.quiet(only.message)}"
+            lines += "${Style.name(only.subject)}${Style.quiet(": ")}${Style.quiet(only.message)}"
             continue
         }
         val shown = collapsed.take(NAMES_SHOWN).joinToString(Style.quiet(", ")) { Style.name(it.subject) }
         val rest = collapsed.size - minOf(collapsed.size, NAMES_SHOWN)
         val names = if (rest > 0) shown + Style.quiet(" and $rest more") else shown
-        lines += "${Style.feedPrefix} ${Style.number(collapsed.size)} ${Style.good(kind)}" +
+        lines += "${Style.number(collapsed.size)} ${Style.good(kind)}" +
             "${Style.quiet(" in ")}${Style.name(groupName)}${Style.quiet(" (")}$names${Style.quiet(")")}"
     }
     return lines

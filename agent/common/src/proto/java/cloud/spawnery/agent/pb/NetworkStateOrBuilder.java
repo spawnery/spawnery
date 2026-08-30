@@ -111,4 +111,40 @@ public interface NetworkStateOrBuilder extends
    */
   cloud.spawnery.agent.pb.RosterEntryOrBuilder getPlayersOrBuilder(
       int index);
+
+  /**
+   * <pre>
+   * The line a cloud event becomes in chat, from the Network's own spec.
+   *
+   * Carried in this state message rather than in the pod, and that placement
+   * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+   * a format in one would make re-wording a chat line replace every server on
+   * the network. Here a change costs a resync interval and rolls nothing.
+   *
+   * Empty is what an operator older than this field sends, and the agent reads
+   * it as "use my own default" rather than as "print nothing".
+   * </pre>
+   *
+   * <code>string feed_format = 4;</code>
+   * @return The feedFormat.
+   */
+  java.lang.String getFeedFormat();
+  /**
+   * <pre>
+   * The line a cloud event becomes in chat, from the Network's own spec.
+   *
+   * Carried in this state message rather than in the pod, and that placement
+   * is the point: a pod's environment is part of podspec.DesiredServerHash, so
+   * a format in one would make re-wording a chat line replace every server on
+   * the network. Here a change costs a resync interval and rolls nothing.
+   *
+   * Empty is what an operator older than this field sends, and the agent reads
+   * it as "use my own default" rather than as "print nothing".
+   * </pre>
+   *
+   * <code>string feed_format = 4;</code>
+   * @return The bytes for feedFormat.
+   */
+  com.google.protobuf.ByteString
+      getFeedFormatBytes();
 }

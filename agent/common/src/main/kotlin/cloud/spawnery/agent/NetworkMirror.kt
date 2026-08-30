@@ -39,14 +39,21 @@ class NetworkMirror {
         val groups: List<Group>,
         val servers: List<ServerInfo>,
         val players: List<CloudPlayer>,
+        /**
+         * The chat feed's shape, from the Network's own spec. Blank until the
+         * first NetworkState arrives, and blank from an operator older than
+         * the field -- [Feed] reads both as "use my own default".
+         */
+        val feedFormat: String,
     )
 
     @Volatile
-    private var snapshot = Snapshot(emptyList(), emptyList(), emptyList())
+    private var snapshot = Snapshot(emptyList(), emptyList(), emptyList(), "")
 
     /** Replaces everything this mirror holds. */
     fun apply(state: NetworkState) {
         snapshot = Snapshot(
+            feedFormat = state.feedFormat,
             groups = state.groupsList.map {
                 Group(it.name, kindOf(it.kind), it.replicas, it.readyReplicas, it.onlinePlayers, it.freeSlots)
             },
@@ -83,6 +90,15 @@ class NetworkMirror {
     fun servers(): List<ServerInfo> = snapshot.servers
 
     fun players(): List<CloudPlayer> = snapshot.players
+
+    /**
+     * The chat feed's shape, as the operator last stated it.
+     *
+     * Read per delivery rather than captured, so an edit to the Network takes
+     * effect at the next resync instead of at the next pod -- see Feed's own
+     * `format` parameter for why that matters.
+     */
+    fun feedFormat(): String = snapshot.feedFormat
 
     private fun kindOf(kind: GroupState.Kind): Group.Kind =
         when (kind) {

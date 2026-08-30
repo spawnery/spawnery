@@ -2029,7 +2029,17 @@ type NetworkState struct {
 	// Every player on this network, aggregated across the proxies. Empty when
 	// no proxy has reported recently -- which is a real state and not an error,
 	// and is why the API documents an empty list as ordinary.
-	Players       []*RosterEntry `protobuf:"bytes,3,rep,name=players,proto3" json:"players,omitempty"`
+	Players []*RosterEntry `protobuf:"bytes,3,rep,name=players,proto3" json:"players,omitempty"`
+	// The line a cloud event becomes in chat, from the Network's own spec.
+	//
+	// Carried in this state message rather than in the pod, and that placement
+	// is the point: a pod's environment is part of podspec.DesiredServerHash, so
+	// a format in one would make re-wording a chat line replace every server on
+	// the network. Here a change costs a resync interval and rolls nothing.
+	//
+	// Empty is what an operator older than this field sends, and the agent reads
+	// it as "use my own default" rather than as "print nothing".
+	FeedFormat    string `protobuf:"bytes,4,opt,name=feed_format,json=feedFormat,proto3" json:"feed_format,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2083,6 +2093,13 @@ func (x *NetworkState) GetPlayers() []*RosterEntry {
 		return x.Players
 	}
 	return nil
+}
+
+func (x *NetworkState) GetFeedFormat() string {
+	if x != nil {
+		return x.FeedFormat
+	}
+	return ""
 }
 
 // GroupState is one group as the operator's status fields describe it.
@@ -3147,11 +3164,13 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\vRosterEntry\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
-	"\x06server\x18\x03 \x01(\tR\x06server\"\xcb\x01\n" +
+	"\x06server\x18\x03 \x01(\tR\x06server\"\xec\x01\n" +
 	"\fNetworkState\x12;\n" +
 	"\x06groups\x18\x01 \x03(\v2#.spawnery.agent.v1alpha1.GroupStateR\x06groups\x12>\n" +
 	"\aservers\x18\x02 \x03(\v2$.spawnery.agent.v1alpha1.ServerStateR\aservers\x12>\n" +
-	"\aplayers\x18\x03 \x03(\v2$.spawnery.agent.v1alpha1.RosterEntryR\aplayers\"\xaf\x02\n" +
+	"\aplayers\x18\x03 \x03(\v2$.spawnery.agent.v1alpha1.RosterEntryR\aplayers\x12\x1f\n" +
+	"\vfeed_format\x18\x04 \x01(\tR\n" +
+	"feedFormat\"\xaf\x02\n" +
 	"\n" +
 	"GroupState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12<\n" +

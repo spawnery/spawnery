@@ -25,7 +25,8 @@ class FeedTest {
     private val audience = FakeAudience()
     private val state = FeedState()
     private var now = 0L
-    private val feed = Feed(audience, state, { now })
+    private var format = ""
+    private val feed = Feed(audience, state, { now }, format = { format })
 
     private fun anEvent(name: String): CloudEvent =
         CloudEvent.newBuilder()
@@ -63,14 +64,85 @@ class FeedTest {
     @Test
     fun `nobody watching means the agent says it wants nothing`() {
         // What the operator reads to decide whether to send anything at all.
-        assertTrue(!feed.wanted(), "an empty server claimed to want events")
+        assertTrue(!feed.wanted(0), "an empty server claimed to want events")
 
         audience.online += alice
         audience.permitted += alice
-        assertTrue(feed.wanted(), "a permitted player online did not register")
+        assertTrue(feed.wanted(0), "a permitted player online did not register")
 
         state.optOut(alice)
-        assertTrue(!feed.wanted(), "the last watcher opting out left the agent still asking")
+        assertTrue(!feed.wanted(0), "the last watcher opting out left the agent still asking")
+    }
+
+    @Test
+    fun `the network's format wraps the message`() {
+        audience.online += alice
+        audience.permitted += alice
+        format = "<gray>PREFIX</gray> ${Feed.MESSAGE_TOKEN} <gray>SUFFIX</gray>"
+
+        feed.onEvent(anEvent("lobby-a"))
+        now = 1_000
+        feed.tick()
+
+        val line = audience.sent.single().second
+        assertTrue(line.startsWith("<gray>PREFIX</gray> "), line)
+        assertTrue(line.endsWith(" <gray>SUFFIX</gray>"), line)
+        assertTrue(line.contains("lobby-a"), "the event itself was lost: $line")
+    }
+
+    @Test
+    fun `a blank format falls back to the built-in one rather than printing nothing`() {
+        // Blank is what an operator older than the field sends, and what the
+        // mirror holds before the first NetworkState arrives. Reading it as
+        // "print nothing" would make a feed silently empty on exactly the
+        // upgrade that introduces it.
+        audience.online += alice
+        audience.permitted += alice
+        format = ""
+
+        feed.onEvent(anEvent("lobby-a"))
+        now = 1_000
+        feed.tick()
+
+        val line = audience.sent.single().second
+        assertTrue(line.contains("Spawnery"), "the default format was not used: $line")
+        assertTrue(line.contains("lobby-a"), "the event itself was lost: $line")
+        assertTrue(!line.contains(Feed.MESSAGE_TOKEN), "the token survived into chat: $line")
+    }
+
+    @Test
+    fun `the format is read per delivery, not captured once`() {
+        // The format arrives in the NetworkState the operator resends on every
+        // resync. A value captured at construction would hold whatever the
+        // first message said, and an edit would take effect at the next pod
+        // rather than at the next resync -- which is the rolling this design
+        // put the format on the wire to avoid.
+        audience.online += alice
+        audience.permitted += alice
+        format = "<gray>FIRST</gray> ${Feed.MESSAGE_TOKEN}"
+        feed.onEvent(anEvent("lobby-a"))
+        now = 1_000
+        feed.tick()
+
+        format = "<gray>SECOND</gray> ${Feed.MESSAGE_TOKEN}"
+        feed.onEvent(anEvent("lobby-b"))
+        now = 2_000
+        feed.tick()
+
+        assertEquals(2, audience.sent.size)
+        assertTrue(audience.sent[0].second.startsWith("<gray>FIRST</gray>"), audience.sent[0].second)
+        assertTrue(audience.sent[1].second.startsWith("<gray>SECOND</gray>"), audience.sent[1].second)
+    }
+
+    @Test
+    fun `a subscribed plugin keeps events flowing even with nobody in chat`() {
+        // The case a backend is always in: its audience is empty by design,
+        // because every player on it is behind a proxy that delivers the same
+        // line. Without the subscriber count the operator would stop sending
+        // it events entirely, and a plugin that subscribed through the API
+        // would receive nothing -- silently.
+        assertTrue(!feed.wanted(0), "an empty agent with no subscriber asked for events")
+        assertTrue(feed.wanted(1), "a subscribed plugin did not keep events flowing")
     }
 
     @Test

@@ -317,6 +317,25 @@ type Defaults struct {
 	// Scheduling is the default pod placement.
 	// +optional
 	Scheduling *Scheduling `json:"scheduling,omitempty"`
+
+	// FeedFormat is the line a cloud event becomes in chat.
+	//
+	// MiniMessage, which both platforms parse -- see the agent's own Style for
+	// why that rather than the deprecated section-sign codes. `$EVENT_MESSAGE`
+	// is replaced by what happened; everything around it is yours.
+	//
+	// **Nothing about this reaches podspec.DesiredServerHash.** It travels in
+	// the NetworkState the operator already sends, so changing it rolls no
+	// pod and takes effect within a resync interval. A format carried in an
+	// environment variable would have been in the pod spec, and re-wording a
+	// chat line would have replaced every server on the network.
+	//
+	// A value that MiniMessage cannot parse costs the line, not the agent: the
+	// agent falls back to the message alone rather than throwing inside a
+	// network callback.
+	// +kubebuilder:default="<gray>»</gray> <gradient:aqua:green>Spawnery</gradient> <dark_gray>|</dark_gray> <gray>$EVENT_MESSAGE"
+	// +optional
+	FeedFormat string `json:"feedFormat,omitempty"`
 }
 
 // ExtraPlugins names a volume whose contents are copied into the server's

@@ -36,9 +36,6 @@ internal object Style {
     /** A figure worth the eye landing on. */
     fun number(value: Any): String = "<white>${escape(value.toString())}</white>"
 
-    /** The `[cloud]` the chat feed prefixes its lines with. */
-    val feedPrefix: String = "<dark_aqua>[cloud]</dark_aqua>"
-
     /**
      * Plain text that must not be read as markup.
      *

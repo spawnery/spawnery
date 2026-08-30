@@ -60,6 +60,27 @@ type Source struct {
 func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkState, error) {
 	state := &agentpb.NetworkState{}
 
+	// The chat feed's format, from whichever Network this namespace holds.
+	//
+	// A failed read is a blank format and not an error: the agent reads blank
+	// as "use my own default", so a Network that cannot be listed costs a
+	// styling choice rather than the whole picture -- and the picture is what
+	// a plugin and the proxies' routing depend on.
+	//
+	// The first Network wins if a namespace somehow holds two. That is not a
+	// state this operator allows: the Network controller refuses a duplicate
+	// with ReasonDuplicateNetwork, so a second one is already not Accepted and
+	// owns nothing here.
+	var networks spawneryv1alpha1.NetworkList
+	if err := s.Reader.List(ctx, &networks, client.InNamespace(namespace)); err == nil {
+		for i := range networks.Items {
+			if d := networks.Items[i].Spec.Defaults; d != nil && d.FeedFormat != "" {
+				state.FeedFormat = d.FeedFormat
+				break
+			}
+		}
+	}
+
 	var serverGroups spawneryv1alpha1.ServerGroupList
 	if err := s.Reader.List(ctx, &serverGroups, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("list server groups in %s: %w", namespace, err)

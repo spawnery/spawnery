@@ -56,6 +56,26 @@ spec:
               defaults:
                 description: Defaults are inherited by all groups of this network.
                 properties:
+                  feedFormat:
+                    default: <gray>»</gray> <gradient:aqua:green>Spawnery</gradient>
+                      <dark_gray>|</dark_gray> <gray>$EVENT_MESSAGE
+                    description: |-
+                      FeedFormat is the line a cloud event becomes in chat.
+
+                      MiniMessage, which both platforms parse -- see the agent's own Style for
+                      why that rather than the deprecated section-sign codes. `$EVENT_MESSAGE`
+                      is replaced by what happened; everything around it is yours.
+
+                      **Nothing about this reaches podspec.DesiredServerHash.** It travels in
+                      the NetworkState the operator already sends, so changing it rolls no
+                      pod and takes effect within a resync interval. A format carried in an
+                      environment variable would have been in the pod spec, and re-wording a
+                      chat line would have replaced every server on the network.
+
+                      A value that MiniMessage cannot parse costs the line, not the agent: the
+                      agent falls back to the message alone rather than throwing inside a
+                      network callback.
+                    type: string
                   imagePullSecrets:
                     description: ImagePullSecrets are attached to every managed pod.
                     items:

@@ -250,7 +250,7 @@ class AgentPlugin @Inject constructor(
             override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
             override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
         }
-        val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis)
+        val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis, format = mirror::feedFormat)
         this.feed = feed
         val api = MirrorApi(mirror, self, connector, events)
         Spawnery.install(api)
@@ -320,7 +320,7 @@ class AgentPlugin @Inject constructor(
                     // get wrong.
                     this.feed?.let {
                         it.tick()
-                        reportInterest(it.wanted())
+                        reportInterest(it.wanted(events.size()))
                     }
                 },
             )
