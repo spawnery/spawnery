@@ -5,12 +5,15 @@ type: application
 
 # The chart's own version, and the operator release it installs by default.
 # They move independently: a chart fix that changes no image is a chart
-# version bump alone.
-version: 0.2.13
+# version bump alone. Since v0.2.14 this number is also the address people
+# install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
+# so it is no longer only what Flux names a packaged artifact after.
+version: 0.2.14
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
-# CRD, also steht der Operator weiter auf 0.2.12 -- version oben bewegt sich,
-# weil charts/ sich geaendert hat und Flux ein Paket nach dieser Zahl benennt.
+# CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
+# weg des Charts selbst --, also steht der Operator weiter auf 0.2.12, waehrend
+# version oben sich zweimal bewegt hat, weil charts/ sich zweimal geaendert hat.
 appVersion: "0.2.12"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries

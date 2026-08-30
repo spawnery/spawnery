@@ -216,7 +216,13 @@ jobs:
       # appVersion and values.yaml's tag are checked against flake.nix by
       # internal/rbacaudit's TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease;
       # this is the other half.
+      #
+      # It also answers a second question, now that the chart is itself a
+      # published artefact: whether this tag has a chart to publish at all.
+      # That is the same comparison, so it is made once here rather than a
+      # second time further down.
       - name: The chart's own version, against the previous tag
+        id: chart_version
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
@@ -224,13 +230,16 @@ jobs:
             | grep -v "^${GITHUB_REF_NAME}$" | head -1 || true)"
           if [ -z "$previous" ]; then
             echo "no earlier v* tag; nothing to compare against"
+            echo "chart_changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           echo "comparing charts/ against ${previous}"
           if git diff --quiet "${previous}" HEAD -- charts/; then
             echo "charts/ is unchanged since ${previous}; its version may stand"
+            echo "chart_changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "chart_changed=true" >> "$GITHUB_OUTPUT"
           now="$(grep -E '^version:' charts/spawnery/Chart.yaml | head -1 | awk '{print $2}')"
           before="$(git show "${previous}:charts/spawnery/Chart.yaml" \
             | grep -E '^version:' | head -1 | awk '{print $2}')"
@@ -332,14 +341,24 @@ jobs:
           # Release. Keying on the attempt number keeps the guard's teeth on the
           # attempt where the mistake is possible and takes them out on the
           # attempt where the same state is the normal one.
-          if [ "$dry_run" = "0" ] && [ "$published" -eq 0 ]; then
+          #
+          # Since the chart became a published artefact of its own, "no image
+          # moved" stopped being the same statement as "this tag releases
+          # nothing": a tag whose whole change is under charts/ -- a template
+          # fix, a default, a values comment -- publishes a chart and no image,
+          # and is a correct release. The guard therefore asks the chart step's
+          # question too, through the output the version guard above already
+          # computed, rather than re-deriving it here.
+          if [ "$dry_run" = "0" ] && [ "$published" -eq 0 ] \
+            && [ "${{ steps.chart_version.outputs.chart_changed }}" != "true" ]; then
             if [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ]; then
               echo "::notice::attempt ${GITHUB_RUN_ATTEMPT}: all three images are already on the registry at the versions flake.nix names, which is what a re-run of a tag that already published looks like. Carrying on to the digest and Release steps, which is what a re-run is for."
             else
               echo >&2
               echo "all three images were already published at the versions flake.nix names," >&2
-              echo "so ${GITHUB_REF_NAME} releases nothing. Bump imageVersion or operatorVersion" >&2
-              echo "in flake.nix and tag again." >&2
+              echo "and charts/ has not moved since the previous tag either, so" >&2
+              echo "${GITHUB_REF_NAME} releases nothing. Bump imageVersion or operatorVersion in" >&2
+              echo "flake.nix, or change the chart, and tag again." >&2
               exit 1
             fi
           fi
@@ -380,6 +399,56 @@ jobs:
           echo "operator image digest: $digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+      # The chart, beside the three images rather than in a second place. This
+      # is what makes `helm install oci://ghcr.io/spawnery/charts/spawnery`
+      # possible; until this step existed, every README in this repository
+      # told people to install from a checkout, and one of them claimed the
+      # chart was published when nothing published it.
+      #
+      # After the images, and deliberately: a chart on the registry whose
+      # operator image failed to push would send installers at a tag that is
+      # not there. The reverse ordering costs nothing to avoid.
+      #
+      # The credential is separate from skopeo's because the tools keep their
+      # own. skopeo's lives at REGISTRY_AUTH_FILE, set near the top of this
+      # job; helm's goes to its registry config, and asking one to read the
+      # other's would be a third arrangement to maintain.
+      - name: Authenticate helm to ghcr.io
+        if: github.event_name == 'push'
+        run: |
+          nix develop -c helm registry login ghcr.io \
+            -u "${{ github.actor }}" \
+            --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+
+      # Exit 3 is "this chart version is already on the registry", which after
+      # the version guard above is the ordinary state of a tag that changed no
+      # chart -- most of them. It is a notice, not a failure, exactly as it is
+      # for an image whose tag has not moved. Every other non-zero status
+      # fails the release, including "I could not tell whether it is there".
+      - name: hack/publish-chart.sh
+        id: publish_chart
+        run: |
+          set -euo pipefail
+          dry_run=0
+          if [ "${{ github.event_name }}" != "push" ]; then
+            dry_run=1
+            echo "::notice::dispatched, not tagged: DRY_RUN=1, no chart is sent to the registry"
+          fi
+          status=0
+          nix develop -c env DRY_RUN="$dry_run" ./hack/publish-chart.sh || status=$?
+          case "$status" in
+            0)
+              echo "chart_published=true" >> "$GITHUB_OUTPUT"
+              ;;
+            3)
+              echo "::notice::the chart is already published at the version charts/spawnery/Chart.yaml names; skipping it"
+              echo "chart_published=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              exit "$status"
+              ;;
+          esac
+
       # The other half of design §5's "the digest goes into the GitHub Release
       # body and a job output". contents: write is granted for exactly this and
       # for nothing else -- the workflow still commits nothing.
@@ -389,6 +458,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           DIGEST: ${{ steps.digest.outputs.digest }}
           OPERATOR_PUBLISHED: ${{ steps.publish.outputs.operator_published }}
+          CHART_PUBLISHED: ${{ steps.publish_chart.outputs.chart_published }}
         run: |
           set -euo pipefail
           notes="$RUNNER_TEMP/release-notes.md"
@@ -425,6 +495,26 @@ jobs:
               echo "No new operator image on this tag: it was already published at the version"
               echo "\`flake.nix\` names, and \`charts/spawnery/values.yaml\`'s \`image.digest\` is"
               echo "unchanged."
+            fi
+            # The install line, with the chart version rather than the tag.
+            # Those two are not the same number and are not meant to be: the
+            # chart moves when charts/ does, which is neither every release
+            # nor only when the operator moves. Printing the tag here would
+            # give people a --version that resolves to nothing.
+            chart_version="$(grep -E '^version:' charts/spawnery/Chart.yaml | head -1 | awk '{print $2}')"
+            echo
+            echo "## Install"
+            echo
+            echo '```bash'
+            echo "helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \\"
+            echo "  --version ${chart_version} \\"
+            echo "  --namespace spawnery-system --create-namespace"
+            echo '```'
+            echo
+            if [ "${CHART_PUBLISHED:-false}" != "true" ]; then
+              echo "That chart is not new on this tag -- \`charts/\` has not moved since the"
+              echo "previous one, so version ${chart_version} is the artefact an earlier release"
+              echo "already pushed, and it is the right one to install."
             fi
           } > "$notes"
           # Created if absent, updated if a release for this tag already

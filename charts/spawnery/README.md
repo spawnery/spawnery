@@ -7,6 +7,36 @@ replaces, no longer exists in this repository.
 ## Installing
 
 ```bash
+helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
+  --version 0.2.14 --namespace spawnery-system --create-namespace
+```
+
+The chart is an OCI artefact under the same `ghcr.io/spawnery` the three images
+live in, pushed by `hack/publish-chart.sh` from `.github/workflows/release.yml`
+on a `v*` tag. There is no `helm repo add`: an OCI reference is the whole
+address, which is also why this is not a `gh-pages` `index.yaml` — that would
+need a branch, a merged index and a repository setting no workflow can grant
+itself.
+
+`--version` is the chart's own number and not the release tag. The two are
+deliberately different: this file's `Chart.yaml` moves whenever anything under
+`charts/` does, `appVersion` follows the operator, and `flake.nix` keeps two
+image versions apart from both. Four numbers, four different questions. Each
+GitHub Release body prints the install line with the right one already in it.
+
+`hack/publish-chart.sh` packages from `git archive HEAD` rather than from the
+working tree, so what reaches the registry is the chart at the tagged commit
+even though `hack/publish.sh` rewrites `values.yaml`'s `image.digest` in place
+on the same runner minutes earlier. It refuses outright to publish a chart
+whose committed `image.digest` is non-empty; `values.yaml`'s own comment on
+that key says why one must never be committed, and the refusal is there
+because nothing else in this repository would notice — `internal/rbacaudit`'s
+`TestTheOperatorImageIsNotAMutableTag` *returns early* when a digest is set
+rather than failing.
+
+From a checkout, which is what `hack/e2e.sh` and every local install do:
+
+```bash
 helm install spawnery charts/spawnery --namespace spawnery-system --create-namespace
 ```
 

@@ -17,9 +17,9 @@ make e2e               # the driven run: the operator in a real kind cluster
 
 The first six are the commit loop and run anywhere. Everything from
 `agent-test` down needs a container runtime and only works on `x86_64-linux` —
-pass `CONTAINER=podman` if `docker` is not your runtime. Two reach the network
-and are therefore part of no other target, not even `make all`: `agent-deps`
-and `publish`.
+pass `CONTAINER=podman` if `docker` is not your runtime. Three reach the network
+and are therefore part of no other target, not even `make all`: `agent-deps`,
+`publish` and `publish-chart`.
 
 | Target | What it does |
 |---|---|
@@ -37,6 +37,7 @@ and `publish`.
 | `make operator-image` | The operator's own image, same three steps |
 | `make image-repro` | Builds each image twice and fails if the bytes differ |
 | `make publish` | Copies the images to `ghcr.io/spawnery/` with `skopeo` |
+| `make publish-chart` | Pushes the Helm chart to `oci://ghcr.io/spawnery/charts` |
 | `make e2e` | Builds a kind cluster, installs the chart, drives eighteen scenarios |
 | `make all` | `proto manifests generate fmt vet test build agent` |
 
@@ -153,6 +154,32 @@ while the operator's push went through; `v0.2.7` and `v0.2.9` moved both,
 because each changed the operator and the agents together; and `v0.2.10` moved
 `imageVersion` alone, because its whole change was `image/entrypoint.sh`, which
 ships in the game images and not in the operator.
+
+`make publish-chart` (`hack/publish-chart.sh`) is the fourth artefact and the
+newest: since `v0.2.14` the chart is pushed to
+`oci://ghcr.io/spawnery/charts/spawnery`, so installing the operator needs no
+checkout. Two things about it are worth knowing before reading the script.
+
+It packages from `git archive HEAD` and not from the working tree, because on
+the release runner those two stop being the same file: `WRITE_DIGEST=1` above
+rewrites `charts/spawnery/values.yaml` in place, minutes before the chart step
+runs. Archiving `HEAD` makes the ordering irrelevant instead of making it a
+comment in `release.yml` that somebody has to keep obeying. It also refuses,
+with no `FORCE=1` escape, to publish a chart whose *committed* `image.digest`
+is non-empty — the one state nothing else here catches, because
+`internal/rbacaudit`'s `TestTheOperatorImageIsNotAMutableTag` returns early
+when a digest is set instead of failing.
+
+Its "already there" refusal is exit 3, same as `hack/publish.sh`'s and for the
+same reason, and in the chart's case that is the ordinary outcome rather than
+a rare one: most tags change nothing under `charts/`. `make publish-chart-test`
+drives nine cases past it — five against this repository, four against
+throwaway git repositories built on the spot, none against a registry.
+
+Adding the chart also changed what "this tag releases nothing" means, which
+`release.yml`'s guard now reflects: a tag whose whole change is under
+`charts/` publishes a chart and no image, and is a correct release. Before
+`v0.2.14` that combination failed the run.
 
 **Both numbers therefore have gaps, and none of them is a miscount.**
 `imageVersion` reads `0.2.5, 0.2.7, 0.2.9, 0.2.10, 0.2.12, 0.2.13`;

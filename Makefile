@@ -306,6 +306,26 @@ IMAGES ?=
 publish:
 	hack/publish.sh $(IMAGES)
 
+# The chart, as an OCI artefact beside the three images, so that installing
+# the operator needs no checkout of this repository. Out of `all` for the same
+# reason as `publish`: it contacts a registry and needs a token. DRY_RUN=1
+# packages the chart and prints what it would push where -- unlike `publish`
+# that is cheap, because nothing here builds an image.
+.PHONY: publish-chart
+publish-chart:
+	hack/publish-chart.sh
+
+# hack/publish-chart-test.sh: nine cases, five against this repository and
+# four against throwaway git repositories built on the spot. Unlike the two
+# gh-driven targets above it needs no network and no token -- the registry's
+# three possible answers go through the CHART_INSPECT_CMD seam -- but it is
+# still out of `test` and `all`, which is where every hack/ script's test
+# sits: `make test` is about the operator, and these are about a publishing
+# decision.
+.PHONY: publish-chart-test
+publish-chart-test:
+	hack/publish-chart-test.sh
+
 # The driven run from the milestone 6a design. Explicitly not part of `test` or
 # `all`: it builds a cluster and takes minutes, and the commit loop stays at
 # around 25 seconds. See hack/e2e.sh's header for the rootless-podman
