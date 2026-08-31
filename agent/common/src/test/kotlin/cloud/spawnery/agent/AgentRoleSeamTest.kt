@@ -46,6 +46,7 @@ class AgentRoleSeamTest {
             scheduler = scheduler,
             version = "26.2-0.2.0",
             log = { _, _ -> },
+            note = { },
             // See SessionLoopTest.loopAgainst: identity jitter, so a test's
             // delays are the delays it wrote down.
             jitter = { it },

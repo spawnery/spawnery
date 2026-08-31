@@ -343,6 +343,18 @@ class SessionLoop<Req, Resp>(
     private val scheduler: ScheduledExecutorService,
     private val version: String,
     private val log: (String, Throwable?) -> Unit,
+    /**
+     * Where a thing that happened goes, as opposed to a thing that went wrong.
+     *
+     * Its own channel rather than a level on [log], because the level cannot be
+     * read off the arguments: `log(..., null)` covers both the operator closing
+     * a stream and the operator accepting one and never answering it, and those
+     * are not the same news. And rather than a level enum on every call site,
+     * because exactly one message here is routine -- a renewal, which the
+     * operator performs on a schedule and which used to arrive as a warning
+     * with a stack trace, per server, every few minutes.
+     */
+    private val note: (String) -> Unit,
     private val jitter: (Long) -> Long = { base ->
         // ±10 %, so the pods of one group neither renew nor reconnect in the
         // same instant. An operator restart breaks every agent's stream at once,
@@ -524,7 +536,7 @@ class SessionLoop<Req, Resp>(
                 // that one is the agent's to mourn and the throwable is the
                 // only clue anybody gets.
                 if (session.hasReplacement()) {
-                    log("the operator retired this stream for a renewal", null)
+                    note("the operator retired this stream for a renewal")
                 } else {
                     log("the operator stream failed", t)
                 }

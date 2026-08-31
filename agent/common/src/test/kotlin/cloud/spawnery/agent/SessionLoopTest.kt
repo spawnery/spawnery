@@ -122,6 +122,7 @@ class SessionLoopTest {
         // pass a collector: a renewal is not a failure, and the log is the only
         // place that distinction is visible to anybody.
         log: (String, Throwable?) -> Unit = { _, _ -> },
+        note: (String) -> Unit = { },
     ): SessionLoop<ServerMessage, OperatorToServer> {
         val token = dir.resolve("token")
         Files.writeString(token, "test-token")
@@ -132,6 +133,7 @@ class SessionLoopTest {
             scheduler = scheduler,
             version = "26.2-0.2.0",
             log = log,
+            note = note,
             jitter = jitter,
             fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
             onStreamChanged = onStreamChanged,
@@ -417,14 +419,19 @@ class SessionLoopTest {
     fun `does not report a stream the operator retired for a renewal as a failure`(
         @TempDir dir: Path,
     ) {
-        val logged = Collections.synchronizedList(mutableListOf<Pair<String, Throwable?>>())
+        val warned = Collections.synchronizedList(mutableListOf<Pair<String, Throwable?>>())
+        val noted = Collections.synchronizedList(mutableListOf<String>())
 
         FakeOperator("renewal-is-not-a-failure").use { operator ->
             val role = FakeRole().apply { markReady() }
 
-            loopAgainst(operator, role, dir, log = { message, cause ->
-                logged += message to cause
-            }).use { loop ->
+            loopAgainst(
+                operator,
+                role,
+                dir,
+                log = { message, cause -> warned += message to cause },
+                note = { message -> noted += message },
+            ).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -447,8 +454,8 @@ class SessionLoopTest {
                 // of the replacement, so the agent sees Unavailable on every
                 // renewal, by design. streamEnded already knows -- it skips
                 // the reconnect on exactly this -- and the log did not, so a
-                // healthy fleet wrote a stack trace per server per renewal and
-                // anyone reading a server log saw a failure that was not one.
+                // healthy fleet wrote a warning per server per renewal about a
+                // handover that worked.
                 first.toAgent.onError(
                     Status.UNAVAILABLE
                         .withDescription("session ended, reconnect with a fresh token")
@@ -457,14 +464,13 @@ class SessionLoopTest {
 
                 Thread.sleep(500)
 
-                val withCause = logged.filter { it.second != null }
                 assertTrue(
-                    withCause.isEmpty(),
-                    "a renewal was reported as a failure, with a stack trace: $withCause",
+                    warned.isEmpty(),
+                    "a renewal was reported on the channel for things going wrong: $warned",
                 )
                 assertTrue(
-                    logged.any { it.first.contains("renewal") },
-                    "the retirement was not mentioned at all: $logged",
+                    noted.any { it.contains("renewal") },
+                    "the retirement was not reported at all: $noted",
                 )
             }
         }

@@ -357,6 +357,11 @@ class AgentPlugin @Inject constructor(
             // the failure is already visible in `kubectl get pods`, and these
             // lines are what say why.
             log = ::warn,
+            // A renewal is a thing that happened, not a thing that went wrong:
+            // the operator retires the displaced stream on a schedule, and it
+            // used to arrive here as a warning with a stack trace every few
+            // minutes.
+            note = logger::info,
             // See Paper's AgentPlugin: the connector fails what is in flight
             // rather than resending it, and the interest is forgotten because
             // the operator's answer for a session it has never seen is "no".
