@@ -393,3 +393,34 @@ type Mount struct {
 	// +optional
 	Secret *corev1.SecretVolumeSource `json:"secret,omitempty"`
 }
+
+// ReservedEnvPrefix is the prefix of every container environment variable the
+// operator sets itself, and the one prefix a group's own spec.env may not use.
+//
+// The operator writes SPAWNERY_NETWORK, SPAWNERY_GROUP and either
+// SPAWNERY_SERVER or SPAWNERY_PROXY into every pod it renders, along with the
+// agent's endpoint and, for a proxy, its player limit and fallback groups. The
+// agent reads them to know what it is and whom to call. Without them it never
+// connects, and what an installation sees is a server that starts, stays
+// NotReady, and says nothing about why.
+//
+// Kubernetes does not refuse a duplicate name in a container's env list. It
+// keeps both entries and the last one wins, so a group setting SPAWNERY_GROUP
+// would leave `kubectl describe pod` printing both values with nothing on the
+// pod saying which one the process actually got. Refusing the prefix at
+// admission turns that into an error on the object somebody just wrote.
+//
+// The prefix is reserved whole rather than the six names being denied one by
+// one, so a variable added to a pod in a later release needs no change here
+// and cannot collide with something an installation already set. Reserving it
+// whole also covers the two seams the entrypoints read: SPAWNERY_PLUGIN_SOURCE
+// and SPAWNERY_CGROUP_ROOT exist so the image tests can point them at a
+// temporary directory, and setting either from a group spec would break a
+// start in a way nothing reports.
+//
+// The rule is a CEL expression on both spec.env fields, so the API server
+// refuses the object rather than the operator finding it afterwards. The
+// literal is repeated in those markers because a kubebuilder marker cannot
+// interpolate a constant; TestTheReservedEnvPrefixMarkersMatchTheConstant
+// reads the generated CRDs and checks that all of them still agree with this.
+const ReservedEnvPrefix = "SPAWNERY_"

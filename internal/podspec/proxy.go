@@ -289,14 +289,17 @@ func renderProxyPod(
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
-		Env: []corev1.EnvVar{
+		// The group's own variables come last; see BuildServerPod for why
+		// the position is a readability decision rather than the thing that
+		// keeps the six below intact.
+		Env: append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: EnvProxy, Value: name},
 			{Name: EnvPlayerLimit, Value: strconv.FormatInt(int64(playerLimit), 10)},
 			{Name: EnvFallbackGroups, Value: strings.Join(group.Spec.Routing.FallbackGroups, ",")},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
-		},
+		}, group.Spec.Env...),
 		VolumeMounts: mounts,
 		// Readiness only, for the same reason the server pod has no liveness
 		// probe: a restart would disconnect every player on this proxy, and

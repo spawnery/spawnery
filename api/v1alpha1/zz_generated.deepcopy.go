@@ -440,6 +440,13 @@ func (in *ProxyGroupSpec) DeepCopyInto(out *ProxyGroupSpec) {
 		*out = new(ObjectRef)
 		**out = **in
 	}
+	if in.Env != nil {
+		in, out := &in.Env, &out.Env
+		*out = make([]v1.EnvVar, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
 	if in.ExtraPlugins != nil {
 		in, out := &in.ExtraPlugins, &out.ExtraPlugins
 		*out = new(ExtraPlugins)
@@ -734,6 +741,13 @@ func (in *ServerGroupSpec) DeepCopyInto(out *ServerGroupSpec) {
 	if in.Mounts != nil {
 		in, out := &in.Mounts, &out.Mounts
 		*out = make([]Mount, len(*in))
+		for i := range *in {
+			(*in)[i].DeepCopyInto(&(*out)[i])
+		}
+	}
+	if in.Env != nil {
+		in, out := &in.Env, &out.Env
+		*out = make([]v1.EnvVar, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}

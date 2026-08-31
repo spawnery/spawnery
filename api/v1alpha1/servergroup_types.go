@@ -158,6 +158,34 @@ type ServerGroupSpec struct {
 	// +listMapKey=name
 	Mounts []Mount `json:"mounts,omitempty"`
 
+	// Env are extra environment variables for the server container, appended
+	// to the ones the operator sets. A name may not begin with
+	// ReservedEnvPrefix; see that constant for why the whole prefix is taken
+	// rather than the individual names.
+	//
+	// This is also the only way to reach the JVM. The entrypoint execs java
+	// with a fixed flag list and takes no arguments from any spec, so a
+	// process-level setting travels in JAVA_TOOL_OPTIONS, which is the seam
+	// the JVM itself offers. Measured on OpenJDK 21.0.12: an option on the
+	// command line beats the same option in that variable, for -D and for
+	// -Xmx alike, so a group can add the system property its plugins read
+	// without being able to displace the heap and GC flags the entrypoint
+	// sets. The case this exists for is a network whose game variants differ
+	// by nothing else -- the same jars and the same configuration, one group
+	// running them solo and another in teams, told apart by a single -D.
+	//
+	// It shapes the pod, so it is in podspec.DesiredServerHash: editing it
+	// makes every server of the group stale and replaces them exactly the way
+	// an image bump does, through maxUnavailable and the cold start. That is
+	// the opposite of ExtraPlugins, whose contents deliberately reach no
+	// hash, and the difference is that a filesystem the operator only names
+	// cannot be digested while an env list it renders can.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:XValidation:rule="self.all(e, !e.name.startsWith('SPAWNERY_'))",message="the SPAWNERY_ prefix is reserved for the environment variables the operator sets itself"
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
 	// ExtraPlugins names a volume whose plugins and their configuration are
 	// copied into this group's servers on every start. See ExtraPlugins.
 	// +optional

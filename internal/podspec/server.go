@@ -428,12 +428,19 @@ func BuildServerPod(
 			ContainerPort: MinecraftPort,
 			Protocol:      corev1.ProtocolTCP,
 		}},
-		Env: []corev1.EnvVar{
+		// The group's own variables come last, after the four this operator
+		// owns. Order is not what protects those four: ReservedEnvPrefix and
+		// the CEL rule on spec.env are, and they make it impossible for a
+		// group to repeat one of these names at all. Appending is a
+		// readability decision -- it keeps the operator's own set at a fixed
+		// position in every pod, so `kubectl describe pod` still reads
+		// straight down for a group that sets twenty of its own.
+		Env: append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: "SPAWNERY_SERVER", Value: srv.Name},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
-		},
+		}, group.Spec.Env...),
 		VolumeMounts: mounts,
 		// Readiness only. A liveness probe would restart the container and
 		// kick every player on it — the state machine handles a red readiness

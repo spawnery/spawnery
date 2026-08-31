@@ -280,6 +280,21 @@ type ProxyGroupSpec struct {
 	// +optional
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 
+	// Env are extra environment variables for the proxy container, appended
+	// to the ones the operator sets. A name may not begin with
+	// ReservedEnvPrefix.
+	//
+	// It is ServerGroupSpec.Env for a proxy, rule and reasoning unchanged,
+	// and JAVA_TOOL_OPTIONS is the same seam: the Velocity entrypoint execs
+	// java with its own flag list too. It is in podspec.DesiredProxyHash for
+	// the same reason -- editing it rolls the group through the ordinary
+	// surge-1 path.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	// +kubebuilder:validation:XValidation:rule="self.all(e, !e.name.startsWith('SPAWNERY_'))",message="the SPAWNERY_ prefix is reserved for the environment variables the operator sets itself"
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
 	// ExtraPlugins names a volume whose plugins and their configuration are
 	// copied into this group's servers on every start. See ExtraPlugins.
 	// +optional
