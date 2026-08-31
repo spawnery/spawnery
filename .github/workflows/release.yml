@@ -130,7 +130,16 @@ jobs:
       # imageVersion is the agent's and operatorVersion is the reconciler's,
       # and flake.nix:128-134 explains why hanging one off the other would be
       # wrong. Nothing coupled them here either; what this refuses is only the
-      # tag that names neither, which is a tag nobody meant to push. The table
+      # tag that names none of them, which is a tag nobody meant to push.
+      #
+      # *None of them* is three numbers since v0.2.14, not two. The chart
+      # became a published artefact of its own, so charts/spawnery/Chart.yaml's
+      # version is a version this repository ships under, and a tag naming it
+      # is a tag that means something. v0.2.14 was refused here for naming
+      # "no image in flake.nix" -- correctly, by this step's old premise, and
+      # wrongly by the one the release now has. The guard further down that
+      # asks whether a tag publishes anything had already been taught the
+      # chart; this one is the half that was missed, and the two now agree. The table
       # is printed either way, so the run's log says what v0.1.1 actually
       # released without anyone opening flake.nix.
       #
@@ -152,10 +161,21 @@ jobs:
           set -euo pipefail
           agent="$(nix eval --raw .#agents.version)"
           operator="$(nix eval --raw .#spawnery-operator.version)"
+          # Read as text, the way every other version comparison in this file
+          # reads a YAML number: no helm on this step's path, and rendering a
+          # chart to learn what its own Chart.yaml says would be a heavier
+          # answer to a smaller question.
+          chart="$(grep -E '^version:' charts/spawnery/Chart.yaml | head -1 | awk '{print $2}')"
+          if [ -z "$chart" ]; then
+            echo "no version: line in charts/spawnery/Chart.yaml; this step reads it as text" >&2
+            echo "and cannot check a tag against what it cannot find." >&2
+            exit 1
+          fi
           tag="${GITHUB_REF_NAME#v}"
           echo "tag                       ${GITHUB_REF_NAME} (${tag})"
           echo "flake.nix imageVersion    ${agent}   (paper, velocity)"
           echo "flake.nix operatorVersion ${operator}   (operator)"
+          echo "Chart.yaml version        ${chart}   (chart)"
           echo "what this tag publishes:"
           paper_tag="$(nix eval --raw .#paper-image.imageTag)"
           velocity_tag="$(nix eval --raw .#velocity-image.imageTag)"
@@ -163,6 +183,7 @@ jobs:
           echo "  paper     ${paper_tag}"
           echo "  velocity  ${velocity_tag}"
           echo "  operator  ${operator_tag}"
+          echo "  chart     ${chart}"
           # And check that the versions above are still the versions those tags
           # carry. Reading a version from one attribute and publishing a tag
           # built in another is precisely how the old shape of this step came
@@ -190,12 +211,13 @@ jobs:
             echo "comparing ${GITHUB_REF_NAME} against a number no image carries." >&2
             exit 1
           fi
-          if [ "$tag" != "$agent" ] && [ "$tag" != "$operator" ]; then
+          if [ "$tag" != "$agent" ] && [ "$tag" != "$operator" ] && [ "$tag" != "$chart" ]; then
             echo >&2
-            echo "${GITHUB_REF_NAME} names a version no image in flake.nix carries. A tag that" >&2
-            echo "corresponds to nothing anybody bumped is how a release goes out under a" >&2
-            echo "number the images inside it do not have. Bump imageVersion or" >&2
-            echo "operatorVersion in flake.nix to match, or tag the version that is there." >&2
+            echo "${GITHUB_REF_NAME} names a version no artefact in this repository carries." >&2
+            echo "A tag that corresponds to nothing anybody bumped is how a release goes out" >&2
+            echo "under a number the things inside it do not have. Bump imageVersion or" >&2
+            echo "operatorVersion in flake.nix, or version in charts/spawnery/Chart.yaml, to" >&2
+            echo "match -- or tag one of the versions that is there." >&2
             exit 1
           fi
 

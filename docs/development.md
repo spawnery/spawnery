@@ -181,6 +181,17 @@ Adding the chart also changed what "this tag releases nothing" means, which
 `charts/` publishes a chart and no image, and is a correct release. Before
 `v0.2.14` that combination failed the run.
 
+**It changed that in two places, and the first attempt at `v0.2.14` only found
+one of them.** `release.yml` has a preflight step, "The tag, against the
+versions in flake.nix", whose whole premise is that a tag must name a version
+some artefact carries — and it knew about three images. `v0.2.14` names the
+chart's version and no image's, so it was refused with "names a version no
+image in flake.nix carries", correctly by that step's old premise and wrongly
+by the release's new one. The fix is the same sentence the other guard
+already had: the chart is an artefact, so `Chart.yaml`'s version is a third
+number a tag may name. Nothing was published on that attempt — the step runs
+before any credential is used, which is what a preflight is for.
+
 **Both numbers therefore have gaps, and none of them is a miscount.**
 `imageVersion` reads `0.2.5, 0.2.7, 0.2.9, 0.2.10, 0.2.12, 0.2.13`;
 `operatorVersion` reads `…, 0.2.9, 0.2.11, 0.2.12`. The chart's own `version`
