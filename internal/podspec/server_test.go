@@ -270,10 +270,16 @@ func TestGroupOverridesNetworkDefaults(t *testing.T) {
 }
 
 func TestUserMounts(t *testing.T) {
+	// /data/resources and not /data/config, which this test used until
+	// 2026-08-31: a mount there is refused now, because it stops the server
+	// writing its own configuration. See ServerConfigDirPath. The path is
+	// incidental to what this test is about -- that a ConfigMap mount reaches
+	// the pod as a read-only volume and mount -- so it moved rather than the
+	// test being split.
 	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
 		g.Spec.Mounts = []spawneryv1alpha1.Mount{{
 			Name:      "lobby-config",
-			MountPath: "/data/config",
+			MountPath: "/data/resources",
 			ConfigMap: &corev1.ConfigMapVolumeSource{
 				LocalObjectReference: corev1.LocalObjectReference{Name: "lobby-config"},
 			},
@@ -282,12 +288,12 @@ func TestUserMounts(t *testing.T) {
 
 	var found bool
 	for _, m := range pod.Spec.Containers[0].VolumeMounts {
-		if m.Name == "lobby-config" && m.MountPath == "/data/config" && m.ReadOnly {
+		if m.Name == "lobby-config" && m.MountPath == "/data/resources" && m.ReadOnly {
 			found = true
 		}
 	}
 	if !found {
-		t.Errorf("volumeMounts = %+v, want a read-only lobby-config at /data/config",
+		t.Errorf("volumeMounts = %+v, want a read-only lobby-config at /data/resources",
 			pod.Spec.Containers[0].VolumeMounts)
 	}
 
@@ -916,13 +922,19 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 		mountPath string
 	}{
 		{
-			// Design spec 4.3's own ServerGroup example: a ConfigMap mounted
-			// at DataMountPath+"/config" to add server config files. If this
-			// case is ever removed as "redundant with TestUserMounts", it is
-			// not — this one specifically exercises checkMountCollision, the
-			// other exercises the resulting volume and mount.
-			name:      "a config file nested inside /data, the documented pattern",
-			mountPath: DataMountPath + "/config",
+			// A tree nested inside /data, which is how worlds and assets
+			// arrive. It replaces a case that used DataMountPath+"/config" and
+			// called it "the documented pattern" after design spec 4.3's own
+			// ServerGroup example -- an example that was measured on
+			// 2026-08-31 and does not work at all. See ServerConfigDirPath,
+			// and TestAMountInsideTheServersConfigDirectoryIsRefused below,
+			// which is now the case that path exercises.
+			//
+			// If this case is ever removed as "redundant with TestUserMounts",
+			// it is not: this one exercises checkMountCollision, the other
+			// exercises the resulting volume and mount.
+			name:      "a world tree nested inside /data, the documented pattern",
+			mountPath: DataMountPath + "/worlds",
 		},
 		{
 			name:      "a sibling directory that only shares a prefix with /data",

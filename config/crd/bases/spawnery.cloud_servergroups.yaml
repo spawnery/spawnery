@@ -70,7 +70,16 @@ spec:
                 description: |-
                   ConfigOverlay names a ConfigMap whose keys are configuration files to
                   merge over the rendered defaults — "server.properties",
-                  "paper-global.yml" or "velocity.toml", in the target's own dialect.
+                  "paper-global.yml", "paper-world-defaults.yml" or "velocity.toml", in
+                  the target's own dialect.
+
+                  paper-world-defaults.yml is the one of those the operator writes only
+                  when an overlay names it. Nothing in it is operationally critical, so
+                  there is nothing to assert into it, and a file written empty on every
+                  start would overwrite whatever the server had filled in for itself. It
+                  is also the only route that file has: a mount cannot deliver it, because
+                  a mount anywhere under /data/config stops the server writing its own
+                  configuration and it never starts. See internal/podspec.ServerConfigDirPath.
 
                   It is a field of its own rather than a reserved name inside mounts,
                   because mounts is documented as raw files for plugins and worlds and a

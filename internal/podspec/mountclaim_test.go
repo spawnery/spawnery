@@ -296,3 +296,50 @@ func TestSubPathReachesTheHash(t *testing.T) {
 		t.Fatal("adding a subPath did not move the digest")
 	}
 }
+
+func TestAMountInsideTheServersConfigDirectoryIsRefused(t *testing.T) {
+	// Measured in a kind cluster on 2026-08-31: the kubelet creates a mount's
+	// parent directory root-owned and group-read-only (drwxr-sr-x 0 10001),
+	// while fsGroup with OnRootMismatch only ever touches the volume root
+	// (drwxrwsrwx). So a mount here leaves the container unable to write into
+	// the directory, and the first write it attempts is spawnery-config's own
+	// paper-global.yml. The server never starts, and the error names a file
+	// rather than a mount.
+	//
+	// Design spec 4.3 used exactly this path as its example of a legitimate
+	// mount, which is why this test names the measurement rather than
+	// pointing at the design.
+	for _, mountPath := range []string{
+		ServerConfigDirPath,
+		ServerConfigDirPath + "/paper-world-defaults.yml",
+		ServerConfigDirPath + "/sponge/sponge.conf",
+	} {
+		group := testGroup()
+		group.Spec.Mounts = []spawneryv1alpha1.Mount{{
+			Name:      "conf",
+			MountPath: mountPath,
+			ConfigMap: &corev1.ConfigMapVolumeSource{},
+		}}
+		_, err := BuildServerPod(testNetwork(), group, testServer(), testEndpoint)
+		if err == nil {
+			t.Errorf("a mount at %q was accepted; every server of the group would fail to start", mountPath)
+			continue
+		}
+		// The remedy, not just the refusal: somebody who wanted
+		// paper-world-defaults.yml has a field that does work.
+		if !strings.Contains(err.Error(), "configOverlay") {
+			t.Errorf("the refusal for %q does not name what to use instead: %v", mountPath, err)
+		}
+	}
+
+	// And a sibling that merely shares the prefix is still fine.
+	group := testGroup()
+	group.Spec.Mounts = []spawneryv1alpha1.Mount{{
+		Name:      "conf",
+		MountPath: ServerConfigDirPath + "-extra",
+		ConfigMap: &corev1.ConfigMapVolumeSource{},
+	}}
+	if _, err := BuildServerPod(testNetwork(), group, testServer(), testEndpoint); err != nil {
+		t.Errorf("a sibling of the config directory was refused: %v", err)
+	}
+}

@@ -50,6 +50,35 @@ const (
 	// TmpMountPath is where TmpVolumeName is mounted.
 	TmpMountPath = "/tmp"
 
+	// ServerConfigDirPath is the server's own configuration directory, and a
+	// place no user mount may go -- not at it, and not inside it.
+	//
+	// **Measured in a kind cluster on 2026-08-31, because the design said the
+	// opposite.** Design spec 4.3's own ServerGroup example mounts a ConfigMap
+	// here, and checkMountCollision's comment cited it as the legitimate case
+	// for nesting under /data. It is not legitimate: it breaks every start.
+	//
+	// The kubelet creates the parent directory of a mount itself, and creates
+	// it root-owned and group-read-only -- drwxr-sr-x 0 10001 -- while fsGroup
+	// with OnRootMismatch only ever touches the volume's own root, which comes
+	// out drwxrwsrwx. So a mount anywhere under here leaves the container
+	// unable to write into the directory, and the first thing it tries to
+	// write is spawnery-config's own paper-global.yml:
+	//
+	//	spawnery-config: /data/config/paper-global.yml: open ...: permission denied
+	//
+	// The server then never starts, and nothing in that message names a mount.
+	// Refusing it here is what turns that into a sentence on the object
+	// somebody just wrote. Nothing this operator can do makes it work: the
+	// ownership is the kubelet's, and fixing it would need a root init
+	// container, which is the one thing every pod here is built not to have.
+	//
+	// Refused for proxy pods too, though only the Paper flavour writes here.
+	// One rule rather than two, and a proxy loses nothing by it: Velocity
+	// reads velocity.toml at /data's root and has no configuration directory
+	// of its own.
+	ServerConfigDirPath = DataMountPath + "/config"
+
 	// PluginsMountPath is the server's plugins directory, and the one place
 	// under DataMountPath a user mount cannot go.
 	//
@@ -622,13 +651,19 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 //     mount at ConfigMountPath+"/forwarding.secret" would do the same to the
 //     file the renderer reads the forwarding secret from. Nothing but this
 //     check stops either. Nesting under either is never legitimate.
+//
 //   - DataMountPath and TmpMountPath only refuse an exact match (after
 //     path.Clean, so a trailing slash does not slip past). Mounting AT
 //     DataMountPath would replace the whole working directory and is
-//     refused; mounting INSIDE it is the documented way to add extra files —
-//     design spec 4.3's own ServerGroup example mounts a ConfigMap at
-//     DataMountPath+"/config" — so unlike the other two, a nested path under
-//     these two is a feature, not a collision.
+//     refused; mounting INSIDE it is the documented way to add extra files,
+//     so unlike the other two, a nested path under these two is a feature and
+//     not a collision.
+//
+//     With one hole in it, which design spec 4.3 fell into: its own
+//     ServerGroup example mounts a ConfigMap at DataMountPath+"/config", and
+//     this comment used to cite that example as the legitimate case. It is
+//     not one. ServerConfigDirPath carries what was measured and why that
+//     path is now refused equal-or-under like the two above.
 //
 // Path comparison is on segment boundaries, not raw string prefixes, so
 // "/data-extra" is never mistaken for a child of "/data".
@@ -651,6 +686,19 @@ func checkMountCollision(m spawneryv1alpha1.Mount) error {
 		case isPathUnder(clean, user):
 			return fmt.Errorf("mount %q at %q is an ancestor of the reserved mount path %q", m.Name, m.MountPath, reserved)
 		}
+	}
+
+	// Equal or under, like the two above rather than like the two below: a
+	// mount AT this directory replaces the one the server writes into, and a
+	// mount inside it makes that directory unwritable. See ServerConfigDirPath
+	// for the measurement.
+	if conf := path.Clean(ServerConfigDirPath); user == conf || isPathUnder(user, conf) {
+		return fmt.Errorf("mount %q at %q is at or inside %s, the directory the server writes its "+
+			"own configuration into; the kubelet creates a mount's parent directory root-owned, "+
+			"so this leaves the server unable to write %s/paper-global.yml and it never starts. "+
+			"Use spec.configOverlay for server.properties, paper-global.yml and "+
+			"paper-world-defaults.yml",
+			m.Name, m.MountPath, ServerConfigDirPath, ServerConfigDirPath)
 	}
 
 	for _, reserved := range []string{DataMountPath, TmpMountPath} {

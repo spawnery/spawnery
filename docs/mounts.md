@@ -122,6 +122,26 @@ mount. `/data` and `/tmp` are refused only as exact matches — mounting *inside
 `/data` is the ordinary way to add files, which is why the example above works.
 `/data/plugins` is refused; that is what `extraPlugins` is for.
 
+**`/data/config` is refused too, at it and inside it**, and that one was
+measured rather than reasoned. The kubelet creates a mount's parent directory
+itself, root-owned and group-read-only:
+
+```
+/data          drwxrwsrwx  0 10001    ← fsGroup makes the volume root writable
+/data/config   drwxr-sr-x  0 10001    ← the mount's parent does not inherit it
+```
+
+`fsGroup` with `OnRootMismatch` only ever touches the volume's own root, so the
+container cannot write into that directory — and the first thing it tries to
+write is `spawnery-config`'s own `paper-global.yml`. The server never starts,
+and the error names a file rather than a mount.
+
+Nothing the operator can do makes it work: the ownership is the kubelet's, and
+changing it would need a root init container, which is the one thing every pod
+here is built not to have. So it is refused, with a message naming
+`spec.configOverlay` — which is where `server.properties`, `paper-global.yml`
+and `paper-world-defaults.yml` belong anyway.
+
 ## Editing a mount replaces the group's servers
 
 A mount shapes the pod, so it is in the group's pod digest, and adding one,

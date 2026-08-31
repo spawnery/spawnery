@@ -4,10 +4,12 @@ What a running CloudNET network needed from Spawnery that Spawnery did not
 have. It was a list of gaps, kept so that none of them was rediscovered one at
 a time during a migration.
 
-**All four are closed as of 0.2.15.** The file stays for now because what each
-gap cost and how each was measured is the answer to "why is it like this" for
-four API fields and an image — and because a second CloudNET network will put
-different weights on the same shapes. It goes when that stops being useful.
+**Four were closed in 0.2.15; a fifth was found while checking whether the
+first four were enough, and is closed too.** The file stays for now because
+what each gap cost and how each was measured is the answer to "why is it like
+this" for several API fields and an image — and because a second CloudNET
+network will put different weights on the same shapes. It goes when that stops
+being useful.
 
 ## Where the numbers come from
 
@@ -48,6 +50,7 @@ Spawnery needs is somewhere to put the result.
 | [A tree that is not `plugins/`](#a-tree-that-is-not-plugins) | every task | **closed**, `spec.mounts` |
 | [A volume shared between groups](#a-volume-shared-between-groups) | 6 tasks | **closed**, `spec.mounts` |
 | [Purpur, not Paper](#purpur-not-paper) | every backend | **closed**, `ghcr.io/spawnery/purpur` |
+| [The rest of the config files](#the-rest-of-the-config-files) | every backend | **closed**, `configOverlay` |
 
 ### Per-group process settings
 
@@ -183,6 +186,51 @@ worth.
 
 `purpur.yml` needs no rendering: it is a [mount](mounts.md) like any other
 file, which is what the gap above bought.
+
+### The rest of the config files
+
+**Closed by `paper-world-defaults.yml` on `configOverlay`, and by a refusal.**
+
+The gap above assumed `configOverlay` took care of everything under
+`config/`. It does not: it took `server.properties` and `paper-global.yml`
+only (`internal/render/paper.go`). The network's own files, counted:
+
+```
+server.properties           4 × configOverlay
+config/paper-global.yml     2 × configOverlay
+config/paper-world-defaults.yml   2 ×  — had no route at all
+bukkit.yml 5 ×, spigot.yml 2 ×, purpur.yml 2 ×, permissions.yml 1 ×
+                                     mounts, with subPath
+config/sponge/sponge.conf   1 ×  — see below
+```
+
+`paper-world-defaults.yml` is now a `configOverlay` key. Its declared-key tree
+comes from Paper's own default file, captured the way the other two were —
+and **Purpur's copy of that file is byte-identical to Paper's**, measured on
+2026-08-31 by booting both pinned jars against an empty data directory. One
+tree serves both images.
+
+The root-level files work as mounts with `subPath`, at the price of one line
+per start. Measured against the real Purpur image: a read-only `bukkit.yml`
+makes Bukkit log
+
+```
+[ERROR]: Could not save bukkit.yml
+java.io.FileNotFoundException: bukkit.yml (Read-only file system)
+```
+
+and then reach `Done (11.200s)`. The settings are read before the save is
+attempted, so the override applies; what it costs is an alarming-looking line
+in every log.
+
+**`config/sponge/sponge.conf` has no route, and that is now a refusal rather
+than a mystery.** A mount anywhere under `/data/config` stops the server
+writing its own configuration — measured in a kind cluster, see
+[`mounts.md`](mounts.md#reserved-paths) — so the operator refuses it and says
+what to use instead. A third-party plugin that insists on a file there needs
+that file in an image, or the plugin's own config moved out of `config/`.
+Design spec 4.3 used exactly this path as its example of a legitimate mount;
+it was never one.
 
 ## What already lines up
 
