@@ -118,6 +118,11 @@ class SessionLoopTest {
         // before it could matter.
         fallbackAnswerBoundMillis: Long = SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS,
         onStreamChanged: () -> Unit = {},
+        // Silent unless a test is about what the agent says. The two that are
+        // pass a collector: a renewal is not a failure, and the log is the only
+        // place that distinction is visible to anybody.
+        log: (String, Throwable?) -> Unit = { _, _ -> },
+        note: (String) -> Unit = { },
     ): SessionLoop<ServerMessage, OperatorToServer> {
         val token = dir.resolve("token")
         Files.writeString(token, "test-token")
@@ -127,7 +132,8 @@ class SessionLoopTest {
             role = role,
             scheduler = scheduler,
             version = "26.2-0.2.0",
-            log = { _, _ -> },
+            log = log,
+            note = note,
             jitter = jitter,
             fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
             onStreamChanged = onStreamChanged,
@@ -404,6 +410,97 @@ class SessionLoopTest {
                     "the operator retiring the displaced stream was mistaken for a " +
                         "breakage the agent owes a reconnect, so every renewal opens a " +
                         "spare stream and the spare supersedes the replacement a second later",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `does not report a stream the operator retired for a renewal as a failure`(
+        @TempDir dir: Path,
+    ) {
+        val warned = Collections.synchronizedList(mutableListOf<Pair<String, Throwable?>>())
+        val noted = Collections.synchronizedList(mutableListOf<String>())
+
+        FakeOperator("renewal-is-not-a-failure").use { operator ->
+            val role = FakeRole().apply { markReady() }
+
+            loopAgainst(
+                operator,
+                role,
+                dir,
+                log = { message, cause -> warned += message to cause },
+                note = { message -> noted += message },
+            ).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(3),
+                        )
+                        .build(),
+                )
+
+                val second = operator.awaitStream(1)
+                second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // The operator's own order, and the reason this is not an
+                // error: it cancels the displaced stream at the handler entry
+                // of the replacement, so the agent sees Unavailable on every
+                // renewal, by design. streamEnded already knows -- it skips
+                // the reconnect on exactly this -- and the log did not, so a
+                // healthy fleet wrote a warning per server per renewal about a
+                // handover that worked.
+                first.toAgent.onError(
+                    Status.UNAVAILABLE
+                        .withDescription("session ended, reconnect with a fresh token")
+                        .asRuntimeException(),
+                )
+
+                Thread.sleep(500)
+
+                assertTrue(
+                    warned.isEmpty(),
+                    "a renewal was reported on the channel for things going wrong: $warned",
+                )
+                assertTrue(
+                    noted.any { it.contains("renewal") },
+                    "the retirement was not reported at all: $noted",
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `reports a stream that broke on its own with what broke it`(@TempDir dir: Path) {
+        val logged = Collections.synchronizedList(mutableListOf<Pair<String, Throwable?>>())
+
+        FakeOperator("breakage-keeps-its-cause").use { operator ->
+            val role = FakeRole().apply { markReady() }
+
+            loopAgainst(operator, role, dir, log = { message, cause ->
+                logged += message to cause
+            }).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                // No replacement was ever opened, so this one is the agent's to
+                // mourn and its cause is the only clue anybody gets.
+                first.toAgent.onError(
+                    Status.UNAVAILABLE.withDescription("connection reset").asRuntimeException(),
+                )
+
+                Thread.sleep(500)
+
+                assertTrue(
+                    logged.any { it.second != null },
+                    "a stream that broke on its own lost its cause: $logged",
                 )
             }
         }

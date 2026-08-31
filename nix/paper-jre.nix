@@ -44,10 +44,34 @@
 # against a rotated CA bundle included. Neither needed a module beyond the
 # fourteen.
 #
+# java.net.http is the fifteenth, and it is here for something the derivation
+# cannot reach at all: the jdeps run above measures Paper and the agent, and a
+# Paper server exists to run plugins, which are on neither classpath. No static
+# analysis over this jar set will ever see what a plugin resolves.
+#
+# Found by a plugin rather than by analysis, and loudly. FancyNpcs builds a
+# FancyAnalyticsAPI in its own constructor, that builds an ApiClient, and the
+# server logs
+#
+#   Could not load plugin 'fancy-npcs.jar' in folder 'plugins'
+#   Caused by: java.lang.NoClassDefFoundError: java/net/http/HttpTimeoutException
+#
+# before any of its configuration is read -- so there is no turning its
+# analytics off, and java.* is a package the JVM will not let anything define
+# from the classpath. The module is the only place this can be fixed.
+#
+# Not one plugin's problem either. Scanned across a real network's plugin jars,
+# the coding-area network's own core references java.net.http on both platforms
+# -- core-bukkit.jar on every backend and core-velocity.jar on the proxy -- and
+# survives on Paper today only because nothing has reached that code path during
+# load the way FancyNpcs does.
+#
 # This list is Paper's. Velocity's is nix/velocity-jre.nix -- a separate
-# derivation over a separate classpath, measured the same way and sharing
-# exactly one finding with this one: jdk.zipfs, which neither jdeps run could
-# see and which both programs die without.
+# derivation over a separate classpath, measured the same way and sharing two
+# findings with this one: jdk.zipfs, which neither jdeps run could see and which
+# both programs die without, and java.net.http, which Velocity's own jar uses
+# and Paper's does not. That asymmetry is how a dependency every plugin platform
+# needs came to be present on one image and missing on the other.
 { jre25_minimal }:
 
 jre25_minimal.override {
@@ -56,6 +80,7 @@ jre25_minimal.override {
     "java.compiler"
     "java.desktop"
     "java.instrument"
+    "java.net.http"
     "java.rmi"
     "java.scripting"
     "java.security.jgss"

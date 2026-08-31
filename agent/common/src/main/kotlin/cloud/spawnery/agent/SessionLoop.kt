@@ -343,6 +343,18 @@ class SessionLoop<Req, Resp>(
     private val scheduler: ScheduledExecutorService,
     private val version: String,
     private val log: (String, Throwable?) -> Unit,
+    /**
+     * Where a thing that happened goes, as opposed to a thing that went wrong.
+     *
+     * Its own channel rather than a level on [log], because the level cannot be
+     * read off the arguments: `log(..., null)` covers both the operator closing
+     * a stream and the operator accepting one and never answering it, and those
+     * are not the same news. And rather than a level enum on every call site,
+     * because exactly one message here is routine -- a renewal, which the
+     * operator performs on a schedule and which used to arrive as a warning
+     * with a stack trace, per server, every few minutes.
+     */
+    private val note: (String) -> Unit,
     private val jitter: (Long) -> Long = { base ->
         // ±10 %, so the pods of one group neither renew nor reconnect in the
         // same instant. An operator restart breaks every agent's stream at once,
@@ -504,7 +516,30 @@ class SessionLoop<Req, Resp>(
             }
 
             override fun onError(t: Throwable) {
-                log("the operator stream failed", t)
+                // A renewal ends this stream, every time and by design: the
+                // operator cancels the displaced stream's context at the
+                // handler entry of its replacement, and the cancelled handler
+                // answers Unavailable. See [streamEnded], which skips the
+                // reconnect on exactly this.
+                //
+                // So the throwable here is the operator doing its job, and
+                // logging it as a failure wrote a stack trace per server per
+                // renewal into a healthy fleet's logs -- roughly one every
+                // eight minutes, on every pod, saying "the operator stream
+                // failed" about a handover that worked. Anything that reads a
+                // server log for real trouble had to learn to skip them, which
+                // is the habit that hides the next real one.
+                //
+                // [Session.replacementOpened] is set before the replacement's
+                // stream exists, precisely so that this moment can be told
+                // apart. A stream nothing replaced still carries its cause:
+                // that one is the agent's to mourn and the throwable is the
+                // only clue anybody gets.
+                if (session.hasReplacement()) {
+                    note("the operator retired this stream for a renewal")
+                } else {
+                    log("the operator stream failed", t)
+                }
                 streamEnded(session)
             }
 

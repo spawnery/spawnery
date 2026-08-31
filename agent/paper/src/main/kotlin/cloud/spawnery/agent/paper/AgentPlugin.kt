@@ -157,6 +157,12 @@ class AgentPlugin : JavaPlugin(), Listener {
                     // from on its own — the server itself is healthy; only its
                     // connection to the operator is not.
                     log = { message, error -> logger.log(Level.WARNING, message, error) },
+                    // And what merely happened goes at INFO. The renewal above
+                    // is the whole reason this channel exists: the operator
+                    // retires the displaced stream on its own schedule, so a
+                    // healthy server reported a warning every few minutes about
+                    // a handover that worked.
+                    note = { message -> logger.log(Level.INFO, message) },
                     // Two things are per-stream and nothing else would tell
                     // them a renewal happened. The connector fails what is in
                     // flight rather than resending it, because only the caller
