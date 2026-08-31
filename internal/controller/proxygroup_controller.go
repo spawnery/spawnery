@@ -251,8 +251,9 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// rather than decorating it: every proxy would otherwise sit Pending on a
 	// volume that will not attach, and the group would look like a scheduling
 	// problem rather than a spec one.
-	if reason, message, ok := checkExtraPlugins(
-		ctx, r.ClaimReader, group.Namespace, group.Spec.ExtraPlugins, r.AllowPluginVolumes); !ok {
+	if reason, message, ok := checkGroupVolumes(
+		ctx, r.ClaimReader, group.Namespace,
+		group.Spec.ExtraPlugins, group.Spec.Mounts, r.AllowPluginVolumes); !ok {
 		// Announced on the transition only, following the rule
 		// network_controller.go states: this runs on every pass for as long as
 		// the claim is wrong, and an event per resync forever is not a report,

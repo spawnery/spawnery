@@ -545,3 +545,27 @@ func TestNoSourceDirectoryIsNotAnError(t *testing.T) {
 		t.Fatalf("a missing plugin source failed the start: %v", err)
 	}
 }
+
+func TestEntrypointExecsThePurpurJarWhenTheImageNamesOne(t *testing.T) {
+	// The Purpur image sets SPAWNERY_SERVER_JAR; the Paper image does not, and
+	// TestEntrypointExecsJavaWithTheBundlerRepo above is what holds its
+	// default still. Without this the two images would need two entrypoints,
+	// and every behaviour tested in this file would be tested for one of them.
+	dir := t.TempDir()
+
+	out, err := runEntrypoint(t, dir, 0,
+		"PAPER_HOME=/opt/purpur",
+		"SPAWNERY_SERVER_JAR=/opt/purpur/purpur.jar")
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "-jar /opt/purpur/purpur.jar") {
+		t.Errorf("java was not invoked with the named jar:\n%s", out)
+	}
+	// The bundler repo still follows PAPER_HOME rather than the jar's own
+	// directory. They are the same directory in both images, and a repo
+	// derived from the jar path would break the moment somebody moved one.
+	if !strings.Contains(out, "-DbundlerRepoDir=/opt/purpur/repo") {
+		t.Errorf("the bundler repo did not follow PAPER_HOME:\n%s", out)
+	}
+}

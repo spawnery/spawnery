@@ -241,6 +241,21 @@ const (
 	// --allow-plugin-volumes.
 	ReasonPluginVolumesDisabled = "PluginVolumesDisabled"
 
+	// The two spec.mounts claim reasons. They are separate from the
+	// extraPlugins pair above even though one flag gates both and one rule
+	// judges both claims, because the remedy differs by which field somebody
+	// wrote: a person reading MountVolumeUnusable goes and looks at
+	// spec.mounts, and a shared reason would have sent them to a field their
+	// group may not even set.
+	//
+	// ReasonMountVolumeUnusable says a spec.mounts entry names a claim that
+	// is missing, or that cannot be mounted by every pod of the group.
+	ReasonMountVolumeUnusable = "MountVolumeUnusable"
+	// ReasonMountVolumesDisabled says a spec.mounts entry names a claim on an
+	// installation whose operator was not started with
+	// --allow-plugin-volumes.
+	ReasonMountVolumesDisabled = "MountVolumesDisabled"
+
 	// The four ForwardingSecretRotationPending reasons.
 	// ReasonPodsPredateTracking is the Unknown that keeps an operator upgrade
 	// from reading as a rotation: after an upgrade no running pod carries a
@@ -373,9 +388,20 @@ type ExtraPlugins struct {
 	ClaimName string `json:"claimName"`
 }
 
-// Mount is a single file mount into a managed pod. V1 supports ConfigMaps and
-// Secrets only; the layered template system is a later project.
-// +kubebuilder:validation:XValidation:rule="has(self.configMap) != has(self.secret)",message="exactly one of configMap or secret must be set"
+// Mount is a single file mount into a managed pod: a ConfigMap, a Secret, or
+// a PersistentVolumeClaim.
+//
+// The claim is what carries the things an image cannot and `extraPlugins` will
+// not: a world tree, a directory of assets every server reads, a pool one
+// group writes and another reads. `extraPlugins` is deliberately narrow -- one
+// claim, read-only, copied into `plugins/` by the entrypoint -- and everything
+// outside `plugins/` needed somewhere to go. See docs/cloudnet-parity.md for
+// the network that measured the gap.
+//
+// It is still not a layered template system. There is no composition, no
+// priority, no per-server rendering: a mount is one volume at one path, and
+// what assembles the volume's contents is somebody else's job.
+// +kubebuilder:validation:XValidation:rule="[has(self.configMap), has(self.secret), has(self.persistentVolumeClaim)].exists_one(x, x)",message="exactly one of configMap, secret or persistentVolumeClaim must be set"
 type Mount struct {
 	// Name of the volume inside the pod.
 	// +kubebuilder:validation:MinLength=1
@@ -392,4 +418,99 @@ type Mount struct {
 	// Secret source.
 	// +optional
 	Secret *corev1.SecretVolumeSource `json:"secret,omitempty"`
+
+	// PersistentVolumeClaim source. See MountClaim.
+	// +optional
+	PersistentVolumeClaim *MountClaim `json:"persistentVolumeClaim,omitempty"`
+
+	// SubPath mounts one file or one subdirectory of the source instead of
+	// the whole of it, so that MountPath can be a file.
+	//
+	// Without it, a mount whose path names a file gets a *directory* there --
+	// the source's keys as separate files inside it. A server looking for
+	// /data/bukkit.yml then finds a directory called bukkit.yml, and what it
+	// reports is a parse error rather than anything about a mount. Landing a
+	// single file beside the ones the server writes itself is the case this
+	// exists for; there is no other way to do it.
+	//
+	// **A ConfigMap or Secret mounted through subPath does not update.**
+	// Kubernetes refreshes a projected volume in place, and a subPath mount is
+	// a bind of one file out of it that the kubelet does not re-point. Editing
+	// the ConfigMap changes nothing in a running pod, and nothing reports
+	// that. Without subPath the file does update, eventually and without a
+	// restart -- which is a real difference and the reason this is a field
+	// somebody opts into rather than something inferred from the path looking
+	// like a file. Neither behaviour reaches the pod digest either way, so no
+	// edit to a ConfigMap's contents rolls anything.
+	// +optional
+	SubPath string `json:"subPath,omitempty"`
 }
+
+// MountClaim is a PersistentVolumeClaim mounted into a group's pods.
+//
+// Like ExtraPlugins it must be ReadWriteMany, for the reason that field's own
+// comment gives at length: every pod of the group mounts it, they are spread
+// across nodes, and a ReadWriteOnce claim would leave the second one Pending
+// on a scheduling error about volume affinity with nothing naming the claim.
+// The rule does not soften for a group that happens to run one replica today,
+// because maxReplicas is raised by edits that have nothing to do with storage.
+//
+// It is gated by the same --allow-plugin-volumes the operator already has.
+// One switch rather than two: what an installation turns off with it is
+// "content this cluster did not ship reaches a game server from a volume",
+// and a claim mounted at /data/worlds is that as much as a claim copied into
+// plugins/ is. The flag is still not a security boundary -- a claim is a
+// namespaced object in the same trust domain as the group naming it -- and
+// docs/plugins.md says so at more length.
+type MountClaim struct {
+	// ClaimName is a PersistentVolumeClaim in this object's own namespace.
+	// +kubebuilder:validation:MinLength=1
+	ClaimName string `json:"claimName"`
+
+	// Writable mounts the claim read-write. It defaults to false, and the
+	// field is spelled this way round -- Writable rather than ReadOnly --
+	// so that the zero value is the safe one. An omitted field, a field
+	// somebody has not heard of, and a field lost in a hand-written manifest
+	// all land on read-only.
+	//
+	// One group writing a volume that others read is the case this exists
+	// for: a generator filling a pool of worlds that game servers consume.
+	// Nothing here coordinates that. Two groups that both write the same
+	// claim get exactly what two processes writing one filesystem get, and
+	// the operator has no way to know which of them meant to.
+	//
+	// It reaches the pod, so flipping it replaces the group's servers.
+	// +optional
+	Writable bool `json:"writable,omitempty"`
+}
+
+// ReservedEnvPrefix is the prefix of every container environment variable the
+// operator sets itself, and the one prefix a group's own spec.env may not use.
+//
+// The operator writes SPAWNERY_NETWORK, SPAWNERY_GROUP and either
+// SPAWNERY_SERVER or SPAWNERY_PROXY into every pod it renders, along with the
+// agent's endpoint and, for a proxy, its player limit and fallback groups. The
+// agent reads them to know what it is and whom to call. Without them it never
+// connects, and what an installation sees is a server that starts, stays
+// NotReady, and says nothing about why.
+//
+// Kubernetes does not refuse a duplicate name in a container's env list. It
+// keeps both entries and the last one wins, so a group setting SPAWNERY_GROUP
+// would leave `kubectl describe pod` printing both values with nothing on the
+// pod saying which one the process actually got. Refusing the prefix at
+// admission turns that into an error on the object somebody just wrote.
+//
+// The prefix is reserved whole rather than the six names being denied one by
+// one, so a variable added to a pod in a later release needs no change here
+// and cannot collide with something an installation already set. Reserving it
+// whole also covers the two seams the entrypoints read: SPAWNERY_PLUGIN_SOURCE
+// and SPAWNERY_CGROUP_ROOT exist so the image tests can point them at a
+// temporary directory, and setting either from a group spec would break a
+// start in a way nothing reports.
+//
+// The rule is a CEL expression on both spec.env fields, so the API server
+// refuses the object rather than the operator finding it afterwards. The
+// literal is repeated in those markers because a kubebuilder marker cannot
+// interpolate a constant; TestTheReservedEnvPrefixMarkersMatchTheConstant
+// reads the generated CRDs and checks that all of them still agree with this.
+const ReservedEnvPrefix = "SPAWNERY_"

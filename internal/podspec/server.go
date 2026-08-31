@@ -338,44 +338,12 @@ func BuildServerPod(
 		})
 	}
 
-	// checkMountCollision sees one mount at a time, so a collision *between*
-	// two user mounts is structurally invisible to it. The API server catches
-	// both of these -- duplicate volume names and duplicate mount paths are
-	// invalid -- but it catches them as a rejected pod create, which reaches
-	// the user as a Degraded condition carrying an apimachinery validation
-	// message about an index in an array. Refusing here names the mount and
-	// the reason, and does it before anything is sent.
-	seenNames := make(map[string]bool, len(group.Spec.Mounts))
-	seenPaths := make(map[string]bool, len(group.Spec.Mounts))
-	for _, m := range group.Spec.Mounts {
-		if err := checkMountCollision(m); err != nil {
-			return nil, err
-		}
-		if seenNames[m.Name] {
-			return nil, fmt.Errorf("mount %q is declared twice; two mounts of one group cannot share a name", m.Name)
-		}
-		seenNames[m.Name] = true
-		// Cleaned before comparing, so "/plugins" and "/plugins/" are one
-		// path -- the same normalisation checkMountCollision applies before
-		// comparing against the reserved paths.
-		clean := path.Clean(m.MountPath)
-		if seenPaths[clean] {
-			return nil, fmt.Errorf("mount %q targets %q, which another mount of this group already targets; one path can hold one mount", m.Name, m.MountPath)
-		}
-		seenPaths[clean] = true
-		volumes = append(volumes, corev1.Volume{
-			Name: m.Name,
-			VolumeSource: corev1.VolumeSource{
-				ConfigMap: m.ConfigMap,
-				Secret:    m.Secret,
-			},
-		})
-		mounts = append(mounts, corev1.VolumeMount{
-			Name:      m.Name,
-			MountPath: m.MountPath,
-			ReadOnly:  true,
-		})
+	userVolumes, userVolumeMounts, err := renderUserMounts(group.Spec.Mounts)
+	if err != nil {
+		return nil, err
 	}
+	volumes = append(volumes, userVolumes...)
+	mounts = append(mounts, userVolumeMounts...)
 
 	// The group's own plugin volume, if it named one. Read-only at the volume
 	// as well as at the mount: one claim may serve several groups, and a group
@@ -428,12 +396,19 @@ func BuildServerPod(
 			ContainerPort: MinecraftPort,
 			Protocol:      corev1.ProtocolTCP,
 		}},
-		Env: []corev1.EnvVar{
+		// The group's own variables come last, after the four this operator
+		// owns. Order is not what protects those four: ReservedEnvPrefix and
+		// the CEL rule on spec.env are, and they make it impossible for a
+		// group to repeat one of these names at all. Appending is a
+		// readability decision -- it keeps the operator's own set at a fixed
+		// position in every pod, so `kubectl describe pod` still reads
+		// straight down for a group that sets twenty of its own.
+		Env: append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: "SPAWNERY_SERVER", Value: srv.Name},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
-		},
+		}, group.Spec.Env...),
 		VolumeMounts: mounts,
 		// Readiness only. A liveness probe would restart the container and
 		// kick every player on it — the state machine handles a red readiness
@@ -559,6 +534,75 @@ func dataVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Serve
 		Name:         DataVolumeName,
 		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 	}
+}
+
+// renderUserMounts turns spec.mounts into the volumes and mounts a pod
+// carries. Shared by both group kinds: a ServerGroup and a ProxyGroup declare
+// the same field with the same reserved paths, and two copies would be two
+// answers the day one of them learns something.
+//
+// checkMountCollision sees one mount at a time, so a collision *between* two
+// user mounts is structurally invisible to it. The API server catches both of
+// these -- duplicate volume names and duplicate mount paths are invalid -- but
+// it catches them as a rejected pod create, which reaches the user as a
+// Degraded condition carrying an apimachinery validation message about an
+// index in an array. Refusing here names the mount and the reason, and does it
+// before anything is sent.
+//
+// A claim is the only source that can be writable, and it is read-only unless
+// the mount says otherwise. ConfigMaps and Secrets are read-only whatever
+// anybody writes -- the kubelet mounts them that way -- so asking about
+// Writable for them would be a question with no answer. Nothing here checks
+// that the claim exists or that it is ReadWriteMany; that needs a client, and
+// internal/controller's checkMountClaims does it before this is ever reached.
+func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.VolumeMount, error) {
+	var volumes []corev1.Volume
+	var mounts []corev1.VolumeMount
+
+	seenNames := make(map[string]bool, len(list))
+	seenPaths := make(map[string]bool, len(list))
+	for _, m := range list {
+		if err := checkMountCollision(m); err != nil {
+			return nil, nil, err
+		}
+		if seenNames[m.Name] {
+			return nil, nil, fmt.Errorf("mount %q is declared twice; two mounts of one group cannot share a name", m.Name)
+		}
+		seenNames[m.Name] = true
+		// Cleaned before comparing, so "/plugins" and "/plugins/" are one
+		// path -- the same normalisation checkMountCollision applies before
+		// comparing against the reserved paths.
+		clean := path.Clean(m.MountPath)
+		if seenPaths[clean] {
+			return nil, nil, fmt.Errorf("mount %q targets %q, which another mount of this group already targets; one path can hold one mount", m.Name, m.MountPath)
+		}
+		seenPaths[clean] = true
+
+		source := corev1.VolumeSource{ConfigMap: m.ConfigMap, Secret: m.Secret}
+		readOnly := true
+		if claim := m.PersistentVolumeClaim; claim != nil {
+			readOnly = !claim.Writable
+			// Read-only at the volume as well as at the mount, when it is
+			// read-only at all. The pair matters: a volume marked writable and
+			// mounted read-only is still attached read-write to the node, and
+			// the difference shows up as a claim that cannot be attached
+			// elsewhere rather than as anything about this pod.
+			source = corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: claim.ClaimName,
+					ReadOnly:  readOnly,
+				},
+			}
+		}
+		volumes = append(volumes, corev1.Volume{Name: m.Name, VolumeSource: source})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      m.Name,
+			MountPath: m.MountPath,
+			SubPath:   m.SubPath,
+			ReadOnly:  readOnly,
+		})
+	}
+	return volumes, mounts, nil
 }
 
 // checkMountCollision refuses a user mount that reuses one of the operator's

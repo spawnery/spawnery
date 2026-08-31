@@ -190,13 +190,16 @@ jobs:
 
       # Not `make image-test`: that loads them into a kind cluster and runs a
       # server, which is the e2e job's business. The question here is narrower
-      # and is the one the fixed-output hashes answer to -- do these two
+      # and is the one the fixed-output hashes answer to -- do these
       # derivations still build, which means do their downloads still hash to
-      # what the files say.
-      - name: Build the Paper and Velocity images
+      # what the files say. Purpur joined them in 0.2.15; it takes its Mojang
+      # jar from nix/paper.nix, so a Paper pin that moves without a Purpur pin
+      # moving fails here rather than in a container.
+      - name: Build the game images
         if: steps.changed.outputs.build == 'true'
         run: |
           nix build .#paper-image --no-link
+          nix build .#purpur-image --no-link
           nix build .#velocity-image --no-link
 
   deps:

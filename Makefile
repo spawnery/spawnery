@@ -5,6 +5,7 @@ CONTAINER ?= docker
 # references it and pays nothing for it.
 IMAGE ?= $(shell nix eval --raw .#paper-image.imageName):$(shell nix eval --raw .#paper-image.imageTag)
 VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix eval --raw .#velocity-image.imageTag)
+PURPUR_IMAGE ?= $(shell nix eval --raw .#purpur-image.imageName):$(shell nix eval --raw .#purpur-image.imageTag)
 OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix eval --raw .#operator-image.imageTag)
 STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
 
@@ -132,6 +133,17 @@ paper-pin:
 paper-pin-check:
 	CHECK=1 hack/paper-pin.sh $(ARGS)
 
+# Purpur's sibling. It differs from the Paper one in what the upstream API can
+# be asked for -- a SHA-256 there, an MD5 here -- and hack/purpur-pin.sh's
+# header is where that difference is spelled out rather than glossed.
+.PHONY: purpur-pin
+purpur-pin:
+	hack/purpur-pin.sh $(ARGS)
+
+.PHONY: purpur-pin-check
+purpur-pin-check:
+	CHECK=1 hack/purpur-pin.sh $(ARGS)
+
 .PHONY: agent
 # `nix build` filters the source tree through the git index, so an untracked
 # file does not exist for a sandboxed build. This is worth reading before
@@ -174,8 +186,9 @@ image-load: image
 # is what makes that table row true rather than aspirational, and it keeps
 # one command as the single gate for "did I break either image", the same way
 # `go build ./...` is for compilation.
-image-test: image-load velocity-image-load
+image-test: image-load purpur-image-load velocity-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) hack/image-test.sh
+	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/image-test.sh
 	CONTAINER=$(CONTAINER) IMAGE=$(VELOCITY_IMAGE) hack/velocity-image-test.sh
 
 # The level-2 proof from design section 9. Not part of `test` or `all`, for the
@@ -185,6 +198,24 @@ image-test: image-load velocity-image-load
 agent-test: image-load velocity-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
 		STUBOP=$(STUBOP) hack/agent-test.sh
+
+# Purpur, through hack/image-test.sh unchanged. The script asserts on Paper's
+# own behaviour -- that Paper rewrote /data/config/paper-global.yml, that the
+# agent plugin loaded -- and Purpur is a Paper fork that does all of it, so a
+# second script would have been the same script with a different name. If the
+# two ever diverge enough for that to stop being true, this is the line that
+# fails and says so.
+.PHONY: purpur-image
+purpur-image:
+	nix build .#purpur-image --out-link result-purpur
+
+.PHONY: purpur-image-load
+purpur-image-load: purpur-image
+	$(CONTAINER) load < result-purpur
+
+.PHONY: purpur-image-test
+purpur-image-test: purpur-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/image-test.sh
 
 .PHONY: velocity-image
 velocity-image:
@@ -234,6 +265,8 @@ operator-image-test: operator-image-load
 image-repro:
 	nix build .#paper-image --no-link
 	nix build .#paper-image --rebuild --no-link
+	nix build .#purpur-image --no-link
+	nix build .#purpur-image --rebuild --no-link
 	nix build .#velocity-image --no-link
 	nix build .#velocity-image --rebuild --no-link
 	nix build .#operator-image --no-link

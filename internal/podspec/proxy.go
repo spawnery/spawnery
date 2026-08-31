@@ -228,6 +228,16 @@ func renderProxyPod(
 		})
 	}
 
+	// The group's own file mounts, through the same renderUserMounts a server
+	// pod goes through: same reserved paths, same refusals, same treatment of
+	// a claim.
+	userVolumes, userVolumeMounts, err := renderUserMounts(group.Spec.Mounts)
+	if err != nil {
+		return nil, err
+	}
+	volumes = append(volumes, userVolumes...)
+	mounts = append(mounts, userVolumeMounts...)
+
 	// The group's own plugin volume, if it named one. Read-only at the volume
 	// as well as at the mount: one claim may serve several groups, and a group
 	// that could write it could change what every other group loads.
@@ -289,14 +299,17 @@ func renderProxyPod(
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
-		Env: []corev1.EnvVar{
+		// The group's own variables come last; see BuildServerPod for why
+		// the position is a readability decision rather than the thing that
+		// keeps the six below intact.
+		Env: append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: EnvProxy, Value: name},
 			{Name: EnvPlayerLimit, Value: strconv.FormatInt(int64(playerLimit), 10)},
 			{Name: EnvFallbackGroups, Value: strings.Join(group.Spec.Routing.FallbackGroups, ",")},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
-		},
+		}, group.Spec.Env...),
 		VolumeMounts: mounts,
 		// Readiness only, for the same reason the server pod has no liveness
 		// probe: a restart would disconnect every player on this proxy, and

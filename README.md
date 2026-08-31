@@ -72,7 +72,7 @@ server before it stops rather than disconnecting them.
 
 ## Status
 
-Running, and honest about where it stops. The operator, both game images and
+Running, and honest about where it stops. The operator, the game images and
 the Helm chart are published to `ghcr.io/spawnery`, the chart as an OCI
 artefact since v0.2.14 — this sentence had claimed it since 2026-08-27 and
 through the eight releases from `v0.2.6` to `v0.2.13`, none of which published
@@ -87,6 +87,12 @@ What that cluster has not done is carry a real player: TCP 25565 does not
 reach it from outside, so the joins above were all driven against local `kind`
 clusters. The API is `v1alpha1` and is not stable.
 
+The backend image is [Purpur](https://purpurmc.org) as of v0.2.15 —
+`ghcr.io/spawnery/purpur`, a fork of Paper running the same agent, the same
+entrypoint and the same Java runtime. `ghcr.io/spawnery/paper` is deprecated
+and still published; nothing moves until a `ServerGroup`'s `spec.image` is
+edited, and [`docs/upgrading.md`](docs/upgrading.md) carries what that costs.
+
 Whatever is open right now is in
 [`docs/known-issues.md`](docs/known-issues.md) — an entry is deleted when it
 closes, so an empty file means nothing is open. How it got here, milestone by
@@ -97,7 +103,7 @@ milestone and with the measurement each claim rests on, is
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.2.14 \
+  --version 0.2.15 \
   --namespace spawnery-system --create-namespace
 ```
 

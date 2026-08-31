@@ -611,3 +611,50 @@ the transition: `PluginVolumesDisabled` names the operator flag, and
 servers — a group whose volume cannot be mounted would otherwise fill with pods
 sitting `Pending` on a claim that will not attach, and look like a scheduling
 problem rather than a spec one.
+
+## 0.2.15: Purpur is the backend image, and Paper is deprecated
+
+`ghcr.io/spawnery/purpur` is published from this release. It is
+[Purpur](https://purpurmc.org), a fork of Paper, and it is what the network
+this operator was built for actually runs.
+
+**Nothing moves on its own.** A `ServerGroup` names its own `spec.image`, so no
+installation changes backend until somebody edits one. `ghcr.io/spawnery/paper`
+is still built, still tested and still published at every release.
+
+### What the two images share
+
+Everything except the server jar: the same `image/entrypoint.sh`, the same
+agent plugin, the same `spawnery-slp` and `spawnery-config`, and the same
+jlink'd Java runtime. That last one is a measurement rather than an assumption —
+`nix/paper-jre.nix`'s module list was re-derived with `jdeps` over Purpur's own
+classpath (109 jars against Paper's 105) and came out identical.
+
+Both are tagged the same way, so the version you are on is the version you
+move to:
+
+```yaml
+-  image: ghcr.io/spawnery/paper:26.2-0.2.15
++  image: ghcr.io/spawnery/purpur:26.2-0.2.15
+```
+
+That edit changes the group's pod hash, so it rolls the group exactly the way
+any image bump does — through `maxUnavailable` and the cold start, with drains
+moving players rather than dropping them.
+
+### What you get, and what it costs
+
+Purpur adds its own configuration file, `purpur.yml`, on top of Paper's. Nothing
+renders it: it is a [mount](mounts.md) like any other file, and `subPath` is how
+a single file lands beside the ones the server writes itself.
+
+The cost is an upstream more: Purpur tracks Paper, so a Purpur build lags a
+Paper build by however long that takes. `hack/purpur-pin.sh` is the sibling of
+`hack/paper-pin.sh` and the same `make purpur-pin-check` says whether the pin is
+behind.
+
+### Why Paper is not simply removed
+
+Every `ServerGroup` in every installation carries a `spec.image`, so deleting
+the derivation would strand each of them on a tag that stops being rebuilt.
+It goes when there is a release note saying it is going, and not before.

@@ -1457,6 +1457,179 @@ spec:
                 required:
                 - timeoutSeconds
                 type: object
+              env:
+                description: |-
+                  Env are extra environment variables for the proxy container, appended
+                  to the ones the operator sets. A name may not begin with
+                  ReservedEnvPrefix.
+
+                  It is ServerGroupSpec.Env for a proxy, rule and reasoning unchanged,
+                  and JAVA_TOOL_OPTIONS is the same seam: the Velocity entrypoint execs
+                  java with its own flag list too. It is in podspec.DesiredProxyHash for
+                  the same reason -- editing it rolls the group through the ordinary
+                  surge-1 path.
+                items:
+                  description: EnvVar represents an environment variable present in
+                    a Container.
+                  properties:
+                    name:
+                      description: |-
+                        Name of the environment variable.
+                        May consist of any printable ASCII characters except '='.
+                      type: string
+                    value:
+                      description: |-
+                        Variable references $(VAR_NAME) are expanded
+                        using the previously defined environment variables in the container and
+                        any service environment variables. If a variable cannot be resolved,
+                        the reference in the input string will be unchanged. Double $$ are reduced
+                        to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                        "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
+                        Escaped references will never be expanded, regardless of whether the variable
+                        exists or not.
+                        Defaults to "".
+                      type: string
+                    valueFrom:
+                      description: Source for the environment variable's value. Cannot
+                        be used if value is not empty.
+                      properties:
+                        configMapKeyRef:
+                          description: Selects a key of a ConfigMap.
+                          properties:
+                            key:
+                              description: The key to select.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the ConfigMap or its key
+                                must be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fieldRef:
+                          description: |-
+                            Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
+                            spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
+                          properties:
+                            apiVersion:
+                              description: Version of the schema the FieldPath is
+                                written in terms of, defaults to "v1".
+                              type: string
+                            fieldPath:
+                              description: Path of the field to select in the specified
+                                API version.
+                              type: string
+                          required:
+                          - fieldPath
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fileKeyRef:
+                          description: |-
+                            FileKeyRef selects a key of the env file.
+                            Requires the EnvFiles feature gate to be enabled.
+                          properties:
+                            key:
+                              description: |-
+                                The key within the env file. An invalid key will prevent the pod from starting.
+                                The keys defined within a source may consist of any printable ASCII characters except '='.
+                                During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
+                              type: string
+                            optional:
+                              default: false
+                              description: |-
+                                Specify whether the file or its key must be defined. If the file or key
+                                does not exist, then the env var is not published.
+                                If optional is set to true and the specified key does not exist,
+                                the environment variable will not be set in the Pod's containers.
+
+                                If optional is set to false and the specified key does not exist,
+                                an error will be returned during Pod creation.
+                              type: boolean
+                            path:
+                              description: |-
+                                The path within the volume from which to select the file.
+                                Must be relative and may not contain the '..' path or start with '..'.
+                              type: string
+                            volumeName:
+                              description: The name of the volume mount containing
+                                the env file.
+                              type: string
+                          required:
+                          - key
+                          - path
+                          - volumeName
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        resourceFieldRef:
+                          description: |-
+                            Selects a resource of the container: only resources limits and requests
+                            (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
+                          properties:
+                            containerName:
+                              description: 'Container name: required for volumes,
+                                optional for env vars'
+                              type: string
+                            divisor:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Specifies the output format of the exposed
+                                resources, defaults to "1"
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            resource:
+                              description: 'Required: resource to select'
+                              type: string
+                          required:
+                          - resource
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        secretKeyRef:
+                          description: Selects a key of a secret in the pod's namespace
+                          properties:
+                            key:
+                              description: The key of the secret to select from.  Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the Secret or its key must
+                                be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: the SPAWNERY_ prefix is reserved for the environment variables
+                    the operator sets itself
+                  rule: self.all(e, !e.name.startsWith('SPAWNERY_'))
               expose:
                 description: Expose makes the proxies reachable from outside the cluster.
                 properties:
@@ -1602,6 +1775,231 @@ spec:
                   is recommended.
                 minLength: 1
                 type: string
+              mounts:
+                description: |-
+                  Mounts are extra ConfigMap, Secret and PersistentVolumeClaim mounts.
+
+                  It is ServerGroupSpec.Mounts for a proxy and it arrived later, which is
+                  worth knowing when reading a manifest written against an older chart: a
+                  ProxyGroup simply had no way to be handed a file until then, and the
+                  asymmetry was never a decision anybody took. What forced it was one
+                  network's own shape -- its proxies read the same shared asset directory
+                  its backends do, out of a template that targets both.
+                items:
+                  description: |-
+                    Mount is a single file mount into a managed pod: a ConfigMap, a Secret, or
+                    a PersistentVolumeClaim.
+
+                    The claim is what carries the things an image cannot and `extraPlugins` will
+                    not: a world tree, a directory of assets every server reads, a pool one
+                    group writes and another reads. `extraPlugins` is deliberately narrow -- one
+                    claim, read-only, copied into `plugins/` by the entrypoint -- and everything
+                    outside `plugins/` needed somewhere to go. See docs/cloudnet-parity.md for
+                    the network that measured the gap.
+
+                    It is still not a layered template system. There is no composition, no
+                    priority, no per-server rendering: a mount is one volume at one path, and
+                    what assembles the volume's contents is somebody else's job.
+                  properties:
+                    configMap:
+                      description: ConfigMap source.
+                      properties:
+                        defaultMode:
+                          description: |-
+                            defaultMode is optional: mode bits used to set permissions on created files by default.
+                            Must be an octal value between 0000 and 0777 or a decimal value between 0 and 511.
+                            YAML accepts both octal and decimal values, JSON requires decimal values for mode bits.
+                            Defaults to 0644.
+                            Directories within the path are not affected by this setting.
+                            This might be in conflict with other options that affect the file
+                            mode, like fsGroup, and the result can be other mode bits set.
+                          format: int32
+                          type: integer
+                        items:
+                          description: |-
+                            items if unspecified, each key-value pair in the Data field of the referenced
+                            ConfigMap will be projected into the volume as a file whose name is the
+                            key and content is the value. If specified, the listed keys will be
+                            projected into the specified paths, and unlisted keys will not be
+                            present. If a key is specified which is not present in the ConfigMap,
+                            the volume setup will error unless it is marked optional. Paths must be
+                            relative and may not contain the '..' path or start with '..'.
+                          items:
+                            description: Maps a string key to a path within a volume.
+                            properties:
+                              key:
+                                description: key is the key to project.
+                                type: string
+                              mode:
+                                description: |-
+                                  mode is Optional: mode bits used to set permissions on this file.
+                                  Must be an octal value between 0000 and 0777 or a decimal value between 0 and 511.
+                                  YAML accepts both octal and decimal values, JSON requires decimal values for mode bits.
+                                  If not specified, the volume defaultMode will be used.
+                                  This might be in conflict with other options that affect the file
+                                  mode, like fsGroup, and the result can be other mode bits set.
+                                format: int32
+                                type: integer
+                              path:
+                                description: |-
+                                  path is the relative path of the file to map the key to.
+                                  May not be an absolute path.
+                                  May not contain the path element '..'.
+                                  May not start with the string '..'.
+                                type: string
+                            required:
+                            - key
+                            - path
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                        optional:
+                          description: optional specify whether the ConfigMap or its
+                            keys must be defined
+                          type: boolean
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    mountPath:
+                      description: MountPath is the absolute path inside the container.
+                      pattern: ^/.*
+                      type: string
+                    name:
+                      description: Name of the volume inside the pod.
+                      minLength: 1
+                      type: string
+                    persistentVolumeClaim:
+                      description: PersistentVolumeClaim source. See MountClaim.
+                      properties:
+                        claimName:
+                          description: ClaimName is a PersistentVolumeClaim in this
+                            object's own namespace.
+                          minLength: 1
+                          type: string
+                        writable:
+                          description: |-
+                            Writable mounts the claim read-write. It defaults to false, and the
+                            field is spelled this way round -- Writable rather than ReadOnly --
+                            so that the zero value is the safe one. An omitted field, a field
+                            somebody has not heard of, and a field lost in a hand-written manifest
+                            all land on read-only.
+
+                            One group writing a volume that others read is the case this exists
+                            for: a generator filling a pool of worlds that game servers consume.
+                            Nothing here coordinates that. Two groups that both write the same
+                            claim get exactly what two processes writing one filesystem get, and
+                            the operator has no way to know which of them meant to.
+
+                            It reaches the pod, so flipping it replaces the group's servers.
+                          type: boolean
+                      required:
+                      - claimName
+                      type: object
+                    secret:
+                      description: Secret source.
+                      properties:
+                        defaultMode:
+                          description: |-
+                            defaultMode is Optional: mode bits used to set permissions on created files by default.
+                            Must be an octal value between 0000 and 0777 or a decimal value between 0 and 511.
+                            YAML accepts both octal and decimal values, JSON requires decimal values
+                            for mode bits. Defaults to 0644.
+                            Directories within the path are not affected by this setting.
+                            This might be in conflict with other options that affect the file
+                            mode, like fsGroup, and the result can be other mode bits set.
+                          format: int32
+                          type: integer
+                        items:
+                          description: |-
+                            items If unspecified, each key-value pair in the Data field of the referenced
+                            Secret will be projected into the volume as a file whose name is the
+                            key and content is the value. If specified, the listed keys will be
+                            projected into the specified paths, and unlisted keys will not be
+                            present. If a key is specified which is not present in the Secret,
+                            the volume setup will error unless it is marked optional. Paths must be
+                            relative and may not contain the '..' path or start with '..'.
+                          items:
+                            description: Maps a string key to a path within a volume.
+                            properties:
+                              key:
+                                description: key is the key to project.
+                                type: string
+                              mode:
+                                description: |-
+                                  mode is Optional: mode bits used to set permissions on this file.
+                                  Must be an octal value between 0000 and 0777 or a decimal value between 0 and 511.
+                                  YAML accepts both octal and decimal values, JSON requires decimal values for mode bits.
+                                  If not specified, the volume defaultMode will be used.
+                                  This might be in conflict with other options that affect the file
+                                  mode, like fsGroup, and the result can be other mode bits set.
+                                format: int32
+                                type: integer
+                              path:
+                                description: |-
+                                  path is the relative path of the file to map the key to.
+                                  May not be an absolute path.
+                                  May not contain the path element '..'.
+                                  May not start with the string '..'.
+                                type: string
+                            required:
+                            - key
+                            - path
+                            type: object
+                          type: array
+                          x-kubernetes-list-type: atomic
+                        optional:
+                          description: optional field specify whether the Secret or
+                            its keys must be defined
+                          type: boolean
+                        secretName:
+                          description: |-
+                            secretName is the name of the secret in the pod's namespace to use.
+                            More info: https://kubernetes.io/docs/concepts/storage/volumes#secret
+                          type: string
+                      type: object
+                    subPath:
+                      description: |-
+                        SubPath mounts one file or one subdirectory of the source instead of
+                        the whole of it, so that MountPath can be a file.
+
+                        Without it, a mount whose path names a file gets a *directory* there --
+                        the source's keys as separate files inside it. A server looking for
+                        /data/bukkit.yml then finds a directory called bukkit.yml, and what it
+                        reports is a parse error rather than anything about a mount. Landing a
+                        single file beside the ones the server writes itself is the case this
+                        exists for; there is no other way to do it.
+
+                        **A ConfigMap or Secret mounted through subPath does not update.**
+                        Kubernetes refreshes a projected volume in place, and a subPath mount is
+                        a bind of one file out of it that the kubelet does not re-point. Editing
+                        the ConfigMap changes nothing in a running pod, and nothing reports
+                        that. Without subPath the file does update, eventually and without a
+                        restart -- which is a real difference and the reason this is a field
+                        somebody opts into rather than something inferred from the path looking
+                        like a file. Neither behaviour reaches the pod digest either way, so no
+                        edit to a ConfigMap's contents rolls anything.
+                      type: string
+                  required:
+                  - mountPath
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of configMap, secret or persistentVolumeClaim
+                      must be set
+                    rule: '[has(self.configMap), has(self.secret), has(self.persistentVolumeClaim)].exists_one(x,
+                      x)'
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               networkRef:
                 description: NetworkRef names the Network this group belongs to. Immutable.
                 properties:
@@ -3003,6 +3401,192 @@ spec:
                 required:
                 - timeoutSeconds
                 type: object
+              env:
+                description: |-
+                  Env are extra environment variables for the server container, appended
+                  to the ones the operator sets. A name may not begin with
+                  ReservedEnvPrefix; see that constant for why the whole prefix is taken
+                  rather than the individual names.
+
+                  This is also the only way to reach the JVM. The entrypoint execs java
+                  with a fixed flag list and takes no arguments from any spec, so a
+                  process-level setting travels in JAVA_TOOL_OPTIONS, which is the seam
+                  the JVM itself offers. Measured on OpenJDK 21.0.12: an option on the
+                  command line beats the same option in that variable, for -D and for
+                  -Xmx alike, so a group can add the system property its plugins read
+                  without being able to displace the heap and GC flags the entrypoint
+                  sets. The case this exists for is a network whose game variants differ
+                  by nothing else -- the same jars and the same configuration, one group
+                  running them solo and another in teams, told apart by a single -D.
+
+                  It shapes the pod, so it is in podspec.DesiredServerHash: editing it
+                  makes every server of the group stale and replaces them exactly the way
+                  an image bump does, through maxUnavailable and the cold start. That is
+                  the opposite of ExtraPlugins, whose contents deliberately reach no
+                  hash, and the difference is that a filesystem the operator only names
+                  cannot be digested while an env list it renders can.
+                items:
+                  description: EnvVar represents an environment variable present in
+                    a Container.
+                  properties:
+                    name:
+                      description: |-
+                        Name of the environment variable.
+                        May consist of any printable ASCII characters except '='.
+                      type: string
+                    value:
+                      description: |-
+                        Variable references $(VAR_NAME) are expanded
+                        using the previously defined environment variables in the container and
+                        any service environment variables. If a variable cannot be resolved,
+                        the reference in the input string will be unchanged. Double $$ are reduced
+                        to a single $, which allows for escaping the $(VAR_NAME) syntax: i.e.
+                        "$$(VAR_NAME)" will produce the string literal "$(VAR_NAME)".
+                        Escaped references will never be expanded, regardless of whether the variable
+                        exists or not.
+                        Defaults to "".
+                      type: string
+                    valueFrom:
+                      description: Source for the environment variable's value. Cannot
+                        be used if value is not empty.
+                      properties:
+                        configMapKeyRef:
+                          description: Selects a key of a ConfigMap.
+                          properties:
+                            key:
+                              description: The key to select.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the ConfigMap or its key
+                                must be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fieldRef:
+                          description: |-
+                            Selects a field of the pod: supports metadata.name, metadata.namespace, `metadata.labels['<KEY>']`, `metadata.annotations['<KEY>']`,
+                            spec.nodeName, spec.serviceAccountName, status.hostIP, status.podIP, status.podIPs.
+                          properties:
+                            apiVersion:
+                              description: Version of the schema the FieldPath is
+                                written in terms of, defaults to "v1".
+                              type: string
+                            fieldPath:
+                              description: Path of the field to select in the specified
+                                API version.
+                              type: string
+                          required:
+                          - fieldPath
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        fileKeyRef:
+                          description: |-
+                            FileKeyRef selects a key of the env file.
+                            Requires the EnvFiles feature gate to be enabled.
+                          properties:
+                            key:
+                              description: |-
+                                The key within the env file. An invalid key will prevent the pod from starting.
+                                The keys defined within a source may consist of any printable ASCII characters except '='.
+                                During Alpha stage of the EnvFiles feature gate, the key size is limited to 128 characters.
+                              type: string
+                            optional:
+                              default: false
+                              description: |-
+                                Specify whether the file or its key must be defined. If the file or key
+                                does not exist, then the env var is not published.
+                                If optional is set to true and the specified key does not exist,
+                                the environment variable will not be set in the Pod's containers.
+
+                                If optional is set to false and the specified key does not exist,
+                                an error will be returned during Pod creation.
+                              type: boolean
+                            path:
+                              description: |-
+                                The path within the volume from which to select the file.
+                                Must be relative and may not contain the '..' path or start with '..'.
+                              type: string
+                            volumeName:
+                              description: The name of the volume mount containing
+                                the env file.
+                              type: string
+                          required:
+                          - key
+                          - path
+                          - volumeName
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        resourceFieldRef:
+                          description: |-
+                            Selects a resource of the container: only resources limits and requests
+                            (limits.cpu, limits.memory, limits.ephemeral-storage, requests.cpu, requests.memory and requests.ephemeral-storage) are currently supported.
+                          properties:
+                            containerName:
+                              description: 'Container name: required for volumes,
+                                optional for env vars'
+                              type: string
+                            divisor:
+                              anyOf:
+                              - type: integer
+                              - type: string
+                              description: Specifies the output format of the exposed
+                                resources, defaults to "1"
+                              pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                              x-kubernetes-int-or-string: true
+                            resource:
+                              description: 'Required: resource to select'
+                              type: string
+                          required:
+                          - resource
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        secretKeyRef:
+                          description: Selects a key of a secret in the pod's namespace
+                          properties:
+                            key:
+                              description: The key of the secret to select from.  Must
+                                be a valid secret key.
+                              type: string
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                            optional:
+                              description: Specify whether the Secret or its key must
+                                be defined
+                              type: boolean
+                          required:
+                          - key
+                          type: object
+                          x-kubernetes-map-type: atomic
+                      type: object
+                  required:
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+                x-kubernetes-validations:
+                - message: the SPAWNERY_ prefix is reserved for the environment variables
+                    the operator sets itself
+                  rule: self.all(e, !e.name.startsWith('SPAWNERY_'))
               extraPlugins:
                 description: |-
                   ExtraPlugins names a volume whose plugins and their configuration are
@@ -3047,8 +3631,19 @@ spec:
                 description: Mounts are extra ConfigMap and Secret mounts.
                 items:
                   description: |-
-                    Mount is a single file mount into a managed pod. V1 supports ConfigMaps and
-                    Secrets only; the layered template system is a later project.
+                    Mount is a single file mount into a managed pod: a ConfigMap, a Secret, or
+                    a PersistentVolumeClaim.
+
+                    The claim is what carries the things an image cannot and `extraPlugins` will
+                    not: a world tree, a directory of assets every server reads, a pool one
+                    group writes and another reads. `extraPlugins` is deliberately narrow -- one
+                    claim, read-only, copied into `plugins/` by the entrypoint -- and everything
+                    outside `plugins/` needed somewhere to go. See docs/cloudnet-parity.md for
+                    the network that measured the gap.
+
+                    It is still not a layered template system. There is no composition, no
+                    priority, no per-server rendering: a mount is one volume at one path, and
+                    what assembles the volume's contents is somebody else's job.
                   properties:
                     configMap:
                       description: ConfigMap source.
@@ -3125,6 +3720,33 @@ spec:
                       description: Name of the volume inside the pod.
                       minLength: 1
                       type: string
+                    persistentVolumeClaim:
+                      description: PersistentVolumeClaim source. See MountClaim.
+                      properties:
+                        claimName:
+                          description: ClaimName is a PersistentVolumeClaim in this
+                            object's own namespace.
+                          minLength: 1
+                          type: string
+                        writable:
+                          description: |-
+                            Writable mounts the claim read-write. It defaults to false, and the
+                            field is spelled this way round -- Writable rather than ReadOnly --
+                            so that the zero value is the safe one. An omitted field, a field
+                            somebody has not heard of, and a field lost in a hand-written manifest
+                            all land on read-only.
+
+                            One group writing a volume that others read is the case this exists
+                            for: a generator filling a pool of worlds that game servers consume.
+                            Nothing here coordinates that. Two groups that both write the same
+                            claim get exactly what two processes writing one filesystem get, and
+                            the operator has no way to know which of them meant to.
+
+                            It reaches the pod, so flipping it replaces the group's servers.
+                          type: boolean
+                      required:
+                      - claimName
+                      type: object
                     secret:
                       description: Secret source.
                       properties:
@@ -3187,13 +3809,37 @@ spec:
                             More info: https://kubernetes.io/docs/concepts/storage/volumes#secret
                           type: string
                       type: object
+                    subPath:
+                      description: |-
+                        SubPath mounts one file or one subdirectory of the source instead of
+                        the whole of it, so that MountPath can be a file.
+
+                        Without it, a mount whose path names a file gets a *directory* there --
+                        the source's keys as separate files inside it. A server looking for
+                        /data/bukkit.yml then finds a directory called bukkit.yml, and what it
+                        reports is a parse error rather than anything about a mount. Landing a
+                        single file beside the ones the server writes itself is the case this
+                        exists for; there is no other way to do it.
+
+                        **A ConfigMap or Secret mounted through subPath does not update.**
+                        Kubernetes refreshes a projected volume in place, and a subPath mount is
+                        a bind of one file out of it that the kubelet does not re-point. Editing
+                        the ConfigMap changes nothing in a running pod, and nothing reports
+                        that. Without subPath the file does update, eventually and without a
+                        restart -- which is a real difference and the reason this is a field
+                        somebody opts into rather than something inferred from the path looking
+                        like a file. Neither behaviour reaches the pod digest either way, so no
+                        edit to a ConfigMap's contents rolls anything.
+                      type: string
                   required:
                   - mountPath
                   - name
                   type: object
                   x-kubernetes-validations:
-                  - message: exactly one of configMap or secret must be set
-                    rule: has(self.configMap) != has(self.secret)
+                  - message: exactly one of configMap, secret or persistentVolumeClaim
+                      must be set
+                    rule: '[has(self.configMap), has(self.secret), has(self.persistentVolumeClaim)].exists_one(x,
+                      x)'
                 type: array
                 x-kubernetes-list-map-keys:
                 - name

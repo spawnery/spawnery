@@ -1,5 +1,17 @@
 # The Paper base image.
 #
+# **Deprecated as of 0.2.15, and still built and published.** The backend image
+# this project ships going forward is nix/purpur-image.nix: Purpur is a fork of
+# Paper, it runs the same agent, the same helper binaries and the same
+# entrypoint, and it is what the network this operator was built for actually
+# runs. See docs/upgrading.md for what an installation should do about it.
+#
+# Nothing about this file stops working, and nothing here is going to be
+# removed by surprise: every ServerGroup in every installation carries a
+# spec.image, so deleting this derivation would strand each of them on a tag
+# that no longer gets rebuilt. It goes when there is a release note saying it
+# is going, and not before.
+#
 # Everything the podspec prescribes has to be satisfied here, because the pod
 # spec is already written: /usr/local/bin/spawnery-slp, port 25565, working
 # directory /data, scratch /tmp, a numeric user, and nothing else writable.

@@ -14,6 +14,8 @@ This page is the index of everything under `docs/`.
 | [`persistent-storage.md`](persistent-storage.md) | How persistent worlds are stored, and why a claim outlives its server on purpose |
 | [`network-boundaries.md`](network-boundaries.md) | What the two `NetworkPolicy` objects buy, and what they do not. Read before treating them as protection |
 | [`plugins.md`](plugins.md) | Loading third-party plugins from a volume, without rebuilding an image — and what Longhorn's `ReadWriteMany` adds to the failure surface |
+| [`group-environment.md`](group-environment.md) | `spec.env` on a group: the reserved `SPAWNERY_` prefix, and why `JAVA_TOOL_OPTIONS` is the only way to reach the JVM |
+| [`mounts.md`](mounts.md) | `spec.mounts`: putting a ConfigMap, a Secret or a claim at a path in a group's pods, and the one claim rule that has no exceptions |
 
 ## Working on Spawnery
 
@@ -23,6 +25,7 @@ This page is the index of everything under `docs/`.
 | [`development.md`](development.md) | Building, testing, the images, publishing, and the hand-driven local `kind` flow |
 | [`../agent/api/README.md`](../agent/api/README.md) | The plugin API: what a Paper or Velocity plugin can ask the cloud, and the one rule that breaks a consumer |
 | [`history.md`](history.md) | How it was built, milestone by milestone, and what each one measured rather than assumed |
+| [`cloudnet-parity.md`](cloudnet-parity.md) | What a running CloudNET network needs that Spawnery does not have, measured against one — deleted when it is empty |
 | [`superpowers/specs/`](superpowers/specs/) | The design documents, one per milestone |
 | [`superpowers/plans/`](superpowers/plans/) | The implementation plans the designs became |
 

@@ -58,34 +58,110 @@ func checkExtraPlugins(
 			false
 	}
 
+	if problem, ok := checkClaimMountable(ctx, reader, namespace, ep.ClaimName); !ok {
+		return spawneryv1alpha1.ReasonPluginVolumeUnusable,
+			fmt.Sprintf("spec.extraPlugins names claim %q, which %s", ep.ClaimName, problem),
+			false
+	}
+	return "", "", true
+}
+
+// checkGroupVolumes is every storage question a group's spec asks, answered in
+// one call so that both controllers keep one branch rather than two identical
+// ones. spec.extraPlugins is asked first: it is the older field and the one
+// more installations set, and when a group has both wrong there is no reason
+// to prefer the other.
+//
+// The reasons stay distinct -- see ReasonMountVolumeUnusable -- so the caller
+// puts the answer on the object without having to know which field produced
+// it.
+func checkGroupVolumes(
+	ctx context.Context,
+	reader client.Reader,
+	namespace string,
+	ep *spawneryv1alpha1.ExtraPlugins,
+	mounts []spawneryv1alpha1.Mount,
+	allowed bool,
+) (string, string, bool) {
+	if reason, message, ok := checkExtraPlugins(ctx, reader, namespace, ep, allowed); !ok {
+		return reason, message, false
+	}
+	return checkMountClaims(ctx, reader, namespace, mounts, allowed)
+}
+
+// checkClaimMountable answers the one question both spec.extraPlugins and a
+// spec.mounts claim ask of a PersistentVolumeClaim: can every pod of a group
+// mount it. It returns a clause a caller puts after "claim %q, which ...", so
+// that each field names itself in its own message while the rule stays in one
+// place.
+//
+// Refused here rather than left to the scheduler. Kubernetes would leave every
+// pod of the group Pending on a claim that does not exist, and the answer
+// would be in a pod event rather than on the group somebody is looking at.
+func checkClaimMountable(
+	ctx context.Context,
+	reader client.Reader,
+	namespace string,
+	claimName string,
+) (string, bool) {
 	var pvc corev1.PersistentVolumeClaim
-	err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: ep.ClaimName}, &pvc)
+	err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: claimName}, &pvc)
 	switch {
 	case apierrors.IsNotFound(err):
-		// Refused here rather than left to the scheduler. Kubernetes would
-		// leave every pod of the group Pending on a claim that does not exist,
-		// and the answer would be in a pod event rather than on the group
-		// somebody is looking at.
-		return spawneryv1alpha1.ReasonPluginVolumeUnusable,
-			fmt.Sprintf("spec.extraPlugins names claim %q, which does not exist in this namespace",
-				ep.ClaimName),
-			false
+		return "does not exist in this namespace", false
 	case err != nil:
-		return spawneryv1alpha1.ReasonPluginVolumeUnusable,
-			fmt.Sprintf("could not read claim %q: %v", ep.ClaimName, err),
-			false
+		return fmt.Sprintf("could not be read: %v", err), false
 	}
 
 	// The whole list, not the first entry: a claim may carry several modes,
 	// and one that is both RWO and RWX is mountable by every node.
 	for _, m := range pvc.Spec.AccessModes {
 		if m == corev1.ReadWriteMany {
-			return "", "", true
+			return "", true
 		}
 	}
-	return spawneryv1alpha1.ReasonPluginVolumeUnusable,
-		fmt.Sprintf("spec.extraPlugins names claim %q, whose access modes are %v; "+
-			"every server of a group must mount it, which needs ReadWriteMany",
-			ep.ClaimName, pvc.Spec.AccessModes),
-		false
+	return fmt.Sprintf("has access modes %v; every pod of a group mounts it, "+
+		"which needs ReadWriteMany", pvc.Spec.AccessModes), false
+}
+
+// checkMountClaims decides whether the claims a group's spec.mounts names can
+// be served. ConfigMap and Secret mounts are not its business: they need no
+// storage class, no access mode and no flag, and a group made of nothing but
+// those never reaches a single API call here.
+//
+// One function for both group kinds, for the reason checkExtraPlugins gives.
+// It reports the first mount that fails rather than collecting every one: the
+// condition holds a sentence, and a person fixing three broken claims fixes
+// them one reconcile at a time either way.
+func checkMountClaims(
+	ctx context.Context,
+	reader client.Reader,
+	namespace string,
+	mounts []spawneryv1alpha1.Mount,
+	allowed bool,
+) (string, string, bool) {
+	for _, m := range mounts {
+		if m.PersistentVolumeClaim == nil {
+			continue
+		}
+		if !allowed {
+			// Before the claim is read, exactly as checkExtraPlugins does it,
+			// so an installation with the feature off touches no
+			// PersistentVolumeClaim at all -- and so somebody whose claim is
+			// perfectly good is sent to the operator's arguments rather than
+			// to their own storage.
+			return spawneryv1alpha1.ReasonMountVolumesDisabled,
+				fmt.Sprintf("mount %q names claim %q, and this operator was started without "+
+					"--allow-plugin-volumes so it mounts no claim",
+					m.Name, m.PersistentVolumeClaim.ClaimName),
+				false
+		}
+		if problem, ok := checkClaimMountable(ctx, reader, namespace, m.PersistentVolumeClaim.ClaimName); !ok {
+			return spawneryv1alpha1.ReasonMountVolumeUnusable,
+				fmt.Sprintf("mount %q names claim %q, which %s",
+					m.Name, m.PersistentVolumeClaim.ClaimName, problem),
+				false
+		}
+	}
+	return "", "", true
 }

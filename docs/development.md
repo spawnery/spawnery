@@ -33,6 +33,7 @@ and are therefore part of no other target, not even `make all`: `agent-deps`,
 | `make agent-test` | Both real images against the stub operator in `cmd/spawnery-stubop` |
 | `make paper-pin` | Computes the Paper pin; `paper-pin-check` fails if `nix/paper.nix` is behind |
 | `make image` | The Paper base image (`image-load`, `image-test` follow it) |
+| `make purpur-image` | The Purpur base image — the backend image going forward; `purpur-image-load`, `purpur-image-test` |
 | `make velocity-image` | The Velocity image, same three steps scoped to it alone |
 | `make operator-image` | The operator's own image, same three steps |
 | `make image-repro` | Builds each image twice and fails if the bytes differ |
@@ -76,14 +77,34 @@ container runtime and only works on `x86_64-linux`.
 ## The images
 
 `make image` builds the Paper base image, `make image-load` hands it to the
-local container runtime, and `make image-test` runs both the Paper and the
-Velocity images offline under the same constraints the podspec imposes —
-loading both first, so the target needs no separate `make velocity-image`
-step of its own. All three need Docker or Podman and only work on
-`x86_64-linux`. Pass `CONTAINER=podman` if `docker` is not your runtime.
-`make velocity-image`, `make velocity-image-load` and `make
-velocity-image-test` are the same three steps scoped to only the Velocity
-image, for when a change is known to touch nothing on the Paper side.
+local container runtime, and `make image-test` runs all three game images —
+Paper, Purpur and Velocity — offline under the same constraints the podspec
+imposes, loading each first so the target needs no separate build step of its
+own. All of them need Docker or Podman and only work on `x86_64-linux`. Pass
+`CONTAINER=podman` if `docker` is not your runtime. `make purpur-image` and
+`make velocity-image`, with their own `-load` and `-test` siblings, are the
+same three steps scoped to one image, for when a change is known to touch
+nothing on the others.
+
+**Purpur goes through `hack/image-test.sh` unchanged**, the same script the
+Paper image does. It asserts on Paper's behaviour — that Paper rewrote
+`/data/config/paper-global.yml`, that the agent plugin loaded, that nothing was
+downloaded at start — and Purpur is a Paper fork that does all of it. A second
+script would have been the same script with a different name; if the two ever
+diverge enough for that to stop being true, that run is what fails and says so.
+
+Purpur is the backend image going forward and the Paper image is deprecated.
+Both are built, tested and published; see [`upgrading.md`](upgrading.md) for
+what an installation does about it and `nix/paper-image.nix` for why nothing is
+being removed.
+
+`make agent-test` still drives the **Paper** image, and that is not an
+oversight. What it exercises is the agent — a real gRPC session against
+`cmd/spawnery-stubop`, TLS handshake and rotated CA bundle included — and the
+agent jar in the two images is the same file. `make image-test` is what covers
+the Purpur side of it: it boots that image and asserts the plugin loaded and
+its classes linked. Doubling an expensive harness to run identical bytes twice
+would buy nothing.
 
 ### Reproducibility
 
