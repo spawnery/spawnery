@@ -49,7 +49,7 @@ spec:
   networkRef:
     name: production
   type: Ephemeral
-  image: ghcr.io/spawnery/paper:26.2-0.2.1
+  image: ghcr.io/spawnery/purpur:26.2-0.2.15
   maxPlayers: 100
   drain:
     timeoutSeconds: 60
@@ -67,7 +67,7 @@ spec:
   networkRef:
     name: production
   replicas: 1
-  image: ghcr.io/spawnery/velocity:3.5.1-0.2.1
+  image: ghcr.io/spawnery/velocity:3.5.1-0.2.15
   expose:
     type: NodePort
     nodePort:

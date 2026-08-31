@@ -1,8 +1,13 @@
 # Bringing a CloudNET network across
 
-What a running CloudNET network needs from Spawnery that Spawnery does not
-have. It is a list of gaps, kept so that none of them is rediscovered one at a
-time during a migration, and it is deleted when it is empty.
+What a running CloudNET network needed from Spawnery that Spawnery did not
+have. It was a list of gaps, kept so that none of them was rediscovered one at
+a time during a migration.
+
+**All four are closed as of 0.2.15.** The file stays for now because what each
+gap cost and how each was measured is the answer to "why is it like this" for
+four API fields and an image — and because a second CloudNET network will put
+different weights on the same shapes. It goes when that stops being useful.
 
 ## Where the numbers come from
 
@@ -42,7 +47,7 @@ Spawnery needs is somewhere to put the result.
 | [Per-group process settings](#per-group-process-settings) | 6 of 14 tasks | **closed**, `spec.env` |
 | [A tree that is not `plugins/`](#a-tree-that-is-not-plugins) | every task | **closed**, `spec.mounts` |
 | [A volume shared between groups](#a-volume-shared-between-groups) | 6 tasks | **closed**, `spec.mounts` |
-| [Purpur, not Paper](#purpur-not-paper) | every backend | open |
+| [Purpur, not Paper](#purpur-not-paper) | every backend | **closed**, `ghcr.io/spawnery/purpur` |
 
 ### Per-group process settings
 
@@ -133,44 +138,51 @@ what that adds.
 
 ### Purpur, not Paper
 
+**Closed by an image.** `ghcr.io/spawnery/purpur` is published from 0.2.15, and
+`ghcr.io/spawnery/paper` is deprecated — still built, still tested, still
+published, and going nowhere until a release note says so. See
+[`upgrading.md`](upgrading.md#0215-purpur-is-the-backend-image-and-paper-is-deprecated).
+
 `Platform/Purpur` is 165 files, 159 of them under `libraries/`, around a
-`purpur.jar` descriptor: the network is Purpur, and Spawnery's backend image is
-Paper. The image is not just a server jar — it carries `spawnery-config`, the
-`spawnery-slp` binary the readiness probe execs, and the agent — so "point
-`spec.image` at Purpur" is the answer somebody will reach for and it does not
-work.
+`purpur.jar` descriptor. The image is not just a server jar — it carries
+`spawnery-config`, the `spawnery-slp` binary the readiness probe execs, and the
+agent — so "point `spec.image` at Purpur" was the answer somebody would reach
+for and it did not work.
 
-**Whether Purpur is still wanted after the move is the network's decision, not
-this file's.** What follows is what the work would be, measured on 2026-08-31
-so that the decision is the only thing left to make.
+It turned out to be a smaller derivation than it looked, and every step of that
+was measured on 2026-08-31 rather than assumed:
 
-It is a smaller derivation than it looks. Purpur ships the same paperclip
-bootstrap Paper does — `META-INF/license/paperclip-LICENSE.txt`, a
-`META-INF/download-context` in the identical format — so `nix/paper.nix`'s
-build-time patching applies unchanged. And Purpur 26.2 build 2628 asks for
-**exactly the Mojang jar `nix/paper.nix` already pins**: same URL, same object
-`823e2250d24b3ddac457a60c92a6a941943fcd6a`. That half is shared, not
-duplicated.
+- **Same paperclip.** Purpur's jar carries
+  `META-INF/license/paperclip-LICENSE.txt` and a `META-INF/download-context` in
+  Paper's format, so `nix/paper.nix`'s build-time patching applies unchanged.
+- **Same Mojang jar.** Purpur 26.2 build 2628 names exactly the object
+  `nix/paper.nix` already pins, `823e2250d24b3ddac457a60c92a6a941943fcd6a`, so
+  `nix/purpur.nix` takes it as an argument rather than pinning a second copy.
+  That is safe rather than convenient: paperclip verifies the cached original
+  against its own `download-context` before patching, so a pair that ever
+  drifts fails the build instead of patching against the wrong original — and
+  `hack/purpur-pin.sh` refuses before that, with both URLs in the message.
+- **Same Java runtime.** `nix/paper-jre.nix`'s module list is a `jdeps`
+  measurement, so it was re-derived over Purpur's own classpath — 109 jars
+  against Paper's 105, empty stderr — and came out as Paper's thirteen exactly.
+  `jdk.zipfs` is the fourteenth for the reason it always was.
+- **Same entrypoint.** `image/entrypoint.sh` now takes its jar from
+  `SPAWNERY_SERVER_JAR`, defaulting to what Paper always used. Two lines, and
+  the Paper image renders identically.
+- **Same test.** `hack/image-test.sh` runs against it unchanged and passes:
+  the server answered a list ping after 14s, nothing was downloaded at start,
+  the forwarding secret was read, the agent plugin loaded and its classes
+  linked, and it shut down cleanly on `SIGTERM`.
 
-```
-purpur 26.2 build 2628
-  sha256  75b9c49ffd09f26180fb4ab285d840da806f79b347f2fe2256ade2691da15492
-  md5     9298c8a949c7a1c6166e1de8e0f26427   (from api.purpurmc.org)
-```
+One difference is real and is not papered over: PaperMC's API publishes a
+SHA-256 for its launcher and Purpur's publishes an MD5, so
+`hack/purpur-pin.sh` verifies its first download against a weaker digest and
+computes the SHA-256 itself. What freezes the input either way is the hash in
+the nix file. `hack/purpur-pin.sh`'s own header carries what that bound is
+worth.
 
-One difference from Paper worth knowing before it is a surprise: PaperMC's API
-publishes a SHA-256 for the launcher and Purpur's publishes an MD5. Both come
-from the host that serves the artifact, so neither is what freezes the input —
-the hash checked into nix is — but a pin script for Purpur would verify its
-first download against a weaker digest than `hack/paper-pin.sh` does.
-
-What an added image touches, none of it hard and all of it permanent:
-`nix/purpur.nix` and `nix/purpur-image.nix`, one flake output, one line in
-`hack/publish.sh`'s ordered list, a `hack/purpur-pin.sh`, an image test, an
-entry in `hack/image-derivations-changed.sh`, and CI time on every run
-thereafter. Nothing in `internal/` changes: `spawnery-config --flavor paper` is
-already right for Purpur, which reads Paper's own configuration files, and
-`purpur.yml` is a [mount](mounts.md) like any other file.
+`purpur.yml` needs no rendering: it is a [mount](mounts.md) like any other
+file, which is what the gap above bought.
 
 ## What already lines up
 

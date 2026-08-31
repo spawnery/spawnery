@@ -4,7 +4,7 @@ on:
   push:
     tags: ["v*"]
   # A dispatch can only ever dry-run. It takes no input, and the DRY_RUN below
-  # is not conditional on one: publishing three images under this project's
+  # is not conditional on one: publishing this project's images under its
   # name is a decision a tag records, and a button that could take it by
   # accident is not the same decision. What a dispatch is for is the thing
   # design §5 said DRY_RUN was for and no mechanism actually offered --
@@ -285,11 +285,11 @@ jobs:
             -u "${{ github.actor }}" \
             --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
 
-      # One invocation per image, and not one invocation for all three.
+      # One invocation per image, and not one invocation for all four.
       #
-      # hack/publish.sh's own header says why: the three versions move
+      # hack/publish.sh's own header says why: the versions move
       # independently, so the ordinary case after a reconciler fix is that
-      # exactly one tag is new. Publishing all three refuses at the first image
+      # exactly one tag is new. Publishing them together refuses at the first image
       # whose tag is already there -- correctly -- and never reaches the one
       # that changed, which would make this workflow a release path that works
       # exactly once. The script's answer for a human is to name the image; a
@@ -313,7 +313,7 @@ jobs:
           fi
           published=0
           operator_published=false
-          for image in paper-image velocity-image operator-image; do
+          for image in paper-image purpur-image velocity-image operator-image; do
             status=0
             nix develop -c env DRY_RUN="$dry_run" WRITE_DIGEST=1 \
               ./hack/publish.sh "$image" || status=$?
@@ -374,10 +374,10 @@ jobs:
           if [ "$dry_run" = "0" ] && [ "$published" -eq 0 ] \
             && [ "${{ steps.chart_version.outputs.chart_changed }}" != "true" ]; then
             if [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ]; then
-              echo "::notice::attempt ${GITHUB_RUN_ATTEMPT}: all three images are already on the registry at the versions flake.nix names, which is what a re-run of a tag that already published looks like. Carrying on to the digest and Release steps, which is what a re-run is for."
+              echo "::notice::attempt ${GITHUB_RUN_ATTEMPT}: every image is already on the registry at the version flake.nix names, which is what a re-run of a tag that already published looks like. Carrying on to the digest and Release steps, which is what a re-run is for."
             else
               echo >&2
-              echo "all three images were already published at the versions flake.nix names," >&2
+              echo "every image was already published at the version flake.nix names," >&2
               echo "and charts/ has not moved since the previous tag either, so" >&2
               echo "${GITHUB_REF_NAME} releases nothing. Bump imageVersion or operatorVersion in" >&2
               echo "flake.nix, or change the chart, and tag again." >&2
@@ -421,7 +421,7 @@ jobs:
           echo "operator image digest: $digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      # The chart, beside the three images rather than in a second place. This
+      # The chart, beside the images rather than in a second place. This
       # is what makes `helm install oci://ghcr.io/spawnery/charts/spawnery`
       # possible; until this step existed, every README in this repository
       # told people to install from a checkout, and one of them claimed the

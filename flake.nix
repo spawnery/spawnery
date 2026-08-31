@@ -119,6 +119,16 @@
 
           velocity = pkgs.callPackage ./nix/velocity.nix { };
 
+          # Purpur, the fork this project's backend image is moving to. It
+          # takes Paper's Mojang jar rather than pinning a second copy: both
+          # are the same Minecraft version, there is only one such object, and
+          # paperclip verifies it against its own download-context before
+          # patching -- so a pair that ever drifts fails the build instead of
+          # patching against the wrong original. See nix/purpur.nix.
+          purpur = pkgs.callPackage ./nix/purpur.nix {
+            inherit (paper) mojangJar;
+          };
+
           # Extracted while paper-image was the only consumer; velocity-image
           # will be the second (see nix/oci-common.nix for why that timing
           # matters).
@@ -148,15 +158,24 @@
           # it stood and the operator moved.
           #
           # The sequence so far, and none of it is a miscount: 0.2.5, 0.2.7,
-          # 0.2.9, 0.2.10, 0.2.12, 0.2.13. 0.2.6, 0.2.8 and 0.2.11 built no
-          # agent, so
-          # ghcr.io/spawnery/paper:26.2-0.2.6, -0.2.8 and -0.2.11 simply do not
-          # exist, and each gap records a release that carried no jar.
+          # 0.2.9, 0.2.10, 0.2.12, 0.2.13, 0.2.15. 0.2.6, 0.2.8, 0.2.11 and
+          # 0.2.14 built no game image, so
+          # ghcr.io/spawnery/paper:26.2-0.2.6, -0.2.8, -0.2.11 and -0.2.14
+          # simply do not exist, and each gap records a release that carried no
+          # jar. 0.2.14's gap is the widest of them: its whole content was the
+          # chart's own publication route.
           #
-          # A Paper build that moves without this number moving would collide,
-          # which is what makes a bump obligatory when the images really do
-          # change rather than tidy.
-          imageVersion = "0.2.13";
+          # **0.2.15 moves this for the reason 0.2.10 did and one more.**
+          # image/entrypoint.sh changed again -- it now takes the server jar
+          # from SPAWNERY_SERVER_JAR -- so both game images differ. And a third
+          # game image joins them: ghcr.io/spawnery/purpur, which shares this
+          # number because it ships the same agent jar and is tagged the same
+          # way.
+          #
+          # A Paper or Purpur build that moves without this number moving would
+          # collide, which is what makes a bump obligatory when the images
+          # really do change rather than tidy.
+          imageVersion = "0.2.15";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -188,7 +207,14 @@
           # field. A comment does not reach the compiled binary, so the
           # operator image is byte-identical and hack/publish.sh correctly
           # refuses to overwrite a tag a cluster has already pulled.
-          operatorVersion = "0.2.12";
+          #
+          # 0.2.14 did not move it either -- it published the chart and nothing
+          # else. **0.2.15 does**, and it is the first release since 0.2.9 to
+          # move all three numbers at once: two new CRD fields the reconcilers
+          # actually read (spec.env, and a claim source on spec.mounts), an
+          # entrypoint that takes its jar from a variable, and a third game
+          # image.
+          operatorVersion = "0.2.15";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
@@ -269,6 +295,10 @@
           # Architecture-independent (it is jars), so this stays available on
           # every system.
           paper-repo = paper.repo;
+          # Exposed for the same reason paper-repo is: nix/purpur-jre.nix's
+          # module list is a jdeps measurement over exactly these jars, and a
+          # Purpur bump has to be able to repeat it.
+          purpur-repo = purpur.repo;
           # The paperclip launcher, exposed for the same reason velocity-jar
           # is: it is what a human runs by hand to measure something out of
           # the pinned build. The command that uses it is recorded above
@@ -290,6 +320,15 @@
           # unaffected elsewhere.
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
             inherit paper spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
+          };
+
+          # The backend image this project is moving to. It shares
+          # image/entrypoint.sh, the agent, both helper binaries and paper-jre
+          # with the image above -- the module list was re-measured over
+          # Purpur's own classpath and came out identical, see
+          # nix/purpur-image.nix -- so what actually differs is the jar.
+          purpur-image = pkgs.callPackage ./nix/purpur-image.nix {
+            inherit purpur spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
           };
 
           # No spawnery-slp: a proxy's readiness is the agent's ready port,

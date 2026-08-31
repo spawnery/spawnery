@@ -16,6 +16,19 @@ set -eu
 
 PAPER_HOME="${PAPER_HOME:-/opt/paper}"
 
+# The server jar inside PAPER_HOME. It is a variable because this one script
+# serves two images: the Paper image, where the default is exactly what it has
+# always been, and the Purpur image, which sets it. Forking the script instead
+# would have meant maintaining two copies of the plugin copying, the cgroup
+# reading and the flag list below, and every one of the tests in
+# image/entrypoint_test.go twice.
+#
+# SPAWNERY_-prefixed on purpose: that prefix is reserved by
+# api/v1alpha1.ReservedEnvPrefix, so a group's spec.env cannot set it and
+# nobody can point a running server at a jar of their choosing through a field
+# meant for game settings.
+SERVER_JAR="${SPAWNERY_SERVER_JAR:-$PAPER_HOME/paper.jar}"
+
 # Mojang's EULA. Running this image is accepting it, and the README says so
 # rather than leaving it buried here.
 printf 'eula=true\n' >eula.txt
@@ -184,4 +197,4 @@ exec java \
 	-XX:G1RSetUpdatingPauseTimePercent=5 \
 	-XX:InitiatingHeapOccupancyPercent=15 \
 	-DbundlerRepoDir="$PAPER_HOME/repo" \
-	-jar "$PAPER_HOME/paper.jar" --nogui
+	-jar "$SERVER_JAR" --nogui
