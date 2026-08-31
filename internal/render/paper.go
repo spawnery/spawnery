@@ -26,7 +26,20 @@ import (
 )
 
 // PaperFiles are the files the Paper flavour writes, relative to /data.
-var PaperFiles = []string{"server.properties", "config/paper-global.yml"}
+//
+// config/paper-world-defaults.yml is written only when an overlay names it,
+// which is why this list is what the flavour *may* write rather than what it
+// always does. Nothing in that file is operationally critical -- unlike
+// paper-global.yml, which carries the Velocity block a join depends on -- so
+// there is nothing for this renderer to assert into it, and a file written
+// empty on every start would overwrite whatever the server had filled in for
+// itself. On an ephemeral group that costs nothing; on a persistent one it
+// would be a fresh loss every restart.
+var PaperFiles = []string{
+	"server.properties",
+	"config/paper-global.yml",
+	"config/paper-world-defaults.yml",
+}
 
 // paperOverlayKeys are the ConfigMap keys an overlay may set. They are not
 // PaperFiles: a Kubernetes ConfigMap key cannot contain '/', so
@@ -34,7 +47,11 @@ var PaperFiles = []string{"server.properties", "config/paper-global.yml"}
 // the overlay names the file "paper-global.yml", the same bare name Paper
 // reads it by below, and checkOverlayFiles must be told that, not the
 // /data-relative write path.
-var paperOverlayKeys = []string{"server.properties", "paper-global.yml"}
+var paperOverlayKeys = []string{
+	"server.properties",
+	"paper-global.yml",
+	"paper-world-defaults.yml",
+}
 
 // Paper renders the two files a Spawnery-managed Paper server reads.
 //
@@ -115,10 +132,73 @@ func Paper(v Values, secret string, overlay map[string]string) (map[string][]byt
 		return nil, err
 	}
 
-	return map[string][]byte{
+	files := map[string][]byte{
 		"server.properties":       []byte(writeProperties(props)),
 		"config/paper-global.yml": []byte(global),
-	}, nil
+	}
+
+	// Only when the overlay names it. See PaperFiles for why an unconditional
+	// write would be a loss rather than a no-op, and paperWorldDefaults for
+	// what the rendered document is.
+	if raw, ok := overlay["paper-world-defaults.yml"]; ok {
+		doc, err := paperWorldDefaults(raw)
+		if err != nil {
+			return nil, err
+		}
+		files["config/paper-world-defaults.yml"] = []byte(doc)
+	}
+
+	return files, nil
+}
+
+// paperWorldDefaults validates an overlay for paper-world-defaults.yml and
+// returns it as the document to write.
+//
+// It is the overlay and nothing else: this renderer has no base layer to
+// merge under it and no critical keys to assert over it, because nothing the
+// operator relies on lives in this file. What it adds over copying the string
+// through is the declared-key check -- the same one paper-global.yml has had
+// since 2026-08-24, and for the same reason, which is that Paper keeps its own
+// default for a key it does not read and writes the stray key back out, so the
+// file on disk goes on looking like the override took.
+//
+// The document is re-marshalled rather than passed through, so that what
+// reaches the server is what this package parsed. An overlay that parses to
+// something other than a mapping -- a list, a bare scalar, "null" -- is
+// refused here rather than written out for Paper to reject in its own words.
+func paperWorldDefaults(overlay string) (string, error) {
+	if strings.TrimSpace(overlay) == "" {
+		// An empty overlay is a written empty file, not an error: somebody who
+		// sets the key to "" has said something, and the something they said
+		// is "leave this file alone", which an empty document is.
+		return "", nil
+	}
+
+	// Declared nil rather than initialised, and that is the whole mechanism
+	// for catching an overlay of "null". Unmarshalling YAML null into an
+	// already-allocated map leaves the map exactly as it was, so a `doc :=
+	// map[string]any{}` here would take "null" for an empty override and write
+	// a file. Left nil, null stays nil and is caught below. (paperGlobal above
+	// has the initialised form and a nil check that therefore cannot fire --
+	// harmless there, because an empty override of that file is a legitimate
+	// thing to mean and renders the defaults plus the Velocity block.)
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(overlay), &doc); err != nil {
+		return "", fmt.Errorf("paper-world-defaults.yml: overlay does not parse as YAML: %w", err)
+	}
+	if doc == nil {
+		return "", fmt.Errorf("paper-world-defaults.yml: overlay parses to nothing; " +
+			"write the keys you mean, or drop the key to leave the file to the server")
+	}
+	if err := checkDeclaredKeys(paperWorldDefaultsDeclared, doc, "paper-world-defaults.yml"); err != nil {
+		return "", err
+	}
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return "", fmt.Errorf("paper-world-defaults.yml: %w", err)
+	}
+	return string(out), nil
 }
 
 // checkOverlayFiles refuses an overlay that names a file the flavour does not

@@ -172,10 +172,16 @@
           # number because it ships the same agent jar and is tagged the same
           # way.
           #
+          # 0.2.16 moves it for a reason worth naming, because it is not the
+          # obvious one: nothing under agent/ or image/ changed. internal/render
+          # did, and that package is compiled into spawnery-config, which ships
+          # in all three game images. A change to what the renderer accepts is
+          # a change to those images even when the agent is byte-identical.
+          #
           # A Paper or Purpur build that moves without this number moving would
           # collide, which is what makes a bump obligatory when the images
           # really do change rather than tidy.
-          imageVersion = "0.2.15";
+          imageVersion = "0.2.16";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -214,7 +220,12 @@
           # actually read (spec.env, and a claim source on spec.mounts), an
           # entrypoint that takes its jar from a variable, and a third game
           # image.
-          operatorVersion = "0.2.15";
+          #
+          # 0.2.16 moves all three again: paper-world-defaults.yml became a
+          # configOverlay key (internal/render, so the game images) and a mount
+          # under /data/config is now refused (internal/podspec, so the
+          # operator).
+          operatorVersion = "0.2.16";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

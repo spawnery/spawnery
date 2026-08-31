@@ -25,7 +25,6 @@ This page is the index of everything under `docs/`.
 | [`development.md`](development.md) | Building, testing, the images, publishing, and the hand-driven local `kind` flow |
 | [`../agent/api/README.md`](../agent/api/README.md) | The plugin API: what a Paper or Velocity plugin can ask the cloud, and the one rule that breaks a consumer |
 | [`history.md`](history.md) | How it was built, milestone by milestone, and what each one measured rather than assumed |
-| [`cloudnet-parity.md`](cloudnet-parity.md) | What a running CloudNET network needs that Spawnery does not have, measured against one — deleted when it is empty |
 | [`superpowers/specs/`](superpowers/specs/) | The design documents, one per milestone |
 | [`superpowers/plans/`](superpowers/plans/) | The implementation plans the designs became |
 

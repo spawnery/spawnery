@@ -39,6 +39,9 @@ const defaultsDir = "defaults"
 //go:embed defaults/paper-global.default.yml
 var paperDefaultConfig []byte
 
+//go:embed defaults/paper-world-defaults.default.yml
+var paperWorldDefaultsDefaultConfig []byte
+
 //go:embed defaults/velocity.default.toml
 var velocityDefaultConfig []byte
 
@@ -86,6 +89,26 @@ var paperFreeForm = []freeFormPath{
 	{path: "packet-limiter.overrides"},
 }
 
+// paper-world-defaults.yml declares none, and that is a limitation rather than
+// a finding.
+//
+// It has at least two levels whose child names are the user's: tick-rates.
+// behavior and tick-rates.sensor are keyed by entity type and then by goal or
+// sensor name, and the default file carries one example of each (villager.
+// validatenearbypoi, villager.secondarypoisensor). Declaring them would need a
+// free-form level whose *shape* is itself free-form, and buildKeyNode does not
+// build that: a nested free-form path disappears into its parent's shape, and
+// mustKeyTree's own post-check then panics because nodeAt cannot find it.
+//
+// So an override under tick-rates.behavior for any entity but villager is
+// refused today, and the refusal names the key. That is the same trade
+// checkDeclaredKeys documents everywhere else -- a legitimate override refused
+// loudly, rather than a stray key accepted silently -- and it is written down
+// here so the next person meets a sentence instead of a puzzle. Measured
+// against the network this file was added for: neither of its two overlays
+// touches a free-form level at all.
+var paperWorldDefaultsFreeForm []freeFormPath
+
 var velocityFreeForm = []freeFormPath{
 	// Keyed by server name. try is Velocity's own reserved key in there, and
 	// the fixture's lobby/factions/minigames are its three example servers.
@@ -98,7 +121,15 @@ var velocityFreeForm = []freeFormPath{
 // broken build rather than a runtime error: these are checked-in files this
 // repository measured itself, not input.
 var (
-	paperDeclared    = mustKeyTree(paperDefaultConfig, unmarshalYAML, paperFreeForm, "paper-global.yml")
+	paperDeclared = mustKeyTree(paperDefaultConfig, unmarshalYAML, paperFreeForm, "paper-global.yml")
+	// Purpur's copy of this file is byte-identical to Paper's -- measured on
+	// 2026-08-31 by booting both pinned jars against an empty data directory
+	// and diffing what each wrote. One tree therefore serves both backend
+	// images, and a fork that starts adding its own keys here shows up as a
+	// refused override rather than as a silently ignored one.
+	paperWorldDefaultsDeclared = mustKeyTree(
+		paperWorldDefaultsDefaultConfig, unmarshalYAML, paperWorldDefaultsFreeForm,
+		"paper-world-defaults.yml")
 	velocityDeclared = mustKeyTree(velocityDefaultConfig, unmarshalTOML, velocityFreeForm, "velocity.toml")
 	// server.properties is flat, so its tree is one level deep and needs no
 	// free-form paths: every key in it is Minecraft's own, and there is no
