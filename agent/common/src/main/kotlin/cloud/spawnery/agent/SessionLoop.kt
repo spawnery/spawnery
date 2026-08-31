@@ -504,7 +504,30 @@ class SessionLoop<Req, Resp>(
             }
 
             override fun onError(t: Throwable) {
-                log("the operator stream failed", t)
+                // A renewal ends this stream, every time and by design: the
+                // operator cancels the displaced stream's context at the
+                // handler entry of its replacement, and the cancelled handler
+                // answers Unavailable. See [streamEnded], which skips the
+                // reconnect on exactly this.
+                //
+                // So the throwable here is the operator doing its job, and
+                // logging it as a failure wrote a stack trace per server per
+                // renewal into a healthy fleet's logs -- roughly one every
+                // eight minutes, on every pod, saying "the operator stream
+                // failed" about a handover that worked. Anything that reads a
+                // server log for real trouble had to learn to skip them, which
+                // is the habit that hides the next real one.
+                //
+                // [Session.replacementOpened] is set before the replacement's
+                // stream exists, precisely so that this moment can be told
+                // apart. A stream nothing replaced still carries its cause:
+                // that one is the agent's to mourn and the throwable is the
+                // only clue anybody gets.
+                if (session.hasReplacement()) {
+                    log("the operator retired this stream for a renewal", null)
+                } else {
+                    log("the operator stream failed", t)
+                }
                 streamEnded(session)
             }
 
