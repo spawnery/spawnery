@@ -925,6 +925,59 @@ func TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease(t *testing.T) {
 	}
 }
 
+// TestTheInstallInstructionsNameTheChartVersion holds the two READMEs to
+// charts/spawnery/Chart.yaml.
+//
+// Since v0.2.14 the chart is published to oci://ghcr.io/spawnery/charts, and
+// an OCI install needs --version: unlike a path to a checkout, the reference
+// alone does not say which chart. So both READMEs now carry a version number
+// in a copy-pasteable command, and a number in prose is exactly the thing that
+// goes stale silently. It is the same failure the sibling test above exists
+// for -- a claim nobody built -- one step further out: an install line naming
+// a version the registry has never heard of fails at the reader's terminal,
+// with nothing in this repository having gone red first.
+//
+// Read as text, like its neighbours, and deliberately not by rendering the
+// chart: what is being checked is what a person copies out of a document.
+func TestTheInstallInstructionsNameTheChartVersion(t *testing.T) {
+	chart, err := os.ReadFile(testenv.RepoPath(t, "charts/spawnery/Chart.yaml"))
+	if err != nil {
+		t.Fatalf("read Chart.yaml: %v", err)
+	}
+	versionRe := regexp.MustCompile(`(?m)^version:\s*"?([^"\s]+)"?\s*$`)
+	m := versionRe.FindSubmatch(chart)
+	if m == nil {
+		t.Fatal("no version line in charts/spawnery/Chart.yaml; this test reads it " +
+			"as text and cannot check what it cannot find")
+	}
+	want := string(m[1])
+
+	// Every --version in either README, not just the first: the chart README
+	// carries an OCI install and a from-a-checkout one, and a second install
+	// line added later must not be able to drift unnoticed behind the first.
+	flagRe := regexp.MustCompile(`--version\s+(\S+)`)
+	for _, doc := range []string{"README.md", "charts/spawnery/README.md"} {
+		body, err := os.ReadFile(testenv.RepoPath(t, doc))
+		if err != nil {
+			t.Fatalf("read %s: %v", doc, err)
+		}
+		found := flagRe.FindAllSubmatch(body, -1)
+		if len(found) == 0 {
+			t.Errorf("%s names no --version. The chart installs from an OCI reference, "+
+				"which does not carry a version of its own, so an install line without "+
+				"one resolves to whatever is newest rather than to this release", doc)
+			continue
+		}
+		for _, f := range found {
+			if got := string(f[1]); got != want {
+				t.Errorf("%s says --version %s, Chart.yaml says version: %s. The install "+
+					"line is what a reader copies, and the registry has no chart at %s",
+					doc, got, want, got)
+			}
+		}
+	}
+}
+
 // TestLeaderElectionPermissionIsGranted is the regression test for a real gap:
 // leader election is on by default and locks on a Lease, but no kubebuilder
 // marker declared that permission, so the generated role never granted it and

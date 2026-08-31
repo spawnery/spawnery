@@ -73,9 +73,13 @@ server before it stops rather than disconnecting them.
 ## Status
 
 Running, and honest about where it stops. The operator, both game images and
-the Helm chart are published; a licensed Minecraft client has joined through
-the proxy, been moved onto a fallback while a server was taken away, and
-survived a rolling update of the proxy fleet. The whole system installs and
+the Helm chart are published to `ghcr.io/spawnery`, the chart as an OCI
+artefact since v0.2.14 — this sentence had claimed it since 2026-08-27 and
+through the eight releases from `v0.2.6` to `v0.2.13`, none of which published
+a chart, while the install instructions below said "from a checkout" the whole
+time. A licensed Minecraft client has joined through the proxy, been moved
+onto a fallback while a server was taken away, and survived a rolling update
+of the proxy fleet. The whole system installs and
 runs on a three-node RKE2 cluster with Cilium, which is where the
 `NetworkPolicy` objects were enforced for the first time.
 
@@ -92,9 +96,19 @@ milestone and with the measurement each claim rests on, is
 ## Install
 
 ```bash
-helm install spawnery charts/spawnery \
+helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
+  --version 0.2.14 \
   --namespace spawnery-system --create-namespace
 ```
+
+No checkout and no `helm repo add`: the chart is an OCI artefact beside the
+three images. `--version` takes the chart's own number, which is not the
+release tag and is not meant to be — `charts/spawnery/Chart.yaml` moves when
+`charts/` does, which is neither every release nor only the ones that move the
+operator. Every GitHub Release names the version to install in its body.
+
+From a checkout — which is what the end-to-end run and every local test use —
+it is `helm install spawnery charts/spawnery` with the same flags.
 
 `--create-namespace` is not optional — the chart templates no `Namespace` of
 its own on purpose. There is also **one manual step per game namespace** the
