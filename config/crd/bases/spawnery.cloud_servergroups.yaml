@@ -355,8 +355,8 @@ spec:
                     not: a world tree, a directory of assets every server reads, a pool one
                     group writes and another reads. `extraPlugins` is deliberately narrow -- one
                     claim, read-only, copied into `plugins/` by the entrypoint -- and everything
-                    outside `plugins/` needed somewhere to go. See docs/cloudnet-parity.md for
-                    the network that measured the gap.
+                    outside `plugins/` needed somewhere to go. docs/mounts.md carries what each
+                    of those routes is and the one that is refused.
 
                     It is still not a layered template system. There is no composition, no
                     priority, no per-server rendering: a mount is one volume at one path, and
