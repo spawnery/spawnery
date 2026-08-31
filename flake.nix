@@ -181,7 +181,13 @@
           # A Paper or Purpur build that moves without this number moving would
           # collide, which is what makes a bump obligatory when the images
           # really do change rather than tidy.
-          imageVersion = "0.2.16";
+          #
+          # 0.2.17 is both halves of that at once. nix/paper-jre.nix gains
+          # java.net.http, so the Paper and Purpur images run a different
+          # runtime than 0.2.16 did -- and agent/ changed too: a renewal is no
+          # longer reported as a stream failure. Either alone would oblige this
+          # number; the operator is untouched, so operatorVersion below is not.
+          imageVersion = "0.2.17";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
