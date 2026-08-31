@@ -135,14 +135,42 @@ what that adds.
 
 `Platform/Purpur` is 165 files, 159 of them under `libraries/`, around a
 `purpur.jar` descriptor: the network is Purpur, and Spawnery's backend image is
-Paper. The image is not just a server
-jar: it carries `spawnery-config`, the `spawnery-slp` binary the readiness
-probe execs, and the agent. So this is a Purpur variant of the image rather
-than a `spec.image` override — `nix/paper.nix` is where it would fork.
+Paper. The image is not just a server jar — it carries `spawnery-config`, the
+`spawnery-slp` binary the readiness probe execs, and the agent — so "point
+`spec.image` at Purpur" is the answer somebody will reach for and it does not
+work.
 
-Whether Purpur is still wanted after the move is a question for the network,
-not for this file. It is listed because "point `spec.image` at Purpur" is the
-answer somebody will reach for, and it does not work.
+**Whether Purpur is still wanted after the move is the network's decision, not
+this file's.** What follows is what the work would be, measured on 2026-08-31
+so that the decision is the only thing left to make.
+
+It is a smaller derivation than it looks. Purpur ships the same paperclip
+bootstrap Paper does — `META-INF/license/paperclip-LICENSE.txt`, a
+`META-INF/download-context` in the identical format — so `nix/paper.nix`'s
+build-time patching applies unchanged. And Purpur 26.2 build 2628 asks for
+**exactly the Mojang jar `nix/paper.nix` already pins**: same URL, same object
+`823e2250d24b3ddac457a60c92a6a941943fcd6a`. That half is shared, not
+duplicated.
+
+```
+purpur 26.2 build 2628
+  sha256  75b9c49ffd09f26180fb4ab285d840da806f79b347f2fe2256ade2691da15492
+  md5     9298c8a949c7a1c6166e1de8e0f26427   (from api.purpurmc.org)
+```
+
+One difference from Paper worth knowing before it is a surprise: PaperMC's API
+publishes a SHA-256 for the launcher and Purpur's publishes an MD5. Both come
+from the host that serves the artifact, so neither is what freezes the input —
+the hash checked into nix is — but a pin script for Purpur would verify its
+first download against a weaker digest than `hack/paper-pin.sh` does.
+
+What an added image touches, none of it hard and all of it permanent:
+`nix/purpur.nix` and `nix/purpur-image.nix`, one flake output, one line in
+`hack/publish.sh`'s ordered list, a `hack/purpur-pin.sh`, an image test, an
+entry in `hack/image-derivations-changed.sh`, and CI time on every run
+thereafter. Nothing in `internal/` changes: `spawnery-config --flavor paper` is
+already right for Purpur, which reads Paper's own configuration files, and
+`purpur.yml` is a [mount](mounts.md) like any other file.
 
 ## What already lines up
 
