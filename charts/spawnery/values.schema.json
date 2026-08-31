@@ -132,7 +132,7 @@
         },
         "allowPluginVolumes": {
           "type": "boolean",
-          "description": "A bool, for the reason leaderElect is one. Lets a group name a spec.extraPlugins claim; see docs/plugins.md. Not a security control -- a PersistentVolumeClaim is in the same trust domain as the group naming it."
+          "description": "A bool, for the reason leaderElect is one. Lets a group mount a PersistentVolumeClaim, through spec.extraPlugins (docs/plugins.md) or a spec.mounts entry that names one (docs/mounts.md). Not a security control -- a PersistentVolumeClaim is in the same trust domain as the group naming it."
         }
       }
     },

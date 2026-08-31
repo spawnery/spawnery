@@ -75,13 +75,20 @@ operator:
   # The production value. hack/e2e.sh overrides it for its own run.
   startupDeadline: 5m
   leaderElect: true
-  # Lets a group name a spec.extraPlugins claim, whose contents are copied into
-  # every server's plugins directory on start. See docs/plugins.md.
+  # Lets a group mount a PersistentVolumeClaim. Two fields need it: a
+  # spec.extraPlugins claim, whose contents are copied into every server's
+  # plugins directory on start (docs/plugins.md), and a spec.mounts entry that
+  # names a claim rather than a ConfigMap or a Secret (docs/mounts.md).
+  #
+  # One switch for both, because what it turns off is the same sentence for
+  # each: content this installation did not ship reaches a game server from a
+  # volume. ConfigMap and Secret mounts are not gated -- they carry
+  # configuration an administrator wrote, not a filesystem somebody filled.
   #
   # Off by default, and NOT as a security control: a PersistentVolumeClaim is a
   # namespaced object in the same trust domain as the group naming it, so
   # anybody who can write one can write the other. What this buys is an
-  # operator being able to say "this installation runs no third-party plugins"
+  # operator being able to say "this installation runs nothing off a volume"
   # and have that be a fact rather than a convention.
   allowPluginVolumes: false
 

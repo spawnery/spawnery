@@ -339,8 +339,19 @@ spec:
                 description: Mounts are extra ConfigMap and Secret mounts.
                 items:
                   description: |-
-                    Mount is a single file mount into a managed pod. V1 supports ConfigMaps and
-                    Secrets only; the layered template system is a later project.
+                    Mount is a single file mount into a managed pod: a ConfigMap, a Secret, or
+                    a PersistentVolumeClaim.
+
+                    The claim is what carries the things an image cannot and `extraPlugins` will
+                    not: a world tree, a directory of assets every server reads, a pool one
+                    group writes and another reads. `extraPlugins` is deliberately narrow -- one
+                    claim, read-only, copied into `plugins/` by the entrypoint -- and everything
+                    outside `plugins/` needed somewhere to go. See docs/cloudnet-parity.md for
+                    the network that measured the gap.
+
+                    It is still not a layered template system. There is no composition, no
+                    priority, no per-server rendering: a mount is one volume at one path, and
+                    what assembles the volume's contents is somebody else's job.
                   properties:
                     configMap:
                       description: ConfigMap source.
@@ -417,6 +428,33 @@ spec:
                       description: Name of the volume inside the pod.
                       minLength: 1
                       type: string
+                    persistentVolumeClaim:
+                      description: PersistentVolumeClaim source. See MountClaim.
+                      properties:
+                        claimName:
+                          description: ClaimName is a PersistentVolumeClaim in this
+                            object's own namespace.
+                          minLength: 1
+                          type: string
+                        writable:
+                          description: |-
+                            Writable mounts the claim read-write. It defaults to false, and the
+                            field is spelled this way round -- Writable rather than ReadOnly --
+                            so that the zero value is the safe one. An omitted field, a field
+                            somebody has not heard of, and a field lost in a hand-written manifest
+                            all land on read-only.
+
+                            One group writing a volume that others read is the case this exists
+                            for: a generator filling a pool of worlds that game servers consume.
+                            Nothing here coordinates that. Two groups that both write the same
+                            claim get exactly what two processes writing one filesystem get, and
+                            the operator has no way to know which of them meant to.
+
+                            It reaches the pod, so flipping it replaces the group's servers.
+                          type: boolean
+                      required:
+                      - claimName
+                      type: object
                     secret:
                       description: Secret source.
                       properties:
@@ -479,13 +517,37 @@ spec:
                             More info: https://kubernetes.io/docs/concepts/storage/volumes#secret
                           type: string
                       type: object
+                    subPath:
+                      description: |-
+                        SubPath mounts one file or one subdirectory of the source instead of
+                        the whole of it, so that MountPath can be a file.
+
+                        Without it, a mount whose path names a file gets a *directory* there --
+                        the source's keys as separate files inside it. A server looking for
+                        /data/bukkit.yml then finds a directory called bukkit.yml, and what it
+                        reports is a parse error rather than anything about a mount. Landing a
+                        single file beside the ones the server writes itself is the case this
+                        exists for; there is no other way to do it.
+
+                        **A ConfigMap or Secret mounted through subPath does not update.**
+                        Kubernetes refreshes a projected volume in place, and a subPath mount is
+                        a bind of one file out of it that the kubelet does not re-point. Editing
+                        the ConfigMap changes nothing in a running pod, and nothing reports
+                        that. Without subPath the file does update, eventually and without a
+                        restart -- which is a real difference and the reason this is a field
+                        somebody opts into rather than something inferred from the path looking
+                        like a file. Neither behaviour reaches the pod digest either way, so no
+                        edit to a ConfigMap's contents rolls anything.
+                      type: string
                   required:
                   - mountPath
                   - name
                   type: object
                   x-kubernetes-validations:
-                  - message: exactly one of configMap or secret must be set
-                    rule: has(self.configMap) != has(self.secret)
+                  - message: exactly one of configMap, secret or persistentVolumeClaim
+                      must be set
+                    rule: '[has(self.configMap), has(self.secret), has(self.persistentVolumeClaim)].exists_one(x,
+                      x)'
                 type: array
                 x-kubernetes-list-map-keys:
                 - name

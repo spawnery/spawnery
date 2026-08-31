@@ -280,6 +280,19 @@ type ProxyGroupSpec struct {
 	// +optional
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 
+	// Mounts are extra ConfigMap, Secret and PersistentVolumeClaim mounts.
+	//
+	// It is ServerGroupSpec.Mounts for a proxy and it arrived later, which is
+	// worth knowing when reading a manifest written against an older chart: a
+	// ProxyGroup simply had no way to be handed a file until then, and the
+	// asymmetry was never a decision anybody took. What forced it was one
+	// network's own shape -- its proxies read the same shared asset directory
+	// its backends do, out of a template that targets both.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	Mounts []Mount `json:"mounts,omitempty"`
+
 	// Env are extra environment variables for the proxy container, appended
 	// to the ones the operator sets. A name may not begin with
 	// ReservedEnvPrefix.

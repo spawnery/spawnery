@@ -166,8 +166,9 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// Read before the switch, like networkUsable above it, so the chain below
 	// stays a list of plain conditions rather than a call with side effects
 	// hidden in a case expression.
-	pluginReason, pluginMessage, pluginsOK := checkExtraPlugins(
-		ctx, r.ClaimReader, group.Namespace, group.Spec.ExtraPlugins, r.AllowPluginVolumes)
+	volumeReason, volumeMessage, volumesOK := checkGroupVolumes(
+		ctx, r.ClaimReader, group.Namespace,
+		group.Spec.ExtraPlugins, group.Spec.Mounts, r.AllowPluginVolumes)
 
 	requeue := ResyncInterval
 	switch {
@@ -192,25 +193,25 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		})
 		requeue = networkRetryInterval
 	// After the two network cases on purpose. A group whose Network is missing
-	// has a bigger problem than its plugin volume, and reporting the smaller
-	// one first would send somebody to their storage while the real cause sits
-	// one condition away.
-	case !pluginsOK:
-		logger.Info("plugin volume unusable, no servers are created for this group",
-			"group", group.Name, "reason", pluginReason)
+	// has a bigger problem than a volume, and reporting the smaller one first
+	// would send somebody to their storage while the real cause sits one
+	// condition away.
+	case !volumesOK:
+		logger.Info("volume unusable, no servers are created for this group",
+			"group", group.Name, "reason", volumeReason)
 		// Announced on the transition only, following the rule
 		// network_controller.go states: this branch runs on every pass for as
 		// long as the claim is wrong, and an event per resync forever is not a
 		// report, it is noise that buries the one that mattered.
-		if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, pluginReason) {
-			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, pluginReason, actionSyncStatus,
-				"%s", pluginMessage)
+		if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, volumeReason) {
+			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, volumeReason, actionSyncStatus,
+				"%s", volumeMessage)
 		}
 		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 			Type:    spawneryv1alpha1.ConditionAccepted,
 			Status:  metav1.ConditionFalse,
-			Reason:  pluginReason,
-			Message: pluginMessage,
+			Reason:  volumeReason,
+			Message: volumeMessage,
 		})
 		requeue = networkRetryInterval
 	default:
@@ -406,12 +407,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// group's servers are condemned on the way through either way, which is
 	// what known-issues already describes: a departing node takes a server
 	// regardless of what kind of server it is.
-	// And not only networkUsable. A group whose plugin claim cannot be mounted
-	// must not create servers either: every pod would sit Pending on a volume
-	// that will not attach, and the group would look like a scheduling problem
-	// rather than a spec one. Setting the condition without this would
-	// decorate the group and change nothing it does.
-	mayResize := networkUsable && pluginsOK
+	// And not only networkUsable. A group whose claim -- spec.extraPlugins or
+	// one named by spec.mounts -- cannot be mounted must not create servers
+	// either: every pod would sit Pending on a volume that will not attach,
+	// and the group would look like a scheduling problem rather than a spec
+	// one. Setting the condition without this would decorate the group and
+	// change nothing it does.
+	mayResize := networkUsable && volumesOK
 
 	// The NodeDraining condition, with what stops this group rebuilding what
 	// it is about to condemn.

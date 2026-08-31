@@ -40,8 +40,8 @@ Spawnery needs is somewhere to put the result.
 | | what it blocks | state |
 |---|---|---|
 | [Per-group process settings](#per-group-process-settings) | 6 of 14 tasks | **closed**, `spec.env` |
-| [A tree that is not `plugins/`](#a-tree-that-is-not-plugins) | every task | open |
-| [A volume shared between groups](#a-volume-shared-between-groups) | 6 tasks | open |
+| [A tree that is not `plugins/`](#a-tree-that-is-not-plugins) | every task | **closed**, `spec.mounts` |
+| [A volume shared between groups](#a-volume-shared-between-groups) | 6 tasks | **closed**, `spec.mounts` |
 | [Purpur, not Paper](#purpur-not-paper) | every backend | open |
 
 ### Per-group process settings
@@ -72,12 +72,13 @@ A network crossing over changes the layout rather than the flag.
 
 ### A tree that is not `plugins/`
 
-`extraPlugins` copies its volume into `plugins/`. `spec.mounts` takes
-ConfigMaps and Secrets and nothing else — `api/v1alpha1/common_types.go` says
-so in as many words: *"V1 supports ConfigMaps and Secrets only; the layered
-template system is a later project."*
+**Closed by a claim source on `spec.mounts`.** See [`mounts.md`](mounts.md).
 
-Everything a template holds outside `plugins/` therefore has nowhere to land:
+`extraPlugins` copies its volume into `plugins/`, and `spec.mounts` took
+ConfigMaps and Secrets and nothing else — `api/v1alpha1/common_types.go` said
+so in as many words: *"V1 supports ConfigMaps and Secrets only; the layered
+template system is a later project."* Everything a template holds outside
+`plugins/` therefore had nowhere to land:
 
 ```
 worlds/     4 templates, all from base/asset/maps
@@ -86,45 +87,49 @@ worlds/     4 templates, all from base/asset/maps
 resources/  7 asset repositories, in Global/Global — reaches every
             backend and the proxy
 addons/     4 game templates, the Arcadia addon jars
-            (plugins/addons/config.yml is a different thing and does land)
+            (plugins/addons/config.yml is a different thing and did land)
 ```
 
-`server.properties`, `config/paper-global.yml` and `config/paper-world-defaults.yml`
-are fine: they are what `configOverlay` is for. `bukkit.yml`, `spigot.yml` and
-`purpur.yml` are not — nothing renders them.
+**Not one of the fourteen tasks ran while this was open**: the Hub needs a
+world, every backend and the proxy need `resources/`, every game needs its
+addon jar. Each of those is now a claim at a path.
 
-**Nothing runs while this is open.** Not one of the fourteen tasks: the Hub
-needs a world, every backend and the proxy need `resources/`, every game needs
-its addon jar.
+Three things came with it rather than out of it:
 
-Two coherent ways out, and the choice is a design decision rather than a
-technical one:
+- **`ProxyGroup` gained `spec.mounts` too.** It had none, which was never a
+  decision anybody took — and this network's proxies read the same
+  `Global/Global` assets its backends do, out of a template that targets both
+  `MINECRAFT_SERVER` and `VELOCITY`.
+- **`subPath`**, because `bukkit.yml`, `spigot.yml` and `purpur.yml` are single
+  files at the server root. A mount without it puts a *directory* at that path.
+- **`server.properties` and `config/paper-*.yml` still belong in
+  `configOverlay`**, not in a mount. They are rendered, and a mount would
+  replace the rendering rather than merge with it.
 
-- **Put it in the image.** Purpur, worlds, `resources/` and `addons/` baked in;
-  `extraPlugins` carries only the jars somebody is actually iterating on. It
-  fits how this network already runs — its tasks are `runtime: docker-jvm`, so
-  images are not foreign — and it fits a development tool, where the image
-  changes rarely and the jars change constantly. It costs an image build per
-  content change.
-- **Let `Mount` take a PVC.** Then volumes carry worlds and assets the way
-  CloudNET's templates do. It is a smaller change to the API than it looks and
-  a larger one to what an installation has to run: an RWX class, and Longhorn's
-  share-manager on the failure path of every start
-  ([`plugins.md`](plugins.md) has what that adds).
+It is still not a layered template system: no composition, no priority, no
+per-server rendering. Flattening the seven templates into one tree per group is
+assembly, and belongs outside the operator.
 
 ### A volume shared between groups
+
+**Closed by the same field**, through `writable` on the claim.
 
 Six tasks bind a Docker volume `world-pool:/world-pool` — `World-Generator`
 fills it, and `Bingo-Solo`, `Bingo-Team`, `All-Items-SMP`, `Challenge` and
 `Manhunt` read from it. A generated world is handed from one group to another
-through the filesystem.
+through the filesystem. `extraPlugins` could not express it: one claim,
+read-only, and it lands in `plugins/`.
 
-Spawnery's only PVC mount is `extraPlugins`, which is read-only and lands in
-`plugins/`. There is no way to express a writable volume shared between two
-groups. This is the same gap as the one above seen from the other side, and a
-`Mount` that took a PVC would close both — but only if it can be writable for
-one group and readable for the others, which `extraPlugins` deliberately is
-not.
+A claim mount can, and the writable half is opt-in so that the zero value is
+the safe one. **Nothing coordinates two writers**, and nothing here pretends
+to: two groups writing one claim get what two processes writing one filesystem
+get.
+
+What this costs an installation is real and is not new: a `ReadWriteMany`
+storage class, and on this project's own cluster that means Longhorn's
+share-manager on the failure path of every start —
+[`plugins.md`](plugins.md#what-longhorns-rwx-adds-to-the-failure-surface) has
+what that adds.
 
 ### Purpur, not Paper
 

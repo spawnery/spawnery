@@ -311,12 +311,16 @@ func main() {
 			"keys it recognises.")
 
 	flag.BoolVar(&allowPluginVolumes, "allow-plugin-volumes", false,
-		"allow a group to name a spec.extraPlugins claim, whose contents are copied into "+
-			"every server's plugins directory on start. Off by default -- an installation that "+
-			"has not turned this on refuses a group that names one, so \"this cluster runs no "+
-			"third-party plugins\" is a fact rather than a convention. It is not a security "+
-			"boundary: a PersistentVolumeClaim is a namespaced object in the same trust domain "+
-			"as the group that names it.")
+		"allow a group to mount a PersistentVolumeClaim: a spec.extraPlugins claim, whose "+
+			"contents are copied into every server's plugins directory on start, or a "+
+			"spec.mounts entry naming a claim. One switch for both, because what it turns "+
+			"off is the same sentence for each -- content this installation did not ship "+
+			"reaches a game server off a volume. ConfigMap and Secret mounts are not gated. "+
+			"Off by default -- an installation that has not turned this on refuses a group "+
+			"that names a claim, so \"this cluster runs nothing off a volume\" is a fact "+
+			"rather than a convention. It is not a security boundary: a "+
+			"PersistentVolumeClaim is a namespaced object in the same trust domain as the "+
+			"group that names it.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)

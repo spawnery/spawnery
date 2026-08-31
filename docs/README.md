@@ -15,6 +15,7 @@ This page is the index of everything under `docs/`.
 | [`network-boundaries.md`](network-boundaries.md) | What the two `NetworkPolicy` objects buy, and what they do not. Read before treating them as protection |
 | [`plugins.md`](plugins.md) | Loading third-party plugins from a volume, without rebuilding an image — and what Longhorn's `ReadWriteMany` adds to the failure surface |
 | [`group-environment.md`](group-environment.md) | `spec.env` on a group: the reserved `SPAWNERY_` prefix, and why `JAVA_TOOL_OPTIONS` is the only way to reach the JVM |
+| [`mounts.md`](mounts.md) | `spec.mounts`: putting a ConfigMap, a Secret or a claim at a path in a group's pods, and the one claim rule that has no exceptions |
 
 ## Working on Spawnery
 

@@ -24,6 +24,11 @@ The operator refuses a group naming `extraPlugins` unless it was started with
 `--allow-plugin-volumes`. The chart passes the operator's arguments through, so
 this is a values edit and a restart of one Deployment.
 
+The same flag gates a [`spec.mounts`](mounts.md) entry that names a claim. One
+switch rather than two, because what it turns off is the same sentence for
+each: content this installation did not ship reaches a game server from a
+volume.
+
 **That switch is not a security boundary, and nothing here will tell you it
 is.** A `PersistentVolumeClaim` is a namespaced object in the same trust domain
 as the group that names it: anybody who can write one can write the other, so

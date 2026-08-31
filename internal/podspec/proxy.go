@@ -228,6 +228,16 @@ func renderProxyPod(
 		})
 	}
 
+	// The group's own file mounts, through the same renderUserMounts a server
+	// pod goes through: same reserved paths, same refusals, same treatment of
+	// a claim.
+	userVolumes, userVolumeMounts, err := renderUserMounts(group.Spec.Mounts)
+	if err != nil {
+		return nil, err
+	}
+	volumes = append(volumes, userVolumes...)
+	mounts = append(mounts, userVolumeMounts...)
+
 	// The group's own plugin volume, if it named one. Read-only at the volume
 	// as well as at the mount: one claim may serve several groups, and a group
 	// that could write it could change what every other group loads.
