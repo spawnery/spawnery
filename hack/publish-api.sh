@@ -103,13 +103,34 @@ if [[ -n "${SIGNING_KEY:-}" ]]; then
     exit 1
   fi
 
+  # Both shapes of the same key are accepted, because both circulate and only
+  # one of them is anybody's fault.
+  #
+  # Gradle's signing plugin takes a key whose newlines are backslash-n, and
+  # every guide to it says so -- so that is the form a key reaches a secret
+  # store in, and it is what this script met the first time it ran with a real
+  # one. gpg needs the newlines to be newlines, and what it says otherwise is
+  # `invalid armor header`, about a value the log has masked to three
+  # asterisks. Nobody was ever going to read that and think of printf.
+  #
+  # Converted only when there is nothing to lose: a value that already has real
+  # newlines is left exactly as it is. Base64 armour contains no backslash, so
+  # there is no key this can damage.
+  key="$SIGNING_KEY"
+  if [[ "$key" != *$'\n'* && "$key" == *'\n'* ]]; then
+    key="$(printf '%b' "$key")"
+    echo "publish-api: SIGNING_KEY arrived with escaped newlines; reading it as a key"
+  fi
+
   GNUPGHOME="$(mktemp -d)"
   export GNUPGHOME
   chmod 700 "$GNUPGHOME"
   trap 'rm -rf "$GNUPGHOME"' EXIT
 
-  if ! printf '%s\n' "$SIGNING_KEY" | gpg --batch --quiet --import; then
+  if ! printf '%s\n' "$key" | gpg --batch --quiet --import; then
     echo "publish-api: gpg would not import SIGNING_KEY." >&2
+    echo "             It is armoured, so what is left is the key itself: an" >&2
+    echo "             export of only a subkey, or a truncated paste." >&2
     exit 1
   fi
 
