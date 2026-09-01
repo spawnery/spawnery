@@ -73,6 +73,12 @@
               # publish whatever a stale `podman load` left behind rather than
               # what the flake describes.
               skopeo
+              # hack/publish-api.sh assembles one archive out of what Gradle
+              # laid out, because the Central Portal takes a bundle rather than
+              # a Maven deploy. `jar` from the JDK could make the same file and
+              # would need a flag to stop it inventing a manifest -- a line the
+              # next reader has to decode, to save a package this small.
+              zip
               # Both of these are pinned a second time, by version, in
               # agent/common/build.gradle.kts -- and only this half moves when
               # nixpkgs does. `protobuf` here is protoc, whose X.Y the

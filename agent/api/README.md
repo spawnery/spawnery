@@ -25,8 +25,16 @@ dependencies {
 }
 ```
 
-Nothing publishes that coordinate yet. Until something does, build against the
-jar from a release.
+It is on Maven Central, so nothing has to be configured to resolve it. The
+version is the one the agent inside the game images carries — the same number,
+because they are built from the same source, and a plugin compiled against one
+runs against the other.
+
+**Compile against the oldest version you mean to support, not the newest.**
+Methods are added to `SpawneryApi` and components are added to the value
+records; a plugin built against 0.2.20 runs on a later agent, while one built
+against a later agent and run on 0.2.20 meets a `NoSuchMethodError` at the
+first call the older jar does not have.
 
 Your plugin must also declare a dependency on the `spawnery` plugin so it
 enables after the agent. `Spawnery.api()` throws
