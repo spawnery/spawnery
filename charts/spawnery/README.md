@@ -8,7 +8,7 @@ replaces, no longer exists in this repository.
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.2.17 --namespace spawnery-system --create-namespace
+  --version 0.2.18 --namespace spawnery-system --create-namespace
 ```
 
 The chart is an OCI artefact under the same `ghcr.io/spawnery` the three images

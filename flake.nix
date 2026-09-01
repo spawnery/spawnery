@@ -187,7 +187,13 @@
           # runtime than 0.2.16 did -- and agent/ changed too: a renewal is no
           # longer reported as a stream failure. Either alone would oblige this
           # number; the operator is untouched, so operatorVersion below is not.
-          imageVersion = "0.2.17";
+          #
+          # 0.2.18 moves it again, and this time the other number with it: the
+          # agents gained a verb. A server can publish a short state and a few
+          # attributes, every agent reads them back out of the network picture,
+          # and `/cloud info` prints what a server says about itself -- so the
+          # jar inside the game images is a different jar.
+          imageVersion = "0.2.18";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -231,7 +237,14 @@
           # configOverlay key (internal/render, so the game images) and a mount
           # under /data/config is now refused (internal/podspec, so the
           # operator).
-          operatorVersion = "0.2.16";
+          #
+          # 0.2.17 stood still here, for the reason the note above gives.
+          # **0.2.18 moves it**: the announcement an agent sends is answered in
+          # internal/agentserver, held in internal/agent and published by
+          # internal/netstate. That is a reconciler-side change of the same
+          # kind as any other, and it is why this release moves all three
+          # numbers rather than only the images'.
+          operatorVersion = "0.2.18";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
