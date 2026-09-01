@@ -658,3 +658,60 @@ behind.
 Every `ServerGroup` in every installation carries a `spec.image`, so deleting
 the derivation would strand each of them on a tag that stops being rebuilt.
 It goes when there is a release note saying it is going, and not before.
+
+## 0.2.18: a server can describe itself, and nothing acts on what it says
+
+A backend publishes a short state and up to sixteen key/value attributes
+through the plugin API, and every agent in the namespace reads them back out of
+the network picture it already receives:
+
+```java
+api.announce("running", Map.of("map", "arena"));
+
+api.servers().stream().filter(s -> s.state().equals("waiting"))
+```
+
+**The operator carries it and reads none of it.** No decision it makes looks at
+a word: not scheduling, not routing, not scaling. That is the whole reason a
+free-form description is safe to carry here, and it is also the limit — a
+server that announces `ending` goes on taking joins until something
+[retires](../agent/api/README.md#changing-the-fleet) it.
+
+It is deliberately not the phase. `ServerInfo.phase()` is the operator's
+account of a server's lifecycle and no plugin can write it; this is the
+server's account of itself, and the two are meant to disagree. A server is
+`READY` from the moment it can take players until it stops, and what is
+happening inside that window is a question only the thing running there can
+answer. `/cloud info` prints both, and prints the server's after the word
+`says`.
+
+**Nothing changes for an installation that ignores it.** No CRD field, no
+status field, no object at all: an announcement lives in the operator's memory
+for as long as that pod has a session. A server that has announced nothing and
+a server whose agent predates the verb are the same server in the picture —
+both carry an empty description rather than a missing one.
+
+### The counterpart: what a person writes down about a group
+
+`ServerGroup` and `ProxyGroup` gain `spec.attributes`, which is the same idea
+from the other side. A server says what it is doing right now and changes its
+mind every round; this is written by a person in the group's own definition and
+changes when somebody edits it:
+
+```yaml
+spec:
+  attributes:
+    permission: task.build
+    game: bingo
+```
+
+A plugin reads it as `Group.attributes()`. The operator reads none of it
+either, and unlike `spec.env` it shapes no pod — editing it replaces nothing
+and restarts nothing, because the next network picture simply carries the new
+value.
+
+Both sides stop at the same bounds, which the API server enforces for the group
+half and the operator for the server half: sixteen entries, names of at most 64
+characters, values of at most 256. Refused rather than trimmed. They are small
+because this is copied into every agent's picture on every resync, so what it
+costs is paid by every pod for as long as the network runs.

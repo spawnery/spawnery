@@ -186,6 +186,16 @@ type ServerGroupSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self.all(e, !e.name.startsWith('SPAWNERY_'))",message="the SPAWNERY_ prefix is reserved for the environment variables the operator sets itself"
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
+	// Attributes is what plugins are told about this group. See
+	// GroupAttributes: the operator carries it and acts on none of it.
+	//
+	// It shapes no pod and is therefore not in the spec hash a server is
+	// replaced on -- the opposite of Env above. Editing it replaces nothing
+	// and restarts nothing; the next network picture simply carries the new
+	// value, which is what a description of a group should cost.
+	// +optional
+	Attributes GroupAttributes `json:"attributes,omitempty"`
+
 	// ExtraPlugins names a volume whose plugins and their configuration are
 	// copied into this group's servers on every start. See ExtraPlugins.
 	// +optional

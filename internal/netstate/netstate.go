@@ -94,6 +94,9 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 			ReadyReplicas: g.Status.ReadyReplicas,
 			OnlinePlayers: g.Status.OnlinePlayers,
 			FreeSlots:     g.Status.FreeSlots,
+			// From the spec and not the status: nobody derived this, somebody
+			// wrote it down.
+			Attributes: g.Spec.Attributes,
 		})
 	}
 
@@ -117,6 +120,7 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 			Replicas:      g.Spec.Replicas,
 			ReadyReplicas: g.Status.ReadyReplicas,
 			OnlinePlayers: g.Status.ConnectedPlayers,
+			Attributes:    g.Spec.Attributes,
 			// No free-slot figure: capacity is a backend's property, and
 			// inventing a number here would answer a question nobody asked of
 			// a proxy.

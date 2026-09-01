@@ -167,6 +167,19 @@ You do not have to re-announce after a reconnection. The agent holds the last
 description you published and re-publishes it on every new session, so an
 operator that restarts does not leave a running game described as nothing.
 
+### What a person wrote down about a group
+
+`Group.attributes()` is the counterpart, and the difference is who writes it. A
+server describes what it is doing right now; a group's attributes are written
+by a person in the group's own definition — `spec.attributes` on a
+`ServerGroup` or a `ProxyGroup` — and change when somebody edits that file.
+Read them for what no server could tell you: which permission a group is
+behind, which of several games it runs, whose it is.
+
+The operator carries those too and reads none of them. They stop at the same
+bounds, enforced by the API server rather than by the operator: sixteen
+entries, names of at most 64 characters, values of at most 256.
+
 ## Hearing what happened
 
 `events()` hands back an `EventBus`, the same one every time, so a plugin may

@@ -2272,7 +2272,17 @@ type GroupState struct {
 	// The operator's own figure, which counts only ready servers of the group's
 	// current spec. Not a sum an agent could compute from the servers below, and
 	// the two can disagree while a rolling update is in flight.
-	FreeSlots     int32 `protobuf:"varint,6,opt,name=free_slots,json=freeSlots,proto3" json:"free_slots,omitempty"`
+	FreeSlots int32 `protobuf:"varint,6,opt,name=free_slots,json=freeSlots,proto3" json:"free_slots,omitempty"`
+	// What whoever runs this network wrote down about this group, from its own
+	// definition, and nothing the operator decided. Empty for a group nobody has
+	// written anything about, which is every group until somebody does.
+	//
+	// The counterpart of ServerState.attributes, and the difference is who
+	// writes it: that one is a server describing what it is doing right now,
+	// this one is a person describing what the group is. A plugin that needs to
+	// know something no server could tell it -- which permission a group is
+	// behind, which of several games it runs -- reads it here.
+	Attributes    map[string]string `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2347,6 +2357,13 @@ func (x *GroupState) GetFreeSlots() int32 {
 		return x.FreeSlots
 	}
 	return 0
+}
+
+func (x *GroupState) GetAttributes() map[string]string {
+	if x != nil {
+		return x.Attributes
+	}
+	return nil
 }
 
 // ServerState is one backend as the operator last observed it.
@@ -3362,7 +3379,7 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\aservers\x18\x02 \x03(\v2$.spawnery.agent.v1alpha1.ServerStateR\aservers\x12>\n" +
 	"\aplayers\x18\x03 \x03(\v2$.spawnery.agent.v1alpha1.RosterEntryR\aplayers\x12\x1f\n" +
 	"\vfeed_format\x18\x04 \x01(\tR\n" +
-	"feedFormat\"\xaf\x02\n" +
+	"feedFormat\"\xc3\x03\n" +
 	"\n" +
 	"GroupState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12<\n" +
@@ -3371,7 +3388,13 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\x0eready_replicas\x18\x04 \x01(\x05R\rreadyReplicas\x12%\n" +
 	"\x0eonline_players\x18\x05 \x01(\x05R\ronlinePlayers\x12\x1d\n" +
 	"\n" +
-	"free_slots\x18\x06 \x01(\x05R\tfreeSlots\"F\n" +
+	"free_slots\x18\x06 \x01(\x05R\tfreeSlots\x12S\n" +
+	"\n" +
+	"attributes\x18\a \x03(\v23.spawnery.agent.v1alpha1.GroupState.AttributesEntryR\n" +
+	"attributes\x1a=\n" +
+	"\x0fAttributesEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"F\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\r\n" +
 	"\tEPHEMERAL\x10\x01\x12\x0e\n" +
@@ -3460,7 +3483,7 @@ func file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP() []byte {
 }
 
 var file_spawnery_agent_v1alpha1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_spawnery_agent_v1alpha1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 42)
+var file_spawnery_agent_v1alpha1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 43)
 var file_spawnery_agent_v1alpha1_agent_proto_goTypes = []any{
 	(RequestError_Reason)(0),   // 0: spawnery.agent.v1alpha1.RequestError.Reason
 	(GroupState_Kind)(0),       // 1: spawnery.agent.v1alpha1.GroupState.Kind
@@ -3505,7 +3528,8 @@ var file_spawnery_agent_v1alpha1_agent_proto_goTypes = []any{
 	(*OperatorToProxy)(nil),    // 40: spawnery.agent.v1alpha1.OperatorToProxy
 	nil,                        // 41: spawnery.agent.v1alpha1.AnnounceRequest.AttributesEntry
 	nil,                        // 42: spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
-	nil,                        // 43: spawnery.agent.v1alpha1.ServerState.AttributesEntry
+	nil,                        // 43: spawnery.agent.v1alpha1.GroupState.AttributesEntry
+	nil,                        // 44: spawnery.agent.v1alpha1.ServerState.AttributesEntry
 }
 var file_spawnery_agent_v1alpha1_agent_proto_depIdxs = []int32{
 	8,  // 0: spawnery.agent.v1alpha1.CloudRequest.connect:type_name -> spawnery.agent.v1alpha1.ConnectRequest
@@ -3537,37 +3561,38 @@ var file_spawnery_agent_v1alpha1_agent_proto_depIdxs = []int32{
 	31, // 26: spawnery.agent.v1alpha1.NetworkState.servers:type_name -> spawnery.agent.v1alpha1.ServerState
 	28, // 27: spawnery.agent.v1alpha1.NetworkState.players:type_name -> spawnery.agent.v1alpha1.RosterEntry
 	1,  // 28: spawnery.agent.v1alpha1.GroupState.kind:type_name -> spawnery.agent.v1alpha1.GroupState.Kind
-	43, // 29: spawnery.agent.v1alpha1.ServerState.attributes:type_name -> spawnery.agent.v1alpha1.ServerState.AttributesEntry
-	4,  // 30: spawnery.agent.v1alpha1.ProxyMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
-	5,  // 31: spawnery.agent.v1alpha1.ProxyMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
-	25, // 32: spawnery.agent.v1alpha1.ProxyMessage.player_joined_server:type_name -> spawnery.agent.v1alpha1.PlayerJoinedServer
-	24, // 33: spawnery.agent.v1alpha1.ProxyMessage.heartbeat:type_name -> spawnery.agent.v1alpha1.Heartbeat
-	26, // 34: spawnery.agent.v1alpha1.ProxyMessage.backend_players:type_name -> spawnery.agent.v1alpha1.BackendPlayers
-	27, // 35: spawnery.agent.v1alpha1.ProxyMessage.player_roster:type_name -> spawnery.agent.v1alpha1.PlayerRoster
-	6,  // 36: spawnery.agent.v1alpha1.ProxyMessage.cloud_request:type_name -> spawnery.agent.v1alpha1.CloudRequest
-	19, // 37: spawnery.agent.v1alpha1.ProxyMessage.event_interest:type_name -> spawnery.agent.v1alpha1.EventInterest
-	33, // 38: spawnery.agent.v1alpha1.FullSync.servers:type_name -> spawnery.agent.v1alpha1.RegisteredServer
-	33, // 39: spawnery.agent.v1alpha1.RegisterServer.server:type_name -> spawnery.agent.v1alpha1.RegisteredServer
-	34, // 40: spawnery.agent.v1alpha1.OperatorToProxy.full_sync:type_name -> spawnery.agent.v1alpha1.FullSync
-	35, // 41: spawnery.agent.v1alpha1.OperatorToProxy.register_server:type_name -> spawnery.agent.v1alpha1.RegisterServer
-	36, // 42: spawnery.agent.v1alpha1.OperatorToProxy.unregister_server:type_name -> spawnery.agent.v1alpha1.UnregisterServer
-	38, // 43: spawnery.agent.v1alpha1.OperatorToProxy.drain_players:type_name -> spawnery.agent.v1alpha1.DrainPlayers
-	2,  // 44: spawnery.agent.v1alpha1.OperatorToProxy.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
-	3,  // 45: spawnery.agent.v1alpha1.OperatorToProxy.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
-	39, // 46: spawnery.agent.v1alpha1.OperatorToProxy.set_ready:type_name -> spawnery.agent.v1alpha1.SetReady
-	29, // 47: spawnery.agent.v1alpha1.OperatorToProxy.network_state:type_name -> spawnery.agent.v1alpha1.NetworkState
-	7,  // 48: spawnery.agent.v1alpha1.OperatorToProxy.cloud_response:type_name -> spawnery.agent.v1alpha1.CloudResponse
-	37, // 49: spawnery.agent.v1alpha1.OperatorToProxy.move_player:type_name -> spawnery.agent.v1alpha1.MovePlayer
-	18, // 50: spawnery.agent.v1alpha1.OperatorToProxy.cloud_event:type_name -> spawnery.agent.v1alpha1.CloudEvent
-	32, // 51: spawnery.agent.v1alpha1.AgentService.ProxySession:input_type -> spawnery.agent.v1alpha1.ProxyMessage
-	22, // 52: spawnery.agent.v1alpha1.AgentService.ServerSession:input_type -> spawnery.agent.v1alpha1.ServerMessage
-	40, // 53: spawnery.agent.v1alpha1.AgentService.ProxySession:output_type -> spawnery.agent.v1alpha1.OperatorToProxy
-	23, // 54: spawnery.agent.v1alpha1.AgentService.ServerSession:output_type -> spawnery.agent.v1alpha1.OperatorToServer
-	53, // [53:55] is the sub-list for method output_type
-	51, // [51:53] is the sub-list for method input_type
-	51, // [51:51] is the sub-list for extension type_name
-	51, // [51:51] is the sub-list for extension extendee
-	0,  // [0:51] is the sub-list for field type_name
+	43, // 29: spawnery.agent.v1alpha1.GroupState.attributes:type_name -> spawnery.agent.v1alpha1.GroupState.AttributesEntry
+	44, // 30: spawnery.agent.v1alpha1.ServerState.attributes:type_name -> spawnery.agent.v1alpha1.ServerState.AttributesEntry
+	4,  // 31: spawnery.agent.v1alpha1.ProxyMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
+	5,  // 32: spawnery.agent.v1alpha1.ProxyMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
+	25, // 33: spawnery.agent.v1alpha1.ProxyMessage.player_joined_server:type_name -> spawnery.agent.v1alpha1.PlayerJoinedServer
+	24, // 34: spawnery.agent.v1alpha1.ProxyMessage.heartbeat:type_name -> spawnery.agent.v1alpha1.Heartbeat
+	26, // 35: spawnery.agent.v1alpha1.ProxyMessage.backend_players:type_name -> spawnery.agent.v1alpha1.BackendPlayers
+	27, // 36: spawnery.agent.v1alpha1.ProxyMessage.player_roster:type_name -> spawnery.agent.v1alpha1.PlayerRoster
+	6,  // 37: spawnery.agent.v1alpha1.ProxyMessage.cloud_request:type_name -> spawnery.agent.v1alpha1.CloudRequest
+	19, // 38: spawnery.agent.v1alpha1.ProxyMessage.event_interest:type_name -> spawnery.agent.v1alpha1.EventInterest
+	33, // 39: spawnery.agent.v1alpha1.FullSync.servers:type_name -> spawnery.agent.v1alpha1.RegisteredServer
+	33, // 40: spawnery.agent.v1alpha1.RegisterServer.server:type_name -> spawnery.agent.v1alpha1.RegisteredServer
+	34, // 41: spawnery.agent.v1alpha1.OperatorToProxy.full_sync:type_name -> spawnery.agent.v1alpha1.FullSync
+	35, // 42: spawnery.agent.v1alpha1.OperatorToProxy.register_server:type_name -> spawnery.agent.v1alpha1.RegisterServer
+	36, // 43: spawnery.agent.v1alpha1.OperatorToProxy.unregister_server:type_name -> spawnery.agent.v1alpha1.UnregisterServer
+	38, // 44: spawnery.agent.v1alpha1.OperatorToProxy.drain_players:type_name -> spawnery.agent.v1alpha1.DrainPlayers
+	2,  // 45: spawnery.agent.v1alpha1.OperatorToProxy.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
+	3,  // 46: spawnery.agent.v1alpha1.OperatorToProxy.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
+	39, // 47: spawnery.agent.v1alpha1.OperatorToProxy.set_ready:type_name -> spawnery.agent.v1alpha1.SetReady
+	29, // 48: spawnery.agent.v1alpha1.OperatorToProxy.network_state:type_name -> spawnery.agent.v1alpha1.NetworkState
+	7,  // 49: spawnery.agent.v1alpha1.OperatorToProxy.cloud_response:type_name -> spawnery.agent.v1alpha1.CloudResponse
+	37, // 50: spawnery.agent.v1alpha1.OperatorToProxy.move_player:type_name -> spawnery.agent.v1alpha1.MovePlayer
+	18, // 51: spawnery.agent.v1alpha1.OperatorToProxy.cloud_event:type_name -> spawnery.agent.v1alpha1.CloudEvent
+	32, // 52: spawnery.agent.v1alpha1.AgentService.ProxySession:input_type -> spawnery.agent.v1alpha1.ProxyMessage
+	22, // 53: spawnery.agent.v1alpha1.AgentService.ServerSession:input_type -> spawnery.agent.v1alpha1.ServerMessage
+	40, // 54: spawnery.agent.v1alpha1.AgentService.ProxySession:output_type -> spawnery.agent.v1alpha1.OperatorToProxy
+	23, // 55: spawnery.agent.v1alpha1.AgentService.ServerSession:output_type -> spawnery.agent.v1alpha1.OperatorToServer
+	54, // [54:56] is the sub-list for method output_type
+	52, // [52:54] is the sub-list for method input_type
+	52, // [52:52] is the sub-list for extension type_name
+	52, // [52:52] is the sub-list for extension extendee
+	0,  // [0:52] is the sub-list for field type_name
 }
 
 func init() { file_spawnery_agent_v1alpha1_agent_proto_init() }
@@ -3637,7 +3662,7 @@ func file_spawnery_agent_v1alpha1_agent_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_spawnery_agent_v1alpha1_agent_proto_rawDesc), len(file_spawnery_agent_v1alpha1_agent_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   42,
+			NumMessages:   43,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

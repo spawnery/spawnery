@@ -56,7 +56,7 @@ class ValueTypesTest {
         assertThrows(NullPointerException.class,
                 () -> new CloudPlayer(UUID.randomUUID(), "someone", null));
         assertThrows(NullPointerException.class,
-                () -> new Group(null, Group.Kind.EPHEMERAL, 1, 1, 0, 100));
+                () -> new Group(null, Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of()));
     }
 
     // An unknown phase is not an error and must not throw: the operator may
