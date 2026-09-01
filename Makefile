@@ -348,6 +348,15 @@ publish:
 publish-chart:
 	hack/publish-chart.sh
 
+# The plugin API on Maven Central, so a plugin can compile against it without
+# a checkout. Out of `all` for the reason the two above are, and then some:
+# this one needs a signing key as well as a token, and both belong to a person
+# rather than to a machine. DRY_RUN=1 builds the bundle and prints what would
+# go where, which needs neither.
+.PHONY: publish-api
+publish-api:
+	hack/publish-api.sh
+
 # hack/publish-chart-test.sh: nine cases, five against this repository and
 # four against throwaway git repositories built on the spot. Unlike the two
 # gh-driven targets above it needs no network and no token -- the registry's
