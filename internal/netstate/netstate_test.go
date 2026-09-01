@@ -287,3 +287,21 @@ func TestBuildCarriesWhatSomebodyWroteDownAboutAGroup(t *testing.T) {
 		t.Errorf("lobby = %+v, want the server group's own attributes", got.GetGroups()[1])
 	}
 }
+
+func TestBuildSaysWhichRunOfAServerThisIs(t *testing.T) {
+	// A persistent server keeps its name across every restart -- that name is
+	// the identity of its world -- so anything asking "is this still the one I
+	// meant" has to compare something else.
+	srv := readyServer("ns", "survival-0", "survival", 0, 100)
+	srv.Status.PodUID = "pod-7c3f"
+	src, _ := source(t, ephemeralGroup("ns", "survival"), srv)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got.GetServers()[0].GetIncarnation() != "pod-7c3f" {
+		t.Errorf("incarnation = %q, want the pod the operator recorded",
+			got.GetServers()[0].GetIncarnation())
+	}
+}

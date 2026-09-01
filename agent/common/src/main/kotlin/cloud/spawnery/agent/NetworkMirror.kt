@@ -81,6 +81,7 @@ class NetworkMirror {
                     // here: a snapshot a plugin holds must not change under it
                     // when the next state arrives.
                     it.attributesMap,
+                    it.incarnation,
                 )
             },
             // An entry whose UUID will not parse is dropped and the rest of the

@@ -30,8 +30,8 @@ import org.junit.jupiter.api.Test;
 class ValueTypesTest {
     @Test
     void twoDescriptionsOfTheSameServerAreEqual() {
-        var a = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true, "running", Map.of("map", "arena"));
-        var b = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true, "running", Map.of("map", "arena"));
+        var a = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true, "running", Map.of("map", "arena"), "pod-1");
+        var b = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true, "running", Map.of("map", "arena"), "pod-1");
         assertEquals(a, b);
         // Set.copyOf and not Set.of: the latter *throws* on a duplicate, so it
         // would have proved the equality by accident rather than asserted it,
@@ -52,7 +52,7 @@ class ValueTypesTest {
     @Test
     void aNullComponentIsRefusedWhereItIsBuilt() {
         assertThrows(NullPointerException.class,
-                () -> new ServerInfo(null, "lobby", ServerPhase.READY, 0, 100, false, "", Map.of()));
+                () -> new ServerInfo(null, "lobby", ServerPhase.READY, 0, 100, false, "", Map.of(), ""));
         assertThrows(NullPointerException.class,
                 () -> new CloudPlayer(UUID.randomUUID(), "someone", null));
         assertThrows(NullPointerException.class,
@@ -73,7 +73,7 @@ class ValueTypesTest {
     // or sizing a list from it should not meet a negative number.
     @Test
     void freeSlotsNeverGoesBelowZero() {
-        var over = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 120, 100, true, "", Map.of());
+        var over = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 120, 100, true, "", Map.of(), "");
         assertEquals(0, over.freeSlots());
     }
 }

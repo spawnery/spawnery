@@ -1030,6 +1030,13 @@ func (r *ServerReconciler) applyDecision(
 	snap := r.Agents.Lookup(podUID(pod, podFound))
 	r.mirrorPlayerCount(srv, snap, now)
 
+	// Which pod this status is about. See ServerStatus.PodUID: it is what
+	// tells one run of a server apart from the next under the same name, and
+	// it is written wherever the pod is seen rather than where it was made.
+	if podFound {
+		srv.Status.PodUID = string(pod.UID)
+	}
+
 	if podFound {
 		if err := r.syncOccupiedLabel(ctx, srv, pod, snap); err != nil {
 			return err

@@ -2529,8 +2529,23 @@ type ServerState struct {
 	// absent and "announced nothing" are the same state here on purpose, because
 	// a plugin that has to tell them apart is asking about the agent rather than
 	// about the game.
-	State         string            `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`
-	Attributes    map[string]string `protobuf:"bytes,8,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	State      string            `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`
+	Attributes map[string]string `protobuf:"bytes,8,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// Which run of this server this is: an opaque token that changes whenever
+	// the process behind the name is replaced, and never otherwise.
+	//
+	// The name alone cannot answer that, and for one kind of server it never
+	// will: an ephemeral server is named afresh every time, but a persistent one
+	// keeps its name across every restart because that name is the identity of
+	// its world. Anything that remembers a server and later asks "is this still
+	// the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+	// reconnect -- compares this and not the name.
+	//
+	// Opaque on purpose. It is a pod UID today and this contract does not say
+	// so: what is promised is that two equal values mean the same run and two
+	// different ones mean different runs. Empty for a server whose pod the
+	// operator has not seen yet, which is a server nobody is being sent to.
+	Incarnation   string `protobuf:"bytes,9,opt,name=incarnation,proto3" json:"incarnation,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2619,6 +2634,13 @@ func (x *ServerState) GetAttributes() map[string]string {
 		return x.Attributes
 	}
 	return nil
+}
+
+func (x *ServerState) GetIncarnation() string {
+	if x != nil {
+		return x.Incarnation
+	}
+	return ""
 }
 
 type ProxyMessage struct {
@@ -3549,7 +3571,7 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\tEPHEMERAL\x10\x01\x12\x0e\n" +
 	"\n" +
 	"PERSISTENT\x10\x02\x12\t\n" +
-	"\x05PROXY\x10\x03\"\xc8\x02\n" +
+	"\x05PROXY\x10\x03\"\xea\x02\n" +
 	"\vServerState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05group\x18\x02 \x01(\tR\x05group\x12\x14\n" +
@@ -3562,7 +3584,8 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\x05state\x18\a \x01(\tR\x05state\x12T\n" +
 	"\n" +
 	"attributes\x18\b \x03(\v24.spawnery.agent.v1alpha1.ServerState.AttributesEntryR\n" +
-	"attributes\x1a=\n" +
+	"attributes\x12 \n" +
+	"\vincarnation\x18\t \x01(\tR\vincarnation\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x82\x05\n" +

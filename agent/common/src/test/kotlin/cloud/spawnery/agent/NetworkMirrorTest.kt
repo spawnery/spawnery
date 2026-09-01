@@ -96,6 +96,33 @@ class NetworkMirrorTest {
     }
 
     @Test
+    fun `a server says which run of it this is`() {
+        // The name cannot say it: a persistent server keeps its name across
+        // every restart, because that name is the identity of its world.
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("survival-0").setGroup("survival")
+                    .setPhase("Ready").setIncarnation("pod-7c3f"),
+            ).build(),
+        )
+
+        assertEquals("pod-7c3f", mirror.servers().single().incarnation())
+    }
+
+    @Test
+    fun `a server the operator has not placed yet carries an empty incarnation`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("lobby-a").setGroup("lobby").setPhase("Pending"),
+            ).build(),
+        )
+
+        assertEquals("", mirror.servers().single().incarnation())
+    }
+
+    @Test
     fun `a server that said nothing carries an empty description rather than null`() {
         // Which is also every server on a network whose operator predates the
         // verb. A plugin asking what a server is doing should not have to

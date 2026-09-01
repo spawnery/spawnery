@@ -36,6 +36,7 @@ private static final long serialVersionUID = 0L;
     group_ = "";
     phase_ = "";
     state_ = "";
+    incarnation_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -368,6 +369,79 @@ java.lang.String defaultValue) {
     return map.get(key);
   }
 
+  public static final int INCARNATION_FIELD_NUMBER = 9;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object incarnation_ = "";
+  /**
+   * <pre>
+   * Which run of this server this is: an opaque token that changes whenever
+   * the process behind the name is replaced, and never otherwise.
+   *
+   * The name alone cannot answer that, and for one kind of server it never
+   * will: an ephemeral server is named afresh every time, but a persistent one
+   * keeps its name across every restart because that name is the identity of
+   * its world. Anything that remembers a server and later asks "is this still
+   * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+   * reconnect -- compares this and not the name.
+   *
+   * Opaque on purpose. It is a pod UID today and this contract does not say
+   * so: what is promised is that two equal values mean the same run and two
+   * different ones mean different runs. Empty for a server whose pod the
+   * operator has not seen yet, which is a server nobody is being sent to.
+   * </pre>
+   *
+   * <code>string incarnation = 9;</code>
+   * @return The incarnation.
+   */
+  @java.lang.Override
+  public java.lang.String getIncarnation() {
+    java.lang.Object ref = incarnation_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      incarnation_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * Which run of this server this is: an opaque token that changes whenever
+   * the process behind the name is replaced, and never otherwise.
+   *
+   * The name alone cannot answer that, and for one kind of server it never
+   * will: an ephemeral server is named afresh every time, but a persistent one
+   * keeps its name across every restart because that name is the identity of
+   * its world. Anything that remembers a server and later asks "is this still
+   * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+   * reconnect -- compares this and not the name.
+   *
+   * Opaque on purpose. It is a pod UID today and this contract does not say
+   * so: what is promised is that two equal values mean the same run and two
+   * different ones mean different runs. Empty for a server whose pod the
+   * operator has not seen yet, which is a server nobody is being sent to.
+   * </pre>
+   *
+   * <code>string incarnation = 9;</code>
+   * @return The bytes for incarnation.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getIncarnationBytes() {
+    java.lang.Object ref = incarnation_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      incarnation_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -409,6 +483,9 @@ java.lang.String defaultValue) {
         internalGetAttributes(),
         AttributesDefaultEntryHolder.defaultEntry,
         8);
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(incarnation_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 9, incarnation_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -446,6 +523,9 @@ java.lang.String defaultValue) {
           .buildPartial();
       size += com.google.protobuf.CodedOutputStream
           .computeMessageSize(8, attributes__);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(incarnation_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(9, incarnation_);
     }
     return size;
   }
@@ -487,6 +567,8 @@ java.lang.String defaultValue) {
         .equals(other.getState())) return false;
     if (!internalGetAttributes().equals(
         other.internalGetAttributes())) return false;
+    if (!getIncarnation()
+        .equals(other.getIncarnation())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -517,6 +599,8 @@ java.lang.String defaultValue) {
       hash = (37 * hash) + ATTRIBUTES_FIELD_NUMBER;
       hash = (53 * hash) + internalGetAttributes().hashCode();
     }
+    hash = (37 * hash) + INCARNATION_FIELD_NUMBER;
+    hash = (53 * hash) + getIncarnation().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -682,6 +766,7 @@ java.lang.String defaultValue) {
       registered_ = false;
       state_ = "";
       internalGetMutableAttributes().clear();
+      incarnation_ = "";
       return this;
     }
 
@@ -740,6 +825,9 @@ java.lang.String defaultValue) {
         result.attributes_ = internalGetAttributes();
         result.attributes_.makeImmutable();
       }
+      if (((from_bitField0_ & 0x00000100) != 0)) {
+        result.incarnation_ = incarnation_;
+      }
     }
 
     @java.lang.Override
@@ -786,6 +874,11 @@ java.lang.String defaultValue) {
       internalGetMutableAttributes().mergeFrom(
           other.internalGetAttributes());
       bitField0_ |= 0x00000080;
+      if (!other.getIncarnation().isEmpty()) {
+        incarnation_ = other.incarnation_;
+        bitField0_ |= 0x00000100;
+        onChanged();
+      }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -856,6 +949,11 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00000080;
               break;
             } // case 66
+            case 74: {
+              incarnation_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000100;
+              break;
+            } // case 74
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1464,6 +1562,163 @@ java.lang.String defaultValue) {
       internalGetMutableAttributes().getMutableMap()
           .putAll(values);
       bitField0_ |= 0x00000080;
+      return this;
+    }
+
+    private java.lang.Object incarnation_ = "";
+    /**
+     * <pre>
+     * Which run of this server this is: an opaque token that changes whenever
+     * the process behind the name is replaced, and never otherwise.
+     *
+     * The name alone cannot answer that, and for one kind of server it never
+     * will: an ephemeral server is named afresh every time, but a persistent one
+     * keeps its name across every restart because that name is the identity of
+     * its world. Anything that remembers a server and later asks "is this still
+     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+     * reconnect -- compares this and not the name.
+     *
+     * Opaque on purpose. It is a pod UID today and this contract does not say
+     * so: what is promised is that two equal values mean the same run and two
+     * different ones mean different runs. Empty for a server whose pod the
+     * operator has not seen yet, which is a server nobody is being sent to.
+     * </pre>
+     *
+     * <code>string incarnation = 9;</code>
+     * @return The incarnation.
+     */
+    public java.lang.String getIncarnation() {
+      java.lang.Object ref = incarnation_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        incarnation_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * Which run of this server this is: an opaque token that changes whenever
+     * the process behind the name is replaced, and never otherwise.
+     *
+     * The name alone cannot answer that, and for one kind of server it never
+     * will: an ephemeral server is named afresh every time, but a persistent one
+     * keeps its name across every restart because that name is the identity of
+     * its world. Anything that remembers a server and later asks "is this still
+     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+     * reconnect -- compares this and not the name.
+     *
+     * Opaque on purpose. It is a pod UID today and this contract does not say
+     * so: what is promised is that two equal values mean the same run and two
+     * different ones mean different runs. Empty for a server whose pod the
+     * operator has not seen yet, which is a server nobody is being sent to.
+     * </pre>
+     *
+     * <code>string incarnation = 9;</code>
+     * @return The bytes for incarnation.
+     */
+    public com.google.protobuf.ByteString
+        getIncarnationBytes() {
+      java.lang.Object ref = incarnation_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        incarnation_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * Which run of this server this is: an opaque token that changes whenever
+     * the process behind the name is replaced, and never otherwise.
+     *
+     * The name alone cannot answer that, and for one kind of server it never
+     * will: an ephemeral server is named afresh every time, but a persistent one
+     * keeps its name across every restart because that name is the identity of
+     * its world. Anything that remembers a server and later asks "is this still
+     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+     * reconnect -- compares this and not the name.
+     *
+     * Opaque on purpose. It is a pod UID today and this contract does not say
+     * so: what is promised is that two equal values mean the same run and two
+     * different ones mean different runs. Empty for a server whose pod the
+     * operator has not seen yet, which is a server nobody is being sent to.
+     * </pre>
+     *
+     * <code>string incarnation = 9;</code>
+     * @param value The incarnation to set.
+     * @return This builder for chaining.
+     */
+    public Builder setIncarnation(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      incarnation_ = value;
+      bitField0_ |= 0x00000100;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Which run of this server this is: an opaque token that changes whenever
+     * the process behind the name is replaced, and never otherwise.
+     *
+     * The name alone cannot answer that, and for one kind of server it never
+     * will: an ephemeral server is named afresh every time, but a persistent one
+     * keeps its name across every restart because that name is the identity of
+     * its world. Anything that remembers a server and later asks "is this still
+     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+     * reconnect -- compares this and not the name.
+     *
+     * Opaque on purpose. It is a pod UID today and this contract does not say
+     * so: what is promised is that two equal values mean the same run and two
+     * different ones mean different runs. Empty for a server whose pod the
+     * operator has not seen yet, which is a server nobody is being sent to.
+     * </pre>
+     *
+     * <code>string incarnation = 9;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearIncarnation() {
+      incarnation_ = getDefaultInstance().getIncarnation();
+      bitField0_ = (bitField0_ & ~0x00000100);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Which run of this server this is: an opaque token that changes whenever
+     * the process behind the name is replaced, and never otherwise.
+     *
+     * The name alone cannot answer that, and for one kind of server it never
+     * will: an ephemeral server is named afresh every time, but a persistent one
+     * keeps its name across every restart because that name is the identity of
+     * its world. Anything that remembers a server and later asks "is this still
+     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+     * reconnect -- compares this and not the name.
+     *
+     * Opaque on purpose. It is a pod UID today and this contract does not say
+     * so: what is promised is that two equal values mean the same run and two
+     * different ones mean different runs. Empty for a server whose pod the
+     * operator has not seen yet, which is a server nobody is being sent to.
+     * </pre>
+     *
+     * <code>string incarnation = 9;</code>
+     * @param value The bytes for incarnation to set.
+     * @return This builder for chaining.
+     */
+    public Builder setIncarnationBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      incarnation_ = value;
+      bitField0_ |= 0x00000100;
+      onChanged();
       return this;
     }
 

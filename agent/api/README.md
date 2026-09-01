@@ -133,6 +133,21 @@ needs to be permanently bigger needs its `ServerGroup` edited by a person, and
 this API deliberately cannot do that — the operator holds no write on
 `servergroups` at all.
 
+## Telling one run of a server from the next
+
+`ServerInfo.incarnation()` is an opaque token that changes whenever the process
+behind a name is replaced, and never otherwise. Compare it; never parse it.
+
+The name cannot answer that on its own, and for one kind of server it never
+will: an ephemeral server is named afresh every time, but a persistent one
+keeps its name across every restart, because that name is the identity of its
+world. Anything that remembers a server and later asks whether this is still
+the one it meant — a rejoin, a queue, a scoreboard that outlives a
+reconnect — compares this and not the name.
+
+It is empty for a server whose pod the operator has not seen yet, which is a
+server nobody is being sent to.
+
 ## Closing this server to new players
 
 `acceptJoins(false)` stops the proxies sending anybody new here.
