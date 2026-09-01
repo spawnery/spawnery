@@ -8,7 +8,7 @@ type: application
 # version bump alone. Since v0.2.14 this number is also the address people
 # install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
 # so it is no longer only what Flux names a packaged artifact after.
-version: 0.2.18
+version: 0.2.19
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
 # CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
@@ -31,7 +31,13 @@ version: 0.2.18
 # beantwortet wird das im Operator -- internal/agentserver prueft und lehnt ab,
 # internal/agent haelt es, internal/netstate legt es ins Netzbild. Das ist Code,
 # den der Operator ausfuehrt, also gibt es ein neues Operator-Image.
-appVersion: "0.2.18"
+#
+# 0.2.19 ebenso, und tiefer: die Phasen-Maschine kennt jetzt eine Tuer, die
+# deregistriert ohne die Phase zu bewegen, der Skalierer zaehlt keine Plaetze
+# mehr auf Servern, zu denen kein Proxy routet, und beide Gruppenarten bekommen
+# ein optionales spec.attributes. Anders als 0.2.18 aendern sich diesmal also
+# wirklich die CRDs -- optional, jedes vorhandene Objekt validiert unveraendert.
+appVersion: "0.2.19"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
 # +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec

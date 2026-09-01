@@ -193,7 +193,12 @@
           # attributes, every agent reads them back out of the network picture,
           # and `/cloud info` prints what a server says about itself -- so the
           # jar inside the game images is a different jar.
-          imageVersion = "0.2.18";
+          #
+          # 0.2.19 moves it for the same kind of reason: the agents gained a
+          # second verb -- a server can close its own door to new players and
+          # open it again -- and a group's attributes reach a plugin through
+          # the same jar.
+          imageVersion = "0.2.19";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -244,7 +249,15 @@
           # internal/netstate. That is a reconciler-side change of the same
           # kind as any other, and it is why this release moves all three
           # numbers rather than only the images'.
-          operatorVersion = "0.2.18";
+          #
+          # 0.2.19 moves all three again, and this one reaches further into the
+          # operator than 0.2.18 did: the phase machine learns a door that
+          # deregisters without moving a phase, the scaler stops counting seats
+          # on a server no proxy will route to, and two group kinds gain a spec
+          # field. **Unlike 0.2.18 the CRDs really change** -- an optional map
+          # on ServerGroup and ProxyGroup -- so every object that exists
+          # validates unchanged and the chart carries a new schema.
+          operatorVersion = "0.2.19";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
