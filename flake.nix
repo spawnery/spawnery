@@ -198,7 +198,10 @@
           # second verb -- a server can close its own door to new players and
           # open it again -- and a group's attributes reach a plugin through
           # the same jar.
-          imageVersion = "0.2.19";
+          #
+          # 0.2.20 moves it because a value the plugin API hands out gained a
+          # component: a server now says which run of it this is.
+          imageVersion = "0.2.20";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -257,7 +260,13 @@
           # field. **Unlike 0.2.18 the CRDs really change** -- an optional map
           # on ServerGroup and ProxyGroup -- so every object that exists
           # validates unchanged and the chart carries a new schema.
-          operatorVersion = "0.2.19";
+          #
+          # 0.2.20 moves all three once more, and it is the smallest of the
+          # three moves: the reconciler records which pod is behind a server
+          # and netstate carries it onward. A status field, so the CRDs change
+          # again -- and a status field is one the operator fills in, so no
+          # object anybody wrote needs anything.
+          operatorVersion = "0.2.20";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
