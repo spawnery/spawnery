@@ -68,6 +68,11 @@ class NetworkMirror {
                     it.players,
                     it.slots,
                     it.registered,
+                    it.state,
+                    // The proto's own map, copied by ServerInfo rather than
+                    // here: a snapshot a plugin holds must not change under it
+                    // when the next state arrives.
+                    it.attributesMap,
                 )
             },
             // An entry whose UUID will not parse is dropped and the rest of the

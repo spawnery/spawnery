@@ -205,3 +205,59 @@ func TestAServersPhaseTravelsAsTheOperatorSpellsIt(t *testing.T) {
 		t.Errorf("phase = %q, want the operator's own spelling", got.GetServers()[0].GetPhase())
 	}
 }
+
+func TestBuildCarriesWhatAServerSaysAboutItself(t *testing.T) {
+	// From the registry and from no object, for a different reason than the
+	// roster is: this is the server's own word, the operator never acts on it,
+	// and a status field would mean an etcd write every time a game changed
+	// what it was doing.
+	src, reg := source(t,
+		ephemeralGroup("ns", "lobby"),
+		readyServer("ns", "lobby-a", "lobby", 0, 100),
+		readyServer("ns", "lobby-b", "lobby", 0, 100),
+	)
+	reg.Connect("pod-a", agent.RoleServer)
+	if err := reg.ReportAnnouncement("pod-a", "ns", "lobby-a", agent.Announcement{
+		State:      "running",
+		Attributes: map[string]string{"map": "arena"},
+	}); err != nil {
+		t.Fatalf("ReportAnnouncement: %v", err)
+	}
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(got.GetServers()) != 2 {
+		t.Fatalf("servers = %v, want both", got.GetServers())
+	}
+	if got.GetServers()[0].GetState() != "running" ||
+		got.GetServers()[0].GetAttributes()["map"] != "arena" {
+		t.Errorf("lobby-a = %+v, want what it announced", got.GetServers()[0])
+	}
+	// The one that announced nothing is described as nothing, not as its
+	// neighbour: an announcement is attached by name, and a mapping that lost
+	// the name would show every server the last one's description.
+	if got.GetServers()[1].GetState() != "" || len(got.GetServers()[1].GetAttributes()) != 0 {
+		t.Errorf("lobby-b = %+v, want an empty description", got.GetServers()[1])
+	}
+}
+
+func TestAServerThatAnnouncedNothingIsDescribedAsNothing(t *testing.T) {
+	// The picture a network has before anything on it announces, and the
+	// picture every network has while its agents predate the verb. They are
+	// the same picture on purpose -- a plugin that had to tell them apart
+	// would be asking about the agent rather than about the game.
+	src, _ := source(t,
+		ephemeralGroup("ns", "lobby"),
+		readyServer("ns", "lobby-a", "lobby", 0, 100),
+	)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got.GetServers()[0].GetState() != "" {
+		t.Errorf("state = %q, want empty", got.GetServers()[0].GetState())
+	}
+}

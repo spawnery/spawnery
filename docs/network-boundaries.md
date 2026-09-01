@@ -371,6 +371,25 @@ budget. `spawnery_agent_requests_refused_total` publishes the refusals by
 reason, and a rising `RATE_LIMITED` is the shape a misbehaving or compromised
 plugin has.
 
+**And a server can now describe itself to the rest of its network.** A backend
+agent may publish a short state and a handful of key/value attributes, which
+the operator carries into the `NetworkState` every other agent in the namespace
+receives. The operator reads none of it: no scheduling, routing or scaling
+decision looks at a word, which is why free-form text is acceptable here and is
+not acceptable anywhere else on this channel.
+
+That is a widening and is written down as one. A compromised game server pod
+can now put text of its choosing in front of every plugin in its own network,
+and a plugin that treats what another server said as an instruction has built a
+path from one pod to another that no policy in this repository bounds. What is
+bounded is the size and the reach: a state of at most 64 characters, at most 16
+attributes of at most 64 and 256, refused rather than trimmed; the namespace,
+because the picture is built from a List scoped to the pod's own authenticated
+namespace; and the name it is published under, which is the pod's own from its
+token — an `AnnounceRequest` has no field for a name, so no pod can describe
+another. It reaches no custom resource and no etcd: it lives in the operator's
+memory for as long as that pod has a session, and is gone when the pod is.
+
 **A plugin needs no permission to read it, and cannot be given one.** That
 looked like an open decision when 7b-3 wrote this section and turned out not
 to be a decision at all. Bukkit permissions attach to a `CommandSender` and

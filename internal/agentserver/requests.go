@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/grpcauth"
 )
@@ -56,6 +57,27 @@ const (
 	// reviews it -- and this bound is the only thing that makes an admin
 	// discover that file rather than typing a week-long boost every week.
 	BoostMaxDuration = 12 * time.Hour
+
+	// AnnounceMaxStateLength is the longest state a server may announce.
+	//
+	// Sixty-four characters, which is a word or a short phrase and not a
+	// sentence. The state is meant to be compared -- a plugin asks whether a
+	// server is in the state it cares about -- and a value long enough to
+	// carry a message is one somebody will put a message in.
+	AnnounceMaxStateLength = 64
+	// AnnounceMaxAttributes is how many attributes one announcement may carry.
+	AnnounceMaxAttributes = 16
+	// AnnounceMaxKeyLength is the longest attribute key.
+	AnnounceMaxKeyLength = 64
+	// AnnounceMaxValueLength is the longest attribute value.
+	//
+	// The three numbers above bound one announcement at roughly five
+	// kilobytes, and that figure is the one that matters rather than any of
+	// them alone: an announcement is carried to every agent in the namespace
+	// on every resync, so a network of forty servers pays this forty times
+	// over, every resync, for as long as it runs. Generous enough for a
+	// description and far too small for a payload.
+	AnnounceMaxValueLength = 256
 )
 
 // requestLimiter is a token bucket per pod.
@@ -148,6 +170,8 @@ func (s *Server) answerCloudRequest(
 		return s.answerBoost(ctx, logger, id, req.GetId(), req.GetBoost())
 	case req.GetStopBoost() != nil:
 		return s.answerStopBoost(ctx, logger, id, req.GetId(), req.GetStopBoost())
+	case req.GetAnnounce() != nil:
+		return s.answerAnnounce(logger, id, req.GetId(), req.GetAnnounce())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")
@@ -428,6 +452,95 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 //
 // The message is free text for a person; the reason is what a caller branches
 // on. Neither carries a player's name into the counter -- see RequestsRefused.
+// answerAnnounce records what a server says about itself.
+//
+// # The one request the operator stores and never reads
+//
+// Every other verb here changes something the operator then acts on. This one
+// changes only what the operator repeats: the announcement is carried into the
+// NetworkState every agent in the namespace receives, and no rule in this
+// repository branches on it. That is what makes free-form text acceptable
+// here and unacceptable anywhere else in this file.
+//
+// **The server names itself, and the message does not.** The name stored is
+// id.PodName, from the pod's own authenticated token; a pod is named after its
+// Server, so the identity already carries the name and there is no field an
+// agent could put another server's name in. An AnnounceRequest that carried a
+// name would be the first message on this channel that could describe
+// somebody else.
+//
+// **A proxy is refused rather than accepted and dropped.** A network's picture
+// has a record per server and none per proxy, so an announcement from a proxy
+// would be stored where nothing could read it. Storing it silently would leave
+// a plugin author watching for a description that was never going to appear,
+// with nothing anywhere saying why.
+//
+// **Too big is refused and never trimmed**, and each bound says which one it
+// was. A description silently cut in half is worse than a refusal twice over:
+// the plugin believes it published what it wrote, and the truncation lands
+// wherever the cut happened to fall rather than where a reader could see it.
+func (s *Server) answerAnnounce(
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.AnnounceRequest,
+) *agentpb.CloudResponse {
+	if id.Role != agent.RoleServer {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"only a server can describe itself: a network's picture has a record per server and none per proxy")
+	}
+	if message, ok := announcementRefusal(req); !ok {
+		return refuse(reqID, agentpb.RequestError_REFUSED, message)
+	}
+
+	// The namespace and the name are the token's; only the words are the
+	// message's.
+	if err := s.opts.Agents.ReportAnnouncement(id.PodUID, id.Namespace, id.PodName,
+		agent.Announcement{State: req.GetState(), Attributes: req.GetAttributes()}); err != nil {
+		// The stream this arrived on was superseded between the read and here,
+		// which is ordinary during a renewal and is the caller's to retry.
+		logger.V(1).Info("could not record an announcement", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not record that just now")
+	}
+
+	return &agentpb.CloudResponse{
+		Id:     reqID,
+		Result: &agentpb.CloudResponse_Announce{Announce: &agentpb.AnnounceResult{}},
+	}
+}
+
+// announcementRefusal reports whether an announcement is within its bounds,
+// and says which one it broke when it is not.
+//
+// The message names the bound and the offending key, because the caller is a
+// plugin author reading a log line and "too many attributes" without the
+// number is a bound they then have to find in this file.
+func announcementRefusal(req *agentpb.AnnounceRequest) (string, bool) {
+	if len(req.GetState()) > AnnounceMaxStateLength {
+		return fmt.Sprintf("that state is %d characters and the operator carries at most %d",
+			len(req.GetState()), AnnounceMaxStateLength), false
+	}
+	if len(req.GetAttributes()) > AnnounceMaxAttributes {
+		return fmt.Sprintf("that announcement has %d attributes and the operator carries at most %d",
+			len(req.GetAttributes()), AnnounceMaxAttributes), false
+	}
+	for key, value := range req.GetAttributes() {
+		if key == "" {
+			return "an attribute with no name is one nothing can ask for", false
+		}
+		if len(key) > AnnounceMaxKeyLength {
+			return fmt.Sprintf("an attribute name is %d characters and the operator carries at most %d",
+				len(key), AnnounceMaxKeyLength), false
+		}
+		if len(value) > AnnounceMaxValueLength {
+			return fmt.Sprintf("the value of %q is %d characters and the operator carries at most %d",
+				key, len(value), AnnounceMaxValueLength), false
+		}
+	}
+	return "", true
+}
+
 func refuse(reqID uint64, reason agentpb.RequestError_Reason, message string) *agentpb.CloudResponse {
 	RequestsRefused.WithLabelValues(reason.String()).Inc()
 	return &agentpb.CloudResponse{

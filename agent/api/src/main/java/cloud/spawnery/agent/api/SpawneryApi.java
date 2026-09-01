@@ -18,6 +18,7 @@ package cloud.spawnery.agent.api;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -145,6 +146,44 @@ public interface SpawneryApi {
      * caller who expected some needs to be able to tell.
      */
     CompletionStage<Integer> stopBoosts(String group);
+
+    /**
+     * Publishes what this server is doing, for every other server to read.
+     *
+     * <p><b>The cloud carries this and never reads it.</b> Nothing the
+     * operator decides looks at a word of it: not where a player is sent, not
+     * when a server is replaced, not how a group is sized. It reaches the
+     * other agents in this network as {@link ServerInfo#state()} and
+     * {@link ServerInfo#attributes()} and goes no further, which is what makes
+     * it safe to put anything in and useless to put an instruction in.
+     *
+     * <p><b>It is not {@link ServerInfo#phase()}.</b> The phase is the
+     * operator's account of a server's lifecycle and no plugin can write it.
+     * This is the server's own account of itself, and the two are meant to
+     * disagree: a server is {@code READY} from the moment it can take players
+     * until it stops, and what is happening inside that window is a question
+     * only the thing running there can answer.
+     *
+     * <p><b>Each call replaces the last one whole.</b> Attributes are not
+     * merged: a call with one attribute leaves this server with one, whatever
+     * the call before it said. Publish the whole description each time, which
+     * is also the only way an attribute can ever be taken back.
+     *
+     * <p>The stage fails when the operator refuses -- a state or an attribute
+     * longer than it carries, more attributes than it carries, or a call from
+     * a proxy, which has no per-instance record in the network's picture for
+     * an announcement to appear in. Each refusal says which.
+     *
+     * <p>It survives a reconnection without being called again: the agent
+     * holds the last description it published and re-publishes it on every new
+     * session, so an operator that restarts does not leave a running game
+     * described as nothing.
+     *
+     * @param state what this server is doing, in a word or a short phrase.
+     *     Empty clears it.
+     * @param attributes anything else worth publishing. Empty clears them.
+     */
+    CompletionStage<Void> announce(String state, Map<String, String> attributes);
 
     /**
      * Where to hear about things happening in the cloud.

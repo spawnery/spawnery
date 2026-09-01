@@ -3,6 +3,7 @@ package cloud.spawnery.agent
 import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
 import cloud.spawnery.agent.api.Target
+import cloud.spawnery.agent.pb.AnnounceRequest
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.ConnectRequest
@@ -14,6 +15,7 @@ import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.CompletionStage
 
 /**
@@ -96,6 +98,46 @@ class CloudConnector(
             )
         }
 
+    /**
+     * The last description this server published, re-sent on every new stream.
+     *
+     * The operator remembers an announcement for as long as it has the session
+     * that made it and no longer -- so an operator that restarts has forgotten
+     * every description in the network, while every game that published one is
+     * still running and has no reason to publish it again. Holding it here is
+     * what closes that: the agent re-asserts on each new session, exactly as
+     * readiness and event interest are re-asserted, and for the same reason.
+     *
+     * Null until something announces. A server that has never described itself
+     * has nothing to restate, which is not the same as one that described
+     * itself as nothing.
+     */
+    private val lastAnnouncement = AtomicReference<AnnounceRequest?>(null)
+
+    /**
+     * Publishes what this server is doing.
+     *
+     * The whole description each time: the operator replaces rather than
+     * merges, so what is sent here is what other agents will see and anything
+     * left out is taken back.
+     */
+    fun announce(state: String, attributes: Map<String, String>): CompletionStage<Void> {
+        val announcement = AnnounceRequest.newBuilder()
+            .setState(state)
+            .putAllAttributes(attributes)
+            .build()
+        // Remembered before it is sent, not after. A send that fails is still
+        // this server's intent, and the stream it failed on is exactly the one
+        // whose replacement should carry it.
+        lastAnnouncement.set(announcement)
+        return send(announcement)
+    }
+
+    private fun send(announcement: AnnounceRequest): CompletionStage<Void> =
+        requests.start<Void> { id ->
+            sendRequest(CloudRequest.newBuilder().setId(id).setAnnounce(announcement).build())
+        }
+
     /** Ends every boost on a group and reports how many there were. */
     fun stopBoosts(group: String): CompletionStage<Int> =
         requests.start<Int> { id ->
@@ -135,6 +177,7 @@ class CloudConnector(
                 ),
             )
             response.hasStopBoost() -> requests.complete(response.id, response.stopBoost.removed)
+            response.hasAnnounce() -> requests.complete(response.id, null)
             // A result kind this agent does not know. Failed rather than
             // ignored: a plugin holding a future to its deadline learns
             // nothing, where a failure names the version skew.
@@ -148,6 +191,16 @@ class CloudConnector(
     /** Fails everything outstanding. Called when this agent's stream changes. */
     fun onStreamChanged() {
         requests.failAll(IllegalStateException("the session was renewed while this request was in flight"))
+        // And then say again what this server is, on the stream that just
+        // became current -- the loop installs it before calling this, so this
+        // send goes to the new one.
+        //
+        // Nobody is waiting on the answer, and the future is dropped rather
+        // than logged: the only caller is this agent restating something it
+        // already knows, and a refusal here would say what the original call
+        // was already told. requests.start never throws, so a send between
+        // sessions fails that future instead of this hook.
+        lastAnnouncement.get()?.let { send(it) }
     }
 
     /** Fails everything past its deadline. Called from the reporting timer. */

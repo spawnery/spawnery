@@ -111,6 +111,7 @@ message CloudRequest {
     RetireRequest retire = 3;
     BoostRequest boost = 4;
     StopBoostRequest stop_boost = 5;
+    AnnounceRequest announce = 6;
   }
 }
 
@@ -128,6 +129,7 @@ message CloudResponse {
     RetireResult retire = 4;
     BoostResult boost = 5;
     StopBoostResult stop_boost = 6;
+    AnnounceResult announce = 7;
   }
 }
 
@@ -249,6 +251,52 @@ message StopBoostRequest {
 message StopBoostResult {
   int32 removed = 1;
 }
+
+// AnnounceRequest is a server describing itself.
+//
+// **The operator does not read any of this.** Nothing here reaches a decision
+// it makes: not scheduling, not routing, not scaling. The operator carries the
+// words to the other agents in the namespace and no further, which is the
+// whole of what this verb does and the reason it can afford to be free-form.
+// A field the operator acted on would need a schema, a validation error path
+// and a version story; a field it only carries needs a length bound.
+//
+// **It is not the phase.** ServerState.phase is the operator's own account of
+// a server's lifecycle and an agent cannot write it. This is the server's
+// account of itself, and the two are allowed to disagree -- a server is Ready
+// for a long time, and what it is *doing* in that time is a question only the
+// thing running on it can answer.
+//
+// **The last one wins, whole.** An announcement replaces its predecessor
+// rather than merging into it: a caller that sends two attributes and then one
+// has one, and a caller that wants the other kept sends it again. Merging
+// would mean an attribute could never be removed without a second verb for
+// removing it, and the first plugin to typo a key would have poisoned that
+// server's description for the life of the pod.
+//
+// The bounds are the operator's and it refuses rather than trims -- see its
+// own answer for the numbers. They are small on purpose: this travels to every
+// agent in the namespace on every resync, so a description that grew to
+// kilobytes would be paid for by every pod, forever, at the resync interval.
+message AnnounceRequest {
+  // What the server says it is doing. Free-form, and empty clears it.
+  //
+  // No enum, and that is deliberate rather than unfinished. The states a game
+  // has are the game's -- waiting, running, ending, whatever a mode invents --
+  // and an enum here would be this repository guessing at them and then
+  // shipping a new operator whenever somebody guessed wrong.
+  string state = 1;
+  // Anything else this server wants other servers to know. Empty clears them.
+  map<string, string> attributes = 2;
+}
+
+// AnnounceResult says the operator has it.
+//
+// It carries nothing. Everything it could echo is something the caller just
+// sent, and a result that repeats its own input teaches a reader that the
+// operator changed something when it did not. What the caller learns is which
+// of two things happened -- it was accepted, or it was refused with a reason.
+message AnnounceResult {}
 
 // CloudEvent is something that happened, on its way to somebody's chat.
 //
@@ -511,6 +559,14 @@ message ServerState {
   // be Ready and not registered -- that is the first half of a drain -- so a
   // plugin choosing where to send somebody wants this and not the phase.
   bool registered = 6;
+  // What this server last said about itself, and nothing the operator decided.
+  // See AnnounceRequest. Both are empty for a server that has announced
+  // nothing, which is every server until something on it says otherwise --
+  // absent and "announced nothing" are the same state here on purpose, because
+  // a plugin that has to tell them apart is asking about the agent rather than
+  // about the game.
+  string state = 7;
+  map<string, string> attributes = 8;
 }
 
 message ProxyMessage {

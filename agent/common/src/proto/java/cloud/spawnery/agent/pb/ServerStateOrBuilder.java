@@ -77,4 +77,68 @@ public interface ServerStateOrBuilder extends
    * @return The registered.
    */
   boolean getRegistered();
+
+  /**
+   * <pre>
+   * What this server last said about itself, and nothing the operator decided.
+   * See AnnounceRequest. Both are empty for a server that has announced
+   * nothing, which is every server until something on it says otherwise --
+   * absent and "announced nothing" are the same state here on purpose, because
+   * a plugin that has to tell them apart is asking about the agent rather than
+   * about the game.
+   * </pre>
+   *
+   * <code>string state = 7;</code>
+   * @return The state.
+   */
+  java.lang.String getState();
+  /**
+   * <pre>
+   * What this server last said about itself, and nothing the operator decided.
+   * See AnnounceRequest. Both are empty for a server that has announced
+   * nothing, which is every server until something on it says otherwise --
+   * absent and "announced nothing" are the same state here on purpose, because
+   * a plugin that has to tell them apart is asking about the agent rather than
+   * about the game.
+   * </pre>
+   *
+   * <code>string state = 7;</code>
+   * @return The bytes for state.
+   */
+  com.google.protobuf.ByteString
+      getStateBytes();
+
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  int getAttributesCount();
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  boolean containsAttributes(
+      java.lang.String key);
+  /**
+   * Use {@link #getAttributesMap()} instead.
+   */
+  @java.lang.Deprecated
+  java.util.Map<java.lang.String, java.lang.String>
+  getAttributes();
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  java.util.Map<java.lang.String, java.lang.String>
+  getAttributesMap();
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  /* nullable */
+java.lang.String getAttributesOrDefault(
+      java.lang.String key,
+      /* nullable */
+java.lang.String defaultValue);
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  java.lang.String getAttributesOrThrow(
+      java.lang.String key);
 }

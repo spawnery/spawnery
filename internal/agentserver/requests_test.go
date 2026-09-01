@@ -17,10 +17,17 @@ limitations under the License.
 package agentserver
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+
+	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/grpcauth"
 )
 
 // One test per bound, and each asserting the reason rather than merely that
@@ -133,5 +140,127 @@ func TestTheBucketRefills(t *testing.T) {
 
 	if !l.allow("pod-a") {
 		t.Error("a token did not come back after the refill interval")
+	}
+}
+
+// One test per bound here too, and each names the bound it broke. A single
+// "it was refused" test passes when the wrong bound fired.
+
+func announcement(state string, attributes map[string]string) *agentpb.AnnounceRequest {
+	return &agentpb.AnnounceRequest{State: state, Attributes: attributes}
+}
+
+func TestAnAnnouncementWithinItsBoundsIsAccepted(t *testing.T) {
+	if message, ok := announcementRefusal(announcement("running",
+		map[string]string{"map": "arena"})); !ok {
+		t.Errorf("an ordinary announcement was refused: %s", message)
+	}
+	// And the empty one, which is how a server takes its description back.
+	if _, ok := announcementRefusal(announcement("", nil)); !ok {
+		t.Error("clearing a description was refused")
+	}
+}
+
+func TestAStateLongerThanTheOperatorCarriesIsRefused(t *testing.T) {
+	long := strings.Repeat("x", AnnounceMaxStateLength+1)
+
+	message, ok := announcementRefusal(announcement(long, nil))
+	if ok {
+		t.Fatal("an oversized state was accepted")
+	}
+	// The number is in the message because the caller is a plugin author
+	// reading a log line, and a bound they have to go and look up is one they
+	// will guess at instead.
+	if !strings.Contains(message, "64") {
+		t.Errorf("refusal = %q, want it to name the bound", message)
+	}
+}
+
+func TestMoreAttributesThanTheOperatorCarriesAreRefused(t *testing.T) {
+	attributes := make(map[string]string)
+	for i := 0; i <= AnnounceMaxAttributes; i++ {
+		attributes[fmt.Sprintf("key-%d", i)] = "v"
+	}
+
+	if message, ok := announcementRefusal(announcement("", attributes)); ok {
+		t.Error("too many attributes were accepted")
+	} else if !strings.Contains(message, "attributes") {
+		t.Errorf("refusal = %q, want it to name what was too many", message)
+	}
+}
+
+func TestAnAttributeNameOrValueBeyondTheBoundIsRefused(t *testing.T) {
+	if _, ok := announcementRefusal(announcement("",
+		map[string]string{strings.Repeat("k", AnnounceMaxKeyLength+1): "v"})); ok {
+		t.Error("an oversized attribute name was accepted")
+	}
+	message, ok := announcementRefusal(announcement("",
+		map[string]string{"map": strings.Repeat("v", AnnounceMaxValueLength+1)}))
+	if ok {
+		t.Fatal("an oversized attribute value was accepted")
+	}
+	// Named, because a plugin publishing eight attributes needs to know which.
+	if !strings.Contains(message, `"map"`) {
+		t.Errorf("refusal = %q, want it to name the attribute", message)
+	}
+}
+
+func TestAnAttributeWithNoNameIsRefused(t *testing.T) {
+	// Not a bound but a shape: nothing can ask for an attribute that has no
+	// name, so storing one would cost a reader nothing but confusion.
+	if _, ok := announcementRefusal(announcement("", map[string]string{"": "v"})); ok {
+		t.Error("a nameless attribute was accepted")
+	}
+}
+
+func TestAnAnnouncementIsStoredUnderTheIdentitysOwnName(t *testing.T) {
+	// The name comes from the pod's authenticated identity and the message has
+	// no field for one, which is what keeps this the only verb here that
+	// cannot describe somebody else.
+	registry := agent.New(time.Now, time.Second, time.Now())
+	registry.Connect("pod-a", agent.RoleServer)
+	// Built by hand rather than by New, which insists on the fleets and the
+	// certificates a real listener needs. This verb reaches none of them: it
+	// reads the identity, checks the bounds and writes to the registry.
+	s := &Server{opts: Options{Agents: registry}, requestRate: newRequestLimiter(time.Now)}
+
+	response := s.answerCloudRequest(context.Background(), logr.Discard(),
+		grpcauth.Identity{Namespace: "ns", PodName: "lobby-a", PodUID: "pod-a", Role: agent.RoleServer},
+		&agentpb.CloudRequest{
+			Id:      7,
+			Request: &agentpb.CloudRequest_Announce{Announce: announcement("running", nil)},
+		})
+
+	if response.GetAnnounce() == nil {
+		t.Fatalf("response = %+v, want an accepted announcement", response)
+	}
+	if response.GetId() != 7 {
+		t.Errorf("id = %d, want the request's own", response.GetId())
+	}
+	if got := registry.Announcements("ns")["lobby-a"].State; got != "running" {
+		t.Errorf("stored state = %q, want it under the identity's name", got)
+	}
+}
+
+func TestAProxyAnnouncementIsRefusedRatherThanDropped(t *testing.T) {
+	// A network's picture has a record per server and none per proxy. Storing
+	// it silently would leave a plugin author watching for a description that
+	// was never going to appear.
+	registry := agent.New(time.Now, time.Second, time.Now())
+	registry.Connect("proxy-a", agent.RoleProxy)
+	s := &Server{opts: Options{Agents: registry}, requestRate: newRequestLimiter(time.Now)}
+
+	response := s.answerCloudRequest(context.Background(), logr.Discard(),
+		grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy},
+		&agentpb.CloudRequest{
+			Id:      1,
+			Request: &agentpb.CloudRequest_Announce{Announce: announcement("running", nil)},
+		})
+
+	if response.GetError() == nil {
+		t.Fatalf("response = %+v, want a refusal", response)
+	}
+	if response.GetError().GetReason() != agentpb.RequestError_REFUSED {
+		t.Errorf("reason = %v, want REFUSED", response.GetError().GetReason())
 	}
 }

@@ -78,6 +78,9 @@ class MirrorApi(
     override fun boost(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<BoostResult> =
         connector.boost(group, replicas, forHowLong)
 
+    override fun announce(state: String, attributes: Map<String, String>): CompletionStage<Void> =
+        connector.announce(state, attributes)
+
     override fun stopBoosts(group: String): CompletionStage<Int> =
         connector.stopBoosts(group)
 

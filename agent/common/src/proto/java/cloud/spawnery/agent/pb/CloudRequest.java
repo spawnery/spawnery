@@ -74,6 +74,7 @@ private static final long serialVersionUID = 0L;
     RETIRE(3),
     BOOST(4),
     STOP_BOOST(5),
+    ANNOUNCE(6),
     REQUEST_NOT_SET(0);
     private final int value;
     private RequestCase(int value) {
@@ -95,6 +96,7 @@ private static final long serialVersionUID = 0L;
         case 3: return RETIRE;
         case 4: return BOOST;
         case 5: return STOP_BOOST;
+        case 6: return ANNOUNCE;
         case 0: return REQUEST_NOT_SET;
         default: return null;
       }
@@ -245,6 +247,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.StopBoostRequest.getDefaultInstance();
   }
 
+  public static final int ANNOUNCE_FIELD_NUMBER = 6;
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+   * @return Whether the announce field is set.
+   */
+  @java.lang.Override
+  public boolean hasAnnounce() {
+    return requestCase_ == 6;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+   * @return The announce.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.AnnounceRequest getAnnounce() {
+    if (requestCase_ == 6) {
+       return (cloud.spawnery.agent.pb.AnnounceRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.AnnounceRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.AnnounceRequestOrBuilder getAnnounceOrBuilder() {
+    if (requestCase_ == 6) {
+       return (cloud.spawnery.agent.pb.AnnounceRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.AnnounceRequest.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -274,6 +307,9 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 5) {
       output.writeMessage(5, (cloud.spawnery.agent.pb.StopBoostRequest) request_);
     }
+    if (requestCase_ == 6) {
+      output.writeMessage(6, (cloud.spawnery.agent.pb.AnnounceRequest) request_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -297,6 +333,10 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 5) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(5, (cloud.spawnery.agent.pb.StopBoostRequest) request_);
+    }
+    if (requestCase_ == 6) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(6, (cloud.spawnery.agent.pb.AnnounceRequest) request_);
     }
     return size;
   }
@@ -342,6 +382,10 @@ private static final long serialVersionUID = 0L;
         if (!getStopBoost()
             .equals(other.getStopBoost())) return false;
         break;
+      case 6:
+        if (!getAnnounce()
+            .equals(other.getAnnounce())) return false;
+        break;
       case 0:
       default:
     }
@@ -375,6 +419,10 @@ private static final long serialVersionUID = 0L;
       case 5:
         hash = (37 * hash) + STOP_BOOST_FIELD_NUMBER;
         hash = (53 * hash) + getStopBoost().hashCode();
+        break;
+      case 6:
+        hash = (37 * hash) + ANNOUNCE_FIELD_NUMBER;
+        hash = (53 * hash) + getAnnounce().hashCode();
         break;
       case 0:
       default:
@@ -539,6 +587,9 @@ private static final long serialVersionUID = 0L;
       if (stopBoostBuilder_ != null) {
         stopBoostBuilder_.clear();
       }
+      if (announceBuilder_ != null) {
+        announceBuilder_.clear();
+      }
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -599,6 +650,10 @@ private static final long serialVersionUID = 0L;
           stopBoostBuilder_ != null) {
         result.request_ = stopBoostBuilder_.build();
       }
+      if (requestCase_ == 6 &&
+          announceBuilder_ != null) {
+        result.request_ = announceBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -631,6 +686,10 @@ private static final long serialVersionUID = 0L;
         }
         case STOP_BOOST: {
           mergeStopBoost(other.getStopBoost());
+          break;
+        }
+        case ANNOUNCE: {
+          mergeAnnounce(other.getAnnounce());
           break;
         }
         case REQUEST_NOT_SET: {
@@ -696,6 +755,13 @@ private static final long serialVersionUID = 0L;
               requestCase_ = 5;
               break;
             } // case 42
+            case 50: {
+              input.readMessage(
+                  internalGetAnnounceFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 6;
+              break;
+            } // case 50
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1326,6 +1392,148 @@ private static final long serialVersionUID = 0L;
       requestCase_ = 5;
       onChanged();
       return stopBoostBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.AnnounceRequest, cloud.spawnery.agent.pb.AnnounceRequest.Builder, cloud.spawnery.agent.pb.AnnounceRequestOrBuilder> announceBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     * @return Whether the announce field is set.
+     */
+    @java.lang.Override
+    public boolean hasAnnounce() {
+      return requestCase_ == 6;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     * @return The announce.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.AnnounceRequest getAnnounce() {
+      if (announceBuilder_ == null) {
+        if (requestCase_ == 6) {
+          return (cloud.spawnery.agent.pb.AnnounceRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.AnnounceRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 6) {
+          return announceBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.AnnounceRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     */
+    public Builder setAnnounce(cloud.spawnery.agent.pb.AnnounceRequest value) {
+      if (announceBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        announceBuilder_.setMessage(value);
+      }
+      requestCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     */
+    public Builder setAnnounce(
+        cloud.spawnery.agent.pb.AnnounceRequest.Builder builderForValue) {
+      if (announceBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        announceBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     */
+    public Builder mergeAnnounce(cloud.spawnery.agent.pb.AnnounceRequest value) {
+      if (announceBuilder_ == null) {
+        if (requestCase_ == 6 &&
+            request_ != cloud.spawnery.agent.pb.AnnounceRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.AnnounceRequest.newBuilder((cloud.spawnery.agent.pb.AnnounceRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 6) {
+          announceBuilder_.mergeFrom(value);
+        } else {
+          announceBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     */
+    public Builder clearAnnounce() {
+      if (announceBuilder_ == null) {
+        if (requestCase_ == 6) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 6) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        announceBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     */
+    public cloud.spawnery.agent.pb.AnnounceRequest.Builder getAnnounceBuilder() {
+      return internalGetAnnounceFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.AnnounceRequestOrBuilder getAnnounceOrBuilder() {
+      if ((requestCase_ == 6) && (announceBuilder_ != null)) {
+        return announceBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 6) {
+          return (cloud.spawnery.agent.pb.AnnounceRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.AnnounceRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.AnnounceRequest, cloud.spawnery.agent.pb.AnnounceRequest.Builder, cloud.spawnery.agent.pb.AnnounceRequestOrBuilder> 
+        internalGetAnnounceFieldBuilder() {
+      if (announceBuilder_ == null) {
+        if (!(requestCase_ == 6)) {
+          request_ = cloud.spawnery.agent.pb.AnnounceRequest.getDefaultInstance();
+        }
+        announceBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.AnnounceRequest, cloud.spawnery.agent.pb.AnnounceRequest.Builder, cloud.spawnery.agent.pb.AnnounceRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.AnnounceRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 6;
+      onChanged();
+      return announceBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudRequest)
