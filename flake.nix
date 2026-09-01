@@ -79,6 +79,14 @@
               # would need a flag to stop it inventing a manifest -- a line the
               # next reader has to decode, to save a package this small.
               zip
+              # And gpg, because hack/publish-api.sh signs with it rather than
+              # with Gradle's signing plugin. Measured, on a real key: that
+              # plugin reads a key through a bundled Bouncy Castle and answers
+              # "Could not read PGP secret key" for keys recent GnuPG versions
+              # write by default -- a failure in the middle of a build log,
+              # about a format the person who made the key never chose. The
+              # tool that wrote the key is the one that can read it.
+              gnupg
               # Both of these are pinned a second time, by version, in
               # agent/common/build.gradle.kts -- and only this half moves when
               # nixpkgs does. `protobuf` here is protoc, whose X.Y the
