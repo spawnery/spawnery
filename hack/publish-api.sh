@@ -128,6 +128,23 @@ if [[ -n "${SIGNING_KEY:-}" ]]; then
     echo "publish-api: SIGNING_KEY arrived with escaped newlines; reading it as a key"
   fi
 
+  # Armour is a marker, then either headers or a blank line, then base64.
+  # Without that blank line gpg reads the first base64 line as a header and
+  # says "invalid armor header: <that line>" -- and on a runner that line is
+  # part of the secret, so the log masks it and what is left to read is three
+  # asterisks. Reproduced exactly by deleting the blank line from a healthy
+  # key, which is how this was found rather than guessed at.
+  #
+  # Something between the export and the secret store drops it; a text box that
+  # trims blank lines is the obvious candidate. Putting it back is unambiguous:
+  # a second line that is neither empty nor "Key: value" cannot be a header,
+  # and armour with no headers has to have the blank line.
+  second="$(sed -n '2p' <<<"$key")"
+  if [[ -n "$second" && ! "$second" =~ ^[A-Za-z][A-Za-z-]*:\  ]]; then
+    key="$(awk 'NR==1 {print; print ""; next} {print}' <<<"$key")"
+    echo "publish-api: SIGNING_KEY had no blank line after its armour marker; put one back"
+  fi
+
   GNUPGHOME="$(mktemp -d)"
   export GNUPGHOME
   chmod 700 "$GNUPGHOME"
