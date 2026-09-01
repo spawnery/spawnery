@@ -5460,6 +5460,29 @@ spec:
                   PodName is the pod backing this server. Set once the pod was created and
                   never reused for a different pod.
                 type: string
+              podUID:
+                description: |-
+                  PodUID identifies the pod behind PodName, and so one run of this server
+                  apart from the next one under the same name.
+
+                  The name is not enough on its own and for one kind of server it never
+                  will be: an ephemeral server is named afresh every time, but a
+                  persistent one keeps its name across every restart -- that name is the
+                  identity of its world. Anything asking "is this still the same server I
+                  saw" therefore has to compare something that changes when the process
+                  does, and the pod's UID is exactly that.
+
+                  Recorded whenever the pod is observed rather than where it is created:
+                  after a Create that came back AlreadyExists the object carries no UID,
+                  and a field written only on the happy path is one that stays empty in
+                  precisely the case somebody is investigating.
+
+                  Not cleared when the pod goes. A stale value on a server that has no pod
+                  changes no answer -- such a server is not Ready and nobody is being sent
+                  there -- while clearing it would make the identity flicker through empty
+                  during a restart, and a reader comparing across that would see two
+                  changes where one happened.
+                type: string
               readinessLosses:
                 description: |-
                   ReadinessLosses counts how often this server fell out of Ready. Past the

@@ -617,6 +617,21 @@ message ServerState {
   // about the game.
   string state = 7;
   map<string, string> attributes = 8;
+  // Which run of this server this is: an opaque token that changes whenever
+  // the process behind the name is replaced, and never otherwise.
+  //
+  // The name alone cannot answer that, and for one kind of server it never
+  // will: an ephemeral server is named afresh every time, but a persistent one
+  // keeps its name across every restart because that name is the identity of
+  // its world. Anything that remembers a server and later asks "is this still
+  // the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+  // reconnect -- compares this and not the name.
+  //
+  // Opaque on purpose. It is a pod UID today and this contract does not say
+  // so: what is promised is that two equal values mean the same run and two
+  // different ones mean different runs. Empty for a server whose pod the
+  // operator has not seen yet, which is a server nobody is being sent to.
+  string incarnation = 9;
 }
 
 message ProxyMessage {
