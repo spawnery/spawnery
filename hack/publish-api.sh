@@ -19,9 +19,18 @@
 # paid by every build of this repository, forever, to save one curl.
 #
 # Gradle's own `maven-publish` writes the repository layout into
-# agent/api/build/staging-deploy, `signing` puts a .asc beside every file, and
-# what is left is to zip that tree and post it. Both of those plugins ship with
-# Gradle.
+# agent/api/build/staging-deploy, and what is left is to sign that tree and
+# post it.
+#
+# # Why gpg signs and Gradle does not
+#
+# Gradle's signing plugin reads a key through a Bouncy Castle it bundles, and
+# measured on a real key it answers "Could not read PGP secret key" for what
+# recent GnuPG versions write by default. The failure is not the problem; where
+# it arrives is. It comes out of the middle of a Gradle build, about a key
+# format the person who generated the key never chose and cannot see from
+# there. Signing here with gpg means the tool that reads the key is the one
+# that wrote it, and every key gpg can produce is a key this can sign with.
 #
 # Environment:
 #   DRY_RUN=1                 build and assemble the bundle, print what would
@@ -33,10 +42,10 @@
 #                             Portal issues a token pair, and it is the pair
 #                             this sends.
 #   SIGNING_KEY=...           an ASCII-armoured private key, whole, newlines
-#                             and all. Gradle reads it from the environment
-#                             rather than from a keyring, because a runner has
-#                             no keyring and a file would be one more thing to
-#                             shred.
+#                             and all. Imported into a throwaway GNUPGHOME for
+#                             the length of this script, because a runner has no
+#                             keyring and a file left behind would be one more
+#                             thing to shred.
 #   SIGNING_PASSWORD=...      its passphrase.
 #   PUBLISHING_TYPE=...       AUTOMATIC (the default) releases as soon as
 #                             validation passes. USER_MANAGED leaves the
@@ -84,8 +93,43 @@ rm -rf "$staging"
 # brings its own.
 find "$staging" -name 'maven-metadata*' -delete
 
-if [[ -z "${DRY_RUN:-}" ]] && ! find "$staging" -name '*.asc' | grep -q .; then
-  echo "publish-api: the staging tree carries no signatures; the key was set but Gradle did not sign." >&2
+# Signed, unless this is a rehearsal without a key. A bundle Central would
+# refuse is not worth assembling, so the failures here are loud and name the
+# thing that is wrong rather than the step that noticed.
+if [[ -n "${SIGNING_KEY:-}" ]]; then
+  if [[ "$SIGNING_KEY" != *"BEGIN PGP PRIVATE KEY BLOCK"* ]]; then
+    echo "publish-api: SIGNING_KEY is not an ASCII-armoured private key." >&2
+    echo "             Export it with: gpg --export-secret-keys --armor <keyid>" >&2
+    exit 1
+  fi
+
+  GNUPGHOME="$(mktemp -d)"
+  export GNUPGHOME
+  chmod 700 "$GNUPGHOME"
+  trap 'rm -rf "$GNUPGHOME"' EXIT
+
+  if ! printf '%s\n' "$SIGNING_KEY" | gpg --batch --quiet --import; then
+    echo "publish-api: gpg would not import SIGNING_KEY." >&2
+    exit 1
+  fi
+
+  signed=0
+  while IFS= read -r -d '' file; do
+    gpg --batch --quiet --pinentry-mode loopback \
+      --passphrase "$SIGNING_PASSWORD" \
+      --armor --detach-sign --output "$file.asc" "$file"
+    signed=$((signed + 1))
+  done < <(find "$staging" -type f \
+    ! -name '*.asc' ! -name '*.md5' ! -name '*.sha1' \
+    ! -name '*.sha256' ! -name '*.sha512' -print0)
+
+  if [[ "$signed" -eq 0 ]]; then
+    echo "publish-api: nothing was signed; the staging tree is empty." >&2
+    exit 1
+  fi
+  echo "publish-api: signed $signed files"
+elif [[ -z "${DRY_RUN:-}" ]]; then
+  echo "publish-api: no SIGNING_KEY, and Central takes no unsigned bundle." >&2
   exit 1
 fi
 

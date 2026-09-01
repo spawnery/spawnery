@@ -6,7 +6,6 @@ plugins {
     // a compile dependency, so the emptiness the comment below defends is
     // untouched.
     `maven-publish`
-    signing
 }
 
 group = "cloud.spawnery"
@@ -90,20 +89,15 @@ publishing {
     }
 }
 
-// Signed only when a key is present.
+// Nothing signs here, and that is the second thing this file is careful about.
 //
-// Central will not take an unsigned bundle, so a release without the key has
-// to fail -- and it does, in hack/publish-api.sh, which says which secret is
-// missing. Failing here instead would break every ordinary build on a machine
-// that has no signing key and no business having one.
-signing {
-    val key = providers.environmentVariable("SIGNING_KEY").orNull
-    val password = providers.environmentVariable("SIGNING_PASSWORD").orNull
-    if (key != null && password != null) {
-        useInMemoryPgpKeys(key, password)
-        sign(publishing.publications["api"])
-    }
-}
+// Gradle's signing plugin reads a key through a Bouncy Castle it bundles, and
+// measured on a real key it answers "Could not read PGP secret key" for what
+// recent GnuPG versions write by default. What that costs is not the failure
+// -- it is that the failure arrives from inside a build, about a key format
+// the person who generated the key never chose and cannot see. hack/publish-
+// api.sh signs the staged files with gpg itself, so the tool that reads the
+// key is the one that wrote it.
 
 tasks.test {
     useJUnitPlatform()
