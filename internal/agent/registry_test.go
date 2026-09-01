@@ -689,3 +689,112 @@ func TestRosterIsScopedToItsNamespace(t *testing.T) {
 		t.Errorf("roster = %+v, want nothing from another namespace", got)
 	}
 }
+
+func TestAnAnnouncementIsKeptUnderTheNameTheIdentityGave(t *testing.T) {
+	// The server names itself from its authenticated identity and never from
+	// the message, which is what makes this key safe to publish under.
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("pod-a", RoleServer)
+
+	if err := r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{
+		State:      "running",
+		Attributes: map[string]string{"map": "arena"},
+	}); err != nil {
+		t.Fatalf("ReportAnnouncement: %v", err)
+	}
+
+	got := r.Announcements("ns")
+	if got["lobby-a"].State != "running" || got["lobby-a"].Attributes["map"] != "arena" {
+		t.Errorf("announcements = %+v, want what lobby-a said", got)
+	}
+	// Scoped to a namespace, like everything else a network can see.
+	if len(r.Announcements("other")) != 0 {
+		t.Errorf("another namespace sees %+v", r.Announcements("other"))
+	}
+}
+
+func TestAnAnnouncementReplacesItsPredecessorWhole(t *testing.T) {
+	// Not merged. An attribute could otherwise never be taken back without a
+	// second verb for taking it back, and the first typo would sit on that
+	// server's description for the life of the pod.
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("pod-a", RoleServer)
+
+	_ = r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{
+		State:      "waiting",
+		Attributes: map[string]string{"map": "arena", "teams": "2"},
+	})
+	_ = r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{
+		State:      "running",
+		Attributes: map[string]string{"map": "arena"},
+	})
+
+	got := r.Announcements("ns")["lobby-a"]
+	if got.State != "running" {
+		t.Errorf("state = %q, want the newer one", got.State)
+	}
+	if _, ok := got.Attributes["teams"]; ok {
+		t.Errorf("attributes = %v, want the older ones gone", got.Attributes)
+	}
+}
+
+func TestAnAnnouncementIsNotAliasedToTheCallersMap(t *testing.T) {
+	// The map arrives inside a message the caller still owns, and this one
+	// outlives the call: a stored alias would change under every reader in the
+	// namespace when the caller reused its builder.
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("pod-a", RoleServer)
+
+	attributes := map[string]string{"map": "arena"}
+	_ = r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{Attributes: attributes})
+	attributes["map"] = "somewhere else"
+
+	if got := r.Announcements("ns")["lobby-a"].Attributes["map"]; got != "arena" {
+		t.Errorf("map = %q, want the value as it was announced", got)
+	}
+	// And the copy handed out is not the stored one either.
+	handed := r.Announcements("ns")["lobby-a"].Attributes
+	handed["map"] = "mutated"
+	if got := r.Announcements("ns")["lobby-a"].Attributes["map"]; got != "arena" {
+		t.Errorf("map = %q after a reader wrote to what it was handed", got)
+	}
+}
+
+func TestAnAnnouncementOutlivesADisconnect(t *testing.T) {
+	// A renewal is make-before-break and a reconnect is seconds. A description
+	// that blanked in between would read, to every other agent in the
+	// namespace, as a server that had changed its mind.
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("pod-a", RoleServer)
+	_ = r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{State: "running"})
+
+	r.Disconnect("pod-a")
+
+	if got := r.Announcements("ns")["lobby-a"].State; got != "running" {
+		t.Errorf("state = %q after a disconnect, want it kept", got)
+	}
+}
+
+func TestAProxyCannotAnnounce(t *testing.T) {
+	// A network's picture has a record per server and none per proxy, so an
+	// announcement from a proxy would be stored where nothing could read it.
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("proxy-a", RoleProxy)
+
+	if err := r.ReportAnnouncement("proxy-a", "ns", "gateway-0",
+		Announcement{State: "running"}); err == nil {
+		t.Error("a proxy's announcement was accepted")
+	}
+	if len(r.Announcements("ns")) != 0 {
+		t.Errorf("announcements = %+v, want none", r.Announcements("ns"))
+	}
+}
+
+func TestAnAnnouncementNeedsALiveStream(t *testing.T) {
+	r := New(time.Now, time.Second, time.Now())
+
+	if err := r.ReportAnnouncement("pod-a", "ns", "lobby-a",
+		Announcement{State: "running"}); err == nil {
+		t.Error("an announcement from a pod with no stream was accepted")
+	}
+}

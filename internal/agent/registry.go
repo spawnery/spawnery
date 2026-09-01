@@ -81,6 +81,16 @@ type Snapshot struct {
 	EmptyFor time.Duration
 }
 
+// Announcement is what one server last said about itself.
+//
+// The operator carries it and reads none of it -- see the proto's
+// AnnounceRequest for why a free-form description is safe to carry and would
+// not be safe to act on.
+type Announcement struct {
+	State      string
+	Attributes map[string]string
+}
+
 type entry struct {
 	role           Role
 	connected      bool
@@ -115,6 +125,27 @@ type entry struct {
 	// and not backends is an old agent, and reading its player timestamp as
 	// though it had said something about backends would invent an answer.
 	backendsAt time.Time
+
+	// server is the name of the Server this backend agent runs, taken from the
+	// authenticated identity and never from a message. It is what
+	// Announcements keys by, and the reason that key is safe: a pod is named
+	// after its Server, so the name is one the pod could not have chosen.
+	server string
+	// announcement is what that server last said about itself, nil until it
+	// says anything.
+	//
+	// It has no timestamp and is not subject to the staleness rule the roster
+	// and the counts are. Those are re-sent on every report, so an old one
+	// means an agent that stopped talking; this is sent when it changes, so an
+	// old one means only that nothing has changed -- and expiring it would
+	// blank a server's description precisely because the game on it settled
+	// down. It ends when the entry does.
+	//
+	// It survives a disconnect for the same reason. A stream renewal is
+	// make-before-break and a reconnect is seconds, and a description that
+	// flickered to empty in between would be read by every other agent in the
+	// namespace as a server that had changed its mind.
+	announcement *Announcement
 
 	// readTimeout is what a proxy said on its Hello about how long it waits on
 	// a silent backend before disconnecting the players on it. Zero means it
@@ -308,6 +339,62 @@ func (r *Registry) ReportRoster(key, namespace string, players []RosterEntry) er
 	e.roster = players
 	e.rosterAt = r.now()
 	return nil
+}
+
+// ReportAnnouncement records what one server says about itself.
+//
+// The namespace and the server name are the caller's, from the authenticated
+// identity; nothing here comes from the message but the words themselves. The
+// bounds on those are the request handler's, which refuses an oversized
+// announcement with a reason rather than storing a trimmed one.
+//
+// A proxy is refused for the same reason a backend is refused a roster: a
+// network's picture has a record per server and none per proxy, so an
+// announcement from one would be stored where nothing could ever read it.
+func (r *Registry) ReportAnnouncement(key, namespace, server string, a Announcement) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	e, ok := r.entries[key]
+	if !ok || !e.connected {
+		return fmt.Errorf("no live stream for %q", key)
+	}
+	if e.role != RoleServer {
+		return fmt.Errorf("announcement from a %s agent %q", e.role, key)
+	}
+	e.namespace = namespace
+	e.server = server
+	// Copied, because the map arrives inside a message the caller still owns
+	// and this one outlives the call.
+	attributes := make(map[string]string, len(a.Attributes))
+	for k, v := range a.Attributes {
+		attributes[k] = v
+	}
+	e.announcement = &Announcement{State: a.State, Attributes: attributes}
+	return nil
+}
+
+// Announcements is what every server in a namespace last said about itself,
+// keyed by server name.
+//
+// Servers that have said nothing are absent rather than present and empty, so
+// a caller ranging over this sees only what was actually announced.
+func (r *Registry) Announcements(namespace string) map[string]Announcement {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	out := make(map[string]Announcement)
+	for _, e := range r.entries {
+		if e.role != RoleServer || e.namespace != namespace || e.announcement == nil || e.server == "" {
+			continue
+		}
+		attributes := make(map[string]string, len(e.announcement.Attributes))
+		for k, v := range e.announcement.Attributes {
+			attributes[k] = v
+		}
+		out[e.server] = Announcement{State: e.announcement.State, Attributes: attributes}
+	}
+	return out
 }
 
 // Roster is every player the live proxies of a namespace say they are serving,

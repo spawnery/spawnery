@@ -123,12 +123,26 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 		})
 	}
 
+	// What each server says about itself. In no object either, and for a
+	// different reason than the roster: a roster is somebody else's personal
+	// data, while this is a game's own word about itself and stays in memory
+	// because the operator never acts on it. A status field would mean an etcd
+	// write every time a round changed what it was doing, CRD validation over
+	// text nothing here reads, and a description outliving the pod that meant
+	// it.
+	//
+	// A server that has announced nothing is absent from this map and gets the
+	// zero values below, which is the same picture as a server whose agent
+	// predates the verb.
+	announcements := s.Agents.Announcements(namespace)
+
 	var servers spawneryv1alpha1.ServerList
 	if err := s.Reader.List(ctx, &servers, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("list servers in %s: %w", namespace, err)
 	}
 	for i := range servers.Items {
 		srv := &servers.Items[i]
+		announced := announcements[srv.Name]
 		state.Servers = append(state.Servers, &agentpb.ServerState{
 			Name:  srv.Name,
 			Group: srv.Spec.GroupRef.Name,
@@ -139,6 +153,8 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 			Players:    srv.Status.Players,
 			Slots:      srv.Status.Slots,
 			Registered: srv.Status.Registered,
+			State:      announced.State,
+			Attributes: announced.Attributes,
 		})
 	}
 

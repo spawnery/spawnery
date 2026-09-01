@@ -77,8 +77,8 @@ class CloudCommandTest {
     private val requests = Requests(timeoutMillis = 1_000, clock = System::currentTimeMillis)
     private val connector = CloudConnector(requests) { request -> requested += request }
 
-    private fun api(): SpawneryApi = MirrorApi(
-        NetworkMirror().also { it.apply(aNetwork()) },
+    private fun api(state: NetworkState = aNetwork()): SpawneryApi = MirrorApi(
+        NetworkMirror().also { it.apply(state) },
         object : ProxySelf {
             override fun name(): String = "gateway-0"
             override fun group(): String = "gateway"
@@ -180,6 +180,33 @@ class CloudCommandTest {
         // Registered and not the phase: the two disagree during a drain, and
         // this is the one that answers "can I send somebody there".
         assertTrue(line.contains("taking joins"), line)
+    }
+
+    @Test
+    fun `a server that says what it is doing has it in the line, marked as its own word`() {
+        // Everything else on that line is the operator's account. An admin
+        // reading one where the two disagree -- Ready, and the game on it
+        // saying it has ended -- has to be able to tell which is which.
+        val described = NetworkState.newBuilder(aNetwork()).also { builder ->
+            builder.setServers(
+                0,
+                ServerState.newBuilder(builder.getServers(0)).setState("running"),
+            )
+        }.build()
+
+        run("cloud info lobby-a", api = api(described))
+
+        val line = plain(sent.single())
+        assertTrue(line.contains("says running"), line)
+    }
+
+    @Test
+    fun `a server that has said nothing gets no fragment rather than an empty one`() {
+        // An empty ", says " would read as a server that had gone quiet, which
+        // is a different thing from one that has never spoken.
+        run("cloud info lobby-a")
+
+        assertTrue(!plain(sent.single()).contains("says"), plain(sent.single()))
     }
 
     @Test

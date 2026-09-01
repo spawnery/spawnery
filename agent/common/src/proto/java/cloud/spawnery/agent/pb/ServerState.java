@@ -35,6 +35,7 @@ private static final long serialVersionUID = 0L;
     name_ = "";
     group_ = "";
     phase_ = "";
+    state_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -47,6 +48,18 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.AgentProto.internal_static_spawnery_agent_v1alpha1_ServerState_descriptor;
   }
 
+  @SuppressWarnings({"rawtypes"})
+  @java.lang.Override
+  protected com.google.protobuf.MapFieldReflectionAccessor internalGetMapFieldReflection(
+      int number) {
+    switch (number) {
+      case 8:
+        return internalGetAttributes();
+      default:
+        throw new RuntimeException(
+            "Invalid map field number: " + number);
+    }
+  }
   @java.lang.Override
   protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internalGetFieldAccessorTable() {
@@ -219,6 +232,142 @@ private static final long serialVersionUID = 0L;
     return registered_;
   }
 
+  public static final int STATE_FIELD_NUMBER = 7;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object state_ = "";
+  /**
+   * <pre>
+   * What this server last said about itself, and nothing the operator decided.
+   * See AnnounceRequest. Both are empty for a server that has announced
+   * nothing, which is every server until something on it says otherwise --
+   * absent and "announced nothing" are the same state here on purpose, because
+   * a plugin that has to tell them apart is asking about the agent rather than
+   * about the game.
+   * </pre>
+   *
+   * <code>string state = 7;</code>
+   * @return The state.
+   */
+  @java.lang.Override
+  public java.lang.String getState() {
+    java.lang.Object ref = state_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      state_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * What this server last said about itself, and nothing the operator decided.
+   * See AnnounceRequest. Both are empty for a server that has announced
+   * nothing, which is every server until something on it says otherwise --
+   * absent and "announced nothing" are the same state here on purpose, because
+   * a plugin that has to tell them apart is asking about the agent rather than
+   * about the game.
+   * </pre>
+   *
+   * <code>string state = 7;</code>
+   * @return The bytes for state.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getStateBytes() {
+    java.lang.Object ref = state_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      state_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
+  public static final int ATTRIBUTES_FIELD_NUMBER = 8;
+  private static final class AttributesDefaultEntryHolder {
+    static final com.google.protobuf.MapEntry<
+        java.lang.String, java.lang.String> defaultEntry =
+            com.google.protobuf.MapEntry
+            .<java.lang.String, java.lang.String>newDefaultInstance(
+                cloud.spawnery.agent.pb.AgentProto.internal_static_spawnery_agent_v1alpha1_ServerState_AttributesEntry_descriptor, 
+                com.google.protobuf.WireFormat.FieldType.STRING,
+                "",
+                com.google.protobuf.WireFormat.FieldType.STRING,
+                "");
+  }
+  @SuppressWarnings("serial")
+  private com.google.protobuf.MapField<
+      java.lang.String, java.lang.String> attributes_;
+  private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+  internalGetAttributes() {
+    if (attributes_ == null) {
+      return com.google.protobuf.MapField.emptyMapField(
+          AttributesDefaultEntryHolder.defaultEntry);
+    }
+    return attributes_;
+  }
+  public int getAttributesCount() {
+    return internalGetAttributes().getMap().size();
+  }
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  @java.lang.Override
+  public boolean containsAttributes(
+      java.lang.String key) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    return internalGetAttributes().getMap().containsKey(key);
+  }
+  /**
+   * Use {@link #getAttributesMap()} instead.
+   */
+  @java.lang.Override
+  @java.lang.Deprecated
+  public java.util.Map<java.lang.String, java.lang.String> getAttributes() {
+    return getAttributesMap();
+  }
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  @java.lang.Override
+  public java.util.Map<java.lang.String, java.lang.String> getAttributesMap() {
+    return internalGetAttributes().getMap();
+  }
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  @java.lang.Override
+  public /* nullable */
+java.lang.String getAttributesOrDefault(
+      java.lang.String key,
+      /* nullable */
+java.lang.String defaultValue) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    java.util.Map<java.lang.String, java.lang.String> map =
+        internalGetAttributes().getMap();
+    return map.containsKey(key) ? map.get(key) : defaultValue;
+  }
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  @java.lang.Override
+  public java.lang.String getAttributesOrThrow(
+      java.lang.String key) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    java.util.Map<java.lang.String, java.lang.String> map =
+        internalGetAttributes().getMap();
+    if (!map.containsKey(key)) {
+      throw new java.lang.IllegalArgumentException();
+    }
+    return map.get(key);
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -251,6 +400,15 @@ private static final long serialVersionUID = 0L;
     if (registered_ != false) {
       output.writeBool(6, registered_);
     }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(state_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 7, state_);
+    }
+    com.google.protobuf.GeneratedMessage
+      .serializeStringMapTo(
+        output,
+        internalGetAttributes(),
+        AttributesDefaultEntryHolder.defaultEntry,
+        8);
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -275,6 +433,19 @@ private static final long serialVersionUID = 0L;
     if (registered_ != false) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(6, registered_);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(state_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(7, state_);
+    }
+    for (java.util.Map.Entry<java.lang.String, java.lang.String> entry
+         : internalGetAttributes().getMap().entrySet()) {
+      com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+      attributes__ = AttributesDefaultEntryHolder.defaultEntry.newBuilderForType()
+          .setKey(entry.getKey())
+          .setValue(entry.getValue())
+          .buildPartial();
+      size += com.google.protobuf.CodedOutputStream
+          .computeMessageSize(8, attributes__);
     }
     return size;
   }
@@ -312,6 +483,10 @@ private static final long serialVersionUID = 0L;
         != other.getSlots()) return false;
     if (getRegistered()
         != other.getRegistered()) return false;
+    if (!getState()
+        .equals(other.getState())) return false;
+    if (!internalGetAttributes().equals(
+        other.internalGetAttributes())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -336,6 +511,12 @@ private static final long serialVersionUID = 0L;
     hash = (37 * hash) + REGISTERED_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getRegistered());
+    hash = (37 * hash) + STATE_FIELD_NUMBER;
+    hash = (53 * hash) + getState().hashCode();
+    if (!internalGetAttributes().getMap().isEmpty()) {
+      hash = (37 * hash) + ATTRIBUTES_FIELD_NUMBER;
+      hash = (53 * hash) + internalGetAttributes().hashCode();
+    }
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -449,6 +630,28 @@ private static final long serialVersionUID = 0L;
       return cloud.spawnery.agent.pb.AgentProto.internal_static_spawnery_agent_v1alpha1_ServerState_descriptor;
     }
 
+    @SuppressWarnings({"rawtypes"})
+    protected com.google.protobuf.MapFieldReflectionAccessor internalGetMapFieldReflection(
+        int number) {
+      switch (number) {
+        case 8:
+          return internalGetAttributes();
+        default:
+          throw new RuntimeException(
+              "Invalid map field number: " + number);
+      }
+    }
+    @SuppressWarnings({"rawtypes"})
+    protected com.google.protobuf.MapFieldReflectionAccessor internalGetMutableMapFieldReflection(
+        int number) {
+      switch (number) {
+        case 8:
+          return internalGetMutableAttributes();
+        default:
+          throw new RuntimeException(
+              "Invalid map field number: " + number);
+      }
+    }
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
         internalGetFieldAccessorTable() {
@@ -477,6 +680,8 @@ private static final long serialVersionUID = 0L;
       players_ = 0;
       slots_ = 0;
       registered_ = false;
+      state_ = "";
+      internalGetMutableAttributes().clear();
       return this;
     }
 
@@ -528,6 +733,13 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000020) != 0)) {
         result.registered_ = registered_;
       }
+      if (((from_bitField0_ & 0x00000040) != 0)) {
+        result.state_ = state_;
+      }
+      if (((from_bitField0_ & 0x00000080) != 0)) {
+        result.attributes_ = internalGetAttributes();
+        result.attributes_.makeImmutable();
+      }
     }
 
     @java.lang.Override
@@ -566,6 +778,14 @@ private static final long serialVersionUID = 0L;
       if (other.getRegistered() != false) {
         setRegistered(other.getRegistered());
       }
+      if (!other.getState().isEmpty()) {
+        state_ = other.state_;
+        bitField0_ |= 0x00000040;
+        onChanged();
+      }
+      internalGetMutableAttributes().mergeFrom(
+          other.internalGetAttributes());
+      bitField0_ |= 0x00000080;
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -622,6 +842,20 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000020;
               break;
             } // case 48
+            case 58: {
+              state_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000040;
+              break;
+            } // case 58
+            case 66: {
+              com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+              attributes__ = input.readMessage(
+                  AttributesDefaultEntryHolder.defaultEntry.getParserForType(), extensionRegistry);
+              internalGetMutableAttributes().getMutableMap().put(
+                  attributes__.getKey(), attributes__.getValue());
+              bitField0_ |= 0x00000080;
+              break;
+            } // case 66
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -986,6 +1220,250 @@ private static final long serialVersionUID = 0L;
       bitField0_ = (bitField0_ & ~0x00000020);
       registered_ = false;
       onChanged();
+      return this;
+    }
+
+    private java.lang.Object state_ = "";
+    /**
+     * <pre>
+     * What this server last said about itself, and nothing the operator decided.
+     * See AnnounceRequest. Both are empty for a server that has announced
+     * nothing, which is every server until something on it says otherwise --
+     * absent and "announced nothing" are the same state here on purpose, because
+     * a plugin that has to tell them apart is asking about the agent rather than
+     * about the game.
+     * </pre>
+     *
+     * <code>string state = 7;</code>
+     * @return The state.
+     */
+    public java.lang.String getState() {
+      java.lang.Object ref = state_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        state_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * What this server last said about itself, and nothing the operator decided.
+     * See AnnounceRequest. Both are empty for a server that has announced
+     * nothing, which is every server until something on it says otherwise --
+     * absent and "announced nothing" are the same state here on purpose, because
+     * a plugin that has to tell them apart is asking about the agent rather than
+     * about the game.
+     * </pre>
+     *
+     * <code>string state = 7;</code>
+     * @return The bytes for state.
+     */
+    public com.google.protobuf.ByteString
+        getStateBytes() {
+      java.lang.Object ref = state_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        state_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * What this server last said about itself, and nothing the operator decided.
+     * See AnnounceRequest. Both are empty for a server that has announced
+     * nothing, which is every server until something on it says otherwise --
+     * absent and "announced nothing" are the same state here on purpose, because
+     * a plugin that has to tell them apart is asking about the agent rather than
+     * about the game.
+     * </pre>
+     *
+     * <code>string state = 7;</code>
+     * @param value The state to set.
+     * @return This builder for chaining.
+     */
+    public Builder setState(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      state_ = value;
+      bitField0_ |= 0x00000040;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What this server last said about itself, and nothing the operator decided.
+     * See AnnounceRequest. Both are empty for a server that has announced
+     * nothing, which is every server until something on it says otherwise --
+     * absent and "announced nothing" are the same state here on purpose, because
+     * a plugin that has to tell them apart is asking about the agent rather than
+     * about the game.
+     * </pre>
+     *
+     * <code>string state = 7;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearState() {
+      state_ = getDefaultInstance().getState();
+      bitField0_ = (bitField0_ & ~0x00000040);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What this server last said about itself, and nothing the operator decided.
+     * See AnnounceRequest. Both are empty for a server that has announced
+     * nothing, which is every server until something on it says otherwise --
+     * absent and "announced nothing" are the same state here on purpose, because
+     * a plugin that has to tell them apart is asking about the agent rather than
+     * about the game.
+     * </pre>
+     *
+     * <code>string state = 7;</code>
+     * @param value The bytes for state to set.
+     * @return This builder for chaining.
+     */
+    public Builder setStateBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      state_ = value;
+      bitField0_ |= 0x00000040;
+      onChanged();
+      return this;
+    }
+
+    private com.google.protobuf.MapField<
+        java.lang.String, java.lang.String> attributes_;
+    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+        internalGetAttributes() {
+      if (attributes_ == null) {
+        return com.google.protobuf.MapField.emptyMapField(
+            AttributesDefaultEntryHolder.defaultEntry);
+      }
+      return attributes_;
+    }
+    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+        internalGetMutableAttributes() {
+      if (attributes_ == null) {
+        attributes_ = com.google.protobuf.MapField.newMapField(
+            AttributesDefaultEntryHolder.defaultEntry);
+      }
+      if (!attributes_.isMutable()) {
+        attributes_ = attributes_.copy();
+      }
+      bitField0_ |= 0x00000080;
+      onChanged();
+      return attributes_;
+    }
+    public int getAttributesCount() {
+      return internalGetAttributes().getMap().size();
+    }
+    /**
+     * <code>map&lt;string, string&gt; attributes = 8;</code>
+     */
+    @java.lang.Override
+    public boolean containsAttributes(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      return internalGetAttributes().getMap().containsKey(key);
+    }
+    /**
+     * Use {@link #getAttributesMap()} instead.
+     */
+    @java.lang.Override
+    @java.lang.Deprecated
+    public java.util.Map<java.lang.String, java.lang.String> getAttributes() {
+      return getAttributesMap();
+    }
+    /**
+     * <code>map&lt;string, string&gt; attributes = 8;</code>
+     */
+    @java.lang.Override
+    public java.util.Map<java.lang.String, java.lang.String> getAttributesMap() {
+      return internalGetAttributes().getMap();
+    }
+    /**
+     * <code>map&lt;string, string&gt; attributes = 8;</code>
+     */
+    @java.lang.Override
+    public /* nullable */
+java.lang.String getAttributesOrDefault(
+        java.lang.String key,
+        /* nullable */
+java.lang.String defaultValue) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetAttributes().getMap();
+      return map.containsKey(key) ? map.get(key) : defaultValue;
+    }
+    /**
+     * <code>map&lt;string, string&gt; attributes = 8;</code>
+     */
+    @java.lang.Override
+    public java.lang.String getAttributesOrThrow(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetAttributes().getMap();
+      if (!map.containsKey(key)) {
+        throw new java.lang.IllegalArgumentException();
+      }
+      return map.get(key);
+    }
+    public Builder clearAttributes() {
+      bitField0_ = (bitField0_ & ~0x00000080);
+      internalGetMutableAttributes().getMutableMap()
+          .clear();
+      return this;
+    }
+    /**
+     * <code>map&lt;string, string&gt; attributes = 8;</code>
+     */
+    public Builder removeAttributes(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      internalGetMutableAttributes().getMutableMap()
+          .remove(key);
+      return this;
+    }
+    /**
+     * Use alternate mutation accessors instead.
+     */
+    @java.lang.Deprecated
+    public java.util.Map<java.lang.String, java.lang.String>
+        getMutableAttributes() {
+      bitField0_ |= 0x00000080;
+      return internalGetMutableAttributes().getMutableMap();
+    }
+    /**
+     * <code>map&lt;string, string&gt; attributes = 8;</code>
+     */
+    public Builder putAttributes(
+        java.lang.String key,
+        java.lang.String value) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      if (value == null) { throw new NullPointerException("map value"); }
+      internalGetMutableAttributes().getMutableMap()
+          .put(key, value);
+      bitField0_ |= 0x00000080;
+      return this;
+    }
+    /**
+     * <code>map&lt;string, string&gt; attributes = 8;</code>
+     */
+    public Builder putAllAttributes(
+        java.util.Map<java.lang.String, java.lang.String> values) {
+      internalGetMutableAttributes().getMutableMap()
+          .putAll(values);
+      bitField0_ |= 0x00000080;
       return this;
     }
 

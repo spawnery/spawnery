@@ -17,6 +17,7 @@ limitations under the License.
 package cloud.spawnery.agent.api;
 
 import java.util.List;
+import java.util.Map;
 import java.time.Duration;
 import java.util.Optional;
 import java.util.UUID;
@@ -58,6 +59,11 @@ final class FakeApi implements SpawneryApi {
 
     @Override
     public CompletionStage<Integer> stopBoosts(String group) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
+    public CompletionStage<Void> announce(String state, Map<String, String> attributes) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }
 

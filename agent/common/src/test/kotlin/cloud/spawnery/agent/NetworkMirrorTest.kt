@@ -55,6 +55,40 @@ class NetworkMirrorTest {
     }
 
     @Test
+    fun `a server carries what it said about itself`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("lobby-a").setGroup("lobby")
+                    .setPhase("Ready").setState("running")
+                    .putAttributes("map", "arena"),
+            ).build(),
+        )
+
+        val server = mirror.servers().single()
+        assertEquals("running", server.state())
+        assertEquals("arena", server.attributes()["map"])
+    }
+
+    @Test
+    fun `a server that said nothing carries an empty description rather than null`() {
+        // Which is also every server on a network whose operator predates the
+        // verb. A plugin asking what a server is doing should not have to
+        // write a null check to be told that it is doing nothing in
+        // particular.
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("lobby-a").setGroup("lobby").setPhase("Ready"),
+            ).build(),
+        )
+
+        val server = mirror.servers().single()
+        assertEquals("", server.state())
+        assertTrue(server.attributes().isEmpty())
+    }
+
+    @Test
     fun `a phase this jar predates becomes UNKNOWN rather than throwing`() {
         val mirror = NetworkMirror()
         mirror.apply(state(servers = listOf("lobby-a"), phase = "SomethingLaterInvented"))

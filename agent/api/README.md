@@ -71,6 +71,11 @@ throws on an unrecognised phase breaks on an operator upgrade that had nothing
 to do with your plugin. Read a phase with `ServerPhase.fromWire`, which never
 throws, rather than `valueOf`, which does.
 
+The value records gain components as the operator learns to say more, and
+`ServerInfo` has gained two. Read them through their accessors, which is what
+they are for; a plugin that constructs a `ServerInfo` of its own — in a test
+double, say — is the one thing that has to be rebuilt when they do.
+
 ## Moving a player
 
 ```java
@@ -127,6 +132,40 @@ an ordinary answer, not a failure.
 needs to be permanently bigger needs its `ServerGroup` edited by a person, and
 this API deliberately cannot do that — the operator holds no write on
 `servergroups` at all.
+
+## Saying what this server is doing
+
+`announce(state, attributes)` publishes a short description of this server that
+every other agent in the network reads back as `ServerInfo.state()` and
+`ServerInfo.attributes()`.
+
+**The cloud carries it and never reads it.** Nothing the operator decides looks
+at a word of it — not where a player is sent, not when a server is replaced,
+not how a group is sized. That is what makes it safe to put anything in, and
+useless to put an instruction in.
+
+**It is not `ServerInfo.phase()`.** The phase is the operator's account of a
+server's lifecycle and no plugin can write it. This is the server's own account
+of itself, and the two are meant to disagree: a server is `READY` from the
+moment it can take players until it stops, and what is happening inside that
+window is a question only the thing running there can answer. `/cloud info`
+prints both, and prints yours after the word `says` so that an admin reading a
+line where they disagree can tell which is which.
+
+**Each call replaces the last one whole.** Attributes are not merged: publish
+the whole description each time, which is also the only way an attribute can be
+taken back. An empty announcement clears the description, and that is a
+description like any other — a game that finished and said so does not come
+back after a reconnect still claiming to be running.
+
+The operator refuses rather than trims: at most 64 characters of state, at most
+16 attributes, at most 64 and 256 characters of name and value. It refuses a
+call from a proxy too, which has no per-instance record in the network picture
+for a description to appear in. Each refusal says which.
+
+You do not have to re-announce after a reconnection. The agent holds the last
+description you published and re-publishes it on every new session, so an
+operator that restarts does not leave a running game described as nothing.
 
 ## Hearing what happened
 
