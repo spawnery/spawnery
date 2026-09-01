@@ -798,3 +798,63 @@ func TestAnAnnouncementNeedsALiveStream(t *testing.T) {
 		t.Error("an announcement from a pod with no stream was accepted")
 	}
 }
+
+func TestAServerTakesPlayersUntilItSaysOtherwise(t *testing.T) {
+	// The default that cannot surprise anybody: a network whose agents predate
+	// the verb, and an operator that has just restarted, both go on routing
+	// exactly as they did.
+	r := New(time.Now, time.Second, time.Now())
+
+	if !r.Lookup("nobody-has-heard-of-this-pod").AcceptingJoins {
+		t.Error("a pod the registry has never seen was read as refusing players")
+	}
+
+	r.Connect("pod-a", RoleServer)
+	if !r.Lookup("pod-a").AcceptingJoins {
+		t.Error("a server that has said nothing was read as refusing players")
+	}
+}
+
+func TestAServerCanCloseItsDoorAndOpenItAgain(t *testing.T) {
+	// Both directions, because the point of this verb rather than a retire is
+	// that there is a way back.
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("pod-a", RoleServer)
+
+	if err := r.ReportAcceptJoins("pod-a", false); err != nil {
+		t.Fatalf("ReportAcceptJoins(false): %v", err)
+	}
+	if r.Lookup("pod-a").AcceptingJoins {
+		t.Error("a server that closed its door was still read as taking players")
+	}
+
+	if err := r.ReportAcceptJoins("pod-a", true); err != nil {
+		t.Fatalf("ReportAcceptJoins(true): %v", err)
+	}
+	if !r.Lookup("pod-a").AcceptingJoins {
+		t.Error("a server that opened its door again was still read as refusing")
+	}
+}
+
+func TestAClosedDoorOutlivesADisconnect(t *testing.T) {
+	// A renewal is make-before-break and a reconnect is seconds. A door that
+	// swung open in between would put players into a round that had started.
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("pod-a", RoleServer)
+	_ = r.ReportAcceptJoins("pod-a", false)
+
+	r.Disconnect("pod-a")
+
+	if r.Lookup("pod-a").AcceptingJoins {
+		t.Error("a disconnect opened a door the server had shut")
+	}
+}
+
+func TestAProxyHasNoDoorToClose(t *testing.T) {
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("proxy-a", RoleProxy)
+
+	if err := r.ReportAcceptJoins("proxy-a", false); err == nil {
+		t.Error("a proxy was allowed to close a door it does not have")
+	}
+}

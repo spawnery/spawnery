@@ -3,6 +3,7 @@ package cloud.spawnery.agent
 import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
 import cloud.spawnery.agent.api.Target
+import cloud.spawnery.agent.pb.AcceptJoinsRequest
 import cloud.spawnery.agent.pb.AnnounceRequest
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
@@ -133,6 +134,37 @@ class CloudConnector(
         return send(announcement)
     }
 
+    /**
+     * The last door state this server asked for, restated on every new stream.
+     *
+     * Null until it asks, and null is not "open": a server that has never
+     * spoken about its door has nothing to restate, while one that opened it
+     * deliberately has something to say after a reconnect. The operator's own
+     * default for a session it has never seen is open, so the two agree.
+     */
+    private val lastJoinPreference = AtomicReference<Boolean?>(null)
+
+    /**
+     * Opens or closes this server's door.
+     *
+     * Closing is not retiring. Nobody is moved, nothing is ended, and it can
+     * be taken back; what changes is that the proxies stop sending new players
+     * here. See [SpawneryApi.acceptJoins].
+     */
+    fun acceptJoins(accept: Boolean): CompletionStage<Void> {
+        lastJoinPreference.set(accept)
+        return send(accept)
+    }
+
+    private fun send(accept: Boolean): CompletionStage<Void> =
+        requests.start<Void> { id ->
+            sendRequest(
+                CloudRequest.newBuilder().setId(id)
+                    .setAcceptJoins(AcceptJoinsRequest.newBuilder().setAccept(accept))
+                    .build(),
+            )
+        }
+
     private fun send(announcement: AnnounceRequest): CompletionStage<Void> =
         requests.start<Void> { id ->
             sendRequest(CloudRequest.newBuilder().setId(id).setAnnounce(announcement).build())
@@ -178,6 +210,7 @@ class CloudConnector(
             )
             response.hasStopBoost() -> requests.complete(response.id, response.stopBoost.removed)
             response.hasAnnounce() -> requests.complete(response.id, null)
+            response.hasAcceptJoins() -> requests.complete(response.id, null)
             // A result kind this agent does not know. Failed rather than
             // ignored: a plugin holding a future to its deadline learns
             // nothing, where a failure names the version skew.
@@ -201,6 +234,11 @@ class CloudConnector(
         // was already told. requests.start never throws, so a send between
         // sessions fails that future instead of this hook.
         lastAnnouncement.get()?.let { send(it) }
+        // The door too, and for a sharper reason than the description: the
+        // operator's default for a session it has never seen is open, so a
+        // closed door that went unrestated would put players into a round that
+        // had already started.
+        lastJoinPreference.get()?.let { send(it) }
     }
 
     /** Fails everything past its deadline. Called from the reporting timer. */

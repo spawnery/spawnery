@@ -55,7 +55,15 @@ class NetworkMirror {
         snapshot = Snapshot(
             feedFormat = state.feedFormat,
             groups = state.groupsList.map {
-                Group(it.name, kindOf(it.kind), it.replicas, it.readyReplicas, it.onlinePlayers, it.freeSlots)
+                Group(
+                    it.name,
+                    kindOf(it.kind),
+                    it.replicas,
+                    it.readyReplicas,
+                    it.onlinePlayers,
+                    it.freeSlots,
+                    it.attributesMap,
+                )
             },
             servers = state.serversList.map {
                 ServerInfo(

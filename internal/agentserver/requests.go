@@ -172,6 +172,8 @@ func (s *Server) answerCloudRequest(
 		return s.answerStopBoost(ctx, logger, id, req.GetId(), req.GetStopBoost())
 	case req.GetAnnounce() != nil:
 		return s.answerAnnounce(logger, id, req.GetId(), req.GetAnnounce())
+	case req.GetAcceptJoins() != nil:
+		return s.answerAcceptJoins(logger, id, req.GetId(), req.GetAcceptJoins())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")
@@ -452,6 +454,48 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 //
 // The message is free text for a person; the reason is what a caller branches
 // on. Neither carries a player's name into the counter -- see RequestsRefused.
+// answerAcceptJoins opens or closes one server's own door.
+//
+// # The second request that changes what the operator does, and the narrowest
+//
+// answerRetire writes to an object and names the server it writes to.
+// This one names nothing: it changes a flag on the session it arrived on, and
+// the only server it can reach is the one that asked. A pod cannot close
+// somebody else's door because there is no field in which to put somebody
+// else's name -- the same structural bound the announcement has, and a
+// stronger one than retire's, which is bounded by a namespace rather than by
+// a pod.
+//
+// **It is not retire and must not be reachable by mistake.** Retiring says the
+// server is finished and ends it; this says only that no new players should be
+// routed there, for as long as the server likes, and it can be taken back. The
+// phase does not move: a closed server is Ready and not registered, which is a
+// state this operator already had.
+//
+// A proxy is refused for a plainer reason than the announcement's: a proxy is
+// not in anybody's routing table, it is the routing table.
+func (s *Server) answerAcceptJoins(
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.AcceptJoinsRequest,
+) *agentpb.CloudResponse {
+	if id.Role != agent.RoleServer {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"only a server has a door to close: a proxy is not in a routing table, it is the routing table")
+	}
+	if err := s.opts.Agents.ReportAcceptJoins(id.PodUID, req.GetAccept()); err != nil {
+		logger.V(1).Info("could not record a join preference", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not record that just now")
+	}
+
+	return &agentpb.CloudResponse{
+		Id:     reqID,
+		Result: &agentpb.CloudResponse_AcceptJoins{AcceptJoins: &agentpb.AcceptJoinsResult{}},
+	}
+}
+
 // answerAnnounce records what a server says about itself.
 //
 // # The one request the operator stores and never reads

@@ -57,6 +57,22 @@ spec:
           spec:
             description: ProxyGroupSpec describes the Velocity layer of a network.
             properties:
+              attributes:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Attributes is what plugins are told about this group. See
+                  GroupAttributes: the operator carries it and acts on none of it.
+
+                  It shapes no pod and is therefore not in the spec hash a server is
+                  replaced on -- the opposite of Env above. Editing it replaces nothing
+                  and restarts nothing; the next network picture simply carries the new
+                  value, which is what a description of a group should cost.
+                maxProperties: 16
+                type: object
+                x-kubernetes-validations:
+                - message: an attribute name may be 64 characters and a value 256
+                  rule: self.all(k, size(k) <= 64 && size(self[k]) <= 256)
               config:
                 description: Config are the rendered Velocity settings.
                 properties:

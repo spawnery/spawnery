@@ -33,7 +33,13 @@ func healthyReady() Inputs {
 		PodReady:       true,
 		AgentReady:     true,
 		AgentConnected: true,
-		Slots:          100,
+		// A healthy Ready server is one the proxies have. Saying so here is
+		// not bookkeeping: Ready and unregistered is a real state -- a server
+		// whose door is shut, or one whose registration failed -- and Decide
+		// now acts on it, so a fixture that left this false would be
+		// describing a different server than it means to.
+		Registered: true,
+		Slots:      100,
 	}
 }
 
@@ -863,5 +869,80 @@ func TestRescueWindowUsesWhatTheProxyReported(t *testing.T) {
 	// the operator took before any proxy sent this.
 	if got, want := RescueWindow(5*time.Second, 0), RescueWindow(5*time.Second, VelocityReadTimeout); got != want {
 		t.Errorf("an unreported timeout gave %s, want the shipped default's %s", got, want)
+	}
+}
+
+// The door a server shuts on itself, which is the one thing here that changes
+// what the proxies have without changing what the server is.
+
+func TestAClosedDoorDeregistersWithoutMovingThePhase(t *testing.T) {
+	in := healthyReady()
+	in.JoinsClosed = true
+
+	got := Decide(Ready, in)
+
+	if got.Next != Ready {
+		t.Errorf("Next = %v, want Ready: a shut door is not a lifecycle event, and a phase "+
+			"change would tell every reader that this server is on its way out", got.Next)
+	}
+	if !got.Deregister {
+		t.Error("a server that asked for no new players stayed in the routing tables")
+	}
+	if got.StartDrain {
+		t.Error("closing a door moved players: nobody is drained, they finish on their own")
+	}
+	if got.Reason != ReasonJoinsClosed {
+		t.Errorf("Reason = %q, want %q so that a reader can tell this from a drain",
+			got.Reason, ReasonJoinsClosed)
+	}
+}
+
+func TestAClosedDoorIsDeregisteredOnceAndNotOnEveryPass(t *testing.T) {
+	// Each Deregister is a broadcast to every proxy in the namespace, so the
+	// second pass over an already-closed server has to be silent.
+	in := healthyReady()
+	in.JoinsClosed = true
+	in.Registered = false
+
+	got := Decide(Ready, in)
+
+	if got.Deregister {
+		t.Error("an already-deregistered server was deregistered again")
+	}
+	if got.Register {
+		t.Error("a closed server was registered again, which is the door reopening itself")
+	}
+}
+
+func TestAnOpenedDoorRegistersAgain(t *testing.T) {
+	// The way back, which is the whole difference between this and retiring.
+	in := healthyReady()
+	in.JoinsClosed = false
+	in.Registered = false
+
+	got := Decide(Ready, in)
+
+	if !got.Register {
+		t.Error("a server that opened its door again was not put back in the routing tables")
+	}
+	if got.Next != Ready {
+		t.Errorf("Next = %v, want Ready", got.Next)
+	}
+}
+
+func TestRetiringWinsOverAClosedDoor(t *testing.T) {
+	// A retiring server is going away. If the door branch could speak first,
+	// a server that had closed its door and was then retired would report the
+	// smaller of the two facts -- and one that had *opened* its door would be
+	// registered again on its way out.
+	in := healthyReady()
+	in.JoinsClosed = false
+	in.Registered = false
+	in.RetirementRequested = true
+
+	got := Decide(Ready, in)
+
+	if got.Next != Retiring || !got.Deregister {
+		t.Errorf("got %+v, want a retiring server to be deregistered and stay retiring", got)
 	}
 }

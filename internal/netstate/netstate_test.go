@@ -261,3 +261,29 @@ func TestAServerThatAnnouncedNothingIsDescribedAsNothing(t *testing.T) {
 		t.Errorf("state = %q, want empty", got.GetServers()[0].GetState())
 	}
 }
+
+func TestBuildCarriesWhatSomebodyWroteDownAboutAGroup(t *testing.T) {
+	// From the spec and not the status: nobody derived this, a person wrote it
+	// in the group's own definition, and the operator's whole part in it is to
+	// carry it to the agents.
+	group := ephemeralGroup("ns", "lobby")
+	group.Spec.Attributes = map[string]string{"permission": "task.build"}
+	proxy := proxyGroupNamed("ns", "gateway")
+	proxy.Spec.Attributes = map[string]string{"region": "eu"}
+	src, _ := source(t, group, proxy)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Sorted, so gateway is first and lobby second.
+	if got.GetGroups()[0].GetAttributes()["region"] != "eu" {
+		t.Errorf("gateway = %+v, want the proxy group's own attributes", got.GetGroups()[0])
+	}
+	// Both kinds, because a plugin reading one list should not find that half
+	// of it can be described and half cannot.
+	if got.GetGroups()[1].GetAttributes()["permission"] != "task.build" {
+		t.Errorf("lobby = %+v, want the server group's own attributes", got.GetGroups()[1])
+	}
+}

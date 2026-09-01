@@ -16,6 +16,7 @@ limitations under the License.
 
 package cloud.spawnery.agent.api;
 
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -25,6 +26,11 @@ import java.util.Objects;
  *     of the group's current spec. It is what the scaler publishes rather than
  *     a sum a plugin could compute from {@link SpawneryApi#servers()}, and the
  *     two can disagree while a rolling update is in flight.
+ * @param attributes what whoever runs this network wrote down about this group
+ *     in its own definition, empty until somebody writes something. The
+ *     counterpart of {@link ServerInfo#attributes()}, and the difference is who
+ *     writes it: that one is a server saying what it is doing right now, this
+ *     one is a person saying what the group is. Immutable.
  */
 public record Group(
         String name,
@@ -32,10 +38,14 @@ public record Group(
         int replicas,
         int readyReplicas,
         int onlinePlayers,
-        int freeSlots) {
+        int freeSlots,
+        Map<String, String> attributes) {
     public Group {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(kind, "kind");
+        // Absent and "nobody wrote anything" are the same group to a plugin,
+        // so both arrive as the empty map rather than as null.
+        attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
     }
 
     /** Which sizing rule this group answers to. */

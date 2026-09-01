@@ -55,6 +55,31 @@ class NetworkMirrorTest {
     }
 
     @Test
+    fun `a group carries what somebody wrote down about it`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL)
+                    .putAttributes("permission", "task.build"),
+            ).build(),
+        )
+
+        assertEquals("task.build", mirror.groups().single().attributes()["permission"])
+    }
+
+    @Test
+    fun `a group nobody described carries an empty map rather than null`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL),
+            ).build(),
+        )
+
+        assertTrue(mirror.groups().single().attributes().isEmpty())
+    }
+
+    @Test
     fun `a server carries what it said about itself`() {
         val mirror = NetworkMirror()
         mirror.apply(

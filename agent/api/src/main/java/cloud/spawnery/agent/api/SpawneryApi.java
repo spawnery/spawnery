@@ -148,6 +148,44 @@ public interface SpawneryApi {
     CompletionStage<Integer> stopBoosts(String group);
 
     /**
+     * Opens or closes this server's own door.
+     *
+     * <p><b>Closing is not {@link #retire}, and the difference is the whole
+     * reason this exists.</b> Retiring says the server is finished: it stops
+     * taking joins, empties out, and is taken down once it is empty. This says
+     * only the first of those, it says it for as long as you like, and you can
+     * take it back. A round that has started is not a server that is going
+     * away, and asking for the one when you mean the other reads as a
+     * decommissioning to everybody who looks at it afterwards.
+     *
+     * <p><b>Nobody is moved.</b> The players already here go on playing until
+     * they leave on their own. What changes is only whether the proxies send
+     * anybody new.
+     *
+     * <p><b>The phase does not change.</b> A closed server is still
+     * {@link ServerPhase#READY} — the phase is the operator's account of a
+     * server's lifecycle, and shutting a door is not a lifecycle event. What
+     * changes is {@link ServerInfo#registered()}, which is the field a caller
+     * choosing where to send somebody already reads.
+     *
+     * <p>Your group notices. A closed server's empty seats stop counting as
+     * the group's free capacity, so a group sized by spare slots builds a
+     * replacement rather than sitting at its floor while every server in it
+     * has shut its door.
+     *
+     * <p>The stage fails when the operator refuses — most plainly on a proxy,
+     * which is not in anybody's routing table but is the routing table.
+     *
+     * <p>Like {@link #announce}, it survives a reconnection without being
+     * called again: the agent restates the last door state on every new
+     * session, because the operator's default for a session it has never seen
+     * is open.
+     *
+     * @param accept {@code false} closes the door, {@code true} opens it.
+     */
+    CompletionStage<Void> acceptJoins(boolean accept);
+
+    /**
      * Publishes what this server is doing, for every other server to read.
      *
      * <p><b>The cloud carries this and never reads it.</b> Nothing the
