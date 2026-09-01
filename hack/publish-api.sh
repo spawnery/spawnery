@@ -135,8 +135,25 @@ if [[ -n "${SIGNING_KEY:-}" ]]; then
 
   if ! printf '%s\n' "$key" | gpg --batch --quiet --import; then
     echo "publish-api: gpg would not import SIGNING_KEY." >&2
-    echo "             It is armoured, so what is left is the key itself: an" >&2
-    echo "             export of only a subkey, or a truncated paste." >&2
+    # What the value is, without any of what it says.
+    #
+    # gpg's own complaint quotes the offending line, and a log masks every
+    # occurrence of the secret in it -- so what reaches a reader is
+    # "invalid armor header: ***" and no way to tell an escaped key from a
+    # CRLF one from a truncated one. These are counts and yes-or-nos derived
+    # from the value; none of them narrows what the key is, and between them
+    # they name the shape.
+    {
+      echo "             what the value looks like, without any of it:"
+      echo "               bytes:            ${#key}"
+      echo "               real newlines:    $(grep -c '' <<<"$key")"
+      echo "               carriage returns: $(tr -cd '\r' <<<"$key" | wc -c)"
+      echo "               backslashes:      $(tr -cd '\\\\' <<<"$key" | wc -c)"
+      echo "               begins with the armour marker: \
+$([[ "$key" == "-----BEGIN PGP PRIVATE KEY BLOCK-----"* ]] && echo yes || echo no)"
+      echo "               ends with it:                  \
+$([[ "$(tr -d '[:space:]' <<<"$key")" == *"-----ENDPGPPRIVATEKEYBLOCK-----" ]] && echo yes || echo no)"
+    } >&2
     exit 1
   fi
 
