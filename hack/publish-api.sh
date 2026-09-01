@@ -113,11 +113,17 @@ if [[ -n "${SIGNING_KEY:-}" ]]; then
   # `invalid armor header`, about a value the log has masked to three
   # asterisks. Nobody was ever going to read that and think of printf.
   #
-  # Converted only when there is nothing to lose: a value that already has real
-  # newlines is left exactly as it is. Base64 armour contains no backslash, so
-  # there is no key this can damage.
+  # The test is only whether a backslash-n is in there, and that is the whole
+  # of it. An earlier version also required the value to carry no real newline,
+  # reasoning that a key with both was already fine -- and it met a secret that
+  # was one escaped line with a trailing newline, which is what a paste into a
+  # text box leaves behind. The extra condition did nothing but decide, on that
+  # evidence, to leave the key unreadable.
+  #
+  # Safe without it: armour is base64 and two header lines, and no backslash
+  # occurs in either, so there is no key this conversion can damage.
   key="$SIGNING_KEY"
-  if [[ "$key" != *$'\n'* && "$key" == *'\n'* ]]; then
+  if [[ "$key" == *'\n'* ]]; then
     key="$(printf '%b' "$key")"
     echo "publish-api: SIGNING_KEY arrived with escaped newlines; reading it as a key"
   fi
