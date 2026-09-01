@@ -112,6 +112,7 @@ message CloudRequest {
     BoostRequest boost = 4;
     StopBoostRequest stop_boost = 5;
     AnnounceRequest announce = 6;
+    AcceptJoinsRequest accept_joins = 7;
   }
 }
 
@@ -130,6 +131,7 @@ message CloudResponse {
     BoostResult boost = 5;
     StopBoostResult stop_boost = 6;
     AnnounceResult announce = 7;
+    AcceptJoinsResult accept_joins = 8;
   }
 }
 
@@ -251,6 +253,44 @@ message StopBoostRequest {
 message StopBoostResult {
   int32 removed = 1;
 }
+
+// AcceptJoinsRequest is a server opening or closing its own door.
+//
+// **Closing is not retiring, and the difference is the whole reason this verb
+// exists.** RetireRequest says the server is finished: it stops taking joins,
+// empties out, and is taken down by the rules that take down any server its
+// group no longer needs. This says only the first of those, it says it for as
+// long as the server likes, and it can be taken back. A round that has started
+// is not a server that is going away, and asking for the one when you mean the
+// other reads as a decommissioning to everybody who looks afterwards.
+//
+// **The phase does not change.** A closed server stays Ready, because the
+// phase is the operator's account of a server's lifecycle and closing the door
+// is not a lifecycle event. What changes is whether the proxies have it in
+// their routing tables, which is exactly the question ServerState.registered
+// answers -- so a plugin choosing where to send somebody already reads the
+// right field and needs to learn nothing new.
+//
+// **Nobody is moved.** The players on a closed server go on playing until they
+// leave on their own. This verb has no effect on anybody who is already there,
+// which is the other half of what distinguishes it from a drain.
+//
+// It is refused from a proxy. A proxy is not in anybody's routing table -- it
+// *is* the routing table -- so there is nothing for this to close.
+message AcceptJoinsRequest {
+  // False closes the door, true opens it again. A server that has never asked
+  // is open, which is what makes this safe to add to a network whose agents
+  // predate it.
+  bool accept = 1;
+}
+
+// AcceptJoinsResult says the operator has it.
+//
+// It carries nothing, for the reason AnnounceResult does. Whether the proxies
+// have caught up is a question ServerState.registered answers a moment later,
+// and inventing a second answer here would be a promise about a broadcast this
+// verb does not wait for.
+message AcceptJoinsResult {}
 
 // AnnounceRequest is a server describing itself.
 //

@@ -50,6 +50,48 @@ class CloudConnectorTest {
     }
 
     @Test
+    fun `a new stream is told again that this server's door is shut`() {
+        // Sharper than the description: the operator's default for a session
+        // it has never seen is open, so a closed door that went unrestated
+        // would put players into a round that had already started.
+        val connector = connector()
+        connector.acceptJoins(false)
+        requested.clear()
+
+        connector.onStreamChanged()
+
+        assertEquals(1, requested.size)
+        assertEquals(false, requested[0].acceptJoins.accept)
+    }
+
+    @Test
+    fun `a door that was opened again is restated as open`() {
+        val connector = connector()
+        connector.acceptJoins(false)
+        connector.acceptJoins(true)
+        requested.clear()
+
+        connector.onStreamChanged()
+
+        assertEquals(1, requested.size)
+        assertEquals(true, requested[0].acceptJoins.accept)
+    }
+
+    @Test
+    fun `a server that never spoke about its door says nothing about it`() {
+        // Never having spoken is not the same as having said "open": there is
+        // nothing to restate, and the operator's own default already agrees.
+        val connector = connector()
+        connector.announce("running", emptyMap())
+        requested.clear()
+
+        connector.onStreamChanged()
+
+        assertEquals(1, requested.size)
+        assertTrue(requested.none { it.hasAcceptJoins() })
+    }
+
+    @Test
     fun `a server that never announced says nothing on a new stream`() {
         // Never having described itself is not the same as having described
         // itself as nothing, and only the second is worth a message.

@@ -691,6 +691,30 @@ for as long as that pod has a session. A server that has announced nothing and
 a server whose agent predates the verb are the same server in the picture —
 both carry an empty description rather than a missing one.
 
+### A server can close its own door, and it is not a retire
+
+`acceptJoins(false)` stops the proxies routing new players to one server;
+`acceptJoins(true)` undoes it. Nobody already there is moved, and the phase
+does not change — a closed server is `Ready` and not registered, which is a
+state this operator always had.
+
+It exists as its own verb rather than as a use of `retire` because the two mean
+different things and one of them is permanent. Retiring says a server is
+finished and ends it once it is empty; a round that has started is not a server
+on its way out, and an operator looking at a `Retiring` server afterwards would
+read a decommissioning that nobody meant.
+
+The group notices: a closed server's empty seats stop counting toward
+`status.freeSlots`, so a group sized by `spec.scaling.spareSlots` builds a
+replacement instead of sitting at its floor while every server in it has shut
+its door. **That rule tightened one case that predates any door**: between the
+pass that makes a server `Ready` and the one that registers it, its seats used
+to count as reachable.
+
+Nothing changes for an installation whose plugins never call it. A server that
+has never asked is open, and so is one whose agent this operator has never
+heard from.
+
 ### The counterpart: what a person writes down about a group
 
 `ServerGroup` and `ProxyGroup` gain `spec.attributes`, which is the same idea

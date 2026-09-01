@@ -264,3 +264,52 @@ func TestAProxyAnnouncementIsRefusedRatherThanDropped(t *testing.T) {
 		t.Errorf("reason = %v, want REFUSED", response.GetError().GetReason())
 	}
 }
+
+func TestAServerClosesItsOwnDoorAndNobodyElses(t *testing.T) {
+	// The narrowest verb on this channel: it names nothing, so the only server
+	// it can reach is the one that asked. Retire is bounded by a namespace;
+	// this is bounded by a pod.
+	registry := agent.New(time.Now, time.Second, time.Now())
+	registry.Connect("pod-a", agent.RoleServer)
+	registry.Connect("pod-b", agent.RoleServer)
+	s := &Server{opts: Options{Agents: registry}, requestRate: newRequestLimiter(time.Now)}
+
+	response := s.answerCloudRequest(context.Background(), logr.Discard(),
+		grpcauth.Identity{Namespace: "ns", PodName: "lobby-a", PodUID: "pod-a", Role: agent.RoleServer},
+		&agentpb.CloudRequest{
+			Id: 3,
+			Request: &agentpb.CloudRequest_AcceptJoins{
+				AcceptJoins: &agentpb.AcceptJoinsRequest{Accept: false},
+			},
+		})
+
+	if response.GetAcceptJoins() == nil {
+		t.Fatalf("response = %+v, want the door closed", response)
+	}
+	if registry.Lookup("pod-a").AcceptingJoins {
+		t.Error("the door of the server that asked is still open")
+	}
+	if !registry.Lookup("pod-b").AcceptingJoins {
+		t.Error("one server's request closed another server's door")
+	}
+}
+
+func TestAProxyIsRefusedADoor(t *testing.T) {
+	registry := agent.New(time.Now, time.Second, time.Now())
+	registry.Connect("proxy-a", agent.RoleProxy)
+	s := &Server{opts: Options{Agents: registry}, requestRate: newRequestLimiter(time.Now)}
+
+	response := s.answerCloudRequest(context.Background(), logr.Discard(),
+		grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy},
+		&agentpb.CloudRequest{
+			Id: 4,
+			Request: &agentpb.CloudRequest_AcceptJoins{
+				AcceptJoins: &agentpb.AcceptJoinsRequest{Accept: false},
+			},
+		})
+
+	if response.GetError() == nil ||
+		response.GetError().GetReason() != agentpb.RequestError_REFUSED {
+		t.Fatalf("response = %+v, want a refusal with a reason", response)
+	}
+}

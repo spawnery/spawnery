@@ -71,6 +71,13 @@ type Snapshot struct {
 	// an unknown pod it is the time since the operator started, so agents get
 	// a grace period to reconnect after an operator restart.
 	StreamDownFor time.Duration
+	// AcceptingJoins is whether this server wants new players routed to it.
+	//
+	// True unless the server itself has said otherwise, and true for a pod the
+	// registry has never seen. That default is the one that cannot surprise
+	// anybody: a network whose agents predate the verb, or whose operator has
+	// just restarted, goes on routing exactly as it did.
+	AcceptingJoins bool
 	// EmptyFor is how long the agent has been reporting zero players. It is
 	// zero while players are on, and zero before the first report — a server
 	// that has never reported is not known to be empty.
@@ -131,6 +138,18 @@ type entry struct {
 	// Announcements keys by, and the reason that key is safe: a pod is named
 	// after its Server, so the name is one the pod could not have chosen.
 	server string
+	// joinsClosed is set while this server has asked that no new players be
+	// routed to it.
+	//
+	// Stored as the *refusal* and not as the permission, so the zero value is
+	// a server that takes players -- which is what every server is until it
+	// says otherwise, and what a pod whose agent predates the verb stays.
+	//
+	// It survives a disconnect, as the announcement does and for the same
+	// reason: a renewal is make-before-break and a reconnect is seconds, and a
+	// door that swung open in between would put players into a round that had
+	// already started.
+	joinsClosed bool
 	// announcement is what that server last said about itself, nil until it
 	// says anything.
 	//
@@ -374,6 +393,26 @@ func (r *Registry) ReportAnnouncement(key, namespace, server string, a Announcem
 	return nil
 }
 
+// ReportAcceptJoins records whether a server wants new players.
+//
+// A proxy is refused, for a plainer reason than the announcement's: a proxy is
+// not in anybody's routing table -- it is the routing table -- so there is
+// nothing for this to close.
+func (r *Registry) ReportAcceptJoins(key string, accept bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	e, ok := r.entries[key]
+	if !ok || !e.connected {
+		return fmt.Errorf("no live stream for %q", key)
+	}
+	if e.role != RoleServer {
+		return fmt.Errorf("accept-joins from a %s agent %q", e.role, key)
+	}
+	e.joinsClosed = !accept
+	return nil
+}
+
 // Announcements is what every server in a namespace last said about itself,
 // keyed by server name.
 //
@@ -602,14 +641,18 @@ func (r *Registry) Lookup(key string) Snapshot {
 	now := r.now()
 	e, ok := r.entries[key]
 	if !ok {
+		// AcceptingJoins true for a pod nothing is known about: the safe
+		// default is the behaviour every network had before this existed.
 		return Snapshot{
-			PlayersStale:  true,
-			StreamDownFor: now.Sub(r.startedAt),
+			PlayersStale:   true,
+			AcceptingJoins: true,
+			StreamDownFor:  now.Sub(r.startedAt),
 		}
 	}
 
 	snap := Snapshot{
 		Known:             true,
+		AcceptingJoins:    !e.joinsClosed,
 		Connected:         e.connected,
 		Ready:             e.ready,
 		Players:           e.players,

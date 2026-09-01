@@ -164,6 +164,20 @@ class MirrorApiTest {
     }
 
     @Test
+    fun `both sides build the same request for the same door`() {
+        // Refused on one of them, and still built identically: which side may
+        // close a door is the operator's rule, and a client that decided it
+        // here would be a second place for that rule to live.
+        val mirror = NetworkMirror().also { it.apply(aRichState()) }
+        MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).acceptJoins(false)
+        MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).acceptJoins(false)
+
+        assertEquals(2, requested.size)
+        assertEquals(requested[0].acceptJoins, requested[1].acceptJoins)
+        assertEquals(false, requested[0].acceptJoins.accept)
+    }
+
+    @Test
     fun `an announcement with nothing in it is what clears a description`() {
         // Not filtered out as a no-op on the way: an empty announcement is how
         // a game says it has stopped doing whatever it was doing, and dropping

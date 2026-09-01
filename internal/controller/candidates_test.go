@@ -37,8 +37,12 @@ func view(name string, p phase.Phase, players, slots int32, stale bool, gen int6
 		// that fell back out of Ready with its players still on it — are built
 		// with registered() below.
 		WasRegistered: p == phase.Ready,
-		Generation:    gen,
-		CreatedAt:     base.Add(time.Duration(ageSeconds) * time.Second),
+		// And still is, for the same walk. A Ready server that is *not*
+		// registered is its own case -- a shut door, or a registration that
+		// failed -- and the tests about that build it by hand.
+		Registered: p == phase.Ready,
+		Generation: gen,
+		CreatedAt:  base.Add(time.Duration(ageSeconds) * time.Second),
 	}
 }
 
@@ -591,8 +595,8 @@ func TestStaleSpec(t *testing.T) {
 // healthy group reporting FREE SLOTS 0 on its own printcolumn.
 func TestAggregateGroupCapacityEditKeepsFreeSlots(t *testing.T) {
 	views := []ServerView{
-		{Name: "a", Phase: phase.Ready, PodHash: "same", Slots: 100, Players: 30},
-		{Name: "b", Phase: phase.Ready, PodHash: "same", Slots: 100, Players: 10},
+		{Name: "a", Phase: phase.Ready, Registered: true, PodHash: "same", Slots: 100, Players: 30},
+		{Name: "b", Phase: phase.Ready, Registered: true, PodHash: "same", Slots: 100, Players: 10},
 	}
 	if got := AggregateGroup(views, "same"); got.FreeSlots != 160 {
 		t.Fatalf("FreeSlots = %d, want 160", got.FreeSlots)
@@ -603,8 +607,8 @@ func TestAggregateGroupCapacityEditKeepsFreeSlots(t *testing.T) {
 // satisfy the scaler, or a rolling update would never build a replacement.
 func TestAggregateGroupExcludesStaleFreeSlots(t *testing.T) {
 	views := []ServerView{
-		{Name: "old", Phase: phase.Ready, PodHash: "old", Slots: 100, Players: 0},
-		{Name: "new", Phase: phase.Ready, PodHash: "new", Slots: 100, Players: 40},
+		{Name: "old", Phase: phase.Ready, Registered: true, PodHash: "old", Slots: 100, Players: 0},
+		{Name: "new", Phase: phase.Ready, Registered: true, PodHash: "new", Slots: 100, Players: 40},
 	}
 	got := AggregateGroup(views, "new")
 	if got.FreeSlots != 60 {
@@ -615,5 +619,26 @@ func TestAggregateGroupExcludesStaleFreeSlots(t *testing.T) {
 	// by accident.
 	if got.Replicas != 2 || got.ReadyReplicas != 2 || got.OnlinePlayers != 40 {
 		t.Fatalf("totals = %+v, want Replicas 2, ReadyReplicas 2, OnlinePlayers 40", got)
+	}
+}
+
+func TestAClosedServersSeatsAreNotCapacity(t *testing.T) {
+	// The half of a shut door that the group has to see. Without it a group
+	// could sit at its floor while every server in it had closed -- the scaler
+	// reading plenty of room and the players finding none.
+	views := []ServerView{
+		{Name: "playing", Phase: phase.Ready, Registered: false, PodHash: "same", Slots: 100},
+		{Name: "waiting", Phase: phase.Ready, Registered: true, PodHash: "same", Slots: 100},
+	}
+
+	got := AggregateGroup(views, "same")
+
+	if got.FreeSlots != 100 {
+		t.Errorf("FreeSlots = %d, want 100 — only the server anybody can be sent to", got.FreeSlots)
+	}
+	// It is still one of the group's servers, and still ready. Only its seats
+	// stopped counting.
+	if got.Replicas != 2 || got.ReadyReplicas != 2 {
+		t.Errorf("replicas = %d/%d, want both servers still counted", got.ReadyReplicas, got.Replicas)
 	}
 }

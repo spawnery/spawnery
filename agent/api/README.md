@@ -133,6 +133,35 @@ needs to be permanently bigger needs its `ServerGroup` edited by a person, and
 this API deliberately cannot do that — the operator holds no write on
 `servergroups` at all.
 
+## Closing this server to new players
+
+`acceptJoins(false)` stops the proxies sending anybody new here.
+`acceptJoins(true)` undoes it.
+
+**It is not `retire`.** Retiring says the server is finished: it stops taking
+joins, empties out, and is taken down once it is empty. This says only the
+first of those, it says it for as long as you like, and you can take it back. A
+round that has started is not a server that is going away, and asking for the
+one when you mean the other reads as a decommissioning to everybody who looks
+at it afterwards.
+
+**Nobody is moved.** The players already here go on playing until they leave on
+their own.
+
+**The phase does not change.** A closed server is still `READY`, because the
+phase is the operator's account of a server's lifecycle and shutting a door is
+not a lifecycle event. What changes is `ServerInfo.registered()` — the field a
+caller choosing where to send somebody already reads.
+
+Your group notices: a closed server's empty seats stop counting as the group's
+free capacity, so a group sized by spare slots builds a replacement rather than
+sitting at its floor while every server in it has shut its door.
+
+Refused on a proxy, which is not in anybody's routing table but is the routing
+table. And like `announce`, it survives a reconnection without being called
+again — the agent restates the last door state on every new session, because
+the operator's default for a session it has never seen is open.
+
 ## Saying what this server is doing
 
 `announce(state, attributes)` publishes a short description of this server that
