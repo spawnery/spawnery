@@ -241,6 +241,13 @@ const (
 	// --allow-plugin-volumes.
 	ReasonPluginVolumesDisabled = "PluginVolumesDisabled"
 
+	// ReasonFileVolumeUnusable says spec.extraFiles names a claim that is
+	// missing or not ReadWriteMany.
+	ReasonFileVolumeUnusable = "FileVolumeUnusable"
+	// ReasonFileVolumesDisabled says spec.extraFiles is set on an
+	// installation started without --allow-file-volumes.
+	ReasonFileVolumesDisabled = "FileVolumesDisabled"
+
 	// The two spec.mounts claim reasons. They are separate from the
 	// extraPlugins pair above even though one flag gates both and one rule
 	// judges both claims, because the remedy differs by which field somebody
@@ -384,6 +391,29 @@ type ExtraPlugins struct {
 	// chosen because maxReplicas can be raised by an edit that has nothing to
 	// do with storage, and a group that worked until somebody scaled it is a
 	// worse failure than one that never started.
+	// +kubebuilder:validation:MinLength=1
+	ClaimName string `json:"claimName"`
+}
+
+// ExtraFiles names a volume whose tree is copied into a server's working
+// directory on every start.
+//
+// It is ExtraPlugins one directory up. ExtraPlugins reaches /data/plugins and
+// nothing else, so a plugin whose configuration lives elsewhere -- Sponge
+// reads config/sponge/sponge.conf -- could not be configured without an image.
+// A mount cannot deliver there either: see ServerConfigDirPath, whose comment
+// carries the kubelet-ownership measurement that rules it out for good.
+//
+// The entrypoint refuses a tree carrying a path another owner writes, so this
+// volume, the renderer and ExtraPlugins never write the same file and the
+// order between them cannot decide the result.
+type ExtraFiles struct {
+	// ClaimName is a PersistentVolumeClaim in this object's own namespace.
+	//
+	// It must be ReadWriteMany, for the reason ExtraPlugins.ClaimName gives:
+	// every pod of a group mounts it, and a ReadWriteOnce claim would leave
+	// the second server Pending with a scheduling error naming volume
+	// affinity rather than the cause.
 	// +kubebuilder:validation:MinLength=1
 	ClaimName string `json:"claimName"`
 }

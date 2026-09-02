@@ -469,6 +469,24 @@ spec:
                   rule: self.type != 'ClusterIP' || has(self.clusterIP)
                 - message: expose.clusterIP is only allowed for type ClusterIP
                   rule: self.type == 'ClusterIP' || !has(self.clusterIP)
+              extraFiles:
+                description: |-
+                  ExtraFiles names a volume whose tree is copied into this group's
+                  servers on every start. See ExtraFiles.
+                properties:
+                  claimName:
+                    description: |-
+                      ClaimName is a PersistentVolumeClaim in this object's own namespace.
+
+                      It must be ReadWriteMany, for the reason ExtraPlugins.ClaimName gives:
+                      every pod of a group mounts it, and a ReadWriteOnce claim would leave
+                      the second server Pending with a scheduling error naming volume
+                      affinity rather than the cause.
+                    minLength: 1
+                    type: string
+                required:
+                - claimName
+                type: object
               extraPlugins:
                 description: |-
                   ExtraPlugins names a volume whose plugins and their configuration are

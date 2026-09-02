@@ -321,6 +321,11 @@ type ProxyGroupSpec struct {
 	// copied into this group's servers on every start. See ExtraPlugins.
 	// +optional
 	ExtraPlugins *ExtraPlugins `json:"extraPlugins,omitempty"`
+
+	// ExtraFiles names a volume whose tree is copied into this group's
+	// servers on every start. See ExtraFiles.
+	// +optional
+	ExtraFiles *ExtraFiles `json:"extraFiles,omitempty"`
 }
 
 // ProxyGroupStatus is the observed state of a ProxyGroup.

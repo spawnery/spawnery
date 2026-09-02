@@ -191,6 +191,11 @@ type ServerGroupSpec struct {
 	// +optional
 	ExtraPlugins *ExtraPlugins `json:"extraPlugins,omitempty"`
 
+	// ExtraFiles names a volume whose tree is copied into this group's
+	// servers on every start. See ExtraFiles.
+	// +optional
+	ExtraFiles *ExtraFiles `json:"extraFiles,omitempty"`
+
 	// ConfigOverlay names a ConfigMap whose keys are configuration files to
 	// merge over the rendered defaults — "server.properties",
 	// "paper-global.yml", "paper-world-defaults.yml" or "velocity.toml", in
