@@ -398,6 +398,17 @@ type ExtraPlugins struct {
 // ExtraFiles names a volume whose tree is copied into a server's working
 // directory on every start.
 //
+// **The claim's contents are the truth, on every start.** Word for word the
+// ExtraPlugins rule, and for the same reason: a server that rewrote one of
+// these files finds the administrator's version back in place next start,
+// which is what makes the claim the truth rather than a first-boot seed.
+//
+// **A world in this claim is therefore overwritten on every start**, and a
+// world does not belong in it. spec.storage and spec.mounts are what carry
+// one. That consequence follows from the rule above rather than qualifying
+// it, and it is the one worth reading twice before pointing this field at a
+// claim somebody was already using for something else.
+//
 // It is ExtraPlugins one directory up. ExtraPlugins reaches /data/plugins and
 // nothing else, so a plugin whose configuration lives elsewhere -- Sponge
 // reads config/sponge/sponge.conf -- could not be configured without an image.
@@ -407,6 +418,11 @@ type ExtraPlugins struct {
 // The entrypoint refuses a tree carrying a path another owner writes, so this
 // volume, the renderer and ExtraPlugins never write the same file and the
 // order between them cannot decide the result.
+//
+// Nothing about the contents reaches podspec.DesiredServerHash: the operator
+// holds a claim name, not a filesystem, and a filesystem it only names cannot
+// be digested. Changing what the claim holds therefore replaces no running
+// server; a new file reaches one on its next start, which somebody triggers.
 type ExtraFiles struct {
 	// ClaimName is a PersistentVolumeClaim in this object's own namespace.
 	//

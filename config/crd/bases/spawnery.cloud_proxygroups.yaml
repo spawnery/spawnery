@@ -473,6 +473,16 @@ spec:
                 description: |-
                   ExtraFiles names a volume whose tree is copied into this group's
                   servers on every start. See ExtraFiles.
+
+                  The claim's contents are the truth on every start: a file the server
+                  rewrote at runtime is replaced by the claim's version the next time the
+                  pod starts. A world placed in this claim is therefore overwritten on
+                  every start and does not belong here -- spec.storage and spec.mounts
+                  are what carry one.
+
+                  Nothing about the contents reaches the pod hash, because the spec names
+                  a claim rather than describing what is in it. Changing a file replaces
+                  no running server; it reaches one on that server's next start.
                 properties:
                   claimName:
                     description: |-
