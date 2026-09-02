@@ -113,12 +113,16 @@ if [ -d "$FILE_SOURCE" ]; then
 		else
 			cp -R "$entry" ./
 		fi
-		# Scoped to what was just copied, and not `chmod -R u+w .`: this
-		# script runs under `set -eu`, every user mount is read-only, and a
-		# mount under /data would make a chmod of the whole working directory
-		# fail with a bare `chmod:` naming no cause. The mount this copies
-		# from is read-only too, so the copies arrive read-only and the files
-		# it carries are exactly the ones a server rewrites -- Sponge writes
+		# Scoped to the top-level entry that was just copied or merged into,
+		# and not `chmod -R u+w .`: this script runs under `set -eu`, every
+		# user mount is read-only, and a mount under /data would make a chmod
+		# of the whole working directory fail with a bare `chmod:` naming no
+		# cause. When merging, this also re-chmods files spawnery-config
+		# already wrote under the same name -- harmless, since they were
+		# already writable, but worth naming rather than implying only the
+		# newly copied files are touched. The mount this copies from is
+		# read-only too, so the copies arrive read-only and the files it
+		# carries are exactly the ones a server rewrites -- Sponge writes
 		# sponge.conf back on every start.
 		chmod -R u+w "./$name"
 	done

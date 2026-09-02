@@ -597,6 +597,54 @@ func TestAFileFromTheVolumeLandsUnderConfig(t *testing.T) {
 	}
 }
 
+func TestAFileFromTheVolumeMergesIntoConfigInsteadOfNestingUnderIt(t *testing.T) {
+	// spawnery-config always creates config/ before this block runs -- it
+	// writes paper-global.yml into it at startup, at line 45 above. The stub
+	// spawnery-config this package uses does not reproduce that, so every
+	// other test here leaves config/ absent when the FILE_SOURCE block runs
+	// and always takes the plain-copy branch, which happens to produce the
+	// right layout when the destination doesn't exist yet. This test creates
+	// config/ by hand, the way the real renderer would have, so the merge
+	// branch actually runs and is actually checked -- `cp -R src ./` against
+	// an *existing* ./config would nest the volume's tree at config/config
+	// instead.
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config", "paper-global.yml"),
+		[]byte("rendered-by-spawnery-config\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "config", "sponge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "config", "sponge", "sponge.conf"),
+		[]byte("version=1\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source); err != nil {
+		t.Fatalf("a source carrying config/sponge/sponge.conf failed the start: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "config", "sponge", "sponge.conf")); err != nil {
+		t.Errorf("the volume's file did not merge into the existing config directory: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "config", "paper-global.yml"))
+	if err != nil {
+		t.Fatalf("the renderer's file did not survive the merge: %v", err)
+	}
+	if string(got) != "rendered-by-spawnery-config\n" {
+		t.Errorf("config/paper-global.yml = %q, want the renderer's file untouched", got)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "config", "config")); err == nil {
+		t.Error("the volume's config directory nested under config/config instead of merging into config/")
+	}
+}
+
 func TestAFileTheRendererOwnsRefusesTheStart(t *testing.T) {
 	for _, owned := range []string{
 		"server.properties",
