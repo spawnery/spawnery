@@ -72,6 +72,12 @@ func checkExtraPlugins(
 // more installations set, and when a group has both wrong there is no reason
 // to prefer the other. spec.extraFiles is asked next, then spec.mounts.
 //
+// Each field has its own flag -- pluginsAllowed, filesAllowed, mountsAllowed
+// -- because each is a separate statement an installation might want to make:
+// "runs no third-party plugins" is not "mounts no administrator claim", and
+// folding them together said one flag governed a field its name never
+// mentioned.
+//
 // The reasons stay distinct -- see ReasonMountVolumeUnusable -- so the caller
 // puts the answer on the object without having to know which field produced
 // it.
@@ -82,16 +88,17 @@ func checkGroupVolumes(
 	ep *spawneryv1alpha1.ExtraPlugins,
 	ef *spawneryv1alpha1.ExtraFiles,
 	mounts []spawneryv1alpha1.Mount,
-	allowed bool,
+	pluginsAllowed bool,
 	filesAllowed bool,
+	mountsAllowed bool,
 ) (string, string, bool) {
-	if reason, message, ok := checkExtraPlugins(ctx, reader, namespace, ep, allowed); !ok {
+	if reason, message, ok := checkExtraPlugins(ctx, reader, namespace, ep, pluginsAllowed); !ok {
 		return reason, message, false
 	}
 	if reason, message, ok := checkExtraFiles(ctx, reader, namespace, ef, filesAllowed); !ok {
 		return reason, message, false
 	}
-	return checkMountClaims(ctx, reader, namespace, mounts, allowed)
+	return checkMountClaims(ctx, reader, namespace, mounts, mountsAllowed)
 }
 
 // checkClaimMountable answers the one question both spec.extraPlugins and a
@@ -134,6 +141,11 @@ func checkClaimMountable(
 // storage class, no access mode and no flag, and a group made of nothing but
 // those never reaches a single API call here.
 //
+// Gated by its own --allow-mount-volumes rather than --allow-plugin-volumes:
+// the two fields are different statements an installation might make, and
+// borrowing the plugin flag's name for a mount left its refusal naming a
+// switch spec.mounts does not mention.
+//
 // One function for both group kinds, for the reason checkExtraPlugins gives.
 // It reports the first mount that fails rather than collecting every one: the
 // condition holds a sentence, and a person fixing three broken claims fixes
@@ -157,7 +169,7 @@ func checkMountClaims(
 			// to their own storage.
 			return spawneryv1alpha1.ReasonMountVolumesDisabled,
 				fmt.Sprintf("mount %q names claim %q, and this operator was started without "+
-					"--allow-plugin-volumes so it mounts no claim",
+					"--allow-mount-volumes so it mounts no claim",
 					m.Name, m.PersistentVolumeClaim.ClaimName),
 				false
 		}

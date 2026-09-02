@@ -249,18 +249,18 @@ const (
 	ReasonFileVolumesDisabled = "FileVolumesDisabled"
 
 	// The two spec.mounts claim reasons. They are separate from the
-	// extraPlugins pair above even though one flag gates both and one rule
-	// judges both claims, because the remedy differs by which field somebody
-	// wrote: a person reading MountVolumeUnusable goes and looks at
-	// spec.mounts, and a shared reason would have sent them to a field their
-	// group may not even set.
+	// extraPlugins pair above even though one rule judges both claims,
+	// because the remedy differs by which field somebody wrote: a person
+	// reading MountVolumeUnusable goes and looks at spec.mounts, and a
+	// shared reason would have sent them to a field their group may not even
+	// set.
 	//
 	// ReasonMountVolumeUnusable says a spec.mounts entry names a claim that
 	// is missing, or that cannot be mounted by every pod of the group.
 	ReasonMountVolumeUnusable = "MountVolumeUnusable"
 	// ReasonMountVolumesDisabled says a spec.mounts entry names a claim on an
 	// installation whose operator was not started with
-	// --allow-plugin-volumes.
+	// --allow-mount-volumes.
 	ReasonMountVolumesDisabled = "MountVolumesDisabled"
 
 	// The four ForwardingSecretRotationPending reasons.
@@ -485,11 +485,10 @@ type Mount struct {
 // The rule does not soften for a group that happens to run one replica today,
 // because maxReplicas is raised by edits that have nothing to do with storage.
 //
-// It is gated by the same --allow-plugin-volumes the operator already has.
-// One switch rather than two: what an installation turns off with it is
-// "content this cluster did not ship reaches a game server from a volume",
-// and a claim mounted at /data/worlds is that as much as a claim copied into
-// plugins/ is. The flag is still not a security boundary -- a claim is a
+// It is gated by its own --allow-mount-volumes rather than
+// --allow-plugin-volumes: until this field existed, the plugin flag governed
+// spec.mounts too, and its refusal said so -- which the flag's name never
+// promised. The flag is still not a security boundary -- a claim is a
 // namespaced object in the same trust domain as the group naming it -- and
 // docs/plugins.md says so at more length.
 type MountClaim struct {

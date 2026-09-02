@@ -107,7 +107,7 @@ func TestAGroupWithBothFieldsWrongReportsThePluginOneFirst(t *testing.T) {
 	reason, _, ok := checkGroupVolumes(context.Background(), c, "minecraft",
 		&spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"},
 		&spawneryv1alpha1.ExtraFiles{ClaimName: "files"},
-		nil, false, false)
+		nil, false, false, false)
 
 	if ok {
 		t.Fatal("both fields wrong was accepted")

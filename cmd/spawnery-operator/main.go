@@ -275,6 +275,7 @@ func main() {
 		drainTaints             taintKeys
 		allowPluginVolumes      bool
 		allowFileVolumes        bool
+		allowMountVolumes       bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
@@ -312,22 +313,26 @@ func main() {
 			"keys it recognises.")
 
 	flag.BoolVar(&allowPluginVolumes, "allow-plugin-volumes", false,
-		"allow a group to mount a PersistentVolumeClaim: a spec.extraPlugins claim, whose "+
-			"contents are copied into every server's plugins directory on start, or a "+
-			"spec.mounts entry naming a claim. One switch for both, because what it turns "+
-			"off is the same sentence for each -- content this installation did not ship "+
-			"reaches a game server off a volume. ConfigMap and Secret mounts are not gated. "+
-			"Off by default -- an installation that has not turned this on refuses a group "+
-			"that names a claim, so \"this cluster runs nothing off a volume\" is a fact "+
-			"rather than a convention. It is not a security boundary: a "+
-			"PersistentVolumeClaim is a namespaced object in the same trust domain as the "+
-			"group that names it.")
+		"let a group name a spec.extraPlugins claim, whose contents are copied "+
+			"into every server's plugins directory on start. Off by default -- an "+
+			"installation that has not turned this on refuses a group that names a "+
+			"claim, so \"this cluster runs no third-party plugins\" is a fact rather "+
+			"than a convention. It is not a security boundary: a PersistentVolumeClaim "+
+			"is a namespaced object in the same trust domain as the group that names "+
+			"it. Until 0.2.x this flag also governed spec.mounts; that is now "+
+			"--allow-mount-volumes.")
 
 	flag.BoolVar(&allowFileVolumes, "allow-file-volumes", false,
 		"let a group name a spec.extraFiles claim whose tree is copied into "+
 			"every server's working directory on start. Not a security control: "+
 			"a claim is a namespaced object in the same trust domain as the group "+
 			"naming it. It lets an installation say it runs no administrator-supplied files.")
+
+	flag.BoolVar(&allowMountVolumes, "allow-mount-volumes", false,
+		"let a group's spec.mounts name a PersistentVolumeClaim. Not a security "+
+			"control: a claim is a namespaced object in the same trust domain as the "+
+			"group naming it. Until 0.2.x this was governed by --allow-plugin-volumes, "+
+			"which now governs only spec.extraPlugins.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -489,6 +494,7 @@ func main() {
 		Events:               bothFanouts{servers: servers, proxies: proxies},
 		AllowPluginVolumes:   allowPluginVolumes,
 		AllowFileVolumes:     allowFileVolumes,
+		AllowMountVolumes:    allowMountVolumes,
 		ReportInterval:       reportInterval,
 		Clock:                time.Now,
 		StartupDeadline:      startupDeadline,

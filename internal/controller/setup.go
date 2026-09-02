@@ -58,6 +58,17 @@ type Options struct {
 	// "runs no third-party plugins" and "runs no administrator-supplied
 	// files" are not the same claim.
 	AllowFileVolumes bool
+	// AllowMountVolumes lets a group name a PersistentVolumeClaim in
+	// spec.mounts.
+	//
+	// **An operational switch and not a security boundary**, for the reason
+	// AllowPluginVolumes gives. A switch of its own rather than folded into
+	// AllowPluginVolumes: until this field existed, --allow-plugin-volumes
+	// gated spec.mounts too, and its refusal said so -- which the flag's name
+	// never promised. A claim mounted at an arbitrary path is a different
+	// statement from "runs no third-party plugins," and deserves its own
+	// name.
+	AllowMountVolumes bool
 	// Clock is the time source. Injectable for tests.
 	Clock func() time.Time
 	// StartupDeadline is how long a server may take to reach Ready.
@@ -234,6 +245,7 @@ func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconc
 		DrainTaintKeys:     opts.DrainTaintKeys,
 		AllowPluginVolumes: opts.AllowPluginVolumes,
 		AllowFileVolumes:   opts.AllowFileVolumes,
+		AllowMountVolumes:  opts.AllowMountVolumes,
 		// Uncached, for the reason ClaimReader's own comment gives: the
 		// manager's cache holds only claims carrying our label, and a plugin
 		// claim carries none.
@@ -256,6 +268,7 @@ func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconcil
 		DrainTaintKeys:     opts.DrainTaintKeys,
 		AllowPluginVolumes: opts.AllowPluginVolumes,
 		AllowFileVolumes:   opts.AllowFileVolumes,
+		AllowMountVolumes:  opts.AllowMountVolumes,
 		// Uncached, for the reason ClaimReader's own comment gives: the
 		// manager's cache holds only claims carrying our label, and a plugin
 		// claim carries none.
