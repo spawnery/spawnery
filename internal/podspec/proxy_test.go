@@ -604,6 +604,22 @@ func TestProxyExtraFilesMountsTheClaimReadOnlyOutsideData(t *testing.T) {
 		t.Fatalf("BuildProxyPod: %v", err)
 	}
 
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == FileSourceVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatal("no extra-files volume was rendered")
+	}
+	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "files" {
+		t.Fatalf("volume source = %+v, want the named claim", vol.VolumeSource)
+	}
+	if !vol.PersistentVolumeClaim.ReadOnly {
+		t.Error("the claim is mounted writable")
+	}
+
 	var mount *corev1.VolumeMount
 	for i := range pod.Spec.Containers[0].VolumeMounts {
 		if pod.Spec.Containers[0].VolumeMounts[i].Name == FileSourceVolumeName {

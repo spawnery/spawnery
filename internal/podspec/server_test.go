@@ -1232,6 +1232,25 @@ func TestExtraFilesIsMountedReadOnlyOutsideData(t *testing.T) {
 		g.Spec.ExtraFiles = &spawneryv1alpha1.ExtraFiles{ClaimName: "files"}
 	})
 
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == FileSourceVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatal("no extra-files volume was rendered")
+	}
+	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "files" {
+		t.Fatalf("volume source = %+v, want the named claim", vol.VolumeSource)
+	}
+	// Read-only at the volume as well as at the mount. One claim may serve
+	// several groups, and a group that could write it could change what every
+	// other group loads.
+	if !vol.PersistentVolumeClaim.ReadOnly {
+		t.Error("the claim is mounted writable")
+	}
+
 	var mount *corev1.VolumeMount
 	for i := range pod.Spec.Containers[0].VolumeMounts {
 		if pod.Spec.Containers[0].VolumeMounts[i].Name == FileSourceVolumeName {
@@ -1258,6 +1277,11 @@ func TestNoExtraFilesVolumeWithoutTheField(t *testing.T) {
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == FileSourceVolumeName {
 			t.Error("a group that names no claim got the volume anyway")
+		}
+	}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == FileSourceVolumeName {
+			t.Error("a group that names no claim got the mount anyway")
 		}
 	}
 }
