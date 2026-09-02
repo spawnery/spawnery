@@ -104,13 +104,20 @@ if [ -d "$FILE_SOURCE" ]; then
 		lost+found) continue ;;
 		esac
 		cp -R "$entry" ./
-		# Scoped to the top-level entry that was just copied, and not
-		# `chmod -R u+w .`: this script runs under `set -eu`, every user
-		# mount is read-only, and a mount under /data would make a chmod of
-		# the whole working directory fail with a bare `chmod:` naming no
-		# cause. The mount this copies from is read-only too, so the copies
-		# arrive read-only and the files it carries are exactly the ones a
-		# server rewrites -- Sponge writes sponge.conf back on every start.
+		# The whole of "./$name", not only what this loop just placed there --
+		# when $name is a directory that already existed, that recurses over
+		# files spawnery-config wrote into it too, such as paper-global.yml.
+		# That is fine rather than merely tolerated: spawnery-config ran as
+		# this same non-root user moments earlier, so those files are already
+		# writable and the recursion is a no-op on them.
+		#
+		# Not `chmod -R u+w .`, though: this script runs under `set -eu`,
+		# every user mount is read-only, and a group with a claim mount
+		# somewhere else under /data would die on that wider chmod with a
+		# bare `chmod:` naming no cause. The mount this copies from is
+		# read-only too, so the copies arrive read-only and the files it
+		# carries are exactly the ones a server rewrites -- Sponge writes
+		# sponge.conf back on every start.
 		chmod -R u+w "./$name"
 	done
 fi
