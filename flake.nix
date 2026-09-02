@@ -236,7 +236,10 @@
           # The images this names are identical to 0.2.20's and 0.2.21's for
           # the third time, which is the price of the mistake and not of the
           # design.
-          imageVersion = "0.2.22";
+          #
+          # 0.2.23 moves it because a value the plugin API hands out gained a
+          # component again: a group now carries the name a person gave it.
+          imageVersion = "0.2.23";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -301,7 +304,12 @@
           # and netstate carries it onward. A status field, so the CRDs change
           # again -- and a status field is one the operator fills in, so no
           # object anybody wrote needs anything.
-          operatorVersion = "0.2.20";
+          #
+          # 0.2.23 moves it with the images: netstate carries a group's display
+          # name into the picture, and the CRDs gain the spec field it comes
+          # from. A spec field this time, but an optional one -- no object
+          # anybody wrote needs anything.
+          operatorVersion = "0.2.23";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
