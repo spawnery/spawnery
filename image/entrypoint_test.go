@@ -599,15 +599,14 @@ func TestAFileFromTheVolumeLandsUnderConfig(t *testing.T) {
 
 func TestAFileFromTheVolumeMergesIntoConfigInsteadOfNestingUnderIt(t *testing.T) {
 	// spawnery-config always creates config/ before this block runs -- it
-	// writes paper-global.yml into it at startup, at line 45 above. The stub
-	// spawnery-config this package uses does not reproduce that, so every
-	// other test here leaves config/ absent when the FILE_SOURCE block runs
-	// and always takes the plain-copy branch, which happens to produce the
-	// right layout when the destination doesn't exist yet. This test creates
-	// config/ by hand, the way the real renderer would have, so the merge
-	// branch actually runs and is actually checked -- `cp -R src ./` against
-	// an *existing* ./config would nest the volume's tree at config/config
-	// instead.
+	// writes paper-global.yml into it at startup, at line 45 above. Every
+	// other test in this file leaves config/ absent when the FILE_SOURCE
+	// block runs, because the stub spawnery-config here doesn't reproduce
+	// that write, so none of them prove anything about a destination that
+	// already exists. This test creates config/ by hand, the way the real
+	// renderer would have, and checks the outcome that matters: the volume's
+	// file lands where it should, the renderer's file is undisturbed, and
+	// nothing ends up nested at config/config.
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
