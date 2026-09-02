@@ -65,6 +65,17 @@ readonly REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly PORTAL="${PORTAL:-https://central.sonatype.com}"
 readonly PUBLISHING_TYPE="${PUBLISHING_TYPE:-AUTOMATIC}"
 
+# The same two lines hack/publish.sh and hack/publish-chart.sh open with, and
+# they are here because this script did not have them.
+#
+# .github/workflows/release.yml passes DRY_RUN=0 to mean "this is the real
+# thing". An earlier version of this file asked whether the variable was
+# non-empty, and the string "0" is not empty -- so the tagged release reported
+# success and uploaded nothing. That is the worst shape a bug in a publisher
+# can take: it looks exactly like the thing having worked.
+DRY_RUN="${DRY_RUN:-0}"
+readonly DRY_RUN
+
 version="$(grep -oE 'imageVersion = "[^"]+"' "$REPO_ROOT/flake.nix" | head -1 | cut -d'"' -f2)"
 if [[ -z "$version" ]]; then
   echo "publish-api: no imageVersion in flake.nix; nothing says which version this would be" >&2
@@ -77,12 +88,20 @@ readonly bundle="$REPO_ROOT/agent/api/build/spawnery-api-$version-bundle.zip"
 # Signed here rather than checked later: Central rejects an unsigned bundle
 # with a message about a missing .asc, which is a long way from "the release
 # has no signing key".
-if [[ -z "${DRY_RUN:-}" && ( -z "${SIGNING_KEY:-}" || -z "${SIGNING_PASSWORD:-}" ) ]]; then
+if [[ "$DRY_RUN" != "1" && ( -z "${SIGNING_KEY:-}" || -z "${SIGNING_PASSWORD:-}" ) ]]; then
   echo "publish-api: SIGNING_KEY and SIGNING_PASSWORD are unset, and Central takes no unsigned bundle." >&2
   echo "             Run with DRY_RUN=1 to rehearse without them." >&2
   exit 1
 fi
 
+# Said once, at the top, because a reader who has to work out from the absence
+# of an upload whether one was meant is a reader this script has already
+# failed.
+if [[ "$DRY_RUN" = "1" ]]; then
+  echo "publish-api: rehearsing cloud.spawnery:spawnery-api:$version -- nothing will be uploaded"
+else
+  echo "publish-api: publishing cloud.spawnery:spawnery-api:$version to $PORTAL as $PUBLISHING_TYPE"
+fi
 echo "publish-api: building cloud.spawnery:spawnery-api:$version"
 rm -rf "$staging"
 (cd "$REPO_ROOT/agent" && gradle --console=plain -q \
@@ -189,7 +208,7 @@ $([[ "$(tr -d '[:space:]' <<<"$key")" == *"-----ENDPGPPRIVATEKEYBLOCK-----" ]] &
     exit 1
   fi
   echo "publish-api: signed $signed files"
-elif [[ -z "${DRY_RUN:-}" ]]; then
+elif [[ "$DRY_RUN" != "1" ]]; then
   echo "publish-api: no SIGNING_KEY, and Central takes no unsigned bundle." >&2
   exit 1
 fi
@@ -198,7 +217,7 @@ rm -f "$bundle"
 (cd "$staging" && zip -qr "$bundle" .)
 echo "publish-api: bundle $(basename "$bundle") ($(du -h "$bundle" | cut -f1))"
 
-if [[ -n "${DRY_RUN:-}" ]]; then
+if [[ "$DRY_RUN" = "1" ]]; then
   echo "publish-api: DRY_RUN, so nothing is uploaded. It would go to $PORTAL as $PUBLISHING_TYPE:"
   (cd "$staging" && find . -type f | sort | sed 's/^/  /')
   exit 0

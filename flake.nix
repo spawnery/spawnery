@@ -228,7 +228,15 @@
           # images is the cost of having one number for the agent artefacts,
           # and it is smaller than giving the API a version of its own that
           # nothing else would keep in step.
-          imageVersion = "0.2.21";
+          #
+          # 0.2.22 exists because 0.2.21 did not do the one thing it was for.
+          # hack/publish-api.sh read DRY_RUN as a presence rather than as a
+          # value, and the workflow passes 0 for "really publish" -- so the
+          # tagged release rehearsed, reported success and uploaded nothing.
+          # The images this names are identical to 0.2.20's and 0.2.21's for
+          # the third time, which is the price of the mistake and not of the
+          # design.
+          imageVersion = "0.2.22";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
