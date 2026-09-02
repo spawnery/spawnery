@@ -81,6 +81,23 @@ func TestAReadWriteOnceFilesClaimIsRefused(t *testing.T) {
 	}
 }
 
+func TestExtraFilesSwitchOffReadsNoClaim(t *testing.T) {
+	// The other half of TestExtraFilesWithoutTheFlagIsRefused, and it needs
+	// its own test because it is a claim about a call that does not happen.
+	// An installation with the feature off must not spend an API read per
+	// group per resync on a field it will refuse anyway -- see
+	// TestTheSwitchOffReadsNoClaimAtAll in extraplugins_test.go, which this
+	// mirrors.
+	c := &countingReader{Reader: fileReaderWithClaim(t, "files", corev1.ReadWriteMany)}
+
+	checkExtraFiles(context.Background(), c, "minecraft",
+		&spawneryv1alpha1.ExtraFiles{ClaimName: "files"}, false)
+
+	if c.gets != 0 {
+		t.Errorf("the claim was read %d times on a disabled installation, want none", c.gets)
+	}
+}
+
 func TestAGroupWithBothFieldsWrongReportsThePluginOneFirst(t *testing.T) {
 	// checkGroupVolumes' existing order: extraPlugins is the older field and
 	// the one more installations set, and when both are wrong there is no
