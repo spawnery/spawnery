@@ -51,7 +51,7 @@
 - Modify: `api/v1alpha1/common_types.go` (beside `type ExtraPlugins struct` at :376, and the reason block at :236-242)
 - Modify: `api/v1alpha1/servergroup_types.go` (beside `ExtraPlugins *ExtraPlugins` at :192)
 - Modify: `api/v1alpha1/proxygroup_types.go` (beside `ExtraPlugins *ExtraPlugins` at :323)
-- Generated: `api/v1alpha1/zz_generated.deepcopy.go`, `charts/spawnery/crds/*.yaml`
+- Generated: `api/v1alpha1/zz_generated.deepcopy.go`, `charts/spawnery/templates/crds.yaml`, `config/crd/bases/*.yaml`
 - Test: `internal/podspec/hash_golden_test.go` (must stay green unchanged)
 
 **Interfaces:**
@@ -116,17 +116,19 @@ Add the identical block to `api/v1alpha1/proxygroup_types.go` after its `ExtraPl
 - [ ] **Step 4: Regenerate**
 
 Run: `make manifests generate`
-Expected: `zz_generated.deepcopy.go` gains `ExtraFiles` deepcopy functions; the two CRDs under `charts/spawnery/crds/` gain an `extraFiles` property with a required `claimName`.
+Expected: `zz_generated.deepcopy.go` gains `ExtraFiles` deepcopy functions; `charts/spawnery/templates/crds.yaml` and the files under `config/crd/bases/` gain an `extraFiles` property with a required `claimName`. There is no `charts/spawnery/crds/` directory — the chart carries its CRDs as a template.
 
 - [ ] **Step 5: Prove the hash did not move**
 
-Run: `go test ./internal/podspec/ -run Golden -v`
-Expected: PASS, with no golden file edited. A pointer field left nil must not change a hash — if this fails, the field was added inside something the hash digests and the spec's section 3.7 is being violated.
+Run: `go test ./internal/podspec/ -run 'TestTheServerPodDigestHasNotMoved|TestTheProxyPodDigestHasNotMoved' -v`
+Expected: PASS, both named, with no golden file edited. A pointer field left nil must not change a hash — if this fails, the field was added inside something the hash digests and the spec's section 3.7 is being violated.
+
+**Check the run actually selected those two tests.** `go test -run` exits 0 when its pattern matches nothing, so a wrong name here is a green step that verified nothing. The output must name both tests.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add api/ charts/spawnery/crds/
+git add api/ charts/spawnery/templates/crds.yaml config/crd/bases/
 git commit -m "feat(api): extraFiles, a claim copied into /data on every start
 
 extraPlugins reaches /data/plugins and nothing else, so a plugin whose
