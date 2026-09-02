@@ -485,6 +485,16 @@ jobs:
       - name: hack/publish-api.sh
         id: publish_api
         env:
+          # USER_MANAGED for the first publication, and only for it. Maven
+          # Central is immutable -- a version that lands there can never be
+          # withdrawn -- so the first deployment under this namespace waits in
+          # the Portal for a person to look at it and release it by hand.
+          #
+          # **Delete this line once one has gone through.** The script's own
+          # default is AUTOMATIC, which is what every release after the first
+          # should be: a deployment nobody remembers to release is a release
+          # that silently did not happen.
+          PUBLISHING_TYPE: USER_MANAGED
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
