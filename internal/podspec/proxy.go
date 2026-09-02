@@ -262,6 +262,27 @@ func renderProxyPod(
 		})
 	}
 
+	// The group's own file volume, if it named one. Same reasoning as the
+	// plugin source above: read-only at both the volume and the mount, and
+	// outside DataMountPath because a read-only mount cannot be the directory
+	// it fills.
+	if group.Spec.ExtraFiles != nil {
+		volumes = append(volumes, corev1.Volume{
+			Name: FileSourceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: group.Spec.ExtraFiles.ClaimName,
+					ReadOnly:  true,
+				},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      FileSourceVolumeName,
+			MountPath: FileSourceMountPath,
+			ReadOnly:  true,
+		})
+	}
+
 	minecraft := corev1.ContainerPort{
 		Name:          MinecraftPortName,
 		ContainerPort: MinecraftPort,

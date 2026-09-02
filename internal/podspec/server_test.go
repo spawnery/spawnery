@@ -1226,3 +1226,38 @@ func TestNoExtraPluginsRendersNoVolume(t *testing.T) {
 		}
 	}
 }
+
+func TestExtraFilesIsMountedReadOnlyOutsideData(t *testing.T) {
+	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.ExtraFiles = &spawneryv1alpha1.ExtraFiles{ClaimName: "files"}
+	})
+
+	var mount *corev1.VolumeMount
+	for i := range pod.Spec.Containers[0].VolumeMounts {
+		if pod.Spec.Containers[0].VolumeMounts[i].Name == FileSourceVolumeName {
+			mount = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatal("no extra-files mount on a group that names a claim")
+	}
+	if mount.MountPath != FileSourceMountPath {
+		t.Errorf("mounted at %q, want %q", mount.MountPath, FileSourceMountPath)
+	}
+	if !mount.ReadOnly {
+		t.Error("the source is writable; every user volume this package renders is read-only")
+	}
+	if strings.HasPrefix(mount.MountPath, DataMountPath) {
+		t.Errorf("mounted inside %s, which a read-only mount may not be", DataMountPath)
+	}
+}
+
+func TestNoExtraFilesVolumeWithoutTheField(t *testing.T) {
+	pod := build(t, nil)
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == FileSourceVolumeName {
+			t.Error("a group that names no claim got the volume anyway")
+		}
+	}
+}

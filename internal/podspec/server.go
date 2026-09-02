@@ -114,6 +114,16 @@ const (
 	PluginSourceVolumeName = "extra-plugins"
 	PluginSourceMountPath  = "/var/run/spawnery/plugins"
 
+	// FileSourceVolumeName and FileSourceMountPath are where a group's
+	// spec.extraFiles claim is mounted.
+	//
+	// Outside DataMountPath for the same reason PluginSourceMountPath is: the
+	// claim cannot *be* the directory it fills, because every mount this
+	// package renders is read-only and a read-only /data breaks everything
+	// the server writes. It is a source the entrypoint copies out of.
+	FileSourceVolumeName = "extra-files"
+	FileSourceMountPath  = "/var/run/spawnery/files"
+
 	// SLPHealthBinary is the Server-List-Ping tool baked into the base image.
 	// Kubelet knows no SLP probe type, and a tcpSocket probe on 25565 turns
 	// green before the world is loaded.
@@ -398,6 +408,27 @@ func BuildServerPod(
 		})
 	}
 
+	// The group's own file volume, if it named one. Same reasoning as the
+	// plugin source above: read-only at both the volume and the mount, and
+	// outside DataMountPath because a read-only mount cannot be the directory
+	// it fills.
+	if group.Spec.ExtraFiles != nil {
+		volumes = append(volumes, corev1.Volume{
+			Name: FileSourceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: group.Spec.ExtraFiles.ClaimName,
+					ReadOnly:  true,
+				},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      FileSourceVolumeName,
+			MountPath: FileSourceMountPath,
+			ReadOnly:  true,
+		})
+	}
+
 	container := corev1.Container{
 		Name:  ContainerName,
 		Image: group.Spec.Image,
@@ -659,6 +690,10 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 //     so unlike the other two, a nested path under these two is a feature and
 //     not a collision.
 //
+//     FileSourceMountPath gets the same exact-match-only refusal, so a
+//     spec.mounts entry cannot silently shadow the claim the entrypoint later
+//     copies out of.
+//
 //     With one hole in it, which design spec 4.3 fell into: its own
 //     ServerGroup example mounts a ConfigMap at DataMountPath+"/config", and
 //     this comment used to cite that example as the legitimate case. It is
@@ -668,7 +703,7 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 // Path comparison is on segment boundaries, not raw string prefixes, so
 // "/data-extra" is never mistaken for a child of "/data".
 func checkMountCollision(m spawneryv1alpha1.Mount) error {
-	for _, name := range []string{AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName, TmpVolumeName} {
+	for _, name := range []string{AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName, TmpVolumeName, FileSourceVolumeName} {
 		if m.Name == name {
 			return fmt.Errorf("mount %q reuses the reserved volume name %q", m.Name, name)
 		}
@@ -701,7 +736,7 @@ func checkMountCollision(m spawneryv1alpha1.Mount) error {
 			m.Name, m.MountPath, ServerConfigDirPath, ServerConfigDirPath)
 	}
 
-	for _, reserved := range []string{DataMountPath, TmpMountPath} {
+	for _, reserved := range []string{DataMountPath, TmpMountPath, FileSourceMountPath} {
 		if user == path.Clean(reserved) {
 			return fmt.Errorf("mount %q targets the reserved mount path %q", m.Name, reserved)
 		}
