@@ -697,6 +697,69 @@ func TestAPluginOnTheFileVolumeRefusesTheStart(t *testing.T) {
 	}
 }
 
+// TestARegularFileNamedPluginsRefusesTheStart is the case the scan used to
+// miss. It tested plugins/ with [ -d ], so a claim carrying a regular file of
+// that name passed, landed at /data/plugins, and killed the start further down
+// on the unconditional `mkdir -p plugins` with
+//
+//	mkdir: can't create directory 'plugins': File exists
+//
+// which names neither extraFiles nor extraPlugins -- exactly the bare failure
+// the scan exists to replace with a sentence.
+func TestARegularFileNamedPluginsRefusesTheStart(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugins"), []byte("not a directory"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source)
+
+	if err == nil {
+		t.Fatal("a source carrying a regular file named plugins started anyway")
+	}
+	if !strings.Contains(out, "extraPlugins") {
+		t.Errorf("the message does not name the mechanism that owns plugins/:\n%s", out)
+	}
+}
+
+// TestPaperDoesNotRefuseTheVelocityFiles is the mirror of
+// TestVelocityDoesNotRefuseThePaperFiles, and the half where the plausible
+// mistake actually lives: somebody adding lang/ to a shared list, or pasting
+// the proxy's entries into this script. Nothing on a Paper server writes
+// either path, so refusing them would be a rule with no reason behind it --
+// and would crash-loop a group whose claim happens to carry a lang directory
+// for something else entirely.
+func TestPaperDoesNotRefuseTheVelocityFiles(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "lang"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "lang", "messages.properties"),
+		[]byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "velocity.toml"), []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source); err != nil {
+		t.Fatalf("a Paper server refused a file no Paper server owns: %v", err)
+	}
+
+	// Not refused, and therefore actually copied: a rule with no reason is
+	// still worth nothing if the files never arrive.
+	for _, want := range []string{"velocity.toml", filepath.Join("lang", "messages.properties")} {
+		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
+			t.Errorf("%s did not reach the working directory: %v", want, err)
+		}
+	}
+}
+
 func TestNothingIsCopiedWhenTheScanRefuses(t *testing.T) {
 	// The scan runs before the copy, so a refused tree leaves no half-written
 	// /data behind.

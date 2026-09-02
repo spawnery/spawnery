@@ -16,30 +16,6 @@ VELOCITY_HOME="${VELOCITY_HOME:-/opt/velocity}"
 # what lets a test double stand in for it in image/entrypoint_test.go.
 spawnery-config --flavor velocity
 
-# Plugins from the group's own volume, if it has one.
-#
-# The default is internal/podspec.PluginSourceMountPath. The operator mounts
-# exactly there and passes nothing -- the variable is overridable only so the
-# tests can point it at a temporary directory, which is the same seam PAPER_HOME
-# already is. Creating /var/run/spawnery/plugins needs root, so without it this
-# copy would have no test at all.
-#
-# The whole tree, not just *.jar. A plugin's configuration lives at
-# plugins/<Name>/config.yml, and copying jars without it would leave every
-# plugin at its defaults on an ephemeral group, whose /data is an emptyDir.
-#
-# The source wins on every start. A plugin that rewrote its own config at
-# runtime loses that change here: on an ephemeral group it was going anyway,
-# and this makes the persistent case predictable rather than accumulating.
-#
-# The trailing dot copies the directory's *contents*. Without it the tree lands
-# at plugins/plugins.
-#
-# **This runs before the agent jar below, and the order is the bound.** That
-# copy overwrites whatever landed here, so a spawnery-agent.jar on the volume
-# cannot displace the one the operator shipped -- otherwise somebody pinning an
-# older agent would leave the operator talking to a version it never published,
-# with every object in the cluster saying the right thing.
 # Files an administrator put on a volume, copied into the working directory.
 #
 # **The scan runs before the copy, and that is the whole safety property.**
@@ -57,7 +33,12 @@ if [ -d "$FILE_SOURCE" ]; then
 	# and the renderer's own file. A proxy does not refuse the Paper files:
 	# nothing writes them on a proxy, and refusing a path no owner claims
 	# would be a rule with no reason.
-	if [ -d "$FILE_SOURCE/plugins" ]; then
+	# -e and not -d, for the same reason velocity.toml below uses it: a
+	# *regular file* named plugins is still a path extraPlugins owns, and
+	# letting it through only postpones the failure to the `mkdir -p plugins`
+	# further down, which dies under `set -eu` naming neither the claim nor
+	# the field.
+	if [ -e "$FILE_SOURCE/plugins" ]; then
 		echo "spawnery: spec.extraFiles carries plugins/, which spec.extraPlugins owns." >&2
 		echo "spawnery: move those files to the extraPlugins claim. Refusing to start." >&2
 		exit 1
@@ -67,7 +48,10 @@ if [ -d "$FILE_SOURCE" ]; then
 	# placed there is overwritten before anybody reads it. Nothing breaks,
 	# which is exactly why it is refused -- a copy that silently does nothing
 	# is the failure this scan exists to prevent.
-	if [ -d "$FILE_SOURCE/lang" ]; then
+	# -e, so a regular file named lang is refused too: Velocity would create
+	# its own lang/ beside it or fail, and either way the copy silently did
+	# nothing, which is what this scan exists to prevent.
+	if [ -e "$FILE_SOURCE/lang" ]; then
 		echo "spawnery: spec.extraFiles carries lang/, which Velocity owns -- it migrates" >&2
 		echo "spawnery: lang/messages.properties on every start and writes it back, so a" >&2
 		echo "spawnery: file placed there is overwritten unread. Refusing to start." >&2
@@ -104,6 +88,30 @@ if [ -d "$FILE_SOURCE" ]; then
 	done
 fi
 
+# Plugins from the group's own volume, if it has one.
+#
+# The default is internal/podspec.PluginSourceMountPath. The operator mounts
+# exactly there and passes nothing -- the variable is overridable only so the
+# tests can point it at a temporary directory, which is the same seam PAPER_HOME
+# already is. Creating /var/run/spawnery/plugins needs root, so without it this
+# copy would have no test at all.
+#
+# The whole tree, not just *.jar. A plugin's configuration lives at
+# plugins/<Name>/config.yml, and copying jars without it would leave every
+# plugin at its defaults on an ephemeral group, whose /data is an emptyDir.
+#
+# The source wins on every start. A plugin that rewrote its own config at
+# runtime loses that change here: on an ephemeral group it was going anyway,
+# and this makes the persistent case predictable rather than accumulating.
+#
+# The trailing dot copies the directory's *contents*. Without it the tree lands
+# at plugins/plugins.
+#
+# **This runs before the agent jar below, and the order is the bound.** That
+# copy overwrites whatever landed here, so a spawnery-agent.jar on the volume
+# cannot displace the one the operator shipped -- otherwise somebody pinning an
+# older agent would leave the operator talking to a version it never published,
+# with every object in the cluster saying the right thing.
 PLUGIN_SOURCE="${SPAWNERY_PLUGIN_SOURCE:-/var/run/spawnery/plugins}"
 if [ -d "$PLUGIN_SOURCE" ]; then
 	mkdir -p plugins
