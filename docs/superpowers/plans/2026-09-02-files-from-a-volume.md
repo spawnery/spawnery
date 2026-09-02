@@ -247,7 +247,9 @@ Add the same block to the proxy pod in `internal/podspec/proxy.go`, at the point
 
 - [ ] **Step 5: Guard the path against a user mount**
 
-Find the loop at `internal/podspec/server.go:671` that lists the reserved volume names and add `FileSourceVolumeName` to it. Then find `checkMountCollision` and give `FileSourceMountPath` the same treatment `PluginSourceMountPath` gets, so a `spec.mounts` entry cannot shadow the source.
+Add `FileSourceVolumeName` to the reserved volume-name loop in `internal/podspec/server.go`, and `FileSourceMountPath` to the exact-match reserved-path list in `checkMountCollision` beside `DataMountPath` and `TmpMountPath`.
+
+**Do not look for a `PluginSourceMountPath` check to mirror — there is none.** That constant appears only in its own definition and in the two volume-mount blocks; the collision check guards `PluginsMountPath` (`/data/plugins`), which is a different constant with a different job. That the plugin *source* path is unreserved is a pre-existing gap in this repository. Leave it alone: it is not this plan's to fix, and widening the change would put an unrelated behaviour change in this task's diff.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
