@@ -690,6 +690,17 @@ mount "worlds" names claim "map-pool", and this operator was started without
 --allow-mount-volumes so it mounts no claim
 ```
 
+In the chart the key is **`operator.allowMountVolumes`**, beside the other two.
+The flag names above are the operator's own arguments; these are what an
+upgrader types:
+
+```yaml
+operator:
+  allowPluginVolumes: true   # unchanged, but now spec.extraPlugins and only that
+  allowMountVolumes: true    # set this if any group has a claim-backed spec.mounts
+  allowFileVolumes: false    # the new spec.extraFiles field; leave off if unused
+```
+
 The failure is loud and names its own fix. There is no grace period and no
 default of `true` for any of the three flags — that would leave the flags
 disagreeing about what they mean, which is the exact imprecision this change

@@ -27,9 +27,10 @@ server rather than rendering an empty volume or quietly dropping one of them.
 ## What a claim is for
 
 `extraPlugins` is deliberately narrow: one claim, read-only, and the entrypoint
-copies it into `plugins/`. [`extraFiles`](plugins.md) is the same mechanism one
-directory up — its claim is copied into the whole working directory, which is
-where a file that is not a plugin and that no mount can reach belongs;
+copies it into `plugins/`. [`extraFiles`](plugins.md#files-from-a-volume) is
+the same mechanism one directory up — its claim is copied into the whole
+working directory, which is where a file that is not a plugin and that no mount
+can reach belongs;
 `config/sponge/sponge.conf` is the case that motivated it. Everything that
 belongs anywhere else had nowhere to go — a world tree, a directory of assets
 every server reads, the output of one group that another consumes. That is

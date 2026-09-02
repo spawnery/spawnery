@@ -20,7 +20,7 @@ The same field exists on `ProxyGroup`.
 
 Configuration that does not live under `plugins/` — Sponge's
 `config/sponge/sponge.conf` is the case that forced the question — is not what
-this field is for. [`extraFiles`](mounts.md#what-a-claim-is-for) is the same
+this field is for. [`extraFiles`](#files-from-a-volume) is the same
 mechanism one directory up, for exactly that case.
 
 ## Turning it on
@@ -142,6 +142,99 @@ roll the group, because the rendered pod really is different.
 - **Not two-way.** The copy runs one direction on every start.
 - **Not in any image.** No third-party plugin ships in a Spawnery image, and
   this mechanism exists so none has to.
+
+## Files from a volume
+
+`extraFiles` is the same mechanism one directory up. Its claim is copied into
+the server's **whole working directory** rather than into `plugins/`, which is
+where a file that is not a plugin and that no mount can reach belongs — Sponge
+reading `config/sponge/sponge.conf` is the case that forced the question.
+
+```yaml
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: lobby
+  namespace: minecraft
+spec:
+  # ...
+  extraFiles:
+    claimName: minecraft-files
+```
+
+The same field exists on `ProxyGroup`, and the claim carries the same
+`ReadWriteMany` requirement as an `extraPlugins` claim, refused the same way and
+for the same reason — with `FileVolumeUnusable` rather than
+`PluginVolumeUnusable`, so that the message sends somebody to the field they
+actually wrote.
+
+**It needs `--allow-file-volumes`**, which is its own switch and not
+`--allow-plugin-volumes`. In the chart that is `operator.allowFileVolumes`,
+default `false`:
+
+```yaml
+operator:
+  allowFileVolumes: true
+```
+
+A group naming a claim on an installation with the switch off is refused with
+`Accepted=False`, reason `FileVolumesDisabled`, and a message naming the flag.
+
+**The volume wins on every start**, exactly as it does for `extraPlugins`: a
+file the server rewrote at runtime is replaced by the claim's version the next
+time the pod starts. **A world therefore does not belong in this claim** — it
+would be overwritten on every start. `spec.storage` and a claim-backed
+[`spec.mounts`](mounts.md) entry are what carry one.
+
+**Nothing about the contents reaches the pod hash.** Writing to the volume rolls
+nothing; the files reach a server on its next start, which somebody triggers by
+deleting the group's pods. Adding or removing the field itself *does* move the
+hash, because the rendered pod really is different.
+
+### Paths a claim may not carry
+
+Three things write into a server's working directory on a start: the operator's
+renderer, this copy, and the `extraPlugins` copy. Rather than an order that
+quietly decides who wins, **each entrypoint scans the claim before copying
+anything and refuses to start if it carries a path one of the others owns.**
+
+| Path in the claim | Matches | Owned by | Refused on |
+|---|---|---|---|
+| `plugins` | the name and everything under it | `extraPlugins` | Paper and Velocity |
+| `server.properties` | that path exactly | the renderer | Paper only |
+| `config/paper-global.yml` | that path exactly | the renderer | Paper only |
+| `config/paper-world-defaults.yml` | that path exactly | the renderer | Paper only |
+| `velocity.toml` | that path exactly | the renderer | Velocity only |
+| `lang` | the name and everything under it | Velocity itself | Velocity only |
+
+`plugins` and `lang` are refused whether the claim holds a directory or a plain
+file of that name.
+
+**The list follows the flavour, and that is not an oversight.** A Paper server
+does not refuse `velocity.toml` or `lang/`: nothing on a Paper server writes
+either, so refusing them would be a rule with no reason behind it — and would
+crash-loop a group whose claim carries a `lang` directory for something else
+entirely. A proxy likewise does not refuse the Paper files.
+
+**`lang/` is the entry worth explaining.** Velocity migrates
+`lang/messages.properties` to MiniMessage on every start and writes the result
+back, so a file placed there is overwritten before anybody reads it. *Nothing
+breaks* — which is exactly why it is refused. A copy that silently does nothing
+is worse than a collision that announces itself.
+
+The remedy is never "put it somewhere else in the claim". For the renderer's
+files it is `spec.configOverlay`; for `plugins/` it is `extraPlugins`.
+
+**The refusal arrives at start, not at admission.** A claim's contents are not
+knowable when somebody writes the group, so a wrong file crash-loops the pod
+rather than failing the `kubectl apply`. What makes that liveable is that the
+message says what is wrong in one sentence, in the container log an operator
+already reads when a group does not come up:
+
+```
+spawnery: spec.extraFiles carries server.properties, which the operator writes itself.
+spawnery: use spec.configOverlay for it. Refusing to start.
+```
 
 ## Styling what the agent says
 
