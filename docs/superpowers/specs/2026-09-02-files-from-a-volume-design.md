@@ -150,6 +150,39 @@ would make the entrypoint's line numbers load-bearing.
 The copy goes immediately before the plugin copy in both scripts, so the
 sequence reads renderer → files → plugins on either flavour.
 
+### 3.6 Its own operator switch
+
+`--allow-file-volumes`, default false, rendered by the chart as
+`operator.allowFileVolumes`. A group naming `extraFiles` on an installation
+that has not enabled it is refused exactly the way `extraPlugins` is, with its
+own reasons — `FileVolumesDisabled` and `FileVolumeUnusable` — so a group
+setting both wrong says which field it means.
+
+**A second flag rather than widening the first.** `--allow-plugin-volumes`
+exists so an operator can say "this installation runs no third-party plugins"
+and have it be a fact; making it also govern files would leave the flag's name
+covering something that is not a plugin. The two statements are different and
+an installation may want one without the other.
+
+And, for the same reason the `extraPlugins` design gives: **this is an
+operational switch and not a security boundary.** A `PersistentVolumeClaim` is
+a namespaced object in the same trust domain as the group naming it, so the
+switch stops nobody who was not already stopped. The chart's documentation for
+it must say so as plainly as the existing one does.
+
+Worth recording because it was raised and answered: `extraFiles` cannot
+undermine what `--allow-plugin-volumes` promises, since section 3.3 refuses
+`plugins/` outright. That is an argument for needing no switch at all, and it
+loses to symmetry — a mechanism that is `extraPlugins` one directory up should
+be governable the same way.
+
+### 3.7 The claim must be `ReadWriteMany`
+
+The rule `extraPlugins` already has, refused by the same helper
+(`checkClaimMountable`): every pod of a group mounts it, and a ReadWriteOnce
+claim would leave the second server Pending with a scheduling error naming
+volume affinity rather than the cause.
+
 ## 4. What this does not do
 
 **It does not make `/data/config` mountable.** The kubelet's ownership is
@@ -178,6 +211,11 @@ volume and their own refusal, and this one refuses their directory.
 - `lost+found` is skipped by name, as the plugin copy already does
 - the volume is rendered read-only, on both group kinds
 - a user mount at `/var/run/spawnery/files` is refused
+- a group naming `extraFiles` without `--allow-file-volumes` is refused with
+  `FileVolumesDisabled`, and the message names the flag
+- a claim that is ReadWriteOnce is refused with `FileVolumeUnusable`
+- a group setting both `extraPlugins` and `extraFiles` wrong reports the
+  plugin one first, the order `checkGroupVolumes` already uses
 
 The case that started this — a file under `config/` reaching a running server
 — is what the first test asserts, with `config/sponge/sponge.conf` as the
