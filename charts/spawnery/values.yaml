@@ -75,22 +75,35 @@ operator:
   # The production value. hack/e2e.sh overrides it for its own run.
   startupDeadline: 5m
   leaderElect: true
-  # Lets a group mount a PersistentVolumeClaim. Two fields need it: a
-  # spec.extraPlugins claim, whose contents are copied into every server's
-  # plugins directory on start (docs/plugins.md), and a spec.mounts entry that
-  # names a claim rather than a ConfigMap or a Secret (docs/mounts.md).
-  #
-  # One switch for both, because what it turns off is the same sentence for
-  # each: content this installation did not ship reaches a game server from a
-  # volume. ConfigMap and Secret mounts are not gated -- they carry
-  # configuration an administrator wrote, not a filesystem somebody filled.
+  # Lets a group name a spec.extraPlugins claim, whose contents are copied
+  # into every server's plugins directory on start (docs/plugins.md). Until
+  # 0.2.x this flag also governed a claim-backed spec.mounts entry; that is
+  # now allowMountVolumes below, because each claim-consuming field earns its
+  # own switch rather than sharing a name that promises less than it governs.
   #
   # Off by default, and NOT as a security control: a PersistentVolumeClaim is a
   # namespaced object in the same trust domain as the group naming it, so
   # anybody who can write one can write the other. What this buys is an
-  # operator being able to say "this installation runs nothing off a volume"
+  # operator being able to say "this installation runs no third-party plugins"
   # and have that be a fact rather than a convention.
   allowPluginVolumes: false
+
+  # Lets a group name a spec.extraFiles claim whose tree is copied into every
+  # server's working directory on start -- the way to deliver a file that is
+  # not a plugin and that no mount can reach, config/sponge/sponge.conf being
+  # the case that motivated it.
+  #
+  # Like allowPluginVolumes, this is not a security control. It exists so an
+  # operator can say "this installation runs nothing an administrator dropped
+  # in" and have that be a fact rather than a convention.
+  allowFileVolumes: false
+
+  # Lets a group's spec.mounts name a PersistentVolumeClaim. Until 0.2.x this
+  # was governed by allowPluginVolumes, whose name never promised it; each of
+  # the three claim-consuming fields has its own switch now.
+  #
+  # Not a security control, for the same reason as the other two.
+  allowMountVolumes: false
 
 # The namespaces that hold a Network, and the forwarding secret in each.
 #

@@ -27,13 +27,25 @@ server rather than rendering an empty volume or quietly dropping one of them.
 ## What a claim is for
 
 `extraPlugins` is deliberately narrow: one claim, read-only, and the entrypoint
-copies it into `plugins/`. Everything that belongs anywhere else had nowhere to
-go — a world tree, a directory of assets every server reads, the output of one
-group that another consumes. That is what a claim mount carries.
+copies it into `plugins/`. [`extraFiles`](plugins.md) is the same mechanism one
+directory up — its claim is copied into the whole working directory, which is
+where a file that is not a plugin and that no mount can reach belongs;
+`config/sponge/sponge.conf` is the case that motivated it. Everything that
+belongs anywhere else had nowhere to go — a world tree, a directory of assets
+every server reads, the output of one group that another consumes. That is
+what a claim mount carries.
 
 It is still not a layered template system. There is no composition, no
 priority, no per-server rendering. A mount is one volume at one path, and
 assembling what goes in the volume is somebody else's job.
+
+`extraFiles` and a claim mount share the two properties that an administrator
+would otherwise discover the hard way. **The source wins on every start** — a
+server that rewrites a file it was seeded with finds the claim's version again
+next start, which is why a world does not belong in either. **Nothing about
+the volume reaches the pod hash** — the operator holds a claim name, not a
+filesystem, so a changed file reaches a server on its next start rather than
+replacing one already running.
 
 ## One file, not a directory
 
@@ -97,20 +109,23 @@ modes in the message. A claim that does not exist is refused the same way.
 The rule does not soften for a group that runs one replica today, because
 `maxReplicas` is raised by edits that have nothing to do with storage.
 
-## It needs `--allow-plugin-volumes`
+## It needs `--allow-mount-volumes`
 
-The flag that gates `extraPlugins` gates a claim mount too. One switch rather
-than two, because what it turns off is the same sentence for each: content this
-installation did not ship reaches a game server from a volume. A group naming a
-claim on an installation with the flag off is refused with
-`MountVolumesDisabled` and a message pointing at the operator's arguments
-rather than at the storage, which is fine.
+A claim-backed mount needs its own switch, `--allow-mount-volumes` — not
+`--allow-plugin-volumes`, which governs `spec.extraPlugins` and, as of 0.2.x,
+only that. A group naming a claim on an installation with
+`--allow-mount-volumes` off is refused with `MountVolumesDisabled` and a
+message pointing at the operator's arguments rather than at the storage, which
+is fine.
 
 ConfigMap and Secret mounts are not gated. They carry configuration an
 administrator wrote, not a filesystem somebody filled.
 
-The flag is not a security boundary, and [`plugins.md`](plugins.md#turning-it-on)
-says at more length why not.
+The flag is not a security boundary: a `PersistentVolumeClaim` is a namespaced
+object in the same trust domain as the group naming it, so the switch stops
+nobody who was not already stopped. What it buys is an operator being able to
+say "this installation mounts no claim" and have that be a fact rather than a
+convention.
 
 ## Reserved paths
 

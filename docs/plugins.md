@@ -18,18 +18,24 @@ spec:
 
 The same field exists on `ProxyGroup`.
 
+Configuration that does not live under `plugins/` — Sponge's
+`config/sponge/sponge.conf` is the case that forced the question — is not what
+this field is for. [`extraFiles`](mounts.md#what-a-claim-is-for) is the same
+mechanism one directory up, for exactly that case.
+
 ## Turning it on
 
 The operator refuses a group naming `extraPlugins` unless it was started with
 `--allow-plugin-volumes`. The chart passes the operator's arguments through, so
 this is a values edit and a restart of one Deployment.
 
-The same flag gates a [`spec.mounts`](mounts.md) entry that names a claim. One
-switch rather than two, because what it turns off is the same sentence for
-each: content this installation did not ship reaches a game server from a
-volume.
+A claim-backed [`spec.mounts`](mounts.md) entry has its own switch,
+`--allow-mount-volumes` — until 0.2.x it shared this one, and that flag's name
+never promised it. Each claim-consuming field has its own switch now:
+`--allow-plugin-volumes` for `extraPlugins`, `--allow-file-volumes` for
+`extraFiles`, and `--allow-mount-volumes` for a claim-backed mount.
 
-**That switch is not a security boundary, and nothing here will tell you it
+**None of the three is a security boundary, and nothing here will tell you it
 is.** A `PersistentVolumeClaim` is a namespaced object in the same trust domain
 as the group that names it: anybody who can write one can write the other, so
 the switch stops nobody who was not already stopped. What it is for is an

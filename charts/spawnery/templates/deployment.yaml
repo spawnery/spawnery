@@ -52,6 +52,8 @@ spec:
           args:
             - --leader-elect={{ .Values.operator.leaderElect }}
             - --allow-plugin-volumes={{ .Values.operator.allowPluginVolumes }}
+            - --allow-file-volumes={{ .Values.operator.allowFileVolumes }}
+            - --allow-mount-volumes={{ .Values.operator.allowMountVolumes }}
             # .Values.operator.startupDeadline defaults to the production
             # value (see values.yaml); hack/e2e.sh overrides it with
             # --set operator.startupDeadline=20s for its own run, so there is
