@@ -48,6 +48,16 @@ type Options struct {
 	// cannot fail, which is worse than no check -- the next reader would trust
 	// it.
 	AllowPluginVolumes bool
+	// AllowFileVolumes lets a group name a spec.extraFiles claim.
+	//
+	// **An operational switch and not a security boundary**, for the reason
+	// AllowPluginVolumes gives -- a claim is a namespaced object in the same
+	// trust domain as the group that names it. It is a switch of its own
+	// rather than folded into AllowPluginVolumes because the two are
+	// different statements an installation might want to make separately:
+	// "runs no third-party plugins" and "runs no administrator-supplied
+	// files" are not the same claim.
+	AllowFileVolumes bool
 	// Clock is the time source. Injectable for tests.
 	Clock func() time.Time
 	// StartupDeadline is how long a server may take to reach Ready.
@@ -223,6 +233,7 @@ func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconc
 		Expectations:       newExpectations(opts.Clock),
 		DrainTaintKeys:     opts.DrainTaintKeys,
 		AllowPluginVolumes: opts.AllowPluginVolumes,
+		AllowFileVolumes:   opts.AllowFileVolumes,
 		// Uncached, for the reason ClaimReader's own comment gives: the
 		// manager's cache holds only claims carrying our label, and a plugin
 		// claim carries none.
@@ -244,6 +255,7 @@ func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconcil
 		Divergence:         newReadinessDivergence(opts.Clock),
 		DrainTaintKeys:     opts.DrainTaintKeys,
 		AllowPluginVolumes: opts.AllowPluginVolumes,
+		AllowFileVolumes:   opts.AllowFileVolumes,
 		// Uncached, for the reason ClaimReader's own comment gives: the
 		// manager's cache holds only claims carrying our label, and a plugin
 		// claim carries none.

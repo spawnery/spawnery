@@ -145,9 +145,9 @@ func TestBothVolumeFieldsAreCheckedTogether(t *testing.T) {
 	c := pluginReader(t, pluginClaim("plugins", corev1.ReadWriteMany))
 
 	reason, _, ok := checkGroupVolumes(context.Background(), c, "minecraft",
-		&spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"},
+		&spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"}, nil,
 		[]spawneryv1alpha1.Mount{claimMount("worlds", "missing")},
-		true)
+		true, false)
 
 	if ok {
 		t.Fatal("a good extraPlugins claim carried a broken mount past the check")
@@ -159,9 +159,9 @@ func TestBothVolumeFieldsAreCheckedTogether(t *testing.T) {
 	// And the other way round: extraPlugins is asked first, so its reason wins
 	// when both are wrong.
 	reason, _, ok = checkGroupVolumes(context.Background(), c, "minecraft",
-		&spawneryv1alpha1.ExtraPlugins{ClaimName: "missing"},
+		&spawneryv1alpha1.ExtraPlugins{ClaimName: "missing"}, nil,
 		[]spawneryv1alpha1.Mount{claimMount("worlds", "missing")},
-		true)
+		true, false)
 	if ok {
 		t.Fatal("two broken fields were accepted")
 	}

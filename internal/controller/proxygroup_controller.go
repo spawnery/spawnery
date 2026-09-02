@@ -173,6 +173,10 @@ type ProxyGroupReconciler struct {
 	// switch and not a security boundary. See that field.
 	AllowPluginVolumes bool
 
+	// AllowFileVolumes is Options.AllowFileVolumes -- an operational switch
+	// and not a security boundary. See that field.
+	AllowFileVolumes bool
+
 	// ClaimReader reads a group's spec.extraPlugins claim, and it must be
 	// uncached.
 	//
@@ -253,7 +257,8 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// problem rather than a spec one.
 	if reason, message, ok := checkGroupVolumes(
 		ctx, r.ClaimReader, group.Namespace,
-		group.Spec.ExtraPlugins, group.Spec.Mounts, r.AllowPluginVolumes); !ok {
+		group.Spec.ExtraPlugins, group.Spec.ExtraFiles, group.Spec.Mounts,
+		r.AllowPluginVolumes, r.AllowFileVolumes); !ok {
 		// Announced on the transition only, following the rule
 		// network_controller.go states: this runs on every pass for as long as
 		// the claim is wrong, and an event per resync forever is not a report,

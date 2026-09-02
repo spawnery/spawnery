@@ -70,7 +70,7 @@ func checkExtraPlugins(
 // one call so that both controllers keep one branch rather than two identical
 // ones. spec.extraPlugins is asked first: it is the older field and the one
 // more installations set, and when a group has both wrong there is no reason
-// to prefer the other.
+// to prefer the other. spec.extraFiles is asked next, then spec.mounts.
 //
 // The reasons stay distinct -- see ReasonMountVolumeUnusable -- so the caller
 // puts the answer on the object without having to know which field produced
@@ -80,10 +80,15 @@ func checkGroupVolumes(
 	reader client.Reader,
 	namespace string,
 	ep *spawneryv1alpha1.ExtraPlugins,
+	ef *spawneryv1alpha1.ExtraFiles,
 	mounts []spawneryv1alpha1.Mount,
 	allowed bool,
+	filesAllowed bool,
 ) (string, string, bool) {
 	if reason, message, ok := checkExtraPlugins(ctx, reader, namespace, ep, allowed); !ok {
+		return reason, message, false
+	}
+	if reason, message, ok := checkExtraFiles(ctx, reader, namespace, ef, filesAllowed); !ok {
 		return reason, message, false
 	}
 	return checkMountClaims(ctx, reader, namespace, mounts, allowed)

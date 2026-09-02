@@ -274,6 +274,7 @@ func main() {
 		hardDeadline            time.Duration
 		drainTaints             taintKeys
 		allowPluginVolumes      bool
+		allowFileVolumes        bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
@@ -321,6 +322,12 @@ func main() {
 			"rather than a convention. It is not a security boundary: a "+
 			"PersistentVolumeClaim is a namespaced object in the same trust domain as the "+
 			"group that names it.")
+
+	flag.BoolVar(&allowFileVolumes, "allow-file-volumes", false,
+		"let a group name a spec.extraFiles claim whose tree is copied into "+
+			"every server's working directory on start. Not a security control: "+
+			"a claim is a namespaced object in the same trust domain as the group "+
+			"naming it. It lets an installation say it runs no administrator-supplied files.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -481,6 +488,7 @@ func main() {
 		Agents:               registry,
 		Events:               bothFanouts{servers: servers, proxies: proxies},
 		AllowPluginVolumes:   allowPluginVolumes,
+		AllowFileVolumes:     allowFileVolumes,
 		ReportInterval:       reportInterval,
 		Clock:                time.Now,
 		StartupDeadline:      startupDeadline,

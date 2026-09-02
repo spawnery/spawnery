@@ -91,6 +91,10 @@ type ServerGroupReconciler struct {
 	// switch and not a security boundary. See that field.
 	AllowPluginVolumes bool
 
+	// AllowFileVolumes is Options.AllowFileVolumes -- an operational switch
+	// and not a security boundary. See that field.
+	AllowFileVolumes bool
+
 	// ClaimReader reads a group's spec.extraPlugins claim, and it must be
 	// uncached.
 	//
@@ -168,7 +172,8 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// hidden in a case expression.
 	volumeReason, volumeMessage, volumesOK := checkGroupVolumes(
 		ctx, r.ClaimReader, group.Namespace,
-		group.Spec.ExtraPlugins, group.Spec.Mounts, r.AllowPluginVolumes)
+		group.Spec.ExtraPlugins, group.Spec.ExtraFiles, group.Spec.Mounts,
+		r.AllowPluginVolumes, r.AllowFileVolumes)
 
 	requeue := ResyncInterval
 	switch {
