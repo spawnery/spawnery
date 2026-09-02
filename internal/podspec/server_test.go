@@ -892,6 +892,39 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			},
 			want: ConfigMountPath,
 		},
+		{
+			// Design spec 5 promises this refusal, and checkMountCollision
+			// has no entry naming FileSourceMountPath at all: what refuses it
+			// is that the path nests under AgentMountPath, which gets the
+			// bidirectional check. If that check is ever narrowed to an exact
+			// match, or the file claim moves out from under the agent mount,
+			// this case fails — which is the point of having it.
+			name: "mounted over the extraFiles claim",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: FileSourceMountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
+		{
+			// The case a code comment on checkMountCollision used to get
+			// wrong, by calling FileSourceMountPath exact-match-only and so
+			// implying a mount *inside* it was permitted. It is not, and
+			// docs/mounts.md has always said so. Pinned here so the two
+			// cannot drift apart again.
+			name: "nested inside the extraFiles claim",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: FileSourceMountPath + "/nested",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
 	}
 
 	for _, tc := range cases {
@@ -1223,6 +1256,65 @@ func TestNoExtraPluginsRendersNoVolume(t *testing.T) {
 	for _, m := range pod.Spec.Containers[0].VolumeMounts {
 		if m.Name == PluginSourceVolumeName {
 			t.Fatal("a plugin source mount was rendered for a group that named none")
+		}
+	}
+}
+
+func TestExtraFilesIsMountedReadOnlyOutsideData(t *testing.T) {
+	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.ExtraFiles = &spawneryv1alpha1.ExtraFiles{ClaimName: "files"}
+	})
+
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == FileSourceVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatal("no extra-files volume was rendered")
+	}
+	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "files" {
+		t.Fatalf("volume source = %+v, want the named claim", vol.VolumeSource)
+	}
+	// Read-only at the volume as well as at the mount. One claim may serve
+	// several groups, and a group that could write it could change what every
+	// other group loads.
+	if !vol.PersistentVolumeClaim.ReadOnly {
+		t.Error("the claim is mounted writable")
+	}
+
+	var mount *corev1.VolumeMount
+	for i := range pod.Spec.Containers[0].VolumeMounts {
+		if pod.Spec.Containers[0].VolumeMounts[i].Name == FileSourceVolumeName {
+			mount = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatal("no extra-files mount on a group that names a claim")
+	}
+	if mount.MountPath != FileSourceMountPath {
+		t.Errorf("mounted at %q, want %q", mount.MountPath, FileSourceMountPath)
+	}
+	if !mount.ReadOnly {
+		t.Error("the source is writable; every user volume this package renders is read-only")
+	}
+	if strings.HasPrefix(mount.MountPath, DataMountPath) {
+		t.Errorf("mounted inside %s, which a read-only mount may not be", DataMountPath)
+	}
+}
+
+func TestNoExtraFilesVolumeWithoutTheField(t *testing.T) {
+	pod := build(t, nil)
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == FileSourceVolumeName {
+			t.Error("a group that names no claim got the volume anyway")
+		}
+	}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == FileSourceVolumeName {
+			t.Error("a group that names no claim got the mount anyway")
 		}
 	}
 }

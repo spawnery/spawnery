@@ -241,19 +241,26 @@ const (
 	// --allow-plugin-volumes.
 	ReasonPluginVolumesDisabled = "PluginVolumesDisabled"
 
+	// ReasonFileVolumeUnusable says spec.extraFiles names a claim that is
+	// missing or not ReadWriteMany.
+	ReasonFileVolumeUnusable = "FileVolumeUnusable"
+	// ReasonFileVolumesDisabled says spec.extraFiles is set on an
+	// installation started without --allow-file-volumes.
+	ReasonFileVolumesDisabled = "FileVolumesDisabled"
+
 	// The two spec.mounts claim reasons. They are separate from the
-	// extraPlugins pair above even though one flag gates both and one rule
-	// judges both claims, because the remedy differs by which field somebody
-	// wrote: a person reading MountVolumeUnusable goes and looks at
-	// spec.mounts, and a shared reason would have sent them to a field their
-	// group may not even set.
+	// extraPlugins pair above even though one rule judges both claims,
+	// because the remedy differs by which field somebody wrote: a person
+	// reading MountVolumeUnusable goes and looks at spec.mounts, and a
+	// shared reason would have sent them to a field their group may not even
+	// set.
 	//
 	// ReasonMountVolumeUnusable says a spec.mounts entry names a claim that
 	// is missing, or that cannot be mounted by every pod of the group.
 	ReasonMountVolumeUnusable = "MountVolumeUnusable"
 	// ReasonMountVolumesDisabled says a spec.mounts entry names a claim on an
 	// installation whose operator was not started with
-	// --allow-plugin-volumes.
+	// --allow-mount-volumes.
 	ReasonMountVolumesDisabled = "MountVolumesDisabled"
 
 	// The four ForwardingSecretRotationPending reasons.
@@ -388,6 +395,45 @@ type ExtraPlugins struct {
 	ClaimName string `json:"claimName"`
 }
 
+// ExtraFiles names a volume whose tree is copied into a server's working
+// directory on every start.
+//
+// **The claim's contents are the truth, on every start.** Word for word the
+// ExtraPlugins rule, and for the same reason: a server that rewrote one of
+// these files finds the administrator's version back in place next start,
+// which is what makes the claim the truth rather than a first-boot seed.
+//
+// **A world in this claim is therefore overwritten on every start**, and a
+// world does not belong in it. spec.storage and spec.mounts are what carry
+// one. That consequence follows from the rule above rather than qualifying
+// it, and it is the one worth reading twice before pointing this field at a
+// claim somebody was already using for something else.
+//
+// It is ExtraPlugins one directory up. ExtraPlugins reaches /data/plugins and
+// nothing else, so a plugin whose configuration lives elsewhere -- Sponge
+// reads config/sponge/sponge.conf -- could not be configured without an image.
+// A mount cannot deliver there either: see ServerConfigDirPath, whose comment
+// carries the kubelet-ownership measurement that rules it out for good.
+//
+// The entrypoint refuses a tree carrying a path another owner writes, so this
+// volume, the renderer and ExtraPlugins never write the same file and the
+// order between them cannot decide the result.
+//
+// Nothing about the contents reaches podspec.DesiredServerHash: the operator
+// holds a claim name, not a filesystem, and a filesystem it only names cannot
+// be digested. Changing what the claim holds therefore replaces no running
+// server; a new file reaches one on its next start, which somebody triggers.
+type ExtraFiles struct {
+	// ClaimName is a PersistentVolumeClaim in this object's own namespace.
+	//
+	// It must be ReadWriteMany, for the reason ExtraPlugins.ClaimName gives:
+	// every pod of a group mounts it, and a ReadWriteOnce claim would leave
+	// the second server Pending with a scheduling error naming volume
+	// affinity rather than the cause.
+	// +kubebuilder:validation:MinLength=1
+	ClaimName string `json:"claimName"`
+}
+
 // GroupAttributes is what whoever runs a network wants every plugin in it to
 // know about one group.
 //
@@ -485,11 +531,10 @@ type Mount struct {
 // The rule does not soften for a group that happens to run one replica today,
 // because maxReplicas is raised by edits that have nothing to do with storage.
 //
-// It is gated by the same --allow-plugin-volumes the operator already has.
-// One switch rather than two: what an installation turns off with it is
-// "content this cluster did not ship reaches a game server from a volume",
-// and a claim mounted at /data/worlds is that as much as a claim copied into
-// plugins/ is. The flag is still not a security boundary -- a claim is a
+// It is gated by its own --allow-mount-volumes rather than
+// --allow-plugin-volumes: until this field existed, the plugin flag governed
+// spec.mounts too, and its refusal said so -- which the flag's name never
+// promised. The flag is still not a security boundary -- a claim is a
 // namespaced object in the same trust domain as the group naming it -- and
 // docs/plugins.md says so at more length.
 type MountClaim struct {

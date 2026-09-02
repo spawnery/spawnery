@@ -175,3 +175,109 @@ func TestTheVelocityJVMStillPreTouchesUnderALimit(t *testing.T) {
 		t.Errorf("the flag was dropped under a limit; got: %s", out)
 	}
 }
+
+func TestVelocityRefusesLangOnTheFileVolume(t *testing.T) {
+	// lang/ belongs to Velocity itself: it migrates lang/messages.properties
+	// to MiniMessage on every start and writes the result back, so a file
+	// placed there is overwritten before anybody reads it. Nothing breaks,
+	// which is exactly why it is refused -- a copy that silently does nothing
+	// is worse than a collision that announces itself.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "lang"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "lang", "messages.properties"),
+		[]byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runVelocityEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source)
+
+	if err == nil {
+		t.Fatal("a source carrying lang/ started anyway")
+	}
+	if !strings.Contains(out, "lang/") {
+		t.Errorf("the message does not name the directory:\n%s", out)
+	}
+}
+
+func TestVelocityRefusesItsOwnRenderedFile(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "velocity.toml"), []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runVelocityEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source)
+
+	if err == nil {
+		t.Fatal("a source carrying velocity.toml started anyway")
+	}
+	if !strings.Contains(out, "velocity.toml") {
+		t.Errorf("the message does not name the file:\n%s", out)
+	}
+}
+
+// TestVelocityRefusesPluginsOnTheFileVolume is the third entry design 5 lists
+// for the proxy, alongside velocity.toml and lang/. The other two had tests
+// and this one did not, which is how a proxy could have ended up quietly
+// accepting a plugins/ tree that extraPlugins owns.
+func TestVelocityRefusesPluginsOnTheFileVolume(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugins", "p.jar"), []byte("jar"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runVelocityEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source)
+
+	if err == nil {
+		t.Fatal("a proxy source carrying plugins/ started anyway")
+	}
+	if !strings.Contains(out, "extraPlugins") {
+		t.Errorf("the message does not name the mechanism that owns plugins/:\n%s", out)
+	}
+}
+
+func TestVelocityDoesNotRefuseThePaperFiles(t *testing.T) {
+	// The list follows the flavour. Nothing writes server.properties on a
+	// proxy, so refusing it would be a rule with no reason behind it.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "server.properties"), []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runVelocityEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source); err != nil {
+		t.Fatalf("a proxy refused a file no proxy owns: %v", err)
+	}
+}
+
+func TestVelocityCopiesAFileFromTheVolume(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "extra"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "extra", "note.txt"), []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runVelocityEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source); err != nil {
+		t.Fatalf("the start failed: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "extra", "note.txt")); err != nil {
+		t.Errorf("the file did not reach the working directory: %v", err)
+	}
+}

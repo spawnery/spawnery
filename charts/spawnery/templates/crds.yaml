@@ -1788,6 +1788,34 @@ spec:
                   rule: self.type != 'ClusterIP' || has(self.clusterIP)
                 - message: expose.clusterIP is only allowed for type ClusterIP
                   rule: self.type == 'ClusterIP' || !has(self.clusterIP)
+              extraFiles:
+                description: |-
+                  ExtraFiles names a volume whose tree is copied into this group's
+                  servers on every start. See ExtraFiles.
+
+                  The claim's contents are the truth on every start: a file the server
+                  rewrote at runtime is replaced by the claim's version the next time the
+                  pod starts. A world placed in this claim is therefore overwritten on
+                  every start and does not belong here -- spec.storage and spec.mounts
+                  are what carry one.
+
+                  Nothing about the contents reaches the pod hash, because the spec names
+                  a claim rather than describing what is in it. Changing a file replaces
+                  no running server; it reaches one on that server's next start.
+                properties:
+                  claimName:
+                    description: |-
+                      ClaimName is a PersistentVolumeClaim in this object's own namespace.
+
+                      It must be ReadWriteMany, for the reason ExtraPlugins.ClaimName gives:
+                      every pod of a group mounts it, and a ReadWriteOnce claim would leave
+                      the second server Pending with a scheduling error naming volume
+                      affinity rather than the cause.
+                    minLength: 1
+                    type: string
+                required:
+                - claimName
+                type: object
               extraPlugins:
                 description: |-
                   ExtraPlugins names a volume whose plugins and their configuration are
@@ -3667,6 +3695,34 @@ spec:
                 - message: the SPAWNERY_ prefix is reserved for the environment variables
                     the operator sets itself
                   rule: self.all(e, !e.name.startsWith('SPAWNERY_'))
+              extraFiles:
+                description: |-
+                  ExtraFiles names a volume whose tree is copied into this group's
+                  servers on every start. See ExtraFiles.
+
+                  The claim's contents are the truth on every start: a file the server
+                  rewrote at runtime is replaced by the claim's version the next time the
+                  pod starts. A world placed in this claim is therefore overwritten on
+                  every start and does not belong here -- spec.storage and spec.mounts
+                  are what carry one.
+
+                  Nothing about the contents reaches the pod hash, because the spec names
+                  a claim rather than describing what is in it. Changing a file replaces
+                  no running server; it reaches one on that server's next start.
+                properties:
+                  claimName:
+                    description: |-
+                      ClaimName is a PersistentVolumeClaim in this object's own namespace.
+
+                      It must be ReadWriteMany, for the reason ExtraPlugins.ClaimName gives:
+                      every pod of a group mounts it, and a ReadWriteOnce claim would leave
+                      the second server Pending with a scheduling error naming volume
+                      affinity rather than the cause.
+                    minLength: 1
+                    type: string
+                required:
+                - claimName
+                type: object
               extraPlugins:
                 description: |-
                   ExtraPlugins names a volume whose plugins and their configuration are

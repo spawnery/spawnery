@@ -132,7 +132,15 @@
         },
         "allowPluginVolumes": {
           "type": "boolean",
-          "description": "A bool, for the reason leaderElect is one. Lets a group mount a PersistentVolumeClaim, through spec.extraPlugins (docs/plugins.md) or a spec.mounts entry that names one (docs/mounts.md). Not a security control -- a PersistentVolumeClaim is in the same trust domain as the group naming it."
+          "description": "A bool, for the reason leaderElect is one. Lets a group name a spec.extraPlugins claim, and only that -- a claim-backed spec.mounts entry has its own switch, allowMountVolumes, since 0.2.x (docs/plugins.md). Not a security control -- a PersistentVolumeClaim is in the same trust domain as the group naming it."
+        },
+        "allowFileVolumes": {
+          "type": "boolean",
+          "description": "A bool, for the reason leaderElect is one. Lets a group name a spec.extraFiles claim whose tree is copied into every server's working directory on start (docs/mounts.md). Not a security control -- a PersistentVolumeClaim is in the same trust domain as the group naming it."
+        },
+        "allowMountVolumes": {
+          "type": "boolean",
+          "description": "A bool, for the reason leaderElect is one. Lets a group's spec.mounts name a PersistentVolumeClaim rather than a ConfigMap or a Secret (docs/mounts.md). Until 0.2.x this was governed by allowPluginVolumes. Not a security control -- a PersistentVolumeClaim is in the same trust domain as the group naming it."
         }
       }
     },

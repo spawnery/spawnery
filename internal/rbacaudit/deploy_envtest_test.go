@@ -769,6 +769,11 @@ func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
 		// default and the chart renders it either way, so the value a cluster
 		// gets is visible in the manifest rather than implied by its absence.
 		"allow-plugin-volumes",
+		// Added with --allow-file-volumes (spec.extraFiles) and
+		// --allow-mount-volumes (a claim-backed spec.mounts), each its own
+		// switch and each off by default, for the same reason as above.
+		"allow-file-volumes",
+		"allow-mount-volumes",
 	}
 	for _, name := range want {
 		if _, ok := args[name]; !ok {

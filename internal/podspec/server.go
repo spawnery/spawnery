@@ -114,6 +114,16 @@ const (
 	PluginSourceVolumeName = "extra-plugins"
 	PluginSourceMountPath  = "/var/run/spawnery/plugins"
 
+	// FileSourceVolumeName and FileSourceMountPath are where a group's
+	// spec.extraFiles claim is mounted.
+	//
+	// Outside DataMountPath for the same reason PluginSourceMountPath is: the
+	// claim cannot *be* the directory it fills, because every mount this
+	// package renders is read-only and a read-only /data breaks everything
+	// the server writes. It is a source the entrypoint copies out of.
+	FileSourceVolumeName = "extra-files"
+	FileSourceMountPath  = "/var/run/spawnery/files"
+
 	// SLPHealthBinary is the Server-List-Ping tool baked into the base image.
 	// Kubelet knows no SLP probe type, and a tcpSocket probe on 25565 turns
 	// green before the world is loaded.
@@ -173,6 +183,16 @@ const (
 	// the one thing it exists to say — ConfigMountPath gets the same
 	// bidirectional check below, for the same reason: a user mount there
 	// would shadow the file the renderer reads the forwarding secret from.
+	//
+	// "Applies to nothing else" is narrower than the reality now:
+	// PluginSourceMountPath and FileSourceMountPath both nest under
+	// AgentMountPath, so that one check refuses a colliding user mount over
+	// three operator directories, not one. Those two are there wanting
+	// exactly that refusal and inheriting it rather than repeating it — see
+	// checkMountCollision, which spells their safety out as a dependency on
+	// it. ConfigMountPath is still kept out from under it and carries its own
+	// copy of the check, so that what each path refuses, and why, is readable
+	// where that path is defined.
 	ConfigMountPath = "/etc/spawnery"
 	// ConfigValuesKey is both the data key of the group's rendered ConfigMap
 	// — the key Task 10's controller marshals render.Values into — and the
@@ -394,6 +414,27 @@ func BuildServerPod(
 		mounts = append(mounts, corev1.VolumeMount{
 			Name:      PluginSourceVolumeName,
 			MountPath: PluginSourceMountPath,
+			ReadOnly:  true,
+		})
+	}
+
+	// The group's own file volume, if it named one. Same reasoning as the
+	// plugin source above: read-only at both the volume and the mount, and
+	// outside DataMountPath because a read-only mount cannot be the directory
+	// it fills.
+	if group.Spec.ExtraFiles != nil {
+		volumes = append(volumes, corev1.Volume{
+			Name: FileSourceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: group.Spec.ExtraFiles.ClaimName,
+					ReadOnly:  true,
+				},
+			},
+		})
+		mounts = append(mounts, corev1.VolumeMount{
+			Name:      FileSourceVolumeName,
+			MountPath: FileSourceMountPath,
 			ReadOnly:  true,
 		})
 	}
@@ -665,10 +706,27 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 //     not one. ServerConfigDirPath carries what was measured and why that
 //     path is now refused equal-or-under like the two above.
 //
+//   - FileSourceMountPath and PluginSourceMountPath get no entry of their own,
+//     and must not be given one. Both are directories *under* AgentMountPath
+//     — "/var/run/spawnery/files" and "/var/run/spawnery/plugins" — so the
+//     bidirectional check above has already refused a mount at either of them,
+//     anywhere inside either of them, and at any ancestor of either, before
+//     control reaches the exact-match loop below. An entry there could never
+//     fire.
+//
+//     That is a dependency, not a coincidence, and it is the whole reason
+//     these two claims are safe: nothing else refuses a spec.mounts entry
+//     that would shadow the claim an entrypoint copies out of. If
+//     AgentMountPath ever stops being a parent of these two, or its check is
+//     narrowed to an exact match, each of them needs its own bidirectional
+//     entry here on the same day. TestCollidingUserMountsAreRefused pins the
+//     refusal for FileSourceMountPath and for a path nested under it, so that
+//     narrowing fails a test rather than quietly opening the hole.
+//
 // Path comparison is on segment boundaries, not raw string prefixes, so
 // "/data-extra" is never mistaken for a child of "/data".
 func checkMountCollision(m spawneryv1alpha1.Mount) error {
-	for _, name := range []string{AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName, TmpVolumeName} {
+	for _, name := range []string{AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName, TmpVolumeName, FileSourceVolumeName} {
 		if m.Name == name {
 			return fmt.Errorf("mount %q reuses the reserved volume name %q", m.Name, name)
 		}

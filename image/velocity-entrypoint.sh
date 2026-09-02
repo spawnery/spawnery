@@ -16,6 +16,78 @@ VELOCITY_HOME="${VELOCITY_HOME:-/opt/velocity}"
 # what lets a test double stand in for it in image/entrypoint_test.go.
 spawnery-config --flavor velocity
 
+# Files an administrator put on a volume, copied into the working directory.
+#
+# **The scan runs before the copy, and that is the whole safety property.**
+# Three things write into /data on a start: spawnery-config above, this, and
+# the plugin copy below. Refusing a source that carries a path one of the
+# others owns makes their paths disjoint, so the order between them cannot
+# decide the result -- rather than a rule about which runs first, which would
+# make these line numbers load-bearing.
+#
+# lost+found and the two globs are the plugin copy's reasoning exactly; see
+# the comment on PLUGIN_SOURCE below for the measurements behind both.
+FILE_SOURCE="${SPAWNERY_FILE_SOURCE:-/var/run/spawnery/files}"
+if [ -d "$FILE_SOURCE" ]; then
+	# The directory extraPlugins owns, the directory Velocity itself owns,
+	# and the renderer's own file. A proxy does not refuse the Paper files:
+	# nothing writes them on a proxy, and refusing a path no owner claims
+	# would be a rule with no reason.
+	# -e and not -d, for the same reason velocity.toml below uses it: a
+	# *regular file* named plugins is still a path extraPlugins owns, and
+	# letting it through only postpones the failure to the `mkdir -p plugins`
+	# further down, which dies under `set -eu` naming neither the claim nor
+	# the field.
+	if [ -e "$FILE_SOURCE/plugins" ]; then
+		echo "spawnery: spec.extraFiles carries plugins/, which spec.extraPlugins owns." >&2
+		echo "spawnery: move those files to the extraPlugins claim. Refusing to start." >&2
+		exit 1
+	fi
+	# lang/ belongs to Velocity itself: it migrates lang/messages.properties
+	# to MiniMessage on every start and writes the result back, so a file
+	# placed there is overwritten before anybody reads it. Nothing breaks,
+	# which is exactly why it is refused -- a copy that silently does nothing
+	# is the failure this scan exists to prevent.
+	# -e, so a regular file named lang is refused too: Velocity would create
+	# its own lang/ beside it or fail, and either way the copy silently did
+	# nothing, which is what this scan exists to prevent.
+	if [ -e "$FILE_SOURCE/lang" ]; then
+		echo "spawnery: spec.extraFiles carries lang/, which Velocity owns -- it migrates" >&2
+		echo "spawnery: lang/messages.properties on every start and writes it back, so a" >&2
+		echo "spawnery: file placed there is overwritten unread. Refusing to start." >&2
+		exit 1
+	fi
+	for owned in velocity.toml; do
+		if [ -e "$FILE_SOURCE/$owned" ]; then
+			echo "spawnery: spec.extraFiles carries $owned, which the operator writes itself." >&2
+			echo "spawnery: use spec.configOverlay for it. Refusing to start." >&2
+			exit 1
+		fi
+	done
+
+	for entry in "$FILE_SOURCE"/* "$FILE_SOURCE"/.[!.]*; do
+		[ -e "$entry" ] || continue
+		name="${entry##*/}"
+		case "$name" in
+		lost+found) continue ;;
+		esac
+		cp -R "$entry" ./
+		# The whole of "./$name", not only what this loop just placed there --
+		# if $name is a directory that already existed, that recurses over
+		# whatever was already there too. That is fine rather than merely
+		# tolerated: anything already there arrived as this same non-root
+		# user, so it is already writable and the recursion is a no-op on it.
+		#
+		# Not `chmod -R u+w .`, though: this script runs under `set -eu`,
+		# every user mount is read-only, and a group with a claim mount
+		# somewhere else under /data would die on that wider chmod with a
+		# bare `chmod:` naming no cause. The mount this copies from is
+		# read-only too, so the copies arrive read-only and the files it
+		# carries are exactly the kind a server rewrites on its own.
+		chmod -R u+w "./$name"
+	done
+fi
+
 # Plugins from the group's own volume, if it has one.
 #
 # The default is internal/podspec.PluginSourceMountPath. The operator mounts

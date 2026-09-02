@@ -51,25 +51,64 @@ func TestMountsWithNoClaimNeverTouchStorage(t *testing.T) {
 func TestAClaimMountNeedsTheFlag(t *testing.T) {
 	// The claim exists and is perfectly good. It must still be refused, and
 	// the message must send somebody to the operator's arguments rather than
-	// to their storage -- the same rule spec.extraPlugins follows, because one
-	// flag governs both.
+	// to their storage -- and, since this task, to the mount flag rather than
+	// the plugin one, because each field now has its own switch.
 	c := pluginReader(t, pluginClaim("worlds", corev1.ReadWriteMany))
 
 	reason, message, ok := checkMountClaims(context.Background(), c, "minecraft",
 		[]spawneryv1alpha1.Mount{claimMount("worlds", "worlds")}, false)
 
 	if ok {
-		t.Fatal("a claim mount was served by an operator started without --allow-plugin-volumes")
+		t.Fatal("a claim mount was served by an operator started without --allow-mount-volumes")
 	}
 	if reason != spawneryv1alpha1.ReasonMountVolumesDisabled {
 		t.Errorf("reason = %q, want ReasonMountVolumesDisabled", reason)
 	}
-	if !strings.Contains(message, "--allow-plugin-volumes") {
+	if !strings.Contains(message, "--allow-mount-volumes") {
 		t.Errorf("message = %q, want it to name the flag", message)
+	}
+	if strings.Contains(message, "--allow-plugin-volumes") {
+		t.Errorf("message = %q, still sends somebody to the plugin flag", message)
 	}
 	// And the mount, so that a group with eleven of them says which one.
 	if !strings.Contains(message, "worlds") {
 		t.Errorf("message = %q, want it to name the mount", message)
+	}
+}
+
+func TestAClaimMountNeedsItsOwnFlagAndNotThePluginOne(t *testing.T) {
+	// --allow-plugin-volumes used to gate this too. It no longer does: the
+	// flag names extraPlugins and now governs only that. Reached through
+	// checkGroupVolumes, which is what the controllers actually call, rather
+	// than checkMountClaims directly, so the wiring between the flag and the
+	// third bool is what is under test here.
+	c := pluginReader(t, pluginClaim("worlds", corev1.ReadWriteMany))
+	mounts := []spawneryv1alpha1.Mount{claimMount("worlds", "worlds")}
+
+	reason, message, ok := checkGroupVolumes(context.Background(), c, "minecraft",
+		nil, nil, mounts, true, false, false)
+
+	if ok {
+		t.Fatal("a claim mount was accepted with only the plugin flag set")
+	}
+	if reason != spawneryv1alpha1.ReasonMountVolumesDisabled {
+		t.Errorf("reason %q, want %q", reason, spawneryv1alpha1.ReasonMountVolumesDisabled)
+	}
+	if !strings.Contains(message, "--allow-mount-volumes") {
+		t.Errorf("the message does not name the flag to set: %s", message)
+	}
+	if strings.Contains(message, "--allow-plugin-volumes") {
+		t.Errorf("the message still sends somebody to the plugin flag: %s", message)
+	}
+}
+
+func TestAClaimMountIsAcceptedWithItsOwnFlag(t *testing.T) {
+	c := pluginReader(t, pluginClaim("worlds", corev1.ReadWriteMany))
+	mounts := []spawneryv1alpha1.Mount{claimMount("worlds", "worlds")}
+
+	if _, _, ok := checkGroupVolumes(context.Background(), c, "minecraft",
+		nil, nil, mounts, false, false, true); !ok {
+		t.Error("a claim mount was refused with its own flag set")
 	}
 }
 
@@ -145,9 +184,9 @@ func TestBothVolumeFieldsAreCheckedTogether(t *testing.T) {
 	c := pluginReader(t, pluginClaim("plugins", corev1.ReadWriteMany))
 
 	reason, _, ok := checkGroupVolumes(context.Background(), c, "minecraft",
-		&spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"},
+		&spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"}, nil,
 		[]spawneryv1alpha1.Mount{claimMount("worlds", "missing")},
-		true)
+		true, false, true)
 
 	if ok {
 		t.Fatal("a good extraPlugins claim carried a broken mount past the check")
@@ -159,9 +198,9 @@ func TestBothVolumeFieldsAreCheckedTogether(t *testing.T) {
 	// And the other way round: extraPlugins is asked first, so its reason wins
 	// when both are wrong.
 	reason, _, ok = checkGroupVolumes(context.Background(), c, "minecraft",
-		&spawneryv1alpha1.ExtraPlugins{ClaimName: "missing"},
+		&spawneryv1alpha1.ExtraPlugins{ClaimName: "missing"}, nil,
 		[]spawneryv1alpha1.Mount{claimMount("worlds", "missing")},
-		true)
+		true, false, true)
 	if ok {
 		t.Fatal("two broken fields were accepted")
 	}

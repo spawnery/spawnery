@@ -592,3 +592,69 @@ func TestProxyWithNoExtraPluginsRendersNoVolume(t *testing.T) {
 		}
 	}
 }
+
+func TestProxyExtraFilesMountsTheClaimReadOnlyOutsideData(t *testing.T) {
+	// Written out rather than shared with the server's. The two pods are built
+	// by two functions, and "it is the same shape" is how the one that is
+	// subtly not the same gets in.
+	group := testProxyGroup()
+	group.Spec.ExtraFiles = &spawneryv1alpha1.ExtraFiles{ClaimName: "files"}
+	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+
+	var vol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == FileSourceVolumeName {
+			vol = &pod.Spec.Volumes[i]
+		}
+	}
+	if vol == nil {
+		t.Fatal("no extra-files volume was rendered")
+	}
+	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "files" {
+		t.Fatalf("volume source = %+v, want the named claim", vol.VolumeSource)
+	}
+	if !vol.PersistentVolumeClaim.ReadOnly {
+		t.Error("the claim is mounted writable")
+	}
+
+	var mount *corev1.VolumeMount
+	for i := range pod.Spec.Containers[0].VolumeMounts {
+		if pod.Spec.Containers[0].VolumeMounts[i].Name == FileSourceVolumeName {
+			mount = &pod.Spec.Containers[0].VolumeMounts[i]
+		}
+	}
+	if mount == nil {
+		t.Fatal("no extra-files mount on a group that names a claim")
+	}
+	if mount.MountPath != FileSourceMountPath {
+		t.Errorf("mounted at %q, want %q", mount.MountPath, FileSourceMountPath)
+	}
+	if !mount.ReadOnly {
+		t.Error("the source is writable; every user volume this package renders is read-only")
+	}
+	if isPathUnder(path.Clean(mount.MountPath), path.Clean(DataMountPath)) {
+		t.Errorf("mountPath %q is under %s, where a read-only mount breaks the start",
+			mount.MountPath, DataMountPath)
+	}
+}
+
+func TestProxyWithNoExtraFilesRendersNoVolume(t *testing.T) {
+	pod, err := BuildProxyPod(testNetwork(), testProxyGroup(), "gateway-abcd", testEndpoint, nil)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == FileSourceVolumeName {
+			t.Fatal("an extra-files volume was rendered for a group that named none")
+		}
+	}
+	for _, m := range pod.Spec.Containers[0].VolumeMounts {
+		if m.Name == FileSourceVolumeName {
+			t.Fatal("an extra-files mount was rendered for a group that named none")
+		}
+	}
+}

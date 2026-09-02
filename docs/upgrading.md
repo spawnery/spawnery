@@ -773,3 +773,64 @@ A plugin built against an older API jar keeps running; `Group` gained a
 component, which is the kind of change the [API's own
 notes](../agent/api/README.md#version-skew) say to expect. Only code that
 constructs a `Group` itself — a test double — has to be rebuilt.
+
+## Files can come from a volume, and a claim mount now needs its own switch
+
+`ServerGroup` and `ProxyGroup` gain `spec.extraFiles.claimName`: a
+`ReadWriteMany` claim whose tree is copied into every server's working
+directory on start. It exists for a file that is not a plugin and that no
+mount can reach — `config/sponge/sponge.conf` is the case that motivated it.
+[`docs/plugins.md`](plugins.md) and [`docs/mounts.md`](mounts.md) carry the
+whole of it.
+
+**This half moves no pod.** A group that names no `extraFiles` claim renders
+exactly the pod it rendered before, so both golden pod digests in
+`internal/podspec/hash_golden_test.go` are unchanged — checked, not assumed.
+Worth saying plainly, because "a new field" reads as "something is about to
+change", and here almost nothing is. The operator also refuses a group naming
+the claim unless it was started with `--allow-file-volumes`, which the chart
+renders as `false`, so an installation that wants neither has nothing to do.
+
+**The other half breaks something, on purpose.** Until this release,
+`--allow-plugin-volumes` gated a claim-backed `spec.mounts` entry as well as
+`spec.extraPlugins` — a flag whose name never promised the mount half. That is
+now `--allow-mount-volumes`, its own switch with its own default of `false`.
+**An installation that set `--allow-plugin-volumes` and uses claim-backed
+mounts must set `--allow-mount-volumes` too**, or every group with such a
+mount goes `Accepted=False`, reason `MountVolumesDisabled`, with an event
+reading:
+
+```
+mount "worlds" names claim "map-pool", and this operator was started without
+--allow-mount-volumes so it mounts no claim
+```
+
+In the chart the key is **`operator.allowMountVolumes`**, beside the other two.
+The flag names above are the operator's own arguments; these are what an
+upgrader types:
+
+```yaml
+operator:
+  allowPluginVolumes: true   # unchanged, but now spec.extraPlugins and only that
+  allowMountVolumes: true    # set this if any group has a claim-backed spec.mounts
+  allowFileVolumes: false    # the new spec.extraFiles field; leave off if unused
+```
+
+The failure is loud and names its own fix. There is no grace period and no
+default of `true` for any of the three flags — that would leave the flags
+disagreeing about what they mean, which is the exact imprecision this change
+corrects. `--allow-plugin-volumes` now governs `spec.extraPlugins` and only
+that.
+
+**Turning either switch on costs one group at a time, not the fleet.** Adding
+`extraFiles` to a group, or a claim to a group's `spec.mounts`, changes the
+rendered pod, so that edit rolls that group the way any other pod-shape change
+does. Flipping `--allow-file-volumes` or `--allow-mount-volumes` in the chart
+changes nothing on its own — a group still has to name a claim before its pod
+moves.
+
+None of the three switches is a security control. A `PersistentVolumeClaim` is
+a namespaced object in the same trust domain as the group naming it, so a
+switch stops nobody who was not already stopped; what it buys is an operator
+being able to say which of the three an installation runs, and have that be a
+fact rather than a convention.
