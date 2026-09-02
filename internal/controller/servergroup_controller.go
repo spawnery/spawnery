@@ -1288,6 +1288,9 @@ func (r *ServerGroupReconciler) collectViews(
 			// Read from the status, never guessed from the phase: a server that
 			// lost its probe is in Starting with its players still connected.
 			WasRegistered: srv.Status.WasRegistered,
+			// And what they have right now, which is a different question and
+			// the one capacity depends on -- see AggregateGroup.
+			Registered: srv.Status.Registered,
 			// A pod that once existed and is now gone took its sessions with it,
 			// exactly like one that reached a terminal state.
 			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),

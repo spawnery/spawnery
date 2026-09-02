@@ -16,6 +16,7 @@ limitations under the License.
 
 package cloud.spawnery.agent.api;
 
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -30,6 +31,25 @@ import java.util.Objects;
  *     tables. A server can be {@link ServerPhase#READY} and not registered --
  *     that is the first half of a drain -- so a plugin deciding where to send
  *     somebody wants this and not the phase.
+ * @param state what the server said it was doing, or {@code ""} if it has said
+ *     nothing. This is the server's own word and not the operator's: see
+ *     {@link SpawneryApi#announce}. It is unrelated to {@link #phase()}, which
+ *     is the operator's account of the same server's lifecycle -- a server is
+ *     {@link ServerPhase#READY} for a long time, and this is what it is doing
+ *     during it.
+ * @param attributes whatever else that server chose to publish, empty until it
+ *     publishes something. Immutable.
+ * @param incarnation which run of this server this is: an opaque token that
+ *     changes whenever the process behind the name is replaced, and never
+ *     otherwise. Compare it, never parse it.
+ *     <p>The name cannot answer that on its own, and for one kind of server it
+ *     never will: an ephemeral server is named afresh every time, but a
+ *     persistent one keeps its name across every restart, because that name is
+ *     the identity of its world. Anything that remembers a server and later
+ *     asks whether this is still the one it meant — a rejoin, a queue, a
+ *     scoreboard that outlives a reconnect — compares this and not the name.
+ *     <p>Empty for a server whose pod the operator has not seen yet, which is
+ *     a server nobody is being sent to.
  */
 public record ServerInfo(
         String name,
@@ -37,11 +57,25 @@ public record ServerInfo(
         ServerPhase phase,
         int players,
         int slots,
-        boolean registered) {
+        boolean registered,
+        String state,
+        Map<String, String> attributes,
+        String incarnation) {
     public ServerInfo {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(group, "group");
         Objects.requireNonNull(phase, "phase");
+        // A server that has announced nothing and one whose agent predates
+        // announcing are the same server as far as a plugin is concerned, so
+        // both arrive here as the empty description rather than as null. A
+        // plugin asking what a server is doing should never have to write a
+        // null check to find out that it is doing nothing in particular.
+        state = state == null ? "" : state;
+        attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
+        // Empty and not null for the reason state is: a server the operator
+        // has not placed yet is one a plugin should be able to describe
+        // without a null check.
+        incarnation = incarnation == null ? "" : incarnation;
     }
 
     /**

@@ -76,5 +76,35 @@ public interface CloudRequestOrBuilder extends
    */
   cloud.spawnery.agent.pb.StopBoostRequestOrBuilder getStopBoostOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+   * @return Whether the announce field is set.
+   */
+  boolean hasAnnounce();
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+   * @return The announce.
+   */
+  cloud.spawnery.agent.pb.AnnounceRequest getAnnounce();
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceRequest announce = 6;</code>
+   */
+  cloud.spawnery.agent.pb.AnnounceRequestOrBuilder getAnnounceOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.AcceptJoinsRequest accept_joins = 7;</code>
+   * @return Whether the acceptJoins field is set.
+   */
+  boolean hasAcceptJoins();
+  /**
+   * <code>.spawnery.agent.v1alpha1.AcceptJoinsRequest accept_joins = 7;</code>
+   * @return The acceptJoins.
+   */
+  cloud.spawnery.agent.pb.AcceptJoinsRequest getAcceptJoins();
+  /**
+   * <code>.spawnery.agent.v1alpha1.AcceptJoinsRequest accept_joins = 7;</code>
+   */
+  cloud.spawnery.agent.pb.AcceptJoinsRequestOrBuilder getAcceptJoinsOrBuilder();
+
   cloud.spawnery.agent.pb.CloudRequest.RequestCase getRequestCase();
 }

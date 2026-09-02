@@ -55,7 +55,16 @@ class NetworkMirror {
         snapshot = Snapshot(
             feedFormat = state.feedFormat,
             groups = state.groupsList.map {
-                Group(it.name, kindOf(it.kind), it.replicas, it.readyReplicas, it.onlinePlayers, it.freeSlots)
+                Group(
+                    it.name,
+                    kindOf(it.kind),
+                    it.replicas,
+                    it.readyReplicas,
+                    it.onlinePlayers,
+                    it.freeSlots,
+                    it.attributesMap,
+                    it.displayName,
+                )
             },
             servers = state.serversList.map {
                 ServerInfo(
@@ -68,6 +77,12 @@ class NetworkMirror {
                     it.players,
                     it.slots,
                     it.registered,
+                    it.state,
+                    // The proto's own map, copied by ServerInfo rather than
+                    // here: a snapshot a plugin holds must not change under it
+                    // when the next state arrives.
+                    it.attributesMap,
+                    it.incarnation,
                 )
             },
             // An entry whose UUID will not parse is dropped and the rest of the

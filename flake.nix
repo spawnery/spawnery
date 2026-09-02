@@ -73,6 +73,20 @@
               # publish whatever a stale `podman load` left behind rather than
               # what the flake describes.
               skopeo
+              # hack/publish-api.sh assembles one archive out of what Gradle
+              # laid out, because the Central Portal takes a bundle rather than
+              # a Maven deploy. `jar` from the JDK could make the same file and
+              # would need a flag to stop it inventing a manifest -- a line the
+              # next reader has to decode, to save a package this small.
+              zip
+              # And gpg, because hack/publish-api.sh signs with it rather than
+              # with Gradle's signing plugin. Measured, on a real key: that
+              # plugin reads a key through a bundled Bouncy Castle and answers
+              # "Could not read PGP secret key" for keys recent GnuPG versions
+              # write by default -- a failure in the middle of a build log,
+              # about a format the person who made the key never chose. The
+              # tool that wrote the key is the one that can read it.
+              gnupg
               # Both of these are pinned a second time, by version, in
               # agent/common/build.gradle.kts -- and only this half moves when
               # nixpkgs does. `protobuf` here is protoc, whose X.Y the
@@ -187,7 +201,45 @@
           # runtime than 0.2.16 did -- and agent/ changed too: a renewal is no
           # longer reported as a stream failure. Either alone would oblige this
           # number; the operator is untouched, so operatorVersion below is not.
-          imageVersion = "0.2.17";
+          #
+          # 0.2.18 moves it again, and this time the other number with it: the
+          # agents gained a verb. A server can publish a short state and a few
+          # attributes, every agent reads them back out of the network picture,
+          # and `/cloud info` prints what a server says about itself -- so the
+          # jar inside the game images is a different jar.
+          #
+          # 0.2.19 moves it for the same kind of reason: the agents gained a
+          # second verb -- a server can close its own door to new players and
+          # open it again -- and a group's attributes reach a plugin through
+          # the same jar.
+          #
+          # 0.2.20 moves it because a value the plugin API hands out gained a
+          # component: a server now says which run of it this is.
+          #
+          # **0.2.21 moves this and nothing else, and the images it names are
+          # identical to 0.2.20's.** What the release publishes is an artefact
+          # that has never been published before: cloud.spawnery:spawnery-api,
+          # whose coordinate takes its version from this number. The same shape
+          # as 0.2.14, whose whole content was the chart's publication path.
+          #
+          # The two game images are pushed again under the new tag because they
+          # are built from this number; the operator is not, and hack/publish.sh
+          # refuses its unchanged tag on its own. Republishing two identical
+          # images is the cost of having one number for the agent artefacts,
+          # and it is smaller than giving the API a version of its own that
+          # nothing else would keep in step.
+          #
+          # 0.2.22 exists because 0.2.21 did not do the one thing it was for.
+          # hack/publish-api.sh read DRY_RUN as a presence rather than as a
+          # value, and the workflow passes 0 for "really publish" -- so the
+          # tagged release rehearsed, reported success and uploaded nothing.
+          # The images this names are identical to 0.2.20's and 0.2.21's for
+          # the third time, which is the price of the mistake and not of the
+          # design.
+          #
+          # 0.2.23 moves it because a value the plugin API hands out gained a
+          # component again: a group now carries the name a person gave it.
+          imageVersion = "0.2.23";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -231,7 +283,33 @@
           # configOverlay key (internal/render, so the game images) and a mount
           # under /data/config is now refused (internal/podspec, so the
           # operator).
-          operatorVersion = "0.2.16";
+          #
+          # 0.2.17 stood still here, for the reason the note above gives.
+          # **0.2.18 moves it**: the announcement an agent sends is answered in
+          # internal/agentserver, held in internal/agent and published by
+          # internal/netstate. That is a reconciler-side change of the same
+          # kind as any other, and it is why this release moves all three
+          # numbers rather than only the images'.
+          #
+          # 0.2.19 moves all three again, and this one reaches further into the
+          # operator than 0.2.18 did: the phase machine learns a door that
+          # deregisters without moving a phase, the scaler stops counting seats
+          # on a server no proxy will route to, and two group kinds gain a spec
+          # field. **Unlike 0.2.18 the CRDs really change** -- an optional map
+          # on ServerGroup and ProxyGroup -- so every object that exists
+          # validates unchanged and the chart carries a new schema.
+          #
+          # 0.2.20 moves all three once more, and it is the smallest of the
+          # three moves: the reconciler records which pod is behind a server
+          # and netstate carries it onward. A status field, so the CRDs change
+          # again -- and a status field is one the operator fills in, so no
+          # object anybody wrote needs anything.
+          #
+          # 0.2.23 moves it with the images: netstate carries a group's display
+          # name into the picture, and the CRDs gain the spec field it comes
+          # from. A spec field this time, but an optional one -- no object
+          # anybody wrote needs anything.
+          operatorVersion = "0.2.23";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

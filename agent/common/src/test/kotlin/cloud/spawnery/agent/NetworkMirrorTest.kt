@@ -55,6 +55,117 @@ class NetworkMirrorTest {
     }
 
     @Test
+    fun `a group carries what somebody wrote down about it`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL)
+                    .putAttributes("permission", "task.build"),
+            ).build(),
+        )
+
+        assertEquals("task.build", mirror.groups().single().attributes()["permission"])
+    }
+
+    @Test
+    fun `a group nobody described carries an empty map rather than null`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL),
+            ).build(),
+        )
+
+        assertTrue(mirror.groups().single().attributes().isEmpty())
+    }
+
+    @Test
+    fun `a group carries the name a person gave it`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("bingo-team").setKind(GroupState.Kind.EPHEMERAL)
+                    .setDisplayName("Bingo-Team"),
+            ).build(),
+        )
+
+        assertEquals("Bingo-Team", mirror.groups().single().displayName())
+    }
+
+    @Test
+    fun `a group nobody named is displayed by its own name`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL),
+            ).build(),
+        )
+
+        assertEquals("lobby", mirror.groups().single().displayName())
+    }
+
+    @Test
+    fun `a server carries what it said about itself`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("lobby-a").setGroup("lobby")
+                    .setPhase("Ready").setState("running")
+                    .putAttributes("map", "arena"),
+            ).build(),
+        )
+
+        val server = mirror.servers().single()
+        assertEquals("running", server.state())
+        assertEquals("arena", server.attributes()["map"])
+    }
+
+    @Test
+    fun `a server says which run of it this is`() {
+        // The name cannot say it: a persistent server keeps its name across
+        // every restart, because that name is the identity of its world.
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("survival-0").setGroup("survival")
+                    .setPhase("Ready").setIncarnation("pod-7c3f"),
+            ).build(),
+        )
+
+        assertEquals("pod-7c3f", mirror.servers().single().incarnation())
+    }
+
+    @Test
+    fun `a server the operator has not placed yet carries an empty incarnation`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("lobby-a").setGroup("lobby").setPhase("Pending"),
+            ).build(),
+        )
+
+        assertEquals("", mirror.servers().single().incarnation())
+    }
+
+    @Test
+    fun `a server that said nothing carries an empty description rather than null`() {
+        // Which is also every server on a network whose operator predates the
+        // verb. A plugin asking what a server is doing should not have to
+        // write a null check to be told that it is doing nothing in
+        // particular.
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("lobby-a").setGroup("lobby").setPhase("Ready"),
+            ).build(),
+        )
+
+        val server = mirror.servers().single()
+        assertEquals("", server.state())
+        assertTrue(server.attributes().isEmpty())
+    }
+
+    @Test
     fun `a phase this jar predates becomes UNKNOWN rather than throwing`() {
         val mirror = NetworkMirror()
         mirror.apply(state(servers = listOf("lobby-a"), phase = "SomethingLaterInvented"))

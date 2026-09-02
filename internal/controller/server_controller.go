@@ -696,6 +696,9 @@ func (r *ServerReconciler) collectInputs(
 		// it wherever it registers and resets it when it creates a fresh pod.
 		WasRegistered:       srv.Status.WasRegistered,
 		RetirementRequested: srv.Spec.Retire,
+		// What the proxies have right now, so the door below is acted on once
+		// rather than on every pass.
+		Registered: srv.Status.Registered,
 	}
 
 	if podFound {
@@ -720,6 +723,12 @@ func (r *ServerReconciler) collectInputs(
 	in.PlayersOnline = snap.Players
 	in.PlayersStale = snap.PlayersStale
 	in.Slots = snap.Slots
+	// The server's own door. AcceptingJoins is true for a pod the registry has
+	// never seen, so an operator that has just restarted goes on routing to
+	// every server it finds -- and the agent restates a closed door on its
+	// next stream, which is what closes that window rather than leaving it to
+	// a timeout.
+	in.JoinsClosed = !snap.AcceptingJoins
 
 	// What the proxies say about this server, which is the half its own agent
 	// cannot see: a player still completing the configuration phase is
@@ -1020,6 +1029,13 @@ func (r *ServerReconciler) applyDecision(
 
 	snap := r.Agents.Lookup(podUID(pod, podFound))
 	r.mirrorPlayerCount(srv, snap, now)
+
+	// Which pod this status is about. See ServerStatus.PodUID: it is what
+	// tells one run of a server apart from the next under the same name, and
+	// it is written wherever the pod is seen rather than where it was made.
+	if podFound {
+		srv.Status.PodUID = string(pod.UID)
+	}
 
 	if podFound {
 		if err := r.syncOccupiedLabel(ctx, srv, pod, snap); err != nil {

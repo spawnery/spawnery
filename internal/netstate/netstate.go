@@ -94,6 +94,10 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 			ReadyReplicas: g.Status.ReadyReplicas,
 			OnlinePlayers: g.Status.OnlinePlayers,
 			FreeSlots:     g.Status.FreeSlots,
+			// From the spec and not the status: nobody derived this, somebody
+			// wrote it down.
+			Attributes:  g.Spec.Attributes,
+			DisplayName: g.Spec.DisplayName,
 		})
 	}
 
@@ -117,11 +121,26 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 			Replicas:      g.Spec.Replicas,
 			ReadyReplicas: g.Status.ReadyReplicas,
 			OnlinePlayers: g.Status.ConnectedPlayers,
+			Attributes:    g.Spec.Attributes,
+			DisplayName:   g.Spec.DisplayName,
 			// No free-slot figure: capacity is a backend's property, and
 			// inventing a number here would answer a question nobody asked of
 			// a proxy.
 		})
 	}
+
+	// What each server says about itself. In no object either, and for a
+	// different reason than the roster: a roster is somebody else's personal
+	// data, while this is a game's own word about itself and stays in memory
+	// because the operator never acts on it. A status field would mean an etcd
+	// write every time a round changed what it was doing, CRD validation over
+	// text nothing here reads, and a description outliving the pod that meant
+	// it.
+	//
+	// A server that has announced nothing is absent from this map and gets the
+	// zero values below, which is the same picture as a server whose agent
+	// predates the verb.
+	announcements := s.Agents.Announcements(namespace)
 
 	var servers spawneryv1alpha1.ServerList
 	if err := s.Reader.List(ctx, &servers, client.InNamespace(namespace)); err != nil {
@@ -129,6 +148,7 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 	}
 	for i := range servers.Items {
 		srv := &servers.Items[i]
+		announced := announcements[srv.Name]
 		state.Servers = append(state.Servers, &agentpb.ServerState{
 			Name:  srv.Name,
 			Group: srv.Spec.GroupRef.Name,
@@ -139,6 +159,11 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 			Players:    srv.Status.Players,
 			Slots:      srv.Status.Slots,
 			Registered: srv.Status.Registered,
+			State:      announced.State,
+			Attributes: announced.Attributes,
+			// Which run of this server this is. From the status, because it is
+			// the operator's own record of the pod it made.
+			Incarnation: srv.Status.PodUID,
 		})
 	}
 

@@ -34,6 +34,7 @@ private static final long serialVersionUID = 0L;
   private GroupState() {
     name_ = "";
     kind_ = 0;
+    displayName_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -46,6 +47,18 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.AgentProto.internal_static_spawnery_agent_v1alpha1_GroupState_descriptor;
   }
 
+  @SuppressWarnings({"rawtypes"})
+  @java.lang.Override
+  protected com.google.protobuf.MapFieldReflectionAccessor internalGetMapFieldReflection(
+      int number) {
+    switch (number) {
+      case 7:
+        return internalGetAttributes();
+      default:
+        throw new RuntimeException(
+            "Invalid map field number: " + number);
+    }
+  }
   @java.lang.Override
   protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internalGetFieldAccessorTable() {
@@ -305,6 +318,190 @@ private static final long serialVersionUID = 0L;
     return freeSlots_;
   }
 
+  public static final int ATTRIBUTES_FIELD_NUMBER = 7;
+  private static final class AttributesDefaultEntryHolder {
+    static final com.google.protobuf.MapEntry<
+        java.lang.String, java.lang.String> defaultEntry =
+            com.google.protobuf.MapEntry
+            .<java.lang.String, java.lang.String>newDefaultInstance(
+                cloud.spawnery.agent.pb.AgentProto.internal_static_spawnery_agent_v1alpha1_GroupState_AttributesEntry_descriptor, 
+                com.google.protobuf.WireFormat.FieldType.STRING,
+                "",
+                com.google.protobuf.WireFormat.FieldType.STRING,
+                "");
+  }
+  @SuppressWarnings("serial")
+  private com.google.protobuf.MapField<
+      java.lang.String, java.lang.String> attributes_;
+  private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+  internalGetAttributes() {
+    if (attributes_ == null) {
+      return com.google.protobuf.MapField.emptyMapField(
+          AttributesDefaultEntryHolder.defaultEntry);
+    }
+    return attributes_;
+  }
+  public int getAttributesCount() {
+    return internalGetAttributes().getMap().size();
+  }
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  @java.lang.Override
+  public boolean containsAttributes(
+      java.lang.String key) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    return internalGetAttributes().getMap().containsKey(key);
+  }
+  /**
+   * Use {@link #getAttributesMap()} instead.
+   */
+  @java.lang.Override
+  @java.lang.Deprecated
+  public java.util.Map<java.lang.String, java.lang.String> getAttributes() {
+    return getAttributesMap();
+  }
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  @java.lang.Override
+  public java.util.Map<java.lang.String, java.lang.String> getAttributesMap() {
+    return internalGetAttributes().getMap();
+  }
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  @java.lang.Override
+  public /* nullable */
+java.lang.String getAttributesOrDefault(
+      java.lang.String key,
+      /* nullable */
+java.lang.String defaultValue) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    java.util.Map<java.lang.String, java.lang.String> map =
+        internalGetAttributes().getMap();
+    return map.containsKey(key) ? map.get(key) : defaultValue;
+  }
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  @java.lang.Override
+  public java.lang.String getAttributesOrThrow(
+      java.lang.String key) {
+    if (key == null) { throw new NullPointerException("map key"); }
+    java.util.Map<java.lang.String, java.lang.String> map =
+        internalGetAttributes().getMap();
+    if (!map.containsKey(key)) {
+      throw new java.lang.IllegalArgumentException();
+    }
+    return map.get(key);
+  }
+
+  public static final int DISPLAY_NAME_FIELD_NUMBER = 8;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object displayName_ = "";
+  /**
+   * <pre>
+   * What this group is called where a person reads it, from its own
+   * definition. A group's name is a DNS label and a name people say out loud
+   * rarely is, so this is where "Bingo-Team" lives while the name stays
+   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+   * operator -- then stands the name in for it, so that a picture from an
+   * operator that predates the field reads the same as one that left it out.
+   * </pre>
+   *
+   * <code>string display_name = 8;</code>
+   * @return The displayName.
+   */
+  @java.lang.Override
+  public java.lang.String getDisplayName() {
+    java.lang.Object ref = displayName_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      displayName_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * What this group is called where a person reads it, from its own
+   * definition. A group's name is a DNS label and a name people say out loud
+   * rarely is, so this is where "Bingo-Team" lives while the name stays
+   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+   * operator -- then stands the name in for it, so that a picture from an
+   * operator that predates the field reads the same as one that left it out.
+   * </pre>
+   *
+   * <code>string display_name = 8;</code>
+   * @return The bytes for displayName.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getDisplayNameBytes() {
+    java.lang.Object ref = displayName_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      displayName_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -337,6 +534,15 @@ private static final long serialVersionUID = 0L;
     if (freeSlots_ != 0) {
       output.writeInt32(6, freeSlots_);
     }
+    com.google.protobuf.GeneratedMessage
+      .serializeStringMapTo(
+        output,
+        internalGetAttributes(),
+        AttributesDefaultEntryHolder.defaultEntry,
+        7);
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(displayName_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 8, displayName_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -363,6 +569,19 @@ private static final long serialVersionUID = 0L;
     if (freeSlots_ != 0) {
       size += com.google.protobuf.CodedOutputStream
         .computeInt32Size(6, freeSlots_);
+    }
+    for (java.util.Map.Entry<java.lang.String, java.lang.String> entry
+         : internalGetAttributes().getMap().entrySet()) {
+      com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+      attributes__ = AttributesDefaultEntryHolder.defaultEntry.newBuilderForType()
+          .setKey(entry.getKey())
+          .setValue(entry.getValue())
+          .buildPartial();
+      size += com.google.protobuf.CodedOutputStream
+          .computeMessageSize(7, attributes__);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(displayName_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(8, displayName_);
     }
     return size;
   }
@@ -399,6 +618,10 @@ private static final long serialVersionUID = 0L;
         != other.getOnlinePlayers()) return false;
     if (getFreeSlots()
         != other.getFreeSlots()) return false;
+    if (!internalGetAttributes().equals(
+        other.internalGetAttributes())) return false;
+    if (!getDisplayName()
+        .equals(other.getDisplayName())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -422,6 +645,12 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getOnlinePlayers();
     hash = (37 * hash) + FREE_SLOTS_FIELD_NUMBER;
     hash = (53 * hash) + getFreeSlots();
+    if (!internalGetAttributes().getMap().isEmpty()) {
+      hash = (37 * hash) + ATTRIBUTES_FIELD_NUMBER;
+      hash = (53 * hash) + internalGetAttributes().hashCode();
+    }
+    hash = (37 * hash) + DISPLAY_NAME_FIELD_NUMBER;
+    hash = (53 * hash) + getDisplayName().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -535,6 +764,28 @@ private static final long serialVersionUID = 0L;
       return cloud.spawnery.agent.pb.AgentProto.internal_static_spawnery_agent_v1alpha1_GroupState_descriptor;
     }
 
+    @SuppressWarnings({"rawtypes"})
+    protected com.google.protobuf.MapFieldReflectionAccessor internalGetMapFieldReflection(
+        int number) {
+      switch (number) {
+        case 7:
+          return internalGetAttributes();
+        default:
+          throw new RuntimeException(
+              "Invalid map field number: " + number);
+      }
+    }
+    @SuppressWarnings({"rawtypes"})
+    protected com.google.protobuf.MapFieldReflectionAccessor internalGetMutableMapFieldReflection(
+        int number) {
+      switch (number) {
+        case 7:
+          return internalGetMutableAttributes();
+        default:
+          throw new RuntimeException(
+              "Invalid map field number: " + number);
+      }
+    }
     @java.lang.Override
     protected com.google.protobuf.GeneratedMessage.FieldAccessorTable
         internalGetFieldAccessorTable() {
@@ -563,6 +814,8 @@ private static final long serialVersionUID = 0L;
       readyReplicas_ = 0;
       onlinePlayers_ = 0;
       freeSlots_ = 0;
+      internalGetMutableAttributes().clear();
+      displayName_ = "";
       return this;
     }
 
@@ -614,6 +867,13 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000020) != 0)) {
         result.freeSlots_ = freeSlots_;
       }
+      if (((from_bitField0_ & 0x00000040) != 0)) {
+        result.attributes_ = internalGetAttributes();
+        result.attributes_.makeImmutable();
+      }
+      if (((from_bitField0_ & 0x00000080) != 0)) {
+        result.displayName_ = displayName_;
+      }
     }
 
     @java.lang.Override
@@ -647,6 +907,14 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getFreeSlots() != 0) {
         setFreeSlots(other.getFreeSlots());
+      }
+      internalGetMutableAttributes().mergeFrom(
+          other.internalGetAttributes());
+      bitField0_ |= 0x00000040;
+      if (!other.getDisplayName().isEmpty()) {
+        displayName_ = other.displayName_;
+        bitField0_ |= 0x00000080;
+        onChanged();
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -704,6 +972,20 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000020;
               break;
             } // case 48
+            case 58: {
+              com.google.protobuf.MapEntry<java.lang.String, java.lang.String>
+              attributes__ = input.readMessage(
+                  AttributesDefaultEntryHolder.defaultEntry.getParserForType(), extensionRegistry);
+              internalGetMutableAttributes().getMutableMap().put(
+                  attributes__.getKey(), attributes__.getValue());
+              bitField0_ |= 0x00000040;
+              break;
+            } // case 58
+            case 66: {
+              displayName_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000080;
+              break;
+            } // case 66
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -987,6 +1269,334 @@ private static final long serialVersionUID = 0L;
     public Builder clearFreeSlots() {
       bitField0_ = (bitField0_ & ~0x00000020);
       freeSlots_ = 0;
+      onChanged();
+      return this;
+    }
+
+    private com.google.protobuf.MapField<
+        java.lang.String, java.lang.String> attributes_;
+    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+        internalGetAttributes() {
+      if (attributes_ == null) {
+        return com.google.protobuf.MapField.emptyMapField(
+            AttributesDefaultEntryHolder.defaultEntry);
+      }
+      return attributes_;
+    }
+    private com.google.protobuf.MapField<java.lang.String, java.lang.String>
+        internalGetMutableAttributes() {
+      if (attributes_ == null) {
+        attributes_ = com.google.protobuf.MapField.newMapField(
+            AttributesDefaultEntryHolder.defaultEntry);
+      }
+      if (!attributes_.isMutable()) {
+        attributes_ = attributes_.copy();
+      }
+      bitField0_ |= 0x00000040;
+      onChanged();
+      return attributes_;
+    }
+    public int getAttributesCount() {
+      return internalGetAttributes().getMap().size();
+    }
+    /**
+     * <pre>
+     * What whoever runs this network wrote down about this group, from its own
+     * definition, and nothing the operator decided. Empty for a group nobody has
+     * written anything about, which is every group until somebody does.
+     *
+     * The counterpart of ServerState.attributes, and the difference is who
+     * writes it: that one is a server describing what it is doing right now,
+     * this one is a person describing what the group is. A plugin that needs to
+     * know something no server could tell it -- which permission a group is
+     * behind, which of several games it runs -- reads it here.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; attributes = 7;</code>
+     */
+    @java.lang.Override
+    public boolean containsAttributes(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      return internalGetAttributes().getMap().containsKey(key);
+    }
+    /**
+     * Use {@link #getAttributesMap()} instead.
+     */
+    @java.lang.Override
+    @java.lang.Deprecated
+    public java.util.Map<java.lang.String, java.lang.String> getAttributes() {
+      return getAttributesMap();
+    }
+    /**
+     * <pre>
+     * What whoever runs this network wrote down about this group, from its own
+     * definition, and nothing the operator decided. Empty for a group nobody has
+     * written anything about, which is every group until somebody does.
+     *
+     * The counterpart of ServerState.attributes, and the difference is who
+     * writes it: that one is a server describing what it is doing right now,
+     * this one is a person describing what the group is. A plugin that needs to
+     * know something no server could tell it -- which permission a group is
+     * behind, which of several games it runs -- reads it here.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; attributes = 7;</code>
+     */
+    @java.lang.Override
+    public java.util.Map<java.lang.String, java.lang.String> getAttributesMap() {
+      return internalGetAttributes().getMap();
+    }
+    /**
+     * <pre>
+     * What whoever runs this network wrote down about this group, from its own
+     * definition, and nothing the operator decided. Empty for a group nobody has
+     * written anything about, which is every group until somebody does.
+     *
+     * The counterpart of ServerState.attributes, and the difference is who
+     * writes it: that one is a server describing what it is doing right now,
+     * this one is a person describing what the group is. A plugin that needs to
+     * know something no server could tell it -- which permission a group is
+     * behind, which of several games it runs -- reads it here.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; attributes = 7;</code>
+     */
+    @java.lang.Override
+    public /* nullable */
+java.lang.String getAttributesOrDefault(
+        java.lang.String key,
+        /* nullable */
+java.lang.String defaultValue) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetAttributes().getMap();
+      return map.containsKey(key) ? map.get(key) : defaultValue;
+    }
+    /**
+     * <pre>
+     * What whoever runs this network wrote down about this group, from its own
+     * definition, and nothing the operator decided. Empty for a group nobody has
+     * written anything about, which is every group until somebody does.
+     *
+     * The counterpart of ServerState.attributes, and the difference is who
+     * writes it: that one is a server describing what it is doing right now,
+     * this one is a person describing what the group is. A plugin that needs to
+     * know something no server could tell it -- which permission a group is
+     * behind, which of several games it runs -- reads it here.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; attributes = 7;</code>
+     */
+    @java.lang.Override
+    public java.lang.String getAttributesOrThrow(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      java.util.Map<java.lang.String, java.lang.String> map =
+          internalGetAttributes().getMap();
+      if (!map.containsKey(key)) {
+        throw new java.lang.IllegalArgumentException();
+      }
+      return map.get(key);
+    }
+    public Builder clearAttributes() {
+      bitField0_ = (bitField0_ & ~0x00000040);
+      internalGetMutableAttributes().getMutableMap()
+          .clear();
+      return this;
+    }
+    /**
+     * <pre>
+     * What whoever runs this network wrote down about this group, from its own
+     * definition, and nothing the operator decided. Empty for a group nobody has
+     * written anything about, which is every group until somebody does.
+     *
+     * The counterpart of ServerState.attributes, and the difference is who
+     * writes it: that one is a server describing what it is doing right now,
+     * this one is a person describing what the group is. A plugin that needs to
+     * know something no server could tell it -- which permission a group is
+     * behind, which of several games it runs -- reads it here.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; attributes = 7;</code>
+     */
+    public Builder removeAttributes(
+        java.lang.String key) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      internalGetMutableAttributes().getMutableMap()
+          .remove(key);
+      return this;
+    }
+    /**
+     * Use alternate mutation accessors instead.
+     */
+    @java.lang.Deprecated
+    public java.util.Map<java.lang.String, java.lang.String>
+        getMutableAttributes() {
+      bitField0_ |= 0x00000040;
+      return internalGetMutableAttributes().getMutableMap();
+    }
+    /**
+     * <pre>
+     * What whoever runs this network wrote down about this group, from its own
+     * definition, and nothing the operator decided. Empty for a group nobody has
+     * written anything about, which is every group until somebody does.
+     *
+     * The counterpart of ServerState.attributes, and the difference is who
+     * writes it: that one is a server describing what it is doing right now,
+     * this one is a person describing what the group is. A plugin that needs to
+     * know something no server could tell it -- which permission a group is
+     * behind, which of several games it runs -- reads it here.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; attributes = 7;</code>
+     */
+    public Builder putAttributes(
+        java.lang.String key,
+        java.lang.String value) {
+      if (key == null) { throw new NullPointerException("map key"); }
+      if (value == null) { throw new NullPointerException("map value"); }
+      internalGetMutableAttributes().getMutableMap()
+          .put(key, value);
+      bitField0_ |= 0x00000040;
+      return this;
+    }
+    /**
+     * <pre>
+     * What whoever runs this network wrote down about this group, from its own
+     * definition, and nothing the operator decided. Empty for a group nobody has
+     * written anything about, which is every group until somebody does.
+     *
+     * The counterpart of ServerState.attributes, and the difference is who
+     * writes it: that one is a server describing what it is doing right now,
+     * this one is a person describing what the group is. A plugin that needs to
+     * know something no server could tell it -- which permission a group is
+     * behind, which of several games it runs -- reads it here.
+     * </pre>
+     *
+     * <code>map&lt;string, string&gt; attributes = 7;</code>
+     */
+    public Builder putAllAttributes(
+        java.util.Map<java.lang.String, java.lang.String> values) {
+      internalGetMutableAttributes().getMutableMap()
+          .putAll(values);
+      bitField0_ |= 0x00000040;
+      return this;
+    }
+
+    private java.lang.Object displayName_ = "";
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @return The displayName.
+     */
+    public java.lang.String getDisplayName() {
+      java.lang.Object ref = displayName_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        displayName_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @return The bytes for displayName.
+     */
+    public com.google.protobuf.ByteString
+        getDisplayNameBytes() {
+      java.lang.Object ref = displayName_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        displayName_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @param value The displayName to set.
+     * @return This builder for chaining.
+     */
+    public Builder setDisplayName(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      displayName_ = value;
+      bitField0_ |= 0x00000080;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearDisplayName() {
+      displayName_ = getDefaultInstance().getDisplayName();
+      bitField0_ = (bitField0_ & ~0x00000080);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @param value The bytes for displayName to set.
+     * @return This builder for chaining.
+     */
+    public Builder setDisplayNameBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      displayName_ = value;
+      bitField0_ |= 0x00000080;
       onChanged();
       return this;
     }

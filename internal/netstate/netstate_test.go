@@ -205,3 +205,141 @@ func TestAServersPhaseTravelsAsTheOperatorSpellsIt(t *testing.T) {
 		t.Errorf("phase = %q, want the operator's own spelling", got.GetServers()[0].GetPhase())
 	}
 }
+
+func TestBuildCarriesWhatAServerSaysAboutItself(t *testing.T) {
+	// From the registry and from no object, for a different reason than the
+	// roster is: this is the server's own word, the operator never acts on it,
+	// and a status field would mean an etcd write every time a game changed
+	// what it was doing.
+	src, reg := source(t,
+		ephemeralGroup("ns", "lobby"),
+		readyServer("ns", "lobby-a", "lobby", 0, 100),
+		readyServer("ns", "lobby-b", "lobby", 0, 100),
+	)
+	reg.Connect("pod-a", agent.RoleServer)
+	if err := reg.ReportAnnouncement("pod-a", "ns", "lobby-a", agent.Announcement{
+		State:      "running",
+		Attributes: map[string]string{"map": "arena"},
+	}); err != nil {
+		t.Fatalf("ReportAnnouncement: %v", err)
+	}
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(got.GetServers()) != 2 {
+		t.Fatalf("servers = %v, want both", got.GetServers())
+	}
+	if got.GetServers()[0].GetState() != "running" ||
+		got.GetServers()[0].GetAttributes()["map"] != "arena" {
+		t.Errorf("lobby-a = %+v, want what it announced", got.GetServers()[0])
+	}
+	// The one that announced nothing is described as nothing, not as its
+	// neighbour: an announcement is attached by name, and a mapping that lost
+	// the name would show every server the last one's description.
+	if got.GetServers()[1].GetState() != "" || len(got.GetServers()[1].GetAttributes()) != 0 {
+		t.Errorf("lobby-b = %+v, want an empty description", got.GetServers()[1])
+	}
+}
+
+func TestAServerThatAnnouncedNothingIsDescribedAsNothing(t *testing.T) {
+	// The picture a network has before anything on it announces, and the
+	// picture every network has while its agents predate the verb. They are
+	// the same picture on purpose -- a plugin that had to tell them apart
+	// would be asking about the agent rather than about the game.
+	src, _ := source(t,
+		ephemeralGroup("ns", "lobby"),
+		readyServer("ns", "lobby-a", "lobby", 0, 100),
+	)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got.GetServers()[0].GetState() != "" {
+		t.Errorf("state = %q, want empty", got.GetServers()[0].GetState())
+	}
+}
+
+func TestBuildCarriesWhatSomebodyWroteDownAboutAGroup(t *testing.T) {
+	// From the spec and not the status: nobody derived this, a person wrote it
+	// in the group's own definition, and the operator's whole part in it is to
+	// carry it to the agents.
+	group := ephemeralGroup("ns", "lobby")
+	group.Spec.Attributes = map[string]string{"permission": "task.build"}
+	proxy := proxyGroupNamed("ns", "gateway")
+	proxy.Spec.Attributes = map[string]string{"region": "eu"}
+	src, _ := source(t, group, proxy)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Sorted, so gateway is first and lobby second.
+	if got.GetGroups()[0].GetAttributes()["region"] != "eu" {
+		t.Errorf("gateway = %+v, want the proxy group's own attributes", got.GetGroups()[0])
+	}
+	// Both kinds, because a plugin reading one list should not find that half
+	// of it can be described and half cannot.
+	if got.GetGroups()[1].GetAttributes()["permission"] != "task.build" {
+		t.Errorf("lobby = %+v, want the server group's own attributes", got.GetGroups()[1])
+	}
+}
+
+func TestBuildSaysWhichRunOfAServerThisIs(t *testing.T) {
+	// A persistent server keeps its name across every restart -- that name is
+	// the identity of its world -- so anything asking "is this still the one I
+	// meant" has to compare something else.
+	srv := readyServer("ns", "survival-0", "survival", 0, 100)
+	srv.Status.PodUID = "pod-7c3f"
+	src, _ := source(t, ephemeralGroup("ns", "survival"), srv)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got.GetServers()[0].GetIncarnation() != "pod-7c3f" {
+		t.Errorf("incarnation = %q, want the pod the operator recorded",
+			got.GetServers()[0].GetIncarnation())
+	}
+}
+
+func TestBuildCarriesAGroupsDisplayName(t *testing.T) {
+	// From the spec, like the attributes: a person wrote it in the group's
+	// own definition, and the operator's whole part in it is to carry it.
+	group := ephemeralGroup("ns", "bingo-team")
+	group.Spec.DisplayName = "Bingo-Team"
+	proxy := proxyGroupNamed("ns", "gateway")
+	proxy.Spec.DisplayName = "Gateway"
+	src, _ := source(t, group, proxy)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Sorted, so bingo-team is first and gateway second.
+	if got.GetGroups()[0].GetDisplayName() != "Bingo-Team" {
+		t.Errorf("bingo-team = %+v, want its display name", got.GetGroups()[0])
+	}
+	if got.GetGroups()[1].GetDisplayName() != "Gateway" {
+		t.Errorf("gateway = %+v, want the proxy group's display name", got.GetGroups()[1])
+	}
+}
+
+func TestAGroupWithoutADisplayNameTravelsWithAnEmptyOne(t *testing.T) {
+	// The operator does not fill the name in: which name stands in for a
+	// missing display name is the reader's decision, and an agent that made
+	// a different one from the operator would have nothing to notice it by.
+	src, _ := source(t, ephemeralGroup("ns", "lobby"))
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got.GetGroups()[0].GetDisplayName() != "" {
+		t.Errorf("display name = %q, want empty", got.GetGroups()[0].GetDisplayName())
+	}
+}

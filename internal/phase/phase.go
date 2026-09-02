@@ -134,7 +134,13 @@ const (
 	ReasonPodNeverCreated   = "PodNeverCreated"
 	ReasonPodTerminal       = "PodTerminal"
 	ReasonRetiring          = "Retiring"
-	ReasonMaxStaleElapsed   = "MaxStaleElapsed"
+	// ReasonJoinsClosed marks a Ready server that has asked for no new
+	// players. It is not a phase of its own on purpose -- see the Ready branch
+	// of Decide.
+	ReasonJoinsClosed = "JoinsClosed"
+	// ReasonJoinsOpen marks the way back.
+	ReasonJoinsOpen       = "JoinsOpen"
+	ReasonMaxStaleElapsed = "MaxStaleElapsed"
 	// ReasonDrainingBeforeCleanup marks a Failed server whose players are being
 	// moved off before its pod is removed.
 	ReasonDrainingBeforeCleanup = "DrainingBeforeCleanup"
@@ -283,6 +289,24 @@ type Inputs struct {
 	// the generation, the update budget and whether a replacement is ready;
 	// this package only carries out the transition.
 	RetirementRequested bool
+
+	// JoinsClosed is set while the server itself has asked that no new players
+	// be routed to it.
+	//
+	// The server's own word and not the operator's, which is why it moves no
+	// phase: a closed door is not a lifecycle event, and a server that has
+	// shut one is still Ready and still playing. It is false for a server that
+	// has never asked and for one whose agent this operator has never heard
+	// from, so a network that does not use it behaves exactly as it did.
+	JoinsClosed bool
+
+	// Registered is whether the proxies currently have this server.
+	//
+	// Read so that the door above can be acted on once rather than on every
+	// pass: without it a closed server would be deregistered again at every
+	// reconcile, and each of those is a broadcast to every proxy in the
+	// namespace.
+	Registered bool
 	// MaxStaleReached is true once a retiring server has waited longer than
 	// spec.update.maxStaleSeconds. It is measured from status.retiringSince
 	// — the wait in soft drain — and not from the group's generation change.
@@ -608,6 +632,33 @@ func Decide(current Phase, in Inputs) Decision {
 			return Decision{
 				Next: Retiring, Deregister: true,
 				Reason: ReasonRetiring, Message: "retiring for a rolling update",
+			}
+		}
+		// The server's own door, and it moves no phase: a closed server is
+		// Ready and not registered, which is a state this operator already
+		// has -- it is the first half of a drain -- and which the plugin API
+		// already documents as the one a caller reads to decide where to send
+		// somebody.
+		//
+		// After retirement, deliberately. A retiring server is going away and
+		// has been deregistered by the branch above; a server that had also
+		// closed its door must not be re-opened by the branch below on the way
+		// out.
+		//
+		// Both directions are conditioned on what the proxies currently have,
+		// so this speaks only when something changes. Without that a closed
+		// server would be deregistered again on every pass, and every one of
+		// those is a broadcast to every proxy in the namespace.
+		if in.JoinsClosed && in.Registered {
+			return Decision{
+				Next: Ready, Deregister: true,
+				Reason: ReasonJoinsClosed, Message: "the server is not taking new players",
+			}
+		}
+		if !in.JoinsClosed && !in.Registered {
+			return Decision{
+				Next: Ready, Register: true,
+				Reason: ReasonJoinsOpen, Message: "the server is taking players again",
 			}
 		}
 		return Decision{

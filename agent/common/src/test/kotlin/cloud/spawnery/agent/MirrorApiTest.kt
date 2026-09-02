@@ -143,4 +143,50 @@ class MirrorApiTest {
         assertEquals(requested[0].retire, requested[1].retire)
         assertEquals("lobby-a", requested[0].retire.server)
     }
+
+    // Announcing is the one verb only one side can succeed at, and it is still
+    // built identically on both: the refusal is the operator's answer rather
+    // than a branch in here. A client that decided for itself which side may
+    // announce would be a second place the rule lives, and the two would come
+    // to disagree the first time the operator's changed.
+    @Test
+    fun `both sides build the same request for the same announcement`() {
+        val mirror = NetworkMirror().also { it.apply(aRichState()) }
+        MirrorApi(mirror, serverSelf(), connector(), CloudEvents())
+            .announce("running", mapOf("map" to "arena"))
+        MirrorApi(mirror, proxySelf(), connector(), CloudEvents())
+            .announce("running", mapOf("map" to "arena"))
+
+        assertEquals(2, requested.size)
+        assertEquals(requested[0].announce, requested[1].announce)
+        assertEquals("running", requested[0].announce.state)
+        assertEquals("arena", requested[0].announce.attributesMap["map"])
+    }
+
+    @Test
+    fun `both sides build the same request for the same door`() {
+        // Refused on one of them, and still built identically: which side may
+        // close a door is the operator's rule, and a client that decided it
+        // here would be a second place for that rule to live.
+        val mirror = NetworkMirror().also { it.apply(aRichState()) }
+        MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).acceptJoins(false)
+        MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).acceptJoins(false)
+
+        assertEquals(2, requested.size)
+        assertEquals(requested[0].acceptJoins, requested[1].acceptJoins)
+        assertEquals(false, requested[0].acceptJoins.accept)
+    }
+
+    @Test
+    fun `an announcement with nothing in it is what clears a description`() {
+        // Not filtered out as a no-op on the way: an empty announcement is how
+        // a game says it has stopped doing whatever it was doing, and dropping
+        // it here would leave the last thing it said standing forever.
+        MirrorApi(NetworkMirror(), serverSelf(), connector(), CloudEvents())
+            .announce("", emptyMap())
+
+        assertEquals(1, requested.size)
+        assertEquals("", requested[0].announce.state)
+        assertTrue(requested[0].announce.attributesMap.isEmpty())
+    }
 }

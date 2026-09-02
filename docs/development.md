@@ -197,6 +197,29 @@ a rare one: most tags change nothing under `charts/`. `make publish-chart-test`
 drives nine cases past it — five against this repository, four against
 throwaway git repositories built on the spot, none against a registry.
 
+`hack/publish-api.sh` is the fifth artefact and the only one that is not a
+container: `cloud.spawnery:spawnery-api` on Maven Central, so that a plugin can
+compile against the API without a checkout and without a jar somebody carries
+by hand.
+
+It is a script rather than a Gradle plugin, and that is a decision about this
+repository rather than a preference. The Central Portal takes one signed
+archive over its own HTTP API instead of a Maven deploy, and every Gradle
+plugin that speaks that API is a third-party plugin — which would enter
+`agent/deps.json`, the lockfile that makes `nix build .#agents` reproducible.
+The cost of the convenience would be paid by every build of this repository,
+forever, to save one `curl`. Gradle's own `maven-publish` writes the repository
+layout into `agent/api/build/staging-deploy` and its own `signing` puts a
+`.asc` beside every file; what is left is to zip that tree and post it.
+
+**Two of its inputs are secrets nobody can grant from inside a workflow**: a
+Central Portal token pair and an ASCII-armoured signing key, both belonging to
+a person. `release.yml` therefore skips this step rather than failing it when
+they are absent, and says which artefact it left out — a hard failure would
+make every image and the chart hostage to a secret that has nothing to do with
+them. `DRY_RUN=1` builds the bundle, prints what would go where, and needs
+neither.
+
 Adding the chart also changed what "this tag releases nothing" means, which
 `release.yml`'s guard now reflects: a tag whose whole change is under
 `charts/` publishes a chart and no image, and is a correct release. Before

@@ -111,6 +111,8 @@ message CloudRequest {
     RetireRequest retire = 3;
     BoostRequest boost = 4;
     StopBoostRequest stop_boost = 5;
+    AnnounceRequest announce = 6;
+    AcceptJoinsRequest accept_joins = 7;
   }
 }
 
@@ -128,6 +130,8 @@ message CloudResponse {
     RetireResult retire = 4;
     BoostResult boost = 5;
     StopBoostResult stop_boost = 6;
+    AnnounceResult announce = 7;
+    AcceptJoinsResult accept_joins = 8;
   }
 }
 
@@ -249,6 +253,90 @@ message StopBoostRequest {
 message StopBoostResult {
   int32 removed = 1;
 }
+
+// AcceptJoinsRequest is a server opening or closing its own door.
+//
+// **Closing is not retiring, and the difference is the whole reason this verb
+// exists.** RetireRequest says the server is finished: it stops taking joins,
+// empties out, and is taken down by the rules that take down any server its
+// group no longer needs. This says only the first of those, it says it for as
+// long as the server likes, and it can be taken back. A round that has started
+// is not a server that is going away, and asking for the one when you mean the
+// other reads as a decommissioning to everybody who looks afterwards.
+//
+// **The phase does not change.** A closed server stays Ready, because the
+// phase is the operator's account of a server's lifecycle and closing the door
+// is not a lifecycle event. What changes is whether the proxies have it in
+// their routing tables, which is exactly the question ServerState.registered
+// answers -- so a plugin choosing where to send somebody already reads the
+// right field and needs to learn nothing new.
+//
+// **Nobody is moved.** The players on a closed server go on playing until they
+// leave on their own. This verb has no effect on anybody who is already there,
+// which is the other half of what distinguishes it from a drain.
+//
+// It is refused from a proxy. A proxy is not in anybody's routing table -- it
+// *is* the routing table -- so there is nothing for this to close.
+message AcceptJoinsRequest {
+  // False closes the door, true opens it again. A server that has never asked
+  // is open, which is what makes this safe to add to a network whose agents
+  // predate it.
+  bool accept = 1;
+}
+
+// AcceptJoinsResult says the operator has it.
+//
+// It carries nothing, for the reason AnnounceResult does. Whether the proxies
+// have caught up is a question ServerState.registered answers a moment later,
+// and inventing a second answer here would be a promise about a broadcast this
+// verb does not wait for.
+message AcceptJoinsResult {}
+
+// AnnounceRequest is a server describing itself.
+//
+// **The operator does not read any of this.** Nothing here reaches a decision
+// it makes: not scheduling, not routing, not scaling. The operator carries the
+// words to the other agents in the namespace and no further, which is the
+// whole of what this verb does and the reason it can afford to be free-form.
+// A field the operator acted on would need a schema, a validation error path
+// and a version story; a field it only carries needs a length bound.
+//
+// **It is not the phase.** ServerState.phase is the operator's own account of
+// a server's lifecycle and an agent cannot write it. This is the server's
+// account of itself, and the two are allowed to disagree -- a server is Ready
+// for a long time, and what it is *doing* in that time is a question only the
+// thing running on it can answer.
+//
+// **The last one wins, whole.** An announcement replaces its predecessor
+// rather than merging into it: a caller that sends two attributes and then one
+// has one, and a caller that wants the other kept sends it again. Merging
+// would mean an attribute could never be removed without a second verb for
+// removing it, and the first plugin to typo a key would have poisoned that
+// server's description for the life of the pod.
+//
+// The bounds are the operator's and it refuses rather than trims -- see its
+// own answer for the numbers. They are small on purpose: this travels to every
+// agent in the namespace on every resync, so a description that grew to
+// kilobytes would be paid for by every pod, forever, at the resync interval.
+message AnnounceRequest {
+  // What the server says it is doing. Free-form, and empty clears it.
+  //
+  // No enum, and that is deliberate rather than unfinished. The states a game
+  // has are the game's -- waiting, running, ending, whatever a mode invents --
+  // and an enum here would be this repository guessing at them and then
+  // shipping a new operator whenever somebody guessed wrong.
+  string state = 1;
+  // Anything else this server wants other servers to know. Empty clears them.
+  map<string, string> attributes = 2;
+}
+
+// AnnounceResult says the operator has it.
+//
+// It carries nothing. Everything it could echo is something the caller just
+// sent, and a result that repeats its own input teaches a reader that the
+// operator changed something when it did not. What the caller learns is which
+// of two things happened -- it was accepted, or it was refused with a reason.
+message AnnounceResult {}
 
 // CloudEvent is something that happened, on its way to somebody's chat.
 //
@@ -497,6 +585,23 @@ message GroupState {
   // current spec. Not a sum an agent could compute from the servers below, and
   // the two can disagree while a rolling update is in flight.
   int32 free_slots = 6;
+  // What whoever runs this network wrote down about this group, from its own
+  // definition, and nothing the operator decided. Empty for a group nobody has
+  // written anything about, which is every group until somebody does.
+  //
+  // The counterpart of ServerState.attributes, and the difference is who
+  // writes it: that one is a server describing what it is doing right now,
+  // this one is a person describing what the group is. A plugin that needs to
+  // know something no server could tell it -- which permission a group is
+  // behind, which of several games it runs -- reads it here.
+  map<string, string> attributes = 7;
+  // What this group is called where a person reads it, from its own
+  // definition. A group's name is a DNS label and a name people say out loud
+  // rarely is, so this is where "Bingo-Team" lives while the name stays
+  // "bingo-team". Empty for a group nobody has named, and the agent -- not the
+  // operator -- then stands the name in for it, so that a picture from an
+  // operator that predates the field reads the same as one that left it out.
+  string display_name = 8;
 }
 
 // ServerState is one backend as the operator last observed it.
@@ -511,6 +616,29 @@ message ServerState {
   // be Ready and not registered -- that is the first half of a drain -- so a
   // plugin choosing where to send somebody wants this and not the phase.
   bool registered = 6;
+  // What this server last said about itself, and nothing the operator decided.
+  // See AnnounceRequest. Both are empty for a server that has announced
+  // nothing, which is every server until something on it says otherwise --
+  // absent and "announced nothing" are the same state here on purpose, because
+  // a plugin that has to tell them apart is asking about the agent rather than
+  // about the game.
+  string state = 7;
+  map<string, string> attributes = 8;
+  // Which run of this server this is: an opaque token that changes whenever
+  // the process behind the name is replaced, and never otherwise.
+  //
+  // The name alone cannot answer that, and for one kind of server it never
+  // will: an ephemeral server is named afresh every time, but a persistent one
+  // keeps its name across every restart because that name is the identity of
+  // its world. Anything that remembers a server and later asks "is this still
+  // the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+  // reconnect -- compares this and not the name.
+  //
+  // Opaque on purpose. It is a pod UID today and this contract does not say
+  // so: what is promised is that two equal values mean the same run and two
+  // different ones mean different runs. Empty for a server whose pod the
+  // operator has not seen yet, which is a server nobody is being sent to.
+  string incarnation = 9;
 }
 
 message ProxyMessage {

@@ -464,7 +464,14 @@ private fun describe(server: ServerInfo): String =
         // The one field in this whole tree where colour earns its place rather
         // than decorating: "can I send somebody there" is the question being
         // asked, and green against red answers it before the words are read.
-        (if (server.registered()) Style.good("taking joins") else Style.bad("not taking joins"))
+        (if (server.registered()) Style.good("taking joins") else Style.bad("not taking joins")) +
+        // What the server says it is doing, and only when it says something.
+        // Last and introduced by "says", because everything before it is the
+        // operator's account and this one is the server's -- an admin reading
+        // a line where the two disagree has to be able to tell which is which.
+        // A server that has announced nothing gets no fragment at all rather
+        // than an empty one, which would read as a server that had gone quiet.
+        (if (server.state().isEmpty()) "" else Style.quiet(", says ") + Style.name(server.state()))
 
 /**
  * One group as a line, written once because `list` and `info` both print it.

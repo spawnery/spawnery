@@ -62,4 +62,128 @@ public interface GroupStateOrBuilder extends
    * @return The freeSlots.
    */
   int getFreeSlots();
+
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  int getAttributesCount();
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  boolean containsAttributes(
+      java.lang.String key);
+  /**
+   * Use {@link #getAttributesMap()} instead.
+   */
+  @java.lang.Deprecated
+  java.util.Map<java.lang.String, java.lang.String>
+  getAttributes();
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  java.util.Map<java.lang.String, java.lang.String>
+  getAttributesMap();
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  /* nullable */
+java.lang.String getAttributesOrDefault(
+      java.lang.String key,
+      /* nullable */
+java.lang.String defaultValue);
+  /**
+   * <pre>
+   * What whoever runs this network wrote down about this group, from its own
+   * definition, and nothing the operator decided. Empty for a group nobody has
+   * written anything about, which is every group until somebody does.
+   *
+   * The counterpart of ServerState.attributes, and the difference is who
+   * writes it: that one is a server describing what it is doing right now,
+   * this one is a person describing what the group is. A plugin that needs to
+   * know something no server could tell it -- which permission a group is
+   * behind, which of several games it runs -- reads it here.
+   * </pre>
+   *
+   * <code>map&lt;string, string&gt; attributes = 7;</code>
+   */
+  java.lang.String getAttributesOrThrow(
+      java.lang.String key);
+
+  /**
+   * <pre>
+   * What this group is called where a person reads it, from its own
+   * definition. A group's name is a DNS label and a name people say out loud
+   * rarely is, so this is where "Bingo-Team" lives while the name stays
+   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+   * operator -- then stands the name in for it, so that a picture from an
+   * operator that predates the field reads the same as one that left it out.
+   * </pre>
+   *
+   * <code>string display_name = 8;</code>
+   * @return The displayName.
+   */
+  java.lang.String getDisplayName();
+  /**
+   * <pre>
+   * What this group is called where a person reads it, from its own
+   * definition. A group's name is a DNS label and a name people say out loud
+   * rarely is, so this is where "Bingo-Team" lives while the name stays
+   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+   * operator -- then stands the name in for it, so that a picture from an
+   * operator that predates the field reads the same as one that left it out.
+   * </pre>
+   *
+   * <code>string display_name = 8;</code>
+   * @return The bytes for displayName.
+   */
+  com.google.protobuf.ByteString
+      getDisplayNameBytes();
 }

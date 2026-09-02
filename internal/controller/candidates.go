@@ -53,6 +53,15 @@ type ServerView struct {
 	// its probe is back in Starting with its players still connected, because
 	// deregistering stops new joins without moving anyone off.
 	WasRegistered bool
+
+	// Registered is whether the proxies have this server right now.
+	//
+	// Beside WasRegistered rather than instead of it, because the two answer
+	// different questions: that one is "did anybody ever get sent here", which
+	// decides whether a deletion has to drain, and this one is "can anybody be
+	// sent here now", which decides whether this server's empty seats are
+	// capacity at all.
+	Registered bool
 	// SessionsGone is true if the pod reached a terminal state or disappeared.
 	// Either way the process is down and its players went with it — the same
 	// reasoning the state machine uses when it refuses to drain a terminal pod.
@@ -517,7 +526,15 @@ func AggregateGroup(views []ServerView, podHash string) GroupTotals {
 		if !v.Stale {
 			t.OnlinePlayers += v.Players
 		}
-		if v.Phase == phase.Ready && !staleSpec(v, podHash) && !v.Stale {
+		// Registered, and not merely Ready. Free seats on a server no proxy
+		// will send anybody to are not capacity, and counting them would let a
+		// group sit at its floor while every server in it had shut its door --
+		// the scaler seeing plenty of room and the players seeing none.
+		//
+		// It also tightens a case that predates any door: between the pass
+		// that makes a server Ready and the one that registers it, its seats
+		// were counted as reachable for as long as that took.
+		if v.Phase == phase.Ready && v.Registered && !staleSpec(v, podHash) && !v.Stale {
 			free := v.Slots - v.Players
 			if free > 0 {
 				t.FreeSlots += free

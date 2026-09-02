@@ -77,4 +77,114 @@ public interface ServerStateOrBuilder extends
    * @return The registered.
    */
   boolean getRegistered();
+
+  /**
+   * <pre>
+   * What this server last said about itself, and nothing the operator decided.
+   * See AnnounceRequest. Both are empty for a server that has announced
+   * nothing, which is every server until something on it says otherwise --
+   * absent and "announced nothing" are the same state here on purpose, because
+   * a plugin that has to tell them apart is asking about the agent rather than
+   * about the game.
+   * </pre>
+   *
+   * <code>string state = 7;</code>
+   * @return The state.
+   */
+  java.lang.String getState();
+  /**
+   * <pre>
+   * What this server last said about itself, and nothing the operator decided.
+   * See AnnounceRequest. Both are empty for a server that has announced
+   * nothing, which is every server until something on it says otherwise --
+   * absent and "announced nothing" are the same state here on purpose, because
+   * a plugin that has to tell them apart is asking about the agent rather than
+   * about the game.
+   * </pre>
+   *
+   * <code>string state = 7;</code>
+   * @return The bytes for state.
+   */
+  com.google.protobuf.ByteString
+      getStateBytes();
+
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  int getAttributesCount();
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  boolean containsAttributes(
+      java.lang.String key);
+  /**
+   * Use {@link #getAttributesMap()} instead.
+   */
+  @java.lang.Deprecated
+  java.util.Map<java.lang.String, java.lang.String>
+  getAttributes();
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  java.util.Map<java.lang.String, java.lang.String>
+  getAttributesMap();
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  /* nullable */
+java.lang.String getAttributesOrDefault(
+      java.lang.String key,
+      /* nullable */
+java.lang.String defaultValue);
+  /**
+   * <code>map&lt;string, string&gt; attributes = 8;</code>
+   */
+  java.lang.String getAttributesOrThrow(
+      java.lang.String key);
+
+  /**
+   * <pre>
+   * Which run of this server this is: an opaque token that changes whenever
+   * the process behind the name is replaced, and never otherwise.
+   *
+   * The name alone cannot answer that, and for one kind of server it never
+   * will: an ephemeral server is named afresh every time, but a persistent one
+   * keeps its name across every restart because that name is the identity of
+   * its world. Anything that remembers a server and later asks "is this still
+   * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+   * reconnect -- compares this and not the name.
+   *
+   * Opaque on purpose. It is a pod UID today and this contract does not say
+   * so: what is promised is that two equal values mean the same run and two
+   * different ones mean different runs. Empty for a server whose pod the
+   * operator has not seen yet, which is a server nobody is being sent to.
+   * </pre>
+   *
+   * <code>string incarnation = 9;</code>
+   * @return The incarnation.
+   */
+  java.lang.String getIncarnation();
+  /**
+   * <pre>
+   * Which run of this server this is: an opaque token that changes whenever
+   * the process behind the name is replaced, and never otherwise.
+   *
+   * The name alone cannot answer that, and for one kind of server it never
+   * will: an ephemeral server is named afresh every time, but a persistent one
+   * keeps its name across every restart because that name is the identity of
+   * its world. Anything that remembers a server and later asks "is this still
+   * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
+   * reconnect -- compares this and not the name.
+   *
+   * Opaque on purpose. It is a pod UID today and this contract does not say
+   * so: what is promised is that two equal values mean the same run and two
+   * different ones mean different runs. Empty for a server whose pod the
+   * operator has not seen yet, which is a server nobody is being sent to.
+   * </pre>
+   *
+   * <code>string incarnation = 9;</code>
+   * @return The bytes for incarnation.
+   */
+  com.google.protobuf.ByteString
+      getIncarnationBytes();
 }

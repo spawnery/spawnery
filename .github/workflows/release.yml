@@ -471,6 +471,58 @@ jobs:
               ;;
           esac
 
+      # The fifth artefact, and the only one that is not a container: a plugin
+      # has to be able to compile against the API, and until this existed the
+      # only way was a jar somebody carried by hand.
+      #
+      # Skipped rather than failed when the credentials are absent. They are
+      # the one secret in this workflow that nobody can grant from inside it --
+      # a Central Portal token and a signing key both belong to a person -- so
+      # a release before somebody adds them publishes the four artefacts it
+      # can and says which one it left out. A hard failure there would make
+      # every image and the chart hostage to a secret that has nothing to do
+      # with them.
+      - name: hack/publish-api.sh
+        id: publish_api
+        env:
+          # No PUBLISHING_TYPE here, so the script's own default of AUTOMATIC
+          # applies. 0.2.22 went through the Portal by hand -- the one
+          # deployment that had to, because the namespace had never published
+          # anything and Maven Central takes nothing back -- and that question
+          # is now answered. A deployment nobody remembers to release would be
+          # a release that silently did not happen, which this file has already
+          # met once in another guise.
+          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+          CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+          SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CENTRAL_USERNAME:-}" ] || [ -z "${SIGNING_KEY:-}" ]; then
+            echo "::notice::no Central Portal credentials or signing key configured; the API jar is not published"
+            echo "api_published=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          dry_run=0
+          if [ "${{ github.event_name }}" != "push" ]; then
+            dry_run=1
+            echo "::notice::dispatched, not tagged: DRY_RUN=1, nothing is sent to Central"
+          fi
+          status=0
+          nix develop -c env DRY_RUN="$dry_run" ./hack/publish-api.sh || status=$?
+          case "$status" in
+            0)
+              echo "api_published=true" >> "$GITHUB_OUTPUT"
+              ;;
+            3)
+              echo "::notice::that version of the API is already on Central; skipping it"
+              echo "api_published=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              exit "$status"
+              ;;
+          esac
+
       # The other half of design §5's "the digest goes into the GitHub Release
       # body and a job output". contents: write is granted for exactly this and
       # for nothing else -- the workflow still commits nothing.

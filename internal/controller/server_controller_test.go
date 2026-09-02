@@ -2923,3 +2923,30 @@ func TestALiveAgentThatKeepsReportingIsLeftAlone(t *testing.T) {
 		t.Errorf("drained = %v, want none", f.registrar.drained)
 	}
 }
+
+// TestAServerRecordsWhichPodItIsRunning pins the identity a reader compares to
+// tell one run of a server from the next one under the same name.
+//
+// The name cannot answer that and for a persistent server it never will: its
+// name is the identity of its world and survives every restart. So the status
+// carries the pod's UID, and it carries it from wherever the pod is *seen* --
+// a Create that came back AlreadyExists hands back an object with no UID on
+// it, and a field written only on the happy path is empty in exactly the case
+// somebody is investigating.
+func TestAServerRecordsWhichPodItIsRunning(t *testing.T) {
+	f := newFixture(t)
+	bringUpReady(t, f, "lobby-x7k2")
+
+	recorded := f.server("lobby-x7k2").Status.PodUID
+	if recorded == "" {
+		t.Fatal("status.podUID is empty on a Ready server, so nothing can tell one run from another")
+	}
+
+	pod, found := f.pod("lobby-x7k2")
+	if !found {
+		t.Fatal("no pod for a Ready server")
+	}
+	if recorded != string(pod.UID) {
+		t.Errorf("status.podUID = %q, want the pod's own %q", recorded, pod.UID)
+	}
+}

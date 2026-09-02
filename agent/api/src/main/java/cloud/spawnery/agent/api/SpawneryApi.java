@@ -18,6 +18,7 @@ package cloud.spawnery.agent.api;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletionStage;
@@ -145,6 +146,82 @@ public interface SpawneryApi {
      * caller who expected some needs to be able to tell.
      */
     CompletionStage<Integer> stopBoosts(String group);
+
+    /**
+     * Opens or closes this server's own door.
+     *
+     * <p><b>Closing is not {@link #retire}, and the difference is the whole
+     * reason this exists.</b> Retiring says the server is finished: it stops
+     * taking joins, empties out, and is taken down once it is empty. This says
+     * only the first of those, it says it for as long as you like, and you can
+     * take it back. A round that has started is not a server that is going
+     * away, and asking for the one when you mean the other reads as a
+     * decommissioning to everybody who looks at it afterwards.
+     *
+     * <p><b>Nobody is moved.</b> The players already here go on playing until
+     * they leave on their own. What changes is only whether the proxies send
+     * anybody new.
+     *
+     * <p><b>The phase does not change.</b> A closed server is still
+     * {@link ServerPhase#READY} — the phase is the operator's account of a
+     * server's lifecycle, and shutting a door is not a lifecycle event. What
+     * changes is {@link ServerInfo#registered()}, which is the field a caller
+     * choosing where to send somebody already reads.
+     *
+     * <p>Your group notices. A closed server's empty seats stop counting as
+     * the group's free capacity, so a group sized by spare slots builds a
+     * replacement rather than sitting at its floor while every server in it
+     * has shut its door.
+     *
+     * <p>The stage fails when the operator refuses — most plainly on a proxy,
+     * which is not in anybody's routing table but is the routing table.
+     *
+     * <p>Like {@link #announce}, it survives a reconnection without being
+     * called again: the agent restates the last door state on every new
+     * session, because the operator's default for a session it has never seen
+     * is open.
+     *
+     * @param accept {@code false} closes the door, {@code true} opens it.
+     */
+    CompletionStage<Void> acceptJoins(boolean accept);
+
+    /**
+     * Publishes what this server is doing, for every other server to read.
+     *
+     * <p><b>The cloud carries this and never reads it.</b> Nothing the
+     * operator decides looks at a word of it: not where a player is sent, not
+     * when a server is replaced, not how a group is sized. It reaches the
+     * other agents in this network as {@link ServerInfo#state()} and
+     * {@link ServerInfo#attributes()} and goes no further, which is what makes
+     * it safe to put anything in and useless to put an instruction in.
+     *
+     * <p><b>It is not {@link ServerInfo#phase()}.</b> The phase is the
+     * operator's account of a server's lifecycle and no plugin can write it.
+     * This is the server's own account of itself, and the two are meant to
+     * disagree: a server is {@code READY} from the moment it can take players
+     * until it stops, and what is happening inside that window is a question
+     * only the thing running there can answer.
+     *
+     * <p><b>Each call replaces the last one whole.</b> Attributes are not
+     * merged: a call with one attribute leaves this server with one, whatever
+     * the call before it said. Publish the whole description each time, which
+     * is also the only way an attribute can ever be taken back.
+     *
+     * <p>The stage fails when the operator refuses -- a state or an attribute
+     * longer than it carries, more attributes than it carries, or a call from
+     * a proxy, which has no per-instance record in the network's picture for
+     * an announcement to appear in. Each refusal says which.
+     *
+     * <p>It survives a reconnection without being called again: the agent
+     * holds the last description it published and re-publishes it on every new
+     * session, so an operator that restarts does not leave a running game
+     * described as nothing.
+     *
+     * @param state what this server is doing, in a word or a short phrase.
+     *     Empty clears it.
+     * @param attributes anything else worth publishing. Empty clears them.
+     */
+    CompletionStage<Void> announce(String state, Map<String, String> attributes);
 
     /**
      * Where to hear about things happening in the cloud.

@@ -68,6 +68,8 @@ private static final long serialVersionUID = 0L;
     RETIRE(4),
     BOOST(5),
     STOP_BOOST(6),
+    ANNOUNCE(7),
+    ACCEPT_JOINS(8),
     RESULT_NOT_SET(0);
     private final int value;
     private ResultCase(int value) {
@@ -90,6 +92,8 @@ private static final long serialVersionUID = 0L;
         case 4: return RETIRE;
         case 5: return BOOST;
         case 6: return STOP_BOOST;
+        case 7: return ANNOUNCE;
+        case 8: return ACCEPT_JOINS;
         case 0: return RESULT_NOT_SET;
         default: return null;
       }
@@ -271,6 +275,68 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.StopBoostResult.getDefaultInstance();
   }
 
+  public static final int ANNOUNCE_FIELD_NUMBER = 7;
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+   * @return Whether the announce field is set.
+   */
+  @java.lang.Override
+  public boolean hasAnnounce() {
+    return resultCase_ == 7;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+   * @return The announce.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.AnnounceResult getAnnounce() {
+    if (resultCase_ == 7) {
+       return (cloud.spawnery.agent.pb.AnnounceResult) result_;
+    }
+    return cloud.spawnery.agent.pb.AnnounceResult.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.AnnounceResultOrBuilder getAnnounceOrBuilder() {
+    if (resultCase_ == 7) {
+       return (cloud.spawnery.agent.pb.AnnounceResult) result_;
+    }
+    return cloud.spawnery.agent.pb.AnnounceResult.getDefaultInstance();
+  }
+
+  public static final int ACCEPT_JOINS_FIELD_NUMBER = 8;
+  /**
+   * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+   * @return Whether the acceptJoins field is set.
+   */
+  @java.lang.Override
+  public boolean hasAcceptJoins() {
+    return resultCase_ == 8;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+   * @return The acceptJoins.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.AcceptJoinsResult getAcceptJoins() {
+    if (resultCase_ == 8) {
+       return (cloud.spawnery.agent.pb.AcceptJoinsResult) result_;
+    }
+    return cloud.spawnery.agent.pb.AcceptJoinsResult.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.AcceptJoinsResultOrBuilder getAcceptJoinsOrBuilder() {
+    if (resultCase_ == 8) {
+       return (cloud.spawnery.agent.pb.AcceptJoinsResult) result_;
+    }
+    return cloud.spawnery.agent.pb.AcceptJoinsResult.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -303,6 +369,12 @@ private static final long serialVersionUID = 0L;
     if (resultCase_ == 6) {
       output.writeMessage(6, (cloud.spawnery.agent.pb.StopBoostResult) result_);
     }
+    if (resultCase_ == 7) {
+      output.writeMessage(7, (cloud.spawnery.agent.pb.AnnounceResult) result_);
+    }
+    if (resultCase_ == 8) {
+      output.writeMessage(8, (cloud.spawnery.agent.pb.AcceptJoinsResult) result_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -330,6 +402,14 @@ private static final long serialVersionUID = 0L;
     if (resultCase_ == 6) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(6, (cloud.spawnery.agent.pb.StopBoostResult) result_);
+    }
+    if (resultCase_ == 7) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(7, (cloud.spawnery.agent.pb.AnnounceResult) result_);
+    }
+    if (resultCase_ == 8) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(8, (cloud.spawnery.agent.pb.AcceptJoinsResult) result_);
     }
     return size;
   }
@@ -379,6 +459,14 @@ private static final long serialVersionUID = 0L;
         if (!getStopBoost()
             .equals(other.getStopBoost())) return false;
         break;
+      case 7:
+        if (!getAnnounce()
+            .equals(other.getAnnounce())) return false;
+        break;
+      case 8:
+        if (!getAcceptJoins()
+            .equals(other.getAcceptJoins())) return false;
+        break;
       case 0:
       default:
     }
@@ -416,6 +504,14 @@ private static final long serialVersionUID = 0L;
       case 6:
         hash = (37 * hash) + STOP_BOOST_FIELD_NUMBER;
         hash = (53 * hash) + getStopBoost().hashCode();
+        break;
+      case 7:
+        hash = (37 * hash) + ANNOUNCE_FIELD_NUMBER;
+        hash = (53 * hash) + getAnnounce().hashCode();
+        break;
+      case 8:
+        hash = (37 * hash) + ACCEPT_JOINS_FIELD_NUMBER;
+        hash = (53 * hash) + getAcceptJoins().hashCode();
         break;
       case 0:
       default:
@@ -576,6 +672,12 @@ private static final long serialVersionUID = 0L;
       if (stopBoostBuilder_ != null) {
         stopBoostBuilder_.clear();
       }
+      if (announceBuilder_ != null) {
+        announceBuilder_.clear();
+      }
+      if (acceptJoinsBuilder_ != null) {
+        acceptJoinsBuilder_.clear();
+      }
       resultCase_ = 0;
       result_ = null;
       return this;
@@ -640,6 +742,14 @@ private static final long serialVersionUID = 0L;
           stopBoostBuilder_ != null) {
         result.result_ = stopBoostBuilder_.build();
       }
+      if (resultCase_ == 7 &&
+          announceBuilder_ != null) {
+        result.result_ = announceBuilder_.build();
+      }
+      if (resultCase_ == 8 &&
+          acceptJoinsBuilder_ != null) {
+        result.result_ = acceptJoinsBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -676,6 +786,14 @@ private static final long serialVersionUID = 0L;
         }
         case STOP_BOOST: {
           mergeStopBoost(other.getStopBoost());
+          break;
+        }
+        case ANNOUNCE: {
+          mergeAnnounce(other.getAnnounce());
+          break;
+        }
+        case ACCEPT_JOINS: {
+          mergeAcceptJoins(other.getAcceptJoins());
           break;
         }
         case RESULT_NOT_SET: {
@@ -748,6 +866,20 @@ private static final long serialVersionUID = 0L;
               resultCase_ = 6;
               break;
             } // case 50
+            case 58: {
+              input.readMessage(
+                  internalGetAnnounceFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              resultCase_ = 7;
+              break;
+            } // case 58
+            case 66: {
+              input.readMessage(
+                  internalGetAcceptJoinsFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              resultCase_ = 8;
+              break;
+            } // case 66
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1520,6 +1652,290 @@ private static final long serialVersionUID = 0L;
       resultCase_ = 6;
       onChanged();
       return stopBoostBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.AnnounceResult, cloud.spawnery.agent.pb.AnnounceResult.Builder, cloud.spawnery.agent.pb.AnnounceResultOrBuilder> announceBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     * @return Whether the announce field is set.
+     */
+    @java.lang.Override
+    public boolean hasAnnounce() {
+      return resultCase_ == 7;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     * @return The announce.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.AnnounceResult getAnnounce() {
+      if (announceBuilder_ == null) {
+        if (resultCase_ == 7) {
+          return (cloud.spawnery.agent.pb.AnnounceResult) result_;
+        }
+        return cloud.spawnery.agent.pb.AnnounceResult.getDefaultInstance();
+      } else {
+        if (resultCase_ == 7) {
+          return announceBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.AnnounceResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     */
+    public Builder setAnnounce(cloud.spawnery.agent.pb.AnnounceResult value) {
+      if (announceBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        result_ = value;
+        onChanged();
+      } else {
+        announceBuilder_.setMessage(value);
+      }
+      resultCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     */
+    public Builder setAnnounce(
+        cloud.spawnery.agent.pb.AnnounceResult.Builder builderForValue) {
+      if (announceBuilder_ == null) {
+        result_ = builderForValue.build();
+        onChanged();
+      } else {
+        announceBuilder_.setMessage(builderForValue.build());
+      }
+      resultCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     */
+    public Builder mergeAnnounce(cloud.spawnery.agent.pb.AnnounceResult value) {
+      if (announceBuilder_ == null) {
+        if (resultCase_ == 7 &&
+            result_ != cloud.spawnery.agent.pb.AnnounceResult.getDefaultInstance()) {
+          result_ = cloud.spawnery.agent.pb.AnnounceResult.newBuilder((cloud.spawnery.agent.pb.AnnounceResult) result_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          result_ = value;
+        }
+        onChanged();
+      } else {
+        if (resultCase_ == 7) {
+          announceBuilder_.mergeFrom(value);
+        } else {
+          announceBuilder_.setMessage(value);
+        }
+      }
+      resultCase_ = 7;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     */
+    public Builder clearAnnounce() {
+      if (announceBuilder_ == null) {
+        if (resultCase_ == 7) {
+          resultCase_ = 0;
+          result_ = null;
+          onChanged();
+        }
+      } else {
+        if (resultCase_ == 7) {
+          resultCase_ = 0;
+          result_ = null;
+        }
+        announceBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     */
+    public cloud.spawnery.agent.pb.AnnounceResult.Builder getAnnounceBuilder() {
+      return internalGetAnnounceFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.AnnounceResultOrBuilder getAnnounceOrBuilder() {
+      if ((resultCase_ == 7) && (announceBuilder_ != null)) {
+        return announceBuilder_.getMessageOrBuilder();
+      } else {
+        if (resultCase_ == 7) {
+          return (cloud.spawnery.agent.pb.AnnounceResult) result_;
+        }
+        return cloud.spawnery.agent.pb.AnnounceResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AnnounceResult announce = 7;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.AnnounceResult, cloud.spawnery.agent.pb.AnnounceResult.Builder, cloud.spawnery.agent.pb.AnnounceResultOrBuilder> 
+        internalGetAnnounceFieldBuilder() {
+      if (announceBuilder_ == null) {
+        if (!(resultCase_ == 7)) {
+          result_ = cloud.spawnery.agent.pb.AnnounceResult.getDefaultInstance();
+        }
+        announceBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.AnnounceResult, cloud.spawnery.agent.pb.AnnounceResult.Builder, cloud.spawnery.agent.pb.AnnounceResultOrBuilder>(
+                (cloud.spawnery.agent.pb.AnnounceResult) result_,
+                getParentForChildren(),
+                isClean());
+        result_ = null;
+      }
+      resultCase_ = 7;
+      onChanged();
+      return announceBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.AcceptJoinsResult, cloud.spawnery.agent.pb.AcceptJoinsResult.Builder, cloud.spawnery.agent.pb.AcceptJoinsResultOrBuilder> acceptJoinsBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     * @return Whether the acceptJoins field is set.
+     */
+    @java.lang.Override
+    public boolean hasAcceptJoins() {
+      return resultCase_ == 8;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     * @return The acceptJoins.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.AcceptJoinsResult getAcceptJoins() {
+      if (acceptJoinsBuilder_ == null) {
+        if (resultCase_ == 8) {
+          return (cloud.spawnery.agent.pb.AcceptJoinsResult) result_;
+        }
+        return cloud.spawnery.agent.pb.AcceptJoinsResult.getDefaultInstance();
+      } else {
+        if (resultCase_ == 8) {
+          return acceptJoinsBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.AcceptJoinsResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     */
+    public Builder setAcceptJoins(cloud.spawnery.agent.pb.AcceptJoinsResult value) {
+      if (acceptJoinsBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        result_ = value;
+        onChanged();
+      } else {
+        acceptJoinsBuilder_.setMessage(value);
+      }
+      resultCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     */
+    public Builder setAcceptJoins(
+        cloud.spawnery.agent.pb.AcceptJoinsResult.Builder builderForValue) {
+      if (acceptJoinsBuilder_ == null) {
+        result_ = builderForValue.build();
+        onChanged();
+      } else {
+        acceptJoinsBuilder_.setMessage(builderForValue.build());
+      }
+      resultCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     */
+    public Builder mergeAcceptJoins(cloud.spawnery.agent.pb.AcceptJoinsResult value) {
+      if (acceptJoinsBuilder_ == null) {
+        if (resultCase_ == 8 &&
+            result_ != cloud.spawnery.agent.pb.AcceptJoinsResult.getDefaultInstance()) {
+          result_ = cloud.spawnery.agent.pb.AcceptJoinsResult.newBuilder((cloud.spawnery.agent.pb.AcceptJoinsResult) result_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          result_ = value;
+        }
+        onChanged();
+      } else {
+        if (resultCase_ == 8) {
+          acceptJoinsBuilder_.mergeFrom(value);
+        } else {
+          acceptJoinsBuilder_.setMessage(value);
+        }
+      }
+      resultCase_ = 8;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     */
+    public Builder clearAcceptJoins() {
+      if (acceptJoinsBuilder_ == null) {
+        if (resultCase_ == 8) {
+          resultCase_ = 0;
+          result_ = null;
+          onChanged();
+        }
+      } else {
+        if (resultCase_ == 8) {
+          resultCase_ = 0;
+          result_ = null;
+        }
+        acceptJoinsBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     */
+    public cloud.spawnery.agent.pb.AcceptJoinsResult.Builder getAcceptJoinsBuilder() {
+      return internalGetAcceptJoinsFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.AcceptJoinsResultOrBuilder getAcceptJoinsOrBuilder() {
+      if ((resultCase_ == 8) && (acceptJoinsBuilder_ != null)) {
+        return acceptJoinsBuilder_.getMessageOrBuilder();
+      } else {
+        if (resultCase_ == 8) {
+          return (cloud.spawnery.agent.pb.AcceptJoinsResult) result_;
+        }
+        return cloud.spawnery.agent.pb.AcceptJoinsResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.AcceptJoinsResult accept_joins = 8;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.AcceptJoinsResult, cloud.spawnery.agent.pb.AcceptJoinsResult.Builder, cloud.spawnery.agent.pb.AcceptJoinsResultOrBuilder> 
+        internalGetAcceptJoinsFieldBuilder() {
+      if (acceptJoinsBuilder_ == null) {
+        if (!(resultCase_ == 8)) {
+          result_ = cloud.spawnery.agent.pb.AcceptJoinsResult.getDefaultInstance();
+        }
+        acceptJoinsBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.AcceptJoinsResult, cloud.spawnery.agent.pb.AcceptJoinsResult.Builder, cloud.spawnery.agent.pb.AcceptJoinsResultOrBuilder>(
+                (cloud.spawnery.agent.pb.AcceptJoinsResult) result_,
+                getParentForChildren(),
+                isClean());
+        result_ = null;
+      }
+      resultCase_ = 8;
+      onChanged();
+      return acceptJoinsBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudResponse)

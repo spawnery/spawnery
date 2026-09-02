@@ -20,6 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Map;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
@@ -29,8 +30,8 @@ import org.junit.jupiter.api.Test;
 class ValueTypesTest {
     @Test
     void twoDescriptionsOfTheSameServerAreEqual() {
-        var a = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true);
-        var b = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true);
+        var a = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true, "running", Map.of("map", "arena"), "pod-1");
+        var b = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true, "running", Map.of("map", "arena"), "pod-1");
         assertEquals(a, b);
         // Set.copyOf and not Set.of: the latter *throws* on a duplicate, so it
         // would have proved the equality by accident rather than asserted it,
@@ -51,11 +52,23 @@ class ValueTypesTest {
     @Test
     void aNullComponentIsRefusedWhereItIsBuilt() {
         assertThrows(NullPointerException.class,
-                () -> new ServerInfo(null, "lobby", ServerPhase.READY, 0, 100, false));
+                () -> new ServerInfo(null, "lobby", ServerPhase.READY, 0, 100, false, "", Map.of(), ""));
         assertThrows(NullPointerException.class,
                 () -> new CloudPlayer(UUID.randomUUID(), "someone", null));
         assertThrows(NullPointerException.class,
-                () -> new Group(null, Group.Kind.EPHEMERAL, 1, 1, 0, 100));
+                () -> new Group(null, Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), null));
+    }
+
+    // A group nobody gave a display name is displayed by its own name, and a
+    // plugin never has to check which of the two it got.
+    @Test
+    void aGroupWithoutADisplayNameIsDisplayedByItsName() {
+        assertEquals("lobby",
+                new Group("lobby", Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), null).displayName());
+        assertEquals("lobby",
+                new Group("lobby", Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), "").displayName());
+        assertEquals("Bingo-Team",
+                new Group("bingo-team", Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), "Bingo-Team").displayName());
     }
 
     // An unknown phase is not an error and must not throw: the operator may
@@ -72,7 +85,7 @@ class ValueTypesTest {
     // or sizing a list from it should not meet a negative number.
     @Test
     void freeSlotsNeverGoesBelowZero() {
-        var over = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 120, 100, true);
+        var over = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 120, 100, true, "", Map.of(), "");
         assertEquals(0, over.freeSlots());
     }
 }

@@ -434,6 +434,36 @@ type ExtraFiles struct {
 	ClaimName string `json:"claimName"`
 }
 
+// GroupAttributes is what whoever runs a network wants every plugin in it to
+// know about one group.
+//
+// **The operator carries it and reads none of it.** No decision it makes looks
+// at a key: not scheduling, not routing, not scaling. It reaches the agents as
+// part of the network picture they already receive and goes no further, which
+// is what makes free-form text safe here -- a field the operator acted on
+// would need a schema, a validation error path and a version story, and a
+// field it only carries needs a length bound.
+//
+// It is the counterpart of what a server announces about itself, and the
+// difference is who writes it. A server describes what it is doing right now
+// and changes its mind every round; this is written by a person in the group's
+// own definition, reviewed like anything else there, and changes when somebody
+// edits it. A plugin that needs to know something about a group that nobody
+// could derive from its servers -- which permission it is behind, which of
+// several games it runs, whose it is -- reads it here rather than asking every
+// server of the group and hoping they agree.
+//
+// The bounds match the announcement's, and matching is the point: two ways of
+// carrying a handful of strings that stopped at different sizes would be two
+// rules for a reader to remember. Sixteen keys of at most 64 characters, with
+// values of at most 256. This is copied into every agent's picture on every
+// resync, so what it costs is paid by every pod for as long as the network
+// runs.
+//
+// +kubebuilder:validation:MaxProperties=16
+// +kubebuilder:validation:XValidation:rule="self.all(k, size(k) <= 64 && size(self[k]) <= 256)",message="an attribute name may be 64 characters and a value 256"
+type GroupAttributes map[string]string
+
 // Mount is a single file mount into a managed pod: a ConfigMap, a Secret, or
 // a PersistentVolumeClaim.
 //

@@ -8,7 +8,7 @@ type: application
 # version bump alone. Since v0.2.14 this number is also the address people
 # install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
 # so it is no longer only what Flux names a packaged artifact after.
-version: 0.2.17
+version: 0.2.23
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
 # CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
@@ -26,7 +26,27 @@ version: 0.2.17
 # 0.2.17 nicht: der Release aendert die Laufzeit der Game-Images und den Agenten,
 # am Operator keine Zeile. version oben zieht mit, weil das die Adresse ist,
 # unter der installiert wird -- diese Zahl bleibt stehen.
-appVersion: "0.2.16"
+#
+# 0.2.18 zieht ihn wieder mit: ein Server kann sich selbst beschreiben, und
+# beantwortet wird das im Operator -- internal/agentserver prueft und lehnt ab,
+# internal/agent haelt es, internal/netstate legt es ins Netzbild. Das ist Code,
+# den der Operator ausfuehrt, also gibt es ein neues Operator-Image.
+#
+# 0.2.19 ebenso, und tiefer: die Phasen-Maschine kennt jetzt eine Tuer, die
+# deregistriert ohne die Phase zu bewegen, der Skalierer zaehlt keine Plaetze
+# mehr auf Servern, zu denen kein Proxy routet, und beide Gruppenarten bekommen
+# ein optionales spec.attributes. Anders als 0.2.18 aendern sich diesmal also
+# wirklich die CRDs -- optional, jedes vorhandene Objekt validiert unveraendert.
+#
+# 0.2.20 zieht ihn wieder mit, und zwar fuer die kleinste der drei Bewegungen:
+# der Reconciler haelt fest, welcher Pod hinter einem Server steckt, und
+# netstate traegt das weiter. Ein Status-Feld -- die CRDs aendern sich also
+# erneut, aber ein Status-Feld fuellt der Operator selbst, kein geschriebenes
+# Objekt braucht dafuer etwas.
+#
+# 0.2.23 moves it with the operator: the CRDs gain spec.displayName on both
+# group kinds, optional, so nothing anybody wrote has to change.
+appVersion: "0.2.23"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
 # +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec

@@ -25,8 +25,16 @@ dependencies {
 }
 ```
 
-Nothing publishes that coordinate yet. Until something does, build against the
-jar from a release.
+It is on Maven Central, so nothing has to be configured to resolve it. The
+version is the one the agent inside the game images carries — the same number,
+because they are built from the same source, and a plugin compiled against one
+runs against the other.
+
+**Compile against the oldest version you mean to support, not the newest.**
+Methods are added to `SpawneryApi` and components are added to the value
+records; a plugin built against 0.2.20 runs on a later agent, while one built
+against a later agent and run on 0.2.20 meets a `NoSuchMethodError` at the
+first call the older jar does not have.
 
 Your plugin must also declare a dependency on the `spawnery` plugin so it
 enables after the agent. `Spawnery.api()` throws
@@ -70,6 +78,11 @@ to publish a value your copy of this jar predates. Handle it. A `switch` that
 throws on an unrecognised phase breaks on an operator upgrade that had nothing
 to do with your plugin. Read a phase with `ServerPhase.fromWire`, which never
 throws, rather than `valueOf`, which does.
+
+The value records gain components as the operator learns to say more, and
+`ServerInfo` has gained two. Read them through their accessors, which is what
+they are for; a plugin that constructs a `ServerInfo` of its own — in a test
+double, say — is the one thing that has to be rebuilt when they do.
 
 ## Moving a player
 
@@ -127,6 +140,110 @@ an ordinary answer, not a failure.
 needs to be permanently bigger needs its `ServerGroup` edited by a person, and
 this API deliberately cannot do that — the operator holds no write on
 `servergroups` at all.
+
+## Telling one run of a server from the next
+
+`ServerInfo.incarnation()` is an opaque token that changes whenever the process
+behind a name is replaced, and never otherwise. Compare it; never parse it.
+
+The name cannot answer that on its own, and for one kind of server it never
+will: an ephemeral server is named afresh every time, but a persistent one
+keeps its name across every restart, because that name is the identity of its
+world. Anything that remembers a server and later asks whether this is still
+the one it meant — a rejoin, a queue, a scoreboard that outlives a
+reconnect — compares this and not the name.
+
+It is empty for a server whose pod the operator has not seen yet, which is a
+server nobody is being sent to.
+
+## Closing this server to new players
+
+`acceptJoins(false)` stops the proxies sending anybody new here.
+`acceptJoins(true)` undoes it.
+
+**It is not `retire`.** Retiring says the server is finished: it stops taking
+joins, empties out, and is taken down once it is empty. This says only the
+first of those, it says it for as long as you like, and you can take it back. A
+round that has started is not a server that is going away, and asking for the
+one when you mean the other reads as a decommissioning to everybody who looks
+at it afterwards.
+
+**Nobody is moved.** The players already here go on playing until they leave on
+their own.
+
+**The phase does not change.** A closed server is still `READY`, because the
+phase is the operator's account of a server's lifecycle and shutting a door is
+not a lifecycle event. What changes is `ServerInfo.registered()` — the field a
+caller choosing where to send somebody already reads.
+
+Your group notices: a closed server's empty seats stop counting as the group's
+free capacity, so a group sized by spare slots builds a replacement rather than
+sitting at its floor while every server in it has shut its door.
+
+Refused on a proxy, which is not in anybody's routing table but is the routing
+table. And like `announce`, it survives a reconnection without being called
+again — the agent restates the last door state on every new session, because
+the operator's default for a session it has never seen is open.
+
+## Saying what this server is doing
+
+`announce(state, attributes)` publishes a short description of this server that
+every other agent in the network reads back as `ServerInfo.state()` and
+`ServerInfo.attributes()`.
+
+**The cloud carries it and never reads it.** Nothing the operator decides looks
+at a word of it — not where a player is sent, not when a server is replaced,
+not how a group is sized. That is what makes it safe to put anything in, and
+useless to put an instruction in.
+
+**It is not `ServerInfo.phase()`.** The phase is the operator's account of a
+server's lifecycle and no plugin can write it. This is the server's own account
+of itself, and the two are meant to disagree: a server is `READY` from the
+moment it can take players until it stops, and what is happening inside that
+window is a question only the thing running there can answer. `/cloud info`
+prints both, and prints yours after the word `says` so that an admin reading a
+line where they disagree can tell which is which.
+
+**Each call replaces the last one whole.** Attributes are not merged: publish
+the whole description each time, which is also the only way an attribute can be
+taken back. An empty announcement clears the description, and that is a
+description like any other — a game that finished and said so does not come
+back after a reconnect still claiming to be running.
+
+The operator refuses rather than trims: at most 64 characters of state, at most
+16 attributes, at most 64 and 256 characters of name and value. It refuses a
+call from a proxy too, which has no per-instance record in the network picture
+for a description to appear in. Each refusal says which.
+
+You do not have to re-announce after a reconnection. The agent holds the last
+description you published and re-publishes it on every new session, so an
+operator that restarts does not leave a running game described as nothing.
+
+### What a person wrote down about a group
+
+`Group.attributes()` is the counterpart, and the difference is who writes it. A
+server describes what it is doing right now; a group's attributes are written
+by a person in the group's own definition — `spec.attributes` on a
+`ServerGroup` or a `ProxyGroup` — and change when somebody edits that file.
+Read them for what no server could tell you: which permission a group is
+behind, which of several games it runs, whose it is.
+
+The operator carries those too and reads none of them. They stop at the same
+bounds, enforced by the API server rather than by the operator: sixteen
+entries, names of at most 64 characters, values of at most 256.
+
+### What a group is called
+
+`Group.displayName()` is the one thing about a group that is written for a
+person rather than for a plugin: what to print on a scoreboard, in a chat
+message, as a key somebody will read later. A group's `name()` is a DNS label
+— lowercase, no spaces — and a name people say out loud rarely is, so
+`bingo-team` carries `Bingo-Team` here. It comes from `spec.displayName` on the
+`ServerGroup` or `ProxyGroup`, at most 64 characters.
+
+It is never empty. A group nobody has named is displayed by its own name, and
+that substitution is the agent's, so you do not check which of the two you
+got.
 
 ## Hearing what happened
 
