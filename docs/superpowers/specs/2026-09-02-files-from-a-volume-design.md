@@ -150,33 +150,67 @@ would make the entrypoint's line numbers load-bearing.
 The copy goes immediately before the plugin copy in both scripts, so the
 sequence reads renderer → files → plugins on either flavour.
 
-### 3.6 Its own operator switch
+### 3.6 One switch per feature, which means narrowing the one that exists
 
-`--allow-file-volumes`, default false, rendered by the chart as
-`operator.allowFileVolumes`. A group naming `extraFiles` on an installation
-that has not enabled it is refused exactly the way `extraPlugins` is, with its
-own reasons — `FileVolumesDisabled` and `FileVolumeUnusable` — so a group
-setting both wrong says which field it means.
+`extraFiles` gets `--allow-file-volumes`, default false, rendered by the chart
+as `operator.allowFileVolumes`, with its own reasons — `FileVolumesDisabled`
+and `FileVolumeUnusable`.
 
-**A second flag rather than widening the first.** `--allow-plugin-volumes`
-exists so an operator can say "this installation runs no third-party plugins"
-and have it be a fact; making it also govern files would leave the flag's name
-covering something that is not a plugin. The two statements are different and
-an installation may want one without the other.
+**An earlier draft of this section argued for a second flag on the grounds that
+widening `--allow-plugin-volumes` would leave its name covering something that
+is not a plugin. That argument was wrong: it already does.**
+`checkMountClaims` gates claim-backed `spec.mounts` behind the same flag and
+says so in its own refusal — *"this operator was started without
+`--allow-plugin-volumes` so it mounts no claim"*. The imprecision this design
+was trying to avoid has been shipped since the mounts field existed.
 
-And, for the same reason the `extraPlugins` design gives: **this is an
-operational switch and not a security boundary.** A `PersistentVolumeClaim` is
-a namespaced object in the same trust domain as the group naming it, so the
-switch stops nobody who was not already stopped. The chart's documentation for
-it must say so as plainly as the existing one does.
+So the decision is not two flags but three, and the third is a correction:
+
+| Flag | Governs |
+|---|---|
+| `--allow-plugin-volumes` | `spec.extraPlugins`, and **only** that from now on |
+| `--allow-file-volumes` | `spec.extraFiles` |
+| `--allow-mount-volumes` | claim-backed `spec.mounts` |
+
+`ReasonMountVolumesDisabled` and `ReasonMountVolumeUnusable` already exist and
+already say "mount", so the vocabulary is in place; only the flag they name
+changes.
+
+**This breaks an installation that sets `--allow-plugin-volumes` and uses claim
+mounts.** After the upgrade it must set `--allow-mount-volumes` too. That is
+accepted rather than smoothed over, because the failure is loud and names its
+own fix: the group goes `Accepted=False` with `MountVolumesDisabled` and a
+message carrying the flag to set. A grace period would mean carrying a rule
+whose only job is to be deleted later, and a default of true for one of the
+three would leave the flags disagreeing about what they mean.
+`docs/upgrading.md` gets a section in the register it already uses.
+
+And, for the same reason the `extraPlugins` design gives: **these are
+operational switches and not security boundaries.** A `PersistentVolumeClaim`
+is a namespaced object in the same trust domain as the group naming it, so a
+switch stops nobody who was not already stopped. What they buy is an operator
+being able to say which of the three an installation runs, and have that be a
+fact. The chart's documentation for each must say so as plainly as the
+existing one does.
 
 Worth recording because it was raised and answered: `extraFiles` cannot
 undermine what `--allow-plugin-volumes` promises, since section 3.3 refuses
 `plugins/` outright. That is an argument for needing no switch at all, and it
-loses to symmetry — a mechanism that is `extraPlugins` one directory up should
-be governable the same way.
+loses to symmetry — once each feature has its own switch, a feature without one
+is the odd case.
 
-### 3.7 The claim must be `ReadWriteMany`
+### 3.7 Nothing about the volume reaches the pod hash
+
+Inherited from `extraPlugins` and stated because it is user-visible: changing
+what the claim holds does **not** replace a running server. The hash covers the
+spec, and the spec names a claim rather than describing its contents — a
+filesystem the operator only names cannot be digested. A new file reaches a
+server on its next start, whenever that is.
+
+`internal/podspec/hash_golden_test.go` is what holds this: adding the field
+must leave the golden hashes unchanged for a group that does not set it.
+
+### 3.8 The claim must be `ReadWriteMany`
 
 The rule `extraPlugins` already has, refused by the same helper
 (`checkClaimMountable`): every pod of a group mounts it, and a ReadWriteOnce
