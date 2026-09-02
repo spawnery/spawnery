@@ -475,12 +475,19 @@ if [ -d "$FILE_SOURCE" ]; then
 		lost+found) continue ;;
 		esac
 		cp -R "$entry" ./
-		# Scoped to the entry just copied, and not `chmod -R u+w .`: this
-		# script runs under `set -eu`, every user mount is read-only, and a
-		# mount under /data would make a chmod of the whole working directory
-		# fail with a bare `chmod:` naming no cause. The mount this copies
-		# from is read-only too, so the copies arrive read-only and the files
-		# it carries are exactly the ones a server rewrites -- Sponge writes
+		# The whole of "./$name", not only what this loop just placed there --
+		# when $name is a directory that already existed, that recurses over
+		# files spawnery-config wrote into it too, such as paper-global.yml.
+		# That is fine rather than merely tolerated: spawnery-config ran as
+		# this same non-root user moments earlier, so those files are already
+		# writable and the recursion is a no-op on them.
+		#
+		# Not `chmod -R u+w .`, though: this script runs under `set -eu`,
+		# every user mount is read-only, and a group with a claim mount
+		# somewhere else under /data would die on that wider chmod with a
+		# bare `chmod:` naming no cause. The mount this copies from is
+		# read-only too, so the copies arrive read-only and the files it
+		# carries are exactly the ones a server rewrites -- Sponge writes
 		# sponge.conf back on every start.
 		chmod -R u+w "./$name"
 	done
@@ -639,7 +646,7 @@ In `image/velocity-entrypoint.sh`, immediately before its `PLUGIN_SOURCE=` line,
 	done
 ```
 
-Keep the copy loop, the `lost+found` skip and the per-entry `chmod -R u+w "./$name"` identical to Task 3.
+Keep the copy loop, the `lost+found` skip and the per-entry `chmod -R u+w "./$name"` identical to Task 3 — but adapt the two Paper-specific examples in its comment, which are false on a proxy: Velocity's renderer writes a flat `velocity.toml` and never a directory, so there is no `paper-global.yml` case to cite, and Sponge runs through the other entrypoint while Velocity's own rewritten file is `lang/`, which this flavour refuses. Citing it would make the comment argue against itself.
 
 **There is no merge branch, and an earlier revision of this plan was wrong to ask for one.** `cp -R "$entry" ./` copies to `./`, so the destination is `./$name` and POSIX already merges into it when it exists — measured, and all three images ship coreutils besides. A conditional here would be dead code justified by behaviour this stack does not have.
 
