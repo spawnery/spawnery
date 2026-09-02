@@ -215,7 +215,20 @@
           #
           # 0.2.20 moves it because a value the plugin API hands out gained a
           # component: a server now says which run of it this is.
-          imageVersion = "0.2.20";
+          #
+          # **0.2.21 moves this and nothing else, and the images it names are
+          # identical to 0.2.20's.** What the release publishes is an artefact
+          # that has never been published before: cloud.spawnery:spawnery-api,
+          # whose coordinate takes its version from this number. The same shape
+          # as 0.2.14, whose whole content was the chart's publication path.
+          #
+          # The two game images are pushed again under the new tag because they
+          # are built from this number; the operator is not, and hack/publish.sh
+          # refuses its unchanged tag on its own. Republishing two identical
+          # images is the cost of having one number for the agent artefacts,
+          # and it is smaller than giving the API a version of its own that
+          # nothing else would keep in step.
+          imageVersion = "0.2.21";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
