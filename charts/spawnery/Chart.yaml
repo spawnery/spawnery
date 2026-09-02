@@ -8,7 +8,7 @@ type: application
 # version bump alone. Since v0.2.14 this number is also the address people
 # install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
 # so it is no longer only what Flux names a packaged artifact after.
-version: 0.2.23
+version: 0.2.24
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
 # CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
@@ -46,7 +46,14 @@ version: 0.2.23
 #
 # 0.2.23 moves it with the operator: the CRDs gain spec.displayName on both
 # group kinds, optional, so nothing anybody wrote has to change.
-appVersion: "0.2.23"
+#
+# 0.2.24 moves it with the operator too, and the CRDs gain an optional
+# spec.extraFiles the same way. What is different this time is the chart's own
+# arguments: it passes two new switches, and one of them is a narrowing.
+# allowPluginVolumes no longer governs a claim-backed spec.mounts -- that is
+# allowMountVolumes now -- so an installation using claim mounts has to set it
+# or those groups stop being accepted.
+appVersion: "0.2.24"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
 # +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec

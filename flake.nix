@@ -239,7 +239,13 @@
           #
           # 0.2.23 moves it because a value the plugin API hands out gained a
           # component again: a group now carries the name a person gave it.
-          imageVersion = "0.2.23";
+          #
+          # 0.2.24 moves it for the images alone and not for the API: both
+          # entrypoint scripts gained a block that copies a spec.extraFiles
+          # claim into the working directory, and refuses a source carrying a
+          # path the renderer or extraPlugins owns. That ships in the game
+          # images and nowhere else.
+          imageVersion = "0.2.24";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -309,7 +315,16 @@
           # name into the picture, and the CRDs gain the spec field it comes
           # from. A spec field this time, but an optional one -- no object
           # anybody wrote needs anything.
-          operatorVersion = "0.2.23";
+          #
+          # 0.2.24 moves it with the images again, and this one asks something
+          # of an installation for the first time in a while. The CRDs gain an
+          # optional spec.extraFiles on both group kinds, which needs nothing
+          # from anybody -- but --allow-plugin-volumes has been narrowed to the
+          # field it names, and a claim-backed spec.mounts now needs
+          # --allow-mount-volumes. An installation using one and not setting
+          # the other gets Accepted=False with MountVolumesDisabled.
+          # docs/upgrading.md carries the note.
+          operatorVersion = "0.2.24";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
