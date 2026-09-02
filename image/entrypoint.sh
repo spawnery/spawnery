@@ -68,6 +68,62 @@ spawnery-config --flavor paper
 # cannot displace the one the operator shipped -- otherwise somebody pinning an
 # older agent would leave the operator talking to a version it never published,
 # with every object in the cluster saying the right thing.
+# Files an administrator put on a volume, copied into the working directory.
+#
+# **The scan runs before the copy, and that is the whole safety property.**
+# Three things write into /data on a start: spawnery-config above, this, and
+# the plugin copy below. Refusing a source that carries a path one of the
+# others owns makes their paths disjoint, so the order between them cannot
+# decide the result -- rather than a rule about which runs first, which would
+# make these line numbers load-bearing.
+#
+# lost+found and the two globs are the plugin copy's reasoning exactly; see
+# the comment on PLUGIN_SOURCE below for the measurements behind both.
+FILE_SOURCE="${SPAWNERY_FILE_SOURCE:-/var/run/spawnery/files}"
+if [ -d "$FILE_SOURCE" ]; then
+	# The renderer's own files, and the directory extraPlugins owns. A Paper
+	# server does not refuse velocity.toml or lang/: nothing writes them here,
+	# and refusing a path no owner claims would be a rule with no reason.
+	if [ -d "$FILE_SOURCE/plugins" ]; then
+		echo "spawnery: spec.extraFiles carries plugins/, which spec.extraPlugins owns." >&2
+		echo "spawnery: move those files to the extraPlugins claim. Refusing to start." >&2
+		exit 1
+	fi
+	for owned in server.properties config/paper-global.yml config/paper-world-defaults.yml; do
+		if [ -e "$FILE_SOURCE/$owned" ]; then
+			echo "spawnery: spec.extraFiles carries $owned, which the operator writes itself." >&2
+			echo "spawnery: use spec.configOverlay for it. Refusing to start." >&2
+			exit 1
+		fi
+	done
+
+	for entry in "$FILE_SOURCE"/* "$FILE_SOURCE"/.[!.]*; do
+		[ -e "$entry" ] || continue
+		name="${entry##*/}"
+		case "$name" in
+		lost+found) continue ;;
+		esac
+		# Merge into a directory that is already there rather than nesting
+		# inside it. `cp -R src dest/` puts src *under* dest when dest/src
+		# exists, so a plain copy of a `config` directory would land the tree
+		# at config/config -- and config always exists by now, because
+		# spawnery-config wrote paper-global.yml into it above.
+		if [ -d "$entry" ] && [ -d "./$name" ]; then
+			cp -R "$entry/." "./$name/"
+		else
+			cp -R "$entry" ./
+		fi
+		# Scoped to what was just copied, and not `chmod -R u+w .`: this
+		# script runs under `set -eu`, every user mount is read-only, and a
+		# mount under /data would make a chmod of the whole working directory
+		# fail with a bare `chmod:` naming no cause. The mount this copies
+		# from is read-only too, so the copies arrive read-only and the files
+		# it carries are exactly the ones a server rewrites -- Sponge writes
+		# sponge.conf back on every start.
+		chmod -R u+w "./$name"
+	done
+fi
+
 PLUGIN_SOURCE="${SPAWNERY_PLUGIN_SOURCE:-/var/run/spawnery/plugins}"
 if [ -d "$PLUGIN_SOURCE" ]; then
 	mkdir -p plugins

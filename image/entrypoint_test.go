@@ -569,3 +569,141 @@ func TestEntrypointExecsThePurpurJarWhenTheImageNamesOne(t *testing.T) {
 		t.Errorf("the bundler repo did not follow PAPER_HOME:\n%s", out)
 	}
 }
+
+func TestAFileFromTheVolumeLandsUnderConfig(t *testing.T) {
+	// The case the whole field exists for: a path no mount can reach, because
+	// the kubelet would create /data/config root-owned.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "config", "sponge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "config", "sponge", "sponge.conf"),
+		[]byte("version=1\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source); err != nil {
+		t.Fatalf("a source carrying config/sponge/sponge.conf failed the start: %v", err)
+	}
+
+	landed := filepath.Join(dir, "config", "sponge", "sponge.conf")
+	info, err := os.Stat(landed)
+	if err != nil {
+		t.Fatalf("the file did not reach %s: %v", landed, err)
+	}
+	if info.Mode().Perm()&0o200 == 0 {
+		t.Error("the copy is read-only; Sponge rewrites this file on every start")
+	}
+}
+
+func TestAFileTheRendererOwnsRefusesTheStart(t *testing.T) {
+	for _, owned := range []string{
+		"server.properties",
+		"config/paper-global.yml",
+		"config/paper-world-defaults.yml",
+	} {
+		t.Run(owned, func(t *testing.T) {
+			dir := t.TempDir()
+			source := filepath.Join(dir, "volume")
+			if err := os.MkdirAll(filepath.Join(source, filepath.Dir(owned)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(source, owned), []byte("x"), 0o444); err != nil {
+				t.Fatal(err)
+			}
+
+			out, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source)
+
+			if err == nil {
+				t.Fatalf("a source carrying %s started anyway", owned)
+			}
+			if !strings.Contains(out, owned) {
+				t.Errorf("the message does not name the file:\n%s", out)
+			}
+			if !strings.Contains(out, "extraFiles") {
+				t.Errorf("the message does not name the field:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestAPluginOnTheFileVolumeRefusesTheStart(t *testing.T) {
+	// plugins/ has a mechanism of its own, and the message has to send
+	// somebody to it rather than only saying no.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "plugins"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "plugins", "p.jar"), []byte("jar"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source)
+
+	if err == nil {
+		t.Fatal("a source carrying plugins/ started anyway")
+	}
+	if !strings.Contains(out, "extraPlugins") {
+		t.Errorf("the message does not name the mechanism that owns plugins/:\n%s", out)
+	}
+}
+
+func TestNothingIsCopiedWhenTheScanRefuses(t *testing.T) {
+	// The scan runs before the copy, so a refused tree leaves no half-written
+	// /data behind.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "config", "sponge"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "config", "sponge", "sponge.conf"),
+		[]byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "server.properties"), []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source); err == nil {
+		t.Fatal("the start was not refused")
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "config", "sponge", "sponge.conf")); err == nil {
+		t.Error("the good file was copied before the bad one was noticed")
+	}
+}
+
+func TestLostFoundOnTheFileVolumeIsSkipped(t *testing.T) {
+	// The same ext4 artefact the plugin copy already skips: mode 0700 owned by
+	// root, unreadable to this container, and never anybody's configuration.
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(filepath.Join(source, "lost+found"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "bukkit.yml"), []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source); err != nil {
+		t.Fatalf("a source carrying lost+found failed the start: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, "lost+found")); err == nil {
+		t.Error("lost+found was copied into the working directory")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "bukkit.yml")); err != nil {
+		t.Errorf("the real file did not survive the skip: %v", err)
+	}
+}
+
+func TestNoFileVolumeIsNotAnError(t *testing.T) {
+	dir := t.TempDir()
+
+	if _, err := runEntrypoint(t, dir, 0,
+		"SPAWNERY_FILE_SOURCE="+filepath.Join(dir, "nothing-here")); err != nil {
+		t.Fatalf("a start with no file volume failed: %v", err)
+	}
+}
