@@ -80,6 +80,31 @@ class NetworkMirrorTest {
     }
 
     @Test
+    fun `a group carries the name a person gave it`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("bingo-team").setKind(GroupState.Kind.EPHEMERAL)
+                    .setDisplayName("Bingo-Team"),
+            ).build(),
+        )
+
+        assertEquals("Bingo-Team", mirror.groups().single().displayName())
+    }
+
+    @Test
+    fun `a group nobody named is displayed by its own name`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL),
+            ).build(),
+        )
+
+        assertEquals("lobby", mirror.groups().single().displayName())
+    }
+
+    @Test
     fun `a server carries what it said about itself`() {
         val mirror = NetworkMirror()
         mirror.apply(

@@ -317,6 +317,21 @@ type ProxyGroupSpec struct {
 	// +kubebuilder:validation:XValidation:rule="self.all(e, !e.name.startsWith('SPAWNERY_'))",message="the SPAWNERY_ prefix is reserved for the environment variables the operator sets itself"
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
+	// DisplayName is what this group is called where a person reads it:
+	// a scoreboard, a chat message, a playtime key. A metadata.name is a DNS
+	// label -- lowercase, no spaces -- and a name people say out loud rarely
+	// is, so a plugin that shows "Bingo-Team" reads it from here and not from
+	// the object's name.
+	//
+	// The operator carries it and reads none of it, like Attributes below.
+	// Empty is not an error: a plugin then shows the group's own name, and it
+	// is the plugin that makes that substitution rather than the operator,
+	// so that a picture with the field unset and a picture whose operator
+	// predates the field read the same.
+	// +optional
+	// +kubebuilder:validation:MaxLength=64
+	DisplayName string `json:"displayName,omitempty"`
+
 	// Attributes is what plugins are told about this group. See
 	// GroupAttributes: the operator carries it and acts on none of it.
 	//

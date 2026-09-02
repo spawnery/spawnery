@@ -305,3 +305,41 @@ func TestBuildSaysWhichRunOfAServerThisIs(t *testing.T) {
 			got.GetServers()[0].GetIncarnation())
 	}
 }
+
+func TestBuildCarriesAGroupsDisplayName(t *testing.T) {
+	// From the spec, like the attributes: a person wrote it in the group's
+	// own definition, and the operator's whole part in it is to carry it.
+	group := ephemeralGroup("ns", "bingo-team")
+	group.Spec.DisplayName = "Bingo-Team"
+	proxy := proxyGroupNamed("ns", "gateway")
+	proxy.Spec.DisplayName = "Gateway"
+	src, _ := source(t, group, proxy)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	// Sorted, so bingo-team is first and gateway second.
+	if got.GetGroups()[0].GetDisplayName() != "Bingo-Team" {
+		t.Errorf("bingo-team = %+v, want its display name", got.GetGroups()[0])
+	}
+	if got.GetGroups()[1].GetDisplayName() != "Gateway" {
+		t.Errorf("gateway = %+v, want the proxy group's display name", got.GetGroups()[1])
+	}
+}
+
+func TestAGroupWithoutADisplayNameTravelsWithAnEmptyOne(t *testing.T) {
+	// The operator does not fill the name in: which name stands in for a
+	// missing display name is the reader's decision, and an agent that made
+	// a different one from the operator would have nothing to notice it by.
+	src, _ := source(t, ephemeralGroup("ns", "lobby"))
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got.GetGroups()[0].GetDisplayName() != "" {
+		t.Errorf("display name = %q, want empty", got.GetGroups()[0].GetDisplayName())
+	}
+}

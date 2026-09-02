@@ -2426,7 +2426,14 @@ type GroupState struct {
 	// this one is a person describing what the group is. A plugin that needs to
 	// know something no server could tell it -- which permission a group is
 	// behind, which of several games it runs -- reads it here.
-	Attributes    map[string]string `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Attributes map[string]string `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	// What this group is called where a person reads it, from its own
+	// definition. A group's name is a DNS label and a name people say out loud
+	// rarely is, so this is where "Bingo-Team" lives while the name stays
+	// "bingo-team". Empty for a group nobody has named, and the agent -- not the
+	// operator -- then stands the name in for it, so that a picture from an
+	// operator that predates the field reads the same as one that left it out.
+	DisplayName   string `protobuf:"bytes,8,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2508,6 +2515,13 @@ func (x *GroupState) GetAttributes() map[string]string {
 		return x.Attributes
 	}
 	return nil
+}
+
+func (x *GroupState) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
 }
 
 // ServerState is one backend as the operator last observed it.
@@ -3550,7 +3564,7 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\aservers\x18\x02 \x03(\v2$.spawnery.agent.v1alpha1.ServerStateR\aservers\x12>\n" +
 	"\aplayers\x18\x03 \x03(\v2$.spawnery.agent.v1alpha1.RosterEntryR\aplayers\x12\x1f\n" +
 	"\vfeed_format\x18\x04 \x01(\tR\n" +
-	"feedFormat\"\xc3\x03\n" +
+	"feedFormat\"\xe6\x03\n" +
 	"\n" +
 	"GroupState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12<\n" +
@@ -3562,7 +3576,8 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"free_slots\x18\x06 \x01(\x05R\tfreeSlots\x12S\n" +
 	"\n" +
 	"attributes\x18\a \x03(\v23.spawnery.agent.v1alpha1.GroupState.AttributesEntryR\n" +
-	"attributes\x1a=\n" +
+	"attributes\x12!\n" +
+	"\fdisplay_name\x18\b \x01(\tR\vdisplayName\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"F\n" +
