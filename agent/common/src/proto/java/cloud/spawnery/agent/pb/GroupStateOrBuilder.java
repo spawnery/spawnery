@@ -156,4 +156,34 @@ java.lang.String defaultValue);
    */
   java.lang.String getAttributesOrThrow(
       java.lang.String key);
+
+  /**
+   * <pre>
+   * What this group is called where a person reads it, from its own
+   * definition. A group's name is a DNS label and a name people say out loud
+   * rarely is, so this is where "Bingo-Team" lives while the name stays
+   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+   * operator -- then stands the name in for it, so that a picture from an
+   * operator that predates the field reads the same as one that left it out.
+   * </pre>
+   *
+   * <code>string display_name = 8;</code>
+   * @return The displayName.
+   */
+  java.lang.String getDisplayName();
+  /**
+   * <pre>
+   * What this group is called where a person reads it, from its own
+   * definition. A group's name is a DNS label and a name people say out loud
+   * rarely is, so this is where "Bingo-Team" lives while the name stays
+   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+   * operator -- then stands the name in for it, so that a picture from an
+   * operator that predates the field reads the same as one that left it out.
+   * </pre>
+   *
+   * <code>string display_name = 8;</code>
+   * @return The bytes for displayName.
+   */
+  com.google.protobuf.ByteString
+      getDisplayNameBytes();
 }

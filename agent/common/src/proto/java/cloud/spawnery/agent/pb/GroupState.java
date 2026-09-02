@@ -34,6 +34,7 @@ private static final long serialVersionUID = 0L;
   private GroupState() {
     name_ = "";
     kind_ = 0;
+    displayName_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -444,6 +445,63 @@ java.lang.String defaultValue) {
     return map.get(key);
   }
 
+  public static final int DISPLAY_NAME_FIELD_NUMBER = 8;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object displayName_ = "";
+  /**
+   * <pre>
+   * What this group is called where a person reads it, from its own
+   * definition. A group's name is a DNS label and a name people say out loud
+   * rarely is, so this is where "Bingo-Team" lives while the name stays
+   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+   * operator -- then stands the name in for it, so that a picture from an
+   * operator that predates the field reads the same as one that left it out.
+   * </pre>
+   *
+   * <code>string display_name = 8;</code>
+   * @return The displayName.
+   */
+  @java.lang.Override
+  public java.lang.String getDisplayName() {
+    java.lang.Object ref = displayName_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      displayName_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * What this group is called where a person reads it, from its own
+   * definition. A group's name is a DNS label and a name people say out loud
+   * rarely is, so this is where "Bingo-Team" lives while the name stays
+   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+   * operator -- then stands the name in for it, so that a picture from an
+   * operator that predates the field reads the same as one that left it out.
+   * </pre>
+   *
+   * <code>string display_name = 8;</code>
+   * @return The bytes for displayName.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getDisplayNameBytes() {
+    java.lang.Object ref = displayName_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      displayName_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -482,6 +540,9 @@ java.lang.String defaultValue) {
         internalGetAttributes(),
         AttributesDefaultEntryHolder.defaultEntry,
         7);
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(displayName_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 8, displayName_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -518,6 +579,9 @@ java.lang.String defaultValue) {
           .buildPartial();
       size += com.google.protobuf.CodedOutputStream
           .computeMessageSize(7, attributes__);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(displayName_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(8, displayName_);
     }
     return size;
   }
@@ -556,6 +620,8 @@ java.lang.String defaultValue) {
         != other.getFreeSlots()) return false;
     if (!internalGetAttributes().equals(
         other.internalGetAttributes())) return false;
+    if (!getDisplayName()
+        .equals(other.getDisplayName())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -583,6 +649,8 @@ java.lang.String defaultValue) {
       hash = (37 * hash) + ATTRIBUTES_FIELD_NUMBER;
       hash = (53 * hash) + internalGetAttributes().hashCode();
     }
+    hash = (37 * hash) + DISPLAY_NAME_FIELD_NUMBER;
+    hash = (53 * hash) + getDisplayName().hashCode();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -747,6 +815,7 @@ java.lang.String defaultValue) {
       onlinePlayers_ = 0;
       freeSlots_ = 0;
       internalGetMutableAttributes().clear();
+      displayName_ = "";
       return this;
     }
 
@@ -802,6 +871,9 @@ java.lang.String defaultValue) {
         result.attributes_ = internalGetAttributes();
         result.attributes_.makeImmutable();
       }
+      if (((from_bitField0_ & 0x00000080) != 0)) {
+        result.displayName_ = displayName_;
+      }
     }
 
     @java.lang.Override
@@ -839,6 +911,11 @@ java.lang.String defaultValue) {
       internalGetMutableAttributes().mergeFrom(
           other.internalGetAttributes());
       bitField0_ |= 0x00000040;
+      if (!other.getDisplayName().isEmpty()) {
+        displayName_ = other.displayName_;
+        bitField0_ |= 0x00000080;
+        onChanged();
+      }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -904,6 +981,11 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00000040;
               break;
             } // case 58
+            case 66: {
+              displayName_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000080;
+              break;
+            } // case 66
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1399,6 +1481,123 @@ java.lang.String defaultValue) {
       internalGetMutableAttributes().getMutableMap()
           .putAll(values);
       bitField0_ |= 0x00000040;
+      return this;
+    }
+
+    private java.lang.Object displayName_ = "";
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @return The displayName.
+     */
+    public java.lang.String getDisplayName() {
+      java.lang.Object ref = displayName_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        displayName_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @return The bytes for displayName.
+     */
+    public com.google.protobuf.ByteString
+        getDisplayNameBytes() {
+      java.lang.Object ref = displayName_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        displayName_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @param value The displayName to set.
+     * @return This builder for chaining.
+     */
+    public Builder setDisplayName(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      displayName_ = value;
+      bitField0_ |= 0x00000080;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearDisplayName() {
+      displayName_ = getDefaultInstance().getDisplayName();
+      bitField0_ = (bitField0_ & ~0x00000080);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What this group is called where a person reads it, from its own
+     * definition. A group's name is a DNS label and a name people say out loud
+     * rarely is, so this is where "Bingo-Team" lives while the name stays
+     * "bingo-team". Empty for a group nobody has named, and the agent -- not the
+     * operator -- then stands the name in for it, so that a picture from an
+     * operator that predates the field reads the same as one that left it out.
+     * </pre>
+     *
+     * <code>string display_name = 8;</code>
+     * @param value The bytes for displayName to set.
+     * @return This builder for chaining.
+     */
+    public Builder setDisplayNameBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      displayName_ = value;
+      bitField0_ |= 0x00000080;
+      onChanged();
       return this;
     }
 

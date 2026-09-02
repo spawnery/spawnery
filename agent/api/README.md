@@ -232,6 +232,19 @@ The operator carries those too and reads none of them. They stop at the same
 bounds, enforced by the API server rather than by the operator: sixteen
 entries, names of at most 64 characters, values of at most 256.
 
+### What a group is called
+
+`Group.displayName()` is the one thing about a group that is written for a
+person rather than for a plugin: what to print on a scoreboard, in a chat
+message, as a key somebody will read later. A group's `name()` is a DNS label
+— lowercase, no spaces — and a name people say out loud rarely is, so
+`bingo-team` carries `Bingo-Team` here. It comes from `spec.displayName` on the
+`ServerGroup` or `ProxyGroup`, at most 64 characters.
+
+It is never empty. A group nobody has named is displayed by its own name, and
+that substitution is the agent's, so you do not check which of the two you
+got.
+
 ## Hearing what happened
 
 `events()` hands back an `EventBus`, the same one every time, so a plugin may

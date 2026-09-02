@@ -739,3 +739,37 @@ half and the operator for the server half: sixteen entries, names of at most 64
 characters, values of at most 256. Refused rather than trimmed. They are small
 because this is copied into every agent's picture on every resync, so what it
 costs is paid by every pod for as long as the network runs.
+
+## 0.2.23: a group has a name for people
+
+`ServerGroup` and `ProxyGroup` gain `spec.displayName`, which is what the group
+is called where a person reads it:
+
+```yaml
+metadata:
+  name: bingo-team
+spec:
+  displayName: Bingo-Team
+```
+
+A `metadata.name` is a DNS label — lowercase, digits and hyphens — and a name
+people say out loud rarely is. Until now a plugin that wanted to print
+`Bingo-Team` had to keep its own table from group names to labels, and every
+plugin kept a different one. This is that table, written once in the group's
+own definition, and read as `Group.displayName()` by every plugin in the
+network.
+
+**The operator carries it and reads none of it**, like `spec.attributes`. It
+shapes no pod, so editing it replaces nothing and restarts nothing. At most 64
+characters, refused rather than trimmed, by the API server.
+
+**Nothing changes for a group that has none.** `Group.displayName()` is never
+empty: a group nobody has named is displayed by its own name. That substitution
+is made in the agent's API and not in the operator, so an agent built against
+this version reads an older operator's picture — where the field does not exist
+— exactly as it reads a new one that left it out.
+
+A plugin built against an older API jar keeps running; `Group` gained a
+component, which is the kind of change the [API's own
+notes](../agent/api/README.md#version-skew) say to expect. Only code that
+constructs a `Group` itself — a test double — has to be rebuilt.

@@ -63,6 +63,7 @@ class NetworkMirror {
                     it.onlinePlayers,
                     it.freeSlots,
                     it.attributesMap,
+                    it.displayName,
                 )
             },
             servers = state.serversList.map {

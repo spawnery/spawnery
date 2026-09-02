@@ -56,7 +56,19 @@ class ValueTypesTest {
         assertThrows(NullPointerException.class,
                 () -> new CloudPlayer(UUID.randomUUID(), "someone", null));
         assertThrows(NullPointerException.class,
-                () -> new Group(null, Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of()));
+                () -> new Group(null, Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), null));
+    }
+
+    // A group nobody gave a display name is displayed by its own name, and a
+    // plugin never has to check which of the two it got.
+    @Test
+    void aGroupWithoutADisplayNameIsDisplayedByItsName() {
+        assertEquals("lobby",
+                new Group("lobby", Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), null).displayName());
+        assertEquals("lobby",
+                new Group("lobby", Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), "").displayName());
+        assertEquals("Bingo-Team",
+                new Group("bingo-team", Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), "Bingo-Team").displayName());
     }
 
     // An unknown phase is not an error and must not throw: the operator may
