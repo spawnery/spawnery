@@ -892,6 +892,39 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			},
 			want: ConfigMountPath,
 		},
+		{
+			// Design spec 5 promises this refusal, and checkMountCollision
+			// has no entry naming FileSourceMountPath at all: what refuses it
+			// is that the path nests under AgentMountPath, which gets the
+			// bidirectional check. If that check is ever narrowed to an exact
+			// match, or the file claim moves out from under the agent mount,
+			// this case fails — which is the point of having it.
+			name: "mounted over the extraFiles claim",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: FileSourceMountPath,
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
+		{
+			// The case a code comment on checkMountCollision used to get
+			// wrong, by calling FileSourceMountPath exact-match-only and so
+			// implying a mount *inside* it was permitted. It is not, and
+			// docs/mounts.md has always said so. Pinned here so the two
+			// cannot drift apart again.
+			name: "nested inside the extraFiles claim",
+			mount: spawneryv1alpha1.Mount{
+				Name:      "eigenes",
+				MountPath: FileSourceMountPath + "/nested",
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+				},
+			},
+			want: AgentMountPath,
+		},
 	}
 
 	for _, tc := range cases {
