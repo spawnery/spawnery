@@ -71,8 +71,8 @@ publishing {
             }
             developers {
                 developer {
-                    id = "spawnery"
-                    name = "The Spawnery Authors"
+                    id = "paulwtf"
+                    name = "paulwtf"
                     url = "https://github.com/spawnery"
                 }
             }
