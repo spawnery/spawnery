@@ -66,7 +66,14 @@ spec:
 `ServerGroup` and `ProxyGroup` both, because `ExtraPlugins` is on both and a
 mechanism that only half the objects have is one more rule to remember. The
 proxy flavour has less to gain — Velocity keeps no configuration directory —
-but it costs one field and no branch in the entrypoint.
+but the cost is one field and a second copy of the same block.
+
+There is no flavour branch to write: `image/entrypoint.sh` and
+`image/velocity-entrypoint.sh` are separate scripts that already know which
+flavour they are (`spawnery-config --flavor paper` against `--flavor
+velocity`), and the plugin copy is already duplicated between them. Each gets
+its own refusal list, which is why section 3.3's list can differ by flavour
+without anything having to decide at runtime.
 
 ### 3.2 Mounted outside `/data`, at `/var/run/spawnery/files`
 
@@ -81,7 +88,7 @@ The path joins the collision checks that already guard
 ### 3.3 Refused paths, and why refusal rather than precedence
 
 The entrypoint scans the source tree **before copying anything** and exits
-non-zero if it carries a path that belongs to another mechanism:
+non-zero if it carries a path that already has an owner:
 
 | Path in the claim | Match | Owned by |
 |---|---|---|
@@ -90,15 +97,24 @@ non-zero if it carries a path that belongs to another mechanism:
 | `config/paper-global.yml` | exact | the renderer, Paper flavour |
 | `config/paper-world-defaults.yml` | exact | the renderer, Paper flavour |
 | `velocity.toml` | exact | the renderer, Velocity flavour |
+| `lang/` | prefix | Velocity itself, Velocity flavour |
+
+Three kinds of owner, and the third is the one worth spelling out. `plugins/`
+belongs to another mechanism and the flavour files to the renderer, but
+**`lang/` belongs to the server program**: Velocity migrates
+`lang/messages.properties` to MiniMessage on every start and writes the result
+back, so a file placed there is overwritten before anybody reads it. Nothing
+breaks — which is precisely why it is refused. A copy that silently does
+nothing is the failure this design exists to prevent, and it is worse here than
+a collision that announces itself.
 
 The renderer's entries are **the running flavour's own** — `render.PaperFiles`
 or `render.VelocityFiles`, read from the same lists the renderer refuses
 overlay keys against, so the two can never drift. A Paper server does not
-refuse `velocity.toml`: nothing writes it there, and refusing a file no
-mechanism owns would be a rule with no reason behind it.
+refuse `velocity.toml` or `lang/`: nothing writes them there, and refusing a
+path no owner claims would be a rule with no reason behind it.
 
-The message names the file **and** the mechanism that owns it, and goes to the
-container log.
+The message names the path **and** its owner, and goes to the container log.
 
 Refusal rather than an order that quietly decides: a claim carrying
 `config/paper-global.yml` is somebody expecting to configure the Velocity
@@ -131,8 +147,8 @@ guarantees their paths are disjoint, so the order between them cannot change
 the result. That is the property to preserve: a design where the order decides
 would make the entrypoint's line numbers load-bearing.
 
-The copy goes immediately before the plugin copy, so the sequence reads
-renderer → files → plugins.
+The copy goes immediately before the plugin copy in both scripts, so the
+sequence reads renderer → files → plugins on either flavour.
 
 ## 4. What this does not do
 
@@ -152,11 +168,13 @@ volume and their own refusal, and this one refuses their directory.
 `image/entrypoint_test.go` and the podspec tests both exist and both grow:
 
 - a nested file from the claim lands at its path under `/data` and is writable
-- each refused path refuses on its own, and the message names the owning
-  mechanism: `plugins/` and the three Paper files on a Paper server,
-  `plugins/` and `velocity.toml` on a proxy
-- a Paper server does **not** refuse `velocity.toml`, and a proxy does not
-  refuse the Paper files — the list follows the flavour
+- each refused path refuses on its own, and the message names the owner:
+  `plugins/` and the three Paper files on a Paper server, `plugins/`,
+  `velocity.toml` and `lang/` on a proxy
+- a Paper server does **not** refuse `velocity.toml` or `lang/`, and a proxy
+  does not refuse the Paper files — the list follows the flavour
+- `lang/` refuses on the directory, not only on `lang/messages.properties`:
+  the whole directory is Velocity's
 - `lost+found` is skipped by name, as the plugin copy already does
 - the volume is rendered read-only, on both group kinds
 - a user mount at `/var/run/spawnery/files` is refused
@@ -167,7 +185,13 @@ path, because a nested target is the whole point.
 
 ## 6. Open
 
-**Whether the proxy flavour should refuse more.** Velocity writes `lang/` and
-migrates it on every start; a claim carrying `lang/messages.properties` would
-be overwritten by Velocity rather than the other way round, which is confusing
-but breaks nothing. Left out of the refusal list until somebody meets it.
+**Whether the Paper flavour has an equivalent of `lang/`.** Refusing a
+directory the server program rewrites raises the question for the other
+flavour, and it is not answered here. Paper's own directories under `/data`
+that nobody else writes — `cache/`, `versions/`, `libraries/` — behave
+differently from each other: `libraries/` is a directory a server is
+routinely given content for, while the other two are the image's. Whichever of
+them Paper rewrites on start belongs in the table for the same reason `lang/`
+does, and finding out means measuring a start rather than reading. Until then
+the Paper list stays the renderer's three, which are the ones something
+demonstrably overwrites.
