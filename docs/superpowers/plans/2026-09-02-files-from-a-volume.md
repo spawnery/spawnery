@@ -158,10 +158,9 @@ In `internal/podspec/server_test.go`:
 
 ```go
 func TestExtraFilesIsMountedReadOnlyOutsideData(t *testing.T) {
-	group := testGroup()
-	group.Spec.ExtraFiles = &spawneryv1alpha1.ExtraFiles{ClaimName: "files"}
-
-	pod := ServerPod(group, testServer(), testNetwork())
+	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.ExtraFiles = &spawneryv1alpha1.ExtraFiles{ClaimName: "files"}
+	})
 
 	var mount *corev1.VolumeMount
 	for i := range pod.Spec.Containers[0].VolumeMounts {
@@ -184,7 +183,7 @@ func TestExtraFilesIsMountedReadOnlyOutsideData(t *testing.T) {
 }
 
 func TestNoExtraFilesVolumeWithoutTheField(t *testing.T) {
-	pod := ServerPod(testGroup(), testServer(), testNetwork())
+	pod := build(t, nil)
 
 	for _, v := range pod.Spec.Volumes {
 		if v.Name == FileSourceVolumeName {
@@ -194,7 +193,9 @@ func TestNoExtraFilesVolumeWithoutTheField(t *testing.T) {
 }
 ```
 
-`testNetwork()`, `testGroup()` and `testServer()` are defined at `internal/podspec/server_test.go:39`, `:60` and `:76`. The two tests to mirror are `TestExtraPluginsMountsTheClaimReadOnlyOutsideData` (:1166) and `TestNoExtraPluginsRendersNoVolume` (:1213) — read both and follow their shape exactly, including how they build the group. Write the proxy counterpart in `proxy_test.go` the same way, against that file's own pod builder.
+`build(t, mutate)` is the helper at `internal/podspec/server_test.go:88`; it wraps `BuildServerPod(net, group, testServer(), testEndpoint)` and takes a mutator over `(*Network, *ServerGroup)`. There is no bare `ServerPod` function — the exported builders are `BuildServerPod` (`server.go:286`) and `BuildProxyPod` (`proxy.go:101`). The two tests to mirror are `TestExtraPluginsMountsTheClaimReadOnlyOutsideData` (:1166) and `TestNoExtraPluginsRendersNoVolume` (:1213).
+
+For the proxy counterpart in `proxy_test.go`, that file has `buildProxy(t)` at :45 for the unmutated case and calls `BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)` directly when it needs a modified group — see :93. Follow whichever of the two fits.
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -465,15 +466,29 @@ if [ -d "$FILE_SOURCE" ]; then
 
 	for entry in "$FILE_SOURCE"/* "$FILE_SOURCE"/.[!.]*; do
 		[ -e "$entry" ] || continue
-		case "${entry##*/}" in
+		name="${entry##*/}"
+		case "$name" in
 		lost+found) continue ;;
 		esac
-		cp -R "$entry" ./
+		# Merge into a directory that is already there rather than nesting
+		# inside it. `cp -R src dest/` puts src *under* dest when dest/src
+		# exists, so a plain copy of a `config` directory would land the tree
+		# at config/config -- and config always exists by now, because
+		# spawnery-config wrote paper-global.yml into it above.
+		if [ -d "$entry" ] && [ -d "./$name" ]; then
+			cp -R "$entry/." "./$name/"
+		else
+			cp -R "$entry" ./
+		fi
+		# Scoped to what was just copied, and not `chmod -R u+w .`: this
+		# script runs under `set -eu`, every user mount is read-only, and a
+		# mount under /data would make a chmod of the whole working directory
+		# fail with a bare `chmod:` naming no cause. The mount this copies
+		# from is read-only too, so the copies arrive read-only and the files
+		# it carries are exactly the ones a server rewrites -- Sponge writes
+		# sponge.conf back on every start.
+		chmod -R u+w "./$name"
 	done
-	# The mount is read-only, so the copies arrive read-only too, and the files
-	# this carries are exactly the ones a server rewrites -- sponge.conf is
-	# rewritten on every start by Sponge itself.
-	chmod -R u+w .
 fi
 ```
 
@@ -629,7 +644,7 @@ In `image/velocity-entrypoint.sh`, immediately before its `PLUGIN_SOURCE=` line,
 	done
 ```
 
-Keep the copy loop, the `lost+found` skip and the `chmod -R u+w .` identical to Task 3.
+Keep the copy loop, the `lost+found` skip and the per-entry `chmod -R u+w "./$name"` identical to Task 3 — including the merge branch for a directory that already exists, which matters on a proxy too: `spawnery-config --flavor velocity` runs before this and a persistent group's second start finds its own directories in place.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
