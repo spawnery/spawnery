@@ -117,6 +117,41 @@ Found by reading, not by a failure: writing 7a's plan against the code showed
 the ordering, and the task that would have changed this was removed from the
 plan rather than left to fail.
 
+## A server is joinable before its plugins have finished
+
+Readiness is one server list ping. `cmd/spawnery-slp` performs it and turns
+the result into an exit code; `internal/podspec` wires it as the exec probe of
+the Paper image and passes nothing but host and port. A Minecraft server
+answers that ping as soon as its listener is up, which is before it has
+finished enabling plugins — measured 2026-09-04 on `hub-dvjk`, where
+`Starting Minecraft server on *:25565` and `Done (35.266s)` are twenty seconds
+apart.
+
+A plugin whose initialisation continues past that point leaves a window in
+which the server is Ready, the proxy will route a player to it, and the player
+is refused. ViaVersion is the one that shows it: it loads its protocol
+mappings on its own executor, and on two starts of the same group it finished
+once before `Done` and once after it. A client connecting inside that window
+meets the unmodified version check and is told
+
+```
+Outdated client! Please use 26.2
+```
+
+which is exactly wrong — the client is fine, the translation layer is not up
+yet. Waiting a few seconds and connecting again works.
+
+**The probe is not the thing to fix.** A server list ping is what a Minecraft
+server offers before anything else answers at all; asking it to mean "every
+plugin has finished" is asking the wrong party, and no timeout added to it
+would be more than a guess at how long somebody's plugin takes. What knows
+the answer is the server itself: the agent runs inside it and could report
+readiness when the server has finished enabling rather than when its socket
+opens. Whether that is worth the coupling has not been decided, and this entry
+does not decide it.
+
+Reported from play on the `paulwtf` installation and confirmed by reading two
+pod logs, not by a failing test.
 ## A corrected `configOverlay` is the one edit that cannot clear a latched group
 
 `spec.configOverlay` names a `ConfigMap`, and the operator renders it as a
