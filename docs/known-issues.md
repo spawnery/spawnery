@@ -152,3 +152,44 @@ does not decide it.
 
 Reported from play on the `paulwtf` installation and confirmed by reading two
 pod logs, not by a failing test.
+## A corrected `configOverlay` is the one edit that cannot clear a latched group
+
+`spec.configOverlay` names a `ConfigMap`, and the operator renders it as a
+volume without ever reading what is in it (`configOverlayVolume`,
+`internal/podspec/server.go:278`). That is deliberate — the merge happens in
+`spawnery-config` inside the image — and it has a consequence at the far end
+of the code. The overlay's content reaches neither `DesiredServerHash` nor
+`metadata.generation`.
+
+An overlay that names a property the CRD does not declare kills every server
+its group starts. After six rounds the group latches:
+
+```
+not retrying: 6 rounds of server starts failed in a row; change the group's
+spec to try again
+```
+
+Correcting the overlay is what removes the cause, and it is precisely the edit
+that cannot lift the latch. Only `group.Generation !=
+group.Status.ObservedGeneration` resets `status.consecutiveFailures`
+(`internal/controller/servergroup_controller.go:315`), and a `ConfigMap`'s
+content is not the group's generation. The group then sits `Degraded` with
+nothing left wrong with it, and the condition's own advice names the one thing
+whoever fixed it has correctly not touched.
+
+**The remedy costs nothing and is not discoverable from the message.** Any
+spec edit clears the streak, and `spec.attributes` is the one to reach for: it
+shapes no pod and is not in the hash a server is replaced on, so it moves the
+generation without replacing anything that is running.
+
+This is the sibling of the entry above it, from the other side. There, a
+capacity edit clears a streak it has not earned; here, the edit that has
+earned it clears nothing. Both follow from the same decision — that the streak
+belongs to a generation — and neither is worth undoing on its own.
+
+Measured 2026-09-04, on four ephemeral groups of one installation that stayed
+latched after their overlay was corrected. An `attributes` edit cleared all
+four and replaced no running server. Fixing it in the operator would mean
+giving the reset a second input — the overlay `ConfigMap`'s `resourceVersion`
+— which means watching an object the reconciler currently only names, for a
+case a one-line edit already answers.
