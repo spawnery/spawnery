@@ -946,3 +946,40 @@ func TestRetiringWinsOverAClosedDoor(t *testing.T) {
 		t.Errorf("got %+v, want a retiring server to be deregistered and stay retiring", got)
 	}
 }
+
+func TestTheGateDoesNotRegisterAServerWhoseDoorIsShut(t *testing.T) {
+	// A plugin that closes the door while starting must not see the server
+	// registered for one pass and deregistered on the next: those seconds are
+	// the window this exists to close.
+	in := Inputs{
+		PodExists: true, PodRunning: true, PodReady: true, AgentReady: true,
+		JoinsClosed: true,
+	}
+
+	got := Decide(Starting, in)
+
+	if got.Next != Ready {
+		t.Errorf("Next = %q, want %q: the server is ready, it is only closed",
+			got.Next, Ready)
+	}
+	if got.Register {
+		t.Error("Register = true, want false while the door is shut")
+	}
+	if got.Reason != ReasonJoinsClosed {
+		t.Errorf("Reason = %q, want %q so a reader can tell why nobody arrives",
+			got.Reason, ReasonJoinsClosed)
+	}
+}
+
+func TestTheGateRegistersWhenNobodyClosedTheDoor(t *testing.T) {
+	// The default matters more than the new branch: a network that never calls
+	// acceptJoins must decide exactly what it decided before.
+	in := Inputs{PodExists: true, PodRunning: true, PodReady: true, AgentReady: true}
+
+	got := Decide(Starting, in)
+
+	want := Decision{Next: Ready, Register: true, Reason: ReasonReadyGatePassed}
+	if got.Next != want.Next || !got.Register || got.Reason != want.Reason {
+		t.Errorf("Decide(Starting, open door) = %+v, want %+v", got, want)
+	}
+}
