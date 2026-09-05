@@ -245,7 +245,7 @@
           # claim into the working directory, and refuses a source carrying a
           # path the renderer or extraPlugins owns. That ships in the game
           # images and nowhere else.
-          imageVersion = "0.2.25";
+          imageVersion = "0.2.26";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
