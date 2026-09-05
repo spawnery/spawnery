@@ -245,7 +245,7 @@
           # claim into the working directory, and refuses a source carrying a
           # path the renderer or extraPlugins owns. That ships in the game
           # images and nowhere else.
-          imageVersion = "0.2.24";
+          imageVersion = "0.2.25";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -324,7 +324,7 @@
           # --allow-mount-volumes. An installation using one and not setting
           # the other gets Accepted=False with MountVolumesDisabled.
           # docs/upgrading.md carries the note.
-          operatorVersion = "0.2.24";
+          operatorVersion = "0.2.25";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
