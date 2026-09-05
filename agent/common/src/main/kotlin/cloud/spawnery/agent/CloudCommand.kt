@@ -7,6 +7,7 @@ import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType
 import com.mojang.brigadier.builder.LiteralArgumentBuilder
 import com.mojang.brigadier.builder.RequiredArgumentBuilder
+import com.mojang.brigadier.suggestion.SuggestionProvider
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
@@ -121,6 +122,10 @@ fun <S> cloudCommand(
                 .requires { adapter.hasPermission(it, PERMISSION_READ) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("name", StringArgumentType.word())
+                        // Both, because this branch answers about both, and a
+                        // completion that offered only one half would teach
+                        // people the other half is not allowed here.
+                        .suggests(suggesting { api.servers().map(ServerInfo::name) + api.groups().map(Group::name) })
                         .executes { ctx ->
                             val name = StringArgumentType.getString(ctx, "name")
                             val server = api.server(name)
@@ -158,6 +163,9 @@ fun <S> cloudCommand(
                 .requires { adapter.hasPermission(it, PERMISSION_RETIRE) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("name", StringArgumentType.word())
+                        // Servers only: a group is not a thing that retires,
+                        // and offering one here would be offering a refusal.
+                        .suggests(suggesting { api.servers().map(ServerInfo::name) })
                         .executes { ctx ->
                             val name = StringArgumentType.getString(ctx, "name")
                             val source = ctx.source
@@ -203,6 +211,7 @@ fun <S> cloudCommand(
                 .requires { adapter.hasPermission(it, PERMISSION_SCALE) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("group", StringArgumentType.word())
+                        .suggests(suggesting { api.groups().map(Group::name) })
                         // Without a count, and the default is one. A person
                         // typing `/cloud start lobby` in a hurry means "one
                         // more", and refusing them for a missing argument
@@ -246,6 +255,7 @@ fun <S> cloudCommand(
                 .requires { adapter.hasPermission(it, PERMISSION_SCALE) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("group", StringArgumentType.word())
+                        .suggests(suggesting { api.groups().map(Group::name) })
                         .executes { ctx ->
                             val name = group(ctx)
                             val source = ctx.source
@@ -453,6 +463,26 @@ private fun reason(failure: Throwable): String {
     }
     return cause.message ?: cause.javaClass.simpleName
 }
+
+/**
+ * Completion for one argument, out of the local mirror.
+ *
+ * The same memory `list` and `info` read, so a tab is a lookup and not a round
+ * trip -- a completion that went to the operator would stall a player's client
+ * whenever the stream was down, on a keystroke nobody asked to be blocking.
+ *
+ * Filtered against what is already typed, case-insensitively: Kubernetes names
+ * are lower case, but somebody who typed `Lob` meant `lobby` and getting
+ * nothing back reads as "there is no such group".
+ */
+private fun <S> suggesting(names: () -> List<String>): SuggestionProvider<S> =
+    SuggestionProvider { _, builder ->
+        val typed = builder.remaining.lowercase()
+        for (name in names()) {
+            if (name.lowercase().startsWith(typed)) builder.suggest(name)
+        }
+        builder.buildFuture()
+    }
 
 private fun describe(server: ServerInfo): String =
     Style.name(server.name()) + Style.quiet(" in ") + Style.name(server.group()) +
