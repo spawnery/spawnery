@@ -252,6 +252,8 @@ class AgentPlugin @Inject constructor(
         }
         val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis, format = mirror::feedFormat)
         this.feed = feed
+        // No ReadinessGate: a proxy has no readiness flag to hold, and
+        // holdReadiness refuses here rather than pretending. See ProxyState.
         val api = MirrorApi(mirror, self, connector, events)
         Spawnery.install(api)
         // Velocity takes the node whenever, so this sits next to the install

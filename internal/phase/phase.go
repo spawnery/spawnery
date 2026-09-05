@@ -567,6 +567,16 @@ func Decide(current Phase, in Inputs) Decision {
 
 	case Starting:
 		if in.PodExists && in.PodRunning && in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
+			// Registering a server that has already closed its door and
+			// deregistering it on the next pass is five seconds in which the
+			// proxies route to a server that asked for nobody. The Ready
+			// branch below registers it when the door opens.
+			if in.JoinsClosed {
+				return Decision{
+					Next:   Ready,
+					Reason: ReasonJoinsClosed, Message: "the server is not taking new players",
+				}
+			}
 			return Decision{
 				Next: Ready, Register: true,
 				Reason: ReasonReadyGatePassed, Message: "probe green and agent ready",

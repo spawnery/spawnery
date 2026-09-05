@@ -4,6 +4,7 @@ import cloud.spawnery.agent.CloudConnector
 import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.MirrorApi
+import cloud.spawnery.agent.ReadinessGate
 import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.api.ServerSelf
@@ -22,6 +23,7 @@ import cloud.spawnery.agent.pb.ServerMessage
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
+import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import org.bukkit.event.server.ServerLoadEvent
 import org.bukkit.plugin.java.JavaPlugin
@@ -41,6 +43,12 @@ import java.util.logging.Level
  */
 class AgentPlugin : JavaPlugin(), Listener {
     private val state = ServerState()
+
+    private val readiness = ReadinessGate {
+        if (state.markReady()) {
+            loop?.send(role.ready())
+        }
+    }
     private val mirror = NetworkMirror()
 
     /**
@@ -104,7 +112,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                     override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
                     override fun slots(): Int = state.slots
                 }
-                val api = MirrorApi(mirror, self, connector, events)
+                val api = MirrorApi(mirror, self, connector, events, readiness)
                 Spawnery.install(api)
                 // Registered inside the COMMANDS lifecycle event because that
                 // is the only window Paper accepts a Brigadier node in; a
@@ -243,13 +251,22 @@ class AgentPlugin : JavaPlugin(), Listener {
         }
     }
 
-    @EventHandler
+    // MONITOR so every other handler has run: a plugin holding readiness from
+    // its own ServerLoadEvent handler is ordered against this one by plugin
+    // registration order otherwise. The agent reads the finished startup and
+    // changes nothing about the event, which is what MONITOR is for.
+    @EventHandler(priority = EventPriority.MONITOR)
     fun onServerLoad(event: ServerLoadEvent) {
         if (event.type != ServerLoadEvent.LoadType.STARTUP) return
         state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
-        if (state.markReady()) {
-            loop?.send(role.ready())
+        // The operator cannot learn a hold's reason -- carrying it would be a
+        // proto field for one log line -- so this is the only place the name
+        // of a plugin that never finishes is written down.
+        val waiting = readiness.openReasons()
+        if (waiting.isNotEmpty()) {
+            logger.info("not ready yet, waiting for: ${waiting.joinToString(", ")}")
         }
+        readiness.serverLoaded()
     }
 
     private companion object {

@@ -186,6 +186,34 @@ public interface SpawneryApi {
     CompletionStage<Void> acceptJoins(boolean accept);
 
     /**
+     * Holds this server back from readiness until the returned hold is closed.
+     *
+     * <p>For a plugin whose initialisation continues after the server has
+     * finished enabling -- a mapping table loaded on its own executor, a
+     * database opened in the background. The agent reports readiness when the
+     * last hold is released <em>and</em> the server has finished enabling,
+     * whichever comes second, so a server that is not finished stays
+     * {@code Starting} rather than becoming {@code Ready} with nobody able to
+     * play on it.
+     *
+     * <p><b>It cannot lower a readiness already reported.</b> Readiness is a
+     * one-way latch; a hold taken after the agent has reported does nothing
+     * but log. To stop new players reaching a server that is already ready,
+     * use {@link #acceptJoins}, which is what that method is for.
+     *
+     * <p>A hold that is never released pins the server in {@code Starting}
+     * until the operator's startup deadline fails it. That is the intended
+     * outcome -- a plugin that never finishes starting is a broken server --
+     * and {@code reason} is what names it in the log.
+     *
+     * <p>Servers only. A proxy has no readiness of this kind and this throws
+     * {@link UnsupportedOperationException} there.
+     *
+     * @param reason what is being waited for, for the log. Required.
+     */
+    ReadinessHold holdReadiness(String reason);
+
+    /**
      * Publishes what this server is doing, for every other server to read.
      *
      * <p><b>The cloud carries this and never reads it.</b> Nothing the

@@ -23,6 +23,15 @@ operator.
 ## Global Constraints
 
 - Every command runs inside the Nix dev shell: prefix with `nix develop -c`.
+- **There is no `./gradlew`.** The agent has no wrapper, and the `gradle` in
+  the dev shell cannot resolve Mojang's brigadier -- `nix build .#agents`
+  supplies those through `agent/deps.json` and a mitmCache. So every agent
+  suite runs through `nix develop -c make agent`, which builds both plugins
+  and runs every JUnit suite. `:api` is the exception: it depends on nothing
+  but JUnit, so `cd agent && nix develop .. -c gradle :api:test` works and is
+  seconds rather than minutes.
+- A failing Nix build prints a store path. `nix-store -l <path>` is the full
+  log, and the only place the test names appear.
 - **Nix builds read the git index, not the working tree.** `git add` every new
   file before `make agent` or any image build. The symptom of forgetting is a
   compile error naming a symbol that is plainly in the file.
@@ -190,40 +199,52 @@ before the agent's. Today the agent's is a bare `@EventHandler`, which is
 
 Create `agent/paper/src/test/kotlin/cloud/spawnery/agent/paper/AgentPriorityTest.kt`:
 
+Read the source, not the annotation: loading `AgentPlugin` pulls in Paper's
+API, which is compiled for a newer Java than the test JVM runs, and the class
+throws `UnsupportedClassVersionError` before any assertion. The repository
+already checks cross-language constants by reading source.
+
 ```kotlin
 package cloud.spawnery.agent.paper
 
-import org.bukkit.event.EventHandler
-import org.bukkit.event.EventPriority
-import org.bukkit.event.server.ServerLoadEvent
-import org.junit.jupiter.api.Assertions.assertEquals
+import java.nio.file.Path
+import kotlin.io.path.readText
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
+/**
+ * Read from the source rather than from the annotation: loading AgentPlugin
+ * pulls in Paper's API, which is compiled for a newer Java than this test JVM,
+ * and the class cannot be loaded here at all.
+ */
 class AgentPriorityTest {
     @Test
     fun `the agent reads the load event after every other handler`() {
-        val handler = AgentPlugin::class.java
-            .getDeclaredMethod("onServerLoad", ServerLoadEvent::class.java)
-            .getAnnotation(EventHandler::class.java)
+        val source = Path.of("src/main/kotlin/cloud/spawnery/agent/paper/AgentPlugin.kt").readText()
 
-        assertEquals(
-            EventPriority.MONITOR,
-            handler.priority,
+        assertTrue(
+            source.contains(
+                "@EventHandler(priority = EventPriority.MONITOR)\n    fun onServerLoad(",
+            ),
             "a plugin that holds readiness from its own ServerLoadEvent handler " +
-                "must have spoken before the agent decides; on NORMAL that is " +
-                "plugin registration order",
+                "must have spoken before the agent decides; on a bare @EventHandler " +
+                "that is plugin registration order",
         )
     }
 }
 ```
 
+The working directory of a Gradle test is its project directory, which is what
+`PackagingInvariantTest` already relies on.
+
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-nix develop -c bash -c 'cd agent && ./gradlew :paper:test --tests "*AgentPriorityTest*"'
+nix develop -c make agent
 ```
 
-Expected: FAIL, `expected: <MONITOR> but was: <NORMAL>`.
+Expected: FAIL. The store path in the error leads to the log; the line is
+`AgentPriorityTest > the agent reads the load event after every other handler() FAILED`.
 
 - [ ] **Step 3: Write the implementation**
 
@@ -248,7 +269,7 @@ import org.bukkit.event.EventPriority
 - [ ] **Step 4: Run it to verify it passes**
 
 ```bash
-nix develop -c bash -c 'cd agent && ./gradlew :paper:test'
+nix develop -c make agent
 ```
 
 Expected: PASS, the whole Paper suite.
@@ -331,7 +352,7 @@ class ReadinessHoldTest {
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-nix develop -c bash -c 'cd agent && ./gradlew :api:test'
+cd agent && nix develop .. -c gradle :api:test --rerun-tasks
 ```
 
 Expected: FAIL to compile — `cannot find symbol: class ReadinessHold`.
@@ -431,7 +452,7 @@ already there.
 - [ ] **Step 6: Run the api suite to verify it passes**
 
 ```bash
-nix develop -c bash -c 'cd agent && ./gradlew :api:test'
+cd agent && nix develop .. -c gradle :api:test --rerun-tasks
 ```
 
 Expected: PASS, including `PackagingInvariantTest`, which walks the compiled
@@ -576,7 +597,7 @@ class ReadinessGateTest {
 - [ ] **Step 2: Run it to verify it fails**
 
 ```bash
-nix develop -c bash -c 'cd agent && ./gradlew :common:test --tests "*ReadinessGateTest*"'
+nix develop -c make agent
 ```
 
 Expected: FAIL to compile — `unresolved reference: ReadinessGate`.
@@ -650,7 +671,7 @@ class ReadinessGate(private val onOpen: () -> Unit) {
 - [ ] **Step 4: Run the gate test to verify it passes**
 
 ```bash
-nix develop -c bash -c 'cd agent && ./gradlew :common:test --tests "*ReadinessGateTest*"'
+nix develop -c make agent
 ```
 
 Expected: PASS, all eight.
@@ -688,7 +709,7 @@ not already there.
 - [ ] **Step 6: Run it to verify it fails**
 
 ```bash
-nix develop -c bash -c 'cd agent && ./gradlew :common:test --tests "*MirrorApiTest*"'
+nix develop -c make agent
 ```
 
 Expected: FAIL to compile — `MirrorApi` takes four arguments and has no
@@ -724,7 +745,7 @@ imports.
 - [ ] **Step 8: Run the common suite to verify it passes**
 
 ```bash
-nix develop -c bash -c 'cd agent && ./gradlew :common:test'
+nix develop -c make agent
 ```
 
 Expected: PASS. The seventeen existing `MirrorApi(...)` call sites compile
@@ -815,7 +836,9 @@ handing back a hold that holds nothing."
 ### Task 5: The version, the known issue, and the tree
 
 **Files:**
-- Modify: `flake.nix:248`
+- Modify: `flake.nix:248` and `flake.nix:327`
+- Modify: `charts/spawnery/{Chart.yaml,values.yaml,README.md}`
+- Modify: `README.md`
 - Modify: `docs/known-issues.md`
 
 **Interfaces:**
@@ -838,6 +861,15 @@ moves. `operatorVersion` moves too — `internal/phase` changed.
           operatorVersion = "0.2.25";
 ```
 
+**`operatorVersion` drags the chart with it**, and four source-reading tests
+in `internal/rbacaudit` fail until it does. All of these move to `0.2.25`:
+
+- `charts/spawnery/Chart.yaml` `appVersion` — tracks the operator, with a
+  paragraph above it saying what this release changed
+- `charts/spawnery/Chart.yaml` `version` — moves whenever `charts/` does
+- `charts/spawnery/values.yaml` `image.tag`
+- the `--version` in **both** `README.md` and `charts/spawnery/README.md`
+
 - [ ] **Step 2: Delete the known-issues entry**
 
 `docs/known-issues.md` holds only open problems. Remove the whole section
@@ -859,7 +891,7 @@ and `git status` stays clean.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add flake.nix docs/known-issues.md
+git add flake.nix charts/ README.md docs/known-issues.md
 git commit -m "chore: 0.2.25, a server holds itself back while a plugin starts
 
 imageVersion because agent/ changed -- it is agentVersion for Gradle too, so
