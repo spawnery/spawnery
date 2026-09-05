@@ -46,8 +46,9 @@ fun coalesce(events: List<CloudEvent>): List<String> {
 
     for (w in warnings) {
         // A warning is the one line in this feed somebody has to see, so it
-        // is the one that is red rather than merely prefixed.
-        lines += "${Style.name(w.subject)}${Style.quiet(": ")}${Style.bad(w.message)}"
+        // is the one that is red rather than merely prefixed. The sign is
+        // added to that and does not replace it.
+        lines += "$WARNING ${Style.name(w.subject)}${Style.quiet(": ")}${Style.bad(w.message)}"
     }
 
     // LinkedHashMap, so the order events arrived is the order they are read.
@@ -65,14 +66,33 @@ fun coalesce(events: List<CloudEvent>): List<String> {
             // One event keeps its sentence. A count of one is not a summary,
             // and "1 ReadyGatePassed in lobby (lobby-a)" says less than the
             // operator already said.
-            lines += "${Style.name(only.subject)}${Style.quiet(": ")}${Style.quiet(only.message)}"
+            lines += "${sign(kind)} ${Style.name(only.subject)}${Style.quiet(": ")}" +
+                Style.quiet(only.message)
             continue
         }
         val shown = collapsed.take(NAMES_SHOWN).joinToString(Style.quiet(", ")) { Style.name(it.subject) }
         val rest = collapsed.size - minOf(collapsed.size, NAMES_SHOWN)
         val names = if (rest > 0) shown + Style.quiet(" and $rest more") else shown
-        lines += "${Style.number(collapsed.size)} ${Style.good(kind)}" +
+        // The kind is no longer green. It was green for every kind, which
+        // said "something happened" and read as good news above a line about
+        // three servers terminating -- and next to the sign it would now
+        // contradict it outright.
+        lines += "${sign(kind)} ${Style.number(collapsed.size)} ${Style.number(kind)}" +
             "${Style.quiet(" in ")}${Style.name(groupName)}${Style.quiet(" (")}$names${Style.quiet(")")}"
     }
     return lines
 }
+
+/**
+ * The sign a line opens with, by what the kind did to the network.
+ *
+ * A neutral event gets one too, dim: without it the column jumps and the signs
+ * stop lining up, which is most of what makes them readable at a glance.
+ */
+private fun sign(kind: String): String = when (direction(kind)) {
+    Direction.ADDED -> Style.marker("+", "green")
+    Direction.REMOVED -> Style.marker("-", "gold")
+    Direction.NEUTRAL -> Style.marker("\u00b7", "dark_gray")
+}
+
+private val WARNING = Style.marker("!", "red")

@@ -551,3 +551,79 @@ class CloudCommandTest {
         assertTrue(sent.isEmpty(), "a source without the read permission was told something: $sent")
     }
 }
+
+class CloudCompletionTest {
+    private val adapter = object : SourceAdapter<Int> {
+        override fun hasPermission(source: Int, permission: String): Boolean = true
+        override fun send(source: Int, message: String) = Unit
+        override fun playerId(source: Int): UUID? = null
+    }
+
+    private fun api(): SpawneryApi = MirrorApi(
+        NetworkMirror().also {
+            it.apply(
+                NetworkState.newBuilder()
+                    .addGroups(
+                        GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL),
+                    )
+                    .addGroups(
+                        GroupState.newBuilder().setName("bingo").setKind(GroupState.Kind.EPHEMERAL),
+                    )
+                    .addServers(
+                        ServerState.newBuilder().setName("lobby-a").setGroup("lobby").setPhase("Ready"),
+                    )
+                    .addServers(
+                        ServerState.newBuilder().setName("bingo-x").setGroup("bingo").setPhase("Ready"),
+                    )
+                    .build(),
+            )
+        },
+        object : ProxySelf {
+            override fun name(): String = "gateway-0"
+            override fun group(): String = "gateway"
+            override fun network(): String = "production"
+        },
+        CloudConnector(Requests(timeoutMillis = 1_000, clock = System::currentTimeMillis)) { },
+        CloudEvents(),
+    )
+
+    private fun completions(command: String): List<String> {
+        val dispatcher = CommandDispatcher<Int>()
+        dispatcher.register(cloudCommand(api(), adapter, FeedState(), { Feed.MESSAGE_TOKEN }))
+        return dispatcher.getCompletionSuggestions(dispatcher.parse(command, 0)).join().list.map { it.text }
+    }
+
+    @Test
+    fun `info offers servers and groups alike`() {
+        assertEquals(listOf("bingo", "bingo-x", "lobby", "lobby-a"), completions("cloud info ").sorted())
+    }
+
+    @Test
+    fun `retire offers servers and no group`() {
+        // A group is not a thing that retires, so offering one would be
+        // offering a refusal.
+        val offered = completions("cloud retire ")
+        assertEquals(listOf("bingo-x", "lobby-a"), offered.sorted())
+    }
+
+    @Test
+    fun `start and stop offer groups and no server`() {
+        assertEquals(listOf("bingo", "lobby"), completions("cloud start ").sorted())
+        assertEquals(listOf("bingo", "lobby"), completions("cloud stop ").sorted())
+    }
+
+    @Test
+    fun `what is already typed narrows the list`() {
+        assertEquals(listOf("lobby", "lobby-a"), completions("cloud info lob").sorted())
+    }
+
+    @Test
+    fun `case is ignored, because a name that came back empty reads as absent`() {
+        assertEquals(listOf("lobby", "lobby-a"), completions("cloud info LOB").sorted())
+    }
+
+    @Test
+    fun `a name nothing matches offers nothing rather than everything`() {
+        assertEquals(emptyList(), completions("cloud info zzz"))
+    }
+}

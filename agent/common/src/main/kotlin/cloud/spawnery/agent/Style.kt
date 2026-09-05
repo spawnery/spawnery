@@ -37,6 +37,18 @@ internal object Style {
     fun number(value: Any): String = "<white>${escape(value.toString())}</white>"
 
     /**
+     * The bracketed sign that opens every feed line.
+     *
+     * The brackets take the prefix's own `dark_gray`, so the sign sits in the
+     * line the way `|` does and the column reads as part of the frame rather
+     * than as four different decorations. Only the sign carries colour;
+     * colouring the sentence behind it would leave nothing for a warning to be
+     * louder than.
+     */
+    fun marker(sign: String, colour: String): String =
+        "<dark_gray>[</dark_gray><$colour>${escape(sign)}</$colour><dark_gray>]</dark_gray>"
+
+    /**
      * Plain text that must not be read as markup.
      *
      * Every value this file interpolates goes through it. Server and group
