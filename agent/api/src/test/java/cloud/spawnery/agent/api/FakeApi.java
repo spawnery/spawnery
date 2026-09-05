@@ -16,6 +16,7 @@ limitations under the License.
 
 package cloud.spawnery.agent.api;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.time.Duration;
@@ -70,6 +71,29 @@ final class FakeApi implements SpawneryApi {
     @Override
     public CompletionStage<Void> announce(String state, Map<String, String> attributes) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    private final List<String> held = new ArrayList<>();
+
+    @Override
+    public ReadinessHold holdReadiness(String reason) {
+        held.add(reason);
+        return new ReadinessHold() {
+            private boolean released;
+
+            @Override
+            public void close() {
+                if (!released) {
+                    released = true;
+                    held.remove(reason);
+                }
+            }
+        };
+    }
+
+    /** The reasons of the holds still open. For tests of this package. */
+    List<String> heldReasons() {
+        return List.copyOf(held);
     }
 
     // A bus nobody publishes to, which is what every test here wants: the
