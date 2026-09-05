@@ -144,11 +144,23 @@ yet. Waiting a few seconds and connecting again works.
 **The probe is not the thing to fix.** A server list ping is what a Minecraft
 server offers before anything else answers at all; asking it to mean "every
 plugin has finished" is asking the wrong party, and no timeout added to it
-would be more than a guess at how long somebody's plugin takes. What knows
-the answer is the server itself: the agent runs inside it and could report
-readiness when the server has finished enabling rather than when its socket
-opens. Whether that is worth the coupling has not been decided, and this entry
-does not decide it.
+would be more than a guess at how long somebody's plugin takes.
+
+**Correction, 2026-09-05.** This entry proposed that the agent report
+readiness at the end of enabling rather than at the open socket. It already
+does: the gate wants `PodReady` and `AgentReady` both (`phase.go:569`), and
+the Paper agent raises the second from `ServerLoadEvent(STARTUP)`
+(`AgentPlugin.kt:247`), which Bukkit fires with the `Done` line. Measured on
+`hub-gakt`: `Done (48.914s)` at 10:26:10, the `Server` object `Ready` at
+10:26:12, the socket open since 10:25:43.
+
+What remains is the narrower window this entry described second: a plugin
+whose initialisation continues on its own executor past `ServerLoadEvent`.
+Nobody outside that plugin knows when it is finished, so the operator cannot
+close the window by observing harder. The design for letting the plugin say
+so is `docs/superpowers/specs/2026-09-05-readiness-holds-design.md`; it also
+records a defect found while writing it, that a server which closed its door
+during startup is registered anyway for one pass.
 
 Reported from play on the `paulwtf` installation and confirmed by reading two
 pod logs, not by a failing test.
