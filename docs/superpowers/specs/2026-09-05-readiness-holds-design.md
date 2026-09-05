@@ -129,8 +129,13 @@ A plugin that never releases its hold pins the server in `Starting`. The
 operator fails it at `-startup-deadline`, five minutes by default
 (`main.go:289`), with `ReasonStartupTimeout`. That is the right outcome: a
 plugin that never finishes starting is a broken server, and it is reported as
-one rather than silently taking players. The reason string of each open hold
-belongs in that message, so the log names the plugin instead of the symptom.
+one rather than silently taking players.
+
+The operator's message cannot name the hold, because the operator never learns
+its reason -- carrying it would be a proto field spent on one log line. The
+agent writes it instead, once, when the server has finished enabling and holds
+are still open. That is the moment a reader needs it, and it names the plugin
+rather than the symptom.
 
 ### Only servers
 
