@@ -4,6 +4,7 @@ import cloud.spawnery.agent.api.CloudPlayer
 import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
+import cloud.spawnery.agent.api.ReadinessHold
 import cloud.spawnery.agent.api.EventBus
 import cloud.spawnery.agent.api.Self
 import cloud.spawnery.agent.api.Target
@@ -49,6 +50,11 @@ class MirrorApi(
      * happen to match.
      */
     private val events: CloudEvents,
+    /**
+     * Null on a proxy, which has no readiness of this kind -- see ProxyState.
+     * Defaulted so the many call sites that do not care stay as they are.
+     */
+    private val readiness: ReadinessGate? = null,
 ) : SpawneryApi {
     override fun self(): Self = self
 
@@ -83,6 +89,13 @@ class MirrorApi(
 
     override fun acceptJoins(accept: Boolean): CompletionStage<Void> =
         connector.acceptJoins(accept)
+
+    override fun holdReadiness(reason: String): ReadinessHold {
+        val gate = readiness ?: throw UnsupportedOperationException(
+            "this is a proxy; a proxy has no readiness to hold",
+        )
+        return gate.hold(reason)
+    }
 
     override fun stopBoosts(group: String): CompletionStage<Int> =
         connector.stopBoosts(group)

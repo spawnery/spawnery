@@ -12,6 +12,7 @@ import cloud.spawnery.agent.pb.ServerState
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -175,6 +176,28 @@ class MirrorApiTest {
         assertEquals(2, requested.size)
         assertEquals(requested[0].acceptJoins, requested[1].acceptJoins)
         assertEquals(false, requested[0].acceptJoins.accept)
+    }
+
+    @Test
+    fun `holdReadiness reaches the gate on a server`() {
+        val gate = ReadinessGate {}
+        val api = MirrorApi(
+            NetworkMirror(), serverSelf(), connector(), CloudEvents(), gate,
+        )
+
+        api.holdReadiness("mappings")
+
+        assertEquals(listOf("mappings"), gate.openReasons())
+    }
+
+    @Test
+    fun `holdReadiness refuses on a proxy`() {
+        // Unlike acceptJoins, which the operator refuses: this one never
+        // leaves the process, so there is no stage to fail and nothing but a
+        // throw would tell the caller it held nothing.
+        val api = MirrorApi(NetworkMirror(), proxySelf(), connector(), CloudEvents())
+
+        assertFailsWith<UnsupportedOperationException> { api.holdReadiness("mappings") }
     }
 
     @Test
