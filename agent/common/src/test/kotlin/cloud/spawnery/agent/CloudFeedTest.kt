@@ -157,3 +157,68 @@ class CloudFeedTest {
         }
     }
 }
+
+class CloudFeedSignTest {
+    private fun line(kind: String, warning: Boolean = false): String =
+        coalesce(listOf(event(kind, "lobby-a3f9", "lobby", warning))).single()
+
+    @Test
+    fun `an arrival opens with a green plus`() {
+        assertTrue(line("ReadyGatePassed").startsWith("<dark_gray>[</dark_gray><green>+</green>"), line("ReadyGatePassed"))
+    }
+
+    @Test
+    fun `a departure opens with a gold minus`() {
+        assertTrue(line("Retiring").startsWith("<dark_gray>[</dark_gray><gold>-</gold>"), line("Retiring"))
+    }
+
+    @Test
+    fun `a warning opens with a red bang and keeps its red sentence`() {
+        val warned = line("StartupTimeout", warning = true)
+        assertTrue(warned.startsWith("<dark_gray>[</dark_gray><red>!</red>"), warned)
+        // The sign is added to the red sentence, not a replacement for it.
+        assertTrue(warned.contains("<red>lobby-a3f9: StartupTimeout</red>"), warned)
+    }
+
+    @Test
+    fun `a neutral event still occupies the column`() {
+        // Without a sign of its own the column jumps, and a column that jumps
+        // is most of what makes the others hard to read.
+        val neutral = line("PodPending")
+        assertTrue(neutral.startsWith("<dark_gray>[</dark_gray><dark_gray>·</dark_gray>"), neutral)
+    }
+
+    @Test
+    fun `a collapsed line takes the sign of its kind`() {
+        val lines = coalesce(
+            listOf(
+                event("Terminating", "lobby-a3f9", "lobby"),
+                event("Terminating", "lobby-b71c", "lobby"),
+            ),
+        )
+
+        assertTrue(lines.single().startsWith("<dark_gray>[</dark_gray><gold>-</gold>"), lines.single())
+    }
+
+    @Test
+    fun `the kind is no longer green in a collapsed line`() {
+        // It used to be green for every kind, which read as good news above a
+        // line about servers terminating.
+        val lines = coalesce(
+            listOf(
+                event("Terminating", "lobby-a3f9", "lobby"),
+                event("Terminating", "lobby-b71c", "lobby"),
+            ),
+        )
+
+        assertTrue(!lines.single().contains("<green>Terminating"), lines.single())
+    }
+
+    @Test
+    fun `the sentence a person reads is unchanged by the sign`() {
+        // plain() takes the markup back out, so this asserts the wording did
+        // not quietly gain a character it has to carry forever.
+        val text = plain(line("ReadyGatePassed"))
+        assertEquals("[+] lobby-a3f9: lobby-a3f9: ReadyGatePassed", text)
+    }
+}
