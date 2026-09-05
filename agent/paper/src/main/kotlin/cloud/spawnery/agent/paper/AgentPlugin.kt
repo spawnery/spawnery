@@ -22,6 +22,7 @@ import cloud.spawnery.agent.pb.ServerMessage
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
+import org.bukkit.event.EventPriority
 import org.bukkit.event.Listener
 import org.bukkit.event.server.ServerLoadEvent
 import org.bukkit.plugin.java.JavaPlugin
@@ -243,7 +244,11 @@ class AgentPlugin : JavaPlugin(), Listener {
         }
     }
 
-    @EventHandler
+    // MONITOR so every other handler has run: a plugin holding readiness from
+    // its own ServerLoadEvent handler is ordered against this one by plugin
+    // registration order otherwise. The agent reads the finished startup and
+    // changes nothing about the event, which is what MONITOR is for.
+    @EventHandler(priority = EventPriority.MONITOR)
     fun onServerLoad(event: ServerLoadEvent) {
         if (event.type != ServerLoadEvent.LoadType.STARTUP) return
         state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
