@@ -152,8 +152,9 @@ const (
 	ReasonRetentionElapsed      = "RetentionElapsed"
 	ReasonTerminating           = "Terminating"
 	ReasonUnknownPhase          = "UnknownPhase"
-	// ReasonRoundFinished marks a server whose round ended and whose pod then
-	// stopped.
+	// ReasonRoundFinished marks the round's end, not the pod's: a Ready server
+	// carries it on deregistering while still running, and only later, once
+	// the pod itself stops, does the same reason carry it into Finished.
 	ReasonRoundFinished = "RoundFinished"
 	// ReasonFinishedRetentionElapsed marks a finished server that has been
 	// kept long enough.
