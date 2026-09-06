@@ -877,3 +877,10 @@ because its one server fixture was a persistent group -- the type whose restart
 policy did not change. It now pins an ephemeral fixture as well, so the next
 change to the ephemeral-only half of the render fails on the pull request that
 makes it.
+
+**It also spends the failure budget faster.** An ephemeral pod no longer gets
+the three in-place container restarts that had to pass before the operator
+called it crash-looping, so a transient JVM crash is a `Failed` server at once
+rather than a minute or two later, and the six consecutive failures that latch
+a group into giving up -- which only a spec edit clears -- are reached roughly
+four times sooner on a broken image.
