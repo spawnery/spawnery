@@ -2559,7 +2559,23 @@ type ServerState struct {
 	// so: what is promised is that two equal values mean the same run and two
 	// different ones mean different runs. Empty for a server whose pod the
 	// operator has not seen yet, which is a server nobody is being sent to.
-	Incarnation   string `protobuf:"bytes,9,opt,name=incarnation,proto3" json:"incarnation,omitempty"`
+	Incarnation string `protobuf:"bytes,9,opt,name=incarnation,proto3" json:"incarnation,omitempty"`
+	// Which of its group's servers this is, counted the way a person counts:
+	// the second hub is 2. Stable for as long as the server exists, and given
+	// out again only after it is gone -- two servers that were both "Hub-2" at
+	// different times are told apart by incarnation, not by this.
+	//
+	// 0 means nobody numbered this server: every server that was already
+	// running when this field arrived, and the ordinal-zero server of a
+	// persistent group. A reader showing this to a player falls back to the
+	// name it already has for those.
+	//
+	// A persistent server reports its ordinal here, so its number agrees with
+	// the name it already carries. That is why these start at 0 where an
+	// ephemeral group's start at 1, and why one persistent server per group is
+	// indistinguishable from an unnumbered one. It costs nothing: that server
+	// is referred to by the name that names its world.
+	Number        int32 `protobuf:"varint,10,opt,name=number,proto3" json:"number,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2655,6 +2671,13 @@ func (x *ServerState) GetIncarnation() string {
 		return x.Incarnation
 	}
 	return ""
+}
+
+func (x *ServerState) GetNumber() int32 {
+	if x != nil {
+		return x.Number
+	}
+	return 0
 }
 
 type ProxyMessage struct {
@@ -3586,7 +3609,7 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\tEPHEMERAL\x10\x01\x12\x0e\n" +
 	"\n" +
 	"PERSISTENT\x10\x02\x12\t\n" +
-	"\x05PROXY\x10\x03\"\xea\x02\n" +
+	"\x05PROXY\x10\x03\"\x82\x03\n" +
 	"\vServerState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05group\x18\x02 \x01(\tR\x05group\x12\x14\n" +
@@ -3600,7 +3623,9 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\n" +
 	"attributes\x18\b \x03(\v24.spawnery.agent.v1alpha1.ServerState.AttributesEntryR\n" +
 	"attributes\x12 \n" +
-	"\vincarnation\x18\t \x01(\tR\vincarnation\x1a=\n" +
+	"\vincarnation\x18\t \x01(\tR\vincarnation\x12\x16\n" +
+	"\x06number\x18\n" +
+	" \x01(\x05R\x06number\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x82\x05\n" +

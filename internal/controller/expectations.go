@@ -44,6 +44,11 @@ const (
 type expectation struct {
 	kind    expectationKind
 	expires time.Time
+	// number is the server number this create reserved, or 0 for a
+	// reservation that reserved no number: a proxy pod, or a persistent
+	// server, whose number is its ordinal and comes from the sizing rule
+	// rather than from the free-number search.
+	number int32
 }
 
 // expectations reserves the creates, deletes and retirements a reconcile has
@@ -81,23 +86,24 @@ func newExpectations(now func() time.Time) *expectations {
 	return &expectations{now: now, byGroup: make(map[string]map[string]expectation)}
 }
 
-// expectCreated records a Server this reconciler has just created.
-func (e *expectations) expectCreated(group, name string) {
-	e.record(group, name, expectationCreate)
+// expectCreated records a Server this reconciler has just created, and the
+// number it was given. Pass 0 where no number was assigned.
+func (e *expectations) expectCreated(group, name string, number int32) {
+	e.record(group, name, expectationCreate, number)
 }
 
 // expectDeleted records a Server whose removal this reconciler has just asked
 // for.
 func (e *expectations) expectDeleted(group, name string) {
-	e.record(group, name, expectationDelete)
+	e.record(group, name, expectationDelete, 0)
 }
 
 // expectRetired records a Server this reconciler has just asked to retire.
 func (e *expectations) expectRetired(group, name string) {
-	e.record(group, name, expectationRetire)
+	e.record(group, name, expectationRetire, 0)
 }
 
-func (e *expectations) record(group, name string, kind expectationKind) {
+func (e *expectations) record(group, name string, kind expectationKind, number int32) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -106,7 +112,7 @@ func (e *expectations) record(group, name string, kind expectationKind) {
 		m = make(map[string]expectation)
 		e.byGroup[group] = m
 	}
-	m[name] = expectation{kind: kind, expires: e.now().Add(expectationTTL)}
+	m[name] = expectation{kind: kind, expires: e.now().Add(expectationTTL), number: number}
 }
 
 // observe drops every reservation the cache has caught up with, and every one
@@ -237,6 +243,24 @@ func (e *expectations) pending(group string) (map[string]bool, map[string]bool, 
 		}
 	}
 	return creates, deletes, retires
+}
+
+// pendingNumbers is the set of server numbers reserved by creates this
+// reconciler has issued and the cache has not shown yet.
+//
+// Beside pending rather than a fourth return value from it: one caller wants
+// this and every other caller would have to name and discard it.
+func (e *expectations) pendingNumbers(group string) map[int32]bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	numbers := make(map[int32]bool)
+	for _, exp := range e.byGroup[group] {
+		if exp.kind == expectationCreate && exp.number > 0 {
+			numbers[exp.number] = true
+		}
+	}
+	return numbers
 }
 
 // forget drops a group entirely, so the map does not grow with every group

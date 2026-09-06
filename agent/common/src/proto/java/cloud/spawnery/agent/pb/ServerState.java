@@ -442,6 +442,35 @@ java.lang.String defaultValue) {
     }
   }
 
+  public static final int NUMBER_FIELD_NUMBER = 10;
+  private int number_ = 0;
+  /**
+   * <pre>
+   * Which of its group's servers this is, counted the way a person counts:
+   * the second hub is 2. Stable for as long as the server exists, and given
+   * out again only after it is gone -- two servers that were both "Hub-2" at
+   * different times are told apart by incarnation, not by this.
+   *
+   * 0 means nobody numbered this server: every server that was already
+   * running when this field arrived, and the ordinal-zero server of a
+   * persistent group. A reader showing this to a player falls back to the
+   * name it already has for those.
+   *
+   * A persistent server reports its ordinal here, so its number agrees with
+   * the name it already carries. That is why these start at 0 where an
+   * ephemeral group's start at 1, and why one persistent server per group is
+   * indistinguishable from an unnumbered one. It costs nothing: that server
+   * is referred to by the name that names its world.
+   * </pre>
+   *
+   * <code>int32 number = 10;</code>
+   * @return The number.
+   */
+  @java.lang.Override
+  public int getNumber() {
+    return number_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -486,6 +515,9 @@ java.lang.String defaultValue) {
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(incarnation_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 9, incarnation_);
     }
+    if (number_ != 0) {
+      output.writeInt32(10, number_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -526,6 +558,10 @@ java.lang.String defaultValue) {
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(incarnation_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(9, incarnation_);
+    }
+    if (number_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(10, number_);
     }
     return size;
   }
@@ -569,6 +605,8 @@ java.lang.String defaultValue) {
         other.internalGetAttributes())) return false;
     if (!getIncarnation()
         .equals(other.getIncarnation())) return false;
+    if (getNumber()
+        != other.getNumber()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -601,6 +639,8 @@ java.lang.String defaultValue) {
     }
     hash = (37 * hash) + INCARNATION_FIELD_NUMBER;
     hash = (53 * hash) + getIncarnation().hashCode();
+    hash = (37 * hash) + NUMBER_FIELD_NUMBER;
+    hash = (53 * hash) + getNumber();
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -767,6 +807,7 @@ java.lang.String defaultValue) {
       state_ = "";
       internalGetMutableAttributes().clear();
       incarnation_ = "";
+      number_ = 0;
       return this;
     }
 
@@ -828,6 +869,9 @@ java.lang.String defaultValue) {
       if (((from_bitField0_ & 0x00000100) != 0)) {
         result.incarnation_ = incarnation_;
       }
+      if (((from_bitField0_ & 0x00000200) != 0)) {
+        result.number_ = number_;
+      }
     }
 
     @java.lang.Override
@@ -878,6 +922,9 @@ java.lang.String defaultValue) {
         incarnation_ = other.incarnation_;
         bitField0_ |= 0x00000100;
         onChanged();
+      }
+      if (other.getNumber() != 0) {
+        setNumber(other.getNumber());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -954,6 +1001,11 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00000100;
               break;
             } // case 74
+            case 80: {
+              number_ = input.readInt32();
+              bitField0_ |= 0x00000200;
+              break;
+            } // case 80
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1718,6 +1770,92 @@ java.lang.String defaultValue) {
       checkByteStringIsUtf8(value);
       incarnation_ = value;
       bitField0_ |= 0x00000100;
+      onChanged();
+      return this;
+    }
+
+    private int number_ ;
+    /**
+     * <pre>
+     * Which of its group's servers this is, counted the way a person counts:
+     * the second hub is 2. Stable for as long as the server exists, and given
+     * out again only after it is gone -- two servers that were both "Hub-2" at
+     * different times are told apart by incarnation, not by this.
+     *
+     * 0 means nobody numbered this server: every server that was already
+     * running when this field arrived, and the ordinal-zero server of a
+     * persistent group. A reader showing this to a player falls back to the
+     * name it already has for those.
+     *
+     * A persistent server reports its ordinal here, so its number agrees with
+     * the name it already carries. That is why these start at 0 where an
+     * ephemeral group's start at 1, and why one persistent server per group is
+     * indistinguishable from an unnumbered one. It costs nothing: that server
+     * is referred to by the name that names its world.
+     * </pre>
+     *
+     * <code>int32 number = 10;</code>
+     * @return The number.
+     */
+    @java.lang.Override
+    public int getNumber() {
+      return number_;
+    }
+    /**
+     * <pre>
+     * Which of its group's servers this is, counted the way a person counts:
+     * the second hub is 2. Stable for as long as the server exists, and given
+     * out again only after it is gone -- two servers that were both "Hub-2" at
+     * different times are told apart by incarnation, not by this.
+     *
+     * 0 means nobody numbered this server: every server that was already
+     * running when this field arrived, and the ordinal-zero server of a
+     * persistent group. A reader showing this to a player falls back to the
+     * name it already has for those.
+     *
+     * A persistent server reports its ordinal here, so its number agrees with
+     * the name it already carries. That is why these start at 0 where an
+     * ephemeral group's start at 1, and why one persistent server per group is
+     * indistinguishable from an unnumbered one. It costs nothing: that server
+     * is referred to by the name that names its world.
+     * </pre>
+     *
+     * <code>int32 number = 10;</code>
+     * @param value The number to set.
+     * @return This builder for chaining.
+     */
+    public Builder setNumber(int value) {
+
+      number_ = value;
+      bitField0_ |= 0x00000200;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Which of its group's servers this is, counted the way a person counts:
+     * the second hub is 2. Stable for as long as the server exists, and given
+     * out again only after it is gone -- two servers that were both "Hub-2" at
+     * different times are told apart by incarnation, not by this.
+     *
+     * 0 means nobody numbered this server: every server that was already
+     * running when this field arrived, and the ordinal-zero server of a
+     * persistent group. A reader showing this to a player falls back to the
+     * name it already has for those.
+     *
+     * A persistent server reports its ordinal here, so its number agrees with
+     * the name it already carries. That is why these start at 0 where an
+     * ephemeral group's start at 1, and why one persistent server per group is
+     * indistinguishable from an unnumbered one. It costs nothing: that server
+     * is referred to by the name that names its world.
+     * </pre>
+     *
+     * <code>int32 number = 10;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearNumber() {
+      bitField0_ = (bitField0_ & ~0x00000200);
+      number_ = 0;
       onChanged();
       return this;
     }

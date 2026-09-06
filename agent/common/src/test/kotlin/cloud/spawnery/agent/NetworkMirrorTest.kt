@@ -201,4 +201,24 @@ class NetworkMirrorTest {
 
         assertEquals("lobby", mirror.groups().single().name())
     }
+
+    @Test
+    fun `a server's number, players and slots each land in their own place`() {
+        // Three distinct values so a positional swap in the ServerInfo
+        // constructor -- it.number landing where players or slots is
+        // expected -- compiles cleanly but fails this rather than passing
+        // by coincidence.
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("hub-a").setGroup("hub").setPhase("Ready")
+                    .setNumber(3).setPlayers(7).setSlots(20),
+            ).build(),
+        )
+
+        val server = mirror.servers().single()
+        assertEquals(3, server.number())
+        assertEquals(7, server.players())
+        assertEquals(20, server.slots())
+    }
 }

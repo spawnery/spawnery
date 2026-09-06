@@ -343,3 +343,30 @@ func TestAGroupWithoutADisplayNameTravelsWithAnEmptyOne(t *testing.T) {
 		t.Errorf("display name = %q, want empty", got.GetGroups()[0].GetDisplayName())
 	}
 }
+
+func TestBuildCarriesAServersNumber(t *testing.T) {
+	// From the spec, like a group's display name: the group decided this once,
+	// when it created the server, and nothing observes it afterwards.
+	numbered := readyServer("ns", "hub-dvjk", "hub", 3, 100)
+	numbered.Spec.Number = 1
+	// A server from before the field existed. Zero is what every reader falls
+	// back on, so the operator carries it rather than inventing one.
+	old := readyServer("ns", "hub-old1", "hub", 0, 100)
+	src, _ := source(t, ephemeralGroup("ns", "hub"), numbered, old)
+
+	got, err := src.Build(context.Background(), "ns")
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	numbers := map[string]int32{}
+	for _, s := range got.GetServers() {
+		numbers[s.GetName()] = s.GetNumber()
+	}
+	if numbers["hub-dvjk"] != 1 {
+		t.Errorf("hub-dvjk = %d, want 1", numbers["hub-dvjk"])
+	}
+	if numbers["hub-old1"] != 0 {
+		t.Errorf("hub-old1 = %d, want 0", numbers["hub-old1"])
+	}
+}

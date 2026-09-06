@@ -371,7 +371,7 @@ func TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown(t *testing.
 	r := proxyGroupReconciler(f)
 	f.createProxyGroup("gateway") // replicas: 2
 
-	r.Expectations.expectCreated(f.ns+"/gateway", "gateway-phantom")
+	r.Expectations.expectCreated(f.ns+"/gateway", "gateway-phantom", 0)
 
 	f.reconcileProxyGroup(r, "gateway")
 
