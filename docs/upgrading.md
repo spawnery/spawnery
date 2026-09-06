@@ -834,3 +834,24 @@ a namespaced object in the same trust domain as the group naming it, so a
 switch stops nobody who was not already stopped; what it buys is an operator
 being able to say which of the three an installation runs, and have that be a
 fact rather than a convention.
+
+## A closed door no longer hides a server
+
+`acceptJoins(false)` used to do two things: stop counting the server's seats
+as capacity, and take it out of the proxies' routing table. It now does only
+the first. A server that has closed its door stays reachable, which is what
+lets a spectator into a running round and a selector click land on one.
+
+This applies to every agent, including ones built before this release: the
+meaning of the field they already send has narrowed. Nothing else changes for
+them — a server that never sends the new `round_ended` stays in the table
+exactly as it does today.
+
+To take a server out of the table, say the round is over: `endRound()` in the
+Java API, `round_ended` on the wire. A pod that stops after that reaches the
+new phase `Finished` instead of `Failed`, is replaced at once, and costs its
+group no failure from the backoff budget.
+
+Ephemeral server pods now carry `restartPolicy: Never`. A pod that stops stays
+stopped, which is what lets the operator see a round end at all. Persistent
+groups are unchanged.

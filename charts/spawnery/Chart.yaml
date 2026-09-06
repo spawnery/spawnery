@@ -8,7 +8,7 @@ type: application
 # version bump alone. Since v0.2.14 this number is also the address people
 # install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
 # so it is no longer only what Flux names a packaged artifact after.
-version: 0.2.26
+version: 0.2.28
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
 # CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
@@ -58,7 +58,13 @@ version: 0.2.26
 # gate no longer registers a server whose agent has already closed its door.
 # No CRD changes and no argument changes, so an installation that upgrades
 # has nothing to write.
-appVersion: "0.2.26"
+#
+# 0.2.28 moves it with the operator: the CRDs gain Server.status.roundEndedAt
+# and ServerGroup.spec.finishedRetentionSeconds, and the reconciler reads
+# both -- a server whose round has ended reaches the new phase Finished
+# instead of Failed, and is replaced at once rather than costing its group a
+# failure from the backoff budget.
+appVersion: "0.2.28"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
 # +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec
