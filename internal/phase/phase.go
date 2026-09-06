@@ -623,16 +623,6 @@ func Decide(current Phase, in Inputs) Decision {
 
 	case Starting:
 		if in.PodExists && in.PodRunning && in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
-			// Registering a server that has already closed its door and
-			// deregistering it on the next pass is five seconds in which the
-			// proxies route to a server that asked for nobody. The Ready
-			// branch below registers it when the door opens.
-			if in.JoinsClosed {
-				return Decision{
-					Next:   Ready,
-					Reason: ReasonJoinsClosed, Message: "the server is not taking new players",
-				}
-			}
 			return Decision{
 				Next: Ready, Register: true,
 				Reason: ReasonReadyGatePassed, Message: "probe green and agent ready",
@@ -700,31 +690,26 @@ func Decide(current Phase, in Inputs) Decision {
 				Reason: ReasonRetiring, Message: "retiring for a rolling update",
 			}
 		}
-		// The server's own door, and it moves no phase: a closed server is
-		// Ready and not registered, which is a state this operator already
-		// has -- it is the first half of a drain -- and which the plugin API
-		// already documents as the one a caller reads to decide where to send
-		// somebody.
-		//
-		// After retirement, deliberately. A retiring server is going away and
-		// has been deregistered by the branch above; a server that had also
-		// closed its door must not be re-opened by the branch below on the way
-		// out.
+		// The round's end takes a server out of the table; a closed door does
+		// not. They were one signal once, and a spectator asking for a running
+		// round was answered "no such server" -- deregistration is about
+		// whether anybody can reach this server at all, and the door is about
+		// whether its seats are capacity.
 		//
 		// Both directions are conditioned on what the proxies currently have,
-		// so this speaks only when something changes. Without that a closed
+		// so this speaks only when something changes. Without that a finished
 		// server would be deregistered again on every pass, and every one of
 		// those is a broadcast to every proxy in the namespace.
-		if in.JoinsClosed && in.Registered {
+		if in.RoundEnded && in.Registered {
 			return Decision{
 				Next: Ready, Deregister: true,
-				Reason: ReasonJoinsClosed, Message: "the server is not taking new players",
+				Reason: ReasonRoundFinished, Message: "the round is over",
 			}
 		}
-		if !in.JoinsClosed && !in.Registered {
+		if !in.RoundEnded && !in.Registered {
 			return Decision{
 				Next: Ready, Register: true,
-				Reason: ReasonJoinsOpen, Message: "the server is taking players again",
+				Reason: ReasonJoinsOpen, Message: "the server is reachable",
 			}
 		}
 		return Decision{
