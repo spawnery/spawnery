@@ -1303,6 +1303,8 @@ func (r *ServerGroupReconciler) collectViews(
 			// And what they have right now, which is a different question and
 			// the one capacity depends on -- see AggregateGroup.
 			Registered: srv.Status.Registered,
+			// The door, from the same snapshot the counts come from.
+			JoinsClosed: !snap.AcceptingJoins,
 			// A pod that once existed and is now gone took its sessions with it,
 			// exactly like one that reached a terminal state.
 			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),

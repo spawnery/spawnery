@@ -48,6 +48,12 @@ const (
 	// Failed means the server is broken. It is kept for diagnosis and cleaned
 	// up after the group's retention.
 	Failed Phase = "Failed"
+	// Finished means the server's round is over: it said so, and then its pod
+	// stopped. It is terminal like Failed and its group replaces it at once,
+	// but it is not a fault -- it is not counted against the backoff, it
+	// raises no Degraded, and it is kept for its own short retention rather
+	// than the hour a failure gets for diagnosis.
+	Finished Phase = "Finished"
 )
 
 const (
@@ -134,11 +140,8 @@ const (
 	ReasonPodNeverCreated   = "PodNeverCreated"
 	ReasonPodTerminal       = "PodTerminal"
 	ReasonRetiring          = "Retiring"
-	// ReasonJoinsClosed marks a Ready server that has asked for no new
-	// players. It is not a phase of its own on purpose -- see the Ready branch
-	// of Decide.
-	ReasonJoinsClosed = "JoinsClosed"
-	// ReasonJoinsOpen marks the way back.
+	// ReasonJoinsOpen marks a server returning to the proxies' routing table
+	// because its round has not ended.
 	ReasonJoinsOpen       = "JoinsOpen"
 	ReasonMaxStaleElapsed = "MaxStaleElapsed"
 	// ReasonDrainingBeforeCleanup marks a Failed server whose players are being
@@ -149,6 +152,13 @@ const (
 	ReasonRetentionElapsed      = "RetentionElapsed"
 	ReasonTerminating           = "Terminating"
 	ReasonUnknownPhase          = "UnknownPhase"
+	// ReasonRoundFinished marks the round's end, not the pod's: a Ready server
+	// carries it on deregistering while still running, and only later, once
+	// the pod itself stops, does the same reason carry it into Finished.
+	ReasonRoundFinished = "RoundFinished"
+	// ReasonFinishedRetentionElapsed marks a finished server that has been
+	// kept long enough.
+	ReasonFinishedRetentionElapsed = "FinishedRetentionElapsed"
 )
 
 // Inputs is everything the state machine may look at. The controller fills it
@@ -300,6 +310,19 @@ type Inputs struct {
 	// from, so a network that does not use it behaves exactly as it did.
 	JoinsClosed bool
 
+	// RoundEnded is set once the server has said its round is over.
+	//
+	// Read from status.roundEndedAt and not from the registry, which is
+	// memory: an operator restart between the pod stopping and the pass that
+	// reads this would otherwise turn a finished round into a failure. It is
+	// the server's own word, like JoinsClosed, and like that one it is false
+	// for a server that never said it.
+	RoundEnded bool
+
+	// FinishedRetentionElapsed is true once a Finished server has been kept
+	// for its group's finished retention.
+	FinishedRetentionElapsed bool
+
 	// Registered is whether the proxies currently have this server.
 	//
 	// Read so that the door above can be acted on once rather than on every
@@ -399,6 +422,27 @@ func Decide(current Phase, in Inputs) Decision {
 		return Decision{
 			Next:   Failed,
 			Reason: ReasonPodTerminal, Message: "kept for diagnosis",
+		}
+
+	case Finished:
+		if in.DeletionRequested || in.FinishedRetentionElapsed {
+			// No drain: the pod is terminal, so its sessions went with it.
+			// That is the same reasoning the terminal branch below gives, and
+			// it is why this case is shorter than Failed's -- a Finished
+			// server is only ever reached through a terminal pod.
+			reason := ReasonFinishedRetentionElapsed
+			message := "finished retention elapsed"
+			if in.DeletionRequested {
+				reason, message = ReasonDeletionRequested, "deletion requested for a finished server"
+			}
+			return Decision{
+				Next: Terminating, DeletePod: true,
+				Reason: reason, Message: message,
+			}
+		}
+		return Decision{
+			Next:   Finished,
+			Reason: ReasonRoundFinished, Message: "the round is over",
 		}
 
 	case Draining:
@@ -514,6 +558,16 @@ func Decide(current Phase, in Inputs) Decision {
 	if in.PodTerminal {
 		// A terminal pod is never drained: the process is already down and its
 		// sessions went with it, so there is nobody left to move off.
+		//
+		// The server's own word decides which terminal phase this is. Not the
+		// exit code: a System.exit(0) in a shutdown hook would make a crash
+		// read as a win, and the word is the one thing only the server knows.
+		if in.RoundEnded {
+			return Decision{
+				Next: Finished, Deregister: current == Ready,
+				Reason: ReasonRoundFinished, Message: "the round is over and the pod stopped",
+			}
+		}
 		return Decision{
 			Next: Failed, Deregister: current == Ready,
 			Reason: ReasonPodTerminal, Message: "pod reached a terminal phase",
@@ -567,16 +621,6 @@ func Decide(current Phase, in Inputs) Decision {
 
 	case Starting:
 		if in.PodExists && in.PodRunning && in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
-			// Registering a server that has already closed its door and
-			// deregistering it on the next pass is five seconds in which the
-			// proxies route to a server that asked for nobody. The Ready
-			// branch below registers it when the door opens.
-			if in.JoinsClosed {
-				return Decision{
-					Next:   Ready,
-					Reason: ReasonJoinsClosed, Message: "the server is not taking new players",
-				}
-			}
 			return Decision{
 				Next: Ready, Register: true,
 				Reason: ReasonReadyGatePassed, Message: "probe green and agent ready",
@@ -644,31 +688,26 @@ func Decide(current Phase, in Inputs) Decision {
 				Reason: ReasonRetiring, Message: "retiring for a rolling update",
 			}
 		}
-		// The server's own door, and it moves no phase: a closed server is
-		// Ready and not registered, which is a state this operator already
-		// has -- it is the first half of a drain -- and which the plugin API
-		// already documents as the one a caller reads to decide where to send
-		// somebody.
-		//
-		// After retirement, deliberately. A retiring server is going away and
-		// has been deregistered by the branch above; a server that had also
-		// closed its door must not be re-opened by the branch below on the way
-		// out.
+		// The round's end takes a server out of the table; a closed door does
+		// not. They were one signal once, and a spectator asking for a running
+		// round was answered "no such server" -- deregistration is about
+		// whether anybody can reach this server at all, and the door is about
+		// whether its seats are capacity.
 		//
 		// Both directions are conditioned on what the proxies currently have,
-		// so this speaks only when something changes. Without that a closed
+		// so this speaks only when something changes. Without that a finished
 		// server would be deregistered again on every pass, and every one of
 		// those is a broadcast to every proxy in the namespace.
-		if in.JoinsClosed && in.Registered {
+		if in.RoundEnded && in.Registered {
 			return Decision{
 				Next: Ready, Deregister: true,
-				Reason: ReasonJoinsClosed, Message: "the server is not taking new players",
+				Reason: ReasonRoundFinished, Message: "the round is over",
 			}
 		}
-		if !in.JoinsClosed && !in.Registered {
+		if !in.RoundEnded && !in.Registered {
 			return Decision{
 				Next: Ready, Register: true,
-				Reason: ReasonJoinsOpen, Message: "the server is taking players again",
+				Reason: ReasonJoinsOpen, Message: "the server is reachable",
 			}
 		}
 		return Decision{

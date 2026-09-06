@@ -526,9 +526,17 @@ func BuildServerPod(
 			}},
 		},
 		Spec: corev1.PodSpec{
-			Containers:    []corev1.Container{container},
-			Volumes:       volumes,
-			RestartPolicy: corev1.RestartPolicyAlways,
+			Containers: []corev1.Container{container},
+			Volumes:    volumes,
+			// Never for an ephemeral server, so a pod that stopped stays
+			// stopped and the operator gets to see it. Always would restart
+			// the container inside the same pod, over the same emptyDir, which
+			// is how a finished round used to come back with its own world.
+			//
+			// A persistent server keeps Always: its world is a claim, its
+			// identity is its ordinal, and a round's end is not a thing that
+			// happens to it.
+			RestartPolicy: restartPolicy(group),
 			// The pods carry no Kubernetes credentials from the API server's
 			// own token machinery. AutomountServiceAccountToken stays off;
 			// the projected, audience-bound token above is the exception,
@@ -587,6 +595,13 @@ func BuildServerPod(
 	}
 
 	return pod, nil
+}
+
+func restartPolicy(group *spawneryv1alpha1.ServerGroup) corev1.RestartPolicy {
+	if group.Spec.Type == spawneryv1alpha1.ServerGroupPersistent {
+		return corev1.RestartPolicyAlways
+	}
+	return corev1.RestartPolicyNever
 }
 
 func dataVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Server) corev1.Volume {

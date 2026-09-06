@@ -294,6 +294,33 @@ func TestAServerClosesItsOwnDoorAndNobodyElses(t *testing.T) {
 	}
 }
 
+func TestAServerSaysItsRoundIsOver(t *testing.T) {
+	// The door and the round travel in one message, and until here nothing
+	// checked that the second field is read at all: every other test of this
+	// path sends the door alone, and the end-to-end one calls
+	// ReportAcceptJoins directly. Reading GetAccept twice would pass all of
+	// them.
+	registry := agent.New(time.Now, time.Second, time.Now())
+	registry.Connect("pod-a", agent.RoleServer)
+	s := &Server{opts: Options{Agents: registry}, requestRate: newRequestLimiter(time.Now)}
+
+	response := s.answerCloudRequest(context.Background(), logr.Discard(),
+		grpcauth.Identity{Namespace: "ns", PodName: "arena-a", PodUID: "pod-a", Role: agent.RoleServer},
+		&agentpb.CloudRequest{
+			Id: 5,
+			Request: &agentpb.CloudRequest_AcceptJoins{
+				AcceptJoins: &agentpb.AcceptJoinsRequest{Accept: false, RoundEnded: true},
+			},
+		})
+
+	if response.GetAcceptJoins() == nil {
+		t.Fatalf("response = %+v, want the round recorded", response)
+	}
+	if !registry.Lookup("pod-a").RoundEnded {
+		t.Error("the server said its round was over and the registry never heard it")
+	}
+}
+
 func TestAProxyIsRefusedADoor(t *testing.T) {
 	registry := agent.New(time.Now, time.Second, time.Now())
 	registry.Connect("proxy-a", agent.RoleProxy)

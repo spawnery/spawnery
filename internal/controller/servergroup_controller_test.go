@@ -577,6 +577,59 @@ func TestGroupReplacesAFailedServer(t *testing.T) {
 	}
 }
 
+// TestAFinishedRoundIsReplacedWithoutCountingAFailure walks the whole round
+// lifecycle at once: the server says its round is over, its pod stops, the
+// group builds a replacement, and none of it spends the backoff budget --
+// unlike TestGroupReplacesAFailedServer above, a finished round is not a
+// fault and needs no window before the replacement is allowed.
+func TestAFinishedRoundIsReplacedWithoutCountingAFailure(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("got %d servers, want minReplicas = 1", len(servers))
+	}
+	finished := servers[0].Name
+
+	uid := bringUpNamed(t, f, finished)
+	if err := f.agents.ReportAcceptJoins(uid, false, true); err != nil {
+		t.Fatalf("ReportAcceptJoins: %v", err)
+	}
+	f.reconcile(finished)
+	if f.server(finished).Status.RoundEndedAt == nil {
+		t.Fatalf("roundEndedAt was not stamped while the server still ran")
+	}
+	if got := f.server(finished).Status.Phase; got != string(phase.Ready) {
+		t.Fatalf("phase right after the round-end word = %q, want it still Ready -- the pod has not stopped yet", got)
+	}
+
+	f.setPodFailed(finished)
+	f.reconcile(finished)
+	if got := f.server(finished).Status.Phase; got != string(phase.Finished) {
+		t.Fatalf("phase after the pod stopped = %q, want Finished", got)
+	}
+
+	// No clock advance: unlike a Failed server, a Finished one is not a
+	// fault, so the group must not need the backoff window to replace it.
+	f.reconcileGroup(t, r)
+
+	var replacement string
+	for _, s := range f.listServers(t) {
+		if s.Name != finished {
+			replacement = s.Name
+		}
+	}
+	if replacement == "" {
+		t.Fatalf("the group did not replace the finished server; servers = %d", len(f.listServers(t)))
+	}
+
+	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got != 0 {
+		t.Errorf("consecutiveFailures = %d, want 0 -- a finished round is not a fault", got)
+	}
+}
+
 func TestGroupAggregatesStatus(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)

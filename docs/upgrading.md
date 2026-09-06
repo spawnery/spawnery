@@ -698,6 +698,12 @@ both carry an empty description rather than a missing one.
 does not change — a closed server is `Ready` and not registered, which is a
 state this operator always had.
 
+**0.2.28 narrows this.** `acceptJoins(false)` no longer takes a server out of
+the proxies' routing table — see ["A closed door no longer hides a
+server"](#a-closed-door-no-longer-hides-a-server) below. What stands from this
+paragraph: it still stops the server's seats counting as capacity, and the
+phase still does not move.
+
 It exists as its own verb rather than as a use of `retire` because the two mean
 different things and one of them is permanent. Retiring says a server is
 finished and ends it once it is empty; a round that has started is not a server
@@ -834,3 +840,47 @@ a namespaced object in the same trust domain as the group naming it, so a
 switch stops nobody who was not already stopped; what it buys is an operator
 being able to say which of the three an installation runs, and have that be a
 fact rather than a convention.
+
+## A closed door no longer hides a server
+
+`acceptJoins(false)` used to do two things: stop counting the server's seats
+as capacity, and take it out of the proxies' routing table. It now does only
+the first. A server that has closed its door stays reachable, which is what
+lets a spectator into a running round and a selector click land on one.
+
+This applies to every agent, including ones built before this release: the
+meaning of the field they already send has narrowed. Nothing else changes for
+them — a server that never sends the new `round_ended` stays in the table
+exactly as it does today.
+
+To take a server out of the table, say the round is over: `endRound()` in the
+Java API, `round_ended` on the wire. A pod that stops after that reaches the
+new phase `Finished` instead of `Failed`, is replaced at once, and costs its
+group no failure from the backoff budget.
+
+Ephemeral server pods now carry `restartPolicy: Never`. A pod that stops stays
+stopped, which is what lets the operator see a round end at all. Persistent
+groups are unchanged.
+
+**That reshapes the pod, so this release rolls every ephemeral group.** A
+server is stale when its `spawnery.cloud/pod-hash` label differs from a digest
+of the pod the operator would render now, and that digest is taken over the
+rendered pod -- `restartPolicy` included. So every ephemeral `ServerGroup` in
+every installation goes stale the moment the new operator comes up, and each is
+replaced an ordinal at a time. Nothing avoids it: the policy cannot be changed
+on a pod that is already running, so the pods have to be re-rendered to carry
+it. A round in progress ends as its server drains, like any other rolled
+server. Persistent groups keep their digest and do not move.
+
+`internal/podspec/hash_golden_test.go` did not catch this when it was written,
+because its one server fixture was a persistent group -- the type whose restart
+policy did not change. It now pins an ephemeral fixture as well, so the next
+change to the ephemeral-only half of the render fails on the pull request that
+makes it.
+
+**It also spends the failure budget faster.** An ephemeral pod no longer gets
+the three in-place container restarts that had to pass before the operator
+called it crash-looping, so a transient JVM crash is a `Failed` server at once
+rather than a minute or two later, and the six consecutive failures that latch
+a group into giving up -- which only a spec edit clears -- are reached roughly
+four times sooner on a broken image.

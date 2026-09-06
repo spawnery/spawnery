@@ -179,6 +179,21 @@ class MirrorApiTest {
     }
 
     @Test
+    fun `both sides build the same request for the same round end`() {
+        // Refused on one of them, and still built identically: which side may
+        // end a round is the operator's rule, and a client that decided it
+        // here would be a second place for that rule to live.
+        val mirror = NetworkMirror().also { it.apply(aRichState()) }
+        MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).endRound()
+        MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).endRound()
+
+        assertEquals(2, requested.size)
+        assertEquals(requested[0].acceptJoins, requested[1].acceptJoins)
+        assertEquals(false, requested[0].acceptJoins.accept)
+        assertTrue(requested[0].acceptJoins.roundEnded)
+    }
+
+    @Test
     fun `holdReadiness reaches the gate on a server`() {
         val gate = ReadinessGate {}
         val api = MirrorApi(

@@ -235,9 +235,10 @@ func TestAggregateIgnoresStaleCountsForFreeSlots(t *testing.T) {
 }
 
 // TestCountsTowardSize pins which servers hold the group at its floor. A server
-// on its way out no longer does, and neither does a Failed one: it is kept for
-// diagnosis and can take no player, so counting it would leave the group below
-// its floor for the whole retention window.
+// on its way out no longer does, and neither does a Failed or a Finished one:
+// both are kept a while — one for diagnosis, one for its finished retention —
+// and neither can take a player, so counting either would leave the group
+// below its floor for the whole of that window.
 func TestCountsTowardSize(t *testing.T) {
 	cases := []struct {
 		p    phase.Phase
@@ -249,6 +250,7 @@ func TestCountsTowardSize(t *testing.T) {
 		{phase.Draining, false},
 		{phase.Terminating, false},
 		{phase.Failed, false},
+		{phase.Finished, false},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.p), func(t *testing.T) {
@@ -640,5 +642,18 @@ func TestAClosedServersSeatsAreNotCapacity(t *testing.T) {
 	// stopped counting.
 	if got.Replicas != 2 || got.ReadyReplicas != 2 {
 		t.Errorf("replicas = %d/%d, want both servers still counted", got.ReadyReplicas, got.Replicas)
+	}
+}
+
+func TestAClosedDoorIsNotFreeCapacity(t *testing.T) {
+	// A running round holds seats nobody can take. Counting them let a group
+	// sit at its floor while every server in it was playing.
+	views := []ServerView{
+		{Name: "a", Phase: phase.Ready, Registered: true, JoinsClosed: true, Players: 2, Slots: 80},
+		{Name: "b", Phase: phase.Ready, Registered: true, Players: 0, Slots: 80},
+	}
+
+	if got, want := AggregateGroup(views, "").FreeSlots, int32(80); got != want {
+		t.Errorf("FreeSlots = %d, want %d — the playing server's seats were counted", got, want)
 	}
 }

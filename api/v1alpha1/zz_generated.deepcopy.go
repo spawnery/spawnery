@@ -987,6 +987,10 @@ func (in *ServerStatus) DeepCopyInto(out *ServerStatus) {
 		in, out := &in.FailedAt, &out.FailedAt
 		*out = (*in).DeepCopy()
 	}
+	if in.RoundEndedAt != nil {
+		in, out := &in.RoundEndedAt, &out.RoundEndedAt
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]metav1.Condition, len(*in))

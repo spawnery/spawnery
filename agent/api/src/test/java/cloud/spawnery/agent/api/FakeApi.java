@@ -69,6 +69,11 @@ final class FakeApi implements SpawneryApi {
     }
 
     @Override
+    public CompletionStage<Void> endRound() {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
     public CompletionStage<Void> announce(String state, Map<String, String> attributes) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }

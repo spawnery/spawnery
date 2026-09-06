@@ -185,6 +185,15 @@ type ServerStatus struct {
 	// +optional
 	FailedAt *metav1.Time `json:"failedAt,omitempty"`
 
+	// RoundEndedAt is when the server said its round was over. Nil for one
+	// that never did.
+	//
+	// Stamped while the server is still running, which is what makes the
+	// distinction survive an operator restart: the registry that heard the
+	// word is memory, and this object is not.
+	// +optional
+	RoundEndedAt *metav1.Time `json:"roundEndedAt,omitempty"`
+
 	// ReadinessLosses counts how often this server fell out of Ready. Past the
 	// threshold the server is considered broken rather than flapping.
 	// +optional

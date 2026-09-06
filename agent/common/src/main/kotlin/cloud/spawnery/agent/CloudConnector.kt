@@ -135,14 +135,23 @@ class CloudConnector(
     }
 
     /**
-     * The last door state this server asked for, restated on every new stream.
+     * The last accept-joins request this server made, restated on every new
+     * stream.
+     *
+     * Held whole, as one message, rather than as two separately-tracked
+     * flags: `accept` and `round_ended` are one field on the wire, and
+     * rebuilding a restatement from two independent values could recombine
+     * them into a pair that was never actually sent -- a round marked ended
+     * next to a door marked open, say. Keeping the built request itself makes
+     * that impossible rather than merely avoided.
      *
      * Null until it asks, and null is not "open": a server that has never
-     * spoken about its door has nothing to restate, while one that opened it
-     * deliberately has something to say after a reconnect. The operator's own
-     * default for a session it has never seen is open, so the two agree.
+     * spoken about its door has nothing to restate, while one that closed it,
+     * or ended its round, deliberately has something to say after a
+     * reconnect. The operator's own defaults for a session it has never
+     * seen -- door open, round not ended -- agree with null in both halves.
      */
-    private val lastJoinPreference = AtomicReference<Boolean?>(null)
+    private val lastAcceptJoins = AtomicReference<AcceptJoinsRequest?>(null)
 
     /**
      * Opens or closes this server's door.
@@ -152,16 +161,29 @@ class CloudConnector(
      * here. See [SpawneryApi.acceptJoins].
      */
     fun acceptJoins(accept: Boolean): CompletionStage<Void> {
-        lastJoinPreference.set(accept)
-        return send(accept)
+        val request = AcceptJoinsRequest.newBuilder().setAccept(accept).build()
+        lastAcceptJoins.set(request)
+        return send(request)
     }
 
-    private fun send(accept: Boolean): CompletionStage<Void> =
+    /**
+     * Says this server's round is over.
+     *
+     * Sent as a closed door and an ended round together, in one message,
+     * because the operator does not distinguish "round over, still taking
+     * joins" from a mistake -- it deregisters and ends the round from the
+     * same field. See [SpawneryApi.endRound].
+     */
+    fun endRound(): CompletionStage<Void> {
+        val request = AcceptJoinsRequest.newBuilder().setAccept(false).setRoundEnded(true).build()
+        lastAcceptJoins.set(request)
+        return send(request)
+    }
+
+    private fun send(request: AcceptJoinsRequest): CompletionStage<Void> =
         requests.start<Void> { id ->
             sendRequest(
-                CloudRequest.newBuilder().setId(id)
-                    .setAcceptJoins(AcceptJoinsRequest.newBuilder().setAccept(accept))
-                    .build(),
+                CloudRequest.newBuilder().setId(id).setAcceptJoins(request).build(),
             )
         }
 
@@ -234,11 +256,13 @@ class CloudConnector(
         // was already told. requests.start never throws, so a send between
         // sessions fails that future instead of this hook.
         lastAnnouncement.get()?.let { send(it) }
-        // The door too, and for a sharper reason than the description: the
-        // operator's default for a session it has never seen is open, so a
-        // closed door that went unrestated would put players into a round that
-        // had already started.
-        lastJoinPreference.get()?.let { send(it) }
+        // The door and the round's end too, and for a sharper reason than
+        // the description: the operator's default for a session it has never
+        // seen is that the door is open and the round has not ended, so
+        // either one going unrestated would put players into a round that
+        // had already finished -- or worse, one it had already recorded as
+        // Failed rather than Finished.
+        lastAcceptJoins.get()?.let { send(it) }
     }
 
     /** Fails everything past its deadline. Called from the reporting timer. */

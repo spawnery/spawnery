@@ -618,6 +618,23 @@ func TestPersistentGroupMountsItsPVC(t *testing.T) {
 	t.Errorf("volumes = %+v, want a %s volume", pod.Spec.Volumes, DataVolumeName)
 }
 
+func TestAnEphemeralPodIsNotLiftedAgainByKubelet(t *testing.T) {
+	// RestartPolicyAlways restarts the container inside the same pod, and an
+	// ephemeral server's /data is an emptyDir -- so the same world comes back
+	// and the operator never sees a pod that stopped.
+	ephemeral := build(t, nil)
+	if got, want := ephemeral.Spec.RestartPolicy, corev1.RestartPolicyNever; got != want {
+		t.Errorf("ephemeral restartPolicy = %q, want %q", got, want)
+	}
+
+	persistent := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.Type = spawneryv1alpha1.ServerGroupPersistent
+	})
+	if got, want := persistent.Spec.RestartPolicy, corev1.RestartPolicyAlways; got != want {
+		t.Errorf("persistent restartPolicy = %q, want %q", got, want)
+	}
+}
+
 func TestBuildRejectsAnEmptyImage(t *testing.T) {
 	net, group := testNetwork(), testGroup()
 	group.Spec.Image = ""

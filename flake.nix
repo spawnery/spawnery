@@ -245,7 +245,12 @@
           # claim into the working directory, and refuses a source carrying a
           # path the renderer or extraPlugins owns. That ships in the game
           # images and nowhere else.
-          imageVersion = "0.2.27";
+          #
+          # 0.2.28 moves it because the published API gains a method:
+          # SpawneryApi.endRound() lets a plugin say its round is over, and
+          # that is a class in cloud.spawnery:spawnery-api, versioned off this
+          # number rather than operatorVersion.
+          imageVersion = "0.2.28";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -324,7 +329,14 @@
           # --allow-mount-volumes. An installation using one and not setting
           # the other gets Accepted=False with MountVolumesDisabled.
           # docs/upgrading.md carries the note.
-          operatorVersion = "0.2.26";
+          #
+          # 0.2.28 moves it: the phase machine gains Finished, a server that
+          # says its round is over is replaced without costing its group a
+          # failure, and accept=false narrows to mean only "stop counting
+          # seats" rather than "stop routing too". docs/upgrading.md carries
+          # the note, because that narrowing reaches agents built before this
+          # release as well.
+          operatorVersion = "0.2.28";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

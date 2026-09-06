@@ -123,6 +123,28 @@ func (f *fixture) pods() []corev1.Pod {
 	return list.Items
 }
 
+func TestTheRoundEndIsStampedWhileTheServerStillRuns(t *testing.T) {
+	// The stamp is what survives an operator restart. Taking it only when the
+	// pod is already terminal would lose the distinction to the restart this
+	// field exists for.
+	srv := &spawneryv1alpha1.Server{}
+	snap := agent.Snapshot{Known: true, Connected: true, RoundEnded: true}
+
+	changed := stampRoundEnd(srv, snap, time.Unix(1000, 0))
+
+	if !changed || srv.Status.RoundEndedAt == nil {
+		t.Fatalf("the round end was not stamped: changed=%v status=%+v", changed, srv.Status)
+	}
+	first := *srv.Status.RoundEndedAt
+
+	if stampRoundEnd(srv, snap, time.Unix(2000, 0)) {
+		t.Error("the stamp moved on a second pass; it must be taken once")
+	}
+	if !srv.Status.RoundEndedAt.Equal(&first) {
+		t.Errorf("the stamp changed: %v then %v", first, *srv.Status.RoundEndedAt)
+	}
+}
+
 // TestServerFailedStraightFromReadyClearsReadySince pins the cross-file
 // invariant CountFailures states and depends on: "A Failed server carries no
 // ReadySince (the Server controller clears it on the way out of Ready), so a

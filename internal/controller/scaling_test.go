@@ -310,6 +310,24 @@ func TestDecideSizeDoesNotLetALeavingServerHoldTheFloor(t *testing.T) {
 	}
 }
 
+// TestDecideSizeDoesNotLetAFinishedServerHoldTheFloor is
+// TestDecideSizeDoesNotLetALeavingServerHoldTheFloor's Finished counterpart.
+// SpareSlots is 0 so the demand path can supply no replacement of its own —
+// the discriminating fixture the end-to-end controller test lacked, where a
+// closed door's lost provisional capacity masked this same gap by ordering a
+// replacement for an unrelated reason. Only the floor can be short here, so a
+// Create of 1 can only come from countsTowardSize excluding phase.Finished.
+func TestDecideSizeDoesNotLetAFinishedServerHoldTheFloor(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{{Name: "a", Phase: phase.Finished, Slots: 100}},
+		MinReplicas: 1, MaxReplicas: 1,
+		SpareSlots: 0, MaxPlayers: 100,
+	})
+	if got.Create != 1 {
+		t.Errorf("Create = %d, want 1: a Finished server does not hold the floor", got.Create)
+	}
+}
+
 // empty builds a Ready, empty server that has been empty for d.
 func empty(name string, slots int32, d time.Duration) ServerView {
 	v := ready(name, 0, slots)
@@ -1549,5 +1567,28 @@ func TestABoostAlsoHoldsCapacityAgainstAScaleDown(t *testing.T) {
 	})
 	if len(got.Delete) != 0 {
 		t.Errorf("Delete = %v, want none: three servers is exactly the boosted floor", got.Delete)
+	}
+}
+
+func TestAGroupWhoseEveryServerIsPlayingBuildsARoom(t *testing.T) {
+	// spareSlots == maxPlayers is a request for one whole free server. With a
+	// single closed-door server the ceiling division hides the bug -- 78 free
+	// seats and 0 free seats both round up to a wanted of 1 against a spare of
+	// 80. It takes every server in the group shut at once, the way
+	// AggregateGroup's own comment describes it, before the unfixed seats
+	// (156) clear the spare-slot bar and the fixed ones (0) do not.
+	in := ScalingInputs{
+		MaxReplicas: 10,
+		MaxPlayers:  80,
+		SpareSlots:  80,
+		Views: []ServerView{
+			{Name: "a", Phase: phase.Ready, Registered: true, JoinsClosed: true, Players: 2, Slots: 80},
+			{Name: "b", Phase: phase.Ready, Registered: true, JoinsClosed: true, Players: 2, Slots: 80},
+		},
+		PendingDeletes: map[string]bool{},
+	}
+
+	if got := decideSize(in).Create; got < 1 {
+		t.Errorf("create = %d, want at least 1 — nobody can join either running round", got)
 	}
 }

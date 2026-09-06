@@ -821,14 +821,14 @@ func TestAServerCanCloseItsDoorAndOpenItAgain(t *testing.T) {
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
 
-	if err := r.ReportAcceptJoins("pod-a", false); err != nil {
+	if err := r.ReportAcceptJoins("pod-a", false, false); err != nil {
 		t.Fatalf("ReportAcceptJoins(false): %v", err)
 	}
 	if r.Lookup("pod-a").AcceptingJoins {
 		t.Error("a server that closed its door was still read as taking players")
 	}
 
-	if err := r.ReportAcceptJoins("pod-a", true); err != nil {
+	if err := r.ReportAcceptJoins("pod-a", true, false); err != nil {
 		t.Fatalf("ReportAcceptJoins(true): %v", err)
 	}
 	if !r.Lookup("pod-a").AcceptingJoins {
@@ -841,7 +841,7 @@ func TestAClosedDoorOutlivesADisconnect(t *testing.T) {
 	// swung open in between would put players into a round that had started.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
-	_ = r.ReportAcceptJoins("pod-a", false)
+	_ = r.ReportAcceptJoins("pod-a", false, false)
 
 	r.Disconnect("pod-a")
 
@@ -854,7 +854,29 @@ func TestAProxyHasNoDoorToClose(t *testing.T) {
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("proxy-a", RoleProxy)
 
-	if err := r.ReportAcceptJoins("proxy-a", false); err == nil {
+	if err := r.ReportAcceptJoins("proxy-a", false, false); err == nil {
 		t.Error("a proxy was allowed to close a door it does not have")
+	}
+}
+
+func TestARoundEndIsRememberedAfterTheStreamDrops(t *testing.T) {
+	r := New(time.Now, time.Second, time.Now())
+	r.Connect("pod-a", RoleServer)
+
+	if got := r.Lookup("pod-a").RoundEnded; got {
+		t.Error("a server that has said nothing has not ended a round")
+	}
+	if err := r.ReportAcceptJoins("pod-a", false, true); err != nil {
+		t.Fatalf("ReportAcceptJoins: %v", err)
+	}
+	if got := r.Lookup("pod-a"); !got.RoundEnded || got.AcceptingJoins {
+		t.Errorf("after the round ended: %+v", got)
+	}
+
+	// The pod stops; the word has to outlive its stream, because the phase
+	// that reads it only runs once the pod is terminal.
+	r.Disconnect("pod-a")
+	if got := r.Lookup("pod-a").RoundEnded; !got {
+		t.Error("the round end was forgotten when the stream dropped")
 	}
 }
