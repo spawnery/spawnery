@@ -164,6 +164,9 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 			// Which run of this server this is. From the status, because it is
 			// the operator's own record of the pod it made.
 			Incarnation: srv.Status.PodUID,
+			// From the spec and not the status: the group decided this when it
+			// created the server, and nothing observes it afterwards.
+			Number: srv.Spec.Number,
 		})
 	}
 

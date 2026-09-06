@@ -187,4 +187,25 @@ java.lang.String defaultValue);
    */
   com.google.protobuf.ByteString
       getIncarnationBytes();
+
+  /**
+   * <pre>
+   * Which of its group's servers this is, counted the way a person counts:
+   * the second hub is 2. Stable for as long as the server exists, and given
+   * out again only after it is gone -- two servers that were both "Hub-2" at
+   * different times are told apart by incarnation, not by this.
+   *
+   * 0 for a server the operator never numbered, which is every server that
+   * was already running when this field arrived. A reader showing this to a
+   * player falls back to the group's own name for those.
+   *
+   * A persistent server reports its ordinal here, so the number agrees with
+   * the name it already has. That is why these start at 0 where an ephemeral
+   * group's start at 1.
+   * </pre>
+   *
+   * <code>int32 number = 10;</code>
+   * @return The number.
+   */
+  int getNumber();
 }
