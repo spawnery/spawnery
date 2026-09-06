@@ -2565,13 +2565,16 @@ type ServerState struct {
 	// out again only after it is gone -- two servers that were both "Hub-2" at
 	// different times are told apart by incarnation, not by this.
 	//
-	// 0 for a server the operator never numbered, which is every server that
-	// was already running when this field arrived. A reader showing this to a
-	// player falls back to the group's own name for those.
+	// 0 means nobody numbered this server: every server that was already
+	// running when this field arrived, and the ordinal-zero server of a
+	// persistent group. A reader showing this to a player falls back to the
+	// name it already has for those.
 	//
-	// A persistent server reports its ordinal here, so the number agrees with
-	// the name it already has. That is why these start at 0 where an ephemeral
-	// group's start at 1.
+	// A persistent server reports its ordinal here, so its number agrees with
+	// the name it already carries. That is why these start at 0 where an
+	// ephemeral group's start at 1, and why one persistent server per group is
+	// indistinguishable from an unnumbered one. It costs nothing: that server
+	// is referred to by the name that names its world.
 	Number        int32 `protobuf:"varint,10,opt,name=number,proto3" json:"number,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

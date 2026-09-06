@@ -34,9 +34,13 @@ type ServerSpec struct {
 	// person counts: the second hub is 2. The group assigns it once, at
 	// creation, and it is given out again only after this server is gone.
 	//
-	// Zero means nobody numbered this server, which is every server that was
-	// already running when this field arrived. Nothing backfills them; a
-	// reader showing this to a player falls back to the group's own name.
+	// Zero means nobody numbered this server: every server that was already
+	// running when this field arrived, and the ordinal-zero server of a
+	// persistent group, whose number is its ordinal. Nothing backfills them,
+	// and a reader showing this to a player falls back to the name it already
+	// has. That the two cases are indistinguishable is deliberate — a
+	// persistent server is referred to by the name that names its world, so
+	// falling back to that name loses nothing.
 	//
 	// Not Ordinal, and the difference is what each one is for: that one is a
 	// persistent server's identity, the thing its storage claim is named

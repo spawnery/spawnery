@@ -127,3 +127,71 @@ func TestAGroupFillsTheLowestGapInItsNumbers(t *testing.T) {
 		t.Errorf("number = %d, want the gap at 2", created.Spec.Number)
 	}
 }
+
+// TestAReservedNumberIsNotHandedToTheCreateThatFollowsIt pins size's call to
+// r.Expectations.pendingNumbers(key): a reservation for a server the cache
+// will never show still holds its number, so the create the same pass makes
+// gets the next one up rather than colliding with it.
+//
+// The phantom reservation also counts against MinReplicas, the same way
+// TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown's phantom
+// counts against a ProxyGroup's replicas -- so MinReplicas is raised to 2
+// here, or the reservation alone satisfies it and no real create happens for
+// this test to inspect.
+func TestAReservedNumberIsNotHandedToTheCreateThatFollowsIt(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.group.Spec.Scaling.MinReplicas = 2
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatalf("update group: %v", err)
+	}
+
+	r.Expectations.expectCreated(f.ns+"/lobby", "lobby-phantom", 1)
+
+	f.reconcileGroup(t, r)
+
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("servers = %d, want 1: the phantom reservation should have cut "+
+			"MinReplicas 2 down by the one already pending", len(servers))
+	}
+	if servers[0].Spec.Number != 2 {
+		t.Errorf("number = %d, want 2: 1 is held by the phantom reservation",
+			servers[0].Spec.Number)
+	}
+}
+
+// TestAPersistentServersNumberIsItsOrdinal pins createPersistentServer's
+// assignment of spec.number. It must cover an ordinal of at least 1: number 0
+// on the ordinal-0 server is indistinguishable from the field never having
+// been set, so a group of one ordinal would prove nothing.
+func TestAPersistentServersNumberIsItsOrdinal(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "survival", 2)
+
+	f.reconcilePersistentGroup(t, r, "survival")
+
+	servers := f.listServers(t)
+	byName := map[string]spawneryv1alpha1.Server{}
+	for _, s := range servers {
+		byName[s.Name] = s
+	}
+
+	zero, ok := byName["survival-0"]
+	if !ok {
+		t.Fatalf("survival-0 was not created; servers = %v", servers)
+	}
+	if zero.Spec.Number != 0 {
+		t.Errorf("survival-0 number = %d, want 0", zero.Spec.Number)
+	}
+
+	one, ok := byName["survival-1"]
+	if !ok {
+		t.Fatalf("survival-1 was not created; servers = %v", servers)
+	}
+	if one.Spec.Number != 1 {
+		t.Errorf("survival-1 number = %d, want 1: its ordinal", one.Spec.Number)
+	}
+}

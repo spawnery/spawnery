@@ -55,8 +55,10 @@ import java.util.Objects;
  *     <p>Given out again once this server is gone, so two servers that were
  *     both "Hub-2" at different times are told apart by {@link #incarnation()}
  *     and never by this.
- *     <p>0 for a server nobody numbered, which is every server that was
- *     already running when this arrived. Show the group's own name for those
+ *     <p>0 for a server nobody numbered: every server that was already
+ *     running when this arrived, and the ordinal-zero server of a persistent
+ *     group, which reports its ordinal here so that its number agrees with
+ *     the name it already carries. Show the name you already have for those
  *     rather than a zero.
  */
 public record ServerInfo(

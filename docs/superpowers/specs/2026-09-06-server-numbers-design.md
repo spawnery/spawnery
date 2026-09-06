@@ -109,9 +109,11 @@ because nothing later revisits an assignment.
 `createPersistentServer` sets `spec.number` to the ordinal it was given. Then
 there is one field to read everywhere downstream and no merge, and a persistent
 server's number agrees with its own name. It also means persistent numbers
-start at 0 where ephemeral ones start at 1. Agreeing with the name the server
-already has is worth more than agreeing with the other kind: `survival-0`
-reading as "Survival-0" is right, and reading as "Survival-1" is a trap.
+start at 0 where ephemeral ones start at 1. Ordinal zero is therefore
+indistinguishable from an unnumbered server, and every reader falls back to
+the name it already has for both. That costs nothing: a persistent server is
+referred to by the name that names its world, so falling back to it loses
+nothing a number would have added.
 
 ## Nothing is backfilled
 
@@ -145,9 +147,9 @@ int32 number = 10;
 component with the same wording.
 
 **`ServerInfo` is a record, so this breaks its canonical constructor.** Every
-call site is a test and every one is in-house: `ValueTypesTest` and `FakeApi`
-in this repository, five sites across four test classes in cyperia. They get
-the extra argument. A second constructor keeping the old arity would live
+call site is a test and every one is in-house: `ValueTypesTest` in this
+repository, and five sites across four test classes in cyperia. They get the
+extra argument. A second constructor keeping the old arity would live
 forever to save a one-line edit that happens once.
 
 ## What the two readers do
@@ -234,3 +236,22 @@ be that number. Nothing validates uniqueness after the fact, which is the same
 position `spec.ordinal` is in, where a duplicate is reported rather than
 prevented. If duplicates turn out to happen, the honest fix is the one
 persistent groups have: report them on the group's conditions.
+
+**The reservation has a TTL, and that is a second way to reach the hole above.**
+`expectationTTL` (30 s, in `internal/controller/expectations.go`) bounds how
+long an unobserved create is allowed to hold its number. If the create is
+still unobserved when its reservation expires, the number stops being held and
+the next pass is free to hand it out again while the first create is still on
+its way in. The count self-heals from this: a create that lands after all is a
+surplus, and surplus is deleted. The number does not self-heal the same way,
+because nothing later revisits an assignment, so two live servers can end up
+publishing the same one for the rest of both their lives.
+
+**Numbers are not contiguous after a rolling update.** A replacement is
+created while the server it is replacing still holds its number, so a full
+roll of `{1, 2, 3}` at `maxUnavailable: 1` ends at `{1, 2, 4}` rather than back
+at `{1, 2, 3}`: the number the retiring server frees is never reused, because
+nothing revisits an assignment, and `NextNumber` has already moved past it by
+the time it would be free. It is bounded by replicas plus one, so it cannot
+climb without bound, but it is the first thing an operator watching an update
+will ask about.
