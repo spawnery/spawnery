@@ -730,6 +730,11 @@ func (r *ServerReconciler) collectInputs(
 	// a timeout.
 	in.JoinsClosed = !snap.AcceptingJoins
 
+	stampRoundEnd(srv, snap, now)
+	// The object and not the snapshot: the registry is memory, and this
+	// decision has to hold across an operator restart.
+	in.RoundEnded = srv.Status.RoundEndedAt != nil
+
 	// What the proxies say about this server, which is the half its own agent
 	// cannot see: a player still completing the configuration phase is
 	// counted by neither the backend nor the proxy's own player list, so a
@@ -821,8 +826,25 @@ func (r *ServerReconciler) collectInputs(
 	if srv.Status.FailedAt != nil {
 		in.FailedRetentionElapsed = now.Sub(srv.Status.FailedAt.Time) >= group.FailedRetention()
 	}
+	if srv.Status.RoundEndedAt != nil {
+		in.FinishedRetentionElapsed = now.Sub(srv.Status.RoundEndedAt.Time) >= group.FinishedRetention()
+	}
 
 	return in
+}
+
+// stampRoundEnd records the first time a server said its round was over, and
+// reports whether it wrote anything.
+//
+// Once, never moved: the field answers "when did this end", and a later pass
+// re-reading the same live word must not turn it into "when was this last
+// observed".
+func stampRoundEnd(srv *spawneryv1alpha1.Server, snap agent.Snapshot, now time.Time) bool {
+	if !snap.RoundEnded || srv.Status.RoundEndedAt != nil {
+		return false
+	}
+	srv.Status.RoundEndedAt = &metav1.Time{Time: now}
+	return true
 }
 
 // fallbackGroup stands in for a ServerGroup that is gone. It carries the CRD
