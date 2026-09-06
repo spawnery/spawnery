@@ -78,6 +78,12 @@ type Snapshot struct {
 	// anybody: a network whose agents predate the verb, or whose operator has
 	// just restarted, goes on routing exactly as it did.
 	AcceptingJoins bool
+	// RoundEnded is whether this server has said its round is over.
+	//
+	// False for a pod the registry has never seen, which is the default that
+	// cannot surprise anybody: an unknown pod that stops has not been told to
+	// count as a finished round.
+	RoundEnded bool
 	// EmptyFor is how long the agent has been reporting zero players. It is
 	// zero while players are on, and zero before the first report — a server
 	// that has never reported is not known to be empty.
@@ -150,6 +156,9 @@ type entry struct {
 	// door that swung open in between would put players into a round that had
 	// already started.
 	joinsClosed bool
+	// roundEnded is set once this server has said its round is over. It is
+	// never cleared: a round does not restart inside one pod.
+	roundEnded bool
 	// announcement is what that server last said about itself, nil until it
 	// says anything.
 	//
@@ -398,7 +407,7 @@ func (r *Registry) ReportAnnouncement(key, namespace, server string, a Announcem
 // A proxy is refused, for a plainer reason than the announcement's: a proxy is
 // not in anybody's routing table -- it is the routing table -- so there is
 // nothing for this to close.
-func (r *Registry) ReportAcceptJoins(key string, accept bool) error {
+func (r *Registry) ReportAcceptJoins(key string, accept, roundEnded bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -410,6 +419,12 @@ func (r *Registry) ReportAcceptJoins(key string, accept bool) error {
 		return fmt.Errorf("accept-joins from a %s agent %q", e.role, key)
 	}
 	e.joinsClosed = !accept
+	// Only ever set. A server that ends a round and then reopens its door --
+	// which nothing does today -- has still ended that round, and the pod it
+	// ended in is the one this entry is about.
+	if roundEnded {
+		e.roundEnded = true
+	}
 	return nil
 }
 
@@ -653,6 +668,7 @@ func (r *Registry) Lookup(key string) Snapshot {
 	snap := Snapshot{
 		Known:             true,
 		AcceptingJoins:    !e.joinsClosed,
+		RoundEnded:        e.roundEnded,
 		Connected:         e.connected,
 		Ready:             e.ready,
 		Players:           e.players,

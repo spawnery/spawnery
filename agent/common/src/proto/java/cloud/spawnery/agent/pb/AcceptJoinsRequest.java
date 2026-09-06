@@ -91,6 +91,32 @@ private static final long serialVersionUID = 0L;
     return accept_;
   }
 
+  public static final int ROUND_ENDED_FIELD_NUMBER = 2;
+  private boolean roundEnded_ = false;
+  /**
+   * <pre>
+   * True says the server's round is over: take it out of the routing table
+   * and treat the pod stopping after this as an ending rather than a fault.
+   *
+   * Unset is a server that stays in the table, which is what every agent that
+   * predates this field does and what closing the door alone now means. The
+   * two fields are two claims: `accept` is about capacity -- do not count my
+   * seats -- and this one is about reachability and about how the end of this
+   * pod is to be read.
+   *
+   * It is here rather than in AnnounceRequest because the operator acts on it.
+   * What the operator acts on needs a schema, an error path and a version
+   * story; what it only carries needs a length bound.
+   * </pre>
+   *
+   * <code>bool round_ended = 2;</code>
+   * @return The roundEnded.
+   */
+  @java.lang.Override
+  public boolean getRoundEnded() {
+    return roundEnded_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -108,6 +134,9 @@ private static final long serialVersionUID = 0L;
     if (accept_ != false) {
       output.writeBool(1, accept_);
     }
+    if (roundEnded_ != false) {
+      output.writeBool(2, roundEnded_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -115,6 +144,10 @@ private static final long serialVersionUID = 0L;
     if (accept_ != false) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(1, accept_);
+    }
+    if (roundEnded_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(2, roundEnded_);
     }
     return size;
   }
@@ -142,6 +175,8 @@ private static final long serialVersionUID = 0L;
 
     if (getAccept()
         != other.getAccept()) return false;
+    if (getRoundEnded()
+        != other.getRoundEnded()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -156,6 +191,9 @@ private static final long serialVersionUID = 0L;
     hash = (37 * hash) + ACCEPT_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getAccept());
+    hash = (37 * hash) + ROUND_ENDED_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getRoundEnded());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -314,6 +352,7 @@ private static final long serialVersionUID = 0L;
       super.clear();
       bitField0_ = 0;
       accept_ = false;
+      roundEnded_ = false;
       return this;
     }
 
@@ -350,6 +389,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000001) != 0)) {
         result.accept_ = accept_;
       }
+      if (((from_bitField0_ & 0x00000002) != 0)) {
+        result.roundEnded_ = roundEnded_;
+      }
     }
 
     @java.lang.Override
@@ -366,6 +408,9 @@ private static final long serialVersionUID = 0L;
       if (other == cloud.spawnery.agent.pb.AcceptJoinsRequest.getDefaultInstance()) return this;
       if (other.getAccept() != false) {
         setAccept(other.getAccept());
+      }
+      if (other.getRoundEnded() != false) {
+        setRoundEnded(other.getRoundEnded());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -398,6 +443,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000001;
               break;
             } // case 8
+            case 16: {
+              roundEnded_ = input.readBool();
+              bitField0_ |= 0x00000002;
+              break;
+            } // case 16
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -461,6 +511,83 @@ private static final long serialVersionUID = 0L;
     public Builder clearAccept() {
       bitField0_ = (bitField0_ & ~0x00000001);
       accept_ = false;
+      onChanged();
+      return this;
+    }
+
+    private boolean roundEnded_ ;
+    /**
+     * <pre>
+     * True says the server's round is over: take it out of the routing table
+     * and treat the pod stopping after this as an ending rather than a fault.
+     *
+     * Unset is a server that stays in the table, which is what every agent that
+     * predates this field does and what closing the door alone now means. The
+     * two fields are two claims: `accept` is about capacity -- do not count my
+     * seats -- and this one is about reachability and about how the end of this
+     * pod is to be read.
+     *
+     * It is here rather than in AnnounceRequest because the operator acts on it.
+     * What the operator acts on needs a schema, an error path and a version
+     * story; what it only carries needs a length bound.
+     * </pre>
+     *
+     * <code>bool round_ended = 2;</code>
+     * @return The roundEnded.
+     */
+    @java.lang.Override
+    public boolean getRoundEnded() {
+      return roundEnded_;
+    }
+    /**
+     * <pre>
+     * True says the server's round is over: take it out of the routing table
+     * and treat the pod stopping after this as an ending rather than a fault.
+     *
+     * Unset is a server that stays in the table, which is what every agent that
+     * predates this field does and what closing the door alone now means. The
+     * two fields are two claims: `accept` is about capacity -- do not count my
+     * seats -- and this one is about reachability and about how the end of this
+     * pod is to be read.
+     *
+     * It is here rather than in AnnounceRequest because the operator acts on it.
+     * What the operator acts on needs a schema, an error path and a version
+     * story; what it only carries needs a length bound.
+     * </pre>
+     *
+     * <code>bool round_ended = 2;</code>
+     * @param value The roundEnded to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRoundEnded(boolean value) {
+
+      roundEnded_ = value;
+      bitField0_ |= 0x00000002;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * True says the server's round is over: take it out of the routing table
+     * and treat the pod stopping after this as an ending rather than a fault.
+     *
+     * Unset is a server that stays in the table, which is what every agent that
+     * predates this field does and what closing the door alone now means. The
+     * two fields are two claims: `accept` is about capacity -- do not count my
+     * seats -- and this one is about reachability and about how the end of this
+     * pod is to be read.
+     *
+     * It is here rather than in AnnounceRequest because the operator acts on it.
+     * What the operator acts on needs a schema, an error path and a version
+     * story; what it only carries needs a length bound.
+     * </pre>
+     *
+     * <code>bool round_ended = 2;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRoundEnded() {
+      bitField0_ = (bitField0_ & ~0x00000002);
+      roundEnded_ = false;
       onChanged();
       return this;
     }

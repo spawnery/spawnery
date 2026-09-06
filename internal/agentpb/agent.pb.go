@@ -1289,7 +1289,20 @@ type AcceptJoinsRequest struct {
 	// False closes the door, true opens it again. A server that has never asked
 	// is open, which is what makes this safe to add to a network whose agents
 	// predate it.
-	Accept        bool `protobuf:"varint,1,opt,name=accept,proto3" json:"accept,omitempty"`
+	Accept bool `protobuf:"varint,1,opt,name=accept,proto3" json:"accept,omitempty"`
+	// True says the server's round is over: take it out of the routing table
+	// and treat the pod stopping after this as an ending rather than a fault.
+	//
+	// Unset is a server that stays in the table, which is what every agent that
+	// predates this field does and what closing the door alone now means. The
+	// two fields are two claims: `accept` is about capacity -- do not count my
+	// seats -- and this one is about reachability and about how the end of this
+	// pod is to be read.
+	//
+	// It is here rather than in AnnounceRequest because the operator acts on it.
+	// What the operator acts on needs a schema, an error path and a version
+	// story; what it only carries needs a length bound.
+	RoundEnded    bool `protobuf:"varint,2,opt,name=round_ended,json=roundEnded,proto3" json:"round_ended,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1327,6 +1340,13 @@ func (*AcceptJoinsRequest) Descriptor() ([]byte, []int) {
 func (x *AcceptJoinsRequest) GetAccept() bool {
 	if x != nil {
 		return x.Accept
+	}
+	return false
+}
+
+func (x *AcceptJoinsRequest) GetRoundEnded() bool {
+	if x != nil {
+		return x.RoundEnded
 	}
 	return false
 }
@@ -3520,9 +3540,11 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\x10StopBoostRequest\x12\x14\n" +
 	"\x05group\x18\x01 \x01(\tR\x05group\"+\n" +
 	"\x0fStopBoostResult\x12\x18\n" +
-	"\aremoved\x18\x01 \x01(\x05R\aremoved\",\n" +
+	"\aremoved\x18\x01 \x01(\x05R\aremoved\"M\n" +
 	"\x12AcceptJoinsRequest\x12\x16\n" +
-	"\x06accept\x18\x01 \x01(\bR\x06accept\"\x13\n" +
+	"\x06accept\x18\x01 \x01(\bR\x06accept\x12\x1f\n" +
+	"\vround_ended\x18\x02 \x01(\bR\n" +
+	"roundEnded\"\x13\n" +
 	"\x11AcceptJoinsResult\"\xc0\x01\n" +
 	"\x0fAnnounceRequest\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x12X\n" +
