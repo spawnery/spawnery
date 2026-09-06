@@ -162,11 +162,15 @@ public interface SpawneryApi {
      * they leave on their own. What changes is only whether the proxies send
      * anybody new.
      *
-     * <p><b>The phase does not change.</b> A closed server is still
-     * {@link ServerPhase#READY} — the phase is the operator's account of a
-     * server's lifecycle, and shutting a door is not a lifecycle event. What
-     * changes is {@link ServerInfo#registered()}, which is the field a caller
-     * choosing where to send somebody already reads.
+     * <p><b>The phase does not change, and neither does the routing table.</b>
+     * A closed server is still {@link ServerPhase#READY} — the phase is the
+     * operator's account of a server's lifecycle, and shutting a door is not a
+     * lifecycle event. The server also stays in the proxies' table, so a
+     * spectator sent there by name still arrives. What changes is who is sent
+     * there unasked: the closed server's empty seats stop counting as
+     * capacity, so the next player looking for a game is placed somewhere
+     * else. To leave the table as well, say the round is over —
+     * {@link #endRound()}.
      *
      * <p>Your group notices. A closed server's empty seats stop counting as
      * the group's free capacity, so a group sized by spare slots builds a
@@ -195,6 +199,9 @@ public interface SpawneryApi {
      *
      * <p>It does not stop the server. Call it when the round is over and let
      * the process end as it always did.
+     *
+     * <p>The stage fails when the operator refuses — most plainly on a proxy,
+     * which is not in anybody's routing table but is the routing table.
      *
      * <p>Like {@link #acceptJoins}, it survives a reconnection without being
      * called again: the agent restates it on every new session, because the
