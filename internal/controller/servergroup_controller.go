@@ -936,12 +936,18 @@ func (r *ServerGroupReconciler) size(
 	// other's field -- and neither loop needs to know that.
 	clearOrdinalBlocked(group)
 	if backoff.MayCreate {
+		taken := takenNumbers(views, r.Expectations.pendingNumbers(key))
 		for i := int32(0); i < decision.Create; i++ {
-			name, err := r.createServer(ctx, group, podHash)
+			// Added to the set as well as passed, so the second create of one
+			// pass does not repeat the first one's number: the reservation
+			// below only helps the next pass.
+			number := NextNumber(taken)
+			taken[number] = true
+			name, err := r.createServer(ctx, group, podHash, number)
 			if err != nil {
 				return decision, err
 			}
-			r.Expectations.expectCreated(key, name, 0)
+			r.Expectations.expectCreated(key, name, number)
 		}
 		for _, ordinal := range decision.CreateOrdinals {
 			name, err := r.createPersistentServer(ctx, group, ordinal, podHash)
@@ -1399,16 +1405,19 @@ func (r *ServerGroupReconciler) newServer(
 }
 
 // createServer creates one interchangeable server of an ephemeral group, under
-// a name with a random suffix because it has no identity to preserve.
+// a name with a random suffix because it has no identity to preserve, and with
+// the number a person will read it by.
 func (r *ServerGroupReconciler) createServer(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	podHash string,
+	number int32,
 ) (string, error) {
 	srv, err := r.newServer(group, NewServerName(group.Name), podHash)
 	if err != nil {
 		return "", err
 	}
+	srv.Spec.Number = number
 	if err := r.Create(ctx, srv); err != nil {
 		return "", err
 	}
@@ -1431,6 +1440,11 @@ func (r *ServerGroupReconciler) createPersistentServer(
 		return "", err
 	}
 	srv.Spec.Ordinal = &ordinal
+	// The same number, so the one a person reads agrees with the name this
+	// server already has: survival-0 reads as Survival-0. It leaves persistent
+	// numbers starting at 0 where ephemeral ones start at 1, and agreeing with
+	// the name is worth more than agreeing with the other kind.
+	srv.Spec.Number = ordinal
 	if err := r.Create(ctx, srv); err != nil {
 		// A name this reconciler derives can already be taken, which a random
 		// one effectively cannot: the cache that DecidePersistentSize read may
