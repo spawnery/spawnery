@@ -28,7 +28,7 @@ the group never replaces it with a fresh one.
 | Which signal a round end sends | the table one; the door is already shut |
 | Ephemeral `restartPolicy` | `Never`, so a finished pod stays finished |
 | Persistent `restartPolicy` | unchanged, `Always` |
-| How a clean end is told from a crash | the server's own last announced state, not the exit code |
+| How a clean end is told from a crash | whether the server sent the table signal, not the exit code and not the announcement |
 | Clean end | a new terminal phase, `Finished` |
 | Where that word is kept | `status.roundEndedAt` on `Server`, stamped while it still runs |
 
@@ -118,26 +118,38 @@ stopped. The exit code distinguishes them only as well as the game plugin
 happens to exit, and a `System.exit(0)` in a shutdown hook would make a crash
 indistinguishable from a win.
 
-The server already says which it is. `SpawneryCloudServiceProvider.setEnding()`
-publishes the state `ending`, and the operator holds the last announcement in
-its registry — `Disconnect` keeps it, only `Forget` drops it. So the operator
-can ask what the server said about itself rather than infer it from how the
-process left.
+The server can say which it is, and this is the line `JoinsClosed` already
+draws: the server's own word and not the operator's.
 
-This is the line `JoinsClosed` already draws: the server's own word and not the
-operator's.
+**The word is the new verb, not the announcement.** `setEnding()` already
+publishes the state `ending`, and reading that would be the shorter road. It is
+closed on purpose. `AnnounceRequest` says the operator reads none of it —
+nothing there reaches scheduling, routing or scaling — because a field the
+operator acted on would need a schema, a validation error path and a version
+story, while a field it only carries needs a length bound. It says the second
+half too: the announcement is not the phase, and an agent cannot write one.
+Deciding `Finished` from a free-form string would break both sentences at once.
 
-**But the registry is memory.** An operator restart between the pod ending and
-the reconcile that reads it would turn a clean round into a `Failed` one. So
-the word is made durable where it is heard: when the operator sees the state
-become `ending` — while the server is still running, with plenty of time — it
-stamps `status.roundEndedAt`. The phase decision reads the object.
+So the round's end travels as the verb this design is adding anyway. A server
+that takes itself out of the routing table is at the end of its round: a
+rolling update deregisters through `retire`, which the operator initiates, so
+nothing else has cause to send it. The operator deregisters and stamps
+`status.roundEndedAt` in the same step.
+
+That stamp lands while the server is still running, which is also what makes it
+survive an operator restart between the pod ending and the reconcile that reads
+it. The phase decision reads the object, never the registry — the registry is
+memory, and a restart would otherwise turn a clean round into a `Failed` one.
+
+`state = ending` stays exactly as it is: published by the plugin, carried to the
+other agents, read by nobody in the operator.
 
 ## What travels
 
 | | |
 |---|---|
 | `AcceptJoinsRequest` | second field for "take me out of the table"; unset means in it, so an older agent keeps its place |
+| That same field | the operator's only source for a round's end — typed, so it may be acted on where the announcement may not |
 | `Server.status.roundEndedAt` | new, `*metav1.Time` |
 | `phase.Inputs` | `RoundEnded bool` |
 | `phase.Phase` | new terminal value `Finished` |
@@ -179,8 +191,9 @@ In the real network the two halves differ:
 
 ## Not part of this
 
-A server that announces `ending` and then does not exit hangs, before this
-change and after it. Bounding that is a deadline on `ending` and a separate
+A server that takes itself out of the table and then does not exit hangs,
+before this change and after it. Bounding that is a deadline on the signal and
+a separate
 piece of work.
 
 Persistent groups keep `restartPolicy: Always`. A persistent server's world is
@@ -192,6 +205,7 @@ about a round's end applies to it.
 - The retention default for `Finished`. Zero deletes it as soon as the
   replacement is ordered, which is tidy but leaves no window to look at what
   the last round did. A short non-zero default may be the better answer.
-- Whether `status.roundEndedAt` should be one field or the announced state in
-  full. The narrow field answers this question and nothing else; the full state
-  would serve readers that do not exist yet.
+- Whether the table signal is a second field on `AcceptJoinsRequest` or a verb
+  of its own. One message keeps the door and the table together, where a reader
+  finds both at once; two messages say plainly that they are different claims,
+  which is the whole argument of this design.
