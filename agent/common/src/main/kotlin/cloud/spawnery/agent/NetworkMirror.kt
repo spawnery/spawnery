@@ -83,6 +83,7 @@ class NetworkMirror {
                     // when the next state arrives.
                     it.attributesMap,
                     it.incarnation,
+                    it.number,
                 )
             },
             // An entry whose UUID will not parse is dropped and the rest of the

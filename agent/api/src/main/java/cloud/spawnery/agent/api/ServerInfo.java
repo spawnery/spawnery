@@ -50,6 +50,14 @@ import java.util.Objects;
  *     scoreboard that outlives a reconnect — compares this and not the name.
  *     <p>Empty for a server whose pod the operator has not seen yet, which is
  *     a server nobody is being sent to.
+ * @param number which of its group's servers this is, counted the way a person
+ *     counts: the second hub is 2. Stable for as long as the server exists.
+ *     <p>Given out again once this server is gone, so two servers that were
+ *     both "Hub-2" at different times are told apart by {@link #incarnation()}
+ *     and never by this.
+ *     <p>0 for a server nobody numbered, which is every server that was
+ *     already running when this arrived. Show the group's own name for those
+ *     rather than a zero.
  */
 public record ServerInfo(
         String name,
@@ -60,7 +68,8 @@ public record ServerInfo(
         boolean registered,
         String state,
         Map<String, String> attributes,
-        String incarnation) {
+        String incarnation,
+        int number) {
     public ServerInfo {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(group, "group");
