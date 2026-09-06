@@ -468,12 +468,13 @@ git commit -m "$(cat <<'EOF'
 feat(controller): a create reserves its server number with its name
 
 size may create a server the cache has not shown yet and be called again
-before it appears -- the ordinary case for a scaler that reacts to player
-counts, not the rare one. Without a reservation the second pass reads the
-same views and hands out the same lowest free number twice.
+before it appears -- the ordinary case for a scaler reacting to player
+counts, not the rare one. Without a reservation the second pass reads
+the same views and hands out the same lowest free number twice.
 
-A shifted number is untidy; a duplicated one sticks for the whole life of
-both servers, because nothing revisits an assignment. So the reservation
+A shifted number is untidy; a duplicated one sticks for the whole life
+of both servers, because nothing revisits an assignment. So the
+reservation
 carries the number beside the name, and zero says a create reserved no
 number at all: a proxy pod, or a persistent server, whose number is the
 ordinal the sizing rule already decided.
@@ -800,16 +801,16 @@ git commit -m "$(cat <<'EOF'
 feat(controller): the group hands each server the lowest free number
 
 A player on a hub cannot say which hub they are on. The group now gives
-every server it creates the lowest number from 1 upwards that none of its
-live servers holds, counting the creates it has issued and not yet seen.
+every server it creates the lowest number from 1 upwards that none of
+its live servers holds, counting the creates it issued and has not seen.
 
-Lowest free rather than highest plus one: a group that scales up and down
+Lowest free rather than highest plus one: a group scaling up and down
 all day keeps its numbers short instead of counting into three digits.
 The cost is that a number returns once its server is gone, which
 ServerInfo.incarnation is what tells apart.
 
-A persistent server's number is its ordinal, so the number a person reads
-agrees with the name the server already has.
+A persistent server's number is its ordinal, so the number a person
+reads agrees with the name the server already has.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01FbwDaFeEUAXku6iLfgp8fZ
@@ -933,8 +934,8 @@ person counts. Zero for a server nobody numbered, which is every server
 that predates the field -- a reader showing it to a player falls back to
 the group's own name for those.
 
-From spec.number and not from a status field: the group decided this once
-when it created the server, and nothing observes it afterwards.
+From spec.number and not from a status field: the group decided this
+once when it created the server, and nothing observes it afterwards.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01FbwDaFeEUAXku6iLfgp8fZ
@@ -1048,8 +1049,8 @@ number between them.
 
 The component goes last. Appending keeps each call site to one added
 argument; inserting it beside name would silently change the meaning of
-every positional argument after it in code that still compiles. Four test
-call sites move, and they are the only ones: no plugin constructs this.
+every positional argument after it in code that still compiles. Four
+test call sites move, and they are the only ones: no plugin builds this.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_01FbwDaFeEUAXku6iLfgp8fZ
@@ -1494,8 +1495,8 @@ git add gradle.properties common/src
 git commit -m "$(cat <<'EOF'
 feat(selector): an entry is labelled by the group and the number
 
-The selector named each entry by the pod, "oneblockrace-solo-vz3g", which
-nobody can say out loud. It now reads "Bingo-Solo-1".
+The selector named each entry by the pod, "oneblockrace-solo-vz3g",
+which nobody can say out loud. It now reads "Bingo-Solo-1".
 
 Two fields and not one: serverName stays the route, which sendToServer,
 SelectorRanking and QuickJoinCommand all compare, and displayName is the
