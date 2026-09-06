@@ -22,12 +22,12 @@ private val REMOVED = setOf(
     "DeletionRequested",
     "Drained",
     "DrainingBeforeCleanup",
-    "JoinsClosed",
     "MaxStaleElapsed",
     "PodLost",
     "ReadinessLost",
     "RetentionElapsed",
     "Retiring",
+    "RoundFinished",
     "Terminating",
 )
 

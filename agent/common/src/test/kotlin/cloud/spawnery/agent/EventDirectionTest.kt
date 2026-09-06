@@ -15,16 +15,22 @@ class EventDirectionTest {
     fun `a server leaving reads as removed`() {
         assertEquals(Direction.REMOVED, direction("Retiring"))
         assertEquals(Direction.REMOVED, direction("Terminating"))
-        assertEquals(Direction.REMOVED, direction("JoinsClosed"))
+        assertEquals(Direction.REMOVED, direction("RoundFinished"))
         assertEquals(Direction.REMOVED, direction("ReadinessLost"))
     }
 
     @Test
     fun `the two doors face opposite ways`() {
-        // JoinsOpen and JoinsClosed are the one pair a table like this is most
-        // likely to get wrong, because they differ by one word.
+        // JoinsOpen and RoundFinished are the pair a table like this is most
+        // likely to get wrong, because they are the same branch in the
+        // operator's state machine read two ways: reachability, not the join
+        // door -- RoundFinished deregisters a server whose round ended,
+        // JoinsOpen registers one whose door is still open and was not yet
+        // reachable. JoinsClosed used to be this pair's other half; it never
+        // deregistered anything on its own, and this table has no entry for
+        // it any more.
         assertEquals(Direction.ADDED, direction("JoinsOpen"))
-        assertEquals(Direction.REMOVED, direction("JoinsClosed"))
+        assertEquals(Direction.REMOVED, direction("RoundFinished"))
     }
 
     @Test
