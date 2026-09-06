@@ -310,6 +310,24 @@ func TestDecideSizeDoesNotLetALeavingServerHoldTheFloor(t *testing.T) {
 	}
 }
 
+// TestDecideSizeDoesNotLetAFinishedServerHoldTheFloor is
+// TestDecideSizeDoesNotLetALeavingServerHoldTheFloor's Finished counterpart.
+// SpareSlots is 0 so the demand path can supply no replacement of its own —
+// the discriminating fixture the end-to-end controller test lacked, where a
+// closed door's lost provisional capacity masked this same gap by ordering a
+// replacement for an unrelated reason. Only the floor can be short here, so a
+// Create of 1 can only come from countsTowardSize excluding phase.Finished.
+func TestDecideSizeDoesNotLetAFinishedServerHoldTheFloor(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{{Name: "a", Phase: phase.Finished, Slots: 100}},
+		MinReplicas: 1, MaxReplicas: 1,
+		SpareSlots: 0, MaxPlayers: 100,
+	})
+	if got.Create != 1 {
+		t.Errorf("Create = %d, want 1: a Finished server does not hold the floor", got.Create)
+	}
+}
+
 // empty builds a Ready, empty server that has been empty for d.
 func empty(name string, slots int32, d time.Duration) ServerView {
 	v := ready(name, 0, slots)

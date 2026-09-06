@@ -310,8 +310,15 @@ func (v ServerView) leaving() bool {
 // so that somebody can look at it. Counting it would leave the group below its
 // floor for that whole hour with nothing a player could join, which is the
 // opposite of what the retention is for.
+//
+// A Finished one does not either, for the same arithmetic and a different
+// reason: it too is deregistered and takes no player, so it holds the group
+// below its floor exactly as a Failed one does. What differs is only why it is
+// kept — briefly, for its finished retention, because its round is over,
+// rather than for diagnosis — and that difference has no bearing on whether it
+// still occupies a floor slot. It does not.
 func (v ServerView) countsTowardSize() bool {
-	return !v.leaving() && v.Phase != phase.Failed
+	return !v.leaving() && v.Phase != phase.Failed && v.Phase != phase.Finished
 }
 
 // tookPlayers reports whether the server was ever able to hold players. That

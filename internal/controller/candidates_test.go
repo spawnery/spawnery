@@ -235,9 +235,10 @@ func TestAggregateIgnoresStaleCountsForFreeSlots(t *testing.T) {
 }
 
 // TestCountsTowardSize pins which servers hold the group at its floor. A server
-// on its way out no longer does, and neither does a Failed one: it is kept for
-// diagnosis and can take no player, so counting it would leave the group below
-// its floor for the whole retention window.
+// on its way out no longer does, and neither does a Failed or a Finished one:
+// both are kept a while — one for diagnosis, one for its finished retention —
+// and neither can take a player, so counting either would leave the group
+// below its floor for the whole of that window.
 func TestCountsTowardSize(t *testing.T) {
 	cases := []struct {
 		p    phase.Phase
@@ -249,6 +250,7 @@ func TestCountsTowardSize(t *testing.T) {
 		{phase.Draining, false},
 		{phase.Terminating, false},
 		{phase.Failed, false},
+		{phase.Finished, false},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.p), func(t *testing.T) {
