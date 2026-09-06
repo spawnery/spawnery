@@ -78,6 +78,34 @@ class CloudConnectorTest {
     }
 
     @Test
+    fun `endRound closes the door and says the round is over`() {
+        val connector = connector()
+
+        connector.endRound()
+
+        assertEquals(1, requested.size)
+        assertEquals(false, requested[0].acceptJoins.accept)
+        assertTrue(requested[0].acceptJoins.roundEnded)
+    }
+
+    @Test
+    fun `a new stream is told again that this server's round has ended`() {
+        // The sharper of the two defaults: the operator's default for a
+        // session it has never seen is that the round has not ended, so an
+        // ended round that went unrestated would put the server back in the
+        // routing table and record its pod as Failed rather than Finished.
+        val connector = connector()
+        connector.endRound()
+        requested.clear()
+
+        connector.onStreamChanged()
+
+        assertEquals(1, requested.size)
+        assertEquals(false, requested[0].acceptJoins.accept)
+        assertTrue(requested[0].acceptJoins.roundEnded)
+    }
+
+    @Test
     fun `a server that never spoke about its door says nothing about it`() {
         // Never having spoken is not the same as having said "open": there is
         // nothing to restate, and the operator's own default already agrees.

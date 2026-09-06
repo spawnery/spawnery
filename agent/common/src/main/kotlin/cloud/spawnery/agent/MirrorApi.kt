@@ -90,6 +90,9 @@ class MirrorApi(
     override fun acceptJoins(accept: Boolean): CompletionStage<Void> =
         connector.acceptJoins(accept)
 
+    override fun endRound(): CompletionStage<Void> =
+        connector.endRound()
+
     override fun holdReadiness(reason: String): ReadinessHold {
         val gate = readiness ?: throw UnsupportedOperationException(
             "this is a proxy; a proxy has no readiness to hold",

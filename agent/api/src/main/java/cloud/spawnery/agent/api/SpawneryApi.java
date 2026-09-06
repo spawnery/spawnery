@@ -186,6 +186,26 @@ public interface SpawneryApi {
     CompletionStage<Void> acceptJoins(boolean accept);
 
     /**
+     * Says this server's round is over.
+     *
+     * <p>Two things follow, and only the operator can do either: the server
+     * leaves the proxies' routing table, so nobody new arrives at a round that
+     * has finished, and the pod stopping after this reads as an ending rather
+     * than a fault — its group replaces it without counting a failure.
+     *
+     * <p>It does not stop the server. Call it when the round is over and let
+     * the process end as it always did.
+     *
+     * <p>Like {@link #acceptJoins}, it survives a reconnection without being
+     * called again: the agent restates it on every new session, because the
+     * operator's default for a session it has never seen is that the round
+     * has not ended. It is restated together with the door, never apart —
+     * a round that ended closed the door too, and the two are never told
+     * apart on the wire.
+     */
+    CompletionStage<Void> endRound();
+
+    /**
      * Holds this server back from readiness until the returned hold is closed.
      *
      * <p>For a plugin whose initialisation continues after the server has
