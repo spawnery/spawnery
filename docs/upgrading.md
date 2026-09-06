@@ -861,3 +861,19 @@ group no failure from the backoff budget.
 Ephemeral server pods now carry `restartPolicy: Never`. A pod that stops stays
 stopped, which is what lets the operator see a round end at all. Persistent
 groups are unchanged.
+
+**That reshapes the pod, so this release rolls every ephemeral group.** A
+server is stale when its `spawnery.cloud/pod-hash` label differs from a digest
+of the pod the operator would render now, and that digest is taken over the
+rendered pod -- `restartPolicy` included. So every ephemeral `ServerGroup` in
+every installation goes stale the moment the new operator comes up, and each is
+replaced an ordinal at a time. Nothing avoids it: the policy cannot be changed
+on a pod that is already running, so the pods have to be re-rendered to carry
+it. A round in progress ends as its server drains, like any other rolled
+server. Persistent groups keep their digest and do not move.
+
+`internal/podspec/hash_golden_test.go` did not catch this when it was written,
+because its one server fixture was a persistent group -- the type whose restart
+policy did not change. It now pins an ephemeral fixture as well, so the next
+change to the ephemeral-only half of the render fails on the pull request that
+makes it.

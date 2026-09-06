@@ -81,6 +81,23 @@ const goldenProxyDigest = "c52b89c65d114de2"
 // finishing their sessions on pods being replaced.
 const goldenServerDigest = "85fe4733710a4013"
 
+// goldenEphemeralServerDigest is DesiredServerHash over
+// goldenNetwork/goldenEphemeralServerGroup and goldenConfigValues. See the
+// comment above before changing it.
+//
+// The sibling above renders a *persistent* group, and the two group types no
+// longer render the same pod: an ephemeral one gets an emptyDir instead of a
+// claim and, since 0.2.28, restartPolicy: Never instead of Always. A single
+// fixture therefore guards only half the fleet, and it was the half that did
+// not move -- 0.2.28's restart-policy change reached every ephemeral group in
+// every installation with this file staying green. This constant is the other
+// half.
+//
+// First pinned on 2026-09-06, over the render 0.2.28 ships. It has no earlier
+// value to have moved from: the roll it would have caught is the one recorded
+// in docs/upgrading.md's 0.2.28 section.
+const goldenEphemeralServerDigest = "1918d30a757abb1d"
+
 // goldenAgentEndpoint is an input to DesiredProxyHash and not to
 // DesiredServerHash -- the asymmetry is deliberate and DesiredServerHash's own
 // comment explains it. Frozen here so that neither the operator's real flag
@@ -146,6 +163,28 @@ func goldenServerGroup() *spawneryv1alpha1.ServerGroup {
 	}
 }
 
+// goldenEphemeralServerGroup is goldenServerGroup with the one field that
+// picks the other render path, and its storage dropped because an ephemeral
+// group has none. Everything else is deliberately identical, so a failure here
+// and not there names the ephemeral-only half of the render as the thing that
+// moved.
+func goldenEphemeralServerGroup() *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "golden-ephemeral-server-group",
+			Namespace: "golden-namespace",
+			UID:       "00000000-0000-4000-8000-000000000004",
+		},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: spawneryv1alpha1.ObjectRef{Name: "golden-network"},
+			Type:       spawneryv1alpha1.ServerGroupEphemeral,
+			Image:      "ghcr.io/spawnery/paper:golden",
+			MaxPlayers: 20,
+			Replicas:   ptr.To(int32(1)),
+		},
+	}
+}
+
 func TestTheProxyPodDigestHasNotMoved(t *testing.T) {
 	got, err := DesiredProxyHash(goldenNetwork(), goldenProxyGroup(), goldenAgentEndpoint, goldenConfigValues)
 	if err != nil {
@@ -184,5 +223,26 @@ every ServerGroup in every installation on the next operator upgrade.
 If that is what the change is for, update goldenServerDigest to %[1]q and say so
 in the commit message -- the release that carries it has to say it too.`,
 			got, goldenServerDigest)
+	}
+}
+
+func TestTheEphemeralServerPodDigestHasNotMoved(t *testing.T) {
+	got, err := DesiredServerHash(goldenNetwork(), goldenEphemeralServerGroup(), goldenConfigValues)
+	if err != nil {
+		t.Fatalf("DesiredServerHash: %v", err)
+	}
+	if got != goldenEphemeralServerDigest {
+		t.Errorf(`DesiredServerHash = %q, want the pinned %q.
+
+Something in the *ephemeral* server pod render moved -- the half the persistent
+fixture above cannot see. The stakes are the sibling's: every ephemeral
+ServerGroup in every installation is rolled on the next operator upgrade, one
+ordinal at a time, and for a group running rounds that means every round in
+progress ends as its server drains.
+
+If that is what the change is for, update goldenEphemeralServerDigest to %[1]q
+and say so in the commit message -- the release that carries it has to say it
+too.`,
+			got, goldenEphemeralServerDigest)
 	}
 }
