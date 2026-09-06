@@ -135,9 +135,10 @@ gone within hours of the release reaching it. Not worth the code.
 // the second hub is 2. Stable for as long as the server exists, and given
 // out again only after it is gone.
 //
-// 0 for a server the operator never numbered, which is every server that
-// was already running when this field arrived. A reader that shows this to
-// a player should fall back to the group's name for those.
+// 0 means nobody numbered this server: every server that was already
+// running when this field arrived, and the ordinal-zero server of a
+// persistent group. A reader showing this to a player falls back to the
+// name it already has for those.
 int32 number = 10;
 ```
 
