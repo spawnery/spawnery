@@ -625,11 +625,7 @@ func TestAFinishedRoundIsReplacedWithoutCountingAFailure(t *testing.T) {
 		t.Fatalf("the group did not replace the finished server; servers = %d", len(f.listServers(t)))
 	}
 
-	group := &spawneryv1alpha1.ServerGroup{}
-	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, group); err != nil {
-		t.Fatalf("get group: %v", err)
-	}
-	if got := group.Status.ConsecutiveFailures; got != 0 {
+	if got := f.reloadGroup(t).Status.ConsecutiveFailures; got != 0 {
 		t.Errorf("consecutiveFailures = %d, want 0 -- a finished round is not a fault", got)
 	}
 }
