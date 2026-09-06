@@ -30,6 +30,24 @@ type ServerSpec struct {
 	// +optional
 	Ordinal *int32 `json:"ordinal,omitempty"`
 
+	// Number is which of its group's servers this is, counted the way a
+	// person counts: the second hub is 2. The group assigns it once, at
+	// creation, and it is given out again only after this server is gone.
+	//
+	// Zero means nobody numbered this server, which is every server that was
+	// already running when this field arrived. Nothing backfills them; a
+	// reader showing this to a player falls back to the group's own name.
+	//
+	// Not Ordinal, and the difference is what each one is for: that one is a
+	// persistent server's identity, the thing its storage claim is named
+	// from, and its presence is read elsewhere as "this server is
+	// persistent". This one is a label a player reads, and every server has
+	// one. A persistent server's Number equals its Ordinal, so the number a
+	// person sees agrees with the name the server already has.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Number int32 `json:"number,omitempty"`
+
 	// GroupGeneration is the metadata.generation of the group at creation
 	// time. A server whose value is behind the group's is stale.
 	// +optional

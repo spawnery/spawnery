@@ -34,6 +34,11 @@ type ServerView struct {
 	// is what "this is not an ordinal server of its group" honestly means to
 	// a rule that reads it, whatever put the server there.
 	Ordinal *int32
+	// Number is spec.number: which of its group's servers this is, as a
+	// person counts. Zero for a server created before the field existed.
+	// Read here so the sizing pass can see which numbers are in use without
+	// fetching the objects again.
+	Number int32
 	// Phase is its current state machine position.
 	Phase phase.Phase
 	// Players is the last reported count.
