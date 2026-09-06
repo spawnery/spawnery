@@ -32,6 +32,14 @@ public enum ServerPhase {
     DRAINING,
     TERMINATING,
     FAILED,
+    /**
+     * The round is over: the server said so with {@link SpawneryApi#endRound()}
+     * and its pod then stopped. Terminal like {@link #FAILED} and replaced by
+     * its group at once, but not a fault — it costs the group no failure and
+     * it is kept for a short retention rather than the long one a failure gets
+     * for diagnosis.
+     */
+    FINISHED,
     UNKNOWN;
 
     /** Maps the operator's spelling onto this enum, never throwing. */

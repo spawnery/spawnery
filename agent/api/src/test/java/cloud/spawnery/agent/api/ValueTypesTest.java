@@ -78,6 +78,7 @@ class ValueTypesTest {
     void anUnknownPhaseBecomesUnknownRatherThanAnException() {
         assertEquals(ServerPhase.UNKNOWN, ServerPhase.fromWire("SomethingLaterInvented"));
         assertEquals(ServerPhase.READY, ServerPhase.fromWire("Ready"));
+        assertEquals(ServerPhase.FINISHED, ServerPhase.fromWire("Finished"));
     }
 
     // freeSlots is never negative: a report can show more players than slots
