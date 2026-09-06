@@ -698,6 +698,12 @@ both carry an empty description rather than a missing one.
 does not change — a closed server is `Ready` and not registered, which is a
 state this operator always had.
 
+**0.2.28 narrows this.** `acceptJoins(false)` no longer takes a server out of
+the proxies' routing table — see ["A closed door no longer hides a
+server"](#a-closed-door-no-longer-hides-a-server) below. What stands from this
+paragraph: it still stops the server's seats counting as capacity, and the
+phase still does not move.
+
 It exists as its own verb rather than as a use of `retire` because the two mean
 different things and one of them is permanent. Retiring says a server is
 finished and ends it once it is empty; a round that has started is not a server
