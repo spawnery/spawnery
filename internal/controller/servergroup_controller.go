@@ -941,14 +941,19 @@ func (r *ServerGroupReconciler) size(
 			if err != nil {
 				return decision, err
 			}
-			r.Expectations.expectCreated(key, name)
+			r.Expectations.expectCreated(key, name, 0)
 		}
 		for _, ordinal := range decision.CreateOrdinals {
 			name, err := r.createPersistentServer(ctx, group, ordinal, podHash)
 			if err != nil {
 				return decision, err
 			}
-			r.Expectations.expectCreated(key, name)
+			// Zero and not the ordinal: this loop's numbers come from
+			// DecidePersistentSize, which reads them off the views and needs
+			// no reservation of its own. Reserving one here would put a
+			// persistent group's ordinal 0 into a set whose zero means "no
+			// number".
+			r.Expectations.expectCreated(key, name, 0)
 		}
 	}
 	// After the creates, and deliberately so: reportSquatter may have set this

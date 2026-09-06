@@ -1022,7 +1022,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		// and no reservation is made for a create that never happened. There
 		// is nothing to expire on the TTL in that case, because nothing was
 		// recorded.
-		r.Expectations.expectCreated(key, pod.Name)
+		r.Expectations.expectCreated(key, pod.Name, 0)
 	}
 
 	// Which pods are going, decided once and used by both loops below.

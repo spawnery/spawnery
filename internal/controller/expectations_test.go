@@ -33,7 +33,7 @@ func newTestExpectations() (*expectations, *testClock) {
 
 func TestExpectedCreateCountsUntilTheCacheShowsIt(t *testing.T) {
 	e, _ := newTestExpectations()
-	e.expectCreated("ns/lobby", "lobby-aaaa")
+	e.expectCreated("ns/lobby", "lobby-aaaa", 0)
 
 	creates, deletes, _ := e.pending("ns/lobby")
 	if len(creates) != 1 || len(deletes) != 0 {
@@ -48,7 +48,7 @@ func TestExpectedCreateCountsUntilTheCacheShowsIt(t *testing.T) {
 
 func TestExpectationsExpire(t *testing.T) {
 	e, clock := newTestExpectations()
-	e.expectCreated("ns/lobby", "lobby-aaaa")
+	e.expectCreated("ns/lobby", "lobby-aaaa", 0)
 
 	clock.Advance(expectationTTL - time.Second)
 	e.observe("ns/lobby", nil)
@@ -109,8 +109,8 @@ func TestExpectedDeleteIsNotSatisfiedByCondemnedAlone(t *testing.T) {
 
 func TestExpectationsAreKeptPerGroup(t *testing.T) {
 	e, _ := newTestExpectations()
-	e.expectCreated("ns/lobby", "lobby-aaaa")
-	e.expectCreated("ns/arena", "arena-bbbb")
+	e.expectCreated("ns/lobby", "lobby-aaaa", 0)
+	e.expectCreated("ns/arena", "arena-bbbb", 0)
 
 	if creates, _, _ := e.pending("ns/arena"); len(creates) != 1 {
 		t.Errorf("arena creates = %v, want 1", creates)
@@ -123,7 +123,7 @@ func TestExpectationsAreKeptPerGroup(t *testing.T) {
 
 func TestForgetDropsAGroupEntirely(t *testing.T) {
 	e, _ := newTestExpectations()
-	e.expectCreated("ns/lobby", "lobby-aaaa")
+	e.expectCreated("ns/lobby", "lobby-aaaa", 0)
 	e.expectDeleted("ns/lobby", "lobby-bbbb")
 
 	e.forget("ns/lobby")
@@ -140,8 +140,8 @@ func TestForgetDropsAGroupEntirely(t *testing.T) {
 // shortfall the group actually has.
 func TestPendingSeparatesCreatesFromDeletes(t *testing.T) {
 	e, _ := newTestExpectations()
-	e.expectCreated("ns/lobby", "lobby-aaaa")
-	e.expectCreated("ns/lobby", "lobby-bbbb")
+	e.expectCreated("ns/lobby", "lobby-aaaa", 0)
+	e.expectCreated("ns/lobby", "lobby-bbbb", 0)
 	e.expectDeleted("ns/lobby", "lobby-cccc")
 
 	creates, deletes, _ := e.pending("ns/lobby")
@@ -164,8 +164,8 @@ func TestPendingSeparatesCreatesFromDeletes(t *testing.T) {
 // thing that failed.
 func TestPendingNamesItsCreates(t *testing.T) {
 	e := newExpectations(func() time.Time { return time.Unix(0, 0) })
-	e.expectCreated("ns/survival", "survival-0")
-	e.expectCreated("ns/survival", "survival-2")
+	e.expectCreated("ns/survival", "survival-0", 0)
+	e.expectCreated("ns/survival", "survival-2", 0)
 	e.expectDeleted("ns/survival", "survival-5")
 
 	creates, deletes, _ := e.pending("ns/survival")
@@ -210,7 +210,7 @@ func TestExpectedRetireCountsUntilTheCacheShowsIt(t *testing.T) {
 // than the Server CRs observe reads.
 func TestObservePodsClearsACreateReservation(t *testing.T) {
 	e := newExpectations(func() time.Time { return time.Unix(0, 0) })
-	e.expectCreated("gateway", "gateway-aaaa")
+	e.expectCreated("gateway", "gateway-aaaa", 0)
 
 	pending, _, _ := e.pending("gateway")
 	if len(pending) != 1 {
@@ -246,5 +246,45 @@ func TestExpectedRetireIsSatisfiedByDisappearance(t *testing.T) {
 	e.observe("ns/g", nil)
 	if _, _, retires := e.pending("ns/g"); retires["a"] {
 		t.Error("a retirement whose server is gone is still reserved")
+	}
+}
+
+func TestPendingNumbersHoldsWhatWasReserved(t *testing.T) {
+	e := newExpectations(time.Now)
+
+	e.expectCreated("ns/hub", "hub-dvjk", 1)
+	e.expectCreated("ns/hub", "hub-pgqg", 3)
+
+	got := e.pendingNumbers("ns/hub")
+	if !got[1] || !got[3] {
+		t.Errorf("pendingNumbers = %v, want 1 and 3", got)
+	}
+	if len(got) != 2 {
+		t.Errorf("pendingNumbers = %v, want exactly two entries", got)
+	}
+}
+
+func TestPendingNumbersSkipsZero(t *testing.T) {
+	e := newExpectations(time.Now)
+
+	// A proxy pod and a persistent server both reserve a name without
+	// reserving a number, and pass zero to say so. Zero is not a number the
+	// ephemeral rule may hand out, so letting it into the set would only
+	// mislead a reader of it.
+	e.expectCreated("ns/gateway", "gateway-a1b2", 0)
+
+	if got := e.pendingNumbers("ns/gateway"); len(got) != 0 {
+		t.Errorf("pendingNumbers = %v, want empty", got)
+	}
+}
+
+func TestAnObservedCreateReleasesItsNumber(t *testing.T) {
+	e := newExpectations(time.Now)
+	e.expectCreated("ns/hub", "hub-dvjk", 1)
+
+	e.observe("ns/hub", []ServerView{{Name: "hub-dvjk", Number: 1}})
+
+	if got := e.pendingNumbers("ns/hub"); len(got) != 0 {
+		t.Errorf("pendingNumbers = %v, want empty once the create was seen", got)
 	}
 }
