@@ -1551,3 +1551,21 @@ func TestABoostAlsoHoldsCapacityAgainstAScaleDown(t *testing.T) {
 		t.Errorf("Delete = %v, want none: three servers is exactly the boosted floor", got.Delete)
 	}
 }
+
+func TestAGroupBuildsARoomWhileItsOnlyServerIsPlaying(t *testing.T) {
+	// spareSlots == maxPlayers is a request for one whole free server. A
+	// running round cannot be the one.
+	in := ScalingInputs{
+		MaxReplicas: 10,
+		MaxPlayers:  80,
+		SpareSlots:  80,
+		Views: []ServerView{
+			{Name: "a", Phase: phase.Ready, Registered: true, JoinsClosed: true, Players: 2, Slots: 80},
+		},
+		PendingDeletes: map[string]bool{},
+	}
+
+	if got := decideSize(in).Create; got < 1 {
+		t.Errorf("create = %d, want at least 1 — nobody can join the running round", got)
+	}
+}

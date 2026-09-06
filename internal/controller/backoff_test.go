@@ -406,3 +406,20 @@ func TestAGenerationResetLeavesOneRoundNotOnePerCorpse(t *testing.T) {
 			"spends most of the budget on servers the operator has just answered for", got)
 	}
 }
+
+func TestAFinishedRoundSpendsNoneOfTheBackoffBudget(t *testing.T) {
+	// Six consecutive failures end a group's attempts for good. A group that
+	// plays six rounds has not failed once, and this is what keeps the two
+	// apart -- CountFailures reads the phase, so Finished has to be its own
+	// phase for this to hold.
+	ended := time.Unix(2000, 0)
+	views := []ServerView{
+		{Name: "a", Phase: phase.Finished, FailedAt: ended},
+		{Name: "b", Phase: phase.Finished, FailedAt: ended},
+	}
+
+	count, _ := CountFailures(views, 0, time.Unix(1000, 0), 0)
+	if count != 0 {
+		t.Errorf("consecutiveFailures = %d, want 0 — finished rounds are not faults", count)
+	}
+}

@@ -67,6 +67,14 @@ type ServerView struct {
 	// sent here now", which decides whether this server's empty seats are
 	// capacity at all.
 	Registered bool
+	// JoinsClosed is whether the server has shut its door: it wants no new
+	// players, while going on playing with the ones it has.
+	//
+	// Beside Registered rather than derived from it. They were the same
+	// question while a closed door was also deregistered; now a playing server
+	// stays in the table on purpose, so "can anybody be sent here" and "would
+	// anybody be sent here" have come apart, and capacity is the second one.
+	JoinsClosed bool
 	// SessionsGone is true if the pod reached a terminal state or disappeared.
 	// Either way the process is down and its players went with it — the same
 	// reasoning the state machine uses when it refuses to drain a terminal pod.
@@ -531,15 +539,11 @@ func AggregateGroup(views []ServerView, podHash string) GroupTotals {
 		if !v.Stale {
 			t.OnlinePlayers += v.Players
 		}
-		// Registered, and not merely Ready. Free seats on a server no proxy
-		// will send anybody to are not capacity, and counting them would let a
-		// group sit at its floor while every server in it had shut its door --
-		// the scaler seeing plenty of room and the players seeing none.
-		//
-		// It also tightens a case that predates any door: between the pass
-		// that makes a server Ready and the one that registers it, its seats
-		// were counted as reachable for as long as that took.
-		if v.Phase == phase.Ready && v.Registered && !staleSpec(v, podHash) && !v.Stale {
+		// Not JoinsClosed, and Registered as well: the first is the server
+		// saying it wants nobody, the second is the proxies being able to
+		// reach it at all. Free seats behind either are not capacity.
+		if v.Phase == phase.Ready && v.Registered && !v.JoinsClosed &&
+			!staleSpec(v, podHash) && !v.Stale {
 			free := v.Slots - v.Players
 			if free > 0 {
 				t.FreeSlots += free

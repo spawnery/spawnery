@@ -642,3 +642,16 @@ func TestAClosedServersSeatsAreNotCapacity(t *testing.T) {
 		t.Errorf("replicas = %d/%d, want both servers still counted", got.ReadyReplicas, got.Replicas)
 	}
 }
+
+func TestAClosedDoorIsNotFreeCapacity(t *testing.T) {
+	// A running round holds seats nobody can take. Counting them let a group
+	// sit at its floor while every server in it was playing.
+	views := []ServerView{
+		{Name: "a", Phase: phase.Ready, Registered: true, JoinsClosed: true, Players: 2, Slots: 80},
+		{Name: "b", Phase: phase.Ready, Registered: true, Players: 0, Slots: 80},
+	}
+
+	if got, want := AggregateGroup(views, "").FreeSlots, int32(80); got != want {
+		t.Errorf("FreeSlots = %d, want %d — the playing server's seats were counted", got, want)
+	}
+}
