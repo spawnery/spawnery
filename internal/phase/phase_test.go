@@ -115,6 +115,12 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Ready, Deregister: true, Reason: ReasonRoundFinished},
 		},
 		{
+			name:    "a server whose round ended is not deregistered twice",
+			current: Ready,
+			in:      Inputs{PodExists: true, PodRunning: true, PodReady: true, AgentReady: true, RoundEnded: true, Registered: false},
+			want:    Decision{Next: Ready, Reason: ReasonReadyGatePassed},
+		},
+		{
 			name:    "ready falls back to starting when the probe turns red",
 			current: Ready,
 			in: func() Inputs {
