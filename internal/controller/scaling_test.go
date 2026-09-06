@@ -1552,20 +1552,25 @@ func TestABoostAlsoHoldsCapacityAgainstAScaleDown(t *testing.T) {
 	}
 }
 
-func TestAGroupBuildsARoomWhileItsOnlyServerIsPlaying(t *testing.T) {
-	// spareSlots == maxPlayers is a request for one whole free server. A
-	// running round cannot be the one.
+func TestAGroupWhoseEveryServerIsPlayingBuildsARoom(t *testing.T) {
+	// spareSlots == maxPlayers is a request for one whole free server. With a
+	// single closed-door server the ceiling division hides the bug -- 78 free
+	// seats and 0 free seats both round up to a wanted of 1 against a spare of
+	// 80. It takes every server in the group shut at once, the way
+	// AggregateGroup's own comment describes it, before the unfixed seats
+	// (156) clear the spare-slot bar and the fixed ones (0) do not.
 	in := ScalingInputs{
 		MaxReplicas: 10,
 		MaxPlayers:  80,
 		SpareSlots:  80,
 		Views: []ServerView{
 			{Name: "a", Phase: phase.Ready, Registered: true, JoinsClosed: true, Players: 2, Slots: 80},
+			{Name: "b", Phase: phase.Ready, Registered: true, JoinsClosed: true, Players: 2, Slots: 80},
 		},
 		PendingDeletes: map[string]bool{},
 	}
 
 	if got := decideSize(in).Create; got < 1 {
-		t.Errorf("create = %d, want at least 1 — nobody can join the running round", got)
+		t.Errorf("create = %d, want at least 1 — nobody can join either running round", got)
 	}
 }
