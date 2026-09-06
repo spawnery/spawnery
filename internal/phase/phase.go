@@ -140,11 +140,8 @@ const (
 	ReasonPodNeverCreated   = "PodNeverCreated"
 	ReasonPodTerminal       = "PodTerminal"
 	ReasonRetiring          = "Retiring"
-	// ReasonJoinsClosed marks a Ready server that has asked for no new
-	// players. It is not a phase of its own on purpose -- see the Ready branch
-	// of Decide.
-	ReasonJoinsClosed = "JoinsClosed"
-	// ReasonJoinsOpen marks the way back.
+	// ReasonJoinsOpen marks a server returning to the proxies' routing table
+	// because its round has not ended.
 	ReasonJoinsOpen       = "JoinsOpen"
 	ReasonMaxStaleElapsed = "MaxStaleElapsed"
 	// ReasonDrainingBeforeCleanup marks a Failed server whose players are being
