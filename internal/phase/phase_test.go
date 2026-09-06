@@ -236,6 +236,30 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Failed, Deregister: true, Reason: ReasonPodTerminal},
 		},
 		{
+			name:    "a terminal pod whose server said its round was over is Finished",
+			current: Ready,
+			in:      Inputs{PodExists: true, PodTerminal: true, RoundEnded: true},
+			want:    Decision{Next: Finished, Deregister: true, Reason: ReasonRoundFinished},
+		},
+		{
+			name:    "a terminal pod that said nothing still Fails",
+			current: Ready,
+			in:      Inputs{PodExists: true, PodTerminal: true},
+			want:    Decision{Next: Failed, Deregister: true, Reason: ReasonPodTerminal},
+		},
+		{
+			name:    "a finished server waits for its retention",
+			current: Finished,
+			in:      Inputs{PodExists: true, PodTerminal: true, RoundEnded: true},
+			want:    Decision{Next: Finished, Reason: ReasonRoundFinished},
+		},
+		{
+			name:    "a finished server is cleaned up once its retention elapses",
+			current: Finished,
+			in:      Inputs{PodExists: true, PodTerminal: true, RoundEnded: true, FinishedRetentionElapsed: true},
+			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonFinishedRetentionElapsed},
+		},
+		{
 			name:    "a failed server with players is drained instead of cleaned up at the retention",
 			current: Failed,
 			in: Inputs{

@@ -48,6 +48,12 @@ const (
 	// Failed means the server is broken. It is kept for diagnosis and cleaned
 	// up after the group's retention.
 	Failed Phase = "Failed"
+	// Finished means the server's round is over: it said so, and then its pod
+	// stopped. It is terminal like Failed and its group replaces it at once,
+	// but it is not a fault -- it is not counted against the backoff, it
+	// raises no Degraded, and it is kept for its own short retention rather
+	// than the hour a failure gets for diagnosis.
+	Finished Phase = "Finished"
 )
 
 const (
@@ -149,6 +155,12 @@ const (
 	ReasonRetentionElapsed      = "RetentionElapsed"
 	ReasonTerminating           = "Terminating"
 	ReasonUnknownPhase          = "UnknownPhase"
+	// ReasonRoundFinished marks a server whose round ended and whose pod then
+	// stopped.
+	ReasonRoundFinished = "RoundFinished"
+	// ReasonFinishedRetentionElapsed marks a finished server that has been
+	// kept long enough.
+	ReasonFinishedRetentionElapsed = "FinishedRetentionElapsed"
 )
 
 // Inputs is everything the state machine may look at. The controller fills it
@@ -300,6 +312,19 @@ type Inputs struct {
 	// from, so a network that does not use it behaves exactly as it did.
 	JoinsClosed bool
 
+	// RoundEnded is set once the server has said its round is over.
+	//
+	// Read from status.roundEndedAt and not from the registry, which is
+	// memory: an operator restart between the pod stopping and the pass that
+	// reads this would otherwise turn a finished round into a failure. It is
+	// the server's own word, like JoinsClosed, and like that one it is false
+	// for a server that never said it.
+	RoundEnded bool
+
+	// FinishedRetentionElapsed is true once a Finished server has been kept
+	// for its group's finished retention.
+	FinishedRetentionElapsed bool
+
 	// Registered is whether the proxies currently have this server.
 	//
 	// Read so that the door above can be acted on once rather than on every
@@ -399,6 +424,27 @@ func Decide(current Phase, in Inputs) Decision {
 		return Decision{
 			Next:   Failed,
 			Reason: ReasonPodTerminal, Message: "kept for diagnosis",
+		}
+
+	case Finished:
+		if in.DeletionRequested || in.FinishedRetentionElapsed {
+			// No drain: the pod is terminal, so its sessions went with it.
+			// That is the same reasoning the terminal branch below gives, and
+			// it is why this case is shorter than Failed's -- a Finished
+			// server is only ever reached through a terminal pod.
+			reason := ReasonFinishedRetentionElapsed
+			message := "finished retention elapsed"
+			if in.DeletionRequested {
+				reason, message = ReasonDeletionRequested, "deletion requested for a finished server"
+			}
+			return Decision{
+				Next: Terminating, DeletePod: true,
+				Reason: reason, Message: message,
+			}
+		}
+		return Decision{
+			Next:   Finished,
+			Reason: ReasonRoundFinished, Message: "the round is over",
 		}
 
 	case Draining:
@@ -514,6 +560,16 @@ func Decide(current Phase, in Inputs) Decision {
 	if in.PodTerminal {
 		// A terminal pod is never drained: the process is already down and its
 		// sessions went with it, so there is nobody left to move off.
+		//
+		// The server's own word decides which terminal phase this is. Not the
+		// exit code: a System.exit(0) in a shutdown hook would make a crash
+		// read as a win, and the word is the one thing only the server knows.
+		if in.RoundEnded {
+			return Decision{
+				Next: Finished, Deregister: current == Ready,
+				Reason: ReasonRoundFinished, Message: "the round is over and the pod stopped",
+			}
+		}
 		return Decision{
 			Next: Failed, Deregister: current == Ready,
 			Reason: ReasonPodTerminal, Message: "pod reached a terminal phase",
