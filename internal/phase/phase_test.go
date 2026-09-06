@@ -936,6 +936,9 @@ func TestAClosedDoorStaysInTheRoutingTable(t *testing.T) {
 	if got.Deregister {
 		t.Error("a server that only closed its door was taken out of the routing tables")
 	}
+	if got.StartDrain {
+		t.Error("a server that only closed its door had its players moved")
+	}
 	if got.Reason != ReasonReadyGatePassed {
 		t.Errorf("Reason = %q, want %q: the door alone is not an event Decide reports",
 			got.Reason, ReasonReadyGatePassed)
