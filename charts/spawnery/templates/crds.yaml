@@ -3752,6 +3752,18 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              finishedRetentionSeconds:
+                default: 300
+                description: |-
+                  FinishedRetentionSeconds is how long a Finished server is kept.
+
+                  Shorter than the failed retention on purpose: that one buys somebody
+                  time to look at a fault, and a round that ended as it should is not one.
+                  What it buys instead is a window in which the last round is still
+                  visible to anybody asking what just happened.
+                format: int32
+                minimum: 0
+                type: integer
               image:
                 description: Image is the Paper base image. A digest reference is
                   recommended.
@@ -5613,6 +5625,16 @@ spec:
                   RetiringSince is when the server entered phase Retiring. It drives
                   spec.update.maxStaleSeconds and nothing else — what marks a server as
                   one this update made unavailable is spec.retire.
+                format: date-time
+                type: string
+              roundEndedAt:
+                description: |-
+                  RoundEndedAt is when the server said its round was over. Nil for one
+                  that never did.
+
+                  Stamped while the server is still running, which is what makes the
+                  distinction survive an operator restart: the registry that heard the
+                  word is memory, and this object is not.
                 format: date-time
                 type: string
               slots:

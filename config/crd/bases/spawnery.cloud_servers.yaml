@@ -284,6 +284,16 @@ spec:
                   one this update made unavailable is spec.retire.
                 format: date-time
                 type: string
+              roundEndedAt:
+                description: |-
+                  RoundEndedAt is when the server said its round was over. Nil for one
+                  that never did.
+
+                  Stamped while the server is still running, which is what makes the
+                  distinction survive an operator restart: the registry that heard the
+                  word is memory, and this object is not.
+                format: date-time
+                type: string
               slots:
                 description: Slots is the player capacity reported by the agent.
                 format: int32

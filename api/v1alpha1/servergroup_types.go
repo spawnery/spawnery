@@ -301,6 +301,17 @@ type ServerGroupSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	FailedRetentionSeconds int32 `json:"failedRetentionSeconds,omitempty"`
+
+	// FinishedRetentionSeconds is how long a Finished server is kept.
+	//
+	// Shorter than the failed retention on purpose: that one buys somebody
+	// time to look at a fault, and a round that ended as it should is not one.
+	// What it buys instead is a window in which the last round is still
+	// visible to anybody asking what just happened.
+	// +kubebuilder:default=300
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	FinishedRetentionSeconds int32 `json:"finishedRetentionSeconds,omitempty"`
 }
 
 // ServerGroupStatus is the observed state of a ServerGroup.
@@ -453,6 +464,11 @@ func (g *ServerGroup) DrainTimeout() time.Duration {
 // FailedRetention is how long a Failed server is kept.
 func (g *ServerGroup) FailedRetention() time.Duration {
 	return time.Duration(g.Spec.FailedRetentionSeconds) * time.Second
+}
+
+// FinishedRetention is how long a Finished server is kept.
+func (g *ServerGroup) FinishedRetention() time.Duration {
+	return time.Duration(g.Spec.FinishedRetentionSeconds) * time.Second
 }
 
 // UpdateMaxUnavailable is how many servers a rolling update may have
