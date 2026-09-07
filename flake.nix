@@ -262,7 +262,13 @@
           # SpawneryApi.endRound() lets a plugin say its round is over, and
           # that is a class in cloud.spawnery:spawnery-api, versioned off this
           # number rather than operatorVersion.
-          imageVersion = "0.2.28";
+          #
+          # 0.2.29 moves it alone, like 0.2.26: the agent's feed gives
+          # FinishedRetentionElapsed the sign its twin RetentionElapsed has
+          # had all along, and nothing in the operator binary changes. The
+          # published API is identical to 0.2.28's and is republished under
+          # this number for the reason the 0.2.21 paragraph gives.
+          imageVersion = "0.2.29";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
