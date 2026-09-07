@@ -236,9 +236,10 @@ func TestTheEphemeralServerPodDigestHasNotMoved(t *testing.T) {
 
 Something in the *ephemeral* server pod render moved -- the half the persistent
 fixture above cannot see. The stakes are the sibling's: every ephemeral
-ServerGroup in every installation is rolled on the next operator upgrade, one
-ordinal at a time, and for a group running rounds that means every round in
-progress ends as its server drains.
+ServerGroup in every installation is rolled on the next operator upgrade, as
+many at a time as spec.update.maxUnavailable allows -- an ephemeral group has
+no ordinals to count through -- and for a group running rounds that means every
+round in progress ends as its server drains.
 
 If that is what the change is for, update goldenEphemeralServerDigest to %[1]q
 and say so in the commit message -- the release that carries it has to say it

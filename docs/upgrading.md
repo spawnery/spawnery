@@ -867,10 +867,12 @@ server is stale when its `spawnery.cloud/pod-hash` label differs from a digest
 of the pod the operator would render now, and that digest is taken over the
 rendered pod -- `restartPolicy` included. So every ephemeral `ServerGroup` in
 every installation goes stale the moment the new operator comes up, and each is
-replaced an ordinal at a time. Nothing avoids it: the policy cannot be changed
-on a pod that is already running, so the pods have to be re-rendered to carry
-it. A round in progress ends as its server drains, like any other rolled
-server. Persistent groups keep their digest and do not move.
+replaced as many servers at a time as its `spec.update.maxUnavailable` allows
+-- one by default. An ephemeral group has no ordinals to count through; that
+budget is the whole of what paces its roll. Nothing avoids it: the policy
+cannot be changed on a pod that is already running, so the pods have to be
+re-rendered to carry it. A round in progress ends as its server drains, like
+any other rolled server. Persistent groups keep their digest and do not move.
 
 `internal/podspec/hash_golden_test.go` did not catch this when it was written,
 because its one server fixture was a persistent group -- the type whose restart
