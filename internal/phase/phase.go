@@ -69,15 +69,11 @@ const (
 	// disconnects the players on it, and it is the deadline the drain in the
 	// Ready branch below is racing.
 	//
-	// It is the value internal/render/defaults/velocity.default.toml ships,
-	// pinned here because a number in a TOML file nothing reads is a number
-	// that drifts. TestTheShippedVelocityDefaultMatchesTheConstant is what
-	// keeps the two the same.
-	//
-	// Thirty seconds is also Velocity's own default, so a cluster that
-	// replaces the whole file rather than overlaying it lands on the same
-	// number by accident rather than by agreement. That is luck, and
-	// RescueWindow's doc says what it cannot see.
+	// It duplicates internal/render/defaults/velocity.default.toml, because a
+	// number in a TOML file nothing reads is a number that drifts;
+	// TestTheShippedVelocityDefaultMatchesTheConstant keeps the two together.
+	// It is Velocity's own default as well, so a cluster that replaces the
+	// file rather than overlaying it agrees with this by luck.
 	VelocityReadTimeout = 30 * time.Second
 )
 
@@ -88,34 +84,20 @@ const (
 // and PlayersStale says so after twice the report interval; from that moment
 // the Ready branch below deregisters the server and starts a drain. Velocity
 // starts its own clock at the same instant and fires at VelocityReadTimeout,
-// with no event and nothing a plugin can intervene in -- disassembling
-// velocity 3.5.1 build 615, ConnectedPlayer.handleConnectionException falls
-// straight through to disconnect() for a ReadTimeoutException. So the room the
+// with no event and nothing a plugin can intervene in. So the room the
 // operator has is what is left of the read timeout after the staleness rule
-// has spent its share.
+// has spent its share: twenty seconds at the default five-second report
+// interval, and negative above fifteen.
 //
-// At the operator's default report interval of five seconds that is twenty
-// seconds. At anything above fifteen it is negative, and the operator is
-// racing a deadline that has already passed.
-//
-// # Where readTimeout comes from
-//
-// The proxy, on its Hello, since 2026-08-27. It reads
-// ProxyServer.getConfiguration().getReadTimeout(), which is what Velocity
+// readTimeout comes from the proxy's Hello, which reads what Velocity
 // actually parsed -- after the image's velocity.toml, after any configOverlay
-// the user mounted, after Velocity's own defaults. The operator can see none
-// of those: the overlay is somebody else's ConfigMap, mounted into the pod by
-// name, and this operator never reads its contents.
+// the user mounted. The operator can see none of those: the overlay is
+// somebody else's ConfigMap, mounted by name and never read here.
 //
-// Zero means no proxy has said, which is what an agent older than that field
-// reports and what a namespace with no connected proxy has. It falls back to
-// VelocityReadTimeout, which is the reading the operator took before proxies
-// reported this at all -- so an old fleet behaves exactly as it did.
-//
-// A namespace with several proxies answers with the smallest of them
+// Zero means no proxy has said, and falls back to VelocityReadTimeout. A
+// namespace with several proxies answers with the smallest
 // (agent.Registry.ShortestReadTimeout): whichever gives up first is the one
-// that kicks the players, so a fleet is only as patient as its least patient
-// member.
+// that kicks the players.
 func RescueWindow(reportInterval, readTimeout time.Duration) time.Duration {
 	if readTimeout <= 0 {
 		readTimeout = VelocityReadTimeout
@@ -189,17 +171,11 @@ type Inputs struct {
 	StartupDeadlineReached bool
 
 	// PodCreationDeadlineReached is true if no pod was ever created for this
-	// server and the wait for one has run out. It is a different question from
-	// StartupDeadlineReached, which asks whether a pod that exists became
-	// playable, and it needs a different answer: a server that never had a pod
-	// did not fail to become ready, it failed to be created, and the remedy is
-	// at whatever refused the create rather than at the server.
-	//
-	// Without it such a server had no clock at all. status.podName stays empty
-	// so PodLost never applies, and the startup deadline's stamp used to be
-	// written beside the pod — so a Server in a namespace whose policy or
-	// quota refuses its pods stayed Pending for as long as the refusal stood,
-	// counting against its group's replicas the whole time.
+	// server and the wait for one has run out. Separate from
+	// StartupDeadlineReached because status.podName stays empty here, so
+	// PodLost never applies and nothing else gives such a server a clock: a
+	// namespace whose policy or quota refuses the pod would otherwise leave it
+	// Pending indefinitely, counting against its group's replicas.
 	PodCreationDeadlineReached bool
 
 	// AgentReady is true if the in-game agent reported readiness on a live
@@ -214,32 +190,20 @@ type Inputs struct {
 	AgentStreamDownFor time.Duration
 
 	// AgentSilent is true when the stream is up, the agent has reported before,
-	// and it has stopped -- which is not the same state as a broken stream and
-	// is the one nothing used to notice.
+	// and it has stopped. That is not the same state as a broken stream.
 	//
 	// A node that is hard-powered off, or a network that black-holes, sends no
-	// FIN and no RST, so the operator's own socket goes on looking connected
-	// for as long as TCP retransmits: measured 2026-08-26 through a freezable
-	// relay, over 200 seconds and twice not at all within 213. Meanwhile
-	// AgentConnected stays true and AgentReady stays at the last thing the
-	// agent said, so a Ready server on a dead node stayed Ready, stayed
-	// registered, and went on being sent new players.
+	// FIN and no RST, so the operator's socket goes on looking connected for
+	// minutes while TCP retransmits, AgentConnected stays true, and a Ready
+	// server on a dead node would go on being sent new players. The reports
+	// are the signal that does move: they stop at once. An operator restart
+	// would look identical but leaves AgentConnected false.
 	//
-	// The reports are the signal that does move: they stop at once, and
-	// PlayersStale says so after twice the report interval. A stream that is
-	// up and quiet is exactly the shape of a peer that is gone without TCP
-	// having noticed, and it is distinguishable from an operator restart --
-	// which breaks every stream and would otherwise look identical -- because
-	// that leaves AgentConnected false.
-	//
-	// It is also why the operator sets no transport keepalive. A keepalive
-	// that broke this stream would replace this state with the one below --
-	// an ordinary broken stream, tolerated for StreamDownGrace and carrying no
-	// StartDrain -- and would do it more slowly than the reports do. The two
-	// signals are not interchangeable: this one says the peer is gone *and*
-	// that its players are on a backend that will never answer, which is what
-	// the drain is for. internal/agentserver's MaxConnectionIdle carries the
-	// same argument from the other side.
+	// It is also why the operator sets no transport keepalive: breaking this
+	// stream would turn this state into the ordinary broken one below, which
+	// is tolerated for StreamDownGrace and carries no StartDrain -- and would
+	// do it more slowly than the reports do. internal/agentserver's
+	// MaxConnectionIdle carries the same argument from the other side.
 	AgentSilent bool
 
 	// ReadinessLosses is how often this server already fell out of Ready.
@@ -267,26 +231,24 @@ type Inputs struct {
 	// report stopped. Both come from agent.Registry.AttachedTo.
 	//
 	// They exist because this server's own count cannot see a player who is
-	// arriving. A backend counts a player only once they finish the
-	// configuration phase, so a drain could read a server empty while a
-	// connection to it was still in flight and delete the pod under them.
+	// arriving: a backend counts a player only once they finish the
+	// configuration phase, so a drain can read a server empty while a
+	// connection to it is still in flight.
 	//
-	// Occupied adds them and never subtracts, which is what makes them safe
-	// against a fleet where some proxies are too old to report: such a proxy
-	// contributes zero and the rule is exactly what it was.
+	// Occupied adds them and never subtracts, which is what makes a fleet with
+	// proxies too old to report safe: such a proxy contributes zero.
 	ProxyAttached    int32
 	ProxyAttachStale bool
 
 	// CountPredatesDrain is true when this server's own player count was
 	// taken before the drain it is being asked about began.
 	//
-	// Freshness and recency are different questions and only the first was
-	// ever asked. PlayersStale says whether the number is recent enough to
-	// believe; this says whether it is about the right moment. A count from
-	// four seconds ago is perfectly fresh and still says nothing about a
-	// player who joined three seconds ago -- so a drain that read it as zero
-	// deleted the pod under them. Every source is asked the same way, which
-	// is why AttachedTo folds the identical rule into ProxyAttachStale.
+	// Freshness and recency are different questions. PlayersStale says whether
+	// the number is recent enough to believe; this says whether it is about
+	// the right moment. A count from four seconds ago is perfectly fresh and
+	// still says nothing about a player who joined three seconds ago. Every
+	// source is asked the same way, which is why AttachedTo folds the
+	// identical rule into ProxyAttachStale.
 	CountPredatesDrain bool
 
 	// DrainDeadlineReached is true once drain.timeoutSeconds elapsed.
@@ -341,22 +303,12 @@ type Inputs struct {
 //
 // Three terms, and every one of them can only make the answer true. That is
 // the property to preserve: a rule that could turn occupied into empty by
-// adding a source would make a fleet's upgrade order load-bearing, and this
-// one does not. The proxy terms come from agents that may be older than this
-// operator and simply say nothing, which is indistinguishable from saying
-// zero and is meant to be.
-//
-// The proxies are asked at all because this server's own count cannot see a
-// player who is arriving: a backend counts a player only once they finish the
-// configuration phase, so a drain read an empty server while a connection to
-// it was still in flight. See Inputs.ProxyAttached.
-//
-// And every count, this server's own included, has to be about the right
-// moment and not merely recent. A number taken before a drain began cannot say
-// whether the drain has finished, however fresh it is -- which is the deeper
-// form of the same defect and the reason CountPredatesDrain exists. What that
-// costs is at most one report interval added to a drain, against a drain
-// timeout measured in minutes.
+// adding a source would make a fleet's upgrade order load-bearing. The proxy
+// terms come from agents that may be older than this operator and say
+// nothing, which is indistinguishable from saying zero and is meant to be.
+// See Inputs.ProxyAttached for why they are asked and
+// Inputs.CountPredatesDrain for why recency is not freshness; that one costs
+// at most a report interval against a drain timeout measured in minutes.
 func (in Inputs) Occupied() bool {
 	return in.PlayersStale || in.PlayersOnline > 0 ||
 		in.ProxyAttachStale || in.ProxyAttached > 0 ||
@@ -654,20 +606,10 @@ func Decide(current Phase, in Inputs) Decision {
 			// already there, which is fine when a server is merely
 			// unhealthy -- it may come back, and moving people costs them a
 			// loading screen. It is not fine when the backend is gone: those
-			// players are on a socket that will never answer again, and
-			// Velocity disconnects them outright when its read timeout fires.
-			// Disassembling velocity 3.5.1 build 615,
-			// ConnectedPlayer.handleConnectionException falls straight through
-			// to disconnect() when its `safe` argument is false, and
-			// BackendPlaySessionHandler passes false for exactly a
-			// ReadTimeoutException -- so no KickedFromServerEvent fires and
-			// the agent's own Rescue never sees them.
-			//
-			// The window is what makes this worth doing rather than merely
-			// correct: Velocity's read-timeout is 30 s, and PlayersStale says
-			// the agent stopped after twice the report interval, ten seconds
-			// at the operator's default. Twenty seconds is a great deal of
-			// room to move somebody one server sideways.
+			// players sit on a socket that will never answer, and Velocity
+			// disconnects them outright on its read timeout without firing a
+			// KickedFromServerEvent, so the agent's own Rescue never sees
+			// them. RescueWindow is the room that leaves.
 			//
 			// Starting rather than Draining, so a server whose agent was
 			// merely wedged can come back. What a false positive costs is a
@@ -689,15 +631,13 @@ func Decide(current Phase, in Inputs) Decision {
 			}
 		}
 		// The round's end takes a server out of the table; a closed door does
-		// not. They were one signal once, and a spectator asking for a running
-		// round was answered "no such server" -- deregistration is about
-		// whether anybody can reach this server at all, and the door is about
-		// whether its seats are capacity.
+		// not. Deregistration is about whether anybody can reach this server
+		// at all, the door about whether its seats are capacity.
 		//
 		// Both directions are conditioned on what the proxies currently have,
-		// so this speaks only when something changes. Without that a finished
-		// server would be deregistered again on every pass, and every one of
-		// those is a broadcast to every proxy in the namespace.
+		// so this speaks only on a change: otherwise a finished server would
+		// be deregistered again on every pass, and each one is a broadcast to
+		// every proxy in the namespace.
 		if in.RoundEnded && in.Registered {
 			return Decision{
 				Next: Ready, Deregister: true,

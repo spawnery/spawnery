@@ -599,15 +599,10 @@ func TestNoPathBackFromFailed(t *testing.T) {
 // long as players are online and no deadline has passed, no decision may
 // delete the pod.
 //
-// Ready and Draining are always checked: a Ready server is registered with
-// the proxies, and a Draining server was registered until it started
-// draining. Starting is checked only with WasRegistered: true — a Starting
-// server that fell out of Ready still has players connected from before it
-// lost readiness, even though it deregistered to stop new joins. A
-// never-registered Pending or Starting server is excluded: it was never
-// registered with the proxies, so it cannot hold players — and treating its
-// stale, never-reported count as "occupied" would make deletion of a server
-// that never started hang until the drain deadline.
+// Starting is checked only with WasRegistered: true — a Starting server that
+// fell out of Ready still holds the players it had before, while one that was
+// never registered cannot hold any, and treating its never-reported count as
+// occupied would hang its deletion until the drain deadline.
 func TestOccupiedServerIsNeverDeletedWithoutDeadline(t *testing.T) {
 	cases := []struct {
 		phase         Phase
@@ -729,17 +724,13 @@ func TestOccupiedIsUnchangedWithoutProxyReports(t *testing.T) {
 // TestBreakingASilentAgentsStreamCostsTheDrain is the reason the operator sets
 // no transport keepalive, made executable.
 //
-// AgentSilent is defined as "the stream is up and has gone quiet". Anything
-// that breaks that stream -- a keepalive on internal/agentserver, a shorter
-// MaxConnectionIdle, an operator that decides to hang up on a peer it has
-// written off -- converts this state into the one below: an ordinary broken
-// stream, which is tolerated for StreamDownGrace and carries no StartDrain. So
-// the twenty-second window for moving players off a backend that will never
-// answer is not merely delayed by such a change, it is gone.
-//
-// Whoever comes to add a keepalive should meet this test rather than a fleet
-// that quietly stopped rescuing anybody. The agent's own keepalive is a
-// different thing and displaces nothing: see OperatorChannel in agent/common.
+// AgentSilent is defined as "the stream is up and has gone quiet", so anything
+// that breaks that stream -- a keepalive, a shorter MaxConnectionIdle, an
+// operator hanging up on a peer it has written off -- turns it into the
+// ordinary broken stream below, which carries no StartDrain. The rescue window
+// is then not delayed but gone, and whoever comes to add a keepalive should
+// meet this test rather than a fleet that quietly stopped rescuing anybody.
+// The agent's own keepalive displaces nothing: see OperatorChannel.
 func TestBreakingASilentAgentsStreamCostsTheDrain(t *testing.T) {
 	silent := Inputs{
 		PodExists: true, PodRunning: true, PodReady: true,
