@@ -68,6 +68,12 @@ const (
 	// resources. grpc-go's default is two minutes.
 	ConnectionTimeout = 30 * time.Second
 
+	// MaxMessageBytes is the largest message an agent may send. grpc-go's
+	// default is 4 MiB; the largest thing an agent has to say is a roster at
+	// RosterMaxEntries, under half a megabyte, and a message the size of the
+	// default is one nobody legitimately sends.
+	MaxMessageBytes = 1 << 20
+
 	// MaxConnectionIdle reaps a connection carrying no stream. An agent's
 	// session stream is long-lived, so a connection that has been idle this
 	// long has lost its agent.
@@ -342,6 +348,7 @@ func (s *Server) Start(ctx context.Context) error {
 		grpc.Creds(creds),
 		grpc.StreamInterceptor(s.opts.Auth.StreamInterceptor()),
 		grpc.MaxConcurrentStreams(MaxConcurrentStreams),
+		grpc.MaxRecvMsgSize(MaxMessageBytes),
 		grpc.ConnectionTimeout(ConnectionTimeout),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
 			MaxConnectionIdle: MaxConnectionIdle,
@@ -720,6 +727,11 @@ func (s *Server) handleProxy(
 		// staleness rule already derives from ReportInterval. A second liveness
 		// path would be a second truth about the same fact.
 	case *agentpb.ProxyMessage_BackendPlayers:
+		if reason, ok := backendsRefusal(m.BackendPlayers.GetPlayers()); !ok {
+			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
+			logger.V(1).Info("discarded a backend report", "reason", reason)
+			break
+		}
 		// The namespace comes from the authenticated identity and never from
 		// the message, the same rule every other fact on this channel follows:
 		// an agent may lie about itself and is believed about nothing else.
@@ -729,6 +741,11 @@ func (s *Server) handleProxy(
 			logger.V(1).Info("discarded a backend report", "reason", err.Error())
 		}
 	case *agentpb.ProxyMessage_PlayerRoster:
+		if reason, ok := rosterRefusal(m.PlayerRoster); !ok {
+			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
+			logger.V(1).Info("discarded a roster report", "reason", reason)
+			break
+		}
 		entries := make([]agent.RosterEntry, 0, len(m.PlayerRoster.GetPlayers()))
 		for _, p := range m.PlayerRoster.GetPlayers() {
 			// An entry with no UUID is dropped rather than stored under "":
