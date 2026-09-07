@@ -27,13 +27,13 @@ import (
 // stub harness runEntrypoint uses for Paper's — the harness only works here
 // because the script calls spawnery-config unqualified, the same way
 // image/entrypoint.sh does, rather than by the hardcoded
-// /usr/local/bin/spawnery-config it used to carry. VELOCITY_HOME defaults to
+// /usr/local/bin/spawnery-config it used to carry. SPAWNERY_VELOCITY_HOME defaults to
 // /opt/velocity, overridable through env like any other variable runScript
 // passes.
 func runVelocityEntrypoint(t *testing.T, workDir string, configExit int, env ...string) (string, error) {
 	t.Helper()
 	return runScript(t, "image/velocity-entrypoint.sh", workDir, configExit,
-		append([]string{"VELOCITY_HOME=/opt/velocity"}, env...)...)
+		append([]string{"SPAWNERY_VELOCITY_HOME=/opt/velocity"}, env...)...)
 }
 
 // TestVelocityEntrypointInvokesSpawneryConfigWithTheVelocityFlavor is the
@@ -92,7 +92,7 @@ func TestVelocityEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runVelocityEntrypoint(t, dir, 1, "VELOCITY_HOME="+velocityHome)
+	out, err := runVelocityEntrypoint(t, dir, 1, "SPAWNERY_VELOCITY_HOME="+velocityHome)
 	if err == nil {
 		t.Fatalf("velocity entrypoint succeeded, want a failure; output: %s", out)
 	}
@@ -132,7 +132,7 @@ func TestVelocityEntrypointCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *
 		t.Fatal(err)
 	}
 
-	if _, err := runVelocityEntrypoint(t, dir, 0, "VELOCITY_HOME="+velocityHome); err != nil {
+	if _, err := runVelocityEntrypoint(t, dir, 0, "SPAWNERY_VELOCITY_HOME="+velocityHome); err != nil {
 		t.Fatalf("velocity entrypoint: %v", err)
 	}
 

@@ -56,7 +56,7 @@ oci-common.layeredImage {
     Env = [
       "HOME=/data"
       "PATH=/bin:/usr/local/bin"
-      "VELOCITY_HOME=/opt/velocity"
+      "SPAWNERY_VELOCITY_HOME=/opt/velocity"
     ];
     ExposedPorts = { "25565/tcp" = { }; };
     Entrypoint = [ "/usr/local/bin/spawnery-entrypoint" ];

@@ -84,7 +84,7 @@ oci-common.layeredImage {
     Env = [
       "HOME=/data"
       "PATH=/bin:/usr/local/bin"
-      "PAPER_HOME=/opt/paper"
+      "SPAWNERY_PAPER_HOME=/opt/paper"
     ];
     ExposedPorts = { "25565/tcp" = { }; };
     Entrypoint = [ "/usr/local/bin/spawnery-entrypoint" ];
