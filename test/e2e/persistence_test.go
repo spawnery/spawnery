@@ -18,21 +18,14 @@ import (
 // aPersistentGroupsClaimOutlivesItsServer is milestone 5a's central property,
 // checked in a real cluster for the first time by anything but a person.
 //
-// Two halves, and neither is the one thing envtest cannot do -- that
-// distinction is narrower than it first looks, and worth being exact about
-// after fix round 1 found the first draft of this comment overstating it.
+// Two halves, and only one of them needs a real cluster.
 //
-// The first half reads the owner-reference field directly off each claim.
-// envtest can do this too, two ways that need no garbage collector at all:
-// podspec.TestBuildDataClaim is a plain unit test with no cluster whatsoever,
-// and TestAPersistentServerGetsItsClaimBeforeItsPod reads the same field off
-// the object envtest's API server actually persisted. Both catch an owner
-// reference the moment BuildDataClaim sets one -- confirmed here by mutation,
-// not assumed: giving the built claim an owner reference turned both of those
-// tests, and `make test`, red before this package was ever involved. So a
-// regression that adds one is already caught three ways before a real
-// cluster runs at all, and this half of the scenario is corroboration, not a
-// capability unique to it.
+// The first half reads the owner-reference field directly off each claim,
+// which envtest can do too and does: podspec.TestBuildDataClaim needs no
+// cluster at all, and TestAPersistentServerGetsItsClaimBeforeItsPod reads the
+// same field off the object envtest's API server persisted. Both go red the
+// moment BuildDataClaim sets an owner reference, so this half is
+// corroboration rather than a capability unique to a real cluster.
 //
 // The second half is where a real garbage collector is actually the point.
 // TestDeletingAPersistentServerLeavesItsClaim's own doc comment states the
@@ -44,13 +37,11 @@ import (
 // that actually enforces cascading deletion, an owner reference's *presence*
 // would actually destroy the claim. Only a real cluster can show that
 // consequence, and only by giving its garbage collector a real, bounded
-// window to act -- not a single synchronous read taken the instant the
-// Server object disappears, which fix round 1 also found: real garbage
-// collection is asynchronous with the owner's removal from etcd, and a bare
-// point-in-time check after survival-1 goes NotFound can run before the
-// collector has processed the deletion event at all. See the eventuallyStable
-// call below, and task-7-report.md's fix-round-1 section for the run that
-// caught this and the run that confirms the fix.
+// window to act. Not a single synchronous read taken the instant the Server
+// object disappears: collection is asynchronous with the owner's removal from
+// etcd, so a point-in-time check after survival-1 goes NotFound can run before
+// the collector has processed the deletion event at all. See the
+// eventuallyStable call below.
 func aPersistentGroupsClaimOutlivesItsServer(t *testing.T) {
 	eventually(t, 2*time.Minute, "both ordinals' claims", func() (bool, string) {
 		claims := claimsIn(t)

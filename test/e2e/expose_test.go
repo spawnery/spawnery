@@ -87,10 +87,7 @@ func theLoadBalancerGroupGetsItsService(t *testing.T) {
 // The readiness gate is covered by
 // TestProxyAddressPublishesOnlyWhatIsObservablyRealised
 // (`internal/controller/proxyaddress_test.go`), whose "ClusterIP publishes
-// nothing until a proxy is ready" case is this sentence's backing. That table
-// absorbed the older TestProxyAddressPerStrategy on 2026-08-23; the two cases
-// this comment depends on moved with it rather than being dropped in the
-// consolidation.
+// nothing until a proxy is ready" case is this sentence's backing.
 func theClusterIPGroupGetsAPlainServiceWithNoNodePort(t *testing.T) {
 	var svc corev1.Service
 	eventually(t, 2*time.Minute, "the gateway-clusterip Service", func() (bool, string) {
