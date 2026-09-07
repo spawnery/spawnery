@@ -210,7 +210,7 @@ var errNotOnlyTheFirstBlock = errors.New("more than its first PEM block")
 // parsableCert reports whether pemBytes is something an agent's trust store
 // will accept: exactly the PEM encoding of one certificate.
 //
-// **What the agent actually rejects, measured rather than assumed.**
+// **What the agent actually rejects.**
 // OperatorChannel.trustManager parses with CertificateFactory.generateCertificates.
 // OpenJDK's X509Factory.readOneBlock skips everything before the first line
 // beginning with a five-hyphen run and returns null at end of stream instead

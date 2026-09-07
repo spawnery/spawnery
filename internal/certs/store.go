@@ -137,10 +137,10 @@ func (s *Store) Ensure(ctx context.Context) (*Bundle, error) {
 }
 
 // carryRotation reattaches whatever rotation slots stale was holding onto
-// fresh. Issue, Reissue and reissueOrIssue know nothing about rotation --
-// that would make them a state machine, and Task 4 is where that sequence
-// lives -- so their output always comes back with both slots empty, and
-// Ensure is the one place positioned to put them back before the write.
+// fresh. Issue, Reissue and reissueOrIssue know nothing about rotation, which
+// would make them a state machine, so their output always comes back with both
+// slots empty and Ensure is the one place positioned to put them back before
+// the write.
 //
 // The renewal branch and the parseCA-succeeds half of a repair both keep the
 // signing CA (Reissue signs a fresh serving certificate under the same CA
@@ -152,9 +152,8 @@ func (s *Store) Ensure(ctx context.Context) (*Bundle, error) {
 // over from a rotation whose outgoing CA no longer exists. That is a choice,
 // not an oversight, and it was weighed against dropping the slot instead:
 // dropping would leave the stored phase saying a rotation is distributing
-// while the one thing that proves it -- the slot -- is gone, so Task 4's
-// SwitchToNext would find no next CA and the sequence would stall until a
-// human noticed. Agents are already stranded the moment ca.key stops
+// while the one thing that proves it -- the slot -- is gone, so SwitchToNext
+// would find no next CA and the sequence would stall until a human noticed. Agents are already stranded the moment ca.key stops
 // parsing; carrying doesn't fix that, but it is the one outcome that leaves
 // the stored state internally consistent for whoever drives the rotation
 // that follows.

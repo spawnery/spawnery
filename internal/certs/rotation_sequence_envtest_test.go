@@ -1295,12 +1295,11 @@ func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
 // because the five-hyphen run opens a block it cannot finish -- and it takes
 // the signing CA down with it, which is the outage these tests are about.
 //
-// Deliberately not "-- not a certificate --", which every one of these tests
-// used to use. That shape has two hyphens, and OpenJDK's block scanner steps
-// straight over anything that is not a line beginning with five; the agent
-// keeps its trust store and the fixture demonstrated nothing. Measured
-// against the OpenJDK in this repository's devshell; the table is in section
-// 2 of docs/superpowers/specs/2026-08-21-rotation-followups-design.md.
+// Deliberately not "-- not a certificate --": that shape has two hyphens, and
+// OpenJDK's block scanner steps straight over anything that is not a line
+// beginning with five, so the agent keeps its trust store and the fixture
+// demonstrates nothing. The shapes it does reject are in section 2 of
+// docs/superpowers/specs/2026-08-21-rotation-followups-design.md.
 var unparseableSlot = []byte("-----BEGIN CERTIFICATE-----\n!!! not base64 !!!\n-----END CERTIFICATE-----\n")
 
 // unparseableMarker is the part of unparseableSlot that could not appear in a

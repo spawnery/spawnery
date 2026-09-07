@@ -27,63 +27,41 @@ import (
 // name the two ways a request ends without a transition, and the last two the
 // two things the operator does to a slot nobody asked it to touch.
 //
-// ReasonRotationRequestUnrecognised covers a case §4 deliberately does not
-// route through ReasonRotationBlocked: a spawnery.cloud/rotate-ca value the
-// operator does not recognise -- a typo -- is left in place and reported, but
-// does not stop the sequence, which carries on and performs its next
-// transition on schedule (rotation.go's AdvanceRotation, the default case).
-// Before this event that outcome had exactly one signal, a log line, and the
-// human who mistyped the annotation is not the one reading the operator's
-// logs. RotationBlocked already means something specific and observable --
-// the gate is holding because a namespace has not caught up -- and firing it
-// for an unreadable request would tell that human the wrong story: there is
-// no gate involved, and the rotation is not waiting on anything but a second,
-// correctly spelled annotation.
+// The four that are not the design's vocabulary are each a separate reason
+// rather than a note on one of the others, because the reason is the field a
+// human triages on:
 //
-// ReasonRotationRequestRefused is the other one, and it is the likelier of
-// the two to be hit under pressure: a request the operator understands
-// perfectly and will not carry out from the phase it is in -- a drop-old sent
-// a minute early, most of all. §4 has that request consumed like an accepted
-// one, so within one tick the annotation is gone and the secret says nothing;
-// without this event the whole trace is a log line, and the procedure looks
-// to whoever ran it as though it swallowed the instruction. It is a reason of
-// its own rather than either of the two above for the same triage argument
-// §4 makes about RotationBlocked: nothing is gated on a namespace here, and
-// the value was not misspelled -- it was right and its timing was wrong. The
-// note carries the refusal's own wording, which names the phase in two of the
-// three cases and, in the start-while-rotating case, the requests that would
-// end the rotation it is already running. The drop-old-too-early case -- the
-// likeliest of all -- says which phase refused it and why, and leaves the
-// remedy to the entry in docs/known-issues.md, which is where somebody
-// running the procedure is already reading.
+// ReasonRotationRequestUnrecognised is a misspelled rotate-ca value. It is
+// left in place and reported, and the sequence carries on to its next
+// scheduled transition (AdvanceRotation's default case). Not RotationBlocked,
+// which means a gate is holding because a namespace has not caught up: there
+// is no gate here, and nothing is waited on but a correctly spelled
+// annotation.
 //
-// ReasonRotationSlotDiscarded is the seventh, and it is the only one that
-// reports the operator undoing part of a rotation on its own. A rotation slot
-// whose certificate does not parse is cleared, because every byte of it
-// reaches every agent's trust store through PublishedCA, where a five-hyphen
-// run that does not open a valid certificate block makes
-// CertificateFactory.generateCertificates throw for the whole stream -- the
-// CA that was signing included. None of the six above says that: nothing was
-// refused and nothing was unrecognised, since a hand-edited slot is not a
-// request; no gate is holding, so a reader triaging a RotationBlocked would
-// go looking for a namespace that is not there; and the phase change that
-// follows is the consequence, not the news -- RotationCompleted would report
-// a drop-old somebody performed, when what happened is that the rollback the
-// hold existed for had already become impossible. The note names the slot and
-// the parse error, and says what became of the rotation; the durable copy is
+// ReasonRotationRequestRefused is a request the operator understands and will
+// not carry out from the phase it is in -- a drop-old sent a minute early,
+// most of all. Such a request is consumed like an accepted one, so within a
+// tick the annotation is gone and the secret would otherwise say nothing,
+// leaving the procedure looking as though it swallowed the instruction. The
+// note carries the refusal's own wording; the remedy is in
+// docs/ca-rotation.md, which whoever ran the procedure is already reading.
+//
+// ReasonRotationSlotDiscarded is the only one that reports the operator
+// undoing part of a rotation on its own: a slot whose certificate does not
+// parse is cleared, because every byte of it reaches every agent's trust
+// store through PublishedCA, where a five-hyphen run that opens no valid
+// block makes CertificateFactory.generateCertificates throw for the whole
+// stream -- the signing CA included. A hand-edited slot is not a request, so
+// neither of the two above fits, and no gate is holding. The durable copy is
 // AnnotationRotationDiscarded, because an event expires after about an hour.
 //
-// ReasonRotationSlotTruncated is the eighth, and it is deliberately not the
-// seventh with a different note. It reports the one parse failure the
-// operator repairs instead of discarding: a slot holding more than one PEM
-// block is truncated to the first, which is the block parseCA already signs
-// with, so nothing usable is lost and no phase moves. The reason is the field
-// a human triages on -- a RotationSlotDiscarded that had to be read to the
-// end before one could tell that nothing had in fact been discarded would
-// train a reader to distrust the reason on the ones that mean what they say.
-// The durable record shares AnnotationRotationDiscarded with the discards,
-// because that annotation answers "what happened to my slots" and its own
-// wording distinguishes the two.
+// ReasonRotationSlotTruncated is the one parse failure the operator repairs
+// instead of discarding: a slot holding more than one PEM block is truncated
+// to the first, which is the block parseCA already signs with, so nothing
+// usable is lost and no phase moves. A discard reason that had to be read to
+// the end before one could tell nothing was discarded would train a reader to
+// distrust it on the ones that mean what they say. The durable record shares
+// AnnotationRotationDiscarded, whose own wording distinguishes the two.
 const (
 	ReasonRotationStarted             = "RotationStarted"
 	ReasonRotationBlocked             = "RotationBlocked"
