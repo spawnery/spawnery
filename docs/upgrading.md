@@ -886,3 +886,23 @@ called it crash-looping, so a transient JVM crash is a `Failed` server at once
 rather than a minute or two later, and the six consecutive failures that latch
 a group into giving up -- which only a spec edit clears -- are reached roughly
 four times sooner on a broken image.
+
+## Every proxy rolls once: the pod gains an `fsGroup`
+
+The proxy pod's security context now carries `fsGroup: 10001` with
+`fsGroupChangePolicy: OnRootMismatch`, exactly as the server pod has since
+persistent groups arrived, and for the same reason: a claim mounted through
+`spec.mounts` with `writable: true` arrives owned by root, and without the
+group the proxy gets `EACCES` on a volume the pod spec says is writable. The
+pod template is in `DesiredProxyHash`, so every `ProxyGroup` is stale after
+the upgrade and rolls at its `maxUnavailable` pace. Nothing in any spec
+changes. `goldenProxyDigest` in `internal/podspec/hash_golden_test.go` moved
+from `c52b89c65d114de2` to `25460cf6ba7e7c0d` for this.
+
+The same release renames the variable the images use to find their own
+directory: `PAPER_HOME` and `VELOCITY_HOME` become `SPAWNERY_PAPER_HOME` and
+`SPAWNERY_VELOCITY_HOME`, so that a group's `spec.env` -- which may not set the
+`SPAWNERY_` prefix -- cannot point a server at another jar or keep the
+operator's agent jar from being copied. Only a custom image that set the old
+name in its own `ENV` has anything to change.
+
