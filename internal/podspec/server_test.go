@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1322,5 +1323,26 @@ func TestNoExtraFilesVolumeWithoutTheField(t *testing.T) {
 		if m.Name == FileSourceVolumeName {
 			t.Error("a group that names no claim got the mount anyway")
 		}
+	}
+}
+
+// Every reserved name, from the slice the check reads rather than a
+// hand-written list: extra-plugins was missing from the check for as long as
+// the cases were typed out one by one.
+func TestEveryReservedVolumeNameIsRefusedAsAUserMount(t *testing.T) {
+	for _, name := range reservedVolumeNames {
+		err := checkMountCollision(spawneryv1alpha1.Mount{
+			Name:      name,
+			MountPath: "/somewhere/else",
+			ConfigMap: &corev1.ConfigMapVolumeSource{
+				LocalObjectReference: corev1.LocalObjectReference{Name: "meine-cm"},
+			},
+		})
+		if err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("a user mount named %q: err = %v, want a refusal naming it", name, err)
+		}
+	}
+	if !slices.Contains(reservedVolumeNames, PluginSourceVolumeName) {
+		t.Error("extra-plugins is not among the reserved names")
 	}
 }
