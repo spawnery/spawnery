@@ -581,11 +581,16 @@ func (r *ProxyGroupReconciler) protectPlayersOnly(ctx context.Context, group *sp
 	// The whole point of this path is that the group is refused, so a drain
 	// here removes a proxy nothing can replace until the refusal lifts. The
 	// group already says Accepted: False; what it did not say is that the
-	// combination of that and a departing node is about to leave it smaller,
-	// which is the sentence docs/known-issues.md carried instead.
-	r.reportNodeDraining(group, pods, nodeGoing, blockedReplacement{
-		Reason: "its Network is missing or not accepted",
-	})
+	// combination of that and a departing node is about to leave it smaller.
+	// Four refusals reach here, and the Accepted condition already names the
+	// one that applies; the sentence follows it rather than blaming the
+	// Network for a claim or an expose type.
+	blocked := blockedReplacement{Reason: "its Network is missing or not accepted"}
+	if c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted); c != nil &&
+		c.Reason != spawneryv1alpha1.ReasonNetworkNotFound && c.Reason != spawneryv1alpha1.ReasonNetworkNotAccepted {
+		blocked.Reason = "it is not accepted (" + c.Reason + ")"
+	}
+	r.reportNodeDraining(group, pods, nodeGoing, blocked)
 	// Before the drain, not after: the label and the budget are what stand
 	// between the eviction API and a proxy that still has players, and
 	// drainDeparting can delete a pod, which changes what the budget is
@@ -1919,8 +1924,8 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 	// Nothing said this. A ProxyGroup whose pods crash-loop reported Accepted,
 	// had its Service up, and published no reason anywhere -- the shape
 	// proxyConfigValues' own comment names as the cost of guessing a player
-	// limit wrong, and the shape docs/known-issues.md recorded for a proxy
-	// that cannot bind its ready port. The ServerGroup controller has reported
+	// limit wrong, and the shape a proxy that cannot bind its ready port
+	// used to leave behind. The ServerGroup controller has reported
 	// CrashLoopBackoff since 4d; this is its counterpart, and it arrives with
 	// the agent change that makes a hopeless ready gate reach it.
 	//
@@ -2376,9 +2381,8 @@ func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A group refused because its Network is missing or unaccepted has no
 		// way of hearing that the Network came back: it is not an owner, and
 		// nothing about the group itself changes when the Network does. It
-		// waited out the resync. This is the watch docs/known-issues.md asks
-		// for under milestone 4b -- the recovery it measures at roughly ninety
-		// seconds is two requeues stacked, and this removes the second.
+		// waited out the resync: recovery measured at roughly ninety seconds
+		// under 4b, two requeues stacked, and this watch removes the second.
 		Watches(&spawneryv1alpha1.Network{},
 			handler.EnqueueRequestsFromMapFunc(r.groupsOfNetwork)).
 		Complete(r)

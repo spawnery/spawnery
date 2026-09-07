@@ -404,17 +404,16 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// that state; its players are evicted off that node regardless of what the
 	// group thinks; and moving them to a fallback group beats holding them on
 	// a node that is going away. It is the same direction already settled for
-	// the create-backoff case, which docs/known-issues.md documents under "a
-	// group in create-backoff condemns without replacing".
+	// the create-backoff case: a group in create-backoff condemns without
+	// replacing, for the same reason.
 	//
 	// The group's type is not part of this flag, and that is the second half of
 	// the same rule. The Network gates sizing of either kind, because neither
 	// kind can render a pod without one; the type selects *which* rule sizes
 	// the group — the spare-slot rule for an ephemeral group, spec.replicas for
 	// a persistent one — and size() branches on it internally. A persistent
-	// group's servers are condemned on the way through either way, which is
-	// what known-issues already describes: a departing node takes a server
-	// regardless of what kind of server it is.
+	// group's servers are condemned on the way through either way: a
+	// departing node takes a server regardless of what kind of server it is.
 	// And not only networkUsable. A group whose claim -- spec.extraPlugins or
 	// one named by spec.mounts -- cannot be mounted must not create servers
 	// either: every pod would sit Pending on a volume that will not attach,
@@ -438,8 +437,10 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// somebody who has an unbounded wait as well.
 	blocked := blockedReplacement{}
 	switch {
-	case !mayResize:
+	case !networkUsable:
 		blocked = blockedReplacement{Reason: "its Network is missing or not accepted"}
+	case !volumesOK:
+		blocked = blockedReplacement{Reason: "a claim it mounts cannot be served; see its Accepted condition"}
 	case !backoff.MayCreate:
 		blocked = blockedReplacement{
 			Reason:  "its servers are failing to start and it is backing off",
@@ -1105,9 +1106,9 @@ func storageResizeCondition(views []ServerView) metav1.Condition {
 // ordinalBefore reports whether a's ordinal sorts before b's, for
 // storageResizeCondition's tie-break. A nil ordinal does occur among a
 // persistent group's views -- an adopted or hand-made object need not carry
-// spec.ordinal, which is what DecidePersistentSize's nil-ordinal rule and
-// known-issues' squatter entry are about -- and this has nothing to compare
-// it against, so it sorts last rather than panicking on the dereference.
+// spec.ordinal, which is what DecidePersistentSize's nil-ordinal rule is
+// about -- and this has nothing to compare it against, so it sorts last
+// rather than panicking on the dereference.
 func ordinalBefore(a, b *ServerView) bool {
 	switch {
 	case a.Ordinal == nil:
@@ -1903,9 +1904,8 @@ func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A group refused because its Network is missing or unaccepted has no
 		// way of hearing that the Network came back: it is not an owner, and
 		// nothing about the group itself changes when the Network does. It
-		// waited out the resync. This is the watch docs/known-issues.md asks
-		// for under milestone 4b -- the recovery it measures at roughly ninety
-		// seconds is two requeues stacked, and this removes the second.
+		// waited out the resync: recovery measured at roughly ninety seconds
+		// under 4b, two requeues stacked, and this watch removes the second.
 		Watches(&spawneryv1alpha1.Network{},
 			handler.EnqueueRequestsFromMapFunc(r.groupsOfNetwork)).
 		Named("servergroup").
