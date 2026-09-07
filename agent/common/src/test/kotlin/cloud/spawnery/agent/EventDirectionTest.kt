@@ -17,6 +17,8 @@ class EventDirectionTest {
         assertEquals(Direction.REMOVED, direction("Terminating"))
         assertEquals(Direction.REMOVED, direction("RoundFinished"))
         assertEquals(Direction.REMOVED, direction("ReadinessLost"))
+        assertEquals(Direction.REMOVED, direction("RetentionElapsed"))
+        assertEquals(Direction.REMOVED, direction("FinishedRetentionElapsed"))
     }
 
     @Test
