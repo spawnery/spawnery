@@ -226,11 +226,9 @@ var RequiredCluster = []Permission{
 }
 
 // RequiredNamespaced is what the operator does in its own namespace only, and
-// is checked against the generated Role rather than the ClusterRole. The lease
-// and the secret were both cluster-wide before milestone 2a: the lease because
-// nobody had split the table yet, the secret because it did not exist yet — and
-// granting a cluster-wide write on secrets would have been the wrong signal in
-// exactly the milestone that introduces the TLS channel.
+// is checked against the generated Role rather than the ClusterRole: a
+// cluster-wide write on secrets is not something the agent channel's CA should
+// ever have needed.
 //
 // Note which verbs are absent: no list and no watch on secrets. certs.Store
 // therefore runs on an uncached client on purpose, because a cached Secret would

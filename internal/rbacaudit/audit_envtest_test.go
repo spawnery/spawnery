@@ -341,12 +341,10 @@ const forwardingSecretReaderManifest = "config/rbac/forwarding-secret-reader.yam
 
 // readForwardingSecretReader decodes both objects in
 // forwardingSecretReaderManifest through readMultiDocManifest
-// (deploy_envtest_test.go), of which it is now the only caller.
-// readGeneratedRoles used to share that path, over config/rbac/role.yaml; it
-// reads the rendered chart through renderedManifest since the chart became
-// the source of truth for the generated roles. This file is still read off
-// disk because it is hand-applied per namespace and the chart never templates
-// it. It refuses to silently drop a second object of a kind it already saw,
+// (deploy_envtest_test.go), of which it is the only caller. This file is read
+// off disk rather than out of the rendered chart because it is hand-applied
+// per namespace and the chart never templates it.
+// It refuses to silently drop a second object of a kind it already saw,
 // the same refusal splitRendered makes for the rendered objects — except this
 // file holds a Role and a RoleBinding rather than a ClusterRole and a Role.
 func readForwardingSecretReader(t *testing.T) (*rbacv1.Role, *rbacv1.RoleBinding) {

@@ -46,14 +46,12 @@ type Reviewer interface {
 // reached the cluster, that it was applied whole, that the RoleBinding names
 // the right ServiceAccount, or that nobody has edited it since.
 //
-// Nothing else notices when it did not, and that is the point. Measured during
-// milestone 6a: removing pods:list from every marker and watching the operator
-// for seven and three-quarter minutes produced not one log line, no 403 in
-// rest_client_requests_total across 24 samples, and no restart. A permission
+// Nothing else notices when it did not, and that is the point. A permission
 // reached only through the manager's cache is claimed by a *watch*, and a
-// watch that cannot start is retried silently forever -- so the request the
-// API server would have denied is never made in a form anything reports. The
-// operator sits there looking healthy and reconciling nothing.
+// watch that cannot start is retried silently forever -- no log line, no 403
+// in the client metrics, no restart, because the request the API server would
+// have denied is never made in a form anything reports. The operator sits
+// there looking healthy and reconciling nothing.
 //
 // A SelfSubjectAccessReview asks the authorizer the question directly rather
 // than waiting for a request to be refused, so it sees the cache-backed verbs
@@ -123,19 +121,13 @@ func DeniedMessage(denied []Permission) string {
 
 // DefaultCheckInterval is how often Checker asks again.
 //
-// The cost is what decided it, and it was measured rather than feared. The
-// whole check is 73 SelfSubjectAccessReviews -- the two required tables -- and
-// against an envtest API server on 2026-08-26 they took 54 ms end to end with
-// the client-side rate limiter off, which is what this operator runs with:
-// controller-runtime v0.24 sets QPS to -1 in GetConfig and leaves the pacing
-// to the API server's own priority and fairness. The same 73 take 3.4 seconds
-// at a client QPS of 20 and 13.4 at the client-go default of 5, so anyone who
-// turns the limiter back on is buying a different trade and should know it.
-//
-// Ten minutes against 54 ms is roughly one part in ten thousand of one
-// connection's time, and a review is an in-memory authorizer lookup with no
-// etcd behind it. What made this look expensive before it was measured was the
-// count, not the cost.
+// The whole check is one SelfSubjectAccessReview per table entry, which reads
+// as expensive and is not: a review is an in-memory authorizer lookup with no
+// etcd behind it, and this operator runs with the client-side rate limiter off
+// -- controller-runtime sets QPS to -1 in GetConfig and leaves the pacing to
+// the API server's own priority and fairness. Turning the limiter back on
+// turns the whole check from milliseconds into seconds, which is a different
+// trade and worth knowing before making it.
 //
 // What sets the interval is not the cost but what is being watched: a
 // permission changes when a person changes it, so a check that notices within
@@ -170,12 +162,9 @@ func DefaultScopes(operatorNamespace string) []Scope {
 // far: an installation that was never right. What it could not catch is a
 // permission revoked while the operator runs -- an administrator tightening a
 // ClusterRole, a GitOps sync reverting a hand-applied binding, an aggregated
-// role losing a rule -- which lands the operator in exactly the state
-// milestone 6a measured: reconciling nothing on the paths that need the verb,
-// logging nothing, restarting never, and reporting healthy throughout.
-//
-// The reason it took a measurement to decide was that "73 reviews per check"
-// reads as expensive and is not; see DefaultCheckInterval.
+// role losing a rule -- which lands the operator reconciling nothing on the
+// paths that need the verb, logging nothing, restarting never, and reporting
+// healthy throughout.
 type Checker struct {
 	// Reviewer creates the reviews. The operator's own clientset.
 	Reviewer Reviewer
