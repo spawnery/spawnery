@@ -652,8 +652,8 @@ type live struct {
 // replacement's first message — travel different connections, and nothing on
 // either side orders them. Cancelling and sending on the next line leaves it to
 // whichever goroutine the Go scheduler picks and whichever of the agent's two
-// transport threads the JVM runs first, and measured, that lands consistently
-// on the side where the agent has already handed over before it hears about the
+// transport threads the JVM runs first, which lands consistently on the side
+// where the agent has already handed over before it hears about the
 // cancellation. Asserting against that would be asserting that the agent keeps
 // winning a coin toss neither end controls: the real operator has a registry
 // write, a metric and two Sends between enter() and the agent hearing anything

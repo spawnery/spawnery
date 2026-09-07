@@ -221,9 +221,8 @@ func TestTheChartRendersExactlyTheseObjects(t *testing.T) {
 // renderChart runs the chart through helm once per package run and returns its
 // objects keyed "<Kind>/<name>".
 //
-// This package used to read config/deploy/ off disk. That directory no longer
-// exists: the chart is the only installation form, so the only honest thing to
-// audit is what helm produces. The subprocess is the price. helm comes from
+// The chart is the only installation form, so the only honest thing to audit
+// is what helm produces. The subprocess is the price. helm comes from
 // the flake (flake.nix's kubernetes-helm), and nothing in this repository runs
 // outside `nix develop`, so its absence means the shell is wrong rather than
 // the tree -- which is why the failure below says that rather than reporting a
@@ -392,11 +391,9 @@ func readMultiDocManifest(t *testing.T, rel string, decode func(kind string, doc
 //
 // A missing Role means a namespace= qualifier fell off a marker and the
 // operator would hold its Secret and Lease rights everywhere. A *second*
-// object of either kind used to be this function's own refusal; it is now
-// splitRendered's, enforced for every kind and name the chart renders, not
-// just these two — returning one of two would leave the other unaudited in
-// both directions while every test still reported green, whichever helper
-// catches it first.
+// object of either kind is splitRendered's refusal, enforced for every kind
+// and name the chart renders: returning one of two would leave the other
+// unaudited in both directions while every test still reported green.
 func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 	t.Helper()
 
@@ -729,17 +726,15 @@ func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
 	}
 }
 
-// TestTheOperatorDeploymentCarriesProductionFlags is the guard
-// docs/known-issues.md asked for under "The flags in the Deployment are
-// unchecked": sigs.k8s.io/yaml is not strict, so a mistyped key disappears
-// silently, and until now nothing looked at the container's arguments at all.
+// TestTheOperatorDeploymentCarriesProductionFlags exists because
+// sigs.k8s.io/yaml is not strict, so a mistyped key in the Deployment
+// disappears silently.
 //
 // The floor on --startup-deadline is the point. These manifests are what gets
-// installed, not test scaffolding: milestone 5a's evidence run measured 24
-// seconds from apply to ReadyGatePassed on an idle single-node kind cluster
-// with the image already present -- the favourable case in every dimension
-// that matters, since there was no image pull, no contention and no world to
-// read. A manifest carrying 20s would fail every server on a real cluster.
+// installed, not test scaffolding, and a server needs 24 seconds from apply to
+// ReadyGatePassed in the most favourable case there is -- an idle single-node
+// cluster, image already present, no world to read. A manifest carrying 20s
+// would fail every server on a real one.
 // hack/e2e.sh gets its short deadline by appending a second occurrence of the
 // flag, which Go's flag package resolves to the last one.
 func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
@@ -840,11 +835,10 @@ func TestTheOperatorImageIsNotAMutableTag(t *testing.T) {
 	// bumping that version and forgetting this line leaves the manifest
 	// pointing at a tag hack/publish.sh will never push again. Nothing else in
 	// the tree would notice: `make e2e` patches the image away before the
-	// cluster ever pulls it, and the whole point of milestone 6a's §3.3 is
-	// that operatorVersion moves on its own schedule, so this will happen
-	// while imageVersion sits still. Once acceptance criterion 7 closes and a
-	// real digest lands here the CutPrefix above returns first, and this stops
-	// applying -- until then it is the only thing keeping the tag honest.
+	// cluster ever pulls it, and operatorVersion moves on its own schedule, so
+	// this happens while imageVersion sits still. A real digest here would
+	// make the CutPrefix above return first; until then this is the only thing
+	// keeping the tag honest.
 	if want := operatorVersionFromFlake(t); tag != want {
 		t.Errorf("image = %q, but flake.nix's operatorVersion is %q. "+
 			"nix/operator-image.nix tags the image with operatorVersion, so this "+
@@ -885,9 +879,7 @@ func operatorVersionFromFlake(t *testing.T) string {
 // that is right: a chart fix touching no image is a chart bump alone. But
 // appVersion is not free -- it is the operator release the chart installs by
 // default, so it has to agree with flake.nix's operatorVersion and with the
-// tag values.yaml renders. On 2026-08-20 all three drifted apart in one
-// release and nothing noticed: operatorVersion went to 0.1.1 while Chart.yaml
-// stayed at 0.1.0, and the cluster kept serving the previous chart.
+// tag values.yaml renders.
 //
 // What this does NOT catch is that failure's actual cause, and saying so is
 // the point: Chart.yaml's `version` is what Flux packages the artifact under,
@@ -1156,10 +1148,10 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	}
 	// Refused rather than modelled, for the same reason ExpandRules refuses a
 	// rule it cannot represent. IntValue() discards its Atoi error and returns
-	// 0 for a named port, so `port: metrics` here used to report as "admits
-	// port 0" -- safe, because 0 is never a declared container port and the
-	// reverse check below rejects it either way, but a message about a port
-	// nobody wrote. A named port is legal in a NetworkPolicy and Kubernetes
+	// 0 for a named port, so modelling `port: metrics` would report it as
+	// "admits port 0" -- harmless, since 0 is never a declared container port,
+	// but a message about a port nobody wrote. A named port is legal in a
+	// NetworkPolicy and Kubernetes
 	// resolves it against the pod's own port names; comparing it here would
 	// mean resolving it the same way, which this check does not do. A nil port
 	// is the other unmodellable shape: it admits every port on the pod, and an

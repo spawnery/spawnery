@@ -165,8 +165,7 @@ var warnedMissingDrainTaint once
 // tolerated here so neither caller has to dedupe or filter before calling.
 // blockedReplacement says why a group cannot build what it is about to
 // condemn, or is empty when it can. It is the second half of the NodeDraining
-// message, and it exists because the two halves were only ever readable
-// separately.
+// message.
 //
 // A group in create-backoff, or one whose Network is unusable, still condemns
 // the pods on a departing node -- deliberately, and the ruling is sound: those
@@ -175,11 +174,11 @@ var warnedMissingDrainTaint once
 // costs is capacity the group cannot rebuild, for a backoff window in the
 // first case and for an unbounded wait in the second.
 //
-// Both facts were already on the object -- NodeDraining: True naming the node,
-// and Accepted: False or BackingOff: True beside it -- and the combination was
-// on neither. An operator reading "pods are on nodes that are on their way out
-// of service" had no way to see that this particular group would come back
-// smaller and stay that way.
+// Both facts sit on the object separately -- NodeDraining: True naming the
+// node, and Accepted: False or BackingOff: True beside it -- and neither
+// carries the combination. An operator reading "pods are on nodes that are on
+// their way out of service" would otherwise have no way to see that this
+// particular group comes back smaller and stays that way.
 type blockedReplacement struct {
 	// Reason is a short clause naming what stops the creates, or empty.
 	Reason string

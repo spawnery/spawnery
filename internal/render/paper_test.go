@@ -91,9 +91,8 @@ func TestPaperEnablesVelocityForwarding(t *testing.T) {
 // patches the repo with. -Xmx1g only keeps the measurement off the host's
 // whole memory; it has no bearing on the file.)
 //
-// A Paper bump therefore has to re-run this and update the file, exactly the
-// way nix/velocity.nix's config-version carries the jar xf command that
-// measured it. It is also not the only guard: hack/image-test.sh boots the
+// A Paper bump therefore has to re-run this and update the file. It is also
+// not the only guard: hack/image-test.sh boots the
 // pinned Paper against a rendered file and reads back what Paper made of it,
 // which needs no fixture to be refreshed and fails on a rename by itself.
 const paperGlobalDefault = defaultsDir + "/paper-global.default.yml"
@@ -103,21 +102,16 @@ const paperGlobalDefault = defaultsDir + "/paper-global.default.yml"
 // Paper does not refuse a key it does not know. It ignores it, keeps its own
 // default for the field the author meant, and writes the stray key back out on
 // the next save so the file on disk still looks like the override took.
-// Measured against the pinned build: rendering secret-key rather than secret
-// leaves Paper with an empty secret and, through its own postProcess, enabled:
-// false — a backend that starts clean, passes every probe, and rejects every
-// forwarded join with "Your server did not send a forwarding request to the
-// proxy" at the other end. That was true of this renderer from the day it was
-// written until milestone 3c's first end-to-end join.
+// Rendering secret-key rather than secret leaves Paper with an empty secret
+// and, through its own postProcess, enabled: false — a backend that starts
+// clean, passes every probe, and rejects every forwarded join.
 //
 // The class, which is the part that outlives this key: a green render test
 // proves what was written and never what was read. Every assertion in this
 // file that compares the renderer against itself is blind to a receiver that
 // ignores the key -- which is why this one compares against the receiving
 // program's own defaults, and why hack/image-test.sh reads the file back out
-// of a running container. Velocity has the same pair, for the same reason and
-// after the same mistake: the lesson had been applied only to the flavour it
-// was learned on until the whole-branch review noticed.
+// of a running container. Velocity has the same pair for the same reason.
 func TestPaperWritesTheKeysPaperItselfReads(t *testing.T) {
 	defaults, err := os.ReadFile(paperGlobalDefault)
 	if err != nil {
@@ -439,10 +433,7 @@ func updateCheckerEnabled(t *testing.T, files map[string][]byte) bool {
 
 // paperPropertiesDefault is Minecraft's own server.properties, byte for byte
 // as the pinned Paper build writes it on a first start against an otherwise
-// empty data directory. It is the third of the three measured defaults, and
-// the last one to arrive: paper-global.yml and velocity.toml have been checked
-// against their programs since 2026-08-24, and this file was the gap
-// docs/known-issues.md called "the one overlay nothing checks".
+// empty data directory, and the third of the three defaults measured this way.
 //
 // Reproduce it with the paperGlobalDefault recipe above, taking
 // server.properties out of the same run rather than a second one -- the two

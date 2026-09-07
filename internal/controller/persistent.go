@@ -115,14 +115,14 @@ type PersistentInputs struct {
 //
 // # An ordinal two servers carry
 //
-// held is a map, so a second server claiming an ordinal used to overwrite the
-// first and the loser vanished from this rule entirely: never surplus, because
-// the surplus loop walks held and the loser is not in it; never recreated,
-// because the ordinal is taken; and still running its pod against the claim
-// named after its own name. Which of the two survived in held was decided by
-// the order of in.Views, so the answer could change between passes.
+// held is a map, so without this a second server claiming an ordinal would
+// overwrite the first and the loser would vanish from this rule entirely:
+// never surplus, because the surplus loop walks held and the loser is not in
+// it; never recreated, because the ordinal is taken; and still running its pod
+// against the claim named after its own name -- with which of the two survived
+// decided by the order of in.Views, so the answer could change between passes.
 //
-// Such an ordinal is now collected into Conflicts and excluded from all three
+// Such an ordinal is collected into Conflicts and excluded from all three
 // nominations below. Excluding it is the point rather than a side effect. The
 // deletes all read held[ordinal], so acting on a duplicated ordinal means
 // deleting whichever of the two the map happened to keep -- an arbitrary

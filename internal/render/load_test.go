@@ -309,11 +309,10 @@ func TestLoadRefusesASecretWithAnInteriorNewline(t *testing.T) {
 // internal/podspec already uses for the agent CA and for a Server's own
 // mounts, not an exotic case: a hidden, timestamped directory holds the real
 // files, "..data" is a symlink to that directory, and each key is a symlink
-// through "..data" rather than a regular file. A t.TempDir() fixture of
-// plain regular files, as every other test in this file uses, would never
-// exercise this shape and would never have caught loadOverlay filtering on
-// DirEntry.Type().IsRegular(), which is false for all three of these entry
-// kinds and used to return an empty overlay with no error.
+// through "..data" rather than a regular file. A t.TempDir() fixture of plain
+// regular files, as every other test in this file uses, never exercises that
+// shape: DirEntry.Type().IsRegular() is false for all three entry kinds, so a
+// loadOverlay that filters on it reads an empty overlay and reports no error.
 func mountConfigMapStyleOverlay(t *testing.T, overlayDir string, files map[string]string) {
 	t.Helper()
 	const dataDir = "..2024_01_01_00_00_00.000000000"

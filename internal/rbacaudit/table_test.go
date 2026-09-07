@@ -34,16 +34,13 @@ func tables() map[string][]Permission {
 	}
 }
 
-// TestEveryRequiredPermissionSaysWhyItIsThere is the check docs/known-issues.md
-// records as missing: "Nothing enforces that Why is filled in and Required is
-// free of duplicates."
+// TestEveryRequiredPermissionSaysWhyItIsThere enforces that Why is filled in
+// and that Required is free of duplicates.
 //
-// Why is documentation rather than identity -- Permission.Key ignores it -- and
-// that is exactly what makes it rot unwatched. Two entries had gone stale
-// before anybody read them against the code: the pods:patch grant named one of
-// its two call sites, and the configmaps grant named one of its three. Both
-// were found by hand, months apart, and neither could have been found by any
-// test in the tree. An empty Why is the same defect at its starting point: a
+// Why is documentation rather than identity -- Permission.Key ignores it -- so
+// nothing else in the tree can notice it rotting: a grant that names one of
+// its three call sites reads exactly like one that names all three. An empty
+// Why is the same defect at its starting point: a
 // permission nobody has to justify is a permission nobody can later argue
 // away, and the table's whole purpose is to be the argument.
 func TestEveryRequiredPermissionSaysWhyItIsThere(t *testing.T) {

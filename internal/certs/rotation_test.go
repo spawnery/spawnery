@@ -149,11 +149,10 @@ func TestThePublishedBundleCarriesBothCAsWhileRotating(t *testing.T) {
 // rather than a repair -- the repair is AdvanceRotation's, and it runs a tick
 // later.
 //
-// Every fixture below is a shape the agent genuinely rejects, verified against
-// the OpenJDK in this repository's devshell (design section 2). That matters:
-// the shape this test used to open with, "-- this is not a certificate --",
-// has only two hyphens, and the agent steps straight over it -- so the test
-// named an outage it was not in fact demonstrating.
+// Every fixture below is a shape the agent genuinely rejects (design section
+// 2). That matters: "-- this is not a certificate --" has only two hyphens,
+// and the agent steps straight over it, so a test built on that shape names an
+// outage it does not demonstrate.
 //
 // The guard is here, at the one function whose output reaches an agent, rather
 // than at a call site: a later path that publishes the bundle from somewhere

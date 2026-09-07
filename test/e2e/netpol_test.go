@@ -72,20 +72,10 @@ func theNetworkGetsItsPolicy(t *testing.T) {
 // port. If the peerless rule admitting it were wrong, the pod would go
 // NotReady and the Deployment would stop being Available.
 //
-// What this cannot claim: Task 3 of this milestone measured, rather than
-// assumed, that kindnet -- the CNI hack/e2e.sh's bare `kind create cluster`
-// gets by default -- does not enforce NetworkPolicy ingress at all. Its
-// evidence: with the peerless probe rule deleted from
-// config/deploy/networkpolicy.yaml, leaving a policy that admits only the
-// agent peer on 9443 and denies the kubelet's probe outright, `make e2e`
-// stayed green and the rollout succeeded on its usual timeline (see
-// task-3-report.md, "Mutation 2"). Two alternatives were ruled out there: the
-// readiness probe is a real httpGet and `kubectl rollout status` cannot
-// succeed without one passing, so the probe path was genuinely exercised; and
-// hack/e2e.sh recreates the cluster every run, with the apply log showing the
-// policy `created` rather than `unchanged`, so the policy was genuinely in
-// force. That leaves only one explanation: kindnet let the denied traffic
-// through anyway.
+// What this cannot claim: kindnet -- the CNI hack/e2e.sh's bare
+// `kind create cluster` gets by default -- does not enforce NetworkPolicy
+// ingress at all. A policy that denies the kubelet's probe outright leaves the
+// rollout green on its usual timeline.
 //
 // So on this harness the operator stays Ready behind a correct policy and
 // would stay Ready behind a wrong one too -- nothing this scenario observes

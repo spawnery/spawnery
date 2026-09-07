@@ -74,9 +74,9 @@ func TestStoreEventIsANoOpWithNoRecorder(t *testing.T) {
 // it, which is what lets every fixture in this package build a Store without
 // one -- and that is exactly why nothing else can catch the field going
 // missing from production. Deleting `Recorder:` from cmd/spawnery-operator's
-// certs.Store literal silences every event on the secret, and before this
-// test the whole suite stayed green, because every test that asserts an event
-// wires its own FakeRecorder in.
+// certs.Store literal silences every event on the secret while the suite stays
+// green, because every test that asserts an event wires its own FakeRecorder
+// in.
 //
 // A source scan rather than a runtime assertion, because the property is
 // about the one construction of a Store that is not a test fixture, and no

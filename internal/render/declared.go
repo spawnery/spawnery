@@ -101,12 +101,9 @@ var paperFreeForm = []freeFormPath{
 // mustKeyTree's own post-check then panics because nodeAt cannot find it.
 //
 // So an override under tick-rates.behavior for any entity but villager is
-// refused today, and the refusal names the key. That is the same trade
-// checkDeclaredKeys documents everywhere else -- a legitimate override refused
-// loudly, rather than a stray key accepted silently -- and it is written down
-// here so the next person meets a sentence instead of a puzzle. Measured
-// against the network this file was added for: neither of its two overlays
-// touches a free-form level at all.
+// refused, and the refusal names the key. That is the same trade
+// checkDeclaredKeys makes everywhere else -- a legitimate override refused
+// loudly, rather than a stray key accepted silently.
 var paperWorldDefaultsFreeForm []freeFormPath
 
 var velocityFreeForm = []freeFormPath{
@@ -261,25 +258,12 @@ func contains(names []string, name string) bool {
 // The program does not refuse it — that is the whole problem. Paper keeps its
 // own default for the field the author meant and writes the stray key straight
 // back out on the next save, so the document on disk goes on looking like the
-// override took; Velocity's night-config reads out the keys it asks for and a
-// misspelling is a key nobody reads. Two outages came through this door:
-// proxies.velocity.secret-key for secret (milestone 3c, every forwarded join
-// refused) and haproxy-protocol at the top level instead of under [advanced]
-// (the RKE2 rollout, half a day spent suspecting the reverse proxy).
-//
-// That second one is what establishes "silently ignored" as a measurement
-// rather than a reading of the code. Driven 2026-08-20 against a scratch
-// ProxyGroup with a hand-built PROXY v1 header sent straight to the pod, no
-// reverse proxy involved:
-//
-//	key placed          no header          with header
-//	top level           status response    silence
-//	under [advanced]    silence            status response
-//
-// So the misplaced key leaves Velocity behaving exactly as if the setting were
-// absent, and the rendered file reads exactly as the author intended. Nothing
-// downstream distinguishes the two until a connection behaves strangely, which
-// is the cost this refusal buys out.
+// override took; Velocity's night-config reads out the keys it asks for, so a
+// misspelling is a key nobody reads and a default silently kept. A misplaced
+// key therefore leaves the program behaving exactly as if the setting were
+// absent while the rendered file reads exactly as the author intended, and
+// nothing downstream tells the two apart until a connection behaves
+// strangely. That is the cost this refusal buys out.
 func checkDeclaredKeys(declared *keyNode, overlay map[string]any, what string) error {
 	return walkOverlay(declared, declared, overlay, "", what)
 }

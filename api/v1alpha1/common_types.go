@@ -76,12 +76,11 @@ const (
 	// ConditionChangingOver is true while a ProxyGroup holds pods whose
 	// rendered shape this operator no longer produces, and says how many.
 	//
-	// It exists because that state was invisible on the object. An operator
-	// upgrade whose pod render changed moves the digest for every group in
-	// every namespace at once, so every one of them begins replacing its pods
-	// with nobody having edited a spec -- and until this condition, the only
-	// outward sign was pods churning and readyReplicas dipping, which is what
-	// a dozen unrelated faults also look like. Seeing it True on every group
+	// An operator upgrade whose pod render changed moves the digest for every
+	// group in every namespace at once, so every one of them begins replacing
+	// its pods with nobody having edited a spec. Without this the only outward
+	// sign is pods churning and readyReplicas dipping, which is what a dozen
+	// unrelated faults also look like. Seeing it True on every group
 	// simultaneously is the fingerprint of that upgrade; seeing it on one is
 	// somebody having edited that group.
 	//
@@ -278,14 +277,11 @@ const (
 // a transition rather than a state: both are emitted on entering a condition,
 // never once per resync.
 //
-// "On entering" is a property of the write, not only of the emit, and until
-// 2026-08-24 it held only usually. Whether a pass is an entry is decided by the
-// condition still in etcd, so emitting before the status update meant that
-// anything failing in between — a pod List, a conflict, a refused write — left
-// the old status behind and the retry announced the same transition again.
-// NetworkReconciler now holds both events until the update lands, so a pass
-// whose write fails announces nothing and the retry is entitled to announce it
-// then. That is what makes this comment true rather than usual.
+// "On entering" is a property of the write and not only of the emit. Whether
+// a pass is an entry is decided by the condition still in etcd, so an emit
+// before the status update would announce the same transition again whenever
+// anything failed in between — a pod List, a conflict, a refused write.
+// NetworkReconciler holds both events until the update lands.
 const (
 	// EventForwardingSecretRotated fires when status.forwardingSecretHash
 	// moves from a non-empty value to a different one. Empty to a value is

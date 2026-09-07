@@ -39,14 +39,9 @@ import (
 // means players moved off their pods; for servers it means worlds stopped and
 // restarted.
 //
-// docs/known-issues.md records this under milestone 4c-2 and offers a manual
-// check: diff internal/podspec/ between two builds, and if nothing in the
-// pod-render path moved, the digest cannot have moved either. That check is
-// sound and nobody runs it, because it has to be remembered at the moment a
-// release is being cut, by someone who is thinking about something else. These
-// tests ask the same question at the moment the change is written, in CI, on
-// the pull request -- and they cannot be fooled by a guess about which files
-// belong to the render path, because they run the render itself.
+// These tests ask the question at the moment the change is written, in CI, on
+// the pull request, and cannot be fooled by a guess about which files belong
+// to the render path, because they run the render itself.
 //
 // **A failure here is not necessarily a defect.** Rolling every pod is
 // sometimes exactly what a change is for. The test's job is to make that a
@@ -63,14 +58,6 @@ import (
 // goldenProxyDigest is DesiredProxyHash over goldenNetwork/goldenProxyGroup,
 // goldenAgentEndpoint and goldenConfigValues. See the comment above before
 // changing it.
-//
-// Moved on 2026-08-29, from f08967aaf278196b, and deliberately: the container
-// now keeps stdin open so `kubectl attach` can reach the console. The next
-// operator upgrade therefore rolls every proxy group in every installation
-// once, moving players off their pods, and every server group with them. That
-// is the price of the console being reachable at all -- before this, /cloud
-// could only be used by granting a permission to a player, which an operator
-// bringing a network up for the first time has nobody to grant to.
 const goldenProxyDigest = "c52b89c65d114de2"
 
 // goldenServerDigest is DesiredServerHash over goldenNetwork/goldenServerGroup
@@ -85,17 +72,10 @@ const goldenServerDigest = "85fe4733710a4013"
 // goldenNetwork/goldenEphemeralServerGroup and goldenConfigValues. See the
 // comment above before changing it.
 //
-// The sibling above renders a *persistent* group, and the two group types no
-// longer render the same pod: an ephemeral one gets an emptyDir instead of a
-// claim and, since 0.2.28, restartPolicy: Never instead of Always. A single
-// fixture therefore guards only half the fleet, and it was the half that did
-// not move -- 0.2.28's restart-policy change reached every ephemeral group in
-// every installation with this file staying green. This constant is the other
-// half.
-//
-// First pinned on 2026-09-06, over the render 0.2.28 ships. It has no earlier
-// value to have moved from: the roll it would have caught is the one recorded
-// in docs/upgrading.md's 0.2.28 section.
+// The sibling above renders a *persistent* group, and the two types do not
+// render the same pod: an ephemeral one gets an emptyDir instead of a claim
+// and restartPolicy: Never instead of Always. One fixture therefore guards
+// only half the fleet, and this constant is the other half.
 const goldenEphemeralServerDigest = "1918d30a757abb1d"
 
 // goldenAgentEndpoint is an input to DesiredProxyHash and not to

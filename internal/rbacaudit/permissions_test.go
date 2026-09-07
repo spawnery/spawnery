@@ -331,19 +331,17 @@ func TestCompare(t *testing.T) {
 // the rule reads as unrestricted and Compare reports the requirement satisfied
 // for every object when it holds for one.
 //
-// controller-gen emits no resourceNames, which is why this went unnoticed. But
-// docs/known-issues.md records that the master design asks for resourceNames on
-// the forwarding-secret reader Role, so the case is not hypothetical — it is
-// waiting for somebody to follow that advice.
+// controller-gen emits no resourceNames, so nothing in the generated manifest
+// exercises this; the master design asks for them on the forwarding-secret
+// reader Role, which is what makes the case real rather than hypothetical.
 // TestExpandRulesCarriesResourceNames is what lets the chart render a narrowed
 // forwarding-secret reader Role at all.
 //
-// It used to be a refusal, and the refusal was right for as long as Permission
-// had nowhere to put a name: such a rule would have expanded into one reading
-// as unrestricted, in the permissive direction, with Compare reporting a
-// requirement satisfied for every object when it was satisfied for one. The
-// names are part of the identity now, so the two are simply different
-// permissions -- which is the property this asserts, in both directions.
+// The names are part of Permission's identity, so a named rule and an
+// unnamed one are simply different permissions -- which is the property this
+// asserts, in both directions. Expanding a named rule into an unnamed one
+// would read as unrestricted and have Compare report a requirement satisfied
+// for every object when it holds for one.
 func TestExpandRulesCarriesResourceNames(t *testing.T) {
 	named, err := ExpandRules([]rbacv1.PolicyRule{{
 		APIGroups:     []string{""},

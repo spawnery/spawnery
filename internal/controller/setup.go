@@ -228,12 +228,10 @@ func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
 // fixtures, and no test exercises mirrorPlayerCount's throttle at a value
 // that would tell a wrong one apart; OrphanInterval is never set by a test at
 // all, and every orphan-sweep test calls the sweep directly rather than
-// through Start's ticker, so nothing there has ever depended on it either.
-// DrainTaintKeys is set nowhere outside SetupAll and the operator binary,
-// no fixture reconciler sets it, and deleting either assignment left the
-// whole suite green — so acceptance criterion 4, that a node carrying a
-// configured taint key is treated like a cordoned one, had no test that could
-// fail. SetupAll has no seam a test can reach through, and these do.
+// through Start's ticker. DrainTaintKeys is set nowhere outside SetupAll and
+// the operator binary and no fixture reconciler sets it, so deleting either
+// assignment would leave the whole suite green. SetupAll has no seam a test
+// can reach through, and these do.
 func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconciler {
 	return &ServerGroupReconciler{
 		Client:             mgr.GetClient(),

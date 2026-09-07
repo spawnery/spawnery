@@ -135,9 +135,8 @@ func (l *requestLimiter) allow(pod string) bool {
 //
 // One dispatcher and not one per direction: a server session and a proxy
 // session ask the same questions and differ only in the envelope the answer
-// travels in, which each caller wraps. Before this existed the oneof was
-// unpacked at both call sites, and the second verb would have made that four
-// copies of a chain whose last branch -- the answer for a request kind this
+// travels in, which each caller wraps. Unpacking the oneof per call site would
+// copy a chain whose last branch -- the answer for a request kind this
 // operator does not know -- is the one nobody would notice going missing.
 //
 // The unknown-request answer is a refusal and not a silence, and that matters
@@ -190,13 +189,10 @@ func (s *Server) answerCloudRequest(
 // token authenticated. There is no field an agent could put another network's
 // server in.
 //
-// Unlike connect, this resolves nothing against the network snapshot, and an
-// earlier draft that did was measured to be dead weight: removing the check
-// changed no test, because the writer's own namespaced Get already answers
-// NOT_FOUND for a name this network does not have. A screening step that reads
-// like a bound but cannot fail on its own is worse than none -- the next
-// person to touch this would have to work out, as this comment had to, that
-// the bound is the Get's key and never was the snapshot.
+// Unlike connect, this resolves nothing against the network snapshot, and must
+// not: the writer's own namespaced Get already answers NOT_FOUND for a name
+// this network does not have, so a screening step there would read like a
+// bound while being unable to fail on its own. The bound is the Get's key.
 //
 // Refusing an already-retiring server is the one bound here that is not about
 // safety. The patch is idempotent and a second one would cost nothing; what it
@@ -358,8 +354,8 @@ func (s *Server) answerStopBoost(
 // id.Namespace -- the namespace the pod's own ServiceAccount token
 // authenticated. There is no field an agent could put another network's name
 // in, which is why this one has no `if` and cannot be forgotten in a later
-// edit. Milestone 2a's promise that a compromised pod cannot harm another is
-// carried here by the shape rather than by a guard.
+// edit: that a compromised pod cannot harm another network is carried by the
+// shape rather than by a guard.
 //
 // The remaining checks each have their own test, because a single test
 // asserting "it was refused" passes when the wrong one fired. The rate bound

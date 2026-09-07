@@ -758,8 +758,8 @@ func TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved(t *testing.T) {
 	}
 }
 
-// TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart pins the
-// answer to the question task 5 carried forward: the cold-start server becomes
+// TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart pins what
+// happens next: the cold-start server becomes
 // Ready, and while nothing has retired yet it is empty, it is surplus, and
 // deleting it re-triggers the cold start on the next pass, which creates
 // another.

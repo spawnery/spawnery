@@ -193,10 +193,10 @@ type ProxyGroupReconciler struct {
 	// says "does not exist in this namespace", which sends somebody looking
 	// for an object they can see with kubectl.
 	//
-	// Measured on a live cluster on 2026-08-29, which is how this was found;
-	// no test caught it, because envtest's client is not cache-restricted the
-	// same way. Labelling the claim would have been the wrong fix twice over:
-	// it is not our object, and the orphan sweep deletes by that label.
+	// No test catches this: envtest's client is not cache-restricted the same
+	// way, so the mistake is invisible until a real cluster. Labelling the
+	// claim would be wrong twice over -- it is not our object, and the orphan
+	// sweep deletes by that label.
 	ClaimReader client.Reader
 }
 
@@ -282,10 +282,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// a branch to serve it. A refusal on the object is a message a user can
 	// read; the alternative is now reconcileService's named error, which
 	// fails the reconcile into the log where nobody looking at the group
-	// would find it. (Before this operator gained a ClusterIP branch that
-	// alternative was a nil dereference on an unvalidated sub-block. It is
-	// not any more, and this guard's value is the reporting, not the crash
-	// it used to prevent.)
+	// would find it.
 	if !exposeImplemented(group.Spec.Expose.Type) {
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonExposeNotImplemented,
 			fmt.Sprintf("expose.type %s is not implemented by this operator",
@@ -346,13 +343,12 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// The status is written wherever the pods and the Service were actually
 	// read, and nowhere else. Both halves of that are deliberate.
 	//
-	// Wherever: before this, setStatus was the last call before the successful
-	// return and eleven error returns stood in front of it, so a pass that
-	// failed partway through kept whatever the last successful pass had
-	// published. A group switched into a strategy the API server refuses went
-	// on advertising the node port of a Service that reconcileService had
-	// already deleted, and no later pass corrected it because no later pass
-	// could get any further.
+	// Wherever: a status write placed after the eleven error returns below
+	// would leave a pass that failed partway through publishing whatever the
+	// last successful one did -- a group switched into a strategy the API
+	// server refuses would go on advertising the node port of a Service
+	// reconcileService has already deleted, and no later pass could correct it
+	// because no later pass gets any further.
 	//
 	// And nowhere else: Reconcile also returns before any of this, on a
 	// missing or unaccepted Network and on an unimplemented expose type. The
@@ -484,15 +480,12 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 // the reason on the group's Accepted condition; this does everything that is
 // the same for all three.
 //
-// Divergence is no longer forgotten here, and that changed with the reason for
-// it. This used to be the one return before reconcileReplicas, the only caller
-// of Divergence.observe, so no observation of this group was coming on this
-// pass and forgetting was the right response to a gap in observation -- see
-// the comment on the readinessDivergence type. protectPlayersOnly now runs
-// drainDeparting, which withdraws readiness and reports divergence for the
-// pods it acts on, so there is no gap to forget: a proxy told to stop taking
-// connections while its group is refused is exactly as capable of ignoring
-// the instruction as any other, and a cleared observation would hide it.
+// Divergence is not forgotten here, because there is no gap in observation to
+// forget: protectPlayersOnly runs drainDeparting, which withdraws readiness
+// and reports divergence for the pods it acts on. A proxy told to stop taking
+// connections while its group is refused is exactly as capable of ignoring the
+// instruction as any other, and a cleared observation would hide it -- see the
+// comment on the readinessDivergence type.
 //
 // The status is written whether or not protectPlayersOnly succeeded, and the
 // reason is the one the accepted path states for its own early write: a
@@ -551,11 +544,11 @@ func (r *ProxyGroupReconciler) protectOccupiedProxies(
 // and stay above these returns; the occupied label, the budget sized from it
 // and the NodeDraining condition do not, and this is where they run instead.
 //
-// Without this, a ProxyGroup whose Network broke stopped maintaining its
-// budget entirely. If its proxy was empty at the last successful pass the
-// budget froze at minAvailable: 0 with no label on the pod, and a player
-// joining afterwards was on a pod the eviction API could take with nothing
-// standing in the way. That is a disconnect, not a hung drain.
+// Without this a ProxyGroup whose Network broke would stop maintaining its
+// budget entirely: a proxy empty at the last successful pass freezes the
+// budget at minAvailable: 0 with no label on the pod, and a player joining
+// afterwards sits on a pod the eviction API can take with nothing standing in
+// the way. That is a disconnect, not a hung drain.
 //
 // nodeDeparting is asked once per pod here, which is the only time it is
 // asked on these paths -- reconcileReplicas, which computes the same fact for
@@ -694,82 +687,43 @@ func proxyPlayerNote(snap agent.Snapshot) string {
 	}
 }
 
-// proxyOccupiedForBudget is proxyOccupied asked by the two consumers that have
-// no deadline behind them: the podspec.LabelOccupied label, and the
-// PodDisruptionBudget whose minAvailable is counted from it.
+// proxyOccupiedForBudget is proxyOccupied for the two consumers with no
+// deadline behind them: the podspec.LabelOccupied label and the
+// PodDisruptionBudget counted from it.
 //
-// The difference is one term, and the reason for it is that the two consumers
-// are wrong in different directions. Registry.Lookup answers for a pod it has
-// never seen with {Known: false, Connected: false, PlayersStale: true}, which
-// proxyOccupied reads as occupied — so without this, every proxy pod counts
-// and is labelled as occupied from the moment it appears until its agent
-// connects and reports. On the deletion wait that costs a surplus pod its
-// full drain deadline and no more. On a budget nothing puts a clock on it at
-// all: a surge pod pushes minAvailable above the currentHealthy the group can
-// reach and blocks every eviction in it until that pod's own agent finally
-// reports, which for a proxy stuck in CrashLoopBackOff is never. The argument
-// for dropping the server side's wasRegistered qualifier was written about
-// the bounded consumer and does not carry to the unbounded one.
+// Registry.Lookup answers for a pod it has never seen with {Known: false,
+// PlayersStale: true}, which proxyOccupied reads as occupied. On the deletion
+// wait that costs one drain deadline; on a budget nothing bounds it, so a
+// surge pod pushes minAvailable above the currentHealthy the group can reach
+// and blocks every eviction until its agent reports -- for a proxy stuck in
+// CrashLoopBackOff, never.
 //
-// snap.Known is the discriminator, and it is precise: Registry.Disconnect
-// leaves it true, so a proxy whose agent connected and then died still counts
-// as occupied — which is the case the conservative rule exists for, since
-// Velocity goes on serving the sessions it holds after its agent's stream
-// breaks. What is excluded is the pod the registry has never heard of at all
-// — which, outside the window the next paragraph is entirely about, cannot be
-// holding players: a proxy pod's readiness probe is served by its own agent
-// (podspec.BuildProxyPod's TCP probe on ProxyReadyPort), so a pod whose agent
-// has never come up is not Ready, is not an endpoint of the group's Service,
-// and has no other route a player could arrive by — it publishes no hostPort
-// and runs on no host network.
+// snap.Known is the discriminator: Registry.Disconnect leaves it true, so a
+// proxy whose agent connected and then died still counts as occupied, which is
+// right because Velocity goes on serving the sessions it holds. Excluded is
+// only the pod the registry has never heard of, which cannot hold players --
+// its readiness probe is served by its own agent (podspec.BuildProxyPod's TCP
+// probe on ProxyReadyPort), so it is no endpoint of the group's Service,
+// publishes no hostPort and runs on no host network.
 //
-// Except in one window, which is what the grace is for. "Never seen" also
-// describes every pod in the fleet in the moments after the operator itself
-// restarts, and those pods are Ready and full of players: an operator evicted
-// off the very node being drained is an ordinary way to reach that state, and
-// kubectl drain will be retrying evictions throughout it. Registry.Lookup
-// already answers this — for an unknown pod it reports StreamDownFor as the
-// time since the operator started, which agent.Snapshot's own field comment
-// describes as "a grace period to reconnect after an operator restart".
-// budgetReconnectGrace below is the length, and its comment carries the
-// measurement it comes from.
-// Inside that window an unknown pod is treated as occupied, which is what
-// protects the whole fleet while its agents dial back in. Outside it, an
-// unknown pod is one whose agent has failed to appear for longer than an
-// agent's own worst-case reconnect, and the group stops paying for it — deliberately, because that is the crash-looping
-// pod the wedge above is about.
-// budgetReconnectGrace is how long an unknown pod is treated as occupied, and
-// it is derived from the agents rather than chosen to sit between two harms.
+// Except right after an operator restart, when every pod in the fleet is
+// unknown and full of players -- an operator evicted off the very node being
+// drained is an ordinary way to reach that state, with kubectl drain retrying
+// throughout. Registry.Lookup answers this too: for an unknown pod it reports
+// StreamDownFor as the time since the operator started, and inside
+// budgetReconnectGrace such a pod counts as occupied.
+
+// budgetReconnectGrace is how long an unknown pod is treated as occupied: the
+// agent's own worst case rather than a number chosen between two harms -- a
+// 30 s backoff cap, plus its jitter, plus one report interval before the agent
+// has said anything about players.
 //
-// It used to be phase.StreamDownGrace, 15 seconds, shared with the server
-// side's "a Ready server's stream has gone quiet" question. Sharing was the
-// mistake: that number answers how long a *known* server may go silent before
-// it is unplayable, and this one answers how long a *whole fleet* needs to
-// dial back in after the operator restarted. Nothing makes those the same
-// length, and measurement says they are not.
-//
-// Measured 2026-08-26, a Paper agent against a stub operator taken away and
-// brought back, timing from the stub's return to the agent's greeting:
-//
-//	3 s outage    0.26  3.82  3.83  4.08  0.26  4.08  0.26  4.08
-//	15 s outage   0.26  16.31  14.27  1.03
-//	45 s outage   13.25  17.84  12.49  15.04
-//
-// At a 45-second absence every one of the four landed at or past fifteen
-// seconds. That is not an edge: SessionLoop.backoffMillis is 1 s doubling to a
-// 30 s cap with ±10 % jitter, so once an agent has retried a few times its
-// next attempt lands wherever that timer sits, and the observed times cluster
-// exactly there. A 15-second grace therefore expired while the fleet it exists
-// to protect was still reconnecting -- and an unknown pod outside the grace
-// reads as unoccupied, so minAvailable was sized without pods that were Ready
-// and full of players, with kubectl drain retrying evictions throughout.
-//
-// 45 seconds is the agent's own worst case and not a round number: a 30 s
-// backoff cap, plus its jitter, plus one report interval before the agent has
-// said anything about players. What a longer grace costs is bounded and small:
-// a proxy whose agent never appears holds its group's minAvailable up for 45
-// seconds after the operator starts rather than 15, and then stops -- the
-// crash-loop wedge this rule exists to avoid is unchanged, only later.
+// Not phase.StreamDownGrace. That one answers how long a *known* server may go
+// silent before it is unplayable; this answers how long a *whole fleet* needs
+// to dial back in after the operator restarted, and nothing makes those the
+// same length. Too short a grace expires while the fleet is still
+// reconnecting, and an unknown pod outside it reads as unoccupied -- so
+// minAvailable is sized without pods that are Ready and full of players.
 const budgetReconnectGrace = 45 * time.Second
 
 func proxyOccupiedForBudget(snap agent.Snapshot) bool {
@@ -891,14 +845,11 @@ func (r *ProxyGroupReconciler) reconcileProxyPDB(
 // the group, or that sit on a node that is going away.
 //
 // Which pods go is DecideRollout's answer, not this function's: stale before
-// current, then the fewest players, then the newest. That replaces a rule
-// which took the newest first, full stop, because an older proxy has had
-// longer to collect players. The old rule was a guess at the player count; the
-// operator now has that count reported by the proxies' own agents, so it uses
-// the number where it has one and falls back to the guess — unchanged, and
-// still newest first — where it does not. Staleness comes first because a
-// stale pod has to go regardless, and taking a current one ahead of it would
-// drain two pods for one replacement.
+// current, then the fewest players, then the newest. The player count comes
+// from the proxies' own agents where there is one, and falls back to newest
+// first where there is not -- an older proxy has had longer to collect
+// players. Staleness comes first because a stale pod has to go regardless, and
+// taking a current one ahead of it would drain two pods for one replacement.
 func (r *ProxyGroupReconciler) reconcileReplicas(
 	ctx context.Context,
 	network *spawneryv1alpha1.Network,
@@ -1067,8 +1018,8 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// invariant is about is pods that are leaving, and a stale pod with no mark
 	// is still serving — it will be marked on a later pass, one at a time.
 	//
-	// The two counts come apart in one state, and it is a state this milestone
-	// exists to serve: a spec change reverted while a proxy is draining for it.
+	// The two counts come apart in one state: a spec change reverted while a
+	// proxy is draining for it.
 	// Take a group of two on v1, change the image, wait for the surge pod, and
 	// let one old proxy be marked; then put the image back. The marked pod
 	// matches the spec again and the surge pod does not, so a pod that was a
@@ -1078,7 +1029,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// already happened; subtracting stale marks holds it, and the surge pod is
 	// marked on a later pass when this one has finished.
 	//
-	// Holding it is the conservative reading and the one that shipped: the
+	// Holding it is the conservative reading: the
 	// budget is spent only on departures that are actually under way, so a spec
 	// that flaps does not release a drain it will want back. It costs the group
 	// one proxy more than the minimum, drained one at a time and bounded by the
@@ -1165,8 +1116,8 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 // arrives, stamp the draining mark that starts its deadline, and delete it
 // once it is empty or that deadline has passed.
 //
-// It is a function of its own because two callers need it and only one of them
-// used to have it. reconcileReplicas passes what DecideRollout nominated --
+// It is a function of its own because two callers need it.
+// reconcileReplicas passes what DecideRollout nominated --
 // surplus, a stale hash, a departing node. protectPlayersOnly passes the
 // departing-node pods and nothing else, on the three paths that give up before
 // reconcileReplicas ever runs: a missing Network, one that is not Accepted,
@@ -1182,14 +1133,13 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 //
 // A departing node cannot wait. The node is going whatever this operator
 // decides, and the only question is whether its proxy leaves gracefully or is
-// killed by the kubelet with its players still on it. Before this ran on those
-// paths, a ProxyGroup with a broken Network published NodeDraining: True
-// naming the node, sized minAvailable to cover every occupied proxy -- so the
-// eviction API refused every attempt to take that proxy -- and then never
-// marked it draining, never started its removal deadline and never withdrew
-// its readiness. `kubectl drain` could not complete against such a group until
-// somebody fixed the Network. The budget refused the disruption; nothing acted
-// on it.
+// killed by the kubelet with its players still on it. Without this on those
+// paths, a ProxyGroup with a broken Network publishes NodeDraining: True
+// naming the node and sizes minAvailable to cover every occupied proxy -- so
+// the eviction API refuses every attempt to take it -- while never marking it
+// draining, never starting its removal deadline and never withdrawing its
+// readiness. The budget refuses the disruption and nothing acts on it, so
+// `kubectl drain` cannot complete until somebody fixes the Network.
 //
 // The lost capacity is real and is the price. A group that drains its last
 // proxy on a broken Network has no proxy until the Network is fixed, where
@@ -1237,10 +1187,7 @@ func (r *ProxyGroupReconciler) drainDeparting(
 	// anything: it is starting up, not diverging, and reporting that
 	// direction would misname it as an agent that heard an instruction and
 	// ignored it. A proxy that is supposed to be ready and never gets there
-	// is already visible without this: the group sits below its ready
-	// count, and known-issues.md's "a proxy that cannot bind its ready port
-	// is silent on the CR" entry (filed under 3c, the milestone that added
-	// the bind) is the diagnosis that direction actually needs.
+	// is already visible without this: the group sits below its ready count.
 	diverging := make(map[types.UID]bool, len(pods))
 	names := make(map[types.UID]string, len(pods))
 	for i := range pods {

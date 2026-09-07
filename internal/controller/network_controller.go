@@ -102,9 +102,9 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if owner != network.Name {
 		// Counted even though this Network is being refused, because the
 		// numbers are about what points at it and not about whether it is
-		// serving. A refused Network used to report whatever it last counted,
-		// which for the ordinary case -- created second, refused from its very
-		// first pass -- was zero forever, however many groups were later
+		// serving. A refused Network that reported only what it last counted
+		// would say zero forever in the ordinary case -- created second,
+		// refused from its very first pass -- however many groups were later
 		// pointed at it. The count is how you see what is stranded behind the
 		// refusal.
 		//
@@ -212,17 +212,13 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// namespace to create the pods the policy was meant to fence, so this
 	// stays fail-closed.
 	//
-	// Fail-closed *and named*, which is the part that was missing. Returning
-	// before any status write left the condition unpersisted, so a fresh
-	// Network stayed at whatever it had -- nothing, for a new one -- and every
-	// group in the namespace refused with "network ... has not been accepted
-	// yet". True and misleading in the same breath: the network was accepted,
-	// and the acceptance could not be written down. Nothing but the operator's
-	// own log said which, and the design's §2.4 argued that no report was
-	// needed here because an RBAC misconfiguration is a fact about the
-	// installation rather than about this object. That argument was wrong in
-	// its premise: the shape produces a report anyway, on every group in the
-	// namespace, and it names the wrong thing.
+	// Fail-closed *and named*. Returning before any status write would leave
+	// the condition unpersisted, so a fresh Network keeps whatever it had --
+	// nothing, for a new one -- and every group in the namespace refuses with
+	// "network ... has not been accepted yet": true and misleading in the same
+	// breath, since the network was accepted and only the acceptance could not
+	// be written down. Saying nothing here does not avoid a report; it
+	// produces one on every group in the namespace, naming the wrong thing.
 	//
 	// So Accepted goes to False with the write's own error on it, and then
 	// through record like every other failure. Groups still refuse, for the

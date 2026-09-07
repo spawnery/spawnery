@@ -65,9 +65,8 @@ type ScaleBoostSpec struct {
 // claims it.
 //
 // It adds to the group's floor and never to its ceiling. spec.scaling.
-// maxReplicas still binds, because a ceiling is an instruction -- milestone 4a
-// established that -- and a boost is the one thing here that a person might
-// create in a hurry.
+// maxReplicas still binds, because a ceiling is an instruction and a boost is
+// the one thing here that a person might create in a hurry.
 //
 // It has no status. There is nothing about a boost that the operator observes
 // and the object does not already say: whether it is live is its expiry

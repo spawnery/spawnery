@@ -126,10 +126,10 @@ func TestCountFailuresStartsAFreshStreakAfterASuccess(t *testing.T) {
 // like the success that ends its own streak." That is load-bearing — without
 // it a corpse whose own readySince post-dates the watermark would reset the
 // streak it belongs to, and the count could never climb past 1 for the
-// Ready -> Failed class — and until now nothing checked it: the whole-branch
-// review mutated `case phase.Failed: srv.Status.ReadySince = nil` out of
-// server_controller.go and the entire suite stayed green, because every
-// fixture reaches Failed through Starting, which clears it anyway.
+// Ready -> Failed class — and nothing else checks it: every fixture in this
+// package reaches Failed through Starting, which clears readySince anyway, so
+// deleting `case phase.Failed: srv.Status.ReadySince = nil` from
+// server_controller.go leaves the whole suite green.
 //
 // This test pins the *dependency*, and does so honestly: CountFailures' search
 // for the newest success reads ReadySince off every view regardless of phase,
@@ -251,10 +251,10 @@ func TestTheGroupRecoveredWhenItsLastRequiredOrdinalDid(t *testing.T) {
 }
 
 // TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling is the steady-state
-// counterpart to the flapping-sibling test above, and the case the first
-// version of this rule got wrong: it had no reset path at all for replicas >=
-// 2, so six isolated failures -- each one fully recovered long before the next
-// arrived -- still gave the group up, and only a spec edit cleared it.
+// counterpart to the flapping-sibling test above, and the case a rule with no
+// reset path for replicas >= 2 gets wrong: six isolated failures, each fully
+// recovered long before the next arrived, would still give the group up, and
+// only a spec edit would clear it.
 //
 // g-0 comes up once and stays up, which is the whole mechanism: its
 // ReadySince never advances past the group's first start, so the earliest
@@ -370,24 +370,18 @@ func TestBackoffDelayIsCapped(t *testing.T) {
 	}
 }
 
-// TestAGenerationResetLeavesOneRoundNotOnePerCorpse pins what the milestone 5b
-// entry in docs/known-issues.md describes, and what changed under it on
-// 2026-08-24.
+// TestAGenerationResetLeavesOneRoundNotOnePerCorpse pins how much of the reset
+// a persistent group actually gets.
 //
 // The reset in servergroup_controller.go zeroes the count whenever
 // metadata.generation moves, because a spec edit is the operator's answer to
 // whatever broke. For a persistent group the same pass then counts over the
-// *unfiltered* views — ofGeneration is ephemeral-only since 5b — so
-// stale-generation corpses still holding their ordinals are counted straight
-// back in on the same reconcile. The reset an ephemeral group gets in full, a
-// persistent one gets only most of.
-//
-// What changed: while the count was corpses, the reset returned to however many
-// corpses the group was holding, bounded by spec.replicas. Now it returns to
-// one, because the corpses are one round however many of them there are. The
-// group still does not pretend they are absent — a spec edit does not heal a
-// broken ordinal — but it starts from one round of penalty rather than from
-// four.
+// *unfiltered* views — ofGeneration is ephemeral-only — so stale-generation
+// corpses still holding their ordinals are counted straight back in on the
+// same reconcile. It returns to one, because the corpses are one round however
+// many of them there are: the group does not pretend they are absent, since a
+// spec edit does not heal a broken ordinal, but it starts from one round of
+// penalty rather than from four.
 func TestAGenerationResetLeavesOneRoundNotOnePerCorpse(t *testing.T) {
 	base := time.Now()
 	corpses := []ServerView{

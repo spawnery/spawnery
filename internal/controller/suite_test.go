@@ -463,20 +463,13 @@ func (f *fixture) ensureNode(t *testing.T, name string, unschedulable bool) *cor
 
 // nonBlockingRecorder is events.FakeRecorder with the channel taken out.
 //
-// docs/known-issues.md records what the channel costs: FakeRecorder's buffer is
-// per call site rather than a package constant — this package had sites asking
-// for 10, 20 and 100 — and a reconciler that emits one event more than the
-// buffer holds does not drop it or error, it *blocks inside Eventf*. The test
-// then does not fail; it hangs, and the only symptom is the package's
-// ten-minute go test timeout with nothing in the output naming the recorder or
-// the channel. A mutant that should take a second to disprove looks like a
-// wedge instead.
-//
-// Milestone 4d worked around one instance of that with a drainRecorder helper
-// beside the test that hit it. The entry says the real fix belongs in the
-// fixture, and this is it: a slice under a mutex has no buffer to overrun, so
-// no test in this package has to budget against one and no future event-heavy
-// test can meet the wall unwarned.
+// FakeRecorder's buffer is per call site rather than a package constant, and a
+// reconciler that emits one event more than the buffer holds does not drop it
+// or error -- it *blocks inside Eventf*. The test then does not fail, it hangs,
+// and the only symptom is the package's ten-minute go test timeout with
+// nothing in the output naming the recorder or the channel: a mutant that
+// should take a second to disprove looks like a wedge instead. A slice under a
+// mutex has no buffer to overrun, so no test here has to budget against one.
 //
 // The format string is copied from events.FakeRecorder deliberately, dropping
 // `action` exactly as it does, so every existing assertion about an event's

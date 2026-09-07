@@ -97,18 +97,15 @@ const (
 // package.
 //
 // The events API's `related` names a secondary object for events about two of
-// them at once. Every event this operator emits regards exactly one object, and
-// the tools/record call sites this package migrated from had no way to carry a
-// second one. Passing the created Server or the deleted Pod there would be new
-// information in the operator's output that no test covers and no design asked
-// for, so the migration leaves it nil throughout and says why once, here,
-// rather than at twenty-four call sites.
+// them at once. Every event this operator emits regards exactly one object, so
+// passing the created Server or the deleted Pod there would be new information
+// in the operator's output that nothing covers. It stays nil throughout, said
+// once here rather than at twenty-four call sites.
 
-// The event note's size limit, which is not the same limit the old API had.
+// The event note's size limit.
 //
-// events.k8s.io/v1 validation rejects an event whose note exceeds 1024 bytes;
-// the core v1 Event the deprecated tools/record wrote had no such cap. Nothing
-// between a call site and the API server enforces it: the recorder does
+// events.k8s.io/v1 validation rejects an event whose note exceeds 1024 bytes,
+// and nothing between a call site and the API server enforces it: the recorder does
 // `fmt.Sprintf(note, args...)` and assigns the result straight to Note
 // (k8s.io/client-go/tools/events/event_recorder.go), and when the API server
 // then refuses the create, the broadcaster classifies a *errors.StatusError as
@@ -122,9 +119,8 @@ const (
 // with the group -- must go through eventNote below.
 //
 // The limit is counted in bytes even though the API server's own message says
-// "can have at most 1024 characters". Probed against envtest's real API server:
-// 1024 ASCII bytes is accepted, 1025 is refused, and 512 em-dashes -- 512
-// characters, 1536 bytes -- is refused too.
+// "can have at most 1024 characters": 1024 ASCII bytes is accepted, 1025 is
+// refused, and 512 em-dashes -- 512 characters, 1536 bytes -- is refused too.
 const maxEventNote = 1024
 
 // eventNoteTruncated marks a cut note and says where the whole one is.

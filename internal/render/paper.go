@@ -70,12 +70,8 @@ var paperOverlayKeys = []string{
 //     online-mode=false above means no join ever has — left at the default,
 //     every join would fail; turned off, a backend reached directly instead
 //     of through the proxy accepts unsigned chat from an unauthenticated
-//     connection too. Nothing in this repository closes that off: there is
-//     no NetworkPolicy anywhere under config/, so today any pod in the
-//     cluster that can reach port 25565 can attempt that connection. See
-//     "A NetworkPolicy restricting backends to proxies-only is now overdue"
-//     in docs/known-issues.md for why that is a real exposure rather than a
-//     formality, and which milestone owns closing it.
+//     connection too. What the NetworkPolicies this operator renders do and
+//     do not bound is in docs/network-boundaries.md.
 func Paper(v Values, secret string, overlay map[string]string) (map[string][]byte, error) {
 	if err := v.RequireMaxPlayers(); err != nil {
 		return nil, err
@@ -90,18 +86,10 @@ func Paper(v Values, secret string, overlay map[string]string) (map[string][]byt
 	// Before the layering, so a key Minecraft does not read is reported as
 	// the key it is rather than silently added to the file and ignored.
 	//
-	// This was the one overlay nothing checked. paper-global.yml and
-	// velocity.toml have been measured against their programs' own defaults
-	// since 2026-08-24; server.properties was left out because its default
-	// file is Minecraft's and this repository had never captured one. It has
-	// now -- defaults/server.properties.default, written by the pinned build
-	// on a first start, the same way the other two were -- so the same rule
-	// applies to all three.
-	//
-	// What it catches is narrow and worth stating: the four keys the operator
-	// relies on are in the critical layer below and no overlay can move them,
-	// so a typo could only ever reach the author's own settings. It reached
-	// them silently, which is the part that changed.
+	// What it catches is narrow: the four keys the operator relies on are in
+	// the critical layer below and no overlay can move them, so a typo can
+	// only ever reach the author's own settings -- silently, which is what
+	// this refuses.
 	userProps := parseProperties(overlay["server.properties"])
 	if len(userProps) > 0 {
 		doc := make(map[string]any, len(userProps))
@@ -157,10 +145,9 @@ func Paper(v Values, secret string, overlay map[string]string) (map[string][]byt
 // It is the overlay and nothing else: this renderer has no base layer to
 // merge under it and no critical keys to assert over it, because nothing the
 // operator relies on lives in this file. What it adds over copying the string
-// through is the declared-key check -- the same one paper-global.yml has had
-// since 2026-08-24, and for the same reason, which is that Paper keeps its own
-// default for a key it does not read and writes the stray key back out, so the
-// file on disk goes on looking like the override took.
+// through is the declared-key check, for the reason paper-global.yml has it:
+// Paper keeps its own default for a key it does not read and writes the stray
+// key back out, so the file on disk goes on looking like the override took.
 //
 // The document is re-marshalled rather than passed through, so that what
 // reaches the server is what this package parsed. An overlay that parses to
@@ -253,16 +240,10 @@ func valueOr(s *string, fallback string) string {
 // here. The two implementations must be kept in the same order — see the
 // note on Layer.
 //
-// The overlay is the base document. It used to be read for its
-// proxies.velocity keys and nothing else: the rendered file was built from
-// scratch as {proxies: {velocity: ...}}, so every other key an overlay set —
-// every part of paper-global.yml that is not the Velocity block — was parsed,
-// dropped, and never written, while paperOverlayKeys advertised the file as
-// one an overlay may set and checkOverlayFiles' own comment called a silently
-// dropped overlay key worse than an error. Nothing said so anywhere, and no
-// test looked outside proxies.velocity, so an override for, say,
-// chunk-loading.autoconfig-send-distance rendered a file that did not contain
-// it and a server that came up looking healthy.
+// The overlay is the base document, not merely a source of proxies.velocity
+// keys: paperOverlayKeys advertises this whole file as one an overlay may set,
+// so every key outside the Velocity block has to survive into the rendered
+// document.
 func paperGlobal(secret, overlay string) (string, error) {
 	doc := map[string]any{}
 	if strings.TrimSpace(overlay) != "" {
@@ -288,7 +269,7 @@ func paperGlobal(secret, overlay string) (string, error) {
 	// whose Paper build is pinned by nix/paper.nix it can change nothing: the
 	// answer reaches a log line nobody acts on, because upgrading means a new
 	// image and not a running server downloading anything. What it does reach
-	// is the egress policy. Milestone 6b's per-Network policy already permits
+	// is the egress policy. The per-Network policy already permits
 	// no general egress, so on a cluster whose CNI enforces it this call
 	// already fails; leaving the default on means every server start spends a
 	// DNS lookup and a connect attempt on a request that is designed to be
@@ -335,29 +316,14 @@ func paperGlobal(secret, overlay string) (string, error) {
 	// turns enabled back off ("Velocity is enabled, but no secret key was
 	// specified. A secret key is required. Disabling velocity..."), leaving a
 	// backend that starts cleanly, passes every probe, and rejects every
-	// forwarded join. This spelling was wrong from the day it was written until
-	// milestone 3c's first end-to-end join found it; see
-	// TestPaperWritesTheKeysPaperItselfReads for the check that now measures
-	// these names against Paper's own defaults rather than against this file.
-	// The environment is not a way to keep this secret off disk, and it looks
-	// like one. Paper 26.2 does read PAPER_VELOCITY_SECRET -- measured
-	//2026-08-26 against the pinned build, booted with a paper-global.yml
-	// carrying enabled and online-mode and no secret at all: forwarding came
-	// up, with none of the "no secret key was specified. Disabling velocity"
-	// that a genuinely missing secret produces.
+	// forwarded join. TestPaperWritesTheKeysPaperItselfReads measures these
+	// names against Paper's own defaults rather than against this file.
 	//
-	// And then Paper wrote it into config/paper-global.yml itself:
-	//
-	//	velocity:
-	//	  enabled: true
-	//	  online-mode: true
-	//	  secret: measured-from-the-environment
-	//
-	// So the plaintext reaches the same file either way, and for a persistent
-	// group that file is on the PersistentVolume. What the environment would
-	// add is a second copy -- in the pod spec, unless it came by secretKeyRef
-	// -- for no reduction anywhere. docs/known-issues.md carried this as a
-	// smaller attack surface waiting to be taken; it is not one.
+	// PAPER_VELOCITY_SECRET looks like a way to keep this secret off disk and
+	// is not one: Paper reads it and then writes it into
+	// config/paper-global.yml itself, which for a persistent group is on the
+	// PersistentVolume. The plaintext reaches the same file either way, and
+	// the environment would only add a second copy in the pod spec.
 	velocity["enabled"] = true
 	velocity["online-mode"] = true
 	velocity["secret"] = secret

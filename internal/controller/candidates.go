@@ -145,8 +145,8 @@ type ServerView struct {
 // that as "everything is stale" would turn a Network outage into a fleet
 // changeover.
 //
-// DecidePersistentSize had this rule inline before this function existed and
-// now calls it, so the two group kinds cannot drift apart on what stale means.
+// DecidePersistentSize calls it too, so the two group kinds cannot drift apart
+// on what stale means.
 func staleSpec(v ServerView, want string) bool {
 	if want == "" || v.PodHash == "" {
 		return false
@@ -171,8 +171,7 @@ func staleSpec(v ServerView, want string) bool {
 // eviction API a disruption to spend on a pod that still has players;
 // counting a pod the label has released pins minAvailable above a budget
 // that can never be met, and kubectl drain then wedges on a pod nobody is
-// on. They used to be two implementations kept in step by a comment, and
-// they drifted.
+// on. Two implementations kept in step by a comment drift.
 //
 // podspec.LabelOccupied is not this rule's private property, and that is why
 // the agreement above needs a third participant to hold. The ProxyGroup
@@ -221,7 +220,7 @@ func (v ServerView) Occupied() bool {
 //
 // Registry.ReportPlayers rejects a player count above the reported slots, but
 // checks the slots against nothing, because it does not know which group a pod
-// belongs to. Here the two meet. From milestone 4a the reported slots feed the
+// belongs to. Here the two meet. The reported slots feed the
 // group's scaling decision, so one pod reporting slots: 1000000 at zero players
 // would make its whole group look permanently spacious and suppress every
 // scale-up for every server in it — an effect reaching across pod boundaries,
@@ -274,14 +273,12 @@ func (v ServerView) mayHavePlayers() bool {
 // expectations.go's expectationDelete case, which reads them as evidence that
 // the deletion its reservation was made for is happening.
 //
-// "Something", and deliberately not "this reconciler". The claim used to be
-// that these phases are reached only as a consequence of a removal this
-// reconciler itself issued, and that is false — a hand-run `kubectl delete
-// server/foo` drives exactly the same phases and is nobody's reservation.
-// (The orphan sweep is not the counterexample: it only touches Servers whose
-// group is gone, which this reconciler never sees.) The caller does not need
-// the stronger version anyway: a reservation is satisfied by evidence that
-// the server it named is going, whoever asked.
+// "Something", and deliberately not "this reconciler": a hand-run
+// `kubectl delete server/foo` drives exactly the same phases and is nobody's
+// reservation. (The orphan sweep is not a second counterexample: it only
+// touches Servers whose group is gone, which this reconciler never sees.) The
+// caller needs no stronger claim -- a reservation is satisfied by evidence
+// that the server it named is going, whoever asked.
 func (v ServerView) leavingByPhase() bool {
 	return v.Phase == phase.Draining || v.Phase == phase.Terminating || v.Phase == phase.Retiring
 }
@@ -409,14 +406,6 @@ const maxRetainedFailures = 1
 // says what broke; the previous generation's corpse says nothing about the new
 // image.
 //
-// It used to be load-bearing as well as truer: coldStart was suppressed while a
-// Failed server of the *current* generation was retained, and a purely
-// oldest-first rule would have pruned the very corpse doing the suppressing.
-// Milestone 4d retired that suppression — the per-group backoff bounds the loop
-// it stood in for, and the count it works from lives on the group's status
-// rather than on a corpse — so what is left here is the diagnosis argument
-// above, which was always the reason and is now the whole of it.
-//
 // Generations are compared numerically rather than against the group's current
 // one, which keeps this a pure two-argument selector: a Server is stamped with
 // its group's generation when it is created and a group's generation only ever
@@ -427,12 +416,11 @@ const maxRetainedFailures = 1
 // anyway, and counting them would let a second failure through while the first
 // drains.
 //
-// leaving(), not the phase alone, and the difference is not cosmetic. While
-// "on the way out" meant only Draining, Terminating or Retiring, the phase
-// filter carried this clause on its own: those three are mutually exclusive
-// with Failed, so no server could be both and there was nothing for a second
-// test to exclude. leaving() is now leavingByPhase() || Condemned, and a
-// Failed server on a departing node is both. Without this test it is
+// leaving(), not the phase alone, and the difference is not cosmetic.
+// leavingByPhase's three phases are mutually exclusive with Failed, so a phase
+// filter alone would have nothing to exclude; leaving() is
+// leavingByPhase() || Condemned, and a Failed server on a departing node is
+// both. Without this test it is
 // collected here as well, and because size() and pruneFailed run over the
 // same in-memory map in one pass — r.Delete stamps no deletion timestamp back
 // onto the local object, so deleteServer's own guard does not see the first
@@ -503,8 +491,7 @@ func occupiedPods(views []ServerView) int32 {
 // GroupTotals is the aggregated status of a group.
 //
 // Three of these four ignore the generation and one does not, and the split is
-// deliberate rather than an oversight -- it was mistaken for one on
-// 2026-08-24, which is why it is written down here. Replicas, ReadyReplicas
+// deliberate rather than an oversight. Replicas, ReadyReplicas
 // and OnlinePlayers are the "what is there" trio: they answer how much of this
 // group is serving right now, which is the question a printed column should
 // answer, and during a changeover the servers being replaced are still

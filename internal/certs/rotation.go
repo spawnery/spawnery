@@ -587,8 +587,8 @@ func (s *Store) drivePhase(ctx context.Context, current *Bundle, phase, since, b
 	// below, which is the point: a freshly restarted process with a secret
 	// that says `distributing` but has no incoming CA, or no
 	// AgentSessionDeadline configured, is exactly the state somebody would
-	// want to query, and those two guards used to return before this ever
-	// ran, leaving the GaugeVec with no series for that phase at all --
+	// want to query, and a Set below those guards would leave the GaugeVec
+	// with no series for that phase at all --
 	// Provider.Start calls in here at most once an hour while idle
 	// (RenewCheckInterval) or every RotationCheckInterval while distributing,
 	// and each of those ticks is what re-populates the gauge after a restart,

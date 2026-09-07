@@ -231,14 +231,10 @@ var knownActions = map[string]string{
 // wantEventfSites is how many Eventf call sites this package has.
 //
 // Asserted rather than logged, because a count that is only printed cannot
-// notice its own coverage shrinking. Deleting a call site outright left the
-// scan green at 22 when this was a t.Logf, and moving a controller into a
-// subpackage would have done the same silently. Changing this number is
-// therefore a deliberate act with a diff, which is what it should be: adding
+// notice its own coverage shrinking: a deleted call site, or a controller
+// moved into a subpackage, leaves a t.Logf green. Changing this number is
+// therefore a deliberate act with a diff, which is what it should be -- adding
 // an event is a change to the operator's output.
-//
-// 28 -> 30 on 2026-08-29: spec.extraPlugins gained a refusal on each group
-// kind, each announcing once on the transition into it.
 const wantEventfSites = 30
 
 // TestEveryEventfCallSitePassesAKnownAction reads this package's own source.
@@ -249,9 +245,9 @@ const wantEventfSites = 30
 // event assertion in this package is blind to it; envtest's tests go through
 // the same fake; and go vet cannot help either, because it cannot see through
 // the events.EventRecorder interface to know Eventf's note is a format string
-// -- a missing argument at one of these call sites produces no diagnostic. The
-// four action constants were replaced with garbage during milestone 6e's final
-// review and the whole package stayed green.
+// -- a missing argument at one of these call sites produces no diagnostic.
+// Replacing the four action constants with garbage leaves the whole package
+// green.
 //
 // What is at stake is not cosmetic. events.k8s.io/v1 rejects an event with an
 // empty action outright (TestTheRealAPIServerRefusesAnEventWithNoAction below
@@ -270,7 +266,7 @@ const wantEventfSites = 30
 // weaker than it looked. It requires every Eventf's action argument to be an
 // identifier named in knownActions. It requires the number of call sites found
 // to be wantEventfSites, because a count that is only logged cannot notice its
-// own corpus shrinking -- a deleted call site left it green at 22. And it
+// own corpus shrinking. And it
 // requires that no local anywhere in the package shadows one of those ten
 // names, which is what makes matching by name mean anything at all: without
 // it, `actionCreatePod := ""` above a call site passes. See shadowedActions.
@@ -392,14 +388,13 @@ type shadow struct {
 // pinned from the other side instead: the ten names are package-level
 // constants, nothing in the package has any business declaring a local of the
 // same name, and if nothing does then the name determines the constant.
-// `actionCreatePod := ""` above a call site went green before this existed --
-// which is exactly the shape the test claims to catch.
+// Without it, `actionCreatePod := ""` above a call site passes -- exactly the
+// shape the test claims to catch.
 //
 // The remaining limit, stated rather than papered over: none of this says the
 // constant a call site chose is the *right* one for that call site.
 // actionSyncStatus where actionCreatePod was meant passes both halves, and
-// only a reader applying events.go's own rule can tell. docs/known-issues.md
-// says the same.
+// only a reader applying events.go's own rule can tell.
 //
 // Declarations, not uses: a parameter, a `:=`, a `var`/`const` inside a
 // function, a range variable, a function literal's parameter. A package-level

@@ -44,10 +44,9 @@ func helmTemplate(t *testing.T, args ...string) (string, bool) {
 }
 
 // TestTheValuesSchemaRefusesWhatTheFlagParserUsedTo is what
-// charts/spawnery/values.schema.json is for. docs/known-issues.md measured
-// three ways to be wrong, and all three reached a cluster as a container that
-// exited at startup — CrashLoopBackOff, with the operator's flag parser
-// naming a flag rather than helm naming a value.
+// charts/spawnery/values.schema.json is for. Without it a wrong value reaches
+// a cluster as a container that exits at startup — CrashLoopBackOff, with the
+// operator's flag parser naming a flag rather than helm naming a value.
 //
 // Every case here asserts two things, and the second is the one worth having:
 // that helm refuses, and that its message names the key. A refusal that does

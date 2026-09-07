@@ -57,19 +57,16 @@ type watchedKind struct {
 // markers generate; and rbacaudit's own tests hold that ClusterRole against
 // the required table. So a get, list, create, update, delete or patch the code
 // makes and the markers do not grant fails in the test that drives it, with
-// the API server's own refusal quoted. Driven 2026-08-26 by removing
-// networkpolicies:create from the marker and from the table together: the
-// audit stayed green -- correctly, it compares two declarations that both
-// moved -- and internal/controller went red on the first fixture that
-// reconciles a Network.
+// the API server's own refusal quoted. The audit alone would not: it compares
+// two declarations, so a verb removed from the marker and the table together
+// leaves it correctly green.
 //
 // A watch is the exception, and it is the one that matters most. No test
 // starts an informer under the operator's identity, so nothing refuses a watch
 // the markers do not grant. Worse, nothing anywhere would: a watch that cannot
-// start is retried silently forever, which milestone 6a measured -- seven and
-// three-quarter minutes with pods:list revoked produced no log line, no 403 in
-// the client metrics, and no restart. The operator sits there looking healthy
-// and reconciling nothing.
+// start is retried silently forever -- no log line, no 403 in the client
+// metrics, no restart. The operator sits there looking healthy and reconciling
+// nothing.
 //
 // So this reads the builder calls themselves. It is a syntactic scan and it is
 // exact about what it does not do: it sees a kind named in a For, Owns or

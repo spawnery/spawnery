@@ -46,12 +46,10 @@ const (
 	// the larger half never reaches this package: a spawnery-system literal
 	// left in one of the chart's own-namespace RBAC fields is refused at
 	// admission by Kubernetes, so `helm install` fails and hack/e2e.sh aborts
-	// under set -e before `go test` runs -- measured, and no scenario here
-	// executed at all. The half that would reach this package is a literal in
-	// a subject namespace, which applies cleanly and is by design caught at
-	// runtime by theOperatorWasNeverDenied once the denial it causes lands on
-	// a write verb; that path was never mutated, so it is reasoning rather
-	// than measurement. See the comment on OPERATOR_NAMESPACE in hack/e2e.sh.
+	// under set -e before `go test` runs. The half that would reach this
+	// package is a literal in a subject namespace, which applies cleanly and
+	// is caught at runtime by theOperatorWasNeverDenied once the denial lands
+	// on a write verb. See the comment on OPERATOR_NAMESPACE in hack/e2e.sh.
 	operatorNamespace = "platform-system"
 
 	// testNamespace is where test/e2e/manifests/e2e.yaml puts its objects.
@@ -170,31 +168,18 @@ func theOperatorIsUp(t *testing.T) {
 // (milestone 5c), and matching "forbidden" alone would turn a correctly
 // reported missing secret into a false accusation about RBAC.
 //
-// What a pass here does and does not establish was measured both ways, and
-// the answer is narrower than "this check works". Task 4's verification
-// mutated the ClusterRole and the namespaced Role four separate ways
-// (task-4-report.md, "Fix round 1"): denying a cache-backed List (pods, then
-// networks) revoked the permission for real but produced no observable call
-// at all -- no log line, no 403 in the operator's own client metrics --
-// across seven and three-quarter minutes of continuous watching. Denying a
-// direct, uncached call that gates the operator's own readiness (the TLS
-// secret's create, the leader election lease's update) produced a real,
-// quoted `is forbidden:` line every time, but also kept the pod from ever
-// reaching Available, so hack/e2e.sh's rollout wait timed out before this
-// test ever ran.
-//
-// Task 5 broke that deadlock, once the scenarios below started applying a
-// Network and its groups: removing `create` on pods -- a WRITE verb --
-// produced a quoted
-// `is forbidden: ... cannot create resource "pods"` on the first attempt,
-// with the operator still healthy and this check still able to read it. So
-// what is measured is narrow: a revoked write fires this check, and the two
-// cache-backed lists that were tried did not. Reads as a class were not
-// measured -- no uncached read was ever revoked and watched here. The
-// explanation that would generalise it -- that such a read goes through the
-// manager's cache, whose initial sync is a watch rather than a list, so a
-// revoked read verb never reaches a request the API server could deny -- is a
-// hypothesis nothing has established; do not restate it as fact.
+// What a pass here establishes is narrower than "this check works", and the
+// difference matters. A revoked WRITE verb fires it: removing `create` on pods
+// produces a quoted `is forbidden: ... cannot create resource "pods"` on the
+// first attempt, with the operator still healthy and this check able to read
+// it. A revoked cache-backed List does not fire it at all -- no log line and
+// no 403 in the operator's own client metrics, however long anything watches.
+// Reads as a class are simply not covered, because no uncached read has ever
+// been revoked and watched here. The explanation that would generalise it --
+// that such a read goes through the manager's cache, whose initial sync is a
+// watch rather than a list, so a revoked read verb never reaches a request the
+// API server could deny -- is a hypothesis nothing has established; do not
+// restate it as fact.
 //
 // There is also at least one uncached read this check would miss for an
 // entirely unrelated reason, and it is the very one the paragraph at the top
@@ -368,23 +353,13 @@ func eventually(t *testing.T, deadline time.Duration, what string, cond func() (
 	t.Fatalf("timed out after %s waiting for %s; last seen: %s%s", deadline, what, last, denialHint(t))
 }
 
-// denialHint is what a timed-out wait adds to its own failure, and it exists
-// because of a measured hole rather than for tidiness.
+// denialHint is what a timed-out wait adds to its own failure.
 //
-// theOperatorWasNeverDenied is the last of twenty scenarios. Driven
-// 2026-08-25 with networkpolicies:create removed from the marker and from
-// rbacaudit's table -- the sharpest form of the case, absent from both, so the
-// audit is green and only the running operator knows -- no Network ever
-// reached Accepted, so nothing sized, and every scenario after the first waited
-// out its own two-minute deadline on state that could not arrive. The
-// package's own 20-minute budget fired six scenarios short of the one that
-// would have read the log. The denial was in that log the whole time and
-// nothing looked.
-//
-// So every wait that gives up looks now, and says so in its own failure. That
-// puts the cause in the message of the scenario that actually stalled, which
-// is where somebody reading a failed run is looking -- and it does not depend
-// on the run getting as far as scenario twenty.
+// theOperatorWasNeverDenied is the last of twenty scenarios, so a missing
+// permission stalls every scenario before it on state that cannot arrive and
+// the package's own budget can expire before the one check that would read the
+// log ever runs. Every wait that gives up therefore looks itself, and puts the
+// cause in the message of the scenario that actually stalled.
 //
 // Best-effort by construction: a log that cannot be read adds nothing rather
 // than replacing a real timeout with a complaint about kubectl.
