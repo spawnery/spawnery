@@ -284,13 +284,9 @@ func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
 // message a user can read, carried on the group where a user looks, while
 // reconcileService's error reaches only the log.
 //
-// The older wording here promised a crash loop instead. That was true when
-// reconcileService's default: arm fell through to reading NodePort.Port on a
-// sub-block the CRD had never validated; this branch replaced that arm with
-// an error naming the type, so the failure mode this guard is measured
-// against is a named error, not a panic. The guard is worth keeping anyway:
-// the two are not redundant, since only this one puts the refusal somewhere
-// a user can read it.
+// The failure mode without it is reconcileService's named error, not a panic,
+// and the two are not redundant: only this one puts the refusal somewhere a
+// user can read it.
 //
 // A pure function rather than an inline default arm because the enum is
 // closed: no ProxyGroup carrying an unknown type can be created through
@@ -318,8 +314,7 @@ func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 }
 
 // The four strategies end to end, through Reconcile rather than through the
-// pieces, because the refusal that stood in front of two of them is what this
-// task removes.
+// pieces.
 //
 // ClusterIP is here for a reason the other rows do not need stated. Every
 // other ClusterIP test in this file calls reconcileService or proxyAddress
@@ -329,7 +324,7 @@ func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 // What this row does not cover is the rest of that path. It never reads
 // status.address and cannot: no pod here is made ready, so proxyAddress
 // returns "" for every row, and severing its ClusterIP arm leaves all four
-// green -- measured. TestTheClusterIPAddressAppearsOnceAProxyIsReady is where
+// green. TestTheClusterIPAddressAppearsOnceAProxyIsReady is where
 // that half is driven, and it is red under the same severance.
 func TestReconcileAcceptsEveryStrategy(t *testing.T) {
 	for _, tc := range []struct {
@@ -861,11 +856,10 @@ func (f *fixture) enforcePodSecurity(t *testing.T, profile string) {
 //
 // The API server names the pod it refused, and NewProxyName draws a fresh
 // random suffix for every attempt, so the refusal text differs on every pass.
-// Storing it each time bumped resourceVersion; For(&ProxyGroup{}) carries no
-// predicate, so the update event re-enqueued the group immediately, ahead of
-// the rate-limited retry, and the group spun. The final review of 6c
-// measured what that costs in a cluster: 3,940 refusals in a 139-second E2E
-// run, where the backoff alone predicts about fifteen.
+// Storing it each time bumps resourceVersion; For(&ProxyGroup{}) carries no
+// predicate, so the update event re-enqueues the group immediately, ahead of
+// the rate-limited retry, and the group spins -- hundreds of refusals a minute
+// where the backoff alone predicts a handful.
 //
 // The second half of this test is not decoration. The stored message has to
 // stay the API server's own words -- the remedy is in them and nothing else
@@ -1077,8 +1071,8 @@ func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 //
 // The mutation that has to fail: severing that wiring in Reconcile, by
 // passing setStatus a Service stripped of its status
-// (`if svc != nil { svc = &corev1.Service{} }`). Before this test the whole
-// package stayed green under it.
+// (`if svc != nil { svc = &corev1.Service{} }`). Without this test the whole
+// package stays green under it.
 func TestTheLoadBalancerAddressAppearsOnceAProxyIsReady(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1144,11 +1138,10 @@ func TestTheLoadBalancerAddressAppearsOnceAProxyIsReady(t *testing.T) {
 // the other three rows would each need their own readiness and their own
 // expected address, and LoadBalancer's would need an ingress written by hand.
 //
-// The mutation that has to fail, and was confirmed failing before this
-// comment was written: return "" from proxyAddress's ClusterIP arm. That is
-// the severance README.md records going unnoticed for LoadBalancer, where the
-// Service sat disconnected from the status it is read out of and the package
-// stayed green.
+// The mutation that has to fail: return "" from proxyAddress's ClusterIP arm.
+// The same severance on the LoadBalancer side once went unnoticed, with the
+// Service disconnected from the status it is read out of and the package
+// green throughout.
 func TestTheClusterIPAddressAppearsOnceAProxyIsReady(t *testing.T) {
 	const want = "mc.example.test"
 
@@ -1233,10 +1226,9 @@ func TestClusterIPServiceShape(t *testing.T) {
 // A group moving from NodePort to ClusterIP was suspected of carrying two
 // fields forward into a Service where neither belongs: externalTrafficPolicy,
 // which the API server should refuse, and the allocated node port, which
-// nothing would dial any more. Both come back cleared. The two halves are not
-// the same kind of assertion, and this comment has been wrong about the
-// difference twice, so it is worth being exact about what each one can
-// detect.
+// nothing would dial any more. Both come back cleared, but the two halves are
+// not the same kind of assertion, and the difference is worth being exact
+// about.
 //
 // externalTrafficPolicy is the straightforward half. It lives on svc.Spec,
 // the object CreateOrUpdate fetched before this arm ran, and the ClusterIP
@@ -1256,29 +1248,12 @@ func TestClusterIPServiceShape(t *testing.T) {
 //   - and the API server would clear it anyway, on the type change, if the
 //     operator did send one.
 //
-// Either alone is sufficient, so this assertion is insensitive to both. It
+// Either alone is sufficient, so this assertion is insensitive to both: it
 // cannot go red unless the operator starts carrying a stale port forward AND
-// the API server stops normalising. Both earlier versions of this comment
-// picked one of the two and called it the mechanism under test; the honest
-// answer is that the assertion does not distinguish them, and no reading of
-// the source was ever going to settle which one "really" clears the field,
-// because both do.
-//
-// The experiment is what ruled out the first story -- that this half guards
-// reconcileService's own port reconstruction, so "a nonzero result means that
-// reconstruction changed". Patch the ClusterIP arm to carry the stored port
-// forward,
-//
-//	case spawneryv1alpha1.ExposeClusterIP:
-//	        svc.Spec.Type = corev1.ServiceTypeClusterIP
-//	        if len(svc.Spec.Ports) > 0 { port.NodePort = svc.Spec.Ports[0].NodePort }
-//
-// and this test still passes. Instrumented, the operator was seen sending
-// NodePort=30001 and the stored Service still read 0, so the patch was doing
-// what it looked like and the API server was undoing it. That kills the claim
-// that the operator's reconstruction is what the assertion measures -- but it
-// does not promote the API server into its place, which is the mistake the
-// version after it made.
+// the API server stops normalising. Patching the ClusterIP arm to carry the
+// stored port forward leaves this test passing, with the operator observably
+// sending a nonzero port and the API server undoing it -- so neither mechanism
+// can be called the one under test.
 //
 // Neither arm sets these fields explicitly, and that stays true. This
 // repository's standing position is that a mechanism reporting nothing is

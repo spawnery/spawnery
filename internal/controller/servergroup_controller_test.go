@@ -126,18 +126,17 @@ func (f *fixture) groupPDB(t *testing.T) *policyv1.PodDisruptionBudget {
 	return pdb
 }
 
-// assertBudgetSelectsExactlyWhatItCounts is the pairing neither group kind
-// asserted before: that the pods a PodDisruptionBudget's selector actually
-// matches are the pods its minAvailable was counted from.
+// assertBudgetSelectsExactlyWhatItCounts pairs the pods a
+// PodDisruptionBudget's selector actually matches against the pods its
+// minAvailable was counted from.
 //
-// Both halves were already covered separately -- minAvailable against a
-// number the test computed, and the occupied label against the pods carrying
-// it -- and neither catches a selector that matches the wrong population.
-// That is exactly the shape of the milestone's own Critical: the ServerGroup
-// budget selected on {managed-by, group, occupied} with no role term, so in a
-// namespace holding a same-named ProxyGroup it matched occupied proxies while
-// counting only occupied servers, and each occupied proxy it picked up bought
-// the eviction API another disruption to spend on a server pod full of players.
+// Checking each half separately -- minAvailable against a number the test
+// computed, the occupied label against the pods carrying it -- catches no
+// selector that matches the wrong population. A ServerGroup budget selecting
+// on {managed-by, group, occupied} with no role term matches the occupied
+// proxies of a same-named ProxyGroup while counting only occupied servers, and
+// each one it picks up buys the eviction API another disruption to spend on a
+// server pod full of players.
 //
 // It reads the selector off the object rather than rebuilding it, so it is a
 // statement about what Kubernetes will match and not about what the test
@@ -902,12 +901,12 @@ func TestRetainedFailedPodDoesNotWedgeTheBudget(t *testing.T) {
 // TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel.
 //
 // TestRetainedFailedPodDoesNotWedgeTheBudget above builds a server whose last
-// reported count was zero, so it only ever exercised the stale branch of the
-// occupancy rule — which was the only branch the terminal-pod exemption sat in.
-// A server that dies with players on it takes the other branch: the registry is
-// never told to forget a pod, so its count stays at seven, seven > 0 wins
-// before staleness is even looked at, and minAvailable stayed at 1 against a
-// currentHealthy of 0 for the whole retention window.
+// reported count was zero, so it exercises only the stale branch of the
+// occupancy rule. A server that dies with players on it takes the other
+// branch: the registry is never told to forget a pod, so its count stays at
+// seven, seven > 0 wins before staleness is even looked at, and minAvailable
+// would sit at 1 against a currentHealthy of 0 for the whole retention
+// window.
 func TestPodThatCrashedWithPlayersOnItDoesNotWedgeTheBudget(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1318,10 +1317,9 @@ func TestGroupWithARejectedNetworkStillProtectsItsPlayers(t *testing.T) {
 // TestGroupResumesOnceItsNetworkIsAccepted is the recovery half of the story:
 // once whatever made the Network lose the contest goes away, a frozen group
 // has to resume on its own, without an operator touching the group. Driven as
-// a loop at the real network-retry cadence rather than a single jump — Task 8
-// lesson 1 is explicit that time- and repetition-driven behaviour needs a
-// loop, because a fix that only works when tried exactly once would sail
-// through a single-reconcile test unnoticed.
+// a loop at the real network-retry cadence rather than a single jump, because
+// a fix that only works when tried exactly once sails through a
+// single-reconcile test unnoticed.
 //
 // This uses a dedicated network+group pair ("staging-net"/"arena"), not the
 // fixture's own "production"/"lobby". "staging-net" is created after
@@ -1331,12 +1329,11 @@ func TestGroupWithARejectedNetworkStillProtectsItsPlayers(t *testing.T) {
 // guarantee TestGroupPointingAtARejectedNetworkCreatesNoServers relies on.
 // The fixture's own "production" cannot be put in the losing seat this way:
 // it is created first, inside newFixture, before this test's code runs at
-// all, so nothing this test creates can ever carry an earlier real
-// timestamp. An earlier version of this test tried anyway, by racing a
-// competitor created after several seconds of setup work (bringing a server
-// up) against "production" — that gave "production" enough real elapsed time
-// to win outright regardless of name, and the test failed intermittently on
-// its own setup assertion, before ever reaching the behaviour under test.
+// all, so nothing this test creates can carry an earlier real timestamp.
+// Racing a competitor against it after several seconds of setup work gives
+// "production" enough real elapsed time to win regardless of name, and the
+// test then fails intermittently on its own setup assertion, before ever
+// reaching the behaviour under test.
 func TestGroupResumesOnceItsNetworkIsAccepted(t *testing.T) {
 	f := newFixture(t)
 	nr := networkReconciler(f)
@@ -1616,14 +1613,13 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	}
 	f.setMinReplicas(t, 1)
 
-	// Three, and this number is the milestone. setMinReplicas performs a real
-	// spec update, so before 7a the group's generation moved, all three Ready
-	// servers read as stale, and a cold start ordered a fourth — a changeover
-	// begun by an edit that changes nothing about the pods. Since 7a
-	// staleness is podspec.DesiredServerHash, which spec.scaling never
-	// reaches, so lowering the floor starts no changeover and creates
-	// nothing. The shrink this test is about happens below, once the
-	// stabilization window elapses.
+	// Three. setMinReplicas performs a real spec update, so a staleness rule
+	// keyed on metadata.generation would read all three Ready servers as stale
+	// and order a cold start -- a changeover begun by an edit that changes
+	// nothing about the pods. Staleness is podspec.DesiredServerHash, which
+	// spec.scaling never reaches, so lowering the floor starts no changeover
+	// and creates nothing. The shrink this test is about happens below, once
+	// the stabilization window elapses.
 	//
 	// All three servers are empty, but none has waited out the window yet.
 	f.reconcileGroup(t, r)
@@ -1976,20 +1972,17 @@ func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32)
 // podspec.DesiredServerHash, so every server created under the previous value
 // reads as stale to the scaling rules.
 //
-// It was called bumpPodSpec until 7a, and the rename is not cosmetic. The
-// old name described the mechanism the rules used to read, and since 7a a
-// helper that only moved metadata.generation -- by editing spareSlots, say --
-// would make nothing stale at all, while every test built on it went on
-// passing and asserting nothing. The image edit below is the load-bearing
-// line, and the name says so.
+// The name is not cosmetic: a helper that only moved metadata.generation -- by
+// editing spareSlots, say -- would make nothing stale at all, while every test
+// built on it went on passing and asserting nothing. The image edit below is
+// the load-bearing line.
 //
 // It also pins spec.update explicitly rather than leaving it unset.
 // spec.update is optional, and an unset one arrives at MaxUnavailable: 0 —
 // which ServerGroup.UpdateMaxUnavailable and selectRetirement both floor to 1
-// already (see that accessor's doc comment) — but a prior finding on this
-// branch showed relying on that floor silently is exactly how a group can
-// appear to work while never actually rolling. Writing the policy out here
-// removes that question from this test.
+// already (see that accessor's doc comment) — but relying on that floor
+// silently is how a group comes to look as though it works while never
+// actually rolling. Writing the policy out here removes the question.
 //
 // It also raises spareSlots to 150, above what a single fresh replacement
 // (100 free slots once it is Ready and empty) can cover on its own. The
@@ -2068,15 +2061,14 @@ func (f *fixture) firstRetiring(t *testing.T) *spawneryv1alpha1.Server {
 	return nil
 }
 
-// TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone is the
-// milestone's acceptance criterion, end to end, in one test: two occupied
-// stale servers, a spec change, and a group that ends up entirely on the new
-// generation with nobody having been moved. Tasks 1 through 8 all have to be
-// correct for this to pass — a regression in any one of them fails a specific
-// numbered assertion below, not the test as an undifferentiated whole.
+// TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone is the whole
+// rolling update, end to end, in one test: two occupied stale servers, a spec
+// change, and a group that ends up entirely on the new generation with nobody
+// having been moved. A regression anywhere in it fails a specific numbered
+// assertion below, not the test as an undifferentiated whole.
 //
-// Driven with the suite's own direct-Reconcile idiom (reconcilePass), not the
-// brief's bare reconcileGroup calls: this repository runs the Server and
+// Driven with the suite's own direct-Reconcile idiom (reconcilePass) rather
+// than bare reconcileGroup calls: this repository runs the Server and
 // ServerGroup reconcilers as two separate direct calls rather than through a
 // running manager, and a phase the group orders (spec.retire, above all) only
 // lands once the Server reconciler for that object runs. Every loop-driven
@@ -2164,8 +2156,8 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 	}
 }
 
-// TestARollingUpdateColdStartCreatesExactlyOneServer pins coldStart's (Task
-// 5) deadlock-breaker in isolation, apart from ordinary spare-slot demand.
+// TestARollingUpdateColdStartCreatesExactlyOneServer pins coldStart's
+// deadlock-breaker in isolation, apart from ordinary spare-slot demand.
 // TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone's assertion 1
 // no longer can: at that test's spareSlots of 150, ordinary demand alone
 // already wants a create at pass 1, so hard-coding coldStart to always
@@ -2356,9 +2348,8 @@ func (f *fixture) failServer(t *testing.T, name string) {
 	}
 }
 
-// failServerNeverReady is failServer's other half, and the one the milestone is
-// actually named for: a server that never becomes playable at all, rather than
-// one that was Ready and flapped.
+// failServerNeverReady is failServer's other half: a server that never becomes
+// playable at all, rather than one that was Ready and flapped.
 //
 // failServer goes bringUpNamed then driveToFailed, so every failure it produces
 // belongs to a server that reached Ready first. That matters twice over. It is
@@ -2715,9 +2706,9 @@ func TestGroupGivesUpAndSaysSo(t *testing.T) {
 	// creates anyway has already created its extra server and that server is
 	// absorbed into the baseline — after which the pass an hour later builds
 	// nothing either way, because the floor is by then satisfied. That is
-	// exactly what the whole-branch review found by mutating DecideBackoff's
-	// threshold branch to {GaveUp: true, MayCreate: true} and watching the
-	// entire envtest suite stay green.
+	// exactly what mutating DecideBackoff's threshold branch to
+	// {GaveUp: true, MayCreate: true} gets away with: the entire envtest suite
+	// stays green.
 	//
 	// So count the state itself. backoffGiveUpAt failures produce
 	// backoffGiveUpAt corpses — pruneFailed asks for all but one to go, but the
@@ -2743,8 +2734,8 @@ func TestGroupGivesUpAndSaysSo(t *testing.T) {
 	}
 }
 
-// TestGroupGivesUpOnServersThatNeverBecomeReady drives the milestone's headline
-// case end to end, which nothing else in this package did: a group whose
+// TestGroupGivesUpOnServersThatNeverBecomeReady drives the broken-image case
+// end to end: a group whose
 // servers run out their startup deadline without ever becoming playable — a
 // broken image, an unpullable tag, a config the server rejects on boot — makes
 // its six attempts and then gives up.
@@ -2754,9 +2745,8 @@ func TestGroupGivesUpAndSaysSo(t *testing.T) {
 // flapped. Those are valid assertions about the state at count 6, but they are
 // a different scenario, and one that a production reconciler at a five-second
 // resync would see differently — it would observe the Ready state in between
-// and CountFailures would correctly reset the streak. Nothing was checking that
-// a server which is *never* Ready climbs the same ladder. It does, and this is
-// where that is written down.
+// and CountFailures would correctly reset the streak. That a server which is
+// *never* Ready climbs the same ladder is what this pins.
 //
 // The round is the same shape as TestGroupGivesUpAndSaysSo's — fail, wait out
 // the window, repeat — and the wait is backoffCap for the same reason: it
@@ -3069,23 +3059,15 @@ func TestBackingOffIsNotDecidedWithoutAUsableNetwork(t *testing.T) {
 	}
 }
 
-// drainRecorder empties a FakeRecorder's buffer and throws the events away.
-// It was written for a hazard that no longer exists: FakeRecorder's channel
-// blocked its writer once full, so a test walking many servers through a whole
-// lifecycle wedged the reconciler mid-event rather than reaching its assertion,
-// and this drained between passes to stop that. nonBlockingRecorder has no
-// buffer to overrun, so nothing wedges anywhere now.
-//
-// It stays because the second thing it did is still wanted: it resets the
-// recorder between passes, so a count taken after one pass is about that pass
-// rather than about every pass since the fixture was built.
+// drainRecorder empties the recorder between passes, so a count taken after
+// one pass is about that pass rather than about every pass since the fixture
+// was built. nonBlockingRecorder has no buffer to overrun, so nothing here is
+// guarding against a wedge.
 func drainRecorder(rec *nonBlockingRecorder) { drainEvents(rec) }
 
-// TestGroupWithABrokenNewImageDoesNotRebuildEveryPass is the loop milestone
-// 4b's cold-start suppression was a stopgap for: a broken new image fails,
-// stops counting toward the group's size, and is recreated on the next
-// five-second pass, forever. It asserts the backoff bounds that loop, so the
-// stopgap can be removed without reopening it.
+// TestGroupWithABrokenNewImageDoesNotRebuildEveryPass pins the loop the
+// backoff exists to bound: a broken new image fails, stops counting toward the
+// group's size, and is recreated on the next five-second pass, forever.
 //
 // Three deliberate departures from the obvious way to write this:
 //
@@ -3108,18 +3090,14 @@ func drainRecorder(rec *nonBlockingRecorder) { drainEvents(rec) }
 // Ten passes move the clock fifty seconds: passes * ResyncInterval = 10 * 5s.
 // backoffDelay(n) = backoffBase * backoffFactor^(n-1) gives windows of 10s,
 // 20s, 40s for n = 1, 2, 3 (backoffBase = 10s, backoffFactor = 2, both in
-// backoff.go). Since 2026-08-24 the count is rounds rather than corpses, so it
+// backoff.go). The count is rounds rather than corpses, so it
 // climbs 1, 2, 3 here: the first window opens at t=15s and the second at
 // t=40s, both inside 50s, and the third would need t=85s. Two windows fire.
 //
-// **Each window builds two servers, not one**, and that is the factor the
-// earlier version of this comment did not have. DecideSize runs the group
-// above its floor to cover spareSlots, so even at minReplicas 1 a recovery
-// builds two. The old comment reached its bound of 3 by a route that happened
-// to give the right number for the wrong reason — it read two windows at one
-// server each, where the run was one window at two servers. Measured, not
-// reasoned: a probe over these ten passes shows the group going 1 -> 3 -> 5
-// servers at passes 2 and 7.
+// **Each window builds two servers, not one.** DecideSize runs the group above
+// its floor to cover spareSlots, so even at minReplicas 1 a recovery builds
+// two: over these ten passes the group goes 1 -> 3 -> 5 servers, at passes 2
+// and 7.
 //
 // So bound = 1 (the cold start's own server) + 2 windows * 2 servers = 5. A
 // group rebuilding every pass would have built about twenty, so the test still
@@ -3219,9 +3197,9 @@ func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 
 	// A resync that changes nothing must not announce the same drain again:
 	// the event is the moment of decision, not a status repeated every five
-	// seconds for as long as the server takes to drain. The proxy side learned
-	// this mid-milestone (TestANodeDrainMarkFiresANodeDrainingEvent's third
-	// pass); this is the same assertion for deleteServer's own guard.
+	// seconds for as long as the server takes to drain. The proxy side has the
+	// same assertion in TestANodeDrainMarkFiresANodeDrainingEvent's third
+	// pass; this is deleteServer's own guard.
 	//
 	// The clock jumps past expectationTTL rather than one resync, and that is
 	// what makes this test the guard's rather than the reservation's. The
@@ -3239,13 +3217,13 @@ func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 	}
 }
 
-// TestAFailedServerOnACordonedNodeGoesAwayOnce is the cost of the same
-// omission, seen from outside: a Failed server on a departing node used to be
-// both condemned by size() and collected by pruneFailed, which run over the
-// same in-memory map in one pass. r.Delete stamps no deletion timestamp back
-// onto the local object, so deleteServer's guard against repeating itself
-// never sees the first removal, and one server going away once was deleted
-// twice and announced twice under two different reasons.
+// TestAFailedServerOnACordonedNodeGoesAwayOnce is the same omission seen from
+// outside: a Failed server on a departing node is both condemned by size() and
+// collected by pruneFailed, which run over the same in-memory map in one pass.
+// r.Delete stamps no deletion timestamp back onto the local object, so
+// deleteServer's guard against repeating itself never sees the first removal,
+// and one server going away once is deleted twice and announced twice under
+// two different reasons.
 //
 // Both failures sit on the cordoned node, which is what makes the
 // FailedServerPruned count below discriminating: with both condemned there is
@@ -3305,15 +3283,14 @@ func TestAFailedServerOnACordonedNodeGoesAwayOnce(t *testing.T) {
 	}
 }
 
-// TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying pins the ruling that
-// moved condemnation below the Network gate. Design §3.3 calls condemnation
-// "unconditional. The node is leaving with or without our consent", and size()
-// used to be called only when the Network was usable -- so a group whose
-// Network had been deleted, or which had lost the one-per-namespace contest,
-// published NodeDraining: True naming the node, condemned nothing, and left
-// kubectl drain hanging on an occupied pod indefinitely. That is the failure
-// §1 of the design opens by describing, reached through the operator that
-// exists to prevent it.
+// TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying pins condemnation
+// below the Network gate. Design §3.3 calls condemnation "unconditional. The
+// node is leaving with or without our consent": a size() reached only when the
+// Network is usable leaves a group whose Network has been deleted, or which
+// lost the one-per-namespace contest, publishing NodeDraining: True naming the
+// node, condemning nothing, and hanging kubectl drain on an occupied pod
+// indefinitely -- the failure §1 of the design opens by describing, reached
+// through the operator that exists to prevent it.
 //
 // The server here is occupied, so the assertion is not merely about a
 // bookkeeping deletion: this is the pod the eviction API would otherwise be
@@ -3935,11 +3912,10 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 	}
 }
 
-// TestAPersistentGroupCountsAFailureAfterItsGenerationMoves pins a defect
-// found while verifying this milestone rather than one it set out to fix:
-// ofGeneration -- built for the ephemeral count, where a generation change
-// really does replace the population -- was the only filter CountFailures'
-// call site applied, for a group of either type. spec.groupGeneration is
+// TestAPersistentGroupCountsAFailureAfterItsGenerationMoves pins why
+// ofGeneration is ephemeral-only. Built for the ephemeral count, where a
+// generation change really does replace the population, it is the wrong filter
+// for a persistent group: spec.groupGeneration is
 // stamped on a Server once at creation and never updated afterwards, so any
 // edit to a persistent group's spec moves group.Generation out from under
 // every ordinal it already has. Filtered by that, CountFailures would see an
@@ -4247,11 +4223,10 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 
 	// backoffGiveUpAt rounds, each one failing whatever the group built.
 	//
-	// A whole floor failing at once used to be enough on its own: the count
-	// was corpses, so one
-	// round at minReplicas 6 spent the entire budget. Since the count became
-	// rounds it takes six of them, and building the give-up that way is also
-	// the honest construction — it is what a genuinely broken image does.
+	// Six of them, because the count is rounds: a count of corpses would let
+	// one round at minReplicas 6 spend the entire budget. Building the give-up
+	// this way is also the honest construction — it is what a genuinely broken
+	// image does.
 	// failServerNeverReady rather than failServer: the latter walks a server up
 	// to Ready first, and a success ends the streak this test is building.
 	// Never-ready is also the broken-image shape the backoff exists for.
@@ -4707,10 +4682,9 @@ func (f *fixture) taintNode(t *testing.T, name, key string) {
 // spec.unschedulable unless --cordon-node-before-terminating is on, which it is
 // not by default.
 //
-// The second subtest is the configuration `paulwtf` runs: measured 2026-08-25,
-// its Deployment passes no --drain-taint at all. Harmless there, because the
-// cluster has three fixed nodes and no autoscaler — and exactly the state this
-// entry warns would make a scale-in invisible.
+// The second subtest is an operator configured with no --drain-taint at all,
+// which is harmless on a cluster with fixed nodes and no autoscaler and makes
+// a scale-in invisible on one without.
 func TestATaintedNodeCondemnsOnlyWhenItsKeyIsConfigured(t *testing.T) {
 	const key = "ToBeDeletedByClusterAutoscaler"
 

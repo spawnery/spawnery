@@ -58,18 +58,14 @@ func TestADivergenceReportsOnceItHasBeenWatchedForTheWholeGrace(t *testing.T) {
 	}
 }
 
-// TestAGapInObservationCannotBeSpentOnTheGrace is the defect
-// docs/known-issues.md files under milestone 4c-2 as "a deferred structural fix
-// to readinessDivergence".
-//
 // An entry measures how long a pod has diverged *while something was watching*.
 // Reconcile does not call observe on every pass: every error return above
 // reconcileReplicas — a failed read, the status write, Bootstrap.Ensure, the
-// ConfigMap, the Service, the first pods() call — returns without it. Since the
-// entry stored only when the divergence was first seen and nothing advanced it,
-// a pod still diverging across a five-minute outage was measured from before
-// the outage, and the first pass that resumed found the whole grace already
-// elapsed and fired a Warning about a stretch nobody watched.
+// ConfigMap, the Service, the first pods() call — returns without it. An entry
+// stored only when the divergence was first seen, with nothing advancing it,
+// measures a pod diverging across a multi-minute outage from before the
+// outage: the first pass that resumes finds the whole grace elapsed and fires
+// a Warning about a stretch nobody watched.
 //
 // The two forget calls on the NetworkNotFound and NetworkNotAccepted paths
 // handled two exits by hand. The cap handles all of them, including the ones

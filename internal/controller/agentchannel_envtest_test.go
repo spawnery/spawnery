@@ -259,7 +259,7 @@ func TestAgentOverTheWireBringsAServerToReady(t *testing.T) {
 //
 // Every assertion here has to be able to tell ServerReconciler's own Ensure
 // apart from the fixture's. newFixture reconciles the Network before this test
-// body starts, and that reconcile now bootstraps the namespace too, so a test
+// body starts, and that reconcile bootstraps the namespace too, so a test
 // that only asked whether the objects exist would stay green with the call it
 // guards deleted outright. Two things separate the two callers: the fixture
 // bootstraps with the literal "test-ca" while newChannelFixture rewires only

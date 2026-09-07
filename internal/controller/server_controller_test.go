@@ -159,8 +159,8 @@ func TestTheRoundEndIsStampedWhileTheServerStillRuns(t *testing.T) {
 // It has to go through the terminal-pod transition rather than the flapping
 // one. Every other fixture in this package reaches Failed via Starting, and
 // entering Starting clears readySince on its own, so a test built that way
-// passes with `case phase.Failed: srv.Status.ReadySince = nil` deleted — which
-// is exactly what the whole-branch review measured. phase.Decide's PodTerminal
+// passes with `case phase.Failed: srv.Status.ReadySince = nil` deleted.
+// phase.Decide's PodTerminal
 // branch goes Ready -> Failed in one step and touches no other clearing, so
 // only the Failed arm of the status switch can be what empties the field here.
 //
@@ -1996,21 +1996,13 @@ func podUnderNameIsStill(f *fixture, name string, uid types.UID) bool {
 // create. Without it the fix above would be indistinguishable from a Server
 // that never gets a pod at all.
 //
-// # It flaked once, on 2026-08-22, and has never done it again
+// # An unexplained failure, seen once and never reproduced
 //
-// It failed during milestone 6d's Task 6 `make test`, passed in isolation and
-// on a full rerun, and 6d changed nothing it touches. Nothing was captured.
-// Recorded here rather than left to memory, because an unrecorded flake is
-// rediagnosed from scratch by whoever meets the second one.
-//
-// One thing is ruled out rather than assumed: **it is not cache lag.**
-// internal/testenv's Client is client.New, a direct client with no informer
-// behind it, so the hypothesis everyone reaches for first with envtest cannot
-// be the mechanism. Sixty runs in isolation and five full-package runs on
-// 2026-08-23 did not reproduce it, and ci.yml's `test` job -- go test -race
-// ./... on every push and pull request -- had concluded failure not once
-// across 86 runs as of 2026-08-25. So this is one occurrence standing against
-// roughly ninety executions.
+// It failed one `make test`, passed in isolation and on a full rerun, and
+// nothing was captured. One thing is ruled out rather than assumed: **it is
+// not cache lag.** internal/testenv's Client is client.New, a direct client
+// with no informer behind it, so the hypothesis everyone reaches for first
+// with envtest cannot be the mechanism.
 //
 // The diagnostic above is what a second occurrence gets that the first did
 // not: the Accepted condition, every pod with its deletionTimestamp and node,
@@ -2026,12 +2018,8 @@ func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
 	got := f.server("survival-0")
 	if got.Status.PodName != "survival-0" {
 		// This is the one assertion in this file that has been seen to fail
-		// without explanation: docs/known-issues.md records it flaking once
-		// during milestone 6d, passing in isolation and on a full rerun, and
-		// nothing was captured. Sixty runs in isolation and five full-package
-		// runs on 2026-08-23 did not reproduce it either.
-		//
-		// So the failure prints what it saw. Whatever the mechanism is, the
+		// without explanation, once, with nothing captured and no reproduction
+		// since. So the failure prints what it saw. Whatever the mechanism is, the
 		// three facts below separate the candidates: a lingering predecessor
 		// says the force delete did not take, a Server carrying
 		// PodNameTerminating with no such pod present says the controller
@@ -2140,9 +2128,9 @@ func TestAnExistingClaimIsLeftExactlyAsItIs(t *testing.T) {
 	}
 }
 
-// TestGrowingStorageSizePatchesTheClaim pins 5b's one write to an object 5a
-// declared created-never-written: growing spec.storage.size reaches the
-// claim, and only that one field.
+// TestGrowingStorageSizePatchesTheClaim pins the one write this operator makes
+// to a claim it otherwise only creates: growing spec.storage.size reaches it,
+// and only that one field.
 //
 // The reconcile that has to notice the growth runs against a server whose
 // pod already exists, which is the ordinary case for a persistent server
@@ -2157,10 +2145,10 @@ func TestAnExistingClaimIsLeftExactlyAsItIs(t *testing.T) {
 // same way setPodRunning fakes the kubelet elsewhere in this file — the
 // StorageClass is real (creating one needs no controller behind it), but
 // nothing ever binds the claim to a volume, so its Bound status is written
-// by hand rather than earned. Confirmed by hand before this test was kept:
-// without the fake bind, r.Patch in growClaim fails with envtest's real
-// "only dynamically provisioned pvc can be resized" error, the same as it
-// would against a claim nobody's storage class ever bound.
+// by hand rather than earned. Without the fake bind, r.Patch in growClaim
+// fails with envtest's real "only dynamically provisioned pvc can be resized"
+// error, the same as it would against a claim nobody's storage class ever
+// bound.
 func TestGrowingStorageSizePatchesTheClaim(t *testing.T) {
 	f := newFixture(t)
 	class := &storagev1.StorageClass{
@@ -2320,15 +2308,13 @@ func TestAClaimLargerThanTheSpecIsLeftAlone(t *testing.T) {
 	}
 }
 
-// TestARecreatedOrdinalMountsTheClaimItLeft is the half of design §6's own
-// headline test that was never written. That section names the one envtest
-// case that matters as "deleting a Server leaves its claim standing, **and the
-// same ordinal picks it up again**"; only the first clause had a test.
+// TestARecreatedOrdinalMountsTheClaimItLeft is the second half of design §6's
+// headline case: deleting a Server leaves its claim standing, **and the same
+// ordinal picks it up again**.
 //
-// Writing this is what would have surfaced the terminating-pod collision the
-// two tests above are about, which is why the recreation here goes through the
-// same helper rather than around it: the ordinal cannot pick anything up until
-// its predecessor's pod has finished.
+// The recreation goes through the same helper as the two tests above rather
+// than around it, because the ordinal cannot pick anything up until its
+// predecessor's pod has finished.
 //
 // What "picks it up again" has to mean at this layer is that the claim that
 // was there is still there, and is the one the new pod mounts. A claim deleted
@@ -2337,10 +2323,8 @@ func TestAClaimLargerThanTheSpecIsLeftAlone(t *testing.T) {
 // pvc-protection finalizer envtest never clears means a deleted claim cannot
 // leave, so the remake gets AlreadyExists and f.claim — which counts a
 // deletion timestamp as gone — reports nothing. The "no claim" assertion is
-// therefore the one that catches a stray Delete on this path, and it was
-// mutation-tested against exactly that: a Delete added to the finalizer-release
-// branch, which TestDeletingAPersistentServerLeavesItsClaim did not reach
-// before this commit.
+// therefore the one that catches a stray Delete on this path -- mutation-tested
+// with a Delete added to the finalizer-release branch.
 func TestARecreatedOrdinalMountsTheClaimItLeft(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)
@@ -2395,8 +2379,8 @@ func claimsMounted(pod *corev1.Pod) []string {
 	return names
 }
 
-// TestDeletingAPersistentServerLeavesItsClaim is the property the whole
-// milestone turns on.
+// TestDeletingAPersistentServerLeavesItsClaim is the property persistent
+// storage turns on.
 //
 // What it catches is a Delete on the claim from the Server controller's
 // deletion path. It cannot catch an owner reference: envtest runs no garbage
@@ -2450,15 +2434,14 @@ func (r refusingPodCreator) Create(ctx context.Context, obj client.Object, opts 
 	return r.Client.Create(ctx, obj, opts...)
 }
 
-// A pod the API server refuses is the shape milestone 4's last unmet
-// precondition described: a Server that never got a pod, sitting in Pending
-// and occupying its group's slot.
+// A pod the API server refuses leaves a Server that never got one, sitting in
+// Pending and occupying its group's slot.
 //
-// Returning the error alone left nothing on the object. status.podName stays
+// Returning the error alone leaves nothing on the object: status.podName stays
 // empty, so the pod-lost path never applies; status.startedAt is only written
 // beside a pod that exists, so StartupDeadlineReached can never fire; and the
-// Server therefore sat there for as long as the refusal stood with a log line
-// as its only trace — the same silence TestReconcileReportsANamespaceItCannot
+// Server sits there for as long as the refusal stands with a log line as its
+// only trace — the same silence TestReconcileReportsANamespaceItCannot
 // Bootstrap closed for the branch one call earlier.
 func TestReconcileReportsAPodTheAPIServerRefused(t *testing.T) {
 	f := newFixture(t)
@@ -2565,9 +2548,9 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 // The other half of a refused pod: after the report comes the reclaim.
 //
 // A Server whose pod the API server refuses has an empty status.podName, so
-// PodLost never applies, and until 2026-08-24 status.startedAt was written
-// only beside a pod — so it had no clock at all and sat in Pending occupying
-// its group's slot for as long as the refusal stood. It now fails at a
+// PodLost never applies, and a status.startedAt written only beside a pod
+// would leave it with no clock at all, sitting in Pending and occupying its
+// group's slot for as long as the refusal stood. It fails instead at a
 // deadline derived from the group: drain.timeoutSeconds plus the startup
 // deadline.
 //
@@ -2666,10 +2649,9 @@ func TestAnOrdinalWaitingOnItsPredecessorIsNotFailedForHavingNoPod(t *testing.T)
 // reconcile holding a cached copy from just before that delete then writes to
 // an object the API server no longer has.
 //
-// Before persistedServer, that NotFound escaped unwrapped and
-// controller-runtime logged it at `error` with a stacktrace on a path where
-// nothing was wrong -- measured on a real cluster 2026-08-16, with the
-// replacement Server created within the second. The reconcile must report the
+// Unwrapped, that NotFound reaches controller-runtime as an `error` with a
+// stacktrace on a path where nothing is wrong -- the replacement Server is
+// already being built. The reconcile must report the
 // disappearance as done, because there is nothing left for it to accomplish
 // and the requeued pass already handles the absence at the top of Reconcile.
 func TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError(t *testing.T) {
@@ -2714,11 +2696,11 @@ func TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError(t *testing.T) {
 //
 // The backend reports zero, freshly, and it is telling the truth: a player
 // still completing the configuration phase is counted by neither the backend
-// nor the proxy's own player list -- disassembling velocity 3.5.1 build 615,
-// VelocityRegisteredServer.addPlayer is called only from
+// nor the proxy's own player list -- Velocity calls
+// VelocityRegisteredServer.addPlayer only from
 // BackendPlaySessionHandler.activated(), the play phase. So this is exactly
-// the state in which a `kubectl delete` used to take the pod out from under
-// somebody, and the proxy's attachment report is the only thing that can say
+// the state in which a `kubectl delete` takes the pod out from under somebody,
+// and the proxy's attachment report is the only thing that can say
 // otherwise.
 func TestAnArrivingPlayerKeepsTheDrainingPodAlive(t *testing.T) {
 	f := newFixture(t)

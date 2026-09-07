@@ -252,9 +252,8 @@ func TestTheGroupRecoversWhenTheCollisionGoesAway(t *testing.T) {
 // so such an object is invisible to the reconciler's Get. CreateOrUpdate
 // therefore never reaches its mutate closure -- the ownership check the tests
 // above exercise is not consulted at all -- and goes on to a Create the API
-// server rejects as AlreadyExists. Before this was mapped to the same
-// sentinel, that was a bare error and an endless requeue with nothing on the
-// group.
+// server rejects as AlreadyExists. Unmapped, that is a bare error and an
+// endless requeue with nothing on the group.
 //
 // It needs a real filtered cache, for the reason bootstrap_test.go's
 // restrictedCacheClient gives: every other test in this package reads through

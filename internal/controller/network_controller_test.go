@@ -640,15 +640,11 @@ func TestTheOperatorNamespaceReachesTheEgressRule(t *testing.T) {
 
 // A namespace where nothing starts still tracks the operator's CA.
 //
-// Before this test's subject existed, Bootstrapper.Ensure ran only from
-// ServerReconciler, on the path that creates a pod
-// (server_controller.go:304). A namespace whose pods were all already
-// running -- or which had none at all -- kept whatever ca.crt it was given
-// the last time a pod happened to be created there, however long ago. That
-// is the second half of docs/known-issues.md's "The CA has no rotation
-// procedure", and it is what makes a rotation's overlap window impossible to
-// close: the operator cannot tell whether a quiet namespace has the new
-// bundle yet.
+// An Ensure that ran only from the pod-creating path would leave a namespace
+// whose pods are all already running -- or which has none at all -- on
+// whatever ca.crt it was given the last time a pod happened to be created
+// there. That makes a rotation's overlap window impossible to close, because
+// the operator cannot tell whether a quiet namespace has the new bundle.
 //
 // No pod is created anywhere in this test. That is the whole point of it.
 func TestAQuietNamespaceFollowsTheCABundle(t *testing.T) {
@@ -1260,17 +1256,14 @@ func (c refusingPolicyWrites) Patch(ctx context.Context, obj client.Object,
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
 
-// TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork closes the half of
-// docs/known-issues.md's entry that said a report naming the cause was
-// available and was not shipped.
+// TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork pins that the cause
+// reaches the object.
 //
-// Returning before any status write left the condition unpersisted, so a fresh
-// Network stayed at nothing and every group in the namespace refused with
+// Returning before any status write leaves the condition unpersisted, so a
+// fresh Network stays at nothing and every group in the namespace refuses with
 // "network ... has not been accepted yet" -- true and misleading in the same
-// breath, because the network *was* accepted and the acceptance could not be
-// written down. Driven 2026-08-25 with networkpolicies:create removed from
-// both the marker and the audit table, that is exactly what a whole cluster
-// reported, and only the operator's log said why.
+// breath, because the network *was* accepted and only the acceptance could not
+// be written down, with nothing but the operator's log saying which.
 func TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)

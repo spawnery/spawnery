@@ -471,32 +471,24 @@ func TestProxyGroupAddressIsEmptyWithNoReadyPod(t *testing.T) {
 // Scale-down has to remove the emptiest proxies, not a slice of the list they
 // happen to sit in.
 //
-// This test's expectation has now moved twice, and both moves are the point.
-// It first expected a single survivor: it connected no agent, every pod
-// therefore reported zero players, and the old bare `players == 0` deleted both
-// surplus pods on the spot. Task 5 made a count believable only while it is
-// fresh and its stream is still up — an agent that has reported nothing and an
-// agent that died with players on it are the same zero — so the pod with no
-// agent had to be kept, and there were two survivors.
-//
-// The second move is this milestone's: which pods are surplus is no longer the
-// tail of a list ordered by age but DecideRollout's answer, and it picks by
-// occupancy. Scaling three down to one now marks the two pods that are known
-// empty — the oldest and the newest here, position notwithstanding — and keeps
-// the one nobody can vouch for. Both marked pods are empty, so both go on the
-// same pass and the group reaches the size that was asked for, having
-// disconnected nobody.
+// Which pods are surplus is DecideRollout's answer and it picks by occupancy,
+// not the tail of a list ordered by age. A count is believable only while it
+// is fresh and its stream is up -- an agent that has reported nothing and an
+// agent that died with players on it are the same zero -- so scaling three
+// down to one marks the two pods that are known empty, the oldest and the
+// newest here, and keeps the one nobody can vouch for. Both marked pods are
+// empty, so both go on the same pass and the group reaches the size that was
+// asked for, having disconnected nobody.
 //
 // The pod with no agent is what keeps the grip: it is named as the survivor
 // rather than counted, so a selection that stopped distinguishing a fresh
 // count from an untrusted one leaves a different pod standing and fails here —
 // checked by running that mutation, which also takes eight other tests with it.
 //
-// It does not pin pick's player comparison, and the first draft of this comment
-// claimed it did. Every count here is zero or unknown, so freshness alone
-// decides the order and dropping the comparison changes nothing. What holds
-// that term is TestSurplusProxyIsToldToStopTakingConnections, where the two
-// counts differ.
+// It does not pin pick's player comparison: every count here is zero or
+// unknown, so freshness alone decides the order and dropping the comparison
+// changes nothing. What holds that term is
+// TestSurplusProxyIsToldToStopTakingConnections, where the two counts differ.
 func TestProxyGroupScalesDown(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -676,15 +668,13 @@ func TestProxyGroupRendersConfigMap(t *testing.T) {
 	}
 }
 
-// TestProxyGroupWithNoConfigStillStartsAProxy is the regression test for the
-// gap a per-task review could not see: spec.config is +optional, and
-// spec.config.playerLimit is +optional inside it, so createProxyGroup's own
-// default shape — no mutate function, exactly what "gateway" is above —
-// used to leave the rendered ConfigMap with playerLimit unset. podspec always
-// defaulted the pod's own SPAWNERY_PLAYER_LIMIT env var, so a real cluster
-// showed a ProxyGroup that was Accepted, had its Service, and had pods stuck
-// in CrashLoopBackOff reading "config.yaml: playerLimit is not set" — nothing
-// on the CR said why. This carries the ConfigMap this reconciler actually
+// TestProxyGroupWithNoConfigStillStartsAProxy covers the default shape:
+// spec.config is +optional and spec.config.playerLimit is +optional inside it,
+// so a ConfigMap rendered without a default leaves playerLimit unset while
+// podspec defaults the pod's own SPAWNERY_PLAYER_LIMIT anyway -- a ProxyGroup
+// that is Accepted, has its Service, and has pods stuck in CrashLoopBackOff
+// reading "config.yaml: playerLimit is not set", with nothing on the CR saying
+// why. This carries the ConfigMap this reconciler actually
 // writes all the way into render.Velocity, the way spawnery-config itself
 // would read it, rather than stopping at "the ConfigMap exists".
 func TestProxyGroupWithNoConfigStillStartsAProxy(t *testing.T) {
@@ -867,12 +857,10 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 // pod is told ready=false and every survivor is told ready=true, both on the
 // same pass that discovers the surplus.
 //
-// The two player counts are what decide which pod is which, and they replaced
-// the pods' positions when this milestone made the surplus DecideRollout's
-// answer rather than the tail of a list. They are the honest version of the
-// setup either way: the pod the group keeps is the one with somebody on it,
-// and the test no longer turns on how ties between two indistinguishable pods
-// happen to break.
+// The two player counts are what decide which pod is which, rather than the
+// pods' positions: the pod the group keeps is the one with somebody on it, and
+// nothing turns on how ties between two indistinguishable pods happen to
+// break.
 func TestSurplusProxyIsToldToStopTakingConnections(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -946,14 +934,11 @@ func TestSurplusProxyIsMarkedWithWhenTheDrainStarted(t *testing.T) {
 // would push the deadline forever and the drain would never end.
 //
 // This calls markDraining directly rather than driving two full Reconcile
-// passes over a scaled-down group, and the reason is narrowness, not
-// impossibility: two passes would work now that Task 5's wait exists, given a
-// reported player to hold the pod open across them. That is the point — the
-// rationale that used to stand here said two passes would prove nothing
-// because the surplus pod was deleted in the same reconcile that marked it,
-// which was true when it was written and which this task falsified.
+// passes over a scaled-down group, and the reason is narrowness rather than
+// impossibility: two passes would work, given a reported player to hold the
+// pod open across them.
 //
-// What is left is a straightforward trade. The direct call is the exact call
+// It is a straightforward trade. The direct call is the exact call
 // reconcileReplicas makes once per live pod per pass, it exercises the guard
 // without a scale-down, a player report and two full reconciles standing
 // between the test and the thing it is testing, and it does not silently
@@ -1019,11 +1004,11 @@ func (f *fixture) setDrainingSince(name, value string) {
 // one user-writable failure: it lives on a pod, so anybody who can write a pod
 // annotation can put something in it that is not RFC 3339.
 //
-// Returning an error for that aborted the entire Reconcile — no Service, no
+// Returning an error for that aborts the entire Reconcile — no Service, no
 // status, no other pod's readiness assertion, and the corrupt pod never
 // deleted — on every pass, permanently, because nothing downstream of the
-// error ever rewrote the value and controller-runtime simply retried forever.
-// One pod's bad annotation stopped a whole group converging.
+// error rewrites the value and controller-runtime retries forever. One pod's
+// bad annotation stops a whole group converging.
 //
 // The recovery is a re-stamp rather than tolerance: the value must end up
 // readable, or the deadline still has nothing to run from. The pod pays a
@@ -1141,11 +1126,9 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 // NotFound, exactly as the real client would if the object were already gone
 // server-side.
 //
-// It overrides nothing else. It used to swallow Delete as well, so that the
-// pods reconcileReplicas walked would survive to be inspected. Delete now
-// reaches the real client, and neither surplus pod is removed on this pass —
-// each for its own reason, and both of them the operator's real behaviour
-// rather than a fake's:
+// It overrides nothing else: Delete reaches the real client, and neither
+// surplus pod is removed on this pass — each for its own reason, and both of
+// them the operator's real behaviour rather than a fake's:
 //
 //   - the inspected pod has a player reported on it, so the wait holds it;
 //   - the racing pod has no player count at all, because nothing reports one
@@ -1153,16 +1136,14 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 //     not started either: markDraining's patch is the call this fake fails, so
 //     no draining-since was ever persisted and nothing can expire.
 //
-// The second bullet is the whole point of the rule this milestone added, so it
-// is asserted at the end of the test rather than left as a claim here. A
-// comment is not a test, and this one described the deletion rule backwards
-// until the reviewer traced it.
+// The second bullet is asserted at the end of the test rather than left as a
+// claim here.
+
 // fired records whether the fake ever got to do its job. Without it this test
 // cannot tell the tolerance working from the racing pod never being patched at
-// all, and it has already been both: the pod it names went from marked to
-// unmarked when the drain stopped being chosen by position, and every assertion
-// went on passing. A fake that is never reached is a test asserting nothing, so
-// this one says so out loud.
+// all -- and which pod is the racing one moves whenever the selection rule
+// does, silently, with every assertion still passing. A fake that is never
+// reached is a test asserting nothing, so this one says so out loud.
 type racingPodClient struct {
 	client.Client
 	racingPod string
@@ -1196,22 +1177,19 @@ func (c racingPodClient) Patch(ctx context.Context, obj client.Object, patch cli
 // f.reconcileProxyGroup's own t.Fatalf fires before either check below ever
 // runs.
 //
-// Which pod is the racing one moved with this milestone, and the test went
-// quietly vacuous until a mutation run said so: with the drain chosen by
-// occupancy rather than by position, the two pods marked here are the one with
-// a player reported on it and one of the two whose counts are unknown.
-// markDraining runs for every pod on every pass, but for one that is not going
-// and carries no stamp it takes neither branch of its switch and never reaches
-// the Patch, so a racing pod that is not marked leaves the tolerance this test
-// is named for unexercised — deleting IgnoreNotFound left the suite green.
+// Which pod is the racing one moves whenever the selection rule does, and the
+// test goes quietly vacuous when it does. markDraining runs for every pod on
+// every pass, but for one that is not going and carries no stamp it takes
+// neither branch of its switch and never reaches the Patch, so a racing pod
+// that is not marked leaves the tolerance this test is named for unexercised --
+// with IgnoreNotFound deleted and the suite still green.
 //
 // Naming the pod the rule currently picks would repair that only until the rule
 // moves again, and the ordering between the two unknown-count pods is not even
 // stable in the meantime: they tie on every clause including age, but only
 // while they share a creation timestamp, and three sequential creations that
 // straddle a second do not. So the fake reports whether it fired, and that is
-// asserted first. The test now fails loudly when it stops testing anything,
-// which is the property it was missing both times.
+// asserted first.
 func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1527,12 +1505,11 @@ func TestADrainingProxyWithPlayersIsNotDeleted(t *testing.T) {
 	}
 }
 
-// TestStatusCountsPlayersOnADrainingProxy pins the field this milestone
-// changed the meaning of without editing: status.connectedPlayers, the CRD's
-// "sum of players across all proxies" and the PLAYERS column.
+// TestStatusCountsPlayersOnADrainingProxy pins status.connectedPlayers, the
+// CRD's "sum of players across all proxies" and the PLAYERS column.
 //
 // A draining proxy is NotReady on purpose — that is the readiness contract —
-// and it still has people on it. Summing only ready pods therefore printed
+// and it still has people on it. Summing only ready pods therefore prints
 // PLAYERS 0 with a person visibly in the game, during the one operation where
 // this number is the only thing an operator can watch: nothing logs a
 // readiness withdrawal anywhere.
@@ -1668,8 +1645,8 @@ func TestAZeroFromADeadStreamDoesNotDeleteTheProxy(t *testing.T) {
 	}
 }
 
-// TestTheDeadlineDeletesLoudly covers the one path in this milestone that
-// disconnects anybody.
+// TestTheDeadlineDeletesLoudly covers the one path here that disconnects
+// anybody.
 //
 // Nobody is moved, and that is not an omission: a draining server can hand its
 // players to another backend because the connection terminates at the proxy,
@@ -1908,8 +1885,8 @@ func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
 	}
 }
 
-// TestASpecChangeSurgesBeforeItMarksAnything is the first move of the
-// milestone's subject: the replacement proxy is created before any proxy is
+// TestASpecChangeSurgesBeforeItMarksAnything is the rollout's first move: the
+// replacement proxy is created before any proxy is
 // asked to stop taking connections. That ordering is what leaves room for the
 // ready count to hold at replicas; whether it actually holds is the readiness
 // gate's business, and that is the next test's.
@@ -1918,8 +1895,6 @@ func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
 // a time, every one of them, ending on the new shape — is
 // TestTheRolloutFinishesWithEveryProxyOnTheNewShape, and the readiness gate in
 // front of the first mark is TestTheSurgePodMustBeReadyBeforeAnyPodIsMarked.
-// This test was called TestAStaleProxyIsReplacedOneAtATime, which named all
-// three and asserted the first.
 func TestASpecChangeSurgesBeforeItMarksAnything(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2923,19 +2898,18 @@ func TestServerAndProxyGroupsSharingANameGetDistinctBudgets(t *testing.T) {
 	}
 }
 
-// TestABudgetSelectsExactlyThePodsItCounts is the pairing the milestone's
-// final review found unasserted for both group kinds, in the configuration
-// that made it a disconnect: a ServerGroup and a ProxyGroup sharing one name
-// in one namespace, each holding occupied pods.
+// TestABudgetSelectsExactlyThePodsItCounts pairs a budget's selector against
+// the pods it counts, in the configuration that makes the difference a
+// disconnect: a ServerGroup and a ProxyGroup sharing one name in one
+// namespace, each holding occupied pods.
 //
-// Every earlier budget assertion checked minAvailable against a number, or
-// the occupied label against the pods carrying it, and never the two against
-// each other. The ServerGroup's selector was {managed-by, group, occupied}
-// with no role term, which was harmless while only server pods carried
-// spawnery.cloud/occupied; this milestone put that label on proxy pods too.
-// From that point the server budget matched the proxies of the same-named
-// ProxyGroup while counting only its own servers, disruptionsAllowed went
-// positive, and kubectl drain could evict an occupied server pod.
+// Checking minAvailable against a number, or the occupied label against the
+// pods carrying it, never checks the two against each other. A ServerGroup
+// selector of {managed-by, group, occupied} with no role term matches the
+// proxies of the same-named ProxyGroup -- both kinds carry
+// spawnery.cloud/occupied -- while counting only its own servers, so
+// disruptionsAllowed goes positive and kubectl drain can evict an occupied
+// server pod.
 //
 // Both budgets are checked, through one helper, because the property belongs
 // to neither kind in particular: whichever selector loses a term next, the
@@ -3041,27 +3015,24 @@ func (c *stepAfterPriming) Now() time.Time {
 	return c.fresh
 }
 
-// TestTheProxyGroupBudgetReadsTheRegistryOnce is the regression test for
-// task 7 review's Critical 2: reconcileProxyPDB used to call r.Agents.Lookup
-// a second time for the same pod, independently of syncOccupiedLabels's own
-// call, and the registry's answer can change between two calls a few lines
-// apart with no concurrency at all -- Lookup re-derives PlayersStale from
-// the clock on every call.
+// TestTheProxyGroupBudgetReadsTheRegistryOnce pins that reconcileProxyPDB
+// takes syncOccupiedLabels's evaluation rather than making a second
+// r.Agents.Lookup for the same pod: the registry's answer can change between
+// two calls a few lines apart with no concurrency at all, because Lookup
+// re-derives PlayersStale from the clock on every call.
 //
-// One Reconcile pass, in the shape both before and after the fix, makes
-// exactly two registry reads before whatever runs immediately after
+// One Reconcile pass makes exactly two registry reads before whatever runs
+// immediately after
 // syncOccupiedLabels: reconcileReplicas builds its rollout view (one Lookup
 // per pod; this fixture uses one pod so this is one call), and
 // syncOccupiedLabels itself makes the other. freshCalls: 2 lets both see a
 // fresh count; the clock steps forward by twice the report interval starting
-// on the call after that. Before the fix, that next call is
-// reconcileProxyPDB's own second read of the same pod, and it lands on the
-// stepped, now-stale side -- producing minAvailable=1 while the pod carries
-// no occupied label at all, confirmed by mutation-testing this exact
-// scenario against the pre-fix shape in a throwaway worktree. After the fix,
-// that next call is setStatus's unrelated read of Players (which does not
-// care about staleness), and minAvailable is sized from the one evaluation
-// syncOccupiedLabels already made -- 0, agreeing with the unlabelled pod.
+// on the call after that. A second read in reconcileProxyPDB would land on the
+// stepped, now-stale side and produce minAvailable=1 while the pod carries no
+// occupied label at all. As written, that next call is setStatus's unrelated
+// read of Players, which does not care about staleness, and minAvailable is
+// sized from the one evaluation syncOccupiedLabels already made -- 0, agreeing
+// with the unlabelled pod.
 func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3310,8 +3281,8 @@ func TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt(t *testing.T) {
 	}
 }
 
-// TestTheProxyPlayerLimitIsDecidedTheSameWayTwice guards the shape behind
-// milestone 3a/3b's one Critical finding.
+// TestTheProxyPlayerLimitIsDecidedTheSameWayTwice guards one answer given in
+// two places.
 //
 // podspec.BuildProxyPod writes SPAWNERY_PLAYER_LIMIT on the container;
 // proxyConfigValues writes playerLimit into the ConfigMap the same pod mounts.
@@ -3321,12 +3292,11 @@ func TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt(t *testing.T) {
 // either one back into its caller fails here rather than the next time
 // somebody edits one of the two.
 //
-// The disagreement is not hypothetical — it happened, back when the predicate
-// was written out on both sides. The controller left the ConfigMap's
-// playerLimit nil whenever spec.config was nil while the env var already
-// defaulted to 500, so a ProxyGroup with no spec.config came up Accepted, with
-// its Service, and every pod crash-looped forever on `config.yaml: playerLimit
-// is not set` with nothing on the CR saying why.
+// The disagreement is not hypothetical: a predicate written out on both sides
+// leaves the ConfigMap's playerLimit nil whenever spec.config is nil while the
+// env var already defaults to 500, so a ProxyGroup with no spec.config comes up
+// Accepted, with its Service, and every pod crash-loops on `config.yaml:
+// playerLimit is not set` with nothing on the CR saying why.
 func TestTheProxyPlayerLimitIsDecidedTheSameWayTwice(t *testing.T) {
 	for _, tc := range []struct {
 		name string
