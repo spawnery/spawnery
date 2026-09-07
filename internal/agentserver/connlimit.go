@@ -23,14 +23,12 @@ import (
 )
 
 // PeerLimiter bounds how many connections one peer address may hold open at
-// once. It is the answer to the availability half of milestone 2a's isolation
-// promise, and it is worth being exact about why none of the bounds that came
-// before it is: MaxConcurrentStreams bounds streams on ONE connection, so a
-// pod that opens many is untouched; MaxConnectionIdle reaps a connection
-// carrying no stream, and every connection in the attack carries a live one;
-// and grpcauth's rate limit throttles TokenReview *misses*, which a pod
-// replaying one valid token never produces because it hits the cache. Each of
-// those bounds something real. None of them bounds the count this one does.
+// once, which none of the other bounds does: MaxConcurrentStreams bounds
+// streams on ONE connection, so a pod that opens many is untouched;
+// MaxConnectionIdle reaps a connection carrying no stream, and every
+// connection in the attack carries a live one; and grpcauth's rate limit
+// throttles TokenReview *misses*, which a pod replaying one valid token never
+// produces because it hits the cache.
 //
 // # Why a listener wrapper rather than a grpc.StatsHandler
 //
@@ -63,8 +61,8 @@ import (
 // the total -- is the wrong one, and it is worth being exact about why: a
 // fixed ceiling is a number legitimate growth eventually reaches, and the peer
 // it refuses on that day is whoever asked next. That turns one namespace's
-// traffic into another namespace's outage, which is the harm milestone 2a's
-// promise is about, moved rather than removed.
+// traffic into another namespace's outage -- the harm this exists to prevent,
+// moved rather than removed.
 //
 // What makes a fleet bound safe is that it be derived from the fleet's own
 // size. Expect gives the limiter the count of pods the operator manages, so

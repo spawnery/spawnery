@@ -76,9 +76,7 @@ const (
 	// black-holed connection carries a live stream, so this never fires on
 	// one, and no keepalive Time is set either, so the transport learns a
 	// partitioned peer is gone only when TCP's own retransmission gives up --
-	// minutes, on a default Linux. Measured 2026-08-26 from the agent's side
-	// through a freezable relay: over 200 seconds, and twice not at all
-	// within 213.
+	// minutes, on a default Linux.
 	//
 	// **The operator does not need the transport to tell it, and setting a
 	// keepalive here would make it worse rather than better.** The agent's
@@ -97,8 +95,7 @@ const (
 	// on a healthy stream between one operator instruction and the next. That
 	// is why the keepalive is on the client and only on the client; see
 	// OperatorChannel.KEEPALIVE_SECONDS, and hack/agent-test.sh's seventh
-	// phase, which measured the agent giving up 64 seconds after a stub went
-	// deaf.
+	// phase, which pins how long the agent takes to give up on a deaf peer.
 	MaxConnectionIdle = 5 * time.Minute
 
 	// MaxConnectionsPerPeer bounds how many connections one peer address may
@@ -106,22 +103,12 @@ const (
 	// listener, and what it does and does not close. This is where the number
 	// comes from.
 	//
-	// A legitimate agent's peak is 2, and that is measured rather than read
-	// off SessionLoop. Renewal is make-before-break and every attempt builds
-	// its own ManagedChannel, so the replacement's connection and the outgoing
-	// one overlap for the length of a handover. cmd/spawnery-stubop counts
-	// connections for exactly this (see its zero-limit PeerLimiter); against
-	// the pinned 0.2.1 images on 2026-08-26 the high-water mark was 2 in every
-	// run, over roughly seventy renewals and four paths:
-	//
-	//	Paper, plain renewal            17 renewals   peak 2
-	//	Paper, --supersede              17 renewals   peak 2
-	//	Paper, --mute-after             8 give-ups    peak 2
-	//	Velocity, --proxy               18 renewals   peak 2
-	//
-	// The give-up path is the interesting one: it drops to 0 between attempts,
-	// because an operator that never answered leaves nothing to hand over.
-	// Nothing observed 3.
+	// A legitimate agent's peak is 2, measured rather than read off
+	// SessionLoop: renewal is make-before-break and every attempt builds its
+	// own ManagedChannel, so the replacement's connection and the outgoing one
+	// overlap for the length of a handover. cmd/spawnery-stubop counts
+	// connections for exactly this, over both flavours and every renewal path
+	// -- see its zero-limit PeerLimiter.
 	//
 	// Eight is four times that, and the factor is a judgement where the peak
 	// is a measurement. It is loose on purpose, because the two directions
@@ -474,14 +461,11 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 // blocked Send is the handler returning, which closes the stream. Nothing
 // bounded that.
 //
-// docs/known-issues.md carried this as "the operator's hard-deadline rescue is
-// armed after its first two Sends", with moving the time.AfterFunc above them
-// as the fix that was necessary but not sufficient. Reading it again on
-// 2026-08-24: it is neither. sessions.cancel does reach a handler once the
-// handler is in its loop -- ServerSession and ProxySession both select on
-// ctx.Done() there -- and it reaches none inside Send, whichever order the
-// timer is armed in. The window is the send itself, so the bound belongs on
-// the send.
+// Arming the hard-deadline timer earlier does not close it. sessions.cancel
+// reaches a handler once the handler is in its loop -- ServerSession and
+// ProxySession both select on ctx.Done() there -- and reaches none inside
+// Send, whichever order the timer is armed in. The window is the send itself,
+// so the bound belongs on the send.
 //
 // The channel is buffered by one so the goroutine cannot leak on the timeout
 // path: the blocked Send returns as soon as the handler's return closes the

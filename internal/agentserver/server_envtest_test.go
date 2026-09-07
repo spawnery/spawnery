@@ -795,9 +795,9 @@ func restrictedCS(t *testing.T) *kubernetes.Clientset {
 	return cs
 }
 
-// TestTheServerBoundsConnectionsPerPeer is the other half, and the one that
-// closes milestone 2a's availability gap: a single peer cannot hold an
-// unbounded number of connections open, no matter how legitimate each one is.
+// TestTheServerBoundsConnectionsPerPeer is the other half: a single peer
+// cannot hold an unbounded number of connections open, no matter how
+// legitimate each one is.
 //
 // Every connection here carries a valid token and a live stream, which is what
 // makes it the real attack rather than a caricature of one. None of the bounds
