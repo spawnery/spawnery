@@ -82,16 +82,13 @@ const velocityDefault = defaultsDir + "/velocity.default.toml"
 //     characters, logs "The forwarding-secret-file does not exist. A new file
 //     has been created at {}", starts cleanly, passes the port probe — and
 //     refuses every forwarded join, because the backends carry a different
-//     secret. Disassembled out of the pinned jar's
-//     VelocityConfiguration.read, 2026-08-11.
+//     secret.
 //   - show-max-players misspelled: Velocity's own default is 500 and
 //     podspec.DefaultPlayerLimit is 500, so on the default path there is
 //     nothing to see at all.
 //
-// This is the Velocity half of the lesson milestone 3c learned on the Paper
-// side, where render.Paper wrote proxies.velocity.secret-key for a reader that
-// wanted secret — see TestPaperWritesTheKeysPaperItselfReads, which this
-// mirrors.
+// This mirrors TestPaperWritesTheKeysPaperItselfReads, which makes the same
+// check on the Paper side.
 func TestVelocityWritesTheKeysVelocityItselfReads(t *testing.T) {
 	defaults, err := os.ReadFile(velocityDefault)
 	if err != nil {
@@ -464,13 +461,10 @@ func TestVelocityEscapesAMotdThatCannotBeALiteralString(t *testing.T) {
 // A [servers] or [forced-hosts] an overlay turned into something other than a
 // table is refused, not skipped.
 //
-// servers is the one that had teeth: the type assertion above the try
-// re-defaulting used to fail quietly, so the empty try list this renderer
-// exists to keep alive was dropped, go-toml marshalled `servers = "x"` without
-// complaint, and the whole report was Velocity refusing to start — about a key
-// the user had spelled right in a shape they had got wrong, with nothing
-// anywhere naming the overlay. forced-hosts had a presence check that could
-// never fire and would have been satisfied by a string in any case.
+// servers is the one with teeth: a quiet type assertion there drops the empty
+// try list this renderer exists to keep alive, go-toml marshals
+// `servers = "x"` without complaint, and the user's whole report is Velocity
+// refusing to start with nothing naming the overlay.
 func TestVelocityRefusesAMisshapenServersTable(t *testing.T) {
 	for _, tc := range []struct{ name, overlay, key string }{
 		{"servers", "servers = \"lobby\"\n", "servers"},

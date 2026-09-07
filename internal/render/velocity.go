@@ -110,10 +110,7 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 	// minigames.example.com. Against an empty [servers] table those examples
 	// name servers that do not exist, and Velocity refuses to start at all
 	// ("Fallback server lobby is not registered", "Server 'lobby' for forced
-	// host ... does not exist") rather than merely warning. Measured against
-	// the pinned jar while building hack/velocity-image-test.sh, which is the
-	// first thing in this repository to actually boot Velocity against a
-	// rendered file rather than asserting on the string.
+	// host ... does not exist") rather than merely warning.
 	doc := map[string]any{
 		"config-version":   velocityConfigVersion,
 		"motd":             valueOr(v.Motd, ""),
@@ -151,12 +148,11 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 	// above exists to close, this time through an ordinary configOverlay.
 	//
 	// A servers that is not a table is refused rather than skipped, the way
-	// paperGlobal refuses a wrong-shaped proxies.velocity. It used to fail
-	// this type assertion, skip the re-defaulting in silence, and marshal
-	// cleanly — go-toml writes servers = "x" without complaint — so the
-	// report a user got was Velocity refusing to start, about a key they had
-	// spelled right in a shape they had got wrong, with nothing anywhere
-	// naming the overlay.
+	// paperGlobal refuses a wrong-shaped proxies.velocity. Skipping it would
+	// drop the re-defaulting above and still marshal cleanly — go-toml writes
+	// servers = "x" without complaint — so the user's whole report would be
+	// Velocity refusing to start, about a key they had spelled right in a
+	// shape they had got wrong, with nothing naming the overlay.
 	servers, ok := doc["servers"].(map[string]any)
 	if !ok {
 		return "", fmt.Errorf("velocity.toml: servers is a %T, want a table", doc["servers"])
