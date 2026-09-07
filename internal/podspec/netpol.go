@@ -66,32 +66,27 @@ func OperatorPodLabels() map[string]string {
 // NetworkPolicyName is the policy a Network owns in its own namespace.
 func NetworkPolicyName(network string) string { return network + "-backends" }
 
-// BuildNetworkPolicy renders the policy that closes the invariant Spawnery has
-// carried open since milestone 3b: a Paper server runs online-mode=false, so it
-// authenticates nobody and trusts whatever completes the modern-forwarding
-// handshake with the right secret. This is what restricts who may attempt it.
+// BuildNetworkPolicy renders the policy that restricts who may attempt modern
+// forwarding: a Paper server runs online-mode=false, so it authenticates
+// nobody and trusts whatever completes the handshake with the right secret.
 //
 // It restricts them only as far as the namespace boundary, and that limit is
 // worth stating because the shape of the rule invites the opposite reading.
 // The ingress peer is a podSelector over spawnery's own labels, and a pod's
 // labels are chosen by whoever creates it -- so anyone who may create a pod in
-// a game namespace can wear this policy's colours and reach the backends.
-// Measured on 2026-08-21 against a real CNI: a pod carrying
-// managed-by/network/role=proxy connected to a server on 25565, while the same
-// pod without labels timed out.
+// a game namespace can wear this policy's colours and reach the backends,
+// while the same pod without them is refused.
 //
 // That is not a hole this operator can close. Vanilla NetworkPolicy offers
 // podSelector, namespaceSelector and ipBlock as peers, and within one namespace
 // the first is forgeable and the second says nothing -- no policy expressible
 // here distinguishes a real proxy from an invented one. Nor would closing it
-// buy much: the same privilege grants the forwarding secret outright, since any
-// pod may mount any Secret in its own namespace, measured the same day by
-// mounting velocity-forwarding-secret from an unlabelled pod.
+// buy much: the same privilege grants the forwarding secret outright, since
+// any pod may mount any Secret in its own namespace.
 //
 // So the boundary is the namespace, not this policy. What the policy does
 // defend against, and does defend well, is the co-tenant that cannot create
-// pods -- a compromised workload cannot relabel itself, and the unlabelled half
-// of that measurement is what it looks like when it tries.
+// pods: a compromised workload cannot relabel itself.
 //
 // It selects server pods and not proxy pods, and that asymmetry is deliberate
 // rather than partial. A server's readiness probe is an exec of spawnery-slp

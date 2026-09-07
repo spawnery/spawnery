@@ -176,8 +176,7 @@ func TestPodIsRestrictedCompliant(t *testing.T) {
 // not already hand back a world-writable directory — not
 // docs/runbook-milestone-5a-evidence.md's kind cluster, whose local-path
 // provisioner does exactly that regardless of fsGroup, so even a manual run
-// against it would not exercise this fix either. See docs/known-issues.md's
-// "From milestone 2b" entry for what confirming this still needs.
+// against it would not exercise this either.
 func assertFSGroup(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
 	sc := pod.Spec.SecurityContext
@@ -417,15 +416,12 @@ func TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *testing.T) {
 	}
 }
 
-// TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount is the test
-// the milestone's own standard demands, sharpened after a review caught what
-// the first version of this task missed: mounting the overlay as a third
-// *projected* source, with Items enumerating a closed set of known target
-// names, would have made an unrecognised key in the user's overlay ConfigMap
-// vanish at the kubelet — never reaching internal/render's checkOverlayFiles,
-// never refused, never even logged. That is a worse failure than the one the
-// overlay/ subdirectory redesign in load.go already fixed: not a
-// misdirected file, but total silence.
+// TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount guards
+// against the tempting shape: mounting the overlay as a third *projected*
+// source, with Items enumerating a closed set of known target names, makes an
+// unrecognised key in the user's overlay ConfigMap vanish at the kubelet --
+// never reaching internal/render's checkOverlayFiles, never refused, never
+// even logged. Not a misdirected file, but total silence.
 //
 // So this asserts the opposite of what an Items-based mount would produce:
 // a *separate*, *plain* ConfigMap volume — not folded into ConfigVolumeName's
@@ -973,12 +969,8 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 	}{
 		{
 			// A tree nested inside /data, which is how worlds and assets
-			// arrive. It replaces a case that used DataMountPath+"/config" and
-			// called it "the documented pattern" after design spec 4.3's own
-			// ServerGroup example -- an example that was measured on
-			// 2026-08-31 and does not work at all. See ServerConfigDirPath,
-			// and TestAMountInsideTheServersConfigDirectoryIsRefused below,
-			// which is now the case that path exercises.
+			// arrive. Not DataMountPath+"/config": see ServerConfigDirPath
+			// and TestAMountInsideTheServersConfigDirectoryIsRefused below.
 			//
 			// If this case is ever removed as "redundant with TestUserMounts",
 			// it is not: this one exercises checkMountCollision, the other
@@ -1030,14 +1022,11 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 // sides only agree on a running pod if this one function is the single
 // source both call.
 //
-// This used to pin the bare group name as the whole identity
-// (TestGroupConfigMapNameIsTheGroupsOwnName, before the role argument
-// existed). That was the collision: a ServerGroup and a ProxyGroup are
-// different Kinds and Kubernetes lets them share a name, so two groups named
-// "lobby" produced one ConfigMap name fought over by both controllers, and a
-// user's own ConfigMap named after their group was silently adopted. What
-// this test must now pin is the opposite property — that role changes the
-// name — not a fixed literal.
+// What it pins is that the role changes the name, not a fixed literal: a
+// ServerGroup and a ProxyGroup are different Kinds and Kubernetes lets them
+// share a name, so a name built from the group alone would be one ConfigMap
+// fought over by both controllers, and a user's own ConfigMap named after
+// their group silently adopted.
 func TestGroupConfigMapNameIsScopedByRoleAsWellAsGroup(t *testing.T) {
 	server := GroupConfigMapName("lobby", RoleServer)
 	proxy := GroupConfigMapName("lobby", RoleProxy)

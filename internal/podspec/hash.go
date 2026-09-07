@@ -46,13 +46,11 @@ import (
 // serialise in a fixed order and the digest does not flap between passes.
 //
 // The config values are part of the digest because the rendered pod is not
-// everything this operator writes for a proxy. playerLimit rides in the pod as
-// SPAWNERY_PLAYER_LIMIT, but motd reaches only the ConfigMap -- so until this
-// milestone a changed motd made no proxy stale, ordered no rollout, and never
-// reached a running proxy at all. Widening the digest changes its value for
-// every existing proxy, so the first reconcile after this ships rolls every
-// proxy group once, through the ordinary surge-1 path. They arrive as
-// marshalled bytes rather than being rendered here for the same reason
+// everything this operator writes for a proxy: playerLimit rides in the pod as
+// SPAWNERY_PLAYER_LIMIT, but motd reaches only the ConfigMap, so a digest over
+// the pod alone would let a changed motd order no rollout and never reach a
+// running proxy. They arrive as marshalled bytes rather than being rendered
+// here for the same reason
 // DesiredServerHash's do: podspec stays free of internal/render (see
 // configSecretFile's comment).
 func DesiredProxyHash(

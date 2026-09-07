@@ -298,17 +298,13 @@ func TestSubPathReachesTheHash(t *testing.T) {
 }
 
 func TestAMountInsideTheServersConfigDirectoryIsRefused(t *testing.T) {
-	// Measured in a kind cluster on 2026-08-31: the kubelet creates a mount's
-	// parent directory root-owned and group-read-only (drwxr-sr-x 0 10001),
-	// while fsGroup with OnRootMismatch only ever touches the volume root
-	// (drwxrwsrwx). So a mount here leaves the container unable to write into
-	// the directory, and the first write it attempts is spawnery-config's own
-	// paper-global.yml. The server never starts, and the error names a file
+	// The kubelet creates a mount's parent directory root-owned and
+	// group-read-only (drwxr-sr-x 0 10001), while fsGroup with
+	// OnRootMismatch only ever touches the volume root (drwxrwsrwx). So a
+	// mount here leaves the container unable to write into the directory,
+	// and the first write it attempts is spawnery-config's own
+	// paper-global.yml: the server never starts, and the error names a file
 	// rather than a mount.
-	//
-	// Design spec 4.3 used exactly this path as its example of a legitimate
-	// mount, which is why this test names the measurement rather than
-	// pointing at the design.
 	for _, mountPath := range []string{
 		ServerConfigDirPath,
 		ServerConfigDirPath + "/paper-world-defaults.yml",

@@ -79,13 +79,9 @@ const (
 // One function because the answer is needed in two places that must not
 // disagree -- the pod's SPAWNERY_PLAYER_LIMIT, which the agent reports slots
 // from, and the rendered velocity.toml's show-max-players, which the proxy
-// serves. Those two used to be two copies of the same predicate, and the
-// disagreement between exactly these two code paths was milestone 3b's one
-// Critical: the controller left the rendered playerLimit unset whenever
-// spec.config was nil while the environment variable already defaulted to 500,
-// so a ProxyGroup with no spec.config came up Accepted, with its Service, and
-// every pod crash-looped forever reading "config.yaml: playerLimit is not
-// set".
+// serves. Two copies of the predicate is how a ProxyGroup comes up Accepted,
+// with its Service, while every pod crash-loops on a playerLimit one side
+// defaulted and the other left unset.
 //
 // A zero in spec.config is not a limit but an unset field: the CRD's own
 // +optional leaves it at Go's zero value, and a limit of zero would make the

@@ -53,11 +53,6 @@ const (
 	// ServerConfigDirPath is the server's own configuration directory, and a
 	// place no user mount may go -- not at it, and not inside it.
 	//
-	// **Measured in a kind cluster on 2026-08-31, because the design said the
-	// opposite.** Design spec 4.3's own ServerGroup example mounts a ConfigMap
-	// here, and checkMountCollision's comment cited it as the legitimate case
-	// for nesting under /data. It is not legitimate: it breaks every start.
-	//
 	// The kubelet creates the parent directory of a mount itself, and creates
 	// it root-owned and group-read-only -- drwxr-sr-x 0 10001 -- while fsGroup
 	// with OnRootMismatch only ever touches the volume's own root, which comes
@@ -172,10 +167,9 @@ const (
 	//
 	// Not /data/config: Paper writes paper-global.yml and
 	// paper-world-defaults.yml there itself at startup, and a ConfigMap
-	// mount is always read-only, so a mount there breaks the start —
-	// known-issues.md has recorded that collision since milestone 2b.
-	// Mounting at ConfigMountPath instead means the collision never arises
-	// rather than getting resolved.
+	// mount is always read-only, so a mount there breaks the start. Mounting
+	// at ConfigMountPath instead means the collision never arises rather than
+	// getting resolved.
 	//
 	// Not under AgentMountPath: that is the agent's credential mount, and
 	// checkMountCollision guards it with a bidirectional nesting check it
@@ -184,15 +178,12 @@ const (
 	// bidirectional check below, for the same reason: a user mount there
 	// would shadow the file the renderer reads the forwarding secret from.
 	//
-	// "Applies to nothing else" is narrower than the reality now:
-	// PluginSourceMountPath and FileSourceMountPath both nest under
-	// AgentMountPath, so that one check refuses a colliding user mount over
-	// three operator directories, not one. Those two are there wanting
-	// exactly that refusal and inheriting it rather than repeating it — see
+	// PluginSourceMountPath and FileSourceMountPath do nest under
+	// AgentMountPath and inherit that check rather than repeating it — see
 	// checkMountCollision, which spells their safety out as a dependency on
-	// it. ConfigMountPath is still kept out from under it and carries its own
-	// copy of the check, so that what each path refuses, and why, is readable
-	// where that path is defined.
+	// it. ConfigMountPath is kept out from under it and carries its own copy,
+	// so that what each path refuses, and why, is readable where that path is
+	// defined.
 	ConfigMountPath = "/etc/spawnery"
 	// ConfigValuesKey is both the data key of the group's rendered ConfigMap
 	// — the key Task 10's controller marshals render.Values into — and the
@@ -446,8 +437,7 @@ func BuildServerPod(
 		//
 		// Without it the container gets /dev/null on stdin, the server's
 		// console reader sees EOF at once, and an attaching client's
-		// keystrokes go nowhere -- which is exactly what a live 0.2.7 lobby
-		// did before this was set. It is what lets an operator run /cloud on a
+		// keystrokes go nowhere. It is what lets an operator run /cloud on a
 		// network where nobody has been granted a permission yet.
 		//
 		// StdinOnce is deliberately left false. It would close the container's
@@ -715,11 +705,9 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 //     so unlike the other two, a nested path under these two is a feature and
 //     not a collision.
 //
-//     With one hole in it, which design spec 4.3 fell into: its own
-//     ServerGroup example mounts a ConfigMap at DataMountPath+"/config", and
-//     this comment used to cite that example as the legitimate case. It is
-//     not one. ServerConfigDirPath carries what was measured and why that
-//     path is now refused equal-or-under like the two above.
+//     With one exception: ServerConfigDirPath, under DataMountPath, is
+//     refused equal-or-under like the two above. Its own comment carries the
+//     kubelet ownership rule that makes a mount there break every start.
 //
 //   - FileSourceMountPath and PluginSourceMountPath get no entry of their own,
 //     and must not be given one. Both are directories *under* AgentMountPath
