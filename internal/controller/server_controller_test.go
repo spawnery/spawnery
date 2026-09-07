@@ -3017,3 +3017,18 @@ func TestTheFallbackGroupCarriesEveryCrdDefault(t *testing.T) {
 		}
 	}
 }
+
+// The scaler reads a clamped view of what a pod reports; the status used to
+// carry the raw one, and netstate hands the status to every agent and to the
+// connect router, which picks a group's target by slots minus players. One
+// backend reporting an absurd capacity won every group-targeted move in its
+// namespace.
+func TestTheMirroredCountIsClampedToTheGroupsCapacity(t *testing.T) {
+	r := &ServerReconciler{PlayerStatusInterval: time.Minute}
+	srv := &spawneryv1alpha1.Server{}
+	r.mirrorPlayerCount(srv, agent.Snapshot{Known: true, Players: 0, Slots: 1 << 30}, 80,
+		metav1.NewTime(time.Now()))
+	if srv.Status.Slots != 80 {
+		t.Errorf("status.slots = %d, want the group's 80", srv.Status.Slots)
+	}
+}
