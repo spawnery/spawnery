@@ -15,100 +15,34 @@ limitations under the License.
 */
 
 // Package mcjoin logs in to a Minecraft proxy far enough to be routed to a
-// backend. It is the automated half of milestone 3's success criterion — a
-// player can join — and it exists because the only other way to make that
-// claim is a human with a Microsoft account.
-//
-// # How far a login has to get, measured
+// backend, so that "a player can join" can be claimed without a human holding
+// a Microsoft account.
 //
 // Velocity does not dial a backend when the login completes. It dials it when
-// the client answers Login Success with Login Acknowledged, and it needs
-// nothing further from the client: no FinishConfiguration, no
-// AcknowledgeFinishConfiguration. Join therefore stops one packet after Login
-// Success.
+// the client answers Login Success with Login Acknowledged, and needs nothing
+// further -- no FinishConfiguration, no acknowledgement of one. A client that
+// stops short of that acknowledgement still produces Velocity's "has
+// connected" line and no backend attempt at all, so that line is not evidence
+// of routing.
 //
-// Measured on 2026-08-11 against the pinned image
-// ghcr.io/spawnery/velocity:3.5.1-0.2.0 (Velocity 3.5.1 build 615) with no
-// operator endpoint, so the agent stayed dormant and the only routing was a
-// static [servers] entry pointing at 127.0.0.1:25566, where nothing listens.
+// Join reads one packet past the acknowledgement, because a routing failure
+// reaches the client only after the login has already succeeded, as a
+// configuration-state Disconnect. Returning at the acknowledgement would
+// report success for a proxy that can route the player nowhere, which is the
+// one failure this tool exists to catch. So a configuration-state Disconnect
+// is an error, and anything else is the proxy forwarding the backend's
+// configuration and therefore proof of a backend.
 //
-// The proxy had to be in offline mode, and it still does: this client
-// authenticates against nothing, so an online-mode proxy answers it with an
-// encryption request it cannot satisfy. What has changed is how that is said.
-// Set spec.config.onlineMode: false on the ProxyGroup — the CRD field, added
-// in 14331b2, which render.Velocity carries into velocity.toml and which no
-// configOverlay can reach, because the renderer reasserts the keys it owns
-// after merging one. That is the whole precondition for using this package
-// against a Spawnery-managed proxy.
+// The two disconnects are neither the same packet nor the same encoding,
+// which is why they are handled separately below: in login state, packet 0x00
+// carrying a length-prefixed JSON string; in configuration state, packet 0x02
+// carrying network NBT with a nameless root compound.
 //
-// The measurements below were taken before that field existed, on a rig that
-// ran the real spawnery-config and then rewrote online-mode in
-// /data/velocity.toml by hand before starting the JVM. The hand rewrite is
-// gone; nothing in the packet exchange depends on how the file got its value,
-// so the measurements stand as written.
-//
-// A client that sent handshake and Login Start, received Set Compression and
-// Login Success, and then held the socket open for eight seconds without
-// answering produced exactly one line and no backend attempt at all:
-//
-//	[18:13:53 INFO]: [connected player] step1probe (/10.1.90.12:60882) has connected
-//	[18:14:01 INFO]: [connected player] step1probe (/10.1.90.12:60882) has disconnected
-//
-// Note the first line: "has connected" is logged before any backend exists, so
-// it is not evidence of routing. The same client, differing only in that it
-// sent Login Acknowledged, produced the dial immediately:
-//
-//	[18:14:19 INFO]: [connected player] step1probe (/10.1.90.12:56024) has connected
-//	[18:14:19 ERROR]: [connected player] step1probe (/10.1.90.12:56024): unable to connect to server unroutable
-//	io.netty.channel.AbstractChannel$AnnotatedConnectException: finishConnect(..) failed with error(-111): Connection refused: /127.0.0.1:25566
-//	[18:14:19 INFO]: [connected player] step1probe (/10.1.90.12:56024) has disconnected: Unable to connect you to unroutable. Please try again later.
-//
-// # Why Join reads one more packet after that
-//
-// The second measurement above also shows how a routing failure reaches the
-// client: as a configuration-state Disconnect, after the login has already
-// succeeded. A client that returned the moment it had sent Login Acknowledged
-// would report success for a proxy that could not route it anywhere, which is
-// the one failure this tool exists to catch. So Join waits for the next
-// packet: a configuration-state Disconnect is an error, anything else is the
-// proxy forwarding the backend's configuration and therefore proof of a
-// backend.
-//
-// That the success path really does deliver such a packet, and promptly, was
-// measured the same way, with the pinned Paper image behind the same proxy on
-// a container network — and with a second hand edit, since fixed. render.Paper
-// wrote the forwarding secret under proxies.velocity.secret-key while Paper
-// 26.2 reads proxies.velocity.secret: the rendered node failed to bind, came
-// back as enabled: false with an empty secret, and the proxy refused the
-// player with "Your server did not send a forwarding request to the proxy".
-// The backend in this rig had that node corrected by hand because the
-// measurement predates 494fa47, which made render.Paper write the key Paper
-// reads. A Spawnery-rendered backend now accepts a forwarded player as
-// rendered, and two guards keep it that way:
-// TestPaperWritesTheKeysPaperItselfReads checks the renderer's key names
-// against a fixture of Paper's own defaults, and hack/image-test.sh reads the
-// file back out of a running Paper.
-//
-// The packet after Login Acknowledged arrived at once and was a
-// configuration-state Plugin Message carrying minecraft:brand — whose value
-// says where it came from:
-//
-//	packet id=0x01 hex=0f6d696e6563726166743a6272616e64105061706572202856656c6f63697479 29
-//	                    m i n e c r a f t : b r a n d          Paper (Velocity)
-//
-//	[18:28:54 INFO]: [server connection] step1probe -> lobby has connected
-//	[18:28:54 INFO]: UUID of player step1probe is b91758c8-e99d-34a7-aea0-b6e54ca3b36b   (Paper's log)
-//
-// The two disconnects are not the same packet and are not even the same
-// encoding, which is why they are handled separately below. In login state it
-// is packet 0x00 carrying a length-prefixed JSON string; measured:
-//
-//	{"translate":"multiplayer.disconnect.outdated_client","with":[{"text":"1.7.2-26.2"}]}
-//
-// In configuration state it is packet 0x02 carrying network NBT — a nameless
-// root compound; measured, with the tag bytes shown as escapes:
-//
-//	\x0a \x08\x00\x05 color \x00\x03 red \x08\x00\x04 text \x00\x3c Unable to connect you to unroutable. Please try again later. \x00
+// The proxy has to be in offline mode, since this client authenticates
+// against nothing and an online-mode proxy answers it with an encryption
+// request it cannot satisfy. Set spec.config.onlineMode: false on the
+// ProxyGroup -- the CRD field, which no configOverlay can reach, because the
+// renderer reasserts the keys it owns after merging one.
 package mcjoin
 
 import (
@@ -160,18 +94,13 @@ const nextStateLogin = 2
 // asks a server which version it speaks, and it is deliberately one no server
 // supports.
 //
-// Measured, because the obvious thing does not work. Against the pinned pair
-// — Velocity 3.5.1 in front of Paper 26.2 — slp.Ping's own handshake version
-// of 771 comes back unchanged, because Velocity answers a status request with
-// the asker's version whenever it supports it rather than with one of its
-// own. Logging in as 771 then gets as far as the backend and no further:
-//
-//	[ERROR]: [connected player] step1probe: disconnected while connecting to lobby: Outdated client! Please use 26.2
-//
-// Announcing -1 instead is answered "776", which is Velocity's own maximum
-// and Paper 26.2's protocol, and that login reaches the backend. 0 and
-// 2147483647 were measured to work identically; -1 is what a client with no
-// version to declare conventionally sends.
+// The obvious thing does not work: Velocity answers a status request with the
+// asker's own version whenever it supports it, so slp.Ping's handshake
+// version comes back unchanged, and logging in with it reaches the backend
+// only to be refused as an outdated client. Announcing a version no server
+// supports is answered with the proxy's own maximum instead. -1 is what a
+// client with no version to declare conventionally sends; 0 and 2147483647
+// behave identically.
 //
 // What this relies on is that the proxy's newest supported version and the
 // backend's version agree, which is true of every pinned pair this repository
@@ -384,19 +313,18 @@ func JoinAndHold(ctx context.Context, host string, port int, username string, ho
 // a real one wherever the *backend's* count is what is read.
 //
 // Closing that needs this client to drive the exchange rather than answer it,
-// which is the part a reading of the protocol gets wrong. Measured on the
-// wire 2026-08-25 against Paper 26.2, protocol 776: after Login Acknowledged
-// the server sends Plugin Message 0x01 (minecraft:brand), Feature Flags 0x0c
-// and Select Known Packs 0x0e -- and then nothing but Keep Alive 0x04, for as
-// long as the client waits. It never sends Finish Configuration unprompted,
-// so a case that answers one packet waits for a packet that never comes. What
-// moves it, each step confirmed by the server's own next move:
+// which is the part a reading of the protocol gets wrong. After Login
+// Acknowledged the server sends Plugin Message 0x01 (minecraft:brand),
+// Feature Flags 0x0c and Select Known Packs 0x0e, and then nothing but Keep
+// Alive 0x04 for as long as the client waits: it never sends Finish
+// Configuration unprompted, so a case that answers one packet waits for a
+// packet that never comes. What moves it:
 //
 //   - serverbound Known Packs 0x07 with an empty list, after which the server
-//     sends 29 Registry Data 0x07 packets and Update Tags 0x0d, 35 KB of them
+//     sends its Registry Data 0x07 and Update Tags 0x0d, tens of kilobytes
 //   - clientbound Finish Configuration 0x03, empty payload
 //   - serverbound Acknowledge Finish Configuration 0x03, empty -- after which
-//     the server logs "<name> joined the game" and counts the player
+//     the server counts the player
 //
 // The hold then sits in the play state, where Keep Alive is 0x2c carrying a
 // millisecond timestamp rather than the configuration state's 0x04. So it is
@@ -505,24 +433,18 @@ func readString(b []byte) (string, error) {
 
 // nbtText renders a configuration-state disconnect reason readably.
 //
-// That payload is network NBT, not JSON — see the package comment for the
-// measured bytes — and its text is carried in string tags whose lengths and
-// tag bytes are binary. Rather than carry an NBT decoder for what is only a
-// diagnostic message, this keeps the printable runs of three characters or
-// more and joins them with a space, which on the measured failure yields
+// That payload is network NBT, not JSON, and its text sits in string tags
+// whose lengths and tag bytes are binary. Rather than carry an NBT decoder
+// for a diagnostic message, this keeps printable runs of three characters or
+// more and joins them with a space. The field names survive alongside their
+// values, which is untidy and honest: the payload rendered legibly, not a
+// component tree resolved.
 //
-//	color red text Unable to connect you to unroutable. Please try again later.
-//
-// The field names survive alongside their values, which is untidy and honest:
-// this is the payload rendered legibly, not a component tree resolved.
-//
-// The one place it does more than that is the length prefix. An NBT string is
-// two big-endian length bytes and then its content, and a message of 32 to
-// 126 characters has a low length byte that is itself printable and would be
-// carried into the message as a leading character — the measured reason is 60
-// bytes long, so it read as "<Unable to connect you to...". A run whose first
-// byte is exactly the length of what follows it is that prefix, so it is
-// dropped.
+// The one place it does more is the length prefix. An NBT string is two
+// big-endian length bytes and then its content, so a message of 32 to 126
+// characters has a low length byte that is itself printable and would lead
+// the message as a stray character. A run whose first byte is exactly the
+// length of what follows it is that prefix, and is dropped.
 func nbtText(payload []byte) string {
 	var runs []string
 	start := -1
