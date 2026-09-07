@@ -71,18 +71,15 @@ type ScalingInputs struct {
 	// its servers. A view whose spec.podHash differs is stale; staleSpec has
 	// what an empty hash on either side means.
 	//
-	// It replaced metadata.generation here in milestone 7a, and the reason is
-	// what a generation could not tell apart. A generation moves on *every*
-	// field of the spec, so raising minReplicas made every running server
-	// stale and the group replaced a fleet of functionally identical pods.
-	// The digest moves only when the rendered pod or the config actually
-	// changes, which is the question a changeover is really asking.
+	// A digest and not metadata.generation, because a generation moves on
+	// *every* field of the spec: raising minReplicas would make every running
+	// server stale and replace a fleet of functionally identical pods. The
+	// digest moves only when the rendered pod or the config actually changes,
+	// which is the question a changeover is really asking.
 	//
-	// Its job is unchanged and still confined: it decides only *which* server
-	// retires, never how many get built. The capacity arithmetic below stays
-	// blind to it, exactly as milestone 4a left it. See the type comment
-	// above -- the hazard described there is about filtering that arithmetic
-	// and applies to this field exactly as it applied to the last one.
+	// Its job is confined: it decides only *which* server retires, never how
+	// many get built. The capacity arithmetic below stays blind to it -- see
+	// the type comment above for the hazard that filtering it would create.
 	PodHash string
 	// MaxUnavailable is spec.update.maxUnavailable: how many servers this
 	// update may have unavailable at once.
@@ -184,9 +181,9 @@ type OrdinalConflict struct {
 // agent went quiet, which has: the first is credited in full, the second not at
 // all, because unknown counts as occupied everywhere in this repository.
 //
-// status.freeSlots keeps AggregateGroup's meaning — Ready servers of the current
-// generation — because that is what its CRD field documents and what the rolling
-// update of milestone 4b needs. Two numbers, two purposes; they must not be
+// status.freeSlots keeps AggregateGroup's meaning — Ready servers of the
+// current generation — because that is what its CRD field documents and what
+// the rolling update needs. Two numbers, two purposes; they must not be
 // unified.
 func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 	if !v.countsTowardSize() {
@@ -336,11 +333,10 @@ func readyFree(views []ServerView) int32 {
 // start without yet licensing a retirement. That gap is intended: the group
 // waits the few seconds for it to become Ready rather than building another.
 //
-// A Failed server of the current generation does not suppress this. It used to
-// — milestone 4b's stopgap against a broken image being recreated every five
-// seconds — and the per-group backoff replaced it: the same loop is now bounded
-// by a window that starts at seconds and grows only if the failures keep
-// coming, rather than by a flat retention hour after any single failure.
+// A Failed server of the current generation does not suppress this: the
+// per-group backoff bounds the recreate loop instead, with a window that
+// starts at seconds and grows only if the failures keep coming, rather than a
+// flat retention hour after any single failure.
 // DecideSize still returns Create >= 1 whenever coldStart applies — neither
 // this function nor DecideSize does the bounding. It happens on execution, at
 // the gate in servergroup_controller.go (`if backoff.MayCreate`), which skips

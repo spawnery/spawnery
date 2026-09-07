@@ -48,12 +48,11 @@ import (
 // group that still exists. Every error return above reconcileReplicas returns
 // without it -- a failed ProxyGroup or Network read, the status write,
 // Bootstrap.Ensure, the ConfigMap, the Service, the first pods() call -- and
-// so will the next early return somebody adds. Before the rule, an entry stored
-// only when the divergence was first seen and nothing advanced it, so a pod
-// still diverging across a five-minute Bootstrap.Ensure outage was measured
-// from before the outage: now.Sub(since) was 300s on the first pass that
-// resumed, the grace was cleared on that pass, and a Warning fired for a
-// divergence nobody had watched.
+// so will the next early return somebody adds. An entry stored only when the
+// divergence was first seen, with nothing advancing it, would measure a pod
+// diverging across a multi-minute Bootstrap.Ensure outage from before the
+// outage -- clearing the grace on the first pass that resumed, and firing a
+// Warning for a divergence nobody had watched.
 //
 // The cost of the rule is the same one forgetting has always had and it runs
 // the safe way: a genuine, continuous divergence that spans a gap restarts its
@@ -63,10 +62,10 @@ import (
 // would never report -- which is why that constant is four resync intervals
 // against a sixty-second grace rather than something tight.
 //
-// NetworkNotFound and NetworkNotAccepted still call forget explicitly, and
-// that is now belt to this braces rather than the mechanism: those two paths
-// know the measurement is void a pass earlier than the gap rule would work it
-// out, and saying so where it is known costs nothing. ExposeNotImplemented
+// NetworkNotFound and NetworkNotAccepted call forget explicitly, which is belt
+// to this braces rather than the mechanism: those two paths know the
+// measurement is void a pass earlier than the gap rule would work it out, and
+// saying so where it is known costs nothing. ExposeNotImplemented
 // shares the same path and the same call; the CRD's enum is closed and
 // exposeImplemented agrees with it, so no object reaching this reconciler can
 // take that branch. It is named here for the reader who greps for the reason.

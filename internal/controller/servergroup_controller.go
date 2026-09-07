@@ -111,10 +111,10 @@ type ServerGroupReconciler struct {
 	// says "does not exist in this namespace", which sends somebody looking
 	// for an object they can see with kubectl.
 	//
-	// Measured on a live cluster on 2026-08-29, which is how this was found;
-	// no test caught it, because envtest's client is not cache-restricted the
-	// same way. Labelling the claim would have been the wrong fix twice over:
-	// it is not our object, and the orphan sweep deletes by that label.
+	// No test catches this: envtest's client is not cache-restricted the same
+	// way, so the mistake is invisible until a real cluster. Labelling the
+	// claim would be wrong twice over -- it is not our object, and the orphan
+	// sweep deletes by that label.
 	ClaimReader client.Reader
 }
 
@@ -307,10 +307,9 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// ordinal is counted straight back in, and the count returns to 1 rather
 	// than to 0.
 	//
-	// One, however many corpses there are. It used to return the number of
-	// them, so four held ordinals put the group four sixths of the way to a
-	// terminal give-up on the very pass an operator's spec edit was meant to
-	// answer for them; the count became rounds rather than servers, and
+	// One, however many corpses there are: counting servers would put a group
+	// with four held ordinals four sixths of the way to a terminal give-up on
+	// the very pass an operator's spec edit was meant to answer for them.
 	// TestAGenerationResetLeavesOneRoundNotOnePerCorpse pins it.
 	if group.Generation != group.Status.ObservedGeneration {
 		group.Status.ConsecutiveFailures = 0
@@ -607,11 +606,11 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// These two are about failures, and either kind of group can have those.
 	// The backoff already gated a persistent group's creates -- size() runs
 	// its CreateOrdinals loop under the same backoff.MayCreate as the
-	// ephemeral count -- so until this was lifted out, a persistent group was
-	// backing off and giving up in silence, with nothing on its status saying
-	// why nothing was happening.
+	// ephemeral count -- so without them a persistent group backs off and
+	// gives up in silence, with nothing on its status saying why nothing is
+	// happening.
 	//
-	// Its likeliest failure is the one this milestone introduces: a claim that
+	// Its likeliest failure is a claim that
 	// never binds, which no replacement can fix, because the world is on that
 	// volume and a rebuilt ordinal would only run at the same one. It does
 	// rebuild, slowly: nothing on the group's side removes a persistent server
@@ -647,9 +646,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Message: "servers are starting normally",
 	}
 	switch {
-	// Before !sized, deliberately, and docs/known-issues.md's milestone 4d
-	// entry asked for the choice to be a ruling with a test rather than an
-	// accident of how the switch was written.
+	// Before !sized, deliberately.
 	//
 	// Both messages are true of a group that has given up while its Network is
 	// also dead. They are not equally useful. The Network's unusability is
@@ -1016,8 +1013,7 @@ func (r *ServerGroupReconciler) size(
 // condemn removes the named servers and reserves each removal, one delete per
 // server on a node that is going away.
 //
-// It stayed a method of its own after the Network gate stopped needing a
-// second call site for it, because the occasion it names is not the one the
+// A method of its own because the occasion it names is not the one the
 // deletes beside it in size() name — a node leaving rather than a size
 // decision — and the event it emits says so. Reserved after the delete,
 // matching size()'s other removal loops.
@@ -1715,22 +1711,21 @@ func (r *ServerGroupReconciler) pruneFailed(
 // of occupied pods is the only formulation that works — and it makes the
 // eviction API refuse to evict any of them.
 //
-// Named through podspec.GroupPDBName, not the bare group.Name it used before
-// -- see that function's doc comment for why a ServerGroup and a same-named
-// ProxyGroup collide over it. This is the side whose object name actually
-// changed when GroupPDBName was introduced, and an operator upgrading across
-// that change strands whatever PodDisruptionBudget previously sat at the
-// bare group.Name: it stays owned by this ServerGroup, keeps whatever
-// minAvailable it last had, and goes on blocking evictions of whatever pods
-// it still selects, because nothing here ever renames or deletes it.
+// Named through podspec.GroupPDBName rather than the bare group.Name -- see
+// that function's doc comment for why a ServerGroup and a same-named
+// ProxyGroup collide over it. An installation that predates that name strands
+// whatever PodDisruptionBudget sat at the bare group.Name: it stays owned by
+// this ServerGroup, keeps whatever minAvailable it last had, and goes on
+// blocking evictions of whatever pods it still selects, because nothing here
+// renames or deletes it.
 //
 // The selector pins podspec.LabelRole as well as the group, and that term is
 // load-bearing rather than tidiness. minAvailable is counted from
 // occupiedPods(views), which sees this group's *servers* and nothing else. A
 // selector without the role term matches on managed-by, group and occupied,
 // and a ProxyGroup may share this group's name in this namespace — the very
-// case GroupPDBName exists for. From the milestone that put
-// podspec.LabelOccupied on proxy pods too, such a selector matches the
+// case GroupPDBName exists for. Since proxy pods carry
+// podspec.LabelOccupied too, such a selector matches the
 // occupied proxies of the same-named ProxyGroup as well: currentHealthy
 // counts the ready ones among them and minAvailable counts none of them, so
 // disruptionsAllowed goes positive, and the eviction API can spend every one
@@ -1837,7 +1832,7 @@ func (r *ServerGroupReconciler) groupsOfNetwork(ctx context.Context, obj client.
 //
 // The five-second resync would find a cordoned node on its own; the watch is
 // what makes the answer immediate, and an eviction issued in the same second
-// as the cordon is exactly the race this milestone is about.
+// as the cordon is exactly the race this exists for.
 //
 // It lists this operator's pods and filters by node rather than asking for a
 // spec.nodeName field index. An index would have to be registered once and

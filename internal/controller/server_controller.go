@@ -347,15 +347,15 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// The claim goes in before the pod that mounts it, and nothing here
 		// waits for it to reach Bound. Under volumeBindingMode:
 		// WaitForFirstConsumer — the default of most topology-aware storage
-		// classes, and of the node-local ones this milestone's failure modes
-		// are about — a volume binds only once a pod demands it, so waiting
+		// classes, and of the node-local ones — a volume binds only once a pod
+		// demands it, so waiting
 		// for Bound would deadlock against the pod this block goes on to
 		// create.
 		//
 		// AlreadyExists is the ordinary case rather than an error: an ordinal
 		// recreated after its server was deleted is *supposed* to find the
-		// claim it had before, and that is the whole point of the milestone.
-		// growClaim above is what grows it; this call only ever creates.
+		// claim it had before. growClaim above is what grows it; this call
+		// only ever creates.
 		if !group.IsEphemeral() {
 			claim := podspec.BuildDataClaim(group, srv)
 			if err := r.Create(ctx, claim); err != nil && !apierrors.IsAlreadyExists(err) {
@@ -459,13 +459,12 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 // The recreate path deletes the Server itself and lets the group build a
 // replacement. A reconcile that read the object through the informer cache
 // just before that delete landed then writes to an object the API server no
-// longer has, and the NotFound escaped unwrapped: controller-runtime logged it
-// at `error` with a stacktrace and requeued, and the requeued pass found the
-// object gone at the top of Reconcile and returned cleanly. Nothing was ever
-// wrong -- measured 2026-08-16, the replacement Server was created within a
-// second and reached Ready 22 seconds later, with the error line sitting in
-// between. A false error line on the happy path is worse than noise here,
-// because `make e2e` reads this log for real refusals.
+// longer has. Unwrapped, that NotFound reaches controller-runtime as an
+// `error` with a stacktrace and a requeue, on a pass where nothing is wrong --
+// the replacement Server is already being built and the requeued pass finds
+// the object gone at the top of Reconcile and returns cleanly. A false error
+// line on the happy path is worse than noise here, because `make e2e` reads
+// this log for real refusals.
 //
 // Deliberately not a blanket ignore at the top of Reconcile: a NotFound there
 // could be the *ServerGroup* rather than this object, and swallowing that
@@ -740,7 +739,8 @@ func (r *ServerReconciler) collectInputs(
 	// What the proxies say about this server, which is the half its own agent
 	// cannot see: a player still completing the configuration phase is
 	// counted by neither the backend nor the proxy's own player list, so a
-	// drain used to read the server empty and delete the pod under them.
+	// drain reading either would find the server empty and delete the pod
+	// under them.
 	//
 	// Asked of the Server's own namespace and name, which is exactly how the
 	// proxies were told about it (proxyreg.registeredServer uses srv.Name), so
@@ -758,8 +758,8 @@ func (r *ServerReconciler) collectInputs(
 	var since time.Time
 	if srv.Status.DrainStartedAt != nil {
 		// Plus a second, because the stamp is a metav1.Time and those are
-		// truncated to whole seconds on the way through the API server --
-		// measured, 456 ms lost on a round trip. So the value read back is up
+		// truncated to whole seconds on the way through the API server, so
+		// sub-second precision is lost. The value read back is up
 		// to a second *earlier* than the drain actually started, and comparing
 		// against it as it stands would believe a report taken up to a second
 		// before the drain: precisely the report this rule exists to refuse.
@@ -792,8 +792,8 @@ func (r *ServerReconciler) collectInputs(
 	// Failed server holds its ordinal (DecidePersistentSize's held map) and
 	// pruneFailed does not run for a persistent group, so the object stays for
 	// its full failedRetentionSeconds -- an hour by default -- even after
-	// somebody force-deletes the stuck pod that caused it. Before this bound
-	// existed, that Server recovered the moment the name came free. Both cases
+	// somebody force-deletes the stuck pod that caused it, where without the
+	// bound the Server recovers the moment the name comes free. Both cases
 	// already name the obstacle on the object, PodNameTerminating and
 	// PodNameConflict, so nothing is silent here either.
 	//
@@ -858,17 +858,12 @@ func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
 	// says it is unset for ephemeral servers, so the ordinal is what identifies
 	// the type of a group that is no longer there to ask.
 	//
-	// Stamping Ephemeral unconditionally was milestone 5's last open
-	// precondition. Its stated reason -- that a persistent server would then
-	// run on the wrong deadlines -- turned out not to be what the code does:
-	// DrainTimeout, FailedRetention and UpdateMaxStale all read fields this
-	// function fills with the CRD's own defaults, and none of the three looks
-	// at the type. What the type actually decides on this path is the
-	// !IsEphemeral() branch in Reconcile, so a persistent server whose group
-	// had gone stopped refreshing status.storageResizeError -- growClaim
-	// already returns on nil storage, and the branch that builds a claim needs
-	// the group anyway, so there is nothing here for the truthful answer to
-	// break.
+	// The deadlines do not depend on it: DrainTimeout, FailedRetention and
+	// UpdateMaxStale all read fields this function fills with the CRD's own
+	// defaults. What the type decides on this path is the !IsEphemeral()
+	// branch in Reconcile, which refreshes status.storageResizeError -- and
+	// growClaim returns on nil storage anyway, so a truthful answer breaks
+	// nothing here.
 	groupType := spawneryv1alpha1.ServerGroupEphemeral
 	if srv.Spec.Ordinal != nil {
 		groupType = spawneryv1alpha1.ServerGroupPersistent

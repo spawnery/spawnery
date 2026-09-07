@@ -108,8 +108,7 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 		count, from = 0, lastSuccess
 	}
 
-	// One per *round*, not one per corpse, and that is the whole of what
-	// milestone 4d left undecided.
+	// One per *round*, not one per corpse.
 	//
 	// Counting servers spent the budget in ceil(backoffGiveUpAt / floor)
 	// rounds, because size() creates the whole shortfall in one pass: three
@@ -126,8 +125,7 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 	// A pass counts at most one round however many corpses it sees. Two passes
 	// that each see new failures are two rounds, which is the conservative
 	// reading when one creation round fails in two batches: the operator
-	// observed twice, and spending two of six is far from the six it used to
-	// spend.
+	// observed twice.
 	newest := since
 	sawNewFailure := false
 	for _, v := range views {
