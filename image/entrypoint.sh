@@ -111,8 +111,7 @@ fi
 # exactly there and passes nothing -- the variable is overridable only so the
 # tests can point it at a temporary directory, which is the same seam
 # SPAWNERY_PAPER_HOME already is. Creating /var/run/spawnery/plugins needs
-# root, so without it this
-# copy would have no test at all.
+# root, so without it this copy would have no test at all.
 #
 # The whole tree, not just *.jar. A plugin's configuration lives at
 # plugins/<Name>/config.yml, and copying jars without it would leave every
