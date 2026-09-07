@@ -20,7 +20,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -2970,5 +2973,83 @@ func TestAServerRecordsWhichPodItIsRunning(t *testing.T) {
 	}
 	if recorded != string(pod.UID) {
 		t.Errorf("status.podUID = %q, want the pod's own %q", recorded, pod.UID)
+	}
+}
+
+// The fallback group's whole contract is that it carries the CRD's defaults,
+// and the way it breaks is silent: a new timing field gets a marker in the API
+// types, nothing here is touched, and a Server whose group is gone runs that
+// field on Go's zero value. That is what happened to
+// spec.finishedRetentionSeconds, whose default is 300 and whose zero deletes a
+// Finished server the moment it is seen.
+//
+// So the defaults are read out of the API source rather than repeated here.
+// Repeating them would pass the day the next field is added, which is the day
+// it needs to fail.
+func TestTheFallbackGroupCarriesEveryCrdDefault(t *testing.T) {
+	src, err := os.ReadFile("../../api/v1alpha1/servergroup_types.go")
+	if err != nil {
+		t.Fatalf("reading the API source the defaults live in: %v", err)
+	}
+	text := string(src)
+
+	scalarDefault := func(field string) int32 {
+		t.Helper()
+		// The marker nearest above the field declaration, which is how
+		// controller-gen reads it too.
+		decl := regexp.MustCompile(`(?s)\+kubebuilder:default=(\d+)[^\n]*\n(?:\s*//[^\n]*\n)*\s*` +
+			field + `\s+int(?:32|64)\s+` + "`")
+		m := decl.FindStringSubmatch(text)
+		if m == nil {
+			t.Fatalf("no +kubebuilder:default marker found above %s; if the field was "+
+				"renamed or its default removed, this test and fallbackGroup both need it", field)
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("%s default %q is not a number: %v", field, m[1], err)
+		}
+		return int32(n)
+	}
+
+	drain := regexp.MustCompile(`\+kubebuilder:default=\{timeoutSeconds:(\d+)\}`).FindStringSubmatch(text)
+	if drain == nil {
+		t.Fatal("no +kubebuilder:default for spec.drain found in the API source")
+	}
+	drainSeconds, err := strconv.Atoi(drain[1])
+	if err != nil {
+		t.Fatalf("drain default %q is not a number: %v", drain[1], err)
+	}
+
+	want := map[string]time.Duration{
+		"drain.timeoutSeconds":     time.Duration(drainSeconds) * time.Second,
+		"failedRetentionSeconds":   time.Duration(scalarDefault("FailedRetentionSeconds")) * time.Second,
+		"finishedRetentionSeconds": time.Duration(scalarDefault("FinishedRetentionSeconds")) * time.Second,
+	}
+
+	for _, srv := range []*spawneryv1alpha1.Server{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "lobby-x7k2", Namespace: "minecraft"},
+			Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "survival-0", Namespace: "minecraft"},
+			Spec: spawneryv1alpha1.ServerSpec{
+				GroupRef: spawneryv1alpha1.ObjectRef{Name: "survival"},
+				Ordinal:  ptr.To[int32](0),
+			},
+		},
+	} {
+		g := fallbackGroup(srv)
+		got := map[string]time.Duration{
+			"drain.timeoutSeconds":     g.DrainTimeout(),
+			"failedRetentionSeconds":   g.FailedRetention(),
+			"finishedRetentionSeconds": g.FinishedRetention(),
+		}
+		for field, w := range want {
+			if got[field] != w {
+				t.Errorf("fallbackGroup(%s).%s = %v, want the CRD default %v",
+					srv.Name, field, got[field], w)
+			}
+		}
 	}
 }

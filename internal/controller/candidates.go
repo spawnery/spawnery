@@ -378,10 +378,14 @@ func SelectDeletionCandidates(views []ServerView, count int) []string {
 //
 // A Failed server holds its pod, and its full resource request, for the whole
 // of spec.failedRetentionSeconds — an hour by default. A broken image does not
-// take that hour to fail: MaxContainerRestarts plus the kubelet's backoff gets
-// there in a minute or two, and the group creates a replacement on the next
-// five-second pass. Left uncapped that is dozens of retained servers and pods
-// per floor replica before the first one expires.
+// take that hour to fail, and how fast it gets there depends on the group's
+// type. A persistent one spends MaxContainerRestarts plus the kubelet's
+// backoff, a minute or two. An ephemeral one has carried restartPolicy: Never
+// since the round lifecycle, so there are no in-place restarts to spend: it
+// fails on the first crash. Either way the group creates a replacement on the
+// next five-second pass, and left uncapped that is dozens of retained servers
+// and pods per floor replica before the first one expires — sooner for the
+// type that no longer waits.
 //
 // One retained failure is enough to diagnose from, and it is the retention
 // window that then bounds the footprint rather than the failure rate — the

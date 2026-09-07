@@ -2696,6 +2696,17 @@ func TestGroupGivesUpAndSaysSo(t *testing.T) {
 	if c.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
 		t.Errorf("reason = %q, want CrashLoopBackoff rather than an all-clear", c.Reason)
 	}
+	// The message has to name the way out, and "change the group's spec" is
+	// not one. The group most likely to latch is the one whose spec.overlay
+	// ConfigMap was wrong, and correcting a ConfigMap moves no generation, so
+	// the reader who has already fixed the real fault is the reader this
+	// message leaves stuck. spec.attributes is the edit that clears the streak
+	// without replacing anything running, and it is not discoverable from the
+	// field list.
+	if !strings.Contains(c.Message, "spec.attributes") {
+		t.Errorf("message = %q, want it to name spec.attributes as the edit that "+
+			"clears the streak without rolling the group", c.Message)
+	}
 
 	// The terminal proof, stated as an absolute count rather than a delta.
 	//

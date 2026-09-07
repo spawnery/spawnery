@@ -131,7 +131,8 @@ its group starts. After six rounds the group latches:
 
 ```
 not retrying: 6 rounds of server starts failed in a row; change the group's
-spec to try again
+spec to try again — any edit to it clears the streak, and spec.attributes
+shapes no pod, so editing that one retries without replacing a running server
 ```
 
 Correcting the overlay is what removes the cause, and it is precisely the edit
@@ -139,13 +140,18 @@ that cannot lift the latch. Only `group.Generation !=
 group.Status.ObservedGeneration` resets `status.consecutiveFailures`
 (`internal/controller/servergroup_controller.go:315`), and a `ConfigMap`'s
 content is not the group's generation. The group then sits `Degraded` with
-nothing left wrong with it, and the condition's own advice names the one thing
-whoever fixed it has correctly not touched.
+nothing left wrong with it.
 
-**The remedy costs nothing and is not discoverable from the message.** Any
+**The remedy costs nothing, and since 2026-09-07 the message carries it.** Any
 spec edit clears the streak, and `spec.attributes` is the one to reach for: it
 shapes no pod and is not in the hash a server is replaced on, so it moves the
-generation without replacing anything that is running.
+generation without replacing anything that is running. The condition used to
+stop at "change the group's spec", which reads as already followed to whoever
+has just corrected the `ConfigMap`; it now names the field as well.
+
+That is the half of this entry that was worth fixing. The other half is still
+here: the operator does not notice that the cause is gone, and somebody has to
+make an edit that means nothing in order to say so.
 
 This is the sibling of the entry above it, from the other side. There, a
 capacity edit clears a streak it has not earned; here, the edit that has
@@ -157,4 +163,4 @@ latched after their overlay was corrected. An `attributes` edit cleared all
 four and replaced no running server. Fixing it in the operator would mean
 giving the reset a second input — the overlay `ConfigMap`'s `resourceVersion`
 — which means watching an object the reconciler currently only names, for a
-case a one-line edit already answers.
+case a one-line edit already answers, and which the message now names.
