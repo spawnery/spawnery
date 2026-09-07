@@ -72,12 +72,14 @@ const ReasonPodNameTerminating = "PodNameTerminating"
 // quota, not at anything this operator can retry its way out of.
 const ReasonServerPodRejected = "ServerPodRejected"
 
-// defaultDrainTimeoutSeconds and defaultFailedRetentionSeconds mirror the
-// kubebuilder defaults on ServerGroupSpec. They are what a Server falls back to
-// when its group is gone, so drain and cleanup keep sane timings.
+// These mirror the kubebuilder defaults on ServerGroupSpec. They are what a
+// Server falls back to when its group is gone, so drain and cleanup keep sane
+// timings. TestTheFallbackGroupCarriesEveryCrdDefault reads the markers out of
+// the API source and fails when one of these drifts from it.
 const (
-	defaultDrainTimeoutSeconds    int32 = 60
-	defaultFailedRetentionSeconds int32 = 3600
+	defaultDrainTimeoutSeconds      int32 = 60
+	defaultFailedRetentionSeconds   int32 = 3600
+	defaultFinishedRetentionSeconds int32 = 300
 )
 
 // ResyncInterval is how often a Server is re-examined even without an event.
@@ -877,10 +879,11 @@ func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
 			Namespace: srv.Namespace,
 		},
 		Spec: spawneryv1alpha1.ServerGroupSpec{
-			Type:                   groupType,
-			Drain:                  &spawneryv1alpha1.DrainSpec{TimeoutSeconds: defaultDrainTimeoutSeconds},
-			FailedRetentionSeconds: defaultFailedRetentionSeconds,
-			Update:                 &spawneryv1alpha1.UpdateSpec{MaxUnavailable: 1, MaxStaleSeconds: 0},
+			Type:                     groupType,
+			Drain:                    &spawneryv1alpha1.DrainSpec{TimeoutSeconds: defaultDrainTimeoutSeconds},
+			FailedRetentionSeconds:   defaultFailedRetentionSeconds,
+			FinishedRetentionSeconds: defaultFinishedRetentionSeconds,
+			Update:                   &spawneryv1alpha1.UpdateSpec{MaxUnavailable: 1, MaxStaleSeconds: 0},
 		},
 	}
 }
