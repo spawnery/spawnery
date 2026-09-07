@@ -59,6 +59,13 @@ version: 0.2.28
 # No CRD changes and no argument changes, so an installation that upgrades
 # has nothing to write.
 #
+# Release v0.2.27 moved it, and version above, to 0.2.26 rather than 0.2.27.
+# The operator did change -- the server number reaches the reconciler and the
+# Server CRD -- but the number counted up by one instead of taking the
+# release's. That is the outlier, not a second rule: a component that moves
+# takes the release number, gaps and all, which is why 0.2.20 was followed by
+# 0.2.23 above. 0.2.28 follows it again.
+#
 # 0.2.28 moves it with the operator: the CRDs gain Server.status.roundEndedAt
 # and ServerGroup.spec.finishedRetentionSeconds, and the reconciler reads
 # both -- a server whose round has ended reaches the new phase Finished
