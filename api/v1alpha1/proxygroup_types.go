@@ -122,8 +122,8 @@ type ExposeSpec struct {
 	// It cannot coexist with Pod Security `baseline` or `restricted` in the
 	// same namespace: both disallow a container hostPort outright, so the API
 	// server refuses every pod of such a group and this operator reports the
-	// refusal on Degraded rather than ever admitting one. Measured against
-	// `restricted` on a real cluster, quoted verbatim:
+	// refusal on Degraded rather than ever admitting one. Against
+	// `restricted` the refusal reads:
 	//
 	//	violates PodSecurity "restricted:latest": hostPort
 	//	(container "velocity" uses hostPort 25577)
@@ -135,10 +135,9 @@ type ExposeSpec struct {
 	// That namespace is necessary and not sufficient. A hostPort that is
 	// admitted, ready and published in status.address can still be
 	// unreachable, because whether the port is open to the world is a
-	// host-firewall question rather than a Kubernetes one -- measured on a
-	// Cilium cluster whose CiliumClusterwideNetworkPolicy admitted a fixed
-	// list of ports from `world` and dropped this one, while the pod was
-	// serving perfectly. docs/network-boundaries.md carries that measurement.
+	// host-firewall question rather than a Kubernetes one: a cluster-wide
+	// policy admitting a fixed list of ports from `world` drops this one while
+	// the pod serves perfectly. See docs/network-boundaries.md.
 	// +optional
 	HostPort *HostPortSpec `json:"hostPort,omitempty"`
 
@@ -280,23 +279,19 @@ type ProxyGroupSpec struct {
 	// written. Paper and Velocity both keep their own default for a key they
 	// do not read and write the stray one straight back out, so the rendered
 	// file goes on looking like the override took while the setting never
-	// applies -- which is the failure this refusal exists to prevent, and
-	// which has cost this project two outages. The declared keys are measured
-	// from each program's own default configuration, so a Paper or Velocity
-	// bump can refuse a legitimately new key until that measurement is
-	// retaken. server.properties is the exception: it has no such
-	// measurement, so a mistyped key there is still only an unused one.
+	// applies -- which is the failure this refusal exists to prevent. The
+	// declared keys are taken from each program's own default configuration,
+	// so a Paper or Velocity bump can refuse a legitimately new key until that
+	// file is captured again. server.properties is the exception: it has no
+	// such capture, so a mistyped key there is still only an unused one.
 	// +optional
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 
 	// Mounts are extra ConfigMap, Secret and PersistentVolumeClaim mounts.
 	//
-	// It is ServerGroupSpec.Mounts for a proxy and it arrived later, which is
-	// worth knowing when reading a manifest written against an older chart: a
-	// ProxyGroup simply had no way to be handed a file until then, and the
-	// asymmetry was never a decision anybody took. What forced it was one
-	// network's own shape -- its proxies read the same shared asset directory
-	// its backends do, out of a template that targets both.
+	// It is ServerGroupSpec.Mounts for a proxy, and it is here because a
+	// network's proxies may read the same shared asset directory its backends
+	// do, out of a template that targets both.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

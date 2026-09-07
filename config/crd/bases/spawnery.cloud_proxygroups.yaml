@@ -154,12 +154,11 @@ spec:
                   written. Paper and Velocity both keep their own default for a key they
                   do not read and write the stray one straight back out, so the rendered
                   file goes on looking like the override took while the setting never
-                  applies -- which is the failure this refusal exists to prevent, and
-                  which has cost this project two outages. The declared keys are measured
-                  from each program's own default configuration, so a Paper or Velocity
-                  bump can refuse a legitimately new key until that measurement is
-                  retaken. server.properties is the exception: it has no such
-                  measurement, so a mistyped key there is still only an unused one.
+                  applies -- which is the failure this refusal exists to prevent. The
+                  declared keys are taken from each program's own default configuration,
+                  so a Paper or Velocity bump can refuse a legitimately new key until that
+                  file is captured again. server.properties is the exception: it has no
+                  such capture, so a mistyped key there is still only an unused one.
                 properties:
                   name:
                     description: Name of the referenced object.
@@ -421,19 +420,18 @@ spec:
                       namespace: both disallow a container hostPort outright, so the
                       API\nserver refuses every pod of such a group and this operator
                       reports the\nrefusal on Degraded rather than ever admitting
-                      one. Measured against\n`restricted` on a real cluster, quoted
-                      verbatim:\n\n\tviolates PodSecurity \"restricted:latest\": hostPort\n\t(container
-                      \"velocity\" uses hostPort 25577)\n\nThe remedy is a namespace
-                      of its own for the HostPort group, with a\nrelaxed Pod Security
-                      label, separate from the restricted namespaces the\nrest of
-                      the network runs in.\n\nThat namespace is necessary and not
-                      sufficient. A hostPort that is\nadmitted, ready and published
-                      in status.address can still be\nunreachable, because whether
-                      the port is open to the world is a\nhost-firewall question rather
-                      than a Kubernetes one -- measured on a\nCilium cluster whose
-                      CiliumClusterwideNetworkPolicy admitted a fixed\nlist of ports
-                      from `world` and dropped this one, while the pod was\nserving
-                      perfectly. docs/network-boundaries.md carries that measurement."
+                      one. Against\n`restricted` the refusal reads:\n\n\tviolates
+                      PodSecurity \"restricted:latest\": hostPort\n\t(container \"velocity\"
+                      uses hostPort 25577)\n\nThe remedy is a namespace of its own
+                      for the HostPort group, with a\nrelaxed Pod Security label,
+                      separate from the restricted namespaces the\nrest of the network
+                      runs in.\n\nThat namespace is necessary and not sufficient.
+                      A hostPort that is\nadmitted, ready and published in status.address
+                      can still be\nunreachable, because whether the port is open
+                      to the world is a\nhost-firewall question rather than a Kubernetes
+                      one: a cluster-wide\npolicy admitting a fixed list of ports
+                      from `world` drops this one while\nthe pod serves perfectly.
+                      See docs/network-boundaries.md."
                     properties:
                       port:
                         description: |-
@@ -559,12 +557,9 @@ spec:
                 description: |-
                   Mounts are extra ConfigMap, Secret and PersistentVolumeClaim mounts.
 
-                  It is ServerGroupSpec.Mounts for a proxy and it arrived later, which is
-                  worth knowing when reading a manifest written against an older chart: a
-                  ProxyGroup simply had no way to be handed a file until then, and the
-                  asymmetry was never a decision anybody took. What forced it was one
-                  network's own shape -- its proxies read the same shared asset directory
-                  its backends do, out of a template that targets both.
+                  It is ServerGroupSpec.Mounts for a proxy, and it is here because a
+                  network's proxies may read the same shared asset directory its backends
+                  do, out of a template that targets both.
                 items:
                   description: |-
                     Mount is a single file mount into a managed pod: a ConfigMap, a Secret, or
