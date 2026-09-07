@@ -196,6 +196,18 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 	// Ready servers of the current generation, the other counts capacity that
 	// has been ordered and not arrived -- but what makes a seat reachable is
 	// one question with one answer.
+	//
+	// AggregateGroup gates its own door check on Phase == Ready, and doing the
+	// same here reads like the symmetry the paragraph above claims. It is the
+	// opposite of it. The server that gate would reach is one that shut its
+	// door and then lost its readiness probe -- a round in progress, a missed
+	// probe -- which would fall through to the Slots == 0 credit below and be
+	// counted as a full maxPlayers of capacity on its way. A server nobody can
+	// join is not capacity on its way, and believing it is would stop the
+	// group building the seat somebody is waiting for. The ordering costs one
+	// server too many while a door-closed server sits outside Ready, and
+	// scale-down takes that back; the other error costs joins.
+	// TestProvisionalCapacityReadsTheDoorBeforeThePhase pins it.
 	if v.JoinsClosed {
 		return 0
 	}

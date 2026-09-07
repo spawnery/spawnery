@@ -1277,6 +1277,41 @@ func TestProvisionalCapacityStillCreditsAStartingServer(t *testing.T) {
 	}
 }
 
+// The door is read before the phase, and that ordering is the answer to a
+// proposed symmetry rather than an oversight of it. AggregateGroup credits a
+// server only while Phase == Ready, so gating the door on Ready here as well
+// looks like it would make one question have one answer.
+//
+// It would do the opposite. A server that shut its door and then lost its
+// readiness probe -- a round in progress, a probe that missed -- is the case
+// that gate would reach, and it has neither free seats nor a way to be
+// reached. Crediting it a full maxPlayers would tell the scale-up rule that
+// spare capacity is on its way when what is actually there is a server nobody
+// can join, and the group would decline to build the one server the players
+// waiting for a seat need. That is the direction this file refuses everywhere
+// else: a group with a server too many costs money, a group with a server too
+// few costs joins.
+//
+// What the ordering does cost is one server too many for as long as a
+// door-closed server sits outside Ready, and scale-down takes that back. The
+// cheap error, deliberately.
+func TestProvisionalCapacityReadsTheDoorBeforeThePhase(t *testing.T) {
+	// Never reported, so Slots == 0 -- the shape that would otherwise be
+	// credited in full by the case above.
+	closed := ServerView{Name: "a", Phase: phase.Starting, JoinsClosed: true}
+	if got := provisionalCapacity(closed, 100); got != 0 {
+		t.Errorf("provisionalCapacity = %d, want 0: a server that shut its door has no "+
+			"seat to offer whether or not it is Ready", got)
+	}
+
+	// And the same server once its door is open again, so the assertion above
+	// pins the door rather than the phase.
+	closed.JoinsClosed = false
+	if got := provisionalCapacity(closed, 100); got != 100 {
+		t.Errorf("provisionalCapacity = %d, want 100 once the door is open again", got)
+	}
+}
+
 func TestDecideSizeCondemns(t *testing.T) {
 	t.Run("a condemned server is named even with no surplus", func(t *testing.T) {
 		in := ScalingInputs{
