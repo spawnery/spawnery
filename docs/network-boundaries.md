@@ -311,9 +311,9 @@ than in code: the verb list carries `delete` on `scaleboosts` and on nothing
 else it does not already own, and the sweep removes only boosts whose own
 `expiresAt` has passed.
 
-It has **no** `create` and no `update` on them. Making one is a person's act
-today, and the milestone that adds a command will add the verb with the
-caller — a grant with no caller is one nobody can justify when they find it.
+It has `create` as well, since `/cloud boost` — the caller that justifies
+the grant — and no `update` or `patch`: a boost is made whole and expires,
+never edited.
 
 ## What the operator knows about a person
 
@@ -339,10 +339,11 @@ than serving a frozen list.
 What this does **not** do is bound who can read it inside the operator. Anyone
 who can reach that process — a debugger, a core dump, a memory-reading
 exploit — reads the roster, and no `NetworkPolicy` in this repository is about
-that. The bounds that exist are the ones that already existed: the agent
-channel is mutually authenticated and the namespace comes from the pod's own
-token rather than from the message, so a proxy can assert a roster for its own
-network and for no other.
+that. The bounds that exist are the ones that already existed: every agent on
+the channel is authenticated by a pod-bound token over a connection pinned to
+the operator's CA, and the namespace comes from that token rather than from
+the message, so a proxy can assert a roster for its own network and for no
+other.
 
 **And since 7b-3 the operator sends it onward.** Every agent in a namespace —
 every Velocity proxy and every Paper backend — receives every player in that
