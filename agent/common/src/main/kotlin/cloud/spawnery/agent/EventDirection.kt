@@ -22,6 +22,7 @@ private val REMOVED = setOf(
     "DeletionRequested",
     "Drained",
     "DrainingBeforeCleanup",
+    "FinishedRetentionElapsed",
     "MaxStaleElapsed",
     "PodLost",
     "ReadinessLost",

@@ -164,3 +164,25 @@ four and replaced no running server. Fixing it in the operator would mean
 giving the reset a second input — the overlay `ConfigMap`'s `resourceVersion`
 — which means watching an object the reconciler currently only names, for a
 case a one-line edit already answers, and which the message now names.
+
+## `TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` failed once and was never reproduced
+
+The test (`internal/controller/server_controller_test.go`) recreates an
+ordinal over a pod that is still terminating, lets the pod finish the way a
+kubelet would, and expects the next pass to create the successor. It failed
+one `make test` with `status.podName` empty, passed in isolation and on a
+full rerun, and nothing was captured.
+
+One thing is ruled out rather than assumed: it is not cache lag.
+`internal/testenv`'s client is `client.New`, a direct client with no informer
+behind it, so the hypothesis anyone reaches for first with envtest cannot be
+the mechanism.
+
+The assertion prints what a second occurrence needs and the first did not
+have: the `Accepted` condition, every pod in the namespace with its deletion
+timestamp and node, and whether the pod under the name is still the
+predecessor by UID. A lingering predecessor says the force delete did not
+take; a Server carrying `PodNameTerminating` with no such pod present says the
+controller decided against a pod that is no longer there; an empty namespace
+with a clean condition says something else refused the create. The second
+occurrence should be a diagnosis, and this entry leaves with it.

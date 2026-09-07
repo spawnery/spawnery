@@ -1976,13 +1976,9 @@ func describePods(f *fixture) string {
 // podUnderNameIsStill answers whether the pod holding a name is still the one
 // with this UID.
 //
-// The UID and not the name, because in this test they are the same name: the
-// ordinal's pod name is reused across generations, so "is a pod called
-// survival-0 present" is true both when the predecessor is lingering and when
-// the successor has been created — the two states the failure has to tell
-// apart. A first draft of this asked by name and reported "predecessor still
-// present: true" about a healthy successor, which would have sent the next
-// reader in exactly the wrong direction.
+// The UID and not the name: the ordinal's pod name is reused across
+// generations, so a pod called survival-0 is present both while the
+// predecessor lingers and once the successor exists.
 func podUnderNameIsStill(f *fixture, name string, uid types.UID) bool {
 	pod := &corev1.Pod{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Namespace: f.ns, Name: name}, pod); err != nil {
@@ -1996,17 +1992,9 @@ func podUnderNameIsStill(f *fixture, name string, uid types.UID) bool {
 // create. Without it the fix above would be indistinguishable from a Server
 // that never gets a pod at all.
 //
-// # An unexplained failure, seen once and never reproduced
-//
-// It failed one `make test`, passed in isolation and on a full rerun, and
-// nothing was captured. One thing is ruled out rather than assumed: **it is
-// not cache lag.** internal/testenv's Client is client.New, a direct client
-// with no informer behind it, so the hypothesis everyone reaches for first
-// with envtest cannot be the mechanism.
-//
-// The diagnostic above is what a second occurrence gets that the first did
-// not: the Accepted condition, every pod with its deletionTimestamp and node,
-// and whether the pod under the name is still the predecessor by UID.
+// Its podName assertion has failed once, unexplained; docs/known-issues.md
+// carries what is known, and the failure prints what a second occurrence
+// needs.
 func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
 	f := newFixture(t)
 	terminating := recreateOrdinalOverATerminatingPod(t, f)
@@ -2017,16 +2005,10 @@ func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
 
 	got := f.server("survival-0")
 	if got.Status.PodName != "survival-0" {
-		// This is the one assertion in this file that has been seen to fail
-		// without explanation, once, with nothing captured and no reproduction
-		// since. So the failure prints what it saw. Whatever the mechanism is, the
-		// three facts below separate the candidates: a lingering predecessor
-		// says the force delete did not take, a Server carrying
-		// PodNameTerminating with no such pod present says the controller
-		// decided against a pod that is no longer there, and an empty
-		// namespace with a clean condition says something else entirely
-		// refused the create. A second occurrence should be a diagnosis, not
-		// another data point.
+		// A lingering predecessor says the force delete did not take,
+		// PodNameTerminating with no such pod says the controller decided
+		// against a pod that is gone, and an empty namespace with a clean
+		// condition says something else refused the create.
 		t.Fatalf("status.podName = %q once the predecessor's pod is gone, want survival-0\n"+
 			"  Accepted condition: %+v\n"+
 			"  pods in the namespace: %s\n"+

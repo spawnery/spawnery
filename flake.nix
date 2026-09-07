@@ -246,6 +246,18 @@
           # path the renderer or extraPlugins owns. That ships in the game
           # images and nowhere else.
           #
+          # 0.2.25 moves it because the published API gained a method: a
+          # plugin can hold its server back from readiness until it has
+          # finished starting, and the agent honours that at the ready probe.
+          #
+          # 0.2.26 moves it alone: the agent completes names and signs its
+          # feed, and the operator binary is untouched -- what it gained is a
+          # test that reads the agent's source.
+          #
+          # 0.2.27 moves it because the published API gained a component
+          # again: a server carries the number its group handed it, so a
+          # plugin can render "Hub-2".
+          #
           # 0.2.28 moves it because the published API gains a method:
           # SpawneryApi.endRound() lets a plugin say its round is over, and
           # that is a class in cloud.spawnery:spawnery-api, versioned off this
@@ -329,6 +341,15 @@
           # --allow-mount-volumes. An installation using one and not setting
           # the other gets Accepted=False with MountVolumesDisabled.
           # docs/upgrading.md carries the note.
+          #
+          # 0.2.25 moves it for a decision, not a schema: the ready gate no
+          # longer registers a server whose agent has already closed its door.
+          #
+          # Release v0.2.27 moved it to 0.2.26, not 0.2.27, and that is the
+          # outlier and not a second rule. The rule since 0.2.14 is that a
+          # component takes the release's number when it moves, gaps and all;
+          # that release counted up by one instead, so the operator image
+          # v0.2.27 published is tagged 0.2.26. 0.2.28 follows the rule again.
           #
           # 0.2.28 moves it: the phase machine gains Finished, a server that
           # says its round is over is replaced without costing its group a

@@ -508,10 +508,11 @@ type GroupTotals struct {
 	ReadyReplicas int32
 	// OnlinePlayers is the sum of players, whatever their generation.
 	OnlinePlayers int32
-	// FreeSlots counts only Ready servers rendered under the group's current
-	// spec, with a fresh player count. Stale ones are excluded on purpose:
-	// without that, a rolling update would never create replacements, because
-	// the old servers' free slots would satisfy the scaler forever.
+	// FreeSlots counts only Ready, registered, open-door servers rendered
+	// under the group's current spec, with a fresh player count. Servers of
+	// an older spec are excluded on purpose: without that, a rolling update
+	// would never create replacements, because the old servers' free slots
+	// would satisfy the scaler forever.
 	FreeSlots int32
 }
 

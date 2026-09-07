@@ -262,23 +262,12 @@ type Inputs struct {
 	// this package only carries out the transition.
 	RetirementRequested bool
 
-	// JoinsClosed is set while the server itself has asked that no new players
-	// be routed to it.
-	//
-	// The server's own word and not the operator's, which is why it moves no
-	// phase: a closed door is not a lifecycle event, and a server that has
-	// shut one is still Ready and still playing. It is false for a server that
-	// has never asked and for one whose agent this operator has never heard
-	// from, so a network that does not use it behaves exactly as it did.
-	JoinsClosed bool
-
 	// RoundEnded is set once the server has said its round is over.
 	//
 	// Read from status.roundEndedAt and not from the registry, which is
 	// memory: an operator restart between the pod stopping and the pass that
 	// reads this would otherwise turn a finished round into a failure. It is
-	// the server's own word, like JoinsClosed, and like that one it is false
-	// for a server that never said it.
+	// the server's own word, and false for a server that never said it.
 	RoundEnded bool
 
 	// FinishedRetentionElapsed is true once a Finished server has been kept
@@ -286,11 +275,6 @@ type Inputs struct {
 	FinishedRetentionElapsed bool
 
 	// Registered is whether the proxies currently have this server.
-	//
-	// Read so that the door above can be acted on once rather than on every
-	// pass: without it a closed server would be deregistered again at every
-	// reconcile, and each of those is a broadcast to every proxy in the
-	// namespace.
 	Registered bool
 	// MaxStaleReached is true once a retiring server has waited longer than
 	// spec.update.maxStaleSeconds. It is measured from status.retiringSince
