@@ -85,6 +85,14 @@ func validateAgentFlags(operatorNamespace string, renewAfter, hardDeadline time.
 		return fmt.Errorf("--agent-session-renew-after (%s) must be below --agent-session-deadline (%s), "+
 			"or the operator would cut every stream off mid-renewal", renewAfter, hardDeadline)
 	}
+	// A stream is authenticated once, when it opens. Its deadline is what
+	// makes "an intercepted token is useful until it expires" true, so it may
+	// not outlive the token it was opened with.
+	if token := time.Duration(podspec.TokenExpirationSeconds) * time.Second; hardDeadline > token {
+		return fmt.Errorf("--agent-session-deadline (%s) is above the agent token's lifetime (%s): "+
+			"a stream is authenticated once, so a stolen token would stay useful past its expiry",
+			hardDeadline, token)
+	}
 	return nil
 }
 

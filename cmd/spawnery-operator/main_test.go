@@ -51,6 +51,7 @@ func TestValidateAgentFlags(t *testing.T) {
 		{"no namespace", "", 8 * time.Minute, 10 * time.Minute, true},
 		{"renewal at the deadline", "spawnery-system", 10 * time.Minute, 10 * time.Minute, true},
 		{"renewal past the deadline", "spawnery-system", 12 * time.Minute, 10 * time.Minute, true},
+		{"a deadline past the token's lifetime", "spawnery-system", 8 * time.Minute, 24 * time.Hour, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
