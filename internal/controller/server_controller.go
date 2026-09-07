@@ -697,9 +697,7 @@ func (r *ServerReconciler) collectInputs(
 		// it wherever it registers and resets it when it creates a fresh pod.
 		WasRegistered:       srv.Status.WasRegistered,
 		RetirementRequested: srv.Spec.Retire,
-		// What the proxies have right now, so the door below is acted on once
-		// rather than on every pass.
-		Registered: srv.Status.Registered,
+		Registered:          srv.Status.Registered,
 	}
 
 	if podFound {
@@ -724,13 +722,6 @@ func (r *ServerReconciler) collectInputs(
 	in.PlayersOnline = snap.Players
 	in.PlayersStale = snap.PlayersStale
 	in.Slots = snap.Slots
-	// The server's own door. AcceptingJoins is true for a pod the registry has
-	// never seen, so an operator that has just restarted goes on routing to
-	// every server it finds -- and the agent restates a closed door on its
-	// next stream, which is what closes that window rather than leaving it to
-	// a timeout.
-	in.JoinsClosed = !snap.AcceptingJoins
-
 	stampRoundEnd(srv, snap, now)
 	// The object and not the snapshot: the registry is memory, and this
 	// decision has to hold across an operator restart.

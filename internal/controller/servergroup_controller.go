@@ -1309,7 +1309,9 @@ func (r *ServerGroupReconciler) collectViews(
 			// And what they have right now, which is a different question and
 			// the one capacity depends on -- see AggregateGroup.
 			Registered: srv.Status.Registered,
-			// The door, from the same snapshot the counts come from.
+			// AcceptingJoins is true for a pod the registry has never heard
+			// from, so after an operator restart every door reads open until
+			// its agent restates it on the next stream.
 			JoinsClosed: !snap.AcceptingJoins,
 			// A pod that once existed and is now gone took its sessions with it,
 			// exactly like one that reached a terminal state.

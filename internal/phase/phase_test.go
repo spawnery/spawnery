@@ -81,12 +81,6 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Ready, Register: true, Reason: ReasonReadyGatePassed},
 		},
 		{
-			name:    "a server that closed its door on the way up is still registered",
-			current: Starting,
-			in:      Inputs{PodExists: true, PodRunning: true, PodReady: true, AgentReady: true, JoinsClosed: true},
-			want:    Decision{Next: Ready, Register: true, Reason: ReasonReadyGatePassed},
-		},
-		{
 			// Regression for Minor 2: the ready gate must not trust a green
 			// probe and agent alone. Task 8 should never send PodReady/AgentReady
 			// without PodExists/PodRunning, but this package must not depend on
@@ -103,15 +97,9 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Ready, Reason: ReasonReadyGatePassed},
 		},
 		{
-			name:    "a closed door keeps its place in the routing table",
-			current: Ready,
-			in:      Inputs{PodExists: true, PodRunning: true, PodReady: true, AgentReady: true, JoinsClosed: true, Registered: true},
-			want:    Decision{Next: Ready, Reason: ReasonReadyGatePassed},
-		},
-		{
 			name:    "a server that has ended its round leaves it",
 			current: Ready,
-			in:      Inputs{PodExists: true, PodRunning: true, PodReady: true, AgentReady: true, JoinsClosed: true, RoundEnded: true, Registered: true},
+			in:      Inputs{PodExists: true, PodRunning: true, PodReady: true, AgentReady: true, RoundEnded: true, Registered: true},
 			want:    Decision{Next: Ready, Deregister: true, Reason: ReasonRoundFinished},
 		},
 		{
@@ -911,36 +899,8 @@ func TestRescueWindowUsesWhatTheProxyReported(t *testing.T) {
 	}
 }
 
-// The door a server shuts on itself used to be the one thing here that
-// changed what the proxies have. It no longer does -- only the round's end
-// takes a server out of the table now; see the Ready branch of Decide.
-
-func TestAClosedDoorStaysInTheRoutingTable(t *testing.T) {
+func TestAnUnregisteredServerRegistersAgain(t *testing.T) {
 	in := healthyReady()
-	in.JoinsClosed = true
-
-	got := Decide(Ready, in)
-
-	if got.Next != Ready {
-		t.Errorf("Next = %v, want Ready", got.Next)
-	}
-	if got.Deregister {
-		t.Error("a server that only closed its door was taken out of the routing tables")
-	}
-	if got.StartDrain {
-		t.Error("a server that only closed its door had its players moved")
-	}
-	if got.Reason != ReasonReadyGatePassed {
-		t.Errorf("Reason = %q, want %q: the door alone is not an event Decide reports",
-			got.Reason, ReasonReadyGatePassed)
-	}
-}
-
-func TestAClosedDoorDoesNotKeepAServerOutOfTheTable(t *testing.T) {
-	// Table membership now follows the round alone: a server that fell out of
-	// it for any other reason comes back even while its door stays shut.
-	in := healthyReady()
-	in.JoinsClosed = true
 	in.Registered = false
 
 	got := Decide(Ready, in)
@@ -954,29 +914,10 @@ func TestAClosedDoorDoesNotKeepAServerOutOfTheTable(t *testing.T) {
 	}
 }
 
-func TestAnOpenedDoorRegistersAgain(t *testing.T) {
-	// The way back, which is the whole difference between this and retiring.
+func TestRetiringWinsOverRegistering(t *testing.T) {
+	// If the register branch spoke first, a retiring server that is not in
+	// the table would be put back on its way out.
 	in := healthyReady()
-	in.JoinsClosed = false
-	in.Registered = false
-
-	got := Decide(Ready, in)
-
-	if !got.Register {
-		t.Error("a server that opened its door again was not put back in the routing tables")
-	}
-	if got.Next != Ready {
-		t.Errorf("Next = %v, want Ready", got.Next)
-	}
-}
-
-func TestRetiringWinsOverAClosedDoor(t *testing.T) {
-	// A retiring server is going away. If the door branch could speak first,
-	// a server that had closed its door and was then retired would report the
-	// smaller of the two facts -- and one that had *opened* its door would be
-	// registered again on its way out.
-	in := healthyReady()
-	in.JoinsClosed = false
 	in.Registered = false
 	in.RetirementRequested = true
 
@@ -984,36 +925,5 @@ func TestRetiringWinsOverAClosedDoor(t *testing.T) {
 
 	if got.Next != Retiring || !got.Deregister {
 		t.Errorf("got %+v, want a retiring server to be deregistered and stay retiring", got)
-	}
-}
-
-func TestTheGateRegistersAServerEvenWhileItsDoorIsShut(t *testing.T) {
-	// The door governs joins, not table membership: a plugin that closes it
-	// while still starting must not be met with deregistration once it comes
-	// up -- it belongs in the table like any other server, and the door
-	// alone decides whether its seats count as capacity.
-	in := Inputs{
-		PodExists: true, PodRunning: true, PodReady: true, AgentReady: true,
-		JoinsClosed: true,
-	}
-
-	got := Decide(Starting, in)
-
-	want := Decision{Next: Ready, Register: true, Reason: ReasonReadyGatePassed}
-	if got.Next != want.Next || !got.Register || got.Reason != want.Reason {
-		t.Errorf("Decide(Starting, closed door) = %+v, want %+v", got, want)
-	}
-}
-
-func TestTheGateRegistersWhenNobodyClosedTheDoor(t *testing.T) {
-	// The default matters on its own: a network that never calls acceptJoins
-	// must decide exactly what it decided before the door existed at all.
-	in := Inputs{PodExists: true, PodRunning: true, PodReady: true, AgentReady: true}
-
-	got := Decide(Starting, in)
-
-	want := Decision{Next: Ready, Register: true, Reason: ReasonReadyGatePassed}
-	if got.Next != want.Next || !got.Register || got.Reason != want.Reason {
-		t.Errorf("Decide(Starting, open door) = %+v, want %+v", got, want)
 	}
 }
