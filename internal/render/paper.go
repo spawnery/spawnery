@@ -358,7 +358,7 @@ func parseProperties(fragment string) map[string]string {
 		if !found {
 			continue
 		}
-		out[strings.TrimSpace(key)] = strings.TrimSpace(value)
+		out[unescapeProperty(strings.TrimSpace(key))] = unescapeProperty(strings.TrimSpace(value))
 	}
 	return out
 }
@@ -377,7 +377,71 @@ func writeProperties(props map[string]string) string {
 
 	var b strings.Builder
 	for _, k := range keys {
-		fmt.Fprintf(&b, "%s=%s\n", k, props[k])
+		fmt.Fprintf(&b, "%s=%s\n", escapeProperty(k), escapeProperty(props[k]))
+	}
+	return b.String()
+}
+
+// escapeProperty writes one key or value in java.util.Properties syntax.
+//
+// Without it a value ending in a backslash -- ordinary in a MOTD -- reads as
+// a line continuation to Java, and the key on the next line, which the sort
+// makes online-mode after motd, silently disappears into the value. A key
+// cannot carry '=' -- the overlay parser cuts at the first one and the
+// operator's own keys are constants -- so keys and values escape alike.
+func escapeProperty(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		switch {
+		case r == '\\':
+			b.WriteString(`\\`)
+		case r == '\n':
+			b.WriteString(`\n`)
+		case r == '\r':
+			b.WriteString(`\r`)
+		case r == '\t':
+			b.WriteString(`\t`)
+		case r == '\f':
+			b.WriteString(`\f`)
+		case i == 0 && r == ' ':
+			// Java strips leading whitespace from a value.
+			b.WriteString(`\ `)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// unescapeProperty is escapeProperty's inverse, and the reason the overlay a
+// person writes is read the way Java would read it: `\\` is one backslash
+// and `\n` a line break, so a value survives the round trip through
+// writeProperties unchanged. An unknown escape drops its backslash, as Java's
+// does; a backslash at the very end is kept as a character rather than read
+// as a continuation, because the parser is line-based.
+func unescapeProperty(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\\' || i+1 == len(s) {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		switch s[i] {
+		case 'n':
+			b.WriteByte('\n')
+		case 'r':
+			b.WriteByte('\r')
+		case 't':
+			b.WriteByte('\t')
+		case 'f':
+			b.WriteByte('\f')
+		default:
+			b.WriteByte(s[i])
+		}
 	}
 	return b.String()
 }
