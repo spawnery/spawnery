@@ -668,8 +668,18 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// No pending retry, so BackingOff is false — but an all-clear
 		// reason here would be a lie, so it carries the real one.
 		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
+		// The advice names a field rather than saying "the spec", because the
+		// group most likely to be reading this has already fixed what was
+		// wrong. A bad spec.configOverlay kills every server it starts, and
+		// correcting the ConfigMap moves neither the overlay into the pod hash
+		// nor the group's generation -- so the one edit that removed the cause
+		// is the one edit that cannot lift the latch. spec.attributes shapes
+		// no pod and is in no hash, so editing it starts the retry and
+		// replaces nothing that is running.
 		backingOff.Message = fmt.Sprintf(
-			"not retrying: %d rounds of server starts failed in a row; change the group's spec to try again",
+			"not retrying: %d rounds of server starts failed in a row; change the group's spec to try again "+
+				"— any edit to it clears the streak, and spec.attributes shapes no pod, so editing that one "+
+				"retries without replacing a running server",
 			group.Status.ConsecutiveFailures)
 		degraded.Status = metav1.ConditionTrue
 		degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
