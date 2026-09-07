@@ -31,7 +31,7 @@ import (
 func ready(name string, players, slots int32) ServerView {
 	return ServerView{
 		Name: name, Phase: phase.Ready, Players: players, Slots: slots,
-		WasRegistered: true,
+		WasRegistered: true, Registered: true,
 	}
 }
 
@@ -107,11 +107,11 @@ func TestDecideSizeCreditsCapacityThatIsOrderedButNotArrived(t *testing.T) {
 				Views: []ServerView{
 					{
 						Name: "stale", Phase: phase.Ready, Slots: 100, Players: 80,
-						WasRegistered: true, PodHash: "old",
+						WasRegistered: true, Registered: true, PodHash: "old",
 					},
 					{
 						Name: "current", Phase: phase.Ready, Slots: 100, Players: 80,
-						WasRegistered: true, PodHash: "current",
+						WasRegistered: true, Registered: true, PodHash: "current",
 					},
 				},
 				PodHash:     "current",
@@ -1625,5 +1625,69 @@ func TestAGroupWhoseEveryServerIsPlayingBuildsARoom(t *testing.T) {
 
 	if got := decideSize(in).Create; got < 1 {
 		t.Errorf("create = %d, want at least 1 — nobody can join either running round", got)
+	}
+}
+
+// The demand rule judges a removal against capacity that exists, and the
+// round lifecycle taught the scale-up side what a reachable seat is without
+// teaching this side. Two servers in a round and one open, empty server: the
+// scale-up rule reads 80 free seats and builds nothing, and the demand rule
+// used to read 236, subtract the open server's 80 and delete it -- the only
+// server anybody could join -- then order it back on the next pass.
+func TestDemandDoesNotShedTheOnlyJoinableServer(t *testing.T) {
+	a := ready("a", 2, 80)
+	a.JoinsClosed = true
+	b := ready("b", 2, 80)
+	b.JoinsClosed = true
+	in := ScalingInputs{
+		MinReplicas: 1, MaxReplicas: 10, MaxPlayers: 80, SpareSlots: 80,
+		Stabilization: time.Minute,
+		Views:         []ServerView{a, b, empty("c", 80, 5*time.Minute)},
+	}
+
+	got := DecideSize(in)
+
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: c is the only server whose door is open", got.Delete)
+	}
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0: c's 80 seats satisfy the spare", got.Create)
+	}
+}
+
+func TestReadyContributionReadsTheSameDoorAsAggregateGroup(t *testing.T) {
+	closed := ready("a", 2, 80)
+	closed.JoinsClosed = true
+	if got := readyContribution(closed); got != 0 {
+		t.Errorf("readyContribution = %d, want 0 behind a closed door", got)
+	}
+	dropped := ready("a", 2, 80)
+	dropped.Registered = false
+	if got := readyContribution(dropped); got != 0 {
+		t.Errorf("readyContribution = %d, want 0 for a server the proxies do not have", got)
+	}
+	if got := readyContribution(ready("a", 2, 80)); got != 78 {
+		t.Errorf("readyContribution = %d, want 78 for an open, registered server", got)
+	}
+}
+
+// A Ready server that loses its probe while its agent stream stays up goes to
+// Starting and is deregistered, with its counts still known. Crediting its
+// seats tells the scale-up rule that capacity exists which no proxy routes to,
+// and the group builds nothing for up to the whole startup deadline. What
+// separates it from a server that is genuinely starting -- credited in full,
+// see TestProvisionalCapacityStillCreditsAStartingServer -- is that this one
+// has been in the tables before.
+func TestProvisionalCapacityDoesNotCreditAServerTheProxiesDropped(t *testing.T) {
+	dropped := ServerView{
+		Name: "a", Phase: phase.Starting, Slots: 80, Players: 5,
+		WasRegistered: true, Registered: false,
+	}
+	if got := provisionalCapacity(dropped, 80); got != 0 {
+		t.Errorf("provisionalCapacity = %d, want 0 for a server the proxies dropped", got)
+	}
+	dropped.Registered = true
+	if got := provisionalCapacity(dropped, 80); got != 75 {
+		t.Errorf("provisionalCapacity = %d, want 75 once the proxies have it again", got)
 	}
 }
