@@ -3031,4 +3031,15 @@ func TestTheMirroredCountIsClampedToTheGroupsCapacity(t *testing.T) {
 	if srv.Status.Slots != 80 {
 		t.Errorf("status.slots = %d, want the group's 80", srv.Status.Slots)
 	}
+
+	// A server whose group is gone reconciles against fallbackGroup, which
+	// has no maxPlayers; clampReport would floor that to 1 and rewrite a
+	// server with fifteen players as 1/1 for as long as the object lives.
+	gone := &spawneryv1alpha1.Server{}
+	r.mirrorPlayerCount(gone, agent.Snapshot{Known: true, Players: 15, Slots: 20}, 0,
+		metav1.NewTime(time.Now()))
+	if gone.Status.Players != 15 || gone.Status.Slots != 20 {
+		t.Errorf("status = %d/%d without a group, want the report's 15/20 unclamped",
+			gone.Status.Players, gone.Status.Slots)
+	}
 }

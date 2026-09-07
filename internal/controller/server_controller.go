@@ -1085,8 +1085,13 @@ func (r *ServerReconciler) mirrorPlayerCount(
 	}
 	// Clamped like the scaler's view, because the status is not only read by
 	// people: netstate carries it into every agent's picture and the connect
-	// router picks a group's target by slots minus players.
-	players, slots := clampReport(snap.Players, snap.Slots, maxPlayers)
+	// router picks a group's target by slots minus players. Zero is the
+	// fallback group standing in for one that is gone; it carries no
+	// capacity, so there is nothing to clamp to and the report stands.
+	players, slots := snap.Players, snap.Slots
+	if maxPlayers > 0 {
+		players, slots = clampReport(players, slots, maxPlayers)
+	}
 	significant := players != srv.Status.Players || slots != srv.Status.Slots
 	overdue := srv.Status.PlayersUpdatedAt == nil ||
 		now.Sub(srv.Status.PlayersUpdatedAt.Time) >= r.PlayerStatusInterval
