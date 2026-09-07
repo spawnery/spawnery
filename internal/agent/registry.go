@@ -509,12 +509,11 @@ func (r *Registry) Roster(namespace string) ([]RosterEntry, bool) {
 // # Why this exists beside the backend's own count
 //
 // A backend counts a player only once they have finished the configuration
-// phase. Disassembling velocity 3.5.1 build 615,
-// VelocityRegisteredServer.addPlayer is called from exactly one place --
-// BackendPlaySessionHandler.activated(), the backend's *play* phase -- so a
-// player still handshaking is invisible to the backend and to the proxy's own
-// getPlayersConnected() alike. The drain's exit condition read the first of
-// those and deleted the pod under such a player.
+// phase: Velocity calls VelocityRegisteredServer.addPlayer from exactly one
+// place, BackendPlaySessionHandler.activated(), the backend's *play* phase --
+// so a player still handshaking is invisible to the backend and to the proxy's
+// own getPlayersConnected() alike, and a drain reading either would delete the
+// pod under them.
 //
 // # How a caller must use it
 //

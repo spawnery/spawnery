@@ -30,8 +30,8 @@ import (
 // # What this reproduces, and what it does not
 //
 // It is the shape of a peer that is gone without the transport having noticed,
-// which docs/known-issues.md measured at over 200 seconds and twice not at all
-// within 213. It is not the same fault. A real black hole drops packets, so
+// which TCP takes minutes to conclude on a default Linux. It is not the same
+// fault, though. A real black hole drops packets, so
 // the agent's own TCP gets no acknowledgements either and eventually gives up
 // on its own; here the stub's kernel goes on acknowledging, so nothing under
 // the agent will ever end the wait. That makes this the harsher half of the

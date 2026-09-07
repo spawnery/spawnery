@@ -17,24 +17,15 @@ limitations under the License.
 // Package serverreg is every live backend session, and the path the operator
 // uses to send one anything.
 //
-// Until this package existed there was no such path. ServerSession sent a
-// ReportInterval and a SessionDeadline when a stream opened and never sent
-// again; internal/proxyreg.Fleet, with its Join, broadcast, snapshot and
-// Resync, has always been the proxies' alone.
-//
 // # The session machinery here is Fleet's, duplicated rather than extracted
-//
-// This comment is the argument, not an apology for one.
 //
 // Fleet is eighteen functions and they split almost exactly in half. Nine are
 // this machinery -- New, Join, leave, close, send, broadcast, Resync, Start,
 // NeedLeaderElection. Nine are the proxy protocol: fallback lists, drain
 // orders, registered-server construction, the lastReady memo, and a snapshot
 // scoped to one group rather than a namespace. A backend needs none of the
-// second half. A generic carrying the proxy's per-session hooks would be a
-// parameterised version of the harder case serving the easier one, and
-// building it would have put a refactor of the drain's delivery path inside a
-// milestone about reporting.
+// second half, so a generic carrying the proxy's per-session hooks would be a
+// parameterised version of the harder case serving the easier one.
 //
 // What is genuinely shared is the picture, and the picture *is* shared: both
 // packages build theirs through netstate.Source, so the two cannot come to
