@@ -208,6 +208,14 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 	if v.JoinsClosed {
 		return 0
 	}
+	// A server the proxies had and no longer have -- a lost probe with the
+	// agent stream still up, a round that ended -- is not capacity on its way
+	// either, however healthy its counts look. WasRegistered is what tells it
+	// apart from a server that is genuinely starting and has never been in
+	// the tables, which the Slots == 0 credit below is for.
+	if v.WasRegistered && !v.Registered {
+		return 0
+	}
 	// Before the Slots == 0 credit below, and not merged into it: a server
 	// whose pod is gone reads exactly like one that has never reported, and
 	// only this flag tells them apart. Testing Stale here instead would be a
@@ -297,7 +305,7 @@ func deletable(in ScalingInputs) []ServerView {
 // group's spec, because the whole group would read as stale and contribute
 // nothing.
 func readyContribution(v ServerView) int32 {
-	if v.Phase != phase.Ready || v.Stale {
+	if v.Phase != phase.Ready || v.Stale || !v.Registered || v.JoinsClosed {
 		return 0
 	}
 	if free := v.Slots - v.Players; free > 0 {
