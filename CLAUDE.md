@@ -81,6 +81,8 @@ Three numbers move independently and each is commented at length where it lives:
 
 A `v*` tag runs `.github/workflows/release.yml`, which publishes only the artefacts whose tag is new and refuses to overwrite existing ones. Gaps in the sequences are deliberate. Before tagging, check CI on master: `gh run list --workflow=ci.yml --limit 3`.
 
+**Which number moves is SemVer, decided on 2026-09-08.** The release number takes a **minor** step for a change in behaviour -- a new or changed CRD field, a method added to the Java API, a decision the operator now makes differently, whether or not an installation has to do anything about it and whether or not it is visible at once. It takes a **patch** step for fixes, comments, docs and bounds. Releases up to 0.2.34 counted everything as a patch; that is not a precedent.
+
 ## Conventions
 
 - **Commits are Conventional Commits** with a scope naming the part touched: `feat(podspec): …`, `fix(api): …`, `chore: 0.2.24, …`. The subject says what changed; the body says why, wrapped at 72 columns. Older plans under `docs/superpowers/plans/` say "no prefixes"; that rule is superseded.
