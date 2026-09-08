@@ -880,3 +880,20 @@ func TestARoundEndIsRememberedAfterTheStreamDrops(t *testing.T) {
 		t.Error("the round end was forgotten when the stream dropped")
 	}
 }
+
+func TestAnUnknownPodIsMeasuredFromWhenAgentsCouldReachTheOperator(t *testing.T) {
+	r, clock := newTestRegistry()
+	clock.Advance(20 * time.Second) // leader election
+	r.MarkServing()
+	clock.Advance(3 * time.Second)
+
+	if got := r.Lookup("never-seen").StreamDownFor; got != 3*time.Second {
+		t.Errorf("StreamDownFor = %v, want 3s since serving began, not 23s since the process started", got)
+	}
+	// Marked once: a second call must not restart the clock.
+	r.MarkServing()
+	clock.Advance(time.Second)
+	if got := r.Lookup("never-seen").StreamDownFor; got != 4*time.Second {
+		t.Errorf("StreamDownFor = %v after a second MarkServing, want 4s", got)
+	}
+}

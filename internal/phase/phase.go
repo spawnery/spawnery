@@ -61,6 +61,15 @@ const (
 	// down before the server counts as unplayable (design spec 4.4).
 	StreamDownGrace = 15 * time.Second
 
+	// ReconnectGrace is StreamDownGrace for a server the operator has not
+	// heard from since it began serving agents: the whole fleet dialling
+	// back in after an operator restart, not one server going quiet. The
+	// agent's own worst case rather than a number chosen between two harms:
+	// a 30 s backoff cap, plus its jitter, plus one report interval. Measured
+	// 2026-08-26, an agent greets again 12.5-17.8 s after the operator is
+	// back, so the 15 s above lost about half the fleet on every restart.
+	ReconnectGrace = 45 * time.Second
+
 	// FlapResetWindow is how long a server must stay Ready before its
 	// readiness-loss counter is forgiven.
 	FlapResetWindow = 10 * time.Minute
@@ -188,6 +197,11 @@ type Inputs struct {
 	// AgentStreamDownFor is how long the agent stream has been broken. Zero
 	// while the stream is up.
 	AgentStreamDownFor time.Duration
+	// AgentUnheard is true for a pod the operator has not heard from since
+	// it began serving agents, which after a restart is every pod. Such a
+	// stream is down because the operator was away, and it gets
+	// ReconnectGrace rather than StreamDownGrace.
+	AgentUnheard bool
 
 	// AgentSilent is true when the stream is up, the agent has reported before,
 	// and it has stopped. That is not the same state as a broken stream.
@@ -580,7 +594,11 @@ func Decide(current Phase, in Inputs) Decision {
 				// A broken stream is tolerated until the grace expires; the
 				// player count goes stale meanwhile, so the server counts as
 				// occupied and is protected from deletion either way.
-				lost = in.AgentStreamDownFor >= StreamDownGrace
+				grace := StreamDownGrace
+				if in.AgentUnheard {
+					grace = ReconnectGrace
+				}
+				lost = in.AgentStreamDownFor >= grace
 			}
 		}
 		if lost {

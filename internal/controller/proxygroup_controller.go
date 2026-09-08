@@ -718,18 +718,13 @@ func proxyPlayerNote(snap agent.Snapshot) string {
 // StreamDownFor as the time since the operator started, and inside
 // budgetReconnectGrace such a pod counts as occupied.
 
-// budgetReconnectGrace is how long an unknown pod is treated as occupied: the
-// agent's own worst case rather than a number chosen between two harms -- a
-// 30 s backoff cap, plus its jitter, plus one report interval before the agent
-// has said anything about players.
-//
-// Not phase.StreamDownGrace. That one answers how long a *known* server may go
-// silent before it is unplayable; this answers how long a *whole fleet* needs
-// to dial back in after the operator restarted, and nothing makes those the
-// same length. Too short a grace expires while the fleet is still
-// reconnecting, and an unknown pod outside it reads as unoccupied -- so
-// minAvailable is sized without pods that are Ready and full of players.
-const budgetReconnectGrace = 45 * time.Second
+// budgetReconnectGrace is how long an unknown pod is treated as occupied:
+// the fleet's reconnect time after an operator restart, which is the same
+// question the Server side's ready gate asks and gets the same answer. Too
+// short a grace expires while the fleet is still reconnecting, and an
+// unknown pod outside it reads as unoccupied -- so minAvailable is sized
+// without pods that are Ready and full of players.
+const budgetReconnectGrace = phase.ReconnectGrace
 
 func proxyOccupiedForBudget(snap agent.Snapshot) bool {
 	if !snap.Known && snap.StreamDownFor >= budgetReconnectGrace {
