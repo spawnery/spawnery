@@ -8,7 +8,7 @@ type: application
 # version bump alone. Since v0.2.14 this number is also the address people
 # install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
 # so it is no longer only what Flux names a packaged artifact after.
-version: 0.2.31
+version: 0.2.32
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
 # CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
@@ -86,7 +86,11 @@ version: 0.2.31
 # 0.2.31 zieht ihn mit, nur der Operator: der Neustart-Ueberbau aus 0.2.30
 # (ein zweiter Server je Gruppe fuer fuenf Minuten) ist weg. Keine CRD-Zeile,
 # kein Image.
-appVersion: "0.2.31"
+#
+# 0.2.32 zieht ihn mit, nur der Operator: ein Neustart nimmt keinen Server
+# mehr fuer fuenfzehn Sekunden aus den Proxy-Tabellen. Keine CRD-Zeile, kein
+# Image.
+appVersion: "0.2.32"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
 # +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec

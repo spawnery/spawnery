@@ -388,7 +388,15 @@
           # stale, and the door rule 0.2.30 added credited those nothing, so
           # every ephemeral group built a second server on every restart.
           # The rule now asks for fresh counts. No image, no CRD line moves.
-          operatorVersion = "0.2.31";
+          #
+          # 0.2.32 moves it alone, for the other thing 0.2.30's rollout showed:
+          # every operator restart took every server out of Ready for fifteen
+          # seconds, because an unknown pod's stream was measured as down
+          # since process start -- leader election alone took 19 s -- and
+          # against a grace meant for one server going quiet, not a fleet
+          # dialling back in. The clock starts when agents can reach the
+          # operator, and the fleet gets the 45 s the proxy side already had.
+          operatorVersion = "0.2.32";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
