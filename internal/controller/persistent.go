@@ -286,18 +286,19 @@ func ordinalConflicts(carrying map[int32][]string) []OrdinalConflict {
 // departing node and removes them all in a single pass, ungated by anything
 // here, so a node holding two ordinals takes two down -- and an ordinal this
 // rule nominated on an earlier pass can still be draining while that happens.
-// Deliberate and unthrottled since 4c-3, see docs/known-issues.md's "A node
-// holding a whole group empties it at once". So the one-at-a-time budget is a
-// statement about what this rule nominates, not about every way an ordinal
-// can go down.
+// Deliberate and unthrottled since 4c-3: the players on a departing node are
+// evicted off it whatever this rule decides, and moving them to a fallback
+// beats holding them on a node that is going away. So the one-at-a-time
+// budget is a statement about what this rule nominates, not about every way
+// an ordinal can go down.
 //
 // A view with a nil Ordinal is skipped, the same as every other pass over
 // in.Views in this file: DecidePersistentSize's own doc comment says a
 // nil-ordinal view "fills no ordinal, and it is not deleted as surplus" --
 // this rule removes what it can name, and something it cannot name is not
-// its to remove. See docs/known-issues.md's "A squatter can stall an
-// ordinal silently": without this, the same kind of object would stall every
-// ordinal's takedown instead of just its own.
+// its to remove. Such an object -- adopted, or made by hand without
+// spec.ordinal -- stalls the ordinal it sits on; without this skip it would
+// stall every ordinal's takedown instead of just its own.
 func takedownInFlight(in PersistentInputs) bool {
 	for _, v := range in.Views {
 		if v.Ordinal == nil {

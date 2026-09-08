@@ -26,9 +26,11 @@ in the next section — never deletes the `PersistentVolumeClaim` it mounted:
 operator calls `Delete` on a claim anywhere. That is not merely the observed
 behaviour, it is enforced structurally: the ClusterRole
 (`config/rbac/role.yaml`) grants `persistentvolumeclaims:
-create;get;list;watch` and nothing else, and `internal/rbacaudit/required.go`
-documents exactly those four verbs with a comment explaining why `delete` and
-`update` are absent on purpose. `internal/rbacaudit`'s tests compare the
+create;get;list;watch;patch` and nothing else — `patch` is `growClaim`'s,
+which touches a claim's requested size and no other field — and
+`internal/rbacaudit/required.go` documents exactly those five verbs with a
+comment explaining why `delete` and `update` are absent on purpose.
+`internal/rbacaudit`'s tests compare the
 generated role against that table in both directions — extra grants as well as
 missing ones — so a future `delete` marker added anywhere in the codebase
 turns the audit red before it can ship. A lowered `spec.replicas`, a group
@@ -101,7 +103,8 @@ as it stands rather than repeated from memory:
   controller takes it away. The empty-ordinal state is where this settles,
   roughly an hour later at the CRD default, not where it begins. The claim and
   the world on it are untouched throughout — nothing in this operator can
-  update or delete a claim, per the RBAC point above — and a spec change (any
+  delete a claim, and its one write grows a claim's size, per the RBAC point
+  above — and a spec change (any
   edit that moves `metadata.generation`) resets the counter and brings the
   ordinal back.
 

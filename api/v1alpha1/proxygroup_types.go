@@ -162,10 +162,10 @@ type ProxyConfigSpec struct {
 
 	// Motd is shown in the server list.
 	//
-	// Editing it does not replace the group's proxies. It reaches only the
-	// group's ConfigMap, which the pod names in a volume, so the new value
-	// applies to the next proxy pod and to no existing one -- cosmetic here,
-	// and not cosmetic on OnlineMode below, which behaves the same way.
+	// Editing it rolls the group's proxies: the rendered config values are
+	// part of the pod digest, so the change reaches every proxy through a
+	// replacement at the group's maxUnavailable pace rather than through a
+	// ConfigMap a running pod never re-reads.
 	// +optional
 	Motd string `json:"motd,omitempty"`
 
@@ -187,21 +187,9 @@ type ProxyConfigSpec struct {
 	// what the proxy forwards" and stays true either way: modern forwarding
 	// works the same whether the proxy authenticated the player or not.
 	//
-	// Editing it does not replace the group's proxies, and nothing on the
-	// object says so. Like Motd it reaches only the group's ConfigMap, which
-	// spawnery-config reads at container start, so a running proxy goes on
-	// authenticating players the old way while observedGeneration advances
-	// and the phase stays Ready -- every signal the API offers says the
-	// change is applied. PlayerLimit, its sibling under the same stanza,
-	// *does* roll the group, because it reaches the pod as an environment
-	// variable; nothing about the stanza distinguishes them and only
-	// internal/podspec/proxy.go does.
-	//
-	// After changing this, delete the group's proxy pods or edit a field that
-	// does roll it -- PlayerLimit is the cheapest. Leaving it is worse than it
-	// looks: a pod that restarts later for an unrelated reason picks the new
-	// value up on its own, so the group drifts into running both settings at
-	// once.
+	// Editing it rolls the group's proxies, like Motd and PlayerLimit: the
+	// config values are part of the pod digest, so no proxy runs the old
+	// setting once the roll is through, and the roll starts on the edit.
 	// +kubebuilder:default=true
 	// +optional
 	OnlineMode *bool `json:"onlineMode,omitempty"`
