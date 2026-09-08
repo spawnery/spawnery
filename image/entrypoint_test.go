@@ -726,6 +726,29 @@ func TestARegularFileNamedPluginsRefusesTheStart(t *testing.T) {
 	}
 }
 
+// eula.txt is the fourth writer the copy comment used to count three of:
+// the image writes it before the copy, and a claim carrying its own replaced
+// the acceptance with whatever the file said.
+func TestAClaimCarryingTheEULARefusesTheStart(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "volume")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "eula.txt"), []byte("eula=false\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source)
+
+	if err == nil {
+		t.Fatal("a source carrying eula.txt started anyway")
+	}
+	if !strings.Contains(out, "eula.txt") {
+		t.Errorf("the message does not name the file:\n%s", out)
+	}
+}
+
 // TestPaperDoesNotRefuseTheVelocityFiles is the mirror of
 // TestVelocityDoesNotRefuseThePaperFiles, and the half where the plausible
 // mistake actually lives: somebody adding lang/ to a shared list, or pasting
