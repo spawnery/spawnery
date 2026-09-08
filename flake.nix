@@ -268,7 +268,16 @@
           # had all along, and nothing in the operator binary changes. The
           # published API is identical to 0.2.28's and is republished under
           # this number for the reason the 0.2.21 paragraph gives.
-          imageVersion = "0.2.29";
+          #
+          # 0.2.30 moves it because the images changed: both entrypoints read
+          # the image's own directory under the reserved prefix
+          # (SPAWNERY_PAPER_HOME, SPAWNERY_VELOCITY_HOME), so spec.env can no
+          # longer point a server at another jar, and spawnery-config writes
+          # server.properties in Properties syntax, so a trailing backslash in
+          # an overlay value no longer swallows the next key. The published
+          # API is identical to 0.2.29's and is republished under this number
+          # for the reason the 0.2.21 paragraph gives.
+          imageVersion = "0.2.30";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -363,7 +372,17 @@
           # seats" rather than "stop routing too". docs/upgrading.md carries
           # the note, because that narrowing reaches agents built before this
           # release as well.
-          operatorVersion = "0.2.28";
+          #
+          # 0.2.30 moves it for the first time since 0.2.28, with the deep
+          # review of 2026-09-07 behind it: scale-down reads the same door as
+          # scale-up, so a group with servers in a round no longer deletes its
+          # only joinable server; the agent channel bounds what a proxy may
+          # report and clamps the mirrored count; proxy pods gain the fsGroup
+          # their writable claims need, which moves DesiredProxyHash and rolls
+          # every proxy once; and NodeDraining names the refusal that applies.
+          # The CRDs change in description text only. docs/upgrading.md
+          # carries the proxy roll.
+          operatorVersion = "0.2.30";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

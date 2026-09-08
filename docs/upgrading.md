@@ -887,7 +887,7 @@ rather than a minute or two later, and the six consecutive failures that latch
 a group into giving up -- which only a spec edit clears -- are reached roughly
 four times sooner on a broken image.
 
-## Every proxy rolls once: the pod gains an `fsGroup`
+## 0.2.30: every proxy rolls once, the pod gains an `fsGroup`
 
 The proxy pod's security context now carries `fsGroup: 10001` with
 `fsGroupChangePolicy: OnRootMismatch`, exactly as the server pod has since
