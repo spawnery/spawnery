@@ -102,10 +102,10 @@ func (stubFleet) SetInterest(string, bool) {}
 func TestTheOpeningSendsAreBounded(t *testing.T) {
 	t.Run("a send that finishes hands its result straight back", func(t *testing.T) {
 		want := errors.New("the stream broke")
-		if got := sendBounded(time.Minute, func() error { return want }); !errors.Is(got, want) {
+		if got := sendBounded(time.Minute, "a message", func() error { return want }); !errors.Is(got, want) {
 			t.Errorf("err = %v, want %v — a real send error must not be reported as a timeout", got, want)
 		}
-		if got := sendBounded(time.Minute, func() error { return nil }); got != nil {
+		if got := sendBounded(time.Minute, "a message", func() error { return nil }); got != nil {
 			t.Errorf("err = %v, want nil", got)
 		}
 	})
@@ -137,7 +137,7 @@ func TestTheOpeningSendsAreBounded(t *testing.T) {
 		}()
 
 		start := time.Now()
-		err := sendBounded(20*time.Millisecond, func() error {
+		err := sendBounded(20*time.Millisecond, "a message", func() error {
 			<-release
 			close(finished)
 			return nil

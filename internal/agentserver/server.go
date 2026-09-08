@@ -68,6 +68,15 @@ const (
 	// resources. grpc-go's default is two minutes.
 	ConnectionTimeout = 30 * time.Second
 
+	// SendDeadline bounds one send inside a session loop. stream.Send
+	// blocks on the client's flow-control window and observes no context,
+	// so an agent that stops reading holds the handler -- and with it the
+	// registry entry, the queued messages and the OpenStreams gauge -- for
+	// as long as the TCP connection lives, past the hard deadline the
+	// select never gets to see. Every message on this channel is small; an
+	// agent that has not drained a window in thirty seconds is wedged.
+	SendDeadline = 30 * time.Second
+
 	// MaxMessageBytes is the largest message an agent may send. grpc-go's
 	// default is 4 MiB; the largest thing an agent has to say is a roster at
 	// RosterMaxEntries, under half a megabyte, and a message the size of the
@@ -95,7 +104,8 @@ const (
 	// broken stream, which phase tolerates for StreamDownGrace and which does
 	// *not* carry StartDrain -- so the twenty-second window for moving players
 	// off a backend that will never answer again would be traded for a socket
-	// closed sooner. HardDeadline already bounds how long that socket can lie.
+	// closed sooner. SendDeadline and HardDeadline bound how long that socket
+	// can lie.
 	//
 	// The agent is the end with no application signal, because nothing arrives
 	// on a healthy stream between one operator instruction and the next. That
@@ -434,7 +444,7 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 			return err
 		case msg := <-received:
 			if answer := s.handle(ctx, logger, id, msg); answer != nil {
-				if err := stream.Send(answer); err != nil {
+				if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
 					return err
 				}
 			}
@@ -453,7 +463,7 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 				// the reconnect rebuilds it from a fresh state.
 				return status.Error(codes.ResourceExhausted, "server fell behind, reconnect for a fresh state")
 			}
-			if err := stream.Send(msg); err != nil {
+			if err := sendBounded(SendDeadline, "a message", func() error { return stream.Send(msg) }); err != nil {
 				return err
 			}
 		}
@@ -481,7 +491,7 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 // That one character is reasoned rather than tested, and deliberately -- see
 // TestTheOpeningSendsAreBounded for why no assertion in this package can
 // observe it without a goroutine count that would make the suite flaky.
-func sendBounded(deadline time.Duration, send func() error) error {
+func sendBounded(deadline time.Duration, what string, send func() error) error {
 	sent := make(chan error, 1)
 	go func() { sent <- send() }()
 	select {
@@ -489,7 +499,7 @@ func sendBounded(deadline time.Duration, send func() error) error {
 		return err
 	case <-time.After(deadline):
 		return status.Errorf(codes.DeadlineExceeded,
-			"the agent did not read its opening messages within %s", deadline)
+			"the agent did not read %s within %s", what, deadline)
 	}
 }
 
@@ -549,7 +559,7 @@ func (s *Server) sessionPrologue(streamCtx context.Context, role agent.Role, sen
 	}
 	OpenStreams.WithLabelValues(string(role)).Inc()
 
-	if err := sendBounded(s.opts.HardDeadline, sendFixed); err != nil {
+	if err := sendBounded(s.opts.HardDeadline, "its opening messages", sendFixed); err != nil {
 		OpenStreams.WithLabelValues(string(role)).Dec()
 		leave()
 		return grpcauth.Identity{}, logr.Logger{}, nil, nil, err
@@ -658,7 +668,7 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 			return err
 		case msg := <-received:
 			if answer := s.handleProxy(ctx, logger, id, msg); answer != nil {
-				if err := stream.Send(answer); err != nil {
+				if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
 					return err
 				}
 			}
@@ -680,7 +690,7 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 				// a partial server list is worse than a reconnect.
 				return status.Error(codes.ResourceExhausted, "proxy fell behind, reconnect for a fresh sync")
 			}
-			if err := stream.Send(msg); err != nil {
+			if err := sendBounded(SendDeadline, "a message", func() error { return stream.Send(msg) }); err != nil {
 				return err
 			}
 		}
