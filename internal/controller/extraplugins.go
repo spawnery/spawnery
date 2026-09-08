@@ -22,6 +22,8 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -58,7 +60,13 @@ func checkExtraPlugins(
 			false
 	}
 
-	if problem, ok := checkClaimMountable(ctx, reader, namespace, ep.ClaimName); !ok {
+	problem, ok, err := checkClaimMountable(ctx, reader, namespace, ep.ClaimName)
+	if err != nil {
+		return reasonClaimUnreadable,
+			fmt.Sprintf("spec.extraPlugins names claim %q, which could not be read: %v", ep.ClaimName, err),
+			false
+	}
+	if !ok {
 		return spawneryv1alpha1.ReasonPluginVolumeUnusable,
 			fmt.Sprintf("spec.extraPlugins names claim %q, which %s", ep.ClaimName, problem),
 			false
@@ -115,25 +123,29 @@ func checkClaimMountable(
 	reader client.Reader,
 	namespace string,
 	claimName string,
-) (string, bool) {
+) (string, bool, error) {
 	var pvc corev1.PersistentVolumeClaim
 	err := reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: claimName}, &pvc)
 	switch {
 	case apierrors.IsNotFound(err):
-		return "does not exist in this namespace", false
+		return "does not exist in this namespace", false, nil
 	case err != nil:
-		return fmt.Sprintf("could not be read: %v", err), false
+		// Not a verdict. The reader is uncached, so this is an API server
+		// that did not answer, and a group must not be emptied on the
+		// strength of one missed round trip -- nodeDeparting makes the same
+		// choice for a cache miss.
+		return "", false, err
 	}
 
 	// The whole list, not the first entry: a claim may carry several modes,
 	// and one that is both RWO and RWX is mountable by every node.
 	for _, m := range pvc.Spec.AccessModes {
 		if m == corev1.ReadWriteMany {
-			return "", true
+			return "", true, nil
 		}
 	}
 	return fmt.Sprintf("has access modes %v; every pod of a group mounts it, "+
-		"which needs ReadWriteMany", pvc.Spec.AccessModes), false
+		"which needs ReadWriteMany", pvc.Spec.AccessModes), false, nil
 }
 
 // checkMountClaims decides whether the claims a group's spec.mounts names can
@@ -173,7 +185,14 @@ func checkMountClaims(
 					m.Name, m.PersistentVolumeClaim.ClaimName),
 				false
 		}
-		if problem, ok := checkClaimMountable(ctx, reader, namespace, m.PersistentVolumeClaim.ClaimName); !ok {
+		problem, ok, err := checkClaimMountable(ctx, reader, namespace, m.PersistentVolumeClaim.ClaimName)
+		if err != nil {
+			return reasonClaimUnreadable,
+				fmt.Sprintf("mount %q names claim %q, which could not be read: %v",
+					m.Name, m.PersistentVolumeClaim.ClaimName, err),
+				false
+		}
+		if !ok {
 			return spawneryv1alpha1.ReasonMountVolumeUnusable,
 				fmt.Sprintf("mount %q names claim %q, which %s",
 					m.Name, m.PersistentVolumeClaim.ClaimName, problem),
@@ -181,4 +200,37 @@ func checkMountClaims(
 		}
 	}
 	return "", "", true
+}
+
+// reasonClaimUnreadable is checkGroupVolumes' answer when the API server did
+// not answer about a claim. It reaches no condition: keepLastVolumeDecision
+// turns it into whatever the group was last told.
+const reasonClaimUnreadable = "ClaimUnreadable"
+
+// keepLastVolumeDecision replaces a "could not read" verdict with the
+// group's previous one. A group that was accepted stays accepted; one that
+// was refused for a claim keeps the refusal and its message, so a refusal is
+// not lifted by an outage either. The round trip is retried on the next
+// pass, which is seconds away.
+func keepLastVolumeDecision(
+	conditions []metav1.Condition, reason, message string, ok bool,
+) (string, string, bool) {
+	if reason != reasonClaimUnreadable {
+		return reason, message, ok
+	}
+	c := meta.FindStatusCondition(conditions, spawneryv1alpha1.ConditionAccepted)
+	if c != nil && c.Status == metav1.ConditionFalse && isVolumeReason(c.Reason) {
+		return c.Reason, c.Message, false
+	}
+	return "", "", true
+}
+
+func isVolumeReason(reason string) bool {
+	switch reason {
+	case spawneryv1alpha1.ReasonPluginVolumeUnusable, spawneryv1alpha1.ReasonPluginVolumesDisabled,
+		spawneryv1alpha1.ReasonFileVolumeUnusable, spawneryv1alpha1.ReasonFileVolumesDisabled,
+		spawneryv1alpha1.ReasonMountVolumeUnusable, spawneryv1alpha1.ReasonMountVolumesDisabled:
+		return true
+	}
+	return false
 }

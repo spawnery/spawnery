@@ -178,6 +178,12 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		ctx, r.ClaimReader, group.Namespace,
 		group.Spec.ExtraPlugins, group.Spec.ExtraFiles, group.Spec.Mounts,
 		r.AllowPluginVolumes, r.AllowFileVolumes, r.AllowMountVolumes)
+	if volumeReason == reasonClaimUnreadable {
+		logger.Info("a claim could not be read; keeping the group's last decision",
+			"group", group.Name, "problem", volumeMessage)
+		volumeReason, volumeMessage, volumesOK = keepLastVolumeDecision(
+			group.Status.Conditions, volumeReason, volumeMessage, volumesOK)
+	}
 
 	// Only meaningful once the Network is there; the switch below reaches
 	// this case after the Network ones, so a nil network is never asked.
@@ -262,29 +268,20 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// before the first pod; failing here returns before createServer runs,
 	// which is what makes that a guarantee and not just where the calls
 	// happen to be written.
+	// A foreign ConfigMap at the rendered name stops this group creating
+	// servers, and nothing else: the pass goes on, because the budget and a
+	// departing node do not depend on who owns a ConfigMap, and returning
+	// here used to freeze minAvailable while the occupied labels moved on.
+	// The Degraded condition is written with the others below, where the
+	// backoff would otherwise overwrite it. Requeued rather than left to a
+	// watch: the colliding object carries no owner reference back here.
+	foreignConfigMap := false
 	if err := r.reconcileConfigMap(ctx, group); err != nil {
-		// The one error here that is a state rather than a failure, and it
-		// needs saying on the object: nothing this group does afterwards can
-		// work, and a bare error would requeue in silence for as long as the
-		// collision stood. Status is written on this path and nowhere else
-		// before the end of Reconcile, because this is the only early return
-		// that leaves the group permanently unable to proceed.
-		if errors.Is(err, errForeignConfigMap) {
-			name := podspec.GroupConfigMapName(group.Name, podspec.RoleServer)
-			meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
-				Type:    spawneryv1alpha1.ConditionDegraded,
-				Status:  metav1.ConditionTrue,
-				Reason:  spawneryv1alpha1.ReasonConfigMapNotOurs,
-				Message: foreignConfigMapMessage(group.Namespace, name),
-			})
-			group.Status.Phase = "Degraded"
-			// Requeued rather than left to a watch. The ConfigMap this waits
-			// on is one the operator does not own, so it carries no owner
-			// reference back to this group and no watch this controller sets
-			// up will fire when somebody finally deletes it.
-			return ctrl.Result{RequeueAfter: networkRetryInterval}, r.Status().Update(ctx, group)
+		if !errors.Is(err, errForeignConfigMap) {
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, err
+		foreignConfigMap = true
+		requeue = networkRetryInterval
 	}
 
 	views, servers, err := r.collectViews(ctx, group)
@@ -442,7 +439,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// and the group would look like a scheduling problem rather than a spec
 	// one. Setting the condition without this would decorate the group and
 	// change nothing it does.
-	mayResize := networkUsable && volumesOK && schedulingOK
+	mayResize := networkUsable && volumesOK && schedulingOK && !foreignConfigMap
 
 	// The NodeDraining condition, with what stops this group rebuilding what
 	// it is about to condemn.
@@ -669,6 +666,12 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Message: "servers are starting normally",
 	}
 	switch {
+	case foreignConfigMap:
+		name := podspec.GroupConfigMapName(group.Name, podspec.RoleServer)
+		degraded.Status = metav1.ConditionTrue
+		degraded.Reason = spawneryv1alpha1.ReasonConfigMapNotOurs
+		degraded.Message = foreignConfigMapMessage(group.Namespace, name)
+		backingOff.Message = "backoff is not being decided: the group cannot write its own configuration"
 	// Before !sized, deliberately.
 	//
 	// Both messages are true of a group that has given up while its Network is
