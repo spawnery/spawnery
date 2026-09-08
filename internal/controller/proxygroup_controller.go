@@ -263,10 +263,16 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// rather than decorating it: every proxy would otherwise sit Pending on a
 	// volume that will not attach, and the group would look like a scheduling
 	// problem rather than a spec one.
-	if reason, message, ok := checkGroupVolumes(
+	reason, message, ok := checkGroupVolumes(
 		ctx, r.ClaimReader, group.Namespace,
 		group.Spec.ExtraPlugins, group.Spec.ExtraFiles, group.Spec.Mounts,
-		r.AllowPluginVolumes, r.AllowFileVolumes, r.AllowMountVolumes); !ok {
+		r.AllowPluginVolumes, r.AllowFileVolumes, r.AllowMountVolumes)
+	if reason == reasonClaimUnreadable {
+		log.FromContext(ctx).Info("a claim could not be read; keeping the group's last decision",
+			"group", group.Name, "problem", message)
+		reason, message, ok = keepLastVolumeDecision(group.Status.Conditions, reason, message, ok)
+	}
+	if !ok {
 		// Announced on the transition only, following the rule
 		// network_controller.go states: this runs on every pass for as long as
 		// the claim is wrong, and an event per resync forever is not a report,
@@ -354,13 +360,11 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Message: foreignConfigMapMessage(group.Namespace, name),
 		})
 		group.Status.Phase = "Degraded"
-		if werr := r.writeStatus(ctx, group); werr != nil {
-			log.FromContext(ctx).Error(werr, "recording the group's status")
-		}
-		// Requeued rather than left to a watch: the colliding ConfigMap is not
-		// owned by this group, so no owner reference leads back here and no
-		// watch fires when somebody deletes it.
-		return ctrl.Result{RequeueAfter: networkRetryInterval}, nil
+		// refuse, like the other refusals: the budget and a departing node do
+		// not depend on who owns a ConfigMap. It writes the status and
+		// requeues rather than leaving this to a watch, because the colliding
+		// object carries no owner reference back here.
+		return r.refuse(ctx, group)
 	}
 
 	// The status is written wherever the pods and the Service were actually

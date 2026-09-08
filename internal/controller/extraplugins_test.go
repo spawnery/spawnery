@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -164,5 +165,44 @@ func TestAClaimWithSeveralModesIsAcceptedIfOneIsReadWriteMany(t *testing.T) {
 	if _, _, ok := checkExtraPlugins(context.Background(), c, "minecraft",
 		&spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"}, true); !ok {
 		t.Error("a claim listing ReadWriteMany among its modes was refused")
+	}
+}
+
+// failingReader answers every Get with the error it was given; a fake client
+// cannot be told to fail, and the case is an API server that did not answer.
+type failingReader struct {
+	client.Reader
+	err error
+}
+
+func (r failingReader) Get(context.Context, client.ObjectKey, client.Object, ...client.GetOption) error {
+	return r.err
+}
+
+func TestAClaimTheAPIServerDidNotAnswerAboutIsNoVerdict(t *testing.T) {
+	// The reader is uncached, one round trip per group per pass. Before
+	// this, any error read as "unusable": a blip during a node drain made
+	// the group condemn its servers and build no replacements.
+	reader := failingReader{pluginReader(t), errors.New("the server is currently unable to handle the request")}
+	reason, _, ok := checkGroupVolumes(context.Background(), reader, "minecraft",
+		&spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"}, nil, nil, true, true, true)
+	if ok || reason != reasonClaimUnreadable {
+		t.Fatalf("reason = %q ok = %v, want the unreadable marker and no verdict", reason, ok)
+	}
+
+	accepted := []metav1.Condition{{Type: spawneryv1alpha1.ConditionAccepted, Status: metav1.ConditionTrue,
+		Reason: spawneryv1alpha1.ReasonAccepted}}
+	if _, _, ok := keepLastVolumeDecision(accepted, reason, "x", false); !ok {
+		t.Error("an accepted group lost its acceptance to a read error")
+	}
+	refused := []metav1.Condition{{Type: spawneryv1alpha1.ConditionAccepted, Status: metav1.ConditionFalse,
+		Reason: spawneryv1alpha1.ReasonPluginVolumeUnusable, Message: "claim \"plugins\" does not exist"}}
+	r2, m2, ok := keepLastVolumeDecision(refused, reason, "x", false)
+	if ok || r2 != spawneryv1alpha1.ReasonPluginVolumeUnusable || m2 == "x" {
+		t.Errorf("a refused group's decision was not kept: %q %q %v", r2, m2, ok)
+	}
+	// A real verdict passes through untouched.
+	if r3, _, ok := keepLastVolumeDecision(accepted, spawneryv1alpha1.ReasonMountVolumeUnusable, "m", false); ok || r3 != spawneryv1alpha1.ReasonMountVolumeUnusable {
+		t.Error("a real refusal was rewritten")
 	}
 }

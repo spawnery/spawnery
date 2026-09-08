@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -280,4 +281,91 @@ func TestAnInvisibleCollisionIsRefusedToo(t *testing.T) {
 		t.Fatalf("get group: %v", err)
 	}
 	assertRefusedOnStatus(t, group.Status.Conditions, group.Status.Phase)
+}
+
+// The rule both controllers state for a broken Network -- the budget and a
+// departing node do not depend on it -- held for the Network and not for a
+// foreign ConfigMap: the ServerGroup returned before reconcilePDB, so a
+// player joining after the collision sat on a pod the eviction API could
+// take, with minAvailable frozen at 0.
+func TestAForeignConfigMapDoesNotStopTheServerBudget(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.reconcileGroup(t, r)
+	srv := f.listServers(t)[0]
+	uid := bringUpNamed(t, f, srv.Name)
+	f.reconcileGroup(t, r)
+	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 0 {
+		t.Fatalf("minAvailable = %d on an empty server before the collision, want 0", got)
+	}
+
+	// The group's own ConfigMap makes way for somebody else's object under
+	// the same name: the collision arrives while the group is serving.
+	name := podspec.GroupConfigMapName(f.group.Name, podspec.RoleServer)
+	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns}}); err != nil {
+		t.Fatalf("delete the group's ConfigMap: %v", err)
+	}
+	f.stranger(t, name, true, nil)
+	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile(srv.Name)
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: f.group.Name, Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	assertRefusedOnStatus(t, group.Status.Conditions, group.Status.Phase)
+	if got := f.groupPDB(t).Spec.MinAvailable.IntValue(); got != 1 {
+		t.Errorf("minAvailable = %d after the collision, want 1 -- the pod now carries a player", got)
+	}
+	for _, s := range f.listServers(t) {
+		if !s.DeletionTimestamp.IsZero() {
+			t.Errorf("server %s was marked for deletion over a ConfigMap collision", s.Name)
+		}
+	}
+}
+
+func TestAForeignConfigMapDoesNotStopTheProxyBudget(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+	pods := f.proxyPods("gateway")
+	if len(pods) != 2 {
+		t.Fatalf("proxy pods = %d, want 2", len(pods))
+	}
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	f.reportProxyPlayers(t, pods[0], 0)
+	f.reportProxyPlayers(t, pods[1], 0)
+	f.reconcileProxyGroup(r, "gateway")
+
+	name := podspec.GroupConfigMapName("gateway", podspec.RoleProxy)
+	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns}}); err != nil {
+		t.Fatalf("delete the group's ConfigMap: %v", err)
+	}
+	f.stranger(t, name, true, nil)
+	f.reportProxyPlayers(t, pods[0], 3)
+	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
+	}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	pdb := &policyv1.PodDisruptionBudget{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: podspec.GroupPDBName("gateway", podspec.RoleProxy), Namespace: f.ns}, pdb); err != nil {
+		t.Fatalf("get proxy PDB: %v", err)
+	}
+	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
+		t.Errorf("minAvailable = %v after the collision, want 1 -- one proxy carries players", pdb.Spec.MinAvailable)
+	}
+	got := f.proxyGroup("gateway")
+	assertRefusedOnStatus(t, got.Status.Conditions, got.Status.Phase)
 }

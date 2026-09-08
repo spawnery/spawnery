@@ -51,7 +51,13 @@ func checkExtraFiles(
 			false
 	}
 
-	if problem, ok := checkClaimMountable(ctx, reader, namespace, ef.ClaimName); !ok {
+	problem, ok, err := checkClaimMountable(ctx, reader, namespace, ef.ClaimName)
+	if err != nil {
+		return reasonClaimUnreadable,
+			fmt.Sprintf("spec.extraFiles names claim %q, which could not be read: %v", ef.ClaimName, err),
+			false
+	}
+	if !ok {
 		return spawneryv1alpha1.ReasonFileVolumeUnusable,
 			fmt.Sprintf("spec.extraFiles names claim %q, which %s", ef.ClaimName, problem),
 			false
