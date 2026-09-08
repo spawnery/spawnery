@@ -83,10 +83,12 @@ if [ -d "$FILE_SOURCE" ]; then
 		# Not `chmod -R u+w .`, though: this script runs under `set -eu`,
 		# every user mount is read-only, and a group with a claim mount
 		# somewhere else under /data would die on that wider chmod with a
-		# bare `chmod:` naming no cause. The mount this copies from is
+		# bare `chmod:` naming no cause. -xdev is the same rule one level
+		# down: a mount nested inside "./$name" is another filesystem, and
+		# find stops at it rather than dying on it. The mount this copies from is
 		# read-only too, so the copies arrive read-only and the files it
 		# carries are exactly the kind a server rewrites on its own.
-		chmod -R u+w "./$name"
+		find "./$name" -xdev -exec chmod u+w {} +
 	done
 fi
 
@@ -144,7 +146,7 @@ if [ -d "$PLUGIN_SOURCE" ]; then
 	# its plugins' data folders inside this directory, and a plugin that cannot
 	# rewrite its own config file fails in its own way rather than in one the
 	# server reports.
-	chmod -R u+w plugins
+	find plugins -xdev -exec chmod u+w {} +
 fi
 
 # The agent plugin. It ships in the read-only part of the image and is copied

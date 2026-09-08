@@ -13,6 +13,7 @@
 { bash
 , buildEnv
 , coreutils
+, findutils
 , paper-jre
 , runCommand
 , purpur
@@ -56,7 +57,9 @@ oci-common.layeredImage {
       # A Purpur bump wants that measurement repeated, exactly as a Paper bump
       # does, and `make purpur-image-test` is what catches getting it wrong:
       # loudly, in a container, rather than in this file.
-      paths = [ bash coreutils paper-jre ];
+      # findutils for the find the entrypoint's chmod walks with: it stops at
+      # filesystem boundaries, which chmod -R cannot, and coreutils has no find.
+      paths = [ bash coreutils findutils paper-jre ];
       pathsToLink = [ "/bin" ];
     })
     oci-common.passwd

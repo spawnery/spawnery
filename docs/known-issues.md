@@ -71,12 +71,15 @@ nor the claim.
 already carries.** The `chmod` in `image/entrypoint.sh` narrows itself to the
 entries it just copied, rather than running `chmod -R u+w .`, for exactly this
 reason: a read-only mount somewhere else under `/data` would make the wider
-version die the same way. The entrypoint cannot tell a read-only mount from a
-read-only file without probing every destination before copying, and the
-operator cannot know what a claim holds when it admits the group. What it
-could do is refuse a `spec.mounts` path under `/data` when the group also
-names `extraFiles` — which would refuse the many groups where the two do not
-overlap at all, to catch the few where they do.
+version die the same way — and since 0.2.34 it stops at filesystem boundaries
+(`find -xdev`), so a mount nested *inside* a copied directory no longer kills
+the start on the chmod either. What remains is the `cp` itself: the
+entrypoint cannot tell a read-only mount from a read-only file without probing
+every destination before copying, and the operator cannot know what a claim
+holds when it admits the group. What it could do is refuse a `spec.mounts`
+path under `/data` when the group also names `extraFiles` — which would refuse
+the many groups where the two do not overlap at all, to catch the few where
+they do.
 
 The remedy is the ordinary one: a mount and an `extraFiles` claim should not
 aim at the same directory. Found by reading the design against the collision

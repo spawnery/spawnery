@@ -18,6 +18,7 @@
 { bash
 , buildEnv
 , coreutils
+, findutils
 , paper-jre
 , runCommand
 , paper
@@ -68,7 +69,9 @@ oci-common.layeredImage {
       # runtime carrying only the modules Paper and the agent resolve is 405
       # MiB of closure against 697. See nix/paper-jre.nix for how the list was
       # derived and what re-deriving it costs.
-      paths = [ bash coreutils paper-jre ];
+      # findutils for the find the entrypoint's chmod walks with: it stops at
+      # filesystem boundaries, which chmod -R cannot, and coreutils has no find.
+      paths = [ bash coreutils findutils paper-jre ];
       pathsToLink = [ "/bin" ];
     })
     oci-common.passwd
