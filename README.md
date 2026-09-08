@@ -103,7 +103,7 @@ milestone and with the measurement each claim rests on, is
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.2.33 \
+  --version 0.2.34 \
   --namespace spawnery-system --create-namespace
 ```
 

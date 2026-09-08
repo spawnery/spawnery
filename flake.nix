@@ -277,7 +277,15 @@
           # an overlay value no longer swallows the next key. The published
           # API is identical to 0.2.29's and is republished under this number
           # for the reason the 0.2.21 paragraph gives.
-          imageVersion = "0.2.30";
+          #
+          # 0.2.34 moves it because the images changed: an extraFiles claim
+          # may not carry eula.txt, the chmod after a copy walks with find
+          # -xdev and stops at a mount, and the images carry findutils for
+          # it -- coreutils has no find, and the script tests run with the
+          # host's. The published API is identical to 0.2.30's and is
+          # republished under this number for the reason the 0.2.21
+          # paragraph gives.
+          imageVersion = "0.2.34";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the

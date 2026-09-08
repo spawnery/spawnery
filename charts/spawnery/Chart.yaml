@@ -8,7 +8,7 @@ type: application
 # version bump alone. Since v0.2.14 this number is also the address people
 # install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
 # so it is no longer only what Flux names a packaged artifact after.
-version: 0.2.33
+version: 0.2.34
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
 # CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
@@ -97,6 +97,10 @@ version: 0.2.33
 # unveraendert; eine Gruppe, die scheduling oder HostPort nutzt, braucht
 # danach die Erlaubnis ihres Networks (docs/upgrading.md). Dazu schreibt der
 # Operator je ProxyGroup eine Egress-Policy. Kein Image bewegt sich.
+#
+# 0.2.34 nicht: die Images bewegen sich (siehe flake.nix), der Operator nicht.
+# Unter charts/ aendert sich nur Beschreibungstext an spec.env, also zieht
+# version oben mit und diese Zahl bleibt.
 appVersion: "0.2.33"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
