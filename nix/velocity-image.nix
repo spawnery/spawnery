@@ -6,6 +6,7 @@
 { bash
 , buildEnv
 , coreutils
+, findutils
 , velocity-jre
 , runCommand
 , velocity
@@ -34,7 +35,9 @@ oci-common.layeredImage {
       name = "velocity-tools";
       # bash because the entrypoint's shebang points at it; coreutils for the
       # mkdir/cp the entrypoint uses to place the agent jar.
-      paths = [ bash coreutils velocity-jre ];
+      # findutils for the find the entrypoint's chmod walks with: it stops at
+      # filesystem boundaries, which chmod -R cannot, and coreutils has no find.
+      paths = [ bash coreutils findutils velocity-jre ];
       pathsToLink = [ "/bin" ];
     })
     oci-common.passwd
