@@ -30,6 +30,10 @@ spec:
     name: velocity-forwarding-secret
   defaults:
     minecraftVersion: "26.2"
+  # The HostPort groups below are about exposure and Pod Security, not about
+  # this policy: the whole range keeps the Network out of their way.
+  scheduling:
+    hostPortRange: {min: 1, max: 65535}
 ---
 apiVersion: spawnery.cloud/v1alpha1
 kind: ServerGroup
@@ -213,6 +217,10 @@ spec:
     name: velocity-forwarding-secret
   defaults:
     minecraftVersion: "26.2"
+  # The HostPort groups below are about exposure and Pod Security, not about
+  # this policy: the whole range keeps the Network out of their way.
+  scheduling:
+    hostPortRange: {min: 1, max: 65535}
 ---
 # The group whose pods the API server refuses. Pod Security baseline
 # disallows host ports outright, so no pod of this group can ever be created,
