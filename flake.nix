@@ -382,7 +382,13 @@
           # every proxy once; and NodeDraining names the refusal that applies.
           # The CRDs change in description text only. docs/upgrading.md
           # carries the proxy roll.
-          operatorVersion = "0.2.30";
+          #
+          # 0.2.31 moves it alone, for what 0.2.30's rollout showed: for the
+          # seconds after an operator starts every server reads dropped and
+          # stale, and the door rule 0.2.30 added credited those nothing, so
+          # every ephemeral group built a second server on every restart.
+          # The rule now asks for fresh counts. No image, no CRD line moves.
+          operatorVersion = "0.2.31";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
