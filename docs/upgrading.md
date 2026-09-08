@@ -906,3 +906,25 @@ directory: `PAPER_HOME` and `VELOCITY_HOME` become `SPAWNERY_PAPER_HOME` and
 operator's agent jar from being copied. Only a custom image that set the old
 name in its own `ENV` has anything to change.
 
+## 0.2.33: a group's scheduling needs the Network's permission
+
+`Network.spec.scheduling` is new, and absent it allows nothing: a ServerGroup
+or ProxyGroup that sets `spec.scheduling` (tolerations, `nodeSelector`,
+affinity), or a ProxyGroup exposed by `HostPort`, is refused after the upgrade
+with `Accepted=False` and `SchedulingNotAllowed` or `HostPortNotAllowed`. The
+message names the key or port and the Network field to write. A refused group
+creates no new server or proxy and rolls nothing; what runs keeps running.
+
+An installation whose groups set none of these -- `paulwtf` is one -- has
+nothing to write. One that does adds to its Network, for example:
+
+```yaml
+spec:
+  scheduling:
+    allowedTolerationKeys: ["spawnery.cloud/game"]
+    allowedNodeSelectorKeys: ["topology.kubernetes.io/zone"]
+    hostPortRange: {min: 30000, max: 30100}
+```
+
+`docs/network-boundaries.md` says what each list bounds.
+

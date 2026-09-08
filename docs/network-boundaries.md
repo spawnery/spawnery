@@ -303,6 +303,31 @@ a cluster whose address pool is exhausted must choose between real client
 addresses and a shared address.
 
 
+## What a group may ask of the scheduler
+
+`spec.scheduling` on a group -- tolerations, `nodeSelector`, affinity -- and
+`expose.hostPort.port` on a proxy group reach past the namespace: onto a
+control-plane node, a node cordoned for maintenance, or beside a workload in
+another namespace, and onto one host port per node. Until 0.2.33 they were
+copied into the pod as written, so whoever could write a group could place a
+pod running an image of their choosing anywhere in the cluster.
+
+Since then the Network decides. `Network.spec.scheduling` names the taint keys
+a group may tolerate, the node label keys it may select on (in `nodeSelector`
+and node affinity alike), the namespaces a pod-affinity term may name besides
+the group's own, and the host port range. **Absent, nothing is allowed**: a
+group that sets any of the three fields, or a HostPort proxy group, is
+refused with `Accepted=False` and a reason naming the key or port and the
+Network field that would allow it. A `namespaceSelector` on a pod-affinity
+term and a toleration with no key are never allowed, because each names
+everything.
+
+The check is on the group's effective scheduling -- its own or the Network's
+`defaults.scheduling` -- resolved exactly as the pod is rendered, so the pod
+and the verdict cannot disagree. It is a check on the group, not on the pod:
+a `pods: create` grant in the namespace is still equivalent to placing a pod,
+as the section above says.
+
 ## What the operator may delete
 
 Since `ScaleBoost` exists, the operator deletes an object a person may have

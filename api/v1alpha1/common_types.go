@@ -262,6 +262,15 @@ const (
 	// --allow-mount-volumes.
 	ReasonMountVolumesDisabled = "MountVolumesDisabled"
 
+	// ReasonSchedulingNotAllowed says the group's effective spec.scheduling
+	// asks something of the scheduler its Network's spec.scheduling does not
+	// allow; the message names the key or namespace.
+	ReasonSchedulingNotAllowed = "SchedulingNotAllowed"
+	// ReasonHostPortNotAllowed says a HostPort proxy group's port lies
+	// outside its Network's spec.scheduling.hostPortRange, or the Network
+	// has none.
+	ReasonHostPortNotAllowed = "HostPortNotAllowed"
+
 	// The four ForwardingSecretRotationPending reasons.
 	// ReasonPodsPredateTracking is the Unknown that keeps an operator upgrade
 	// from reading as a rotation: after an upgrade no running pod carries a

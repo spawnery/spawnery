@@ -179,6 +179,14 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		group.Spec.ExtraPlugins, group.Spec.ExtraFiles, group.Spec.Mounts,
 		r.AllowPluginVolumes, r.AllowFileVolumes, r.AllowMountVolumes)
 
+	// Only meaningful once the Network is there; the switch below reaches
+	// this case after the Network ones, so a nil network is never asked.
+	schedulingMessage, schedulingOK := "", true
+	if networkFound {
+		schedulingMessage, schedulingOK = podspec.SchedulingRefusal(network,
+			podspec.EffectiveScheduling(network, group.Spec.Scheduling), group.Namespace)
+	}
+
 	requeue := ResyncInterval
 	switch {
 	case !networkFound:
@@ -221,6 +229,20 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Status:  metav1.ConditionFalse,
 			Reason:  volumeReason,
 			Message: volumeMessage,
+		})
+		requeue = networkRetryInterval
+	case !schedulingOK:
+		logger.Info("scheduling not allowed by the network, no servers are created for this group",
+			"group", group.Name, "reason", schedulingMessage)
+		if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonSchedulingNotAllowed) {
+			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, spawneryv1alpha1.ReasonSchedulingNotAllowed, actionSyncStatus,
+				"%s", schedulingMessage)
+		}
+		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
+			Type:    spawneryv1alpha1.ConditionAccepted,
+			Status:  metav1.ConditionFalse,
+			Reason:  spawneryv1alpha1.ReasonSchedulingNotAllowed,
+			Message: schedulingMessage,
 		})
 		requeue = networkRetryInterval
 	default:
@@ -420,7 +442,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// and the group would look like a scheduling problem rather than a spec
 	// one. Setting the condition without this would decorate the group and
 	// change nothing it does.
-	mayResize := networkUsable && volumesOK
+	mayResize := networkUsable && volumesOK && schedulingOK
 
 	// The NodeDraining condition, with what stops this group rebuilding what
 	// it is about to condemn.

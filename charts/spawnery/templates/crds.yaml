@@ -1173,6 +1173,59 @@ spec:
                 required:
                 - name
                 type: object
+              scheduling:
+                description: |-
+                  Scheduling is what this network's groups may ask of the scheduler.
+
+                  Absent, nothing is allowed: a group that sets spec.scheduling, or a
+                  proxy group exposed by HostPort, is not accepted. Tolerations, node
+                  selectors and affinity reach beyond the namespace -- onto a
+                  control-plane node, a cordoned one, or beside a workload somebody
+                  else runs -- and the namespace is the boundary a group author is
+                  held to; this field is where the Network's owner widens it.
+                properties:
+                  allowedAffinityNamespaces:
+                    description: |-
+                      AllowedAffinityNamespaces are the namespaces a pod-affinity or
+                      pod-anti-affinity term may name besides the group's own. A
+                      namespaceSelector can name any namespace and is never allowed.
+                    items:
+                      type: string
+                    type: array
+                  allowedNodeSelectorKeys:
+                    description: |-
+                      AllowedNodeSelectorKeys are the node label keys a group may select on,
+                      in nodeSelector and in node-affinity terms alike.
+                    items:
+                      type: string
+                    type: array
+                  allowedTolerationKeys:
+                    description: |-
+                      AllowedTolerationKeys are the taint keys a group may tolerate. A
+                      toleration with no key matches every taint and is never allowed.
+                    items:
+                      type: string
+                    type: array
+                  hostPortRange:
+                    description: |-
+                      HostPortRange bounds expose.hostPort.port on this network's proxy
+                      groups. Without it no HostPort group is accepted.
+                    properties:
+                      max:
+                        format: int32
+                        maximum: 65535
+                        minimum: 1
+                        type: integer
+                      min:
+                        format: int32
+                        maximum: 65535
+                        minimum: 1
+                        type: integer
+                    required:
+                    - max
+                    - min
+                    type: object
+                type: object
             required:
             - forwardingSecretRef
             type: object

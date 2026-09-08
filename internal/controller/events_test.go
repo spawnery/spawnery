@@ -235,7 +235,7 @@ var knownActions = map[string]string{
 // moved into a subpackage, leaves a t.Logf green. Changing this number is
 // therefore a deliberate act with a diff, which is what it should be -- adding
 // an event is a change to the operator's output.
-const wantEventfSites = 30
+const wantEventfSites = 33
 
 // TestEveryEventfCallSitePassesAKnownAction reads this package's own source.
 //
