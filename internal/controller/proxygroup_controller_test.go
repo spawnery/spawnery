@@ -125,11 +125,12 @@ func proxyGroupReconciler(f *fixture) *ProxyGroupReconciler {
 			Client: f.c, Reader: f.c,
 			CA: func() []byte { return []byte("test-ca") },
 		},
-		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
-		Proxies:       f.proxies,
-		Clock:         f.clock.Now,
-		Expectations:  newExpectations(f.clock.Now),
-		Divergence:    newReadinessDivergence(f.clock.Now),
+		AgentEndpoint:     "spawnery-operator.spawnery-system.svc:9443",
+		OperatorNamespace: "spawnery-system",
+		Proxies:           f.proxies,
+		Clock:             f.clock.Now,
+		Expectations:      newExpectations(f.clock.Now),
+		Divergence:        newReadinessDivergence(f.clock.Now),
 		// Every reconciler helper in this package wires a recorder whether or
 		// not the test under it looks at one, so that a path which only fires
 		// under an unusual condition — here, a drain that ran out of time —
@@ -822,11 +823,12 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 			Client: recorder, Reader: f.rc,
 			CA: func() []byte { return []byte("test-ca") },
 		},
-		AgentEndpoint: "spawnery-operator.spawnery-system.svc:9443",
-		Proxies:       f.proxies,
-		Clock:         f.clock.Now,
-		Expectations:  newExpectations(f.clock.Now),
-		Divergence:    newReadinessDivergence(f.clock.Now),
+		AgentEndpoint:     "spawnery-operator.spawnery-system.svc:9443",
+		OperatorNamespace: "spawnery-system",
+		Proxies:           f.proxies,
+		Clock:             f.clock.Now,
+		Expectations:      newExpectations(f.clock.Now),
+		Divergence:        newReadinessDivergence(f.clock.Now),
 		// This literal builds its own reconciler rather than taking the
 		// fixture's, so it has to repeat what newFixture's helper does — see
 		// the comment there. Without it this test kills a mutation on the

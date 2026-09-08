@@ -211,3 +211,106 @@ func BuildNetworkPolicy(
 		},
 	}
 }
+
+// ProxyNetworkPolicyName is the egress policy a ProxyGroup owns.
+func ProxyNetworkPolicyName(group string) string { return group + "-proxies" }
+
+// HTTPSPort is what Mojang's session and API servers answer on, and the one
+// port an online-mode proxy needs the internet for.
+const HTTPSPort int32 = 443
+
+// privateRanges are what an online-mode proxy's internet rule leaves out: the
+// cluster's own address space, which the backend and operator rules already
+// cover as far as they should, and link-local, where a cloud's metadata
+// endpoint hands out node credentials.
+var privateRanges = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"}
+
+// BuildProxyNetworkPolicy renders the egress policy for one ProxyGroup's
+// pods. Egress only, on purpose: a proxy's readiness probe is a TCPSocket
+// from the kubelet, and an ingress rule would put the fleet's readiness at
+// the mercy of whether the CNI subjects kubelet traffic to policy --
+// BuildNetworkPolicy's comment carries the argument. Egress has no such
+// caller.
+//
+// What a proxy needs: cluster DNS, the operator's agent port, and the
+// backends of its own network on the Minecraft port. An online-mode proxy
+// also needs Mojang's session servers, whose addresses nobody can pin, so
+// it gets the internet on 443 minus the private and link-local ranges. An
+// offline-mode proxy authenticates nobody and gets nothing beyond the three.
+//
+// Per group and not per network, because online-mode is a group's setting.
+// The owner reference is set by the reconciler, which has the scheme.
+func BuildProxyNetworkPolicy(
+	networkName string,
+	group *spawneryv1alpha1.ProxyGroup,
+	operatorNamespace string,
+	onlineMode bool,
+) *networkingv1.NetworkPolicy {
+	tcp := corev1.ProtocolTCP
+	udp := corev1.ProtocolUDP
+
+	servers := ManagedSelector(networkName)
+	servers[LabelRole] = RoleServer
+
+	egress := []networkingv1.NetworkPolicyEgressRule{
+		{
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{NamespaceNameLabel: KubeSystemNamespace},
+				},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &udp, Port: ptr.To(intstr.FromInt32(DNSPort))},
+				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(DNSPort))},
+			},
+		},
+		{
+			To: []networkingv1.NetworkPolicyPeer{{
+				NamespaceSelector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{NamespaceNameLabel: operatorNamespace},
+				},
+				PodSelector: &metav1.LabelSelector{MatchLabels: OperatorPodLabels()},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(AgentPort))},
+			},
+		},
+		{
+			// No namespaceSelector: the policy's own namespace, which a
+			// Network owns.
+			To: []networkingv1.NetworkPolicyPeer{{
+				PodSelector: &metav1.LabelSelector{MatchLabels: servers},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(MinecraftPort))},
+			},
+		},
+	}
+	if onlineMode {
+		egress = append(egress, networkingv1.NetworkPolicyEgressRule{
+			To: []networkingv1.NetworkPolicyPeer{{
+				IPBlock: &networkingv1.IPBlock{CIDR: "0.0.0.0/0", Except: privateRanges},
+			}},
+			Ports: []networkingv1.NetworkPolicyPort{
+				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(HTTPSPort))},
+			},
+		})
+	}
+
+	return &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ProxyNetworkPolicyName(group.Name),
+			Namespace: group.Namespace,
+			Labels: map[string]string{
+				LabelManagedBy: ManagedByValue,
+				LabelNetwork:   networkName,
+				LabelGroup:     group.Name,
+			},
+		},
+		Spec: networkingv1.NetworkPolicySpec{
+			PodSelector: metav1.LabelSelector{MatchLabels: ProxyLabels(networkName, group.Name)},
+			PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
+			Egress:      egress,
+		},
+	}
+}

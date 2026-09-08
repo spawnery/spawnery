@@ -114,14 +114,18 @@ second brings certificates and a failure mode to an operator that has no
 webhooks. The boundary is the namespace, and `charts/spawnery/README.md` now
 says so where an administrator chooses one.
 
-**Proxy egress is unrestricted, and vanilla NetworkPolicy is the reason.** A
-proxy configured `onlineMode: true` has to reach Mojang's session servers,
-whose addresses are neither stable nor discoverable, and a `NetworkPolicy`
-cannot name a destination by DNS name — only by pod, namespace or CIDR. An
-egress rule for it would have to be an `ipBlock` over addresses nobody can
-pin, so 6b writes none. A cluster that wants it needs a CNI with FQDN policies
-(Cilium, for one), which is not a portable assumption and therefore not
-something the operator can render. Backend egress is *written* against by the
+**Proxy egress is written against per group, since 0.2.33.** Each
+`ProxyGroup` owns an egress-only policy (`<group>-proxies`) admitting cluster
+DNS, the operator's agent port and the backends of its own network on 25565.
+A proxy with `onlineMode: true` also has to reach Mojang's session servers,
+whose addresses are neither stable nor discoverable and which a
+`NetworkPolicy` cannot name by DNS — so it is admitted the internet on 443
+through an `ipBlock` over `0.0.0.0/0` that leaves out the private ranges and
+link-local, where a cloud's metadata endpoint hands out node credentials. A
+proxy with `onlineMode: false` authenticates nobody and gets nothing beyond
+the three. The policy is egress only: ingress would put the kubelet's
+readiness probe under policy, the reason the backend policy never selected
+proxies. Backend egress is *written* against by the
 per-`Network` policy, whose egress half **admits** cluster DNS and the
 operator's agent port and nothing else — admits being the honest verb in this
 section, since whether anything is thereby restricted is the CNI's business and

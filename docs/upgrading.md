@@ -928,3 +928,14 @@ spec:
 
 `docs/network-boundaries.md` says what each list bounds.
 
+## 0.2.33: every ProxyGroup gains an egress policy
+
+The operator writes a `NetworkPolicy` named `<group>-proxies` beside each
+ProxyGroup, egress only: cluster DNS, the operator's agent port, the network's
+backends on 25565, and for `onlineMode: true` the internet on 443 minus the
+private and link-local ranges. On a CNI that enforces policy, a proxy plugin
+that dials anything else — a database in another namespace, a webhook on a
+port other than 443 — stops reaching it after the upgrade. `kindnet` and the
+`paulwtf` cluster enforce nothing, so nothing changes there. The policy is
+owned by its group and goes with it.
+
