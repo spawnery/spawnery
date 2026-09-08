@@ -143,6 +143,26 @@ func TestTheBucketRefills(t *testing.T) {
 	}
 }
 
+func TestRefilledBucketsAreSweptOnceTheMapIsFull(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newRequestLimiter(func() time.Time { return now })
+	l.maxBuckets = 4
+	for i := 0; i < 4; i++ {
+		l.allow(fmt.Sprintf("pod-%d", i))
+	}
+	// Refill everything, then a fifth pod arrives.
+	now = now.Add(time.Duration(RequestBurst) * RequestRefill)
+	l.allow("pod-4")
+
+	if got := len(l.buckets); got != 1 {
+		t.Errorf("%d buckets after the sweep, want 1: the refilled ones are indistinguishable "+
+			"from pods that never asked", got)
+	}
+	if _, ok := l.buckets["pod-4"]; !ok {
+		t.Error("the pod that triggered the sweep lost its own bucket")
+	}
+}
+
 // One test per bound here too, and each names the bound it broke. A single
 // "it was refused" test passes when the wrong bound fired.
 

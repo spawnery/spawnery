@@ -80,6 +80,8 @@ const (
 	AnnounceMaxValueLength = 256
 )
 
+const requestMaxBuckets = 4096
+
 // requestLimiter is a token bucket per pod.
 //
 // grpcauth.PeerLimiter has the same shape and is not reused: it is keyed by
@@ -89,6 +91,13 @@ const (
 // to a plugin's.
 type requestLimiter struct {
 	now func() time.Time
+	// maxBuckets is when the map is swept of buckets that have refilled,
+	// which are indistinguishable from pods that never asked. Not a hard
+	// cap, for the reason grpcauth.PeerLimiter gives: refusing a legitimate
+	// pod to make room is the harm a limiter exists to prevent. Without the
+	// sweep a namespace of short rounds keeps one entry per pod that ever
+	// asked, until the operator restarts.
+	maxBuckets int
 
 	mu      sync.Mutex
 	buckets map[string]struct {
@@ -99,7 +108,8 @@ type requestLimiter struct {
 
 func newRequestLimiter(now func() time.Time) *requestLimiter {
 	return &requestLimiter{
-		now: now,
+		now:        now,
+		maxBuckets: requestMaxBuckets,
 		buckets: map[string]struct {
 			tokens float64
 			last   time.Time
@@ -127,6 +137,15 @@ func (l *requestLimiter) allow(pod string) bool {
 		return false
 	}
 	b.tokens--
+	if !seen && len(l.buckets) >= l.maxBuckets {
+		for key, other := range l.buckets {
+			// Refilled by now, not as stored: a bucket only refills when its
+			// pod next asks, and a pod that is gone never asks again.
+			if other.tokens+now.Sub(other.last).Seconds()/RequestRefill.Seconds() >= RequestBurst {
+				delete(l.buckets, key)
+			}
+		}
+	}
 	l.buckets[pod] = b
 	return true
 }
