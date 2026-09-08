@@ -1691,3 +1691,23 @@ func TestProvisionalCapacityDoesNotCreditAServerTheProxiesDropped(t *testing.T) 
 		t.Errorf("provisionalCapacity = %d, want 75 once the proxies have it again", got)
 	}
 }
+
+// An operator that has just started has heard from no agent yet, so every
+// server it finds reads Stale with Slots 0, and for the fifteen seconds until
+// the agents are back the ready gate takes each one out of Ready and out of
+// the tables. That server has been registered and is not, exactly like the
+// one above -- and crediting it nothing built one extra server per group on
+// every operator restart (measured 2026-09-08, nine groups, nine creates
+// within 25 s of the new pod). What tells the two apart is whether the
+// counts are fresh: a dropped server whose agent is still talking has no
+// seat to offer; one the operator has simply not heard from yet is the case
+// the Slots == 0 credit was written for.
+func TestProvisionalCapacityStillCreditsAServerARestartedOperatorHasNotHeardFrom(t *testing.T) {
+	unheard := ServerView{
+		Name: "a", Phase: phase.Starting, Stale: true,
+		WasRegistered: true, Registered: false,
+	}
+	if got := provisionalCapacity(unheard, 80); got != 80 {
+		t.Errorf("provisionalCapacity = %d, want the full 80 for a server the operator has not heard from since it started", got)
+	}
+}

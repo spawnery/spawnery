@@ -212,8 +212,11 @@ func provisionalCapacity(v ServerView, maxPlayers int32) int32 {
 	// agent stream still up, a round that ended -- is not capacity on its way
 	// either, however healthy its counts look. WasRegistered is what tells it
 	// apart from a server that is genuinely starting and has never been in
-	// the tables, which the Slots == 0 credit below is for.
-	if v.WasRegistered && !v.Registered {
+	// the tables, and fresh counts are what tell it apart from one the
+	// operator has not heard from since it started: for the seconds until
+	// the agents reconnect every server reads dropped and stale, and that
+	// one is the case the Slots == 0 credit below was written for.
+	if v.WasRegistered && !v.Registered && !v.Stale {
 		return 0
 	}
 	// Before the Slots == 0 credit below, and not merged into it: a server
