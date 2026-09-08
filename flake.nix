@@ -396,7 +396,17 @@
           # against a grace meant for one server going quiet, not a fleet
           # dialling back in. The clock starts when agents can reach the
           # operator, and the fleet gets the 45 s the proxy side already had.
-          operatorVersion = "0.2.32";
+          #
+          # 0.2.33 moves it with the chart, and the CRDs really change for
+          # the first time since 0.2.28: Network gains spec.scheduling,
+          # optional, 53 added lines in config/crd/ and none removed -- a
+          # group's tolerations, node selectors, affinity and host port now
+          # need the Network's permission, and absent the field nothing is
+          # allowed. The operator also writes an egress policy per
+          # ProxyGroup, keeps the budget and a departing node ahead of the
+          # ConfigMap and claim gates, and bounds every send in a session
+          # loop. docs/upgrading.md carries the two notes. No image moves.
+          operatorVersion = "0.2.33";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
