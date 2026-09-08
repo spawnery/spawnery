@@ -313,6 +313,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	bound := listener.Addr().String()
 	s.addr.Store(&bound)
+	s.opts.Agents.MarkServing()
 
 	// Bounded per peer before the TLS handshake, which is the expensive half
 	// of a connection and the half the attack is after. PeerLimiter's doc

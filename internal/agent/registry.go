@@ -192,16 +192,31 @@ type Registry struct {
 	now            func() time.Time
 	reportInterval time.Duration
 	startedAt      time.Time
+	servingAt      time.Time
 }
 
 // New creates a registry. The clock is injectable so the staleness rules are
-// testable; startedAt is when the operator process came up.
+// testable; startedAt is when the operator process came up, and is what an
+// unknown pod's StreamDownFor is measured from until MarkServing moves it.
 func New(clock func() time.Time, reportInterval time.Duration, startedAt time.Time) *Registry {
 	return &Registry{
 		entries:        make(map[string]*entry),
 		now:            clock,
 		reportInterval: reportInterval,
 		startedAt:      startedAt,
+	}
+}
+
+// MarkServing records that agents can reach this operator from now on. An
+// unknown pod's stream is measured as down from here rather than from process
+// start, because no agent could have connected before: leader election alone
+// took 19 s on 2026-09-08, which spent the whole StreamDownGrace before the
+// first reconcile and took every server out of Ready.
+func (r *Registry) MarkServing() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.servingAt.IsZero() {
+		r.servingAt = r.now()
 	}
 }
 
@@ -655,12 +670,16 @@ func (r *Registry) Lookup(key string) Snapshot {
 	now := r.now()
 	e, ok := r.entries[key]
 	if !ok {
+		since := r.startedAt
+		if !r.servingAt.IsZero() {
+			since = r.servingAt
+		}
 		// AcceptingJoins true for a pod nothing is known about: the safe
 		// default is the behaviour every network had before this existed.
 		return Snapshot{
 			PlayersStale:   true,
 			AcceptingJoins: true,
-			StreamDownFor:  now.Sub(r.startedAt),
+			StreamDownFor:  now.Sub(since),
 		}
 	}
 

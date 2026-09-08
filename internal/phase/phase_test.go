@@ -142,6 +142,37 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
 		},
 		{
+			// The shape every server has right after an operator restart:
+			// the registry has never heard of the pod, so it is neither
+			// ready nor connected and its clock runs from when the operator
+			// began serving. StreamDownGrace is for one server going quiet;
+			// a whole fleet dialling back in gets ReconnectGrace.
+			name:    "ready tolerates an unheard agent until the reconnect grace",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.AgentReady = false
+				in.AgentConnected = false
+				in.AgentUnheard = true
+				in.AgentStreamDownFor = ReconnectGrace - time.Millisecond
+				return in
+			}(),
+			want: Decision{Next: Ready, Reason: ReasonReadyGatePassed},
+		},
+		{
+			name:    "ready falls back once even the reconnect grace has passed",
+			current: Ready,
+			in: func() Inputs {
+				in := healthyReady()
+				in.AgentReady = false
+				in.AgentConnected = false
+				in.AgentUnheard = true
+				in.AgentStreamDownFor = ReconnectGrace
+				return in
+			}(),
+			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
+		},
+		{
 			name:    "ready tolerates a short stream gap",
 			current: Ready,
 			in: func() Inputs {
