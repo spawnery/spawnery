@@ -58,7 +58,7 @@ import (
 // goldenProxyDigest is DesiredProxyHash over goldenNetwork/goldenProxyGroup,
 // goldenAgentEndpoint and goldenConfigValues. See the comment above before
 // changing it.
-const goldenProxyDigest = "c52b89c65d114de2"
+const goldenProxyDigest = "25460cf6ba7e7c0d"
 
 // goldenServerDigest is DesiredServerHash over goldenNetwork/goldenServerGroup
 // and goldenConfigValues. See the comment above before changing it.

@@ -339,3 +339,27 @@ func TestAMountInsideTheServersConfigDirectoryIsRefused(t *testing.T) {
 		t.Errorf("a sibling of the config directory was refused: %v", err)
 	}
 }
+
+// The proxy pod shares MountClaim.Writable and renderUserMounts with the
+// server pod, and it used to carry no fsGroup: a claim mounted writable was
+// attached read-write and owned by root, so the proxy got EACCES while the
+// pod spec said readOnly: false.
+func TestAProxyPodCanWriteAClaimItMountsWritable(t *testing.T) {
+	group := testProxyGroup()
+	group.Spec.Mounts = []spawneryv1alpha1.Mount{{
+		Name:      "pool",
+		MountPath: "/data/pool",
+		PersistentVolumeClaim: &spawneryv1alpha1.MountClaim{
+			ClaimName: "shared",
+			Writable:  true,
+		},
+	}}
+	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+	if m := mountNamed(pod, "pool"); m == nil || m.ReadOnly {
+		t.Errorf("mount = %+v, want it writable", m)
+	}
+	assertFSGroup(t, pod)
+}

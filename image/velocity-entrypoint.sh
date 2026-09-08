@@ -6,7 +6,9 @@
 # name the key that is missing.
 set -eu
 
-VELOCITY_HOME="${VELOCITY_HOME:-/opt/velocity}"
+# SPAWNERY_-prefixed like every variable this script reads; image/entrypoint.sh
+# says why, and image/reserved_env_test.go checks it.
+VELOCITY_HOME="${SPAWNERY_VELOCITY_HOME:-/opt/velocity}"
 
 # The configuration Velocity actually reads, written from the operator's
 # rendered ConfigMap, the user's overlay and the fields neither may move.
@@ -92,7 +94,7 @@ fi
 #
 # The default is internal/podspec.PluginSourceMountPath. The operator mounts
 # exactly there and passes nothing -- the variable is overridable only so the
-# tests can point it at a temporary directory, which is the same seam PAPER_HOME
+# tests can point it at a temporary directory, which is the same seam SPAWNERY_VELOCITY_HOME
 # already is. Creating /var/run/spawnery/plugins needs root, so without it this
 # copy would have no test at all.
 #

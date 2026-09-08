@@ -507,3 +507,37 @@ func TestTheMeasuredPropertiesDefaultIsTheOneTheRendererReads(t *testing.T) {
 		}
 	}
 }
+
+// A value ending in a backslash is a line continuation to Java, and the sort
+// puts online-mode right after motd: the overlay `motd=hello\` used to render
+// a file Java read as motd "helloonline-mode=false" with no online-mode key at
+// all, so Paper fell back to its own default of true and modern forwarding
+// failed every join.
+func TestATrailingBackslashInAnOverlayValueCannotSwallowTheNextLine(t *testing.T) {
+	files, err := Paper(paperValues(), "s3cret", map[string]string{
+		"server.properties": "motd=hello\\\n",
+	})
+	if err != nil {
+		t.Fatalf("Paper: %v", err)
+	}
+	text := string(files["server.properties"])
+	if !strings.Contains(text, "motd=hello\\\\\n") {
+		t.Errorf("server.properties does not escape the trailing backslash:\n%s", text)
+	}
+	if !strings.Contains(text, "\nonline-mode=false\n") {
+		t.Errorf("online-mode is not on a line of its own:\n%s", text)
+	}
+}
+
+func TestPropertiesSurviveTheRoundTrip(t *testing.T) {
+	in := map[string]string{
+		"motd":       "line one\nline two\\ tab\t end\\",
+		"level-name": " leading space",
+	}
+	got := parseProperties(writeProperties(in))
+	for k, v := range in {
+		if got[k] != v {
+			t.Errorf("%q = %q after the round trip, want %q", k, got[k], v)
+		}
+	}
+}

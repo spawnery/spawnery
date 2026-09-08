@@ -69,14 +69,14 @@ oci-common.layeredImage {
   ];
 
   config = {
-    # PAPER_HOME keeps its name while the entrypoint is shared, and points at
-    # this image's own directory. SPAWNERY_SERVER_JAR is what makes the shared
-    # script exec Purpur; see image/entrypoint.sh for why the variable is
+    # SPAWNERY_PAPER_HOME keeps its name while the entrypoint is shared, and
+    # points at this image's own directory. SPAWNERY_SERVER_JAR is what makes
+    # the shared script exec Purpur; see image/entrypoint.sh for why both are
     # SPAWNERY_-prefixed.
     Env = [
       "HOME=/data"
       "PATH=/bin:/usr/local/bin"
-      "PAPER_HOME=/opt/purpur"
+      "SPAWNERY_PAPER_HOME=/opt/purpur"
       "SPAWNERY_SERVER_JAR=/opt/purpur/purpur.jar"
     ];
     ExposedPorts = { "25565/tcp" = { }; };

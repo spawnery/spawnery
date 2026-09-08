@@ -377,9 +377,14 @@ func renderProxyPod(
 			AutomountServiceAccountToken:  ptr.To(false),
 			ImagePullSecrets:              pullSecrets,
 			TerminationGracePeriodSeconds: ptr.To(int64(grace)),
+			// FSGroup for the same reason BuildServerPod gives: a writable
+			// claim on spec.mounts arrives owned by root, and the proxy runs
+			// as uid 10001 like the servers do.
 			SecurityContext: &corev1.PodSecurityContext{
-				RunAsNonRoot:   ptr.To(true),
-				SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				RunAsNonRoot:        ptr.To(true),
+				SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
+				FSGroup:             ptr.To(FSGroupID),
+				FSGroupChangePolicy: ptr.To(corev1.FSGroupChangeOnRootMismatch),
 			},
 		},
 	}

@@ -728,8 +728,16 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 //
 // Path comparison is on segment boundaries, not raw string prefixes, so
 // "/data-extra" is never mistaken for a child of "/data".
+// reservedVolumeNames are the volumes the operator itself renders into a
+// server pod; a user mount reusing one would be a duplicate volume name, which
+// the API server refuses with an array index rather than a mount name.
+var reservedVolumeNames = []string{
+	AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName,
+	TmpVolumeName, FileSourceVolumeName, PluginSourceVolumeName,
+}
+
 func checkMountCollision(m spawneryv1alpha1.Mount) error {
-	for _, name := range []string{AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName, TmpVolumeName, FileSourceVolumeName} {
+	for _, name := range reservedVolumeNames {
 		if m.Name == name {
 			return fmt.Errorf("mount %q reuses the reserved volume name %q", m.Name, name)
 		}

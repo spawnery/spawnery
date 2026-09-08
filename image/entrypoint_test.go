@@ -79,12 +79,12 @@ func runScript(t *testing.T, repoScript, workDir string, configExit int, env ...
 	return string(out), err
 }
 
-// runEntrypoint runs the Paper entrypoint. PAPER_HOME defaults to /opt/paper,
+// runEntrypoint runs the Paper entrypoint. SPAWNERY_PAPER_HOME defaults to /opt/paper,
 // overridable through env the same way runScript passes any other variable.
 func runEntrypoint(t *testing.T, workDir string, configExit int, env ...string) (string, error) {
 	t.Helper()
 	return runScript(t, "image/entrypoint.sh", workDir, configExit,
-		append([]string{"PAPER_HOME=/opt/paper"}, env...)...)
+		append([]string{"SPAWNERY_PAPER_HOME=/opt/paper"}, env...)...)
 }
 
 func TestEntrypointAcceptsTheEula(t *testing.T) {
@@ -145,7 +145,7 @@ func TestEntrypointExecsJavaWithTheBundlerRepo(t *testing.T) {
 func TestEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 	dir := t.TempDir()
 
-	// PAPER_HOME points at a real jar, so a script that pressed on regardless
+	// SPAWNERY_PAPER_HOME points at a real jar, so a script that pressed on regardless
 	// of spawnery-config's exit code would still manage to copy the plugin
 	// and start java — the two assertions below are what tell that apart from
 	// a script that actually stopped.
@@ -157,7 +157,7 @@ func TestEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runEntrypoint(t, dir, 1, "PAPER_HOME="+paperHome)
+	out, err := runEntrypoint(t, dir, 1, "SPAWNERY_PAPER_HOME="+paperHome)
 	if err == nil {
 		t.Fatalf("entrypoint succeeded, want a failure; output: %s", out)
 	}
@@ -207,7 +207,7 @@ func TestCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runEntrypoint(t, dir, 0, "PAPER_HOME="+paperHome); err != nil {
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_PAPER_HOME="+paperHome); err != nil {
 		t.Fatalf("entrypoint: %v", err)
 	}
 
@@ -236,7 +236,7 @@ func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *t
 		t.Fatal(err)
 	}
 
-	if _, err := runEntrypoint(t, dir, 0, "PAPER_HOME="+paperHome); err != nil {
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_PAPER_HOME="+paperHome); err != nil {
 		t.Fatalf("first entrypoint run: %v", err)
 	}
 
@@ -259,7 +259,7 @@ func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *t
 		t.Fatal(err)
 	}
 
-	if _, err := runEntrypoint(t, dir, 0, "PAPER_HOME="+paperHome); err != nil {
+	if _, err := runEntrypoint(t, dir, 0, "SPAWNERY_PAPER_HOME="+paperHome); err != nil {
 		t.Fatalf("second entrypoint run: %v", err)
 	}
 
@@ -469,7 +469,7 @@ func TestTheAgentJarWinsOverOneOnTheVolume(t *testing.T) {
 	}
 
 	if _, err := runEntrypoint(t, dir, 0,
-		"PAPER_HOME="+paperHome, "SPAWNERY_PLUGIN_SOURCE="+source); err != nil {
+		"SPAWNERY_PAPER_HOME="+paperHome, "SPAWNERY_PLUGIN_SOURCE="+source); err != nil {
 		t.Fatalf("entrypoint: %v", err)
 	}
 
@@ -554,7 +554,7 @@ func TestEntrypointExecsThePurpurJarWhenTheImageNamesOne(t *testing.T) {
 	dir := t.TempDir()
 
 	out, err := runEntrypoint(t, dir, 0,
-		"PAPER_HOME=/opt/purpur",
+		"SPAWNERY_PAPER_HOME=/opt/purpur",
 		"SPAWNERY_SERVER_JAR=/opt/purpur/purpur.jar")
 	if err != nil {
 		t.Fatalf("entrypoint: %v\n%s", err, out)
@@ -562,11 +562,11 @@ func TestEntrypointExecsThePurpurJarWhenTheImageNamesOne(t *testing.T) {
 	if !strings.Contains(out, "-jar /opt/purpur/purpur.jar") {
 		t.Errorf("java was not invoked with the named jar:\n%s", out)
 	}
-	// The bundler repo still follows PAPER_HOME rather than the jar's own
+	// The bundler repo still follows SPAWNERY_PAPER_HOME rather than the jar's own
 	// directory. They are the same directory in both images, and a repo
 	// derived from the jar path would break the moment somebody moved one.
 	if !strings.Contains(out, "-DbundlerRepoDir=/opt/purpur/repo") {
-		t.Errorf("the bundler repo did not follow PAPER_HOME:\n%s", out)
+		t.Errorf("the bundler repo did not follow SPAWNERY_PAPER_HOME:\n%s", out)
 	}
 }
 

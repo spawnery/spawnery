@@ -14,7 +14,14 @@
 # docs/superpowers/specs/2026-08-08-paper-base-image-design.md.
 set -eu
 
-PAPER_HOME="${PAPER_HOME:-/opt/paper}"
+# Every variable this script reads from its environment is SPAWNERY_-prefixed:
+# that prefix is reserved by api/v1alpha1.ReservedEnvPrefix, so a group's
+# spec.env cannot set it and nobody can point a running server at a directory
+# or a jar of their choosing through a field meant for game settings. The
+# image's own directory is one of them -- it decides which jar runs and where
+# the operator's agent jar is taken from. image/reserved_env_test.go reads this
+# file and fails on an unprefixed one.
+PAPER_HOME="${SPAWNERY_PAPER_HOME:-/opt/paper}"
 
 # The server jar inside PAPER_HOME. It is a variable because this one script
 # serves two images: the Paper image, where the default is exactly what it has
@@ -22,11 +29,6 @@ PAPER_HOME="${PAPER_HOME:-/opt/paper}"
 # would have meant maintaining two copies of the plugin copying, the cgroup
 # reading and the flag list below, and every one of the tests in
 # image/entrypoint_test.go twice.
-#
-# SPAWNERY_-prefixed on purpose: that prefix is reserved by
-# api/v1alpha1.ReservedEnvPrefix, so a group's spec.env cannot set it and
-# nobody can point a running server at a jar of their choosing through a field
-# meant for game settings.
 SERVER_JAR="${SPAWNERY_SERVER_JAR:-$PAPER_HOME/paper.jar}"
 
 # Mojang's EULA. Running this image is accepting it, and the README says so
@@ -107,9 +109,9 @@ fi
 #
 # The default is internal/podspec.PluginSourceMountPath. The operator mounts
 # exactly there and passes nothing -- the variable is overridable only so the
-# tests can point it at a temporary directory, which is the same seam PAPER_HOME
-# already is. Creating /var/run/spawnery/plugins needs root, so without it this
-# copy would have no test at all.
+# tests can point it at a temporary directory, which is the same seam
+# SPAWNERY_PAPER_HOME already is. Creating /var/run/spawnery/plugins needs
+# root, so without it this copy would have no test at all.
 #
 # The whole tree, not just *.jar. A plugin's configuration lives at
 # plugins/<Name>/config.yml, and copying jars without it would leave every
