@@ -44,6 +44,52 @@ type NetworkSpec struct {
 	// Defaults are inherited by all groups of this network.
 	// +optional
 	Defaults *Defaults `json:"defaults,omitempty"`
+
+	// Scheduling is what this network's groups may ask of the scheduler.
+	//
+	// Absent, nothing is allowed: a group that sets spec.scheduling, or a
+	// proxy group exposed by HostPort, is not accepted. Tolerations, node
+	// selectors and affinity reach beyond the namespace -- onto a
+	// control-plane node, a cordoned one, or beside a workload somebody
+	// else runs -- and the namespace is the boundary a group author is
+	// held to; this field is where the Network's owner widens it.
+	// +optional
+	Scheduling *SchedulingPolicy `json:"scheduling,omitempty"`
+}
+
+// SchedulingPolicy names what a group's spec.scheduling may contain. Each
+// list is a plain allowlist; an empty or absent list allows nothing.
+type SchedulingPolicy struct {
+	// AllowedTolerationKeys are the taint keys a group may tolerate. A
+	// toleration with no key matches every taint and is never allowed.
+	// +optional
+	AllowedTolerationKeys []string `json:"allowedTolerationKeys,omitempty"`
+
+	// AllowedNodeSelectorKeys are the node label keys a group may select on,
+	// in nodeSelector and in node-affinity terms alike.
+	// +optional
+	AllowedNodeSelectorKeys []string `json:"allowedNodeSelectorKeys,omitempty"`
+
+	// AllowedAffinityNamespaces are the namespaces a pod-affinity or
+	// pod-anti-affinity term may name besides the group's own. A
+	// namespaceSelector can name any namespace and is never allowed.
+	// +optional
+	AllowedAffinityNamespaces []string `json:"allowedAffinityNamespaces,omitempty"`
+
+	// HostPortRange bounds expose.hostPort.port on this network's proxy
+	// groups. Without it no HostPort group is accepted.
+	// +optional
+	HostPortRange *PortRange `json:"hostPortRange,omitempty"`
+}
+
+// PortRange is an inclusive port interval.
+type PortRange struct {
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Min int32 `json:"min"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Max int32 `json:"max"`
 }
 
 // NetworkStatus is the observed state of a Network.

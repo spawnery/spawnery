@@ -312,12 +312,7 @@ func BuildServerPod(
 		resources = net.Spec.Defaults.Resources
 	}
 
-	// A group's scheduling replaces the network default wholesale. Merging the
-	// two would make it impossible to drop an inherited nodeSelector.
-	scheduling := group.Spec.Scheduling
-	if scheduling == nil && net.Spec.Defaults != nil {
-		scheduling = net.Spec.Defaults.Scheduling
-	}
+	scheduling := EffectiveScheduling(net, group.Spec.Scheduling)
 
 	var pullSecrets []corev1.LocalObjectReference
 	if net.Spec.Defaults != nil {

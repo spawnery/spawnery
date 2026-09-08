@@ -294,6 +294,25 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		// them for as long as the refusal stands.
 		return r.refuse(ctx, group)
 	}
+	if message, ok := podspec.SchedulingRefusal(network,
+		podspec.EffectiveScheduling(network, group.Spec.Scheduling), group.Namespace); !ok {
+		if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonSchedulingNotAllowed) {
+			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, spawneryv1alpha1.ReasonSchedulingNotAllowed, actionSyncStatus,
+				"%s", message)
+		}
+		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonSchedulingNotAllowed, message)
+		return r.refuse(ctx, group)
+	}
+	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort && group.Spec.Expose.HostPort != nil {
+		if message, ok := podspec.HostPortRefusal(network, group.Spec.Expose.HostPort.Port); !ok {
+			if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonHostPortNotAllowed) {
+				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, spawneryv1alpha1.ReasonHostPortNotAllowed, actionSyncStatus,
+					"%s", message)
+			}
+			setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonHostPortNotAllowed, message)
+			return r.refuse(ctx, group)
+		}
+	}
 	setProxyGroupAccepted(group, true, spawneryv1alpha1.ReasonAccepted, "")
 	// Persisted now, before any of the side effects below can fail: without
 	// this write, a group that reaches here and then hits an error — the

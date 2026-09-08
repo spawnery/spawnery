@@ -258,6 +258,11 @@ func newFixture(t *testing.T) *fixture {
 		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: ns},
 		Spec: spawneryv1alpha1.NetworkSpec{
 			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "velocity-forwarding-secret"},
+			// The whole port range, so the expose tests that use HostPort
+			// keep testing exposure; scheduling_test.go narrows it.
+			Scheduling: &spawneryv1alpha1.SchedulingPolicy{
+				HostPortRange: &spawneryv1alpha1.PortRange{Min: 1, Max: 65535},
+			},
 		},
 	}
 	if err := c.Create(ctx, f.network); err != nil {
