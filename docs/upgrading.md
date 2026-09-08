@@ -934,8 +934,15 @@ The operator writes a `NetworkPolicy` named `<group>-proxies` beside each
 ProxyGroup, egress only: cluster DNS, the operator's agent port, the network's
 backends on 25565, and for `onlineMode: true` the internet on 443 minus the
 private and link-local ranges. On a CNI that enforces policy, a proxy plugin
-that dials anything else — a database in another namespace, a webhook on a
-port other than 443 — stops reaching it after the upgrade. `kindnet` and the
-`paulwtf` cluster enforce nothing, so nothing changes there. The policy is
-owned by its group and goes with it.
+that dials anything else — a database, a webhook on a port other than 443 —
+stops reaching it the moment the policy lands. Measured 2026-09-08 on
+`paulwtf`, which runs Cilium: within a minute of the rollout every gateway
+proxy lost Redis, MongoDB and its LuckPerms Postgres, while the backends kept
+theirs because the installation already carried a policy of its own for them.
+Policies add up, so the remedy is one more object beside the operator's — a
+policy selecting `spawnery.cloud/role: proxy` that admits the databases the
+proxy's plugins use — written **before** the upgrade, not after the alert.
+`kindnet`, which the end-to-end harness runs on, enforces nothing; do not read
+that as a statement about any real cluster. The operator's policy is owned by
+its group and goes with it.
 
