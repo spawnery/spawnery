@@ -1547,7 +1547,8 @@ spec:
                   and JAVA_TOOL_OPTIONS is the same seam: the Velocity entrypoint execs
                   java with its own flag list too. It is in podspec.DesiredProxyHash for
                   the same reason -- editing it rolls the group through the ordinary
-                  surge-1 path.
+                  surge-1 path, and with the same limit: a valueFrom reference is
+                  digested, the value behind it is not.
                 items:
                   description: EnvVar represents an environment variable present in
                     a Container.
@@ -3566,6 +3567,12 @@ spec:
                   the opposite of ExtraPlugins, whose contents deliberately reach no
                   hash, and the difference is that a filesystem the operator only names
                   cannot be digested while an env list it renders can.
+
+                  What the hash digests is the reference, not the value: an entry with
+                  valueFrom.secretKeyRef or configMapKeyRef reads any Secret or
+                  ConfigMap in the namespace, the same reach a spec.mounts entry has,
+                  and rotating that object changes what a new pod gets while the
+                  running fleet keeps the old value until something else rolls it.
                 items:
                   description: EnvVar represents an environment variable present in
                     a Container.

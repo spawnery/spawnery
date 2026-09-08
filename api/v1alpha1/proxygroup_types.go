@@ -293,7 +293,8 @@ type ProxyGroupSpec struct {
 	// and JAVA_TOOL_OPTIONS is the same seam: the Velocity entrypoint execs
 	// java with its own flag list too. It is in podspec.DesiredProxyHash for
 	// the same reason -- editing it rolls the group through the ordinary
-	// surge-1 path.
+	// surge-1 path, and with the same limit: a valueFrom reference is
+	// digested, the value behind it is not.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

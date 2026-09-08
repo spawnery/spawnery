@@ -179,6 +179,12 @@ type ServerGroupSpec struct {
 	// the opposite of ExtraPlugins, whose contents deliberately reach no
 	// hash, and the difference is that a filesystem the operator only names
 	// cannot be digested while an env list it renders can.
+	//
+	// What the hash digests is the reference, not the value: an entry with
+	// valueFrom.secretKeyRef or configMapKeyRef reads any Secret or
+	// ConfigMap in the namespace, the same reach a spec.mounts entry has,
+	// and rotating that object changes what a new pod gets while the
+	// running fleet keeps the old value until something else rolls it.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
