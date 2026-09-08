@@ -252,3 +252,83 @@ func TestBuildNetworkPolicyDeclaresBothPolicyTypes(t *testing.T) {
 		t.Errorf("policyTypes = %v, want both Ingress and Egress", p.Spec.PolicyTypes)
 	}
 }
+
+func proxyGroupNamed(name string) *spawneryv1alpha1.ProxyGroup {
+	return &spawneryv1alpha1.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "minecraft"}}
+}
+
+func TestTheProxyPolicyIsEgressOnlyAndSelectsOneGroupsProxies(t *testing.T) {
+	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", false)
+
+	if p.Name != "gateway-proxies" || p.Namespace != "minecraft" {
+		t.Errorf("name/namespace = %s/%s, want gateway-proxies/minecraft", p.Name, p.Namespace)
+	}
+	// Egress only: an ingress type here would put the kubelet's readiness
+	// probe under policy, the reason BuildNetworkPolicy never selected
+	// proxies at all.
+	if len(p.Spec.PolicyTypes) != 1 || p.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
+		t.Errorf("policyTypes = %v, want exactly [Egress]", p.Spec.PolicyTypes)
+	}
+	if len(p.Spec.Ingress) != 0 {
+		t.Errorf("ingress rules = %v, want none", p.Spec.Ingress)
+	}
+	want := podspec.ProxyLabels("production", "gateway")
+	if got := p.Spec.PodSelector.MatchLabels; len(got) != len(want) {
+		t.Errorf("podSelector = %v, want %v", got, want)
+	} else {
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("podSelector[%q] = %q, want %q", k, got[k], v)
+			}
+		}
+	}
+}
+
+func TestAnOfflineProxyReachesDNSTheOperatorAndItsBackendsOnly(t *testing.T) {
+	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", false)
+	if len(p.Spec.Egress) != 3 {
+		t.Fatalf("got %d egress rules, want three (DNS, operator, backends)", len(p.Spec.Egress))
+	}
+	backends := p.Spec.Egress[2]
+	if len(backends.To) != 1 || backends.To[0].PodSelector == nil || backends.To[0].NamespaceSelector != nil {
+		t.Fatalf("the backend peer must be a podSelector in the policy's own namespace; got %+v", backends.To)
+	}
+	sel := backends.To[0].PodSelector.MatchLabels
+	if sel[podspec.LabelRole] != podspec.RoleServer || sel[podspec.LabelNetwork] != "production" {
+		t.Errorf("backend selector = %v, want this network's servers", sel)
+	}
+	if len(backends.Ports) != 1 || backends.Ports[0].Port.IntValue() != int(podspec.MinecraftPort) {
+		t.Errorf("backend ports = %v, want only %d", backends.Ports, podspec.MinecraftPort)
+	}
+	for _, rule := range p.Spec.Egress {
+		for _, peer := range rule.To {
+			if peer.IPBlock != nil {
+				t.Errorf("an offline-mode proxy got an ipBlock rule: %+v", peer.IPBlock)
+			}
+		}
+	}
+}
+
+func TestAnOnlineProxyGetsTheInternetOn443MinusThePrivateRanges(t *testing.T) {
+	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", true)
+	if len(p.Spec.Egress) != 4 {
+		t.Fatalf("got %d egress rules, want four (DNS, operator, backends, internet)", len(p.Spec.Egress))
+	}
+	internet := p.Spec.Egress[3]
+	if len(internet.To) != 1 || internet.To[0].IPBlock == nil || internet.To[0].IPBlock.CIDR != "0.0.0.0/0" {
+		t.Fatalf("the internet peer must be an ipBlock over 0.0.0.0/0; got %+v", internet.To)
+	}
+	except := internet.To[0].IPBlock.Except
+	for _, want := range []string{"169.254.0.0/16", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"} {
+		found := false
+		for _, e := range except {
+			found = found || e == want
+		}
+		if !found {
+			t.Errorf("except = %v, want it to leave out %s", except, want)
+		}
+	}
+	if len(internet.Ports) != 1 || internet.Ports[0].Port.IntValue() != int(podspec.HTTPSPort) {
+		t.Errorf("internet ports = %v, want only %d", internet.Ports, podspec.HTTPSPort)
+	}
+}

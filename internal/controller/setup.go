@@ -259,6 +259,7 @@ func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconcil
 		Agents:             opts.Agents,
 		Bootstrap:          opts.Bootstrapper,
 		AgentEndpoint:      opts.AgentEndpoint,
+		OperatorNamespace:  opts.OperatorNamespace,
 		Proxies:            opts.Proxies,
 		Clock:              opts.Clock,
 		Expectations:       newExpectations(opts.Clock),

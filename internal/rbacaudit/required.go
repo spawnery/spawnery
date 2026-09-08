@@ -218,11 +218,11 @@ var RequiredCluster = []Permission{
 	// its Network, so the garbage collector removes it. A delete marker added
 	// later turns this suite red in both directions before it can ship, the
 	// same way the persistentvolumeclaims grant above works.
-	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "get", Why: "NetworkReconciler.reconcileNetworkPolicy reads before it writes"},
-	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "list", Why: "NetworkReconciler Owns(&networkingv1.NetworkPolicy{})"},
-	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "watch", Why: "NetworkReconciler Owns(&networkingv1.NetworkPolicy{})"},
-	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "create", Why: "NetworkReconciler.reconcileNetworkPolicy creates the per-network policy"},
-	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "update", Why: "NetworkReconciler.reconcileNetworkPolicy keeps it in step with the Network"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "get", Why: "NetworkReconciler and ProxyGroupReconciler read their policies before they write"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "list", Why: "NetworkReconciler and ProxyGroupReconciler Owns(&networkingv1.NetworkPolicy{})"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "watch", Why: "NetworkReconciler and ProxyGroupReconciler Owns(&networkingv1.NetworkPolicy{})"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "create", Why: "the per-network backend policy and the per-group proxy egress policy"},
+	{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "update", Why: "both policies are kept in step with the object that owns them"},
 }
 
 // RequiredNamespaced is what the operator does in its own namespace only, and

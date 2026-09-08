@@ -27,6 +27,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -140,6 +141,9 @@ type ProxyGroupReconciler struct {
 	Bootstrap *Bootstrapper
 	// AgentEndpoint is the address the in-game agent dials.
 	AgentEndpoint string
+	// OperatorNamespace is where the operator runs; the group's egress
+	// policy names it so a proxy may dial the agent port.
+	OperatorNamespace string
 	// Proxies is how a surplus proxy is told to stop taking connections, and
 	// a proxy that is no longer surplus is told to resume. See
 	// ProxyReadinessSetter.
@@ -424,6 +428,9 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	}
 	svc, err := r.reconcileService(ctx, group)
 	if err != nil {
+		return obs, ctrl.Result{}, err
+	}
+	if err := r.reconcileNetworkPolicy(ctx, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
 	// A snapshot from before this pass's own creates: reconcileReplicas may
@@ -1764,6 +1771,23 @@ func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 // Bootstrapper.ensureConfigMap both document: cmd/spawnery-operator narrows
 // the manager's cache for ConfigMaps to that label, so an unlabelled one this
 // reconciler just wrote would be invisible to it on the very next Get.
+// reconcileNetworkPolicy keeps the group's egress policy in step with its
+// online-mode, which is the one input that changes what a proxy may reach.
+func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
+	online := proxyConfigValues(group).OnlineMode
+	desired := podspec.BuildProxyNetworkPolicy(group.Spec.NetworkRef.Name, group, r.OperatorNamespace,
+		online != nil && *online)
+	policy := &networkingv1.NetworkPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace},
+	}
+	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, policy, func() error {
+		policy.Labels = desired.Labels
+		policy.Spec = desired.Spec
+		return controllerutil.SetControllerReference(group, policy, r.Scheme)
+	})
+	return err
+}
+
 func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
 	data, err := yaml.Marshal(proxyConfigValues(group))
 	if err != nil {
@@ -2391,6 +2415,7 @@ func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&corev1.ConfigMap{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
+		Owns(&networkingv1.NetworkPolicy{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
 		// A group refused because its Network is missing or unaccepted has no
 		// way of hearing that the Network came back: it is not an owner, and
