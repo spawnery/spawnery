@@ -75,7 +75,7 @@ vet:
 test: manifests generate fmt vet chart-lint toolchain-lint
 	go test -race ./... -coverprofile cover.out
 
-# The standing check docs/known-issues.md has asked for since milestone 2c.
+# The standing check docs/reference/known-issues.md has asked for since milestone 2c.
 # protoc and protoc-gen-grpc-java are pinned in flake.nix, protobuf-java and
 # the io.grpc:grpc-* artifacts in agent/common/build.gradle.kts and
 # agent/deps.json, and a `nix flake update` moves only the first of each pair.
@@ -230,7 +230,7 @@ velocity-image-test: velocity-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(VELOCITY_IMAGE) hack/velocity-image-test.sh
 
 # Its own out-link, like the two above. Sharing ./result is what let a parallel
-# `make -j` load whichever image finished last; see docs/known-issues.md.
+# `make -j` load whichever image finished last; see docs/reference/known-issues.md.
 .PHONY: operator-image
 operator-image:
 	nix build .#operator-image --out-link result-operator
@@ -259,7 +259,7 @@ operator-image-test: operator-image-load
 # touched. Measured, not reasoned about: see the milestone 6a final fix report.
 #
 # --no-link on both halves, because neither the build nor the check wants an
-# out-link; leaving them to the default ./result is what docs/known-issues.md's
+# out-link; leaving them to the default ./result is what docs/reference/known-issues.md's
 # closed entry is about.
 .PHONY: image-repro
 image-repro:

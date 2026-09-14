@@ -547,7 +547,7 @@ systemd-run --scope --user --property=Delegate=yes -- \
 - The tests: `internal/controller/expose_test.go`, `test/e2e/expose_test.go`.
 - The SDD record of how this milestone was built, task by task, including
   every mutation run and its verbatim output:
-  [`.superpowers/sdd/2026-08-18-expose-strategies/`](../.superpowers/sdd/2026-08-18-expose-strategies/)
+  `.superpowers/sdd/2026-08-18-expose-strategies/`
   (`task-1-report.md` through `task-7-report.md` — there are seven, not six —
   and `progress.md`, the ledger §5 restates).
 - 6b's record, and what 6c started from:

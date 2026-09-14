@@ -720,7 +720,7 @@ this round's own commit message carry the true count.
   `internal/rbacaudit/required.go:42-58`.
 - The SDD record of how this milestone was built, task by task, including
   every mutation run and its verbatim output:
-  [`.superpowers/sdd/2026-08-19-ci/`](../.superpowers/sdd/2026-08-19-ci/)
+  `.superpowers/sdd/2026-08-19-ci/`
   (`task-1-report.md` through `task-6-report.md`, `task-3b-report.md`, and
   `progress.md`, the ledger §5 above restates).
 - 6d's record, and what 6e started from:

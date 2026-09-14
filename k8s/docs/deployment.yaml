@@ -16,6 +16,19 @@ spec:
         runAsNonRoot: true
         runAsUser: 10001
         runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      # maxSkew 1 with DoNotSchedule: three nodes and two replicas means the
+      # constraint can always be satisfied, so a pod that cannot spread is
+      # left Pending rather than doubled up with the other on a node a drain
+      # would then take both replicas down with.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: docs
       containers:
         - name: caddy
           image: ghcr.io/spawnery/docs:dev

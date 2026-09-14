@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.AtomicInteger
  *
  * There is deliberately no way to clear [ready]. Hello{ready:false} cannot
  * lower a readiness the operator's registry has already recorded (see
- * docs/known-issues.md), so representing that state here would only invite
+ * docs/reference/known-issues.md), so representing that state here would only invite
  * code that tries to express it.
  */
 class ServerState {

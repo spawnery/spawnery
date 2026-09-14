@@ -26,6 +26,10 @@ let
       root * /site
       encode gzip
       file_server
+      handle_errors {
+        rewrite * /404.html
+        file_server
+      }
     }
   '';
 

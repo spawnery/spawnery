@@ -521,7 +521,7 @@ systemd-run --scope --user --property=Delegate=yes -- \
 - The publish path: `hack/publish.sh`.
 - The SDD record of how this milestone was built, task by task, including
   every mutation run and its verbatim output:
-  [`.superpowers/sdd/2026-08-19-helm-chart/`](../.superpowers/sdd/2026-08-19-helm-chart/)
+  `.superpowers/sdd/2026-08-19-helm-chart/`
   (`task-1-report.md` through `task-6-report.md`, and `progress.md`, the
   ledger §5 restates).
 - 6c's record, and what 6d started from:

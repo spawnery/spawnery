@@ -174,7 +174,7 @@ class ServerDirectory(
      * a server, and "where did that backend go" is a question with no other
      * answer on the proxy side.
      *
-     * docs/known-issues.md carried this as "logs nothing at the point of
+     * docs/reference/known-issues.md carried this as "logs nothing at the point of
      * removal, unlike every other mutation in the same class". The comparison
      * was wrong -- no mutation here logged, only the malformed-address skip --
      * but the gap it named was real.

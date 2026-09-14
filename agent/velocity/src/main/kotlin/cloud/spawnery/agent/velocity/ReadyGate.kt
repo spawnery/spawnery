@@ -87,7 +87,7 @@ class ReadyGate(
      * the kubelet will probe a port nothing is listening on for as long as the
      * pod lives. Carrying on means a pod stuck in Pending with the reason in a
      * container log and nothing on the group -- which is precisely what
-     * docs/known-issues.md recorded. [onHopeless] ends it instead, so the
+     * docs/reference/known-issues.md recorded. [onHopeless] ends it instead, so the
      * failure becomes a restart and then a CrashLoopBackOff, which the
      * operator does report.
      *
