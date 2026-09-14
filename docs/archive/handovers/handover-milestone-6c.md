@@ -54,7 +54,7 @@ decided against, not a claim about what is true today.
 This document is not a spec. It says where 6c stopped and what 6d — the Helm
 chart — finds when it starts, checked against the code as 6c leaves it rather
 than against the plan that preceded it. The design decisions live in
-[`docs/superpowers/specs/2026-08-18-expose-strategies-design.md`](../../superpowers/specs/2026-08-18-expose-strategies-design.md);
+`docs/superpowers/specs/2026-08-18-expose-strategies-design.md`;
 the open points are in [`docs/known-issues.md`](../../reference/known-issues.md), whose "From
 milestone 6c" section this document does not repeat in full.
 
@@ -535,7 +535,7 @@ systemd-run --scope --user --property=Delegate=yes -- \
 ## 7. Where everything lives
 
 - Design:
-  [`docs/superpowers/specs/2026-08-18-expose-strategies-design.md`](../../superpowers/specs/2026-08-18-expose-strategies-design.md).
+  `docs/superpowers/specs/2026-08-18-expose-strategies-design.md`.
 - Open points: [`docs/known-issues.md`](../../reference/known-issues.md), "From milestone
   6c", plus the two corrected entries under "From milestone 4c-3" that used
   to describe the removed refusal in the present tense.

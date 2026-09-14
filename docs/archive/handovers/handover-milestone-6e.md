@@ -31,7 +31,7 @@ This document is not a spec. It says where 6e stopped and what the RKE2
 rollout — the last thing milestone 6 owes — finds when it starts, checked
 against the code as 6e leaves it rather than against the plan that preceded
 it. The design decisions live in
-[`docs/superpowers/specs/2026-08-19-ci-design.md`](../../superpowers/specs/2026-08-19-ci-design.md);
+`docs/superpowers/specs/2026-08-19-ci-design.md`;
 the open points are in [`docs/known-issues.md`](../../reference/known-issues.md), whose new
 "From milestone 6e" section this document does not repeat in full.
 
@@ -709,7 +709,7 @@ this round's own commit message carry the true count.
 
 ## 8. Where everything lives
 
-- Design: [`docs/superpowers/specs/2026-08-19-ci-design.md`](../../superpowers/specs/2026-08-19-ci-design.md).
+- Design: `docs/superpowers/specs/2026-08-19-ci-design.md`.
 - Open points: [`docs/known-issues.md`](../../reference/known-issues.md), "From milestone
   6e", plus the closed and still-open halves of the milestone-2c entries it
   now amends.
