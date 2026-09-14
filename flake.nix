@@ -555,6 +555,10 @@
           operator-image = pkgs.callPackage ./nix/operator-image.nix {
             inherit spawnery-operator operatorVersion oci-common;
           };
+
+          docs-image = pkgs.callPackage ./nix/docs-image.nix {
+            inherit docs-site oci-common;
+          };
         });
     };
 }
