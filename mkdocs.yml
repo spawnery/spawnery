@@ -57,6 +57,7 @@ nav:
       - Rotating the forwarding secret: guides/rotating-the-forwarding-secret.md
   - Reference:
       - Custom resources: reference/crds.md
+      - Chart values: reference/chart-values.md
       - Known issues: reference/known-issues.md
   - Explanation:
       - Network boundaries: explanation/network-boundaries.md

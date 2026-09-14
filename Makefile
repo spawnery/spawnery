@@ -19,6 +19,7 @@ manifests:
 		output:rbac:artifacts:config=config/rbac
 	./hack/chart-templates.sh
 	./hack/crd-docs.sh
+	./hack/chart-values-docs.sh
 
 .PHONY: generate
 generate:
