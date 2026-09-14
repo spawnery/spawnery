@@ -15,7 +15,7 @@ something other than the test written to catch them. That is the part a
 changelog throws away.
 
 For what is open right now, read [`known-issues.md`](known-issues.md). For what
-the current release does, read the [README](../README.md).
+the current release does, read the [README](https://github.com/spawnery/spawnery/blob/master/README.md).
 
 ## Contents
 

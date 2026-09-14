@@ -543,7 +543,7 @@ systemd-run --scope --user --property=Delegate=yes -- \
   `internal/controller/proxygroup_controller.go` (`reconcileService`,
   `proxyAddress`, `applyExposeAnnotations`, `exposeImplemented`,
   `setProxyPodsBlocked`, `reportBlockedProxies`).
-- The sample: [`config/samples/network.yaml`](../config/samples/network.yaml).
+- The sample: [`config/samples/network.yaml`](https://github.com/spawnery/spawnery/blob/master/config/samples/network.yaml).
 - The tests: `internal/controller/expose_test.go`, `test/e2e/expose_test.go`.
 - The SDD record of how this milestone was built, task by task, including
   every mutation run and its verbatim output:

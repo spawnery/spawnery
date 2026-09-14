@@ -511,7 +511,7 @@ systemd-run --scope --user --property=Delegate=yes -- \
   [`docs/superpowers/specs/2026-08-19-helm-chart-design.md`](superpowers/specs/2026-08-19-helm-chart-design.md).
 - Open points: [`docs/known-issues.md`](known-issues.md).
 - The chart: `charts/spawnery/`, and its own
-  [`README.md`](../charts/spawnery/README.md) for installing, the manual
+  [`README.md`](https://github.com/spawnery/spawnery/blob/master/charts/spawnery/README.md) for installing, the manual
   forwarding-secret step, the values table and what uninstalling does and
   does not remove.
 - The generation step: `hack/chart-templates.sh`, run from `Makefile:14-19`.

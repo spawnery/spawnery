@@ -24,7 +24,7 @@ takes to say so.
 `NetworkPolicy` objects buy and what they do not, and what bounds the number of
 agents that may reach the operator — measured scope rather than a list of
 faults.
-[`charts/spawnery/README.md`](../charts/spawnery/README.md) carries the manual
+[`charts/spawnery/README.md`](https://github.com/spawnery/spawnery/blob/master/charts/spawnery/README.md) carries the manual
 grant a chart cannot make for a namespace that does not exist yet, and why the
 digest checked in at any tag describes the release before it.
 

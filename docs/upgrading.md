@@ -505,7 +505,7 @@ which is the platforms' own convention, and better than a lecture — so an
 ungranted player cannot tell "you may not" from "there is no such command".
 
 The three permissions and what each one costs are in
-[the chart's README](../charts/spawnery/README.md#the-cloud-permissions). The
+[the chart's README](https://github.com/spawnery/spawnery/blob/master/charts/spawnery/README.md#the-cloud-permissions). The
 short version: `spawnery.cloud.read` changes nothing, `spawnery.cloud.retire`
 takes a server out of rotation without moving anybody, and
 `spawnery.cloud.scale` spends money.
@@ -579,7 +579,7 @@ nobody, this feature costs no traffic at all.
 
 Plugins can subscribe too, through `SpawneryApi.events()`. They receive the
 events one at a time rather than the collapsed summary — see
-[`agent/api/README.md`](../agent/api/README.md). It is a feed and not a ledger:
+[`agent/api/README.md`](https://github.com/spawnery/spawnery/blob/master/agent/api/README.md). It is a feed and not a ledger:
 an agent that was disconnected missed what happened while it was gone, and the
 network picture it re-syncs on reconnect is the correction.
 
@@ -675,7 +675,7 @@ api.servers().stream().filter(s -> s.state().equals("waiting"))
 a word: not scheduling, not routing, not scaling. That is the whole reason a
 free-form description is safe to carry here, and it is also the limit — a
 server that announces `ending` goes on taking joins until something
-[retires](../agent/api/README.md#changing-the-fleet) it.
+[retires](https://github.com/spawnery/spawnery/blob/master/agent/api/README.md#changing-the-fleet) it.
 
 It is deliberately not the phase. `ServerInfo.phase()` is the operator's
 account of a server's lifecycle and no plugin can write it; this is the
@@ -777,7 +777,7 @@ this version reads an older operator's picture — where the field does not exis
 
 A plugin built against an older API jar keeps running; `Group` gained a
 component, which is the kind of change the [API's own
-notes](../agent/api/README.md#version-skew) say to expect. Only code that
+notes](https://github.com/spawnery/spawnery/blob/master/agent/api/README.md#version-skew) say to expect. Only code that
 constructs a `Group` itself — a test double — has to be rebuilt.
 
 ## Files can come from a volume, and a claim mount now needs its own switch

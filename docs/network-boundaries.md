@@ -434,14 +434,14 @@ could trivially route around is a check that only reassures.
 
 So the boundary is the one that already exists and is already written down:
 **who may install a plugin**, which is who may create a pod in that namespace,
-which [`charts/spawnery/README.md`](../charts/spawnery/README.md) tells an
+which [`charts/spawnery/README.md`](https://github.com/spawnery/spawnery/blob/master/charts/spawnery/README.md) tells an
 operator to treat as one trust domain.
 
 The `/cloud` command is the different case and does gate. A command has a
 source, so a permission is expressible there, and that is where it belongs. It
 carries three — `spawnery.cloud.read`, `.retire` and `.scale`, listed with what
 each costs in
-[`charts/spawnery/README.md`](../charts/spawnery/README.md#the-cloud-permissions)
+[`charts/spawnery/README.md`](https://github.com/spawnery/spawnery/blob/master/charts/spawnery/README.md#the-cloud-permissions)
 — and the split is not cosmetic: reading the network is what a moderator gets,
 and adding servers spends money.
 

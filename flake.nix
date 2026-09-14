@@ -116,6 +116,11 @@
               protoc-gen-go-grpc
               protoc-gen-grpc-java
               gradle
+              # The documentation site. mkdocs --strict is the link checker,
+              # so this is a test dependency and not only a build one.
+              python3Packages.mkdocs
+              python3Packages.mkdocs-material
+              python3Packages.mkdocs-mermaid2-plugin
               jdk21_headless
               # hack/agent-test.sh asserts on the stub operator's event stream.
               jq
@@ -490,6 +495,8 @@
             env.CGO_ENABLED = 0;
             ldflags = [ "-s" "-w" ];
           };
+
+          mermaid-js = pkgs.callPackage ./nix/mermaid.nix { };
         in
         {
           # Architecture-independent (it is jars), so this stays available on
@@ -507,7 +514,7 @@
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
