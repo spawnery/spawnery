@@ -1,0 +1,85 @@
+site_name: Spawnery
+site_description: A Kubernetes-native cloud system for Minecraft networks
+site_url: https://docs.spawnery.cloud
+repo_url: https://github.com/spawnery/spawnery
+edit_uri: edit/master/docs/
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+
+# The design record: dated specs and plans, written for the person building
+# the thing rather than the person running it. Kept in the repository, kept
+# out of the search index.
+exclude_docs: |
+  superpowers/
+
+plugins:
+  - search
+  - mermaid2:
+      javascript: assets/mermaid.min.js
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid_custom
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Install: getting-started/index.md
+  - Guides:
+      - Upgrading: guides/upgrading.md
+      - Persistent worlds: guides/persistent-worlds.md
+      - Plugins from a volume: guides/plugins-from-a-volume.md
+      - Mounts and files: guides/mounts-and-files.md
+      - Group environment: guides/group-environment.md
+      - Rotating the CA: guides/rotating-the-ca.md
+      - Rotating the forwarding secret: guides/rotating-the-forwarding-secret.md
+  - Reference:
+      - Known issues: reference/known-issues.md
+  - Explanation:
+      - Network boundaries: explanation/network-boundaries.md
+  - Contributing:
+      - Development: contributing/development.md
+  - Archive:
+      - What this is: archive/index.md
+      - How it was built: archive/history.md
+      - Handovers:
+          - 6e: archive/handovers/handover-milestone-6e.md
+          - 6d: archive/handovers/handover-milestone-6d.md
+          - 6c: archive/handovers/handover-milestone-6c.md
+          - 6b: archive/handovers/handover-milestone-6b.md
+          - 6: archive/handovers/handover-milestone-6.md
+          - 5: archive/handovers/handover-milestone-5.md
+          - 4b: archive/handovers/handover-milestone-4b.md
+          - 4: archive/handovers/handover-milestone-4.md
+          - 3: archive/handovers/handover-milestone-3.md
+          - 2c: archive/handovers/handover-milestone-2c.md
+          - 2b: archive/handovers/handover-milestone-2b.md
+      - Runbooks:
+          - The RKE2 rollout: archive/runbooks/runbook-milestone-6-rollout.md
+          - Secret rotation, driven: archive/runbooks/runbook-milestone-5c-evidence.md
+          - Two worlds through an update: archive/runbooks/runbook-milestone-5b-evidence.md
+          - A world outliving its pod: archive/runbooks/runbook-milestone-5a-evidence.md
+          - Proxy drain and rolling updates: archive/runbooks/runbook-milestone-4c1-evidence.md
+          - The first real join: archive/runbooks/runbook-milestone-3-evidence.md

@@ -17,7 +17,7 @@
 # drain and its taint handling, a PodDisruptionBudget's effect on a real
 # eviction, HostPort and its CNI dependency, a LoadBalancer address, or CIS
 # `restricted` pod security. Those are the RKE2 rollout's (design §12), and
-# docs/runbook-milestone-6-rollout.md is where each was driven.
+# docs/archive/runbooks/runbook-milestone-6-rollout.md is where each was driven.
 #
 # **No image resolves**, by the decision test/e2e/manifests/e2e.yaml takes and
 # explains, so no game or proxy process ever starts and every pod sits in

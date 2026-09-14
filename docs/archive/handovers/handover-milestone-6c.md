@@ -54,8 +54,8 @@ decided against, not a claim about what is true today.
 This document is not a spec. It says where 6c stopped and what 6d — the Helm
 chart — finds when it starts, checked against the code as 6c leaves it rather
 than against the plan that preceded it. The design decisions live in
-[`docs/superpowers/specs/2026-08-18-expose-strategies-design.md`](superpowers/specs/2026-08-18-expose-strategies-design.md);
-the open points are in [`docs/known-issues.md`](known-issues.md), whose "From
+`docs/superpowers/specs/2026-08-18-expose-strategies-design.md`;
+the open points are in [`docs/known-issues.md`](../../reference/known-issues.md), whose "From
 milestone 6c" section this document does not repeat in full.
 
 **Why this is a new document rather than a section appended to
@@ -535,19 +535,19 @@ systemd-run --scope --user --property=Delegate=yes -- \
 ## 7. Where everything lives
 
 - Design:
-  [`docs/superpowers/specs/2026-08-18-expose-strategies-design.md`](superpowers/specs/2026-08-18-expose-strategies-design.md).
-- Open points: [`docs/known-issues.md`](known-issues.md), "From milestone
+  `docs/superpowers/specs/2026-08-18-expose-strategies-design.md`.
+- Open points: [`docs/known-issues.md`](../../reference/known-issues.md), "From milestone
   6c", plus the two corrected entries under "From milestone 4c-3" that used
   to describe the removed refusal in the present tense.
 - The strategies: `internal/podspec/proxy.go` (the container's `hostPort`),
   `internal/controller/proxygroup_controller.go` (`reconcileService`,
   `proxyAddress`, `applyExposeAnnotations`, `exposeImplemented`,
   `setProxyPodsBlocked`, `reportBlockedProxies`).
-- The sample: [`config/samples/network.yaml`](../config/samples/network.yaml).
+- The sample: [`config/samples/network.yaml`](https://github.com/spawnery/spawnery/blob/master/config/samples/network.yaml).
 - The tests: `internal/controller/expose_test.go`, `test/e2e/expose_test.go`.
 - The SDD record of how this milestone was built, task by task, including
   every mutation run and its verbatim output:
-  [`.superpowers/sdd/2026-08-18-expose-strategies/`](../.superpowers/sdd/2026-08-18-expose-strategies/)
+  `.superpowers/sdd/2026-08-18-expose-strategies/`
   (`task-1-report.md` through `task-7-report.md` — there are seven, not six —
   and `progress.md`, the ledger §5 restates).
 - 6b's record, and what 6c started from:

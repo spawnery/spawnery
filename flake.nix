@@ -110,12 +110,17 @@
               #
               #   nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.${builtins.currentSystem}.protoc-gen-grpc-java.version'
               #
-              # Nothing enforces this but flake.lock. See docs/known-issues.md.
+              # Nothing enforces this but flake.lock. See docs/reference/known-issues.md.
               protobuf
               protoc-gen-go
               protoc-gen-go-grpc
               protoc-gen-grpc-java
               gradle
+              # The documentation site. mkdocs --strict is the link checker,
+              # so this is a test dependency and not only a build one.
+              python3Packages.mkdocs
+              python3Packages.mkdocs-material
+              python3Packages.mkdocs-mermaid2-plugin
               jdk21_headless
               # hack/agent-test.sh asserts on the stub operator's event stream.
               jq
@@ -363,7 +368,7 @@
           # field it names, and a claim-backed spec.mounts now needs
           # --allow-mount-volumes. An installation using one and not setting
           # the other gets Accepted=False with MountVolumesDisabled.
-          # docs/upgrading.md carries the note.
+          # docs/guides/upgrading.md carries the note.
           #
           # 0.2.25 moves it for a decision, not a schema: the ready gate no
           # longer registers a server whose agent has already closed its door.
@@ -377,7 +382,7 @@
           # 0.2.28 moves it: the phase machine gains Finished, a server that
           # says its round is over is replaced without costing its group a
           # failure, and accept=false narrows to mean only "stop counting
-          # seats" rather than "stop routing too". docs/upgrading.md carries
+          # seats" rather than "stop routing too". docs/guides/upgrading.md carries
           # the note, because that narrowing reaches agents built before this
           # release as well.
           #
@@ -388,7 +393,7 @@
           # report and clamps the mirrored count; proxy pods gain the fsGroup
           # their writable claims need, which moves DesiredProxyHash and rolls
           # every proxy once; and NodeDraining names the refusal that applies.
-          # The CRDs change in description text only. docs/upgrading.md
+          # The CRDs change in description text only. docs/guides/upgrading.md
           # carries the proxy roll.
           #
           # 0.2.31 moves it alone, for what 0.2.30's rollout showed: for the
@@ -413,7 +418,7 @@
           # allowed. The operator also writes an egress policy per
           # ProxyGroup, keeps the budget and a departing node ahead of the
           # ConfigMap and claim gates, and bounds every send in a session
-          # loop. docs/upgrading.md carries the two notes. No image moves.
+          # loop. docs/guides/upgrading.md carries the two notes. No image moves.
           operatorVersion = "0.2.33";
 
           spawnery-slp = pkgs.buildGoModule {
@@ -490,6 +495,12 @@
             env.CGO_ENABLED = 0;
             ldflags = [ "-s" "-w" ];
           };
+
+          mermaid-js = pkgs.callPackage ./nix/mermaid.nix { };
+
+          # mermaid-js is a local let binding, not a pkgs attribute, so
+          # callPackage cannot fill it and it is passed explicitly.
+          docs-site = pkgs.callPackage ./nix/docs-site.nix { inherit mermaid-js; };
         in
         {
           # Architecture-independent (it is jars), so this stays available on
@@ -507,7 +518,7 @@
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js docs-site;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
@@ -543,6 +554,10 @@
           # does not cross-compile but labels its output amd64 regardless.
           operator-image = pkgs.callPackage ./nix/operator-image.nix {
             inherit spawnery-operator operatorVersion oci-common;
+          };
+
+          docs-image = pkgs.callPackage ./nix/docs-image.nix {
+            inherit docs-site oci-common;
           };
         });
     };

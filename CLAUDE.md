@@ -86,6 +86,6 @@ A `v*` tag runs `.github/workflows/release.yml`, which publishes only the artefa
 ## Conventions
 
 - **Commits are Conventional Commits** with a scope naming the part touched: `feat(podspec): …`, `fix(api): …`, `chore: 0.2.24, …`. The subject says what changed; the body says why, wrapped at 72 columns. Older plans under `docs/superpowers/plans/` say "no prefixes"; that rule is superseded.
-- `docs/known-issues.md` holds only open problems; a fixed entry is deleted, and its story lives in the commit that removed it. Claims about the `paulwtf` cluster belong in the GitOps repository, not here.
+- `docs/reference/known-issues.md` holds only open problems; a fixed entry is deleted, and its story lives in the commit that removed it. Claims about the `paulwtf` cluster belong in the GitOps repository, not here.
 - Docs and code comments in this repo record measurements ("measured on …") rather than assumptions. Keep that when adding to them.
 - New features come as a spec in `docs/superpowers/specs/` and a plan in `docs/superpowers/plans/` (dated filenames), then implementation.

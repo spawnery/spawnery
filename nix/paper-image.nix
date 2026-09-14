@@ -4,7 +4,7 @@
 # this project ships going forward is nix/purpur-image.nix: Purpur is a fork of
 # Paper, it runs the same agent, the same helper binaries and the same
 # entrypoint, and it is what the network this operator was built for actually
-# runs. See docs/upgrading.md for what an installation should do about it.
+# runs. See docs/guides/upgrading.md for what an installation should do about it.
 #
 # Nothing about this file stops working, and nothing here is going to be
 # removed by surprise: every ServerGroup in every installation carries a

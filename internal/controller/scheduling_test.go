@@ -40,7 +40,7 @@ func (f *fixture) allowScheduling(t *testing.T, policy *spawneryv1alpha1.Schedul
 	}
 }
 
-// The boundary docs/network-boundaries.md claims: a group author cannot put
+// The boundary docs/explanation/network-boundaries.md claims: a group author cannot put
 // a pod where the Network's owner did not say it may go. Before this check a
 // toleration on a control-plane taint was copied into the pod as written.
 func TestAGroupIsRefusedTheSchedulingItsNetworkDoesNotAllow(t *testing.T) {

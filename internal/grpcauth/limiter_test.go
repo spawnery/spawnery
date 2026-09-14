@@ -182,7 +182,7 @@ func tcpPeerContext(ip string, port int) context.Context {
 //   - Same IP, different ephemeral ports must share one bucket. A gRPC peer
 //     address is IP:port and the port is fresh on every TCP connection, so
 //     keying on the whole address gives a pod in a reconnect loop a fresh
-//     PeerBurst per connection — the attack docs/known-issues.md documents,
+//     PeerBurst per connection — the attack docs/reference/known-issues.md documents,
 //     bounded only by how fast it can complete handshakes.
 //   - Different IPs must not share one bucket. That is the mass-reconnect
 //     safety the design leans on, and it is also what catches a peerAddr that

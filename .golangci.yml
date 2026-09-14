@@ -10,7 +10,7 @@
 #
 # What is confirmed: the true figure, from a cleared golangci-lint cache, was
 # 38 -- not the 17 a capped run shows, and not the 33 once recorded here,
-# which was itself measured against a stale cache (docs/known-issues.md,
+# which was itself measured against a stale cache (docs/reference/known-issues.md,
 # "From milestone 6e"). A check whose output can be a sample rather than a
 # total is not a measurement, and CI would have reported an uncertain count
 # while nobody could tell whether a falling number meant better code or a

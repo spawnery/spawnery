@@ -62,8 +62,8 @@ This document is not a spec. It says where 6b stopped and what 6c — the
 `LoadBalancer` and `HostPort` expose strategies — finds when it starts, checked
 against the code as 6b leaves it rather than against the plan that preceded it.
 The design decisions live in
-[`docs/superpowers/specs/2026-08-17-network-policies-design.md`](superpowers/specs/2026-08-17-network-policies-design.md);
-the open points are in [`docs/known-issues.md`](known-issues.md), whose "From
+`docs/superpowers/specs/2026-08-17-network-policies-design.md`;
+the open points are in [`docs/known-issues.md`](../../reference/known-issues.md), whose "From
 milestone 6b" section this document does not repeat in full.
 
 **Why this is a new document rather than a section appended to
@@ -346,7 +346,7 @@ to catch two cache-backed **lists**, with reads as a class unmeasured. 6b's own
 
 ## 5. Open points
 
-[`docs/known-issues.md`](known-issues.md), "From milestone 6b", carries them in
+[`docs/known-issues.md`](../../reference/known-issues.md), "From milestone 6b", carries them in
 full: the kindnet measurement, the unselected proxies, unlabelled pods in game
 namespaces, unrestricted proxy egress, the DNAT question, the peerless rule and
 the single unit test standing behind it, the reconcile-ordering consequence
@@ -409,8 +409,8 @@ systemd-run --scope --user --property=Delegate=yes -- \
 ## 7. Where everything lives
 
 - Design:
-  [`docs/superpowers/specs/2026-08-17-network-policies-design.md`](superpowers/specs/2026-08-17-network-policies-design.md).
-- Open points: [`docs/known-issues.md`](known-issues.md), "From milestone 6b",
+  `docs/superpowers/specs/2026-08-17-network-policies-design.md`.
+- Open points: [`docs/known-issues.md`](../../reference/known-issues.md), "From milestone 6b",
   plus the amended entries under the milestone 3 preconditions, "From milestone
   3c", and "Preconditions for milestone 6".
 - The policies: `internal/podspec/netpol.go` (the per-`Network` one, a pure

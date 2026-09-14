@@ -81,7 +81,7 @@ version: 0.2.34
 # 0.2.30 zieht ihn wieder mit: Operator und Images bewegen sich beide (siehe
 # flake.nix), die CRDs nur im Beschreibungstext. Was ein Upgrade kostet, ist
 # ein Roll jeder ProxyGroup, weil der Proxy-Pod eine fsGroup bekommt;
-# docs/upgrading.md sagt es.
+# docs/guides/upgrading.md sagt es.
 #
 # 0.2.31 zieht ihn mit, nur der Operator: der Neustart-Ueberbau aus 0.2.30
 # (ein zweiter Server je Gruppe fuer fuenf Minuten) ist weg. Keine CRD-Zeile,
@@ -95,7 +95,7 @@ version: 0.2.34
 # `git diff v0.2.32 v0.2.33 --numstat -- config/crd/` gibt 53 0, alles auf
 # Network, ein optionales spec.scheduling. Jedes vorhandene Objekt validiert
 # unveraendert; eine Gruppe, die scheduling oder HostPort nutzt, braucht
-# danach die Erlaubnis ihres Networks (docs/upgrading.md). Dazu schreibt der
+# danach die Erlaubnis ihres Networks (docs/guides/upgrading.md). Dazu schreibt der
 # Operator je ProxyGroup eine Egress-Policy. Kein Image bewegt sich.
 #
 # 0.2.34 nicht: die Images bewegen sich (siehe flake.nix), der Operator nicht.

@@ -155,7 +155,7 @@ func DesiredServerHash(
 // off-the-shelf dictionary attack with the precomputation shared across every
 // installation of this operator. Salting per network forces that work to be
 // redone for each one. It does not defeat a targeted attack on a weak secret;
-// docs/known-issues.md records that rather than dressing it up.
+// docs/reference/known-issues.md records that rather than dressing it up.
 //
 // The zero byte keeps the two inputs from running together: without it,
 // ("ab", "c") and ("a", "bc") are one byte sequence.

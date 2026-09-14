@@ -5,7 +5,7 @@ that network's own namespace, selecting its server pods; and one beside the
 operator, selecting the operator pod.
 
 This page is what they are worth. It is not in
-[`known-issues.md`](known-issues.md) because none of it is a defect — every
+[`known-issues.md`](../reference/known-issues.md) because none of it is a defect — every
 line is a measured statement of scope, with the alternative considered and, in
 each case, declined for a reason. A security feature whose limits are not
 written down is read as covering more than it does, which is the failure this
@@ -257,7 +257,7 @@ statement about what ships.
 
 6a's handover §6 listed CIS `restricted` pod security and `HostPort` under the
 cluster's real CNI among what the RKE2 rollout owed
-(`docs/handover-milestone-6.md`), and this entry was written to say the two
+(`docs/archive/handovers/handover-milestone-6.md`), and this entry was written to say the two
 could not both be honoured in one namespace. That rollout has since happened,
 and it did not have to choose. Measured on `paulwtf` on 2026-08-22: the
 `minecraft` namespace enforces `restricted` (`enforce` and `warn` both), and
@@ -434,14 +434,14 @@ could trivially route around is a check that only reassures.
 
 So the boundary is the one that already exists and is already written down:
 **who may install a plugin**, which is who may create a pod in that namespace,
-which [`charts/spawnery/README.md`](../charts/spawnery/README.md) tells an
+which [`charts/spawnery/README.md`](../getting-started/index.md) tells an
 operator to treat as one trust domain.
 
 The `/cloud` command is the different case and does gate. A command has a
 source, so a permission is expressible there, and that is where it belongs. It
 carries three — `spawnery.cloud.read`, `.retire` and `.scale`, listed with what
 each costs in
-[`charts/spawnery/README.md`](../charts/spawnery/README.md#the-cloud-permissions)
+[`charts/spawnery/README.md`](../getting-started/index.md#the-cloud-permissions)
 — and the split is not cosmetic: reading the network is what a moderator gets,
 and adding servers spends money.
 

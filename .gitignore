@@ -15,3 +15,6 @@ agent/.gradle/
 agent/build/
 agent/**/.gradle/
 agent/**/build/
+
+# Vendored by hack/vendor-mermaid.sh from the pin in nix/mermaid.nix.
+docs/assets/mermaid.min.js

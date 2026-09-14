@@ -7,7 +7,7 @@
 #
 # What it is for: the operator has served metrics on :8080 since it existed and
 # nothing has ever scraped them. Two of those metrics are the CA rotation's
-# only durable signals -- docs/known-issues.md says in as many words to "alert
+# only durable signals -- docs/reference/known-issues.md says in as many words to "alert
 # on the gauge, not on the event", because the events expire out of the API
 # within the hour -- and until templates/service.yaml grew a metrics port there
 # was no address to scrape even if something had wanted to.

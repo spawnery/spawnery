@@ -34,7 +34,7 @@ import (
 
 // rotationRunbook is where the condition messages and the rotation event send
 // an operator. Named once so the three cannot drift apart.
-const rotationRunbook = "docs/runbook-milestone-5c-secret-rotation.md"
+const rotationRunbook = "docs/guides/rotating-the-forwarding-secret.md"
 
 // forwardingRead is what one attempt at reading a Network's forwarding secret
 // produced: the digest when it worked, and in every case the

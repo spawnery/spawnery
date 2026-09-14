@@ -126,7 +126,7 @@ func theProxyGroupGetsItsService(t *testing.T) {
 // drives, and the two that run through the markers carrying
 // namespace=spawnery-system as a literal. If that qualifier is ever wrong, the
 // operator fails at certs.Ensure or during leader election -- and RBAC never
-// says where the problem is. See docs/known-issues.md, "spawnery-system is
+// says where the problem is. See docs/reference/known-issues.md, "spawnery-system is
 // hard-wired into the RBAC markers".
 func theOperatorHoldsItsSecretAndItsLease(t *testing.T) {
 	var secrets corev1.SecretList

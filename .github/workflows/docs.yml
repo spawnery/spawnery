@@ -1,0 +1,135 @@
+name: Docs
+
+# This is what carries a site change from master to the cluster: build the
+# image, push it to GHCR under the commit's short SHA, move
+# k8s/docs/deployment.yaml to that tag, push. Flux then applies the moved
+# tag on its own schedule.
+#
+# It is not Flux ImageUpdateAutomation, on purpose. That would write to
+# spawnery/spawnery, and the cluster holds no write credential for this
+# repository -- the only SSH GitRepository with a secretRef is
+# paulwtf-infra/spawnery, a different one. Provisioning a deploy key and a
+# Vault path to move one line is more machinery than the line is worth, and
+# this workflow already has contents: write through GITHUB_TOKEN. Nothing is
+# lost: the tag still moves without a human pasting sha-<short> into a second
+# repository, which is the whole complaint against archive/apps/docs.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'nix/docs-site.nix'
+      - 'nix/docs-image.nix'
+      - 'nix/mermaid.nix'
+      # docs/superpowers/ is already excluded from the built site
+      # (mkdocs.yml's exclude_docs) and from the Nix source set
+      # (nix/docs-site.nix's fileset difference). Without this line, editing
+      # one of its 88 dated specs and plans would publish an image whose
+      # content is byte-for-byte the same as the last one.
+      - '!docs/superpowers/**'
+      # flake.lock and flake.nix are deliberately not here. A nixpkgs bump
+      # can move mkdocs-material and change the rendered output, but
+      # publishing on every unrelated dependency bump is the wrong trade --
+      # the next real docs commit picks up any such change anyway.
+
+# Unlike ci.yml's group, this one never cancels a run in progress: every run
+# here publishes an image that should exist, and queueing rather than
+# cancelling also makes the runs land on master in the order they were
+# pushed instead of whichever finishes first.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            # Ten is the default and too few to see why a build failed; the
+            # measurement behind 40 is in the lint job in ci.yml.
+            log-lines = 40
+
+      - name: Build the image
+        run: echo "archive=$(nix build .#docs-image --no-link --print-out-paths)" >> "$GITHUB_ENV"
+
+      # ghcr.io's credential needs a named file on a hosted runner: skopeo
+      # otherwise writes to $XDG_RUNTIME_DIR, which these runners leave
+      # unset, and the containers/image fallback path is one a non-root
+      # runner cannot create. release.yml's "Where skopeo keeps its
+      # credential" step carries the reproduction and the citation.
+      - name: Where skopeo keeps its credential
+        run: echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json" >> "$GITHUB_ENV"
+
+      - name: Push it
+        run: |
+          short="$(git rev-parse --short HEAD)"
+          # skopeo comes from the dev shell, not from the runner image, the
+          # same way hack/publish.sh gets it.
+          nix develop -c skopeo login ghcr.io \
+            -u "${{ github.actor }}" \
+            --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
+          nix develop -c skopeo copy \
+            "docker-archive:$archive" "docker://ghcr.io/spawnery/docs:sha-$short"
+          echo "tag=sha-$short" >> "$GITHUB_ENV"
+
+      - name: Move the Deployment to it
+        run: |
+          # actions/checkout pins to the commit that triggered this run, which
+          # can already be behind master by the time this step runs -- two
+          # docs pushes close together start two runs from different base
+          # SHAs. Committing on top of a fresh fetch of master, rather than on
+          # the checkout, is what keeps the push below a fast-forward; the
+          # concurrency group above keeps the two runs from doing this at the
+          # same time in the first place, so this is the second, independent
+          # safeguard against the same race.
+          git fetch origin master
+          git checkout -B master FETCH_HEAD
+
+          sed -i -E "s|^([[:space:]]*image: ghcr\.io/spawnery/docs:)[^[:space:]]+|\1$tag|" k8s/docs/deployment.yaml
+
+          # GNU sed exits 0 whether or not it matched anything, so without
+          # this, the no-op check below cannot tell a file that already
+          # holds this tag apart from one the sed above silently failed to
+          # touch.
+          if ! grep -qE "^[[:space:]]*image: ghcr\.io/spawnery/docs:${tag}([[:space:]]|\$)" k8s/docs/deployment.yaml; then
+            echo "::error::k8s/docs/deployment.yaml has no image line at $tag -- the sed above matched nothing"
+            exit 1
+          fi
+
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # A run that lands after another one already moved the tag to the
+          # same commit's image has nothing left to do -- git commit -am
+          # would exit 1 with nothing staged. This is the only case the
+          # check below is for: it does not touch git commit's or git push's
+          # own exit status, so a real failure in either still fails the job.
+          if git diff --quiet -- k8s/docs/deployment.yaml; then
+            echo "k8s/docs/deployment.yaml already at $tag; nothing to commit"
+            exit 0
+          fi
+
+          git commit -am "chore(docs): $tag" -m "[skip ci]"
+          # This is the loop guard, and both halves of it matter. What
+          # decides whether this push retriggers the workflow is this
+          # commit's own diff -- k8s/docs/deployment.yaml alone -- not the
+          # diff of whatever push brought the workflow here. Even a push
+          # that touched both docs/ and k8s/ in one commit only makes this
+          # step's diff k8s/docs/deployment.yaml, which paths above does not
+          # list, so the resulting push does not match the trigger. [skip
+          # ci] is the second, independent belt, in case paths above ever
+          # grows to overlap k8s/.
+          git push origin HEAD:master

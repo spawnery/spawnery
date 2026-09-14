@@ -4,7 +4,7 @@
 # It renders configuration and starts the server. Everything it used to
 # validate or rewrite server.properties by hand — max-players, the port, the
 # status flag — lives in spawnery-config now, which has the values and can
-# name the key that is missing; see docs/known-issues.md for why the shell
+# name the key that is missing; see docs/reference/known-issues.md for why the shell
 # version it replaces did not generalise. /data/config is not an override
 # slot — it is Paper's own writable directory, where Paper itself writes
 # paper-global.yml and paper-world-defaults.yml at startup, which is why the
@@ -184,7 +184,7 @@ fi
 #
 # A read-only mount at /data/plugins therefore breaks the start here, with a
 # bare cp error. Mounts below /data are allowed by internal/podspec, so this is
-# reachable; see docs/known-issues.md.
+# reachable; see docs/reference/known-issues.md.
 if [ -f "$PAPER_HOME/agent/spawnery-agent.jar" ]; then
 	mkdir -p plugins
 	cp -f "$PAPER_HOME/agent/spawnery-agent.jar" plugins/spawnery-agent.jar

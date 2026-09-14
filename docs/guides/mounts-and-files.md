@@ -27,7 +27,7 @@ server rather than rendering an empty volume or quietly dropping one of them.
 ## What a claim is for
 
 `extraPlugins` is deliberately narrow: one claim, read-only, and the entrypoint
-copies it into `plugins/`. [`extraFiles`](plugins.md#files-from-a-volume) is
+copies it into `plugins/`. [`extraFiles`](plugins-from-a-volume.md#files-from-a-volume) is
 the same mechanism one directory up — its claim is copied into the whole
 working directory, which is where a file that is not a plugin and that no mount
 can reach belongs;
@@ -99,7 +99,7 @@ way to know which of them meant to.
 
 ## The claim must be `ReadWriteMany`
 
-The same rule [`extraPlugins`](plugins.md#the-claim-must-be-readwritemany)
+The same rule [`extraPlugins`](plugins-from-a-volume.md#the-claim-must-be-readwritemany)
 follows, for the same reason and with the same refusal: every pod of the group
 mounts it, they are spread across nodes, and a `ReadWriteOnce` claim would
 leave the second one `Pending` on a scheduling error about volume affinity with
@@ -166,5 +166,5 @@ removing one or flipping `writable` rolls the group the way an image bump does.
 The volume's *contents* reach no digest at all — the operator holds a claim
 name, not a filesystem. Writing to the volume changes what the next server to
 start reads, and changes nothing about the servers already running. That is the
-same trade [`plugins.md`](plugins.md#changing-a-plugin) describes, and the
+same trade [`plugins.md`](plugins-from-a-volume.md#changing-a-plugin) describes, and the
 remedy is the same: restart the group's servers when you want the new contents.

@@ -122,10 +122,28 @@ jobs:
       - name: make lint
         run: nix develop -c make lint
 
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            # Ten is the default and too few to see why a build failed; the
+            # measurement behind 40 is in the lint job above.
+            log-lines = 40
+
+      - name: make docs
+        run: nix develop -c make docs
+
   # The Paper and Velocity images, built only when something that defines them
   # moved.
   #
-  # docs/known-issues.md, "From milestone 6e (CI)": this workflow builds one of
+  # docs/reference/known-issues.md, "From milestone 6e (CI)": this workflow builds one of
   # the three image derivations the release publishes. The e2e job runs
   # `nix build .#operator-image` and that is the only image any job here
   # reaches, so nix/paper.nix's two fixed-output hashes and nix/velocity.nix's
@@ -222,7 +240,7 @@ jobs:
             # record anywhere of which test it was.
             log-lines = 40
 
-      # The drift guard docs/known-issues.md has been parking since milestone
+      # The drift guard docs/reference/known-issues.md has been parking since milestone
       # 2c. make agent-deps regenerates agent/deps.json by resolving against
       # Maven Central, which is why it cannot run inside a Nix build and why
       # it lives here. It is also the only check in this workflow that can go

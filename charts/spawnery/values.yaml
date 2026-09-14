@@ -17,7 +17,7 @@ image:
   # fails and names both.
   #
   # A deployment that wants an immutable reference pins it where the
-  # deployment is described. See docs/known-issues.md, "From the RKE2
+  # deployment is described. See docs/reference/known-issues.md, "From the RKE2
   # rollout".
   tag: "0.2.33"
   # Set, this wins over tag and the image is referenced by digest. Left empty
@@ -76,7 +76,7 @@ operator:
   startupDeadline: 5m
   leaderElect: true
   # Lets a group name a spec.extraPlugins claim, whose contents are copied
-  # into every server's plugins directory on start (docs/plugins.md). Until
+  # into every server's plugins directory on start (docs/guides/plugins-from-a-volume.md). Until
   # 0.2.x this flag also governed a claim-backed spec.mounts entry; that is
   # now allowMountVolumes below, because each claim-consuming field earns its
   # own switch rather than sharing a name that promises less than it governs.

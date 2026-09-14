@@ -41,8 +41,8 @@ This document is not a spec. It says where 6d stopped and what 6e — CI, plus
 the RKE2 rollout — finds when it starts, checked against the code as 6d
 leaves it rather than against the plan that preceded it. The design decisions
 live in
-[`docs/superpowers/specs/2026-08-19-helm-chart-design.md`](superpowers/specs/2026-08-19-helm-chart-design.md);
-the open points are in [`docs/known-issues.md`](known-issues.md).
+`docs/superpowers/specs/2026-08-19-helm-chart-design.md`;
+the open points are in [`docs/known-issues.md`](../../reference/known-issues.md).
 
 **Why this is a new document rather than a section appended to
 [`handover-milestone-6c.md`](handover-milestone-6c.md).** That document was
@@ -508,10 +508,10 @@ systemd-run --scope --user --property=Delegate=yes -- \
 ## 7. Where everything lives
 
 - Design:
-  [`docs/superpowers/specs/2026-08-19-helm-chart-design.md`](superpowers/specs/2026-08-19-helm-chart-design.md).
-- Open points: [`docs/known-issues.md`](known-issues.md).
+  `docs/superpowers/specs/2026-08-19-helm-chart-design.md`.
+- Open points: [`docs/known-issues.md`](../../reference/known-issues.md).
 - The chart: `charts/spawnery/`, and its own
-  [`README.md`](../charts/spawnery/README.md) for installing, the manual
+  [`README.md`](../../getting-started/index.md) for installing, the manual
   forwarding-secret step, the values table and what uninstalling does and
   does not remove.
 - The generation step: `hack/chart-templates.sh`, run from `Makefile:14-19`.
@@ -521,7 +521,7 @@ systemd-run --scope --user --property=Delegate=yes -- \
 - The publish path: `hack/publish.sh`.
 - The SDD record of how this milestone was built, task by task, including
   every mutation run and its verbatim output:
-  [`.superpowers/sdd/2026-08-19-helm-chart/`](../.superpowers/sdd/2026-08-19-helm-chart/)
+  `.superpowers/sdd/2026-08-19-helm-chart/`
   (`task-1-report.md` through `task-6-report.md`, and `progress.md`, the
   ledger §5 restates).
 - 6c's record, and what 6d started from:

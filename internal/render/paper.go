@@ -71,7 +71,7 @@ var paperOverlayKeys = []string{
 //     every join would fail; turned off, a backend reached directly instead
 //     of through the proxy accepts unsigned chat from an unauthenticated
 //     connection too. What the NetworkPolicies this operator renders do and
-//     do not bound is in docs/network-boundaries.md.
+//     do not bound is in docs/explanation/network-boundaries.md.
 func Paper(v Values, secret string, overlay map[string]string) (map[string][]byte, error) {
 	if err := v.RequireMaxPlayers(); err != nil {
 		return nil, err

@@ -1,0 +1,31 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: docs
+  annotations:
+    # The prefix is external-dns.kubernetes.io/, not the alpha form in
+    # archive/apps/docs/ingressroute.yaml: external-dns v0.22 runs with
+    # --annotation-prefix set explicitly, and an alpha-prefixed annotation
+    # is read by nothing and reports no error.
+    #
+    # The target is the name that follows node health, not a node's address.
+    # infrastructure/traefik/dns-service.yaml keeps only healthy, uncordoned
+    # nodes in it.
+    external-dns.kubernetes.io/target: ingress.paul.wtf
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - docs.spawnery.cloud
+      secretName: docs-tls
+  rules:
+    - host: docs.spawnery.cloud
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: docs
+                port:
+                  number: 80

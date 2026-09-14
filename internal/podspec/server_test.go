@@ -175,7 +175,7 @@ func TestPodIsRestrictedCompliant(t *testing.T) {
 // can only observe what the pod spec asks for, never that the chown
 // actually happened. That needs a real cluster on a storage class that does
 // not already hand back a world-writable directory — not
-// docs/runbook-milestone-5a-evidence.md's kind cluster, whose local-path
+// docs/archive/runbooks/runbook-milestone-5a-evidence.md's kind cluster, whose local-path
 // provisioner does exactly that regardless of fsGroup, so even a manual run
 // against it would not exercise this either.
 func assertFSGroup(t *testing.T, pod *corev1.Pod) {
@@ -927,7 +927,7 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			// The case a code comment on checkMountCollision used to get
 			// wrong, by calling FileSourceMountPath exact-match-only and so
 			// implying a mount *inside* it was permitted. It is not, and
-			// docs/mounts.md has always said so. Pinned here so the two
+			// docs/guides/mounts-and-files.md has always said so. Pinned here so the two
 			// cannot drift apart again.
 			name: "nested inside the extraFiles claim",
 			mount: spawneryv1alpha1.Mount{
@@ -1046,7 +1046,7 @@ func TestGroupConfigMapNameIsScopedByRoleAsWellAsGroup(t *testing.T) {
 }
 
 // TestTwoUserMountsCannotCollideWithEachOther closes the last clause of the
-// mount item in docs/known-issues.md: "it still does not check for two user
+// mount item in docs/reference/known-issues.md: "it still does not check for two user
 // mounts sharing a name — the API server catches that, but with a generic
 // message instead of a clear operator error."
 //
@@ -1140,7 +1140,7 @@ func TestTheServerGroupSelectorIsASubsetOfServerLabels(t *testing.T) {
 }
 
 // TestAMountAtThePluginsDirectoryIsRefused closes the entry in
-// docs/known-issues.md that this was the last live half of: the entrypoint
+// docs/reference/known-issues.md that this was the last live half of: the entrypoint
 // copies the agent jar into the plugins directory on every start, every user
 // mount is read-only, and a mount here therefore failed that copy under
 // `set -eu` with a bare `cp:` message naming no cause. Unlike /data/config,

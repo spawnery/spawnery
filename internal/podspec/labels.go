@@ -49,7 +49,7 @@ const (
 	//
 	// It covers the rendered pod rather than a chosen list of spec fields, so a
 	// spec field added later cannot be forgotten here and silently never roll
-	// out. The cost is recorded in docs/known-issues.md: a change to the
+	// out. The cost is recorded in docs/reference/known-issues.md: a change to the
 	// rendering code moves the digest for every group, so an operator upgrade
 	// that touches podspec rolls the fleet.
 	LabelPodHash = "spawnery.cloud/pod-hash"
@@ -70,7 +70,7 @@ const (
 	// operator would recreate all of them, proxies and backends interleaved --
 	// the uncoordinated version of the rollout the master design (section 6.5)
 	// defers. Rotation is detected and reported; the restarts follow
-	// docs/runbook-milestone-5c-secret-rotation.md.
+	// docs/guides/rotating-the-forwarding-secret.md.
 	LabelForwardingHash = "spawnery.cloud/forwarding-hash"
 )
 

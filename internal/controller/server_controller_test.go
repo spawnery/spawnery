@@ -1992,7 +1992,7 @@ func podUnderNameIsStill(f *fixture, name string, uid types.UID) bool {
 // create. Without it the fix above would be indistinguishable from a Server
 // that never gets a pod at all.
 //
-// Its podName assertion has failed once, unexplained; docs/known-issues.md
+// Its podName assertion has failed once, unexplained; docs/reference/known-issues.md
 // carries what is known, and the failure prints what a second occurrence
 // needs.
 func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {

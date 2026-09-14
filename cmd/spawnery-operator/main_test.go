@@ -118,7 +118,7 @@ func TestTaintKeysSetRejectsEmpty(t *testing.T) {
 }
 
 // TestTaintKeysSetRejectsAWholeTaint closes the half of the milestone 4c-3
-// entry in docs/known-issues.md that can be closed: "nor is the key itself
+// entry in docs/reference/known-issues.md that can be closed: "nor is the key itself
 // checked against anything — a typo in -drain-taint is indistinguishable from
 // a taint key that legitimately does not exist in this cluster."
 //
@@ -181,7 +181,7 @@ func TestTaintKeysSetAcceptsRealKeys(t *testing.T) {
 // Left empty, controller-runtime reads the namespace out of the ServiceAccount
 // mount, which exists only inside a pod. A local `go run` therefore died at
 // startup unless it was told --leader-elect=false, which is what every runbook
-// under docs/ passes and what docs/known-issues.md carried as an open
+// under docs/ passes and what docs/reference/known-issues.md carried as an open
 // precondition for milestone 6. In a cluster the value is the same one
 // controller-runtime would have derived — the chart sets POD_NAMESPACE from
 // metadata.namespace and --operator-namespace defaults to it — so this moves

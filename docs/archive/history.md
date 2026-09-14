@@ -14,8 +14,8 @@ narrower than their design document said, and which defects were found by
 something other than the test written to catch them. That is the part a
 changelog throws away.
 
-For what is open right now, read [`known-issues.md`](known-issues.md). For what
-the current release does, read the [README](../README.md).
+For what is open right now, read [`known-issues.md`](../reference/known-issues.md). For what
+the current release does, read the [README](https://github.com/spawnery/spawnery/blob/master/README.md).
 
 ## Contents
 
@@ -128,7 +128,7 @@ gave it one, and the NetworkPolicy is still owed, by milestone 6b.
 operator-shaped gRPC server — including, for the proxy, that its ready port
 stays closed until a server list arrives and opens once one does. The
 cluster-level proof beyond that harness is written down as
-[`docs/runbook-milestone-3-evidence.md`](runbook-milestone-3-evidence.md),
+[`docs/runbook-milestone-3-evidence.md`](runbooks/runbook-milestone-3-evidence.md),
 and it has now been run once, against a real `kind` cluster (2026-08-12): an
 automated join through `cmd/spawnery-join` reached a backend, and Paper's own
 log and Velocity's own log confirmed it — the first time the forwarding chain
@@ -138,14 +138,14 @@ finding instead of a clean result: deleting a `Server` under a player held
 open by the evidence tool disconnected them rather than moving them, traced to
 the tool stopping short of the point Paper counts a player as online rather
 than to the drain logic itself — full diagnosis in
-[`docs/known-issues.md`](known-issues.md), "From the milestone 3c
+[`docs/known-issues.md`](../reference/known-issues.md), "From the milestone 3c
 evidence run", which is to be read as a finding about `cmd/spawnery-join` and
 not as an open criterion.
 
 The two things that run could not settle — a join with a real Microsoft
 account, and a drain moving a real player rather than the tool's stand-in —
 were both proven by hand the next day (2026-08-13), and
-[`docs/handover-milestone-4.md`](handover-milestone-4.md) carries the
+[`docs/handover-milestone-4.md`](handovers/handover-milestone-4.md) carries the
 logs. A licensed Minecraft client joined through the proxy; the artifact is
 the UUID, because Mojang minted a version-4 one only after the client proved
 its session, where the automated probe could only ever produce the
@@ -158,7 +158,7 @@ Carry-overs and preconditions for later milestones — CA rotation, the
 NetworkPolicy restricting backends to proxies-only that `online-mode=false`
 now makes a real invariant rather than a deferred one, and what earlier
 milestones leave open — are in
-[`docs/known-issues.md`](known-issues.md).
+[`docs/known-issues.md`](../reference/known-issues.md).
 
 The design lives under [`docs/superpowers/specs/`](superpowers/specs/), the
 plans under [`docs/superpowers/plans/`](superpowers/plans/).
@@ -253,7 +253,7 @@ disconnected. What it leaves open matters on upgrade: a proxy image predating
 *new* players for the whole drain window. Upgrade proxy images before the
 operator. Its two cluster claims were driven twice against a real cluster with
 a licensed client on 2026-08-14
-([`docs/runbook-milestone-4c1-evidence.md`](runbook-milestone-4c1-evidence.md)).
+([`docs/runbook-milestone-4c1-evidence.md`](runbooks/runbook-milestone-4c1-evidence.md)).
 
 ### 4c-2 — proxy rolling updates
 
@@ -271,7 +271,7 @@ because the surge pod arrives before any withdrawal; two distinct `pod-hash`
 values in one group is the tell. Its own cluster claims are §11 of the same
 runbook, added for this milestone and driven the same night against merged
 `master`, with a real client
-([`docs/runbook-milestone-4c1-evidence.md`](runbook-milestone-4c1-evidence.md)).
+([`docs/runbook-milestone-4c1-evidence.md`](runbooks/runbook-milestone-4c1-evidence.md)).
 
 ### 4c-3 — node drain
 
@@ -294,7 +294,7 @@ disconnecting players. Adding the role term closed it in the reconciler, but
 one copy is out of reach: a `ServerGroup` last reconciled by pre-4c-3 code
 left a budget at its own bare name, which nothing renames or deletes, carrying
 a frozen `minAvailable` and a frozen copy of the broken selector. Delete it by
-hand — [`docs/upgrading.md`](upgrading.md) has the `kubectl` to find
+hand — [`docs/upgrading.md`](../guides/upgrading.md) has the `kubectl` to find
 it. `docs/known-issues.md` also leaves
 open that an operator running cluster-autoscaler must pass
 `-drain-taint ToBeDeletedByClusterAutoscaler` by hand: that autoscaler taints
@@ -322,7 +322,7 @@ consequence is the open item: claims accumulate, and reclaiming a world is a
 deliberate human act with `kubectl`. The acceptance test was driven against a
 real `kind` cluster on 2026-08-16 — blocks placed, the pod deleted, the client
 rejoined, the blocks still there
-([`docs/runbook-milestone-5a-evidence.md`](runbook-milestone-5a-evidence.md)).
+([`docs/runbook-milestone-5a-evidence.md`](runbooks/runbook-milestone-5a-evidence.md)).
 
 ### 5b — ordered shutdown, `Recreate` updates and storage growth
 
@@ -342,7 +342,7 @@ until 5b gave persistent failures somewhere to accumulate toward. It leaves
 open that a permanently broken ordinal stalls the whole group's update, with
 nothing timing that wait out. Driven on 2026-08-16: two worlds survived an
 update that recreated both, one ordinal at a time
-([`docs/runbook-milestone-5b-evidence.md`](runbook-milestone-5b-evidence.md)).
+([`docs/runbook-milestone-5b-evidence.md`](runbooks/runbook-milestone-5b-evidence.md)).
 The positive half of storage growth was deliberately not driven there — `kind`'s
 local-path storage class cannot expand a volume at all.
 
@@ -355,7 +355,7 @@ creates with that digest in `spawnery.cloud/forwarding-hash`, and reports the
 comparison as two conditions and two events. It is detection and reporting
 only: it restarts nothing and takes no ordinal down, because the restart order
 is a decision for a person with a maintenance window, working through
-[`docs/runbook-milestone-5c-secret-rotation.md`](runbook-milestone-5c-secret-rotation.md).
+[`docs/runbook-milestone-5c-secret-rotation.md`](../guides/rotating-the-forwarding-secret.md).
 The one thing worth naming is the negative that makes it safe: a rotation must
 move no pod hash, so both `DesiredServerHash` and `DesiredProxyHash` strip the
 forwarding label before digesting. Had that digest reached `spec.podHash`,
@@ -367,7 +367,7 @@ last digest the operator *read*, not the bytes the pod actually mounted — unde
 a refused or failed read a pod can be running the new secret while being
 reported stale. Driven on 2026-08-16, against the standing procedure rather
 than around it
-([`docs/runbook-milestone-5c-evidence.md`](runbook-milestone-5c-evidence.md)).
+([`docs/runbook-milestone-5c-evidence.md`](runbooks/runbook-milestone-5c-evidence.md)).
 
 ## Milestone 6
 
@@ -654,7 +654,7 @@ workflows now carries what it was driven with, in its own header.
 ### The RKE2 rollout
 
 Milestone 6 is done: the RKE2 rollout has been driven, from
-[`docs/runbook-milestone-6-rollout.md`](runbook-milestone-6-rollout.md),
+[`docs/runbook-milestone-6-rollout.md`](runbooks/runbook-milestone-6-rollout.md),
 against a three-node cluster running RKE2 `v1.34.3` and Cilium `v1.18.4`.
 Spawnery installs through Flux from the chart at tag `v0.1.0` — two
 Kustomizations, the second gated on the first — and runs in `spawnery-system`
@@ -747,27 +747,27 @@ reads only the backend's count.
 ## Handovers
 
 Anyone starting work on this project begins at
-[`docs/handover-milestone-6e.md`](handover-milestone-6e.md): it says
+[`docs/handover-milestone-6e.md`](handovers/handover-milestone-6e.md): it says
 where 6e stopped, what was actually driven versus what only exists, what the
 next milestone finds in place, and what the RKE2 rollout still owes —
 carried forward from 6d's own list unchanged. It is written to be read by
 someone with no memory of how any of this was built.
-[`docs/handover-milestone-6d.md`](handover-milestone-6d.md), written for
+[`docs/handover-milestone-6d.md`](handovers/handover-milestone-6d.md), written for
 6e and kept because its §3 is the record of what 6e started from and had to
 decide,
-[`docs/handover-milestone-6c.md`](handover-milestone-6c.md), written for
+[`docs/handover-milestone-6c.md`](handovers/handover-milestone-6c.md), written for
 6d and kept because its §3 is the record of what 6d started from and had to
 decide,
-[`docs/handover-milestone-6b.md`](handover-milestone-6b.md), written for 6c
+[`docs/handover-milestone-6b.md`](handovers/handover-milestone-6b.md), written for 6c
 and kept because its §2 and §3 are the record of what 6c started from and had
 to decide,
-[`docs/handover-milestone-6.md`](handover-milestone-6.md), written for 6b
+[`docs/handover-milestone-6.md`](handovers/handover-milestone-6.md), written for 6b
 and kept because its §2 and §3 are the record of what 6b started from and had
 to decide,
-[`docs/handover-milestone-5.md`](handover-milestone-5.md),
-[`docs/handover-milestone-4b.md`](handover-milestone-4b.md),
-[`docs/handover-milestone-4.md`](handover-milestone-4.md),
-[`docs/handover-milestone-3.md`](handover-milestone-3.md),
-[`docs/handover-milestone-2c.md`](handover-milestone-2c.md) and
-[`docs/handover-milestone-2b.md`](handover-milestone-2b.md) are its
+[`docs/handover-milestone-5.md`](handovers/handover-milestone-5.md),
+[`docs/handover-milestone-4b.md`](handovers/handover-milestone-4b.md),
+[`docs/handover-milestone-4.md`](handovers/handover-milestone-4.md),
+[`docs/handover-milestone-3.md`](handovers/handover-milestone-3.md),
+[`docs/handover-milestone-2c.md`](handovers/handover-milestone-2c.md) and
+[`docs/handover-milestone-2b.md`](handovers/handover-milestone-2b.md) are its
 predecessors, kept as the record of what those milestones started from.

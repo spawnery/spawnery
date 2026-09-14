@@ -29,6 +29,9 @@ and are therefore part of no other target, not even `make all`: `agent-deps`,
 | `make manifests` | CRDs, RBAC, and the chart templates generated from them |
 | `make proto` | Go code under `internal/agentpb` from the `.proto` |
 | `make agent` | Both agent plugins, with their JUnit suites as the check phase |
+| `make docs` | The site, built through Nix — `mkdocs build --strict` inside it is the project's only link checker |
+| `make docs-assets` | Vendors `docs/assets/mermaid.min.js` from `nix/mermaid.nix` — gitignored, needed once per checkout before `mkdocs serve` |
+| `make docs-serve` | `mkdocs serve` for writing, after `docs-assets` |
 | `make agent-deps` | Regenerates `agent/deps.json`. Reaches Maven Central — part of no other target |
 | `make agent-test` | Both real images against the stub operator in `cmd/spawnery-stubop` |
 | `make paper-pin` | Computes the Paper pin; `paper-pin-check` fails if `nix/paper.nix` is behind |
@@ -94,7 +97,7 @@ script would have been the same script with a different name; if the two ever
 diverge enough for that to stop being true, that run is what fails and says so.
 
 Purpur is the backend image going forward and the Paper image is deprecated.
-Both are built, tested and published; see [`upgrading.md`](upgrading.md) for
+Both are built, tested and published; see [`upgrading.md`](../guides/upgrading.md) for
 what an installation does about it and `nix/paper-image.nix` for why nothing is
 being removed.
 

@@ -4,7 +4,7 @@ A `Persistent` `ServerGroup` gives each ordinal a world on a
 `PersistentVolumeClaim` of its own. Three things follow from that which nobody
 can read off the CRD, and none of them is a defect: they are consequences of
 decisions taken deliberately, and they are here rather than in
-[`known-issues.md`](known-issues.md) because that file carries problems and
+[`known-issues.md`](../reference/known-issues.md) because that file carries problems and
 these are properties.
 
 The short version, for somebody who is in the middle of something:
