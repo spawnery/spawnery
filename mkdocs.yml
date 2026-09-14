@@ -58,6 +58,7 @@ nav:
   - Reference:
       - Custom resources: reference/crds.md
       - Chart values: reference/chart-values.md
+      - Metrics and alerts: reference/metrics-and-alerts.md
       - Known issues: reference/known-issues.md
   - Explanation:
       - Network boundaries: explanation/network-boundaries.md

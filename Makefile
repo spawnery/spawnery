@@ -20,6 +20,7 @@ manifests:
 	./hack/chart-templates.sh
 	./hack/crd-docs.sh
 	./hack/chart-values-docs.sh
+	./hack/metrics-docs.sh
 
 .PHONY: generate
 generate:
