@@ -92,7 +92,7 @@ jobs:
           # for instance, which is exactly the change most likely to be
           # forgotten. cover.out is the only untracked file make test leaves,
           # and it is gitignored, so --exclude-standard makes this quiet.
-          untracked="$(git ls-files --others --exclude-standard -- api config charts)"
+          untracked="$(git ls-files --others --exclude-standard -- api config charts docs/reference)"
           if [ -n "$untracked" ]; then
             echo "make test generated a file that is not committed:" >&2
             echo "$untracked" >&2
