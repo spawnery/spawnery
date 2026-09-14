@@ -1057,4 +1057,6 @@ Add what the run measured to the commit body or to `docs/archive/`, in the proje
 
 ## What this phase does not do
 
-Phases 2 to 5 of the spec — the generated reference, the missing guides, the plugin API section with its Javadoc, and the explanation pages with `history.md` brought forward — each get their own plan. Each is independently useful and none blocks the others. Phase 2 is the one to write next: it closes the largest gap and, unlike the rest, it makes a class of staleness structurally impossible.
+Phases 2 to 5 of the spec. One of them gets a plan of its own: phase 2, the generated reference, together with the Javadoc build wiring from phase 4 — three generators with test companions, a source-reading Go test, and the wiring into `make manifests` and CI. It is the one to write next, because it closes the largest gap and, unlike the rest, it makes a class of staleness structurally impossible.
+
+The remaining phases are pages. Their test is `mkdocs build --strict` and somebody reading them, and the spec already lists each page and what it covers. They are written directly, one page per commit, with no plan document in between.

@@ -379,6 +379,22 @@ with its frame, and `docs/history.md` brought forward over the 94 commits since
 the rollout — told as six or seven chapters (round lifecycle, server numbers,
 `/cloud`, boosts, the volume family, scheduling), not listed.
 
+### Which phases get an implementation plan
+
+Two of them, not five.
+
+Phase 1 and phase 2 are code — Nix derivations, manifests, a workflow, three
+generators with test companions, a source-reading Go test — with interfaces
+between tasks and a real test cycle at each. They get plans under
+`docs/superpowers/plans/`. The Javadoc build wiring from phase 4 belongs to
+phase 2's plan rather than its own, because it is the same kind of work.
+
+Phases 3 and 5, and the prose half of phase 4, are pages. Their test is
+`mkdocs build --strict` and somebody reading them, and the list of pages with
+what each covers is already above. A plan document for those would restate this
+section at greater length and then be a second place to keep in step. They are
+written directly, one page per commit.
+
 ## Open questions
 
 - Does the mermaid runtime come from a CDN under `mkdocs-mermaid2-plugin`'s
