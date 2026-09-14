@@ -289,10 +289,19 @@ manifests, which predate it:
   archived manifest pins `45.137.203.198`, from before Traefik moved to
   hostPorts on 2026-09-10.
 - external-dns runs with `--policy=sync` and no `--domain-filter`, so its reach
-  is exactly what its Cloudflare token covers. **Whether that token reaches the
-  `spawnery.cloud` zone has to be checked before phase 1 is called done.** If
-  it does, the record appears from the annotation; if not, either the token is
-  widened or the record is written by hand once.
+  is exactly what its Cloudflare token covers, and that token is scoped to
+  every zone on the account. The record therefore appears from the annotation
+  with no DNS work.
+
+**The certificate needs one line changed in `fluxcd`, and it is not the
+token.** The `lets-encrypt` ClusterIssuer solves DNS-01 through Cloudflare with
+a token that also reaches every zone, but
+`infrastructure/cert-manager/issuer/cloudflare-issuer.yaml` carries a single
+solver whose selector reads `dnsZones: ["paul.wtf"]`. cert-manager matches that
+selector against the name being issued, so a `Certificate` for
+`docs.spawnery.cloud` finds no solver at all and its Order stalls rather than
+failing loudly. Adding `"spawnery.cloud"` to that list is part of phase 1 and
+belongs in the same change as `apps/spawnery-docs/`.
 
 **The image tag is moved by Flux image automation.** `image-reflector-controller`
 and `image-automation-controller` are in `clusters/paulwtf/flux-system/gotk-components.yaml`
@@ -372,8 +381,6 @@ the rollout — told as six or seven chapters (round lifecycle, server numbers,
 
 ## Open questions
 
-- Does the external-dns Cloudflare token reach the `spawnery.cloud` zone? Phase
-  1 answers it; the fallback is a hand-written record.
 - Does the mermaid runtime come from a CDN under `mkdocs-mermaid2-plugin`'s
   defaults? If so it is self-hosted before the site is published.
 - Caddy or nginx in `nix/docs-image.nix`. Caddy is the intent; the decision is
