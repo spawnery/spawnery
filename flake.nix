@@ -497,6 +497,10 @@
           };
 
           mermaid-js = pkgs.callPackage ./nix/mermaid.nix { };
+
+          # mermaid-js is a local let binding, not a pkgs attribute, so
+          # callPackage cannot fill it and it is passed explicitly.
+          docs-site = pkgs.callPackage ./nix/docs-site.nix { inherit mermaid-js; };
         in
         {
           # Architecture-independent (it is jars), so this stays available on
@@ -514,7 +518,7 @@
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js docs-site;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
