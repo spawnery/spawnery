@@ -389,3 +389,26 @@ publish-chart-test:
 .PHONY: e2e
 e2e: manifests
 	hack/e2e.sh
+
+# --strict, inside nix/docs-site.nix's buildPhase, turns an unresolved
+# internal link or a page missing from the nav into a build failure -- the
+# only link checker this project has. Out of `test`: internal/controller
+# alone already costs 85s there, and rendering HTML finds none of the bugs
+# that suite is for. ci.yml runs this in its own job instead.
+.PHONY: docs
+docs:
+	nix build .#docs-site --no-link
+
+# docs/assets/mermaid.min.js, which mkdocs.yml points the mermaid2 plugin at.
+# It is gitignored -- nix/mermaid.nix pins it, hack/vendor-mermaid.sh installs
+# it -- so a fresh checkout has no such file. `docs` above never needs this:
+# nix/docs-site.nix's own postPatch does the same install inside the build.
+# `mkdocs serve` has no such step, so without this prerequisite it renders the
+# home page's diagram as nothing, with no error anywhere.
+.PHONY: docs-assets
+docs-assets:
+	hack/vendor-mermaid.sh
+
+.PHONY: docs-serve
+docs-serve: docs-assets
+	mkdocs serve
