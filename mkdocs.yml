@@ -61,6 +61,8 @@ nav:
       - Operator flags: reference/operator-flags.md
       - Metrics and alerts: reference/metrics-and-alerts.md
       - Known issues: reference/known-issues.md
+  - Plugin API:
+      - Javadoc: plugin-api/javadoc/index.html
   - Explanation:
       - Network boundaries: explanation/network-boundaries.md
   - Contributing:
