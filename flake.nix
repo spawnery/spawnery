@@ -121,6 +121,12 @@
               python3Packages.mkdocs
               python3Packages.mkdocs-material
               python3Packages.mkdocs-mermaid2-plugin
+              # Explicit, not incidental: python3 and pyyaml are reachable
+              # through mkdocs's own closure today, and hack/crd-docs.sh would
+              # start failing on a mkdocs bump that dropped them, naming
+              # neither cause.
+              python3
+              python3Packages.pyyaml
               jdk21_headless
               # hack/agent-test.sh asserts on the stub operator's event stream.
               jq

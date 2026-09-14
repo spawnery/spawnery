@@ -56,6 +56,7 @@ nav:
       - Rotating the CA: guides/rotating-the-ca.md
       - Rotating the forwarding secret: guides/rotating-the-forwarding-secret.md
   - Reference:
+      - Custom resources: reference/crds.md
       - Known issues: reference/known-issues.md
   - Explanation:
       - Network boundaries: explanation/network-boundaries.md

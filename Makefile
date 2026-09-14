@@ -18,6 +18,7 @@ manifests:
 		output:crd:artifacts:config=config/crd/bases \
 		output:rbac:artifacts:config=config/rbac
 	./hack/chart-templates.sh
+	./hack/crd-docs.sh
 
 .PHONY: generate
 generate:
