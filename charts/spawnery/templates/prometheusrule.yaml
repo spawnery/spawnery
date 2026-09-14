@@ -4,7 +4,7 @@
 #
 # The four CA rules are the whole answer to "a CA rotation is asked for, never
 # scheduled" and "a RotationBlocked event does not repeat", both in
-# docs/known-issues.md. Every one of them alerts on a gauge rather than on an
+# docs/reference/known-issues.md. Every one of them alerts on a gauge rather than on an
 # event, because a Kubernetes event expires out of the API within the hour and
 # the gauges do not. The two agent rules below are the only signal the
 # connection bounds produce, and the same argument applies to them: the refusal
@@ -43,7 +43,7 @@ spec:
               the middle that waits for a person, so start it with time in
               hand. Annotate the operator's TLS secret with
               spawnery.cloud/rotate-ca=start and follow
-              docs/known-issues.md's "On the agent channel" section. Note that
+              docs/reference/known-issues.md's "On the agent channel" section. Note that
               a start annotation can sit unread for up to an hour on an idle
               cluster, because the operator only re-reads it on its slow tick.
 
@@ -62,7 +62,7 @@ spec:
               left, so reaching one day means the renewal path has stopped.
               Every agent handshake fails when it expires.
 
-        # docs/known-issues.md: a RotationBlocked event fires only when the
+        # docs/reference/known-issues.md: a RotationBlocked event fires only when the
         # list of blocked namespaces changes, and Kubernetes expires it within
         # the hour, so a gate blocked for days is silent everywhere except
         # here and the annotation on the secret.

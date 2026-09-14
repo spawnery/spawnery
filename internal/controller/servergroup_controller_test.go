@@ -3618,7 +3618,7 @@ func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 	// steady state, not a lagging cache — the rule reads spec.ordinal, so the
 	// ordinal stays missing and the create is asked for again on every
 	// five-second pass, for as long as the object sits there
-	// (docs/known-issues.md). What fires per pass is the difference between a
+	// (docs/reference/known-issues.md). What fires per pass is the difference between a
 	// quiet wait and an event stream nobody can read past.
 	if n := scalingEvents(r.Recorder.(*nonBlockingRecorder), "ServerCreated"); n != 0 {
 		t.Errorf("ServerCreated events = %d, want none: the object was already there, "+
@@ -4280,7 +4280,7 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 }
 
 // TestAParkedPersistentGroupIsReadyRatherThanPending closes the entry in
-// docs/known-issues.md: "a Persistent group with replicas: 0 reports Pending
+// docs/reference/known-issues.md: "a Persistent group with replicas: 0 reports Pending
 // forever."
 //
 // Zero is a deliberate operator action rather than an edge case. spec.replicas:
@@ -4336,7 +4336,7 @@ func TestAGroupShortOfItsTargetIsStillPending(t *testing.T) {
 }
 
 // TestASquatterOnAnOrdinalNameSaysSoOnTheGroup closes the entry in
-// docs/known-issues.md: "a squatter can stall an ordinal silently."
+// docs/reference/known-issues.md: "a squatter can stall an ordinal silently."
 //
 // A persistent ordinal's name is derived, <group>-<ordinal>, so anything
 // created by hand under that name takes it. DecidePersistentSize reads
@@ -4836,7 +4836,7 @@ func TestTheOrdinalConditionClearsWhenTheDuplicateGoes(t *testing.T) {
 }
 
 // TestAFailedRetireeIsNamedOnProgressing closes the silent half of
-// docs/known-issues.md's milestone 4b entry, since removed. spec.retire is the update
+// docs/reference/known-issues.md's milestone 4b entry, since removed. spec.retire is the update
 // budget's one signal and it survives the server failing, so a server the
 // group patched it onto and that then failed holds a maxUnavailable slot for
 // its whole failedRetentionSeconds -- an hour by default -- and the changeover
@@ -4897,7 +4897,7 @@ func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
 	}
 }
 
-// liveServers is the count docs/known-issues.md recorded touching zero: the
+// liveServers is the count docs/reference/known-issues.md recorded touching zero: the
 // servers that count toward the group's size, which is every one that is
 // neither leaving nor Failed.
 func (f *fixture) liveServers(t *testing.T) int {
@@ -4912,7 +4912,7 @@ func (f *fixture) liveServers(t *testing.T) int {
 }
 
 // TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter is the
-// explanation for an observation that sat in docs/known-issues.md as
+// explanation for an observation that sat in docs/reference/known-issues.md as
 // uninvestigated: a group's count of live servers briefly touched zero under
 // sustained churn before recovering.
 //

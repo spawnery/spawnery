@@ -96,7 +96,7 @@ const maxBlockedNamesInAnnotation = 10
 // two into one rule -- and is repeated here so the permission is documented
 // where it is used, the way every other pods marker in this repository is.
 // It sits in a comment block of its own with a blank line under it:
-// docs/known-issues.md records that controller-gen silently ignores a marker
+// docs/reference/known-issues.md records that controller-gen silently ignores a marker
 // buried inside a declaration's doc comment.
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list
 

@@ -430,7 +430,7 @@ spec:
                     not: a world tree, a directory of assets every server reads, a pool one
                     group writes and another reads. `extraPlugins` is deliberately narrow -- one
                     claim, read-only, copied into `plugins/` by the entrypoint -- and everything
-                    outside `plugins/` needed somewhere to go. docs/mounts.md carries what each
+                    outside `plugins/` needed somewhere to go. docs/guides/mounts-and-files.md carries what each
                     of those routes is and the one that is refused.
 
                     It is still not a layered template system. There is no composition, no
@@ -661,7 +661,7 @@ spec:
 
                   So if they must not be: empty the ordinal first, or raise
                   spec.drain.timeoutSeconds beforehand so the drain has room to finish.
-                  docs/persistent-storage.md carries why refusing to shrink while anyone
+                  docs/guides/persistent-worlds.md carries why refusing to shrink while anyone
                   is online would not be the better rule.
                 format: int32
                 minimum: 0

@@ -465,7 +465,7 @@ func TestARejectedProxyPodIsReportedOnTheGroup(t *testing.T) {
 }
 
 // TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress is the
-// scenario docs/known-issues.md's milestone 6c entry describes, driven rather
+// scenario docs/reference/known-issues.md's milestone 6c entry describes, driven rather
 // than reasoned: a NodePort group publishing an address is switched to
 // HostPort in a namespace that forbids host ports, reconcileService deletes
 // the Service, the replacement pods are refused, and before this test existed
@@ -1389,7 +1389,7 @@ func TestSwitchingFromHostPortToClusterIPCreatesTheService(t *testing.T) {
 }
 
 // TestAGroupSaysWhenItsPodsNoLongerMatchWhatTheOperatorRenders is the outward
-// half of docs/known-issues.md's milestone 4c-2 entry: "upgrading the operator
+// half of docs/reference/known-issues.md's milestone 4c-2 entry: "upgrading the operator
 // can roll every proxy in the cluster, with nobody having edited a spec." The
 // roll itself was already implemented and already correct. What was missing was
 // any way to tell from the objects that it was happening — pods churning and

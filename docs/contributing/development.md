@@ -94,7 +94,7 @@ script would have been the same script with a different name; if the two ever
 diverge enough for that to stop being true, that run is what fails and says so.
 
 Purpur is the backend image going forward and the Paper image is deprecated.
-Both are built, tested and published; see [`upgrading.md`](upgrading.md) for
+Both are built, tested and published; see [`upgrading.md`](../guides/upgrading.md) for
 what an installation does about it and `nix/paper-image.nix` for why nothing is
 being removed.
 

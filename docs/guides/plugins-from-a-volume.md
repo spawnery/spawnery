@@ -29,7 +29,7 @@ The operator refuses a group naming `extraPlugins` unless it was started with
 `--allow-plugin-volumes`. The chart passes the operator's arguments through, so
 this is a values edit and a restart of one Deployment.
 
-A claim-backed [`spec.mounts`](mounts.md) entry has its own switch,
+A claim-backed [`spec.mounts`](mounts-and-files.md) entry has its own switch,
 `--allow-mount-volumes` — until 0.2.x it shared this one, and that flag's name
 never promised it. Each claim-consuming field has its own switch now:
 `--allow-plugin-volumes` for `extraPlugins`, `--allow-file-volumes` for
@@ -184,7 +184,7 @@ A group naming a claim on an installation with the switch off is refused with
 file the server rewrote at runtime is replaced by the claim's version the next
 time the pod starts. **A world therefore does not belong in this claim** — it
 would be overwritten on every start. `spec.storage` and a claim-backed
-[`spec.mounts`](mounts.md) entry are what carry one.
+[`spec.mounts`](mounts-and-files.md) entry are what carry one.
 
 **Nothing about the contents reaches the pod hash.** Writing to the volume rolls
 nothing; the files reach a server on its next start, which somebody triggers by

@@ -26,7 +26,7 @@ import (
 )
 
 // TestTheReadyPortAgreesWithTheVelocityAgent closes the entry in
-// docs/known-issues.md: "the ready port is spelled in two languages —
+// docs/reference/known-issues.md: "the ready port is spelled in two languages —
 // internal/podspec.ProxyReadyPort and a Kotlin constant in AgentPlugin.kt —
 // with no test that can compare them. Only the level-2 harness catches a
 // divergence, and only when it runs."

@@ -528,7 +528,7 @@ func TestClampReport(t *testing.T) {
 }
 
 // TestPruningKeepsTheFirstFailureWhenTwoShareASecond closes the tiebreak item
-// in docs/known-issues.md: "keep the oldest failure of the newest generation
+// in docs/reference/known-issues.md: "keep the oldest failure of the newest generation
 // does not carry when two failures of one generation share a creationTimestamp
 // (second resolution); the tiebreak falls to the random suffix instead of
 // status.failedAt."

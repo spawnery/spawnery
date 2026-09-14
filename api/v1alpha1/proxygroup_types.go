@@ -137,7 +137,7 @@ type ExposeSpec struct {
 	// unreachable, because whether the port is open to the world is a
 	// host-firewall question rather than a Kubernetes one: a cluster-wide
 	// policy admitting a fixed list of ports from `world` drops this one while
-	// the pod serves perfectly. See docs/network-boundaries.md.
+	// the pod serves perfectly. See docs/explanation/network-boundaries.md.
 	// +optional
 	HostPort *HostPortSpec `json:"hostPort,omitempty"`
 

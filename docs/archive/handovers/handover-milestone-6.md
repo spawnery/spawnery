@@ -31,8 +31,8 @@ measurement, and `README.md` and `docs/known-issues.md` carry the same wording.
 This document is not a spec. It says where 6a stopped and what 6b —
 NetworkPolicies — finds when it starts, checked against the code as 6a leaves
 it rather than against the plan that preceded it. The design decisions live in
-[`docs/superpowers/specs/2026-08-16-operator-image-and-e2e-design.md`](superpowers/specs/2026-08-16-operator-image-and-e2e-design.md);
-the open points are in [`docs/known-issues.md`](known-issues.md), whose "From
+[`docs/superpowers/specs/2026-08-16-operator-image-and-e2e-design.md`](../../superpowers/specs/2026-08-16-operator-image-and-e2e-design.md);
+the open points are in [`docs/known-issues.md`](../../reference/known-issues.md), whose "From
 milestone 6a" and "From the milestone 6a Task 4 measurement round" sections
 this document does not repeat in full.
 

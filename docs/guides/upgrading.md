@@ -7,7 +7,7 @@ the only one that exists was installed 2026-08-20, milestones after all three
 renames, and was checked clean on 2026-08-22. This page is for whoever finds
 an older one.
 
-Nothing here is an open defect. `docs/known-issues.md` carries those.
+Nothing here is an open defect. `docs/reference/known-issues.md` carries those.
 
 ## An operator upgrade can roll every proxy in the cluster
 
@@ -148,7 +148,7 @@ a 0.2.2 proxy against an older operator behaves correctly. Roll them in
 whatever order suits.
 
 What this does *not* close is the operator's half, and
-`docs/known-issues.md` carries it: `Occupied()` still reads only the backend's
+`docs/reference/known-issues.md` carries it: `Occupied()` still reads only the backend's
 count, so a `DeletePod` decided between a player's arrival and the agent's
 move still lands on someone. The window is much smaller and it is not zero.
 
@@ -301,7 +301,7 @@ timeout on their `Hello`.
 
 Before this the operator assumed the value this repository ships. A
 `velocity.toml` overlay lowering `advanced.read-timeout` closed that window with
-nothing noticing, which is the last entry `docs/known-issues.md` carried. The
+nothing noticing, which is the last entry `docs/reference/known-issues.md` carried. The
 agent reads `ProxyServer.getConfiguration().getReadTimeout()`, so what reaches
 the operator is what Velocity actually parsed: after the overlay, after
 whatever the image ships, after Velocity's own defaults.
@@ -354,7 +354,7 @@ being replaced` while nothing was. Its messages now say *spec* rather than
 *generation*, because the generation is no longer what they are about.
 
 **A capacity edit still resets the group's failure streak**, and that is the
-one thing 7a did not change. `docs/known-issues.md` carries why.
+one thing 7a did not change. `docs/reference/known-issues.md` carries why.
 
 ## A chart upgrade brings a fifth CRD, and moves nothing
 
@@ -505,7 +505,7 @@ which is the platforms' own convention, and better than a lecture — so an
 ungranted player cannot tell "you may not" from "there is no such command".
 
 The three permissions and what each one costs are in
-[the chart's README](https://github.com/spawnery/spawnery/blob/master/charts/spawnery/README.md#the-cloud-permissions). The
+[the chart's README](../getting-started/index.md#the-cloud-permissions). The
 short version: `spawnery.cloud.read` changes nothing, `spawnery.cloud.retire`
 takes a server out of rotation without moving anybody, and
 `spawnery.cloud.scale` spends money.
@@ -588,7 +588,7 @@ network picture it re-syncs on reconnect is the correction.
 `ServerGroup` and `ProxyGroup` gain `spec.extraPlugins.claimName`: a
 `ReadWriteMany` claim whose contents are copied into every server's plugins
 directory on start. It exists so a plugin change costs a restart rather than an
-image rebuild and a release. [`plugins.md`](plugins.md) is the whole of it.
+image rebuild and a release. [`plugins.md`](plugins-from-a-volume.md) is the whole of it.
 
 **This upgrade moves no pod.** A group that names no claim renders exactly the
 pod it rendered before, so both golden pod digests in
@@ -645,7 +645,7 @@ moving players rather than dropping them.
 ### What you get, and what it costs
 
 Purpur adds its own configuration file, `purpur.yml`, on top of Paper's. Nothing
-renders it: it is a [mount](mounts.md) like any other file, and `subPath` is how
+renders it: it is a [mount](mounts-and-files.md) like any other file, and `subPath` is how
 a single file lands beside the ones the server writes itself.
 
 The cost is an upstream more: Purpur tracks Paper, so a Purpur build lags a
@@ -786,7 +786,7 @@ constructs a `Group` itself — a test double — has to be rebuilt.
 `ReadWriteMany` claim whose tree is copied into every server's working
 directory on start. It exists for a file that is not a plugin and that no
 mount can reach — `config/sponge/sponge.conf` is the case that motivated it.
-[`docs/plugins.md`](plugins.md) and [`docs/mounts.md`](mounts.md) carry the
+[`docs/guides/plugins-from-a-volume.md`](plugins-from-a-volume.md) and [`docs/guides/mounts-and-files.md`](mounts-and-files.md) carry the
 whole of it.
 
 **This half moves no pod.** A group that names no `extraFiles` claim renders
@@ -926,7 +926,7 @@ spec:
     hostPortRange: {min: 30000, max: 30100}
 ```
 
-`docs/network-boundaries.md` says what each list bounds.
+`docs/explanation/network-boundaries.md` says what each list bounds.
 
 ## 0.2.33: every ProxyGroup gains an egress policy
 

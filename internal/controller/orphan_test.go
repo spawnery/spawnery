@@ -335,7 +335,7 @@ func TestSweepAndServerControllerConverge(t *testing.T) {
 	}
 }
 
-// TestSweepKeepsTheAgentOfADrainingPod pins an ordering docs/known-issues.md
+// TestSweepKeepsTheAgentOfADrainingPod pins an ordering docs/reference/known-issues.md
 // files as "the deletionTimestamp skip in Sweep is covered by no test; it
 // concerns only an already-deleting orphaned pod, where a second Delete is
 // harmless."

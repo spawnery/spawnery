@@ -3256,7 +3256,7 @@ func TestAHashMismatchMarkDoesNotFireANodeDrainingEvent(t *testing.T) {
 // Watches(&Network{}) both group reconcilers now carry. A group refused because
 // its Network is missing or unaccepted has no way of hearing that the Network
 // came back — it is not an owner, and nothing about the group itself changes —
-// so it waited out the resync. docs/known-issues.md measures the pair of waits
+// so it waited out the resync. docs/reference/known-issues.md measures the pair of waits
 // at roughly ninety seconds.
 //
 // The filter on NetworkRef is not a formality even under one-network-per-

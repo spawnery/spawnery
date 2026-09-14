@@ -9,7 +9,7 @@
 #   - that the channel trusts the mounted bundle and nothing else,
 #   - that a renewal really overlaps rather than merely being scheduled.
 #
-# The last one is what docs/known-issues.md calls non-optional, and a unit test
+# The last one is what docs/reference/known-issues.md calls non-optional, and a unit test
 # can only claim it.
 #
 # The first three phases run against the Paper image, one for each of the three
@@ -62,7 +62,7 @@ DEADLINE="${DEADLINE:-240}"
 # with, and the window the two stream-rate phases count over.
 #
 # Declared here rather than beside the phase that first used them, which is
-# what docs/known-issues.md recorded: phase 5 read WINDOW, RENEWALS, LIMIT and
+# what docs/reference/known-issues.md recorded: phase 5 read WINDOW, RENEWALS, LIMIT and
 # FLOOR out of phase 2, five hundred lines above it, and RENEWALS divided by a
 # literal 5 that had to match a --renew-after somewhere else again. Changing
 # the interval meant finding three unrelated places and hoping.
@@ -593,7 +593,7 @@ echo "the first player count already carries the enforced maximum"
 # container is expected to do, so a container that died turns each of them into
 # a wait for its own timeout and then a diagnosis pointing at whatever the wait
 # was about rather than at the crash. await_event has always checked this; the
-# two loops below did not, which is what docs/known-issues.md recorded.
+# two loops below did not, which is what docs/reference/known-issues.md recorded.
 alive() {
 	local name="$1" waiting_for="$2"
 	if [ -z "$("$CONTAINER" ps -q --filter "name=^${name}$")" ]; then
@@ -1113,7 +1113,7 @@ fi
 echo "the proxy reported the ${reported_timeout}ms read timeout its mounted overlay set"
 
 # The other half of the control, and the half that was missing:
-# docs/known-issues.md recorded that the probe had been shown able to answer
+# docs/reference/known-issues.md recorded that the probe had been shown able to answer
 # true and never shown able to answer false for the ordinary reason. The 25565
 # probe above rules out a prober that always says no; this rules out one that
 # always says yes -- a /dev/tcp redirect that succeeded on a refused
@@ -1322,7 +1322,7 @@ closed_after=$((SECONDS - start))
 # established sessions survive while the endpoint drains. A proxy whose own
 # listener went with the gate would have dropped every player still on it.
 #
-# **Observed failing, 2026-08-27, which docs/known-issues.md recorded that it
+# **Observed failing, 2026-08-27, which docs/reference/known-issues.md recorded that it
 # never had been.** This arm could only be seen working if an agent shut its
 # listener on a SetReady, which no correct one does and no fault this harness
 # can inject produces -- so it was a control that had never controlled
@@ -1360,7 +1360,7 @@ echo "the ready gate closed ${closed_after}s after the operator withdrew readine
 # is exactly what a proxy with nobody on it should send, and sending it at all
 # is the thing this milestone added.
 #
-# docs/runbook-milestone-3-evidence.md is where a real client's join is driven,
+# docs/archive/runbooks/runbook-milestone-3-evidence.md is where a real client's join is driven,
 # and is where a real UUID would be observed.
 await_event player_roster "$EVENTS4" "$NAME4"
 roster_players="$(jq -rs '[.[] | select(.kind == "player_roster")] | last | .players | length' <"$EVENTS4")"

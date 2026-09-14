@@ -869,7 +869,7 @@ func TestABootstrapFailureStillWritesTheStatus(t *testing.T) {
 
 // TestARefusedNetworkSaysSoAsAnEventToo closes the "a rejected Network
 // produces no Kubernetes event, only a condition" item in
-// docs/known-issues.md. A duplicate is the refusal a user is most likely to
+// docs/reference/known-issues.md. A duplicate is the refusal a user is most likely to
 // cause by hand — two Networks in one namespace — and it was the only one this
 // reconciler made silently.
 func TestARefusedNetworkSaysSoAsAnEventToo(t *testing.T) {
@@ -908,7 +908,7 @@ func TestARefusedNetworkSaysSoAsAnEventToo(t *testing.T) {
 }
 
 // TestSiblingNetworksWakesTheLosersAndNotTheWinner covers the mapper behind the
-// second watch on Network. docs/known-issues.md measures recovery after
+// second watch on Network. docs/reference/known-issues.md measures recovery after
 // deleting the winning Network at roughly ninety seconds and names the cause:
 // two requeues stacked, the loser's minute and the group's thirty seconds.
 // This mapper removes the first.
@@ -949,7 +949,7 @@ func TestSiblingNetworksWakesTheLosersAndNotTheWinner(t *testing.T) {
 }
 
 // TestARefusedNetworkStillCountsWhatPointsAtIt closes "the status of a rejected
-// Network freezes and keeps reporting old numbers" in docs/known-issues.md.
+// Network freezes and keeps reporting old numbers" in docs/reference/known-issues.md.
 //
 // The ordinary case is worse than freezing. A Network created second is refused
 // on its very first pass, before it has counted anything, so it reported zero
@@ -1011,7 +1011,7 @@ func (f failingSubResource) Update(context.Context, client.Object, ...client.Sub
 }
 
 // TestARotationIsAnnouncedOnlyOnceTheStatusWriteLands closes the entry in
-// docs/known-issues.md: `"exactly one event per transition" holds only if the
+// docs/reference/known-issues.md: `"exactly one event per transition" holds only if the
 // status write lands`.
 //
 // Both forwarding-secret events fire on *entering* a state, and whether a pass
@@ -1082,7 +1082,7 @@ func (f failingPodList) List(ctx context.Context, list client.ObjectList, opts .
 }
 
 // TestAPodListFailureStillRecordsAcceptance closes the entry in
-// docs/known-issues.md: `a pod List failure blocks the Accepted=True status
+// docs/reference/known-issues.md: `a pod List failure blocks the Accepted=True status
 // write`.
 //
 // The List that gathers forwarding-secret stamps sat between the Accepted

@@ -44,7 +44,7 @@ import (
 // tick the annotation is gone and the secret would otherwise say nothing,
 // leaving the procedure looking as though it swallowed the instruction. The
 // note carries the refusal's own wording; the remedy is in
-// docs/ca-rotation.md, which whoever ran the procedure is already reading.
+// docs/guides/rotating-the-ca.md, which whoever ran the procedure is already reading.
 //
 // ReasonRotationSlotDiscarded is the only one that reports the operator
 // undoing part of a rotation on its own: a slot whose certificate does not

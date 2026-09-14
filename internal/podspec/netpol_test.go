@@ -130,7 +130,7 @@ func TestBuildNetworkPolicyAdmitsOnlyItsOwnProxies(t *testing.T) {
 // TestBuildNetworkPolicyEgressIsDNSAndTheOperatorOnly pins the egress half. A
 // backend runs online-mode=false and never authenticates a player, so it never
 // needs Mojang; its only other measured outbound call is Paper's update check,
-// which docs/known-issues.md records as failing harmlessly with no network.
+// which docs/reference/known-issues.md records as failing harmlessly with no network.
 func TestBuildNetworkPolicyEgressIsDNSAndTheOperatorOnly(t *testing.T) {
 	p := podspec.BuildNetworkPolicy(testNetwork(), "spawnery-system")
 

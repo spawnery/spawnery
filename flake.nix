@@ -110,7 +110,7 @@
               #
               #   nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.${builtins.currentSystem}.protoc-gen-grpc-java.version'
               #
-              # Nothing enforces this but flake.lock. See docs/known-issues.md.
+              # Nothing enforces this but flake.lock. See docs/reference/known-issues.md.
               protobuf
               protoc-gen-go
               protoc-gen-go-grpc
@@ -368,7 +368,7 @@
           # field it names, and a claim-backed spec.mounts now needs
           # --allow-mount-volumes. An installation using one and not setting
           # the other gets Accepted=False with MountVolumesDisabled.
-          # docs/upgrading.md carries the note.
+          # docs/guides/upgrading.md carries the note.
           #
           # 0.2.25 moves it for a decision, not a schema: the ready gate no
           # longer registers a server whose agent has already closed its door.
@@ -382,7 +382,7 @@
           # 0.2.28 moves it: the phase machine gains Finished, a server that
           # says its round is over is replaced without costing its group a
           # failure, and accept=false narrows to mean only "stop counting
-          # seats" rather than "stop routing too". docs/upgrading.md carries
+          # seats" rather than "stop routing too". docs/guides/upgrading.md carries
           # the note, because that narrowing reaches agents built before this
           # release as well.
           #
@@ -393,7 +393,7 @@
           # report and clamps the mirrored count; proxy pods gain the fsGroup
           # their writable claims need, which moves DesiredProxyHash and rolls
           # every proxy once; and NodeDraining names the refusal that applies.
-          # The CRDs change in description text only. docs/upgrading.md
+          # The CRDs change in description text only. docs/guides/upgrading.md
           # carries the proxy roll.
           #
           # 0.2.31 moves it alone, for what 0.2.30's rollout showed: for the
@@ -418,7 +418,7 @@
           # allowed. The operator also writes an egress policy per
           # ProxyGroup, keeps the budget and a departing node ahead of the
           # ConfigMap and claim gates, and bounds every send in a session
-          # loop. docs/upgrading.md carries the two notes. No image moves.
+          # loop. docs/guides/upgrading.md carries the two notes. No image moves.
           operatorVersion = "0.2.33";
 
           spawnery-slp = pkgs.buildGoModule {

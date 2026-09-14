@@ -46,7 +46,7 @@ spec:
           # deployment pins a digest itself -- which is where a digest belongs
           # anyway, and what the master design's §8 is actually asking for:
           # an immutable reference in the manifest a cluster runs.
-          # See docs/known-issues.md, "From the RKE2 rollout".
+          # See docs/reference/known-issues.md, "From the RKE2 rollout".
           image: {{ include "spawnery.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:

@@ -1,8 +1,8 @@
 # Runbook: rotating a Network's forwarding secret
 
 **Status: standing operating procedure.** Unlike
-`docs/runbook-milestone-5a-evidence.md`,
-`docs/runbook-milestone-5b-evidence.md` and the other evidence runbooks beside
+`docs/archive/runbooks/runbook-milestone-5a-evidence.md`,
+`docs/archive/runbooks/runbook-milestone-5b-evidence.md` and the other evidence runbooks beside
 it, this document is not a record of a run. It is the procedure itself, and it
 stays true after milestone 5c ships. Milestone 5c is what makes the operator
 report a rotation; every restart below is still a human's to perform.
@@ -431,7 +431,7 @@ a pod rolled while the read is still failing is stamped from the same retained
 digest and is mis-stamped a second time. Fix the read first — the remedy
 column above says how for each reason — and then roll, because a pod created
 against a readable secret is stamped with the digest of the bytes it is about
-to mount. Recorded in `docs/known-issues.md`.
+to mount. Recorded in `docs/reference/known-issues.md`.
 
 ## 9. When the stamp lies, and for how long
 

@@ -120,7 +120,7 @@ func TestNodeDeparting(t *testing.T) {
 }
 
 // TestAWellKnownDrainTaintIsNoticedWithoutBeingActedOn is the answer to
-// docs/known-issues.md's "nothing in the operator will tell them they missed
+// docs/reference/known-issues.md's "nothing in the operator will tell them they missed
 // it". An unset -drain-taint and a genuinely quiet cluster look identical from
 // inside this operator, and the one thing that tells them apart is a node
 // turning up with a taint that plainly means the node is going.

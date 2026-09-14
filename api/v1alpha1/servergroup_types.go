@@ -138,7 +138,7 @@ type ServerGroupSpec struct {
 	//
 	// So if they must not be: empty the ordinal first, or raise
 	// spec.drain.timeoutSeconds beforehand so the drain has room to finish.
-	// docs/persistent-storage.md carries why refusing to shrink while anyone
+	// docs/guides/persistent-worlds.md carries why refusing to shrink while anyone
 	// is online would not be the better rule.
 	// +kubebuilder:validation:Minimum=0
 	// +optional

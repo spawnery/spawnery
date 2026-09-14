@@ -43,7 +43,7 @@ import (
 // The split is not incidental. Groups and servers are custom resources and
 // come from the manager's cache, so reading them is an indexer lookup rather
 // than an API round trip. Players are in memory in the registry and are in no
-// object at all -- see docs/network-boundaries.md for why they stay there.
+// object at all -- see docs/explanation/network-boundaries.md for why they stay there.
 type Source struct {
 	// Reader is the manager's cached client.
 	Reader client.Reader

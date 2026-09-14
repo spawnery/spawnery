@@ -476,7 +476,7 @@ type GroupAttributes map[string]string
 // not: a world tree, a directory of assets every server reads, a pool one
 // group writes and another reads. `extraPlugins` is deliberately narrow -- one
 // claim, read-only, copied into `plugins/` by the entrypoint -- and everything
-// outside `plugins/` needed somewhere to go. docs/mounts.md carries what each
+// outside `plugins/` needed somewhere to go. docs/guides/mounts-and-files.md carries what each
 // of those routes is and the one that is refused.
 //
 // It is still not a layered template system. There is no composition, no
@@ -541,7 +541,7 @@ type Mount struct {
 // spec.mounts too, and its refusal said so -- which the flag's name never
 // promised. The flag is still not a security boundary -- a claim is a
 // namespaced object in the same trust domain as the group naming it -- and
-// docs/plugins.md says so at more length.
+// docs/guides/plugins-from-a-volume.md says so at more length.
 type MountClaim struct {
 	// ClaimName is a PersistentVolumeClaim in this object's own namespace.
 	// +kubebuilder:validation:MinLength=1

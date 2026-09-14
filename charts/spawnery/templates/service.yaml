@@ -18,7 +18,7 @@ spec:
     # with a comment naming "a metrics scrape" -- but nothing ever routed to
     # it, so `spawnery_ca_rotation_phase` and
     # `spawnery_ca_rotation_blocked_namespaces` were unreachable from any
-    # Prometheus. docs/known-issues.md tells a reader to alert on those gauges
+    # Prometheus. docs/reference/known-issues.md tells a reader to alert on those gauges
     # rather than on the events, which was advice the installed chart could not
     # carry out.
     - name: metrics

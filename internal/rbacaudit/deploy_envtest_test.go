@@ -1231,7 +1231,7 @@ var chartNamespacedObjects = []string{
 }
 
 // TestEveryRenderedObjectLandsInTheReleaseNamespace closes the entry in
-// docs/known-issues.md: "`make chart-lint` does not catch a chart that renders
+// docs/reference/known-issues.md: "`make chart-lint` does not catch a chart that renders
 // with an empty namespace."
 //
 // A typo'd `{{ .Release.Namspace }}` is not a render failure. Helm resolves an

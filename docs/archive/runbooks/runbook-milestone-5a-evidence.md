@@ -425,7 +425,7 @@ the real output against this line does not raise a question it cannot answer.
 The first three are what matter: this
 is what lets `kubectl get pvc -l spawnery.cloud/managed-by=spawnery-operator` find
 every claim this operator has ever created, and what
-[`docs/persistent-storage.md`](persistent-storage.md) names as how to tell a
+[`docs/persistent-storage.md`](../../guides/persistent-worlds.md) names as how to tell a
 live claim from an orphan.
 
 **Expect the owner references to print nothing — an empty array.** This is

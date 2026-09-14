@@ -48,7 +48,7 @@ var RejectedReports = prometheus.NewCounterVec(
 // **By reason and by nothing else.** A label carrying a pod, a namespace or a
 // player would be a cardinality bomb -- and for the player it would also put a
 // person's name into whatever the monitoring stack's retention is, which is
-// the rule docs/network-boundaries.md already states about the roster.
+// the rule docs/explanation/network-boundaries.md already states about the roster.
 //
 // Each reason is a different operational question. RATE_LIMITED rising is a
 // pod asking too often, which is a misbehaving plugin or a compromised one;

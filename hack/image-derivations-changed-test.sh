@@ -52,7 +52,7 @@ expect() {
 # this is not an invented example — it is the real range in which a hash moved,
 # and the job this script gates would have built the images across it.
 #
-# 022a421..a6f766c touches docs/known-issues.md and nothing else, which is the
+# 022a421..a6f766c touches docs/reference/known-issues.md and nothing else, which is the
 # ordinary shape of a commit here and the case the whole script exists to make
 # cheap.
 # ---------------------------------------------------------------------------

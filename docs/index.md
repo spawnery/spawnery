@@ -32,7 +32,7 @@ the proxy.
 
 Four custom resources, all namespaced. One namespace holds one `Network`, and a
 `Network` is one trust domain — see [Choosing a game
-namespace](https://github.com/spawnery/spawnery/blob/master/charts/spawnery/README.md#choosing-a-game-namespace) before you
+namespace](getting-started/index.md#choosing-a-game-namespace) before you
 put two of anything in one.
 
 | Kind | What it is |
@@ -66,5 +66,5 @@ and readiness changes down. It is what makes the two things above possible —
 scaling on players the operator can actually count, and moving players off a
 server before it stops rather than disconnecting them.
 
-Whatever is open right now is in [Known issues](known-issues.md) — an entry is
+Whatever is open right now is in [Known issues](reference/known-issues.md) — an entry is
 deleted when it closes, so an empty file means nothing is open.

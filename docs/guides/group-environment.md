@@ -82,7 +82,7 @@ The list is a map keyed by name, so the same name twice is refused as well.
 them exactly the way an image bump does, through `maxUnavailable` and the cold
 start. Nobody is kicked; it still costs a changeover.
 
-That is the opposite of [`extraPlugins`](plugins.md), whose contents reach no
+That is the opposite of [`extraPlugins`](plugins-from-a-volume.md), whose contents reach no
 hash at all. The difference is not a preference: the operator holds a claim
 name and cannot digest a filesystem, while an env list it renders itself it
 can. If you want a value you can change without rolling anything, it belongs on

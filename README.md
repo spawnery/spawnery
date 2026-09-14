@@ -36,8 +36,8 @@ the proxy.
 
 Four custom resources, all namespaced. One namespace holds one `Network`, and a
 `Network` is one trust domain — see [Choosing a game
-namespace](charts/spawnery/README.md#choosing-a-game-namespace) before you put
-two of anything in one.
+namespace](https://docs.spawnery.cloud/getting-started/#choosing-a-game-namespace)
+before you put two of anything in one.
 
 | Kind | What it is |
 |---|---|
@@ -91,13 +91,14 @@ The backend image is [Purpur](https://purpurmc.org) as of v0.2.15 —
 `ghcr.io/spawnery/purpur`, a fork of Paper running the same agent, the same
 entrypoint and the same Java runtime. `ghcr.io/spawnery/paper` is deprecated
 and still published; nothing moves until a `ServerGroup`'s `spec.image` is
-edited, and [`docs/upgrading.md`](docs/upgrading.md) carries what that costs.
+edited, and [`docs/guides/upgrading.md`](docs/guides/upgrading.md) carries what
+that costs.
 
 Whatever is open right now is in
-[`docs/known-issues.md`](docs/known-issues.md) — an entry is deleted when it
-closes, so an empty file means nothing is open. How it got here, milestone by
-milestone and with the measurement each claim rests on, is
-[`docs/history.md`](docs/history.md).
+[`docs/reference/known-issues.md`](docs/reference/known-issues.md) — an entry
+is deleted when it closes, so an empty file means nothing is open. How it got
+here, milestone by milestone and with the measurement each claim rests on, is
+[`docs/archive/history.md`](docs/archive/history.md).
 
 ## Install
 
@@ -118,8 +119,8 @@ it is `helm install spawnery charts/spawnery` with the same flags.
 
 `--create-namespace` is not optional — the chart templates no `Namespace` of
 its own on purpose. There is also **one manual step per game namespace** the
-chart cannot make for you. Both are in
-[`charts/spawnery/README.md`](charts/spawnery/README.md), which is the full
+chart cannot make for you. Both are covered in
+[Getting started](https://docs.spawnery.cloud/getting-started/), the full
 installation reference.
 
 [`config/samples/network.yaml`](config/samples/network.yaml) is a working
@@ -132,32 +133,12 @@ start otherwise.
 
 ## Documentation
 
-**Operating**
-
-| | |
-|---|---|
-| [`charts/spawnery/README.md`](charts/spawnery/README.md) | Installing the chart, and choosing a game namespace |
-| [`docs/upgrading.md`](docs/upgrading.md) | What an operator upgrade moves, including what it moves without being asked |
-| [`docs/ca-rotation.md`](docs/ca-rotation.md) | Rotating the agent channel's CA |
-| [`docs/runbook-milestone-5c-secret-rotation.md`](docs/runbook-milestone-5c-secret-rotation.md) | Rotating a network's forwarding secret |
-| [`docs/persistent-storage.md`](docs/persistent-storage.md) | How persistent worlds are stored, and why claims outlive their servers |
-| [`docs/network-boundaries.md`](docs/network-boundaries.md) | What the NetworkPolicies buy — **and what they do not** |
-
-**Reference**
-
-| | |
-|---|---|
-| [`docs/known-issues.md`](docs/known-issues.md) | Everything open right now, and nothing else |
-| [`docs/development.md`](docs/development.md) | Building, testing, the images, and a local cluster |
-| [`docs/history.md`](docs/history.md) | How it was built, and what each milestone measured |
-| [`docs/superpowers/specs/`](docs/superpowers/specs/) | The designs |
-| [`docs/superpowers/plans/`](docs/superpowers/plans/) | The implementation plans |
-
-The `docs/handover-*.md` and `docs/runbook-*.md` files are the milestone record:
-what each one started from, what it decided, and the logs from the runs that
-proved it. [`docs/handover-milestone-6e.md`](docs/handover-milestone-6e.md) is
-the most recent, and is written to be read by someone with no memory of how any
-of this was built. [`docs/README.md`](docs/README.md) indexes all of them.
+The full documentation — installing the chart, choosing a game namespace,
+upgrading, the guides for persistent storage, plugins, mounts and CA/secret
+rotation, and the milestone-by-milestone history — is at
+[docs.spawnery.cloud](https://docs.spawnery.cloud). Everything open right now
+is in [`docs/reference/known-issues.md`](docs/reference/known-issues.md), and
+the project is licensed under [`LICENSE`](LICENSE).
 
 ## Development
 
@@ -170,9 +151,10 @@ make e2e               # the driven run: the operator in a real kind cluster
 ```
 
 Everything builds through Nix, so nothing depends on what is installed on the
-machine. [`docs/development.md`](docs/development.md) has the full target
-table, what each image target costs, how publishing works, and the hand-driven
-flow for running the operator outside a local `kind` cluster.
+machine. [`docs/contributing/development.md`](docs/contributing/development.md)
+has the full target table, what each image target costs, how publishing works,
+and the hand-driven flow for running the operator outside a local `kind`
+cluster.
 
 ## License
 
