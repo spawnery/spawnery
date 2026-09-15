@@ -66,9 +66,23 @@ itself, which matters for the next section.
 
 Roughly: create the cluster, install the chart, apply a `Network` and one
 ephemeral `ServerGroup` and one `ProxyGroup`, watch `kubectl get servergroups`
-fill in, connect a client, watch the group scale when you join. Each step shows
-the command, then what comes back — the actual output, not a description of
-it.
+fill in, connect a client, and watch the group notice you. Each step shows the
+command, then what comes back — the actual output, not a description of it.
+
+**Notice, not scale.** An earlier draft said the reader watches the group
+*scale* on their join, and that was written before the arithmetic. A scale-up
+needs the free-slot count to fall below `spareSlots`, which for one player
+means a group sized so small it looks contrived — and the second server it
+starts costs another 2Gi on the reader's machine, on top of the first, the
+proxy, kind, and the Minecraft client they are running to join with. That is
+more than a tutorial may ask for, and it is more than this project's own
+development VM has.
+
+So the tutorial's payoff is the counters moving: `onlinePlayers` and
+`freeSlots` on the group the reader just joined. Scaling on free slots is the
+thing this system exists for and it gets a guide of its own in 3c, which is
+what guides are for. A tutorial that cannot be run is worse than one that ends
+one demonstration short.
 
 Where a step has a reason worth knowing, the tutorial gives one sentence and a
 link. It does not explain the drain protocol.
@@ -202,8 +216,8 @@ Two of its properties decide the tutorial's shape:
 So the tutorial runs its proxy with `onlineMode: false` and says why in one
 sentence: it is a local cluster on your own machine, and it is what lets the
 project drive this same path in CI. A reader's own licensed client connects to
-an offline-mode proxy perfectly well, so nothing is taken away from them — they
-still finish by standing on a server.
+an offline-mode proxy perfectly well, so nothing is taken away from them — and
+they still finish by standing on a server.
 
 And CI finishes the same way. `spawnery-join --hold` against the tutorial's own
 manifests verifies the last step rather than stopping at "a backend is Ready
