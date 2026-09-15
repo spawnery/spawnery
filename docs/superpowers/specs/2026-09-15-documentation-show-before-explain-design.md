@@ -176,19 +176,41 @@ spec, and `mkdocs build --strict` plus somebody reading them is the test.
 
 **3a gets an implementation plan.** Nothing else here does.
 
-## Open question for the author
+## The join is automated too, and that closes the last gap
 
-The tutorial needs a Minecraft client to reach a `kind` cluster for its last
-step, and that is the one thing CI cannot do — the end-to-end suite has never
-had a licensed client in it, and the runbooks record every join as
-hand-driven.
+An earlier draft of this spec left the tutorial's final step as an open
+question, on the assumption that a Minecraft client reaching a `kind` cluster
+was something only a person could drive. That was wrong, and the thing that
+makes it wrong has been in the tree since milestone 3.
 
-So the tutorial's final step is either (a) written from a hand-driven run,
-recorded once, with the page saying plainly that the join was driven by a
-person on a named date; or (b) stopped one step earlier, at `kubectl get
-servers` showing a `Ready` backend and the proxy's address, leaving the join to
-the reader.
+`cmd/spawnery-join` logs in to a proxy far enough to be routed to a backend and
+turns the result into an exit code and one line of JSON. Its own header calls
+it "the automated half of milestone 3's success criterion". It is a flake
+package, it is test-only and ships in no image, and **the end-to-end suite does
+not use it today.**
 
-This spec assumes **(a)**, because a tutorial that stops before the payoff is a
-tutorial nobody finishes, and because this project already records driven runs
-that way. It costs one hand-driven session, and the date on it will age.
+Two of its properties decide the tutorial's shape:
+
+- It needs `spec.config.onlineMode: false` on the `ProxyGroup` — the custom
+  resource field, not a `configOverlay`, because `internal/render` reasserts
+  the keys it owns after merging an overlay. It cannot answer the encryption
+  handshake an online-mode proxy asks for, having no Microsoft account.
+- `--hold` keeps the connection open after a successful join. It is the only
+  way a proxy's `status.connectedPlayers` is non-zero when the next line
+  reads it.
+
+So the tutorial runs its proxy with `onlineMode: false` and says why in one
+sentence: it is a local cluster on your own machine, and it is what lets the
+project drive this same path in CI. A reader's own licensed client connects to
+an offline-mode proxy perfectly well, so nothing is taken away from them — they
+still finish by standing on a server.
+
+And CI finishes the same way. `spawnery-join --hold` against the tutorial's own
+manifests verifies the last step rather than stopping at "a backend is Ready
+and here is the address", which means the tutorial's payoff is covered by the
+same argument as the rest of it.
+
+What remains hand-driven is a **licensed** client against an **online-mode**
+proxy. That is what every runbook in the archive records and it stays that way
+— but it is not what a tutorial on `kind` would show, so it is not this spec's
+problem.
