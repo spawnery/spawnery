@@ -26,6 +26,15 @@ const (
 	// mapped to the same number on the host by docs/tutorial/kind-config.yaml,
 	// which is the pair a tutorial reader's own client uses too.
 	tutorialJoinPort = 30001
+
+	// tutorialOperatorNamespace is where hack/e2e-tutorial.sh installs the
+	// chart -- its own default, unlike the main suite's platform-system --
+	// because this scenario has to exercise the install README.md actually
+	// tells a reader to run. It is not operatorNamespace: the two suites
+	// share this package's eventually/denialHint machinery but run against
+	// operators in different namespaces, so every wait in this file that
+	// might time out has to be told which one to look at.
+	tutorialOperatorNamespace = "spawnery-system"
 )
 
 // TestTutorialPath drives the tutorial's own path once, join included: apply
@@ -49,7 +58,7 @@ func TestTutorialPath(t *testing.T) {
 	applyManifest(t, tutorialManifest)
 	applyForwardingSecretReader(t, tutorialNamespace)
 
-	eventually(t, 3*time.Minute, "the lobby ServerGroup to report a Ready backend", func() (bool, string) {
+	eventuallyIn(t, tutorialOperatorNamespace, 3*time.Minute, "the lobby ServerGroup to report a Ready backend", func() (bool, string) {
 		var group spawneryv1alpha1.ServerGroup
 		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialServerGroup}, &group); err != nil {
 			return false, err.Error()
@@ -57,7 +66,7 @@ func TestTutorialPath(t *testing.T) {
 		return group.Status.ReadyReplicas >= 1, fmt.Sprintf("readyReplicas=%d", group.Status.ReadyReplicas)
 	})
 
-	eventually(t, 2*time.Minute, "the gateway ProxyGroup to be addressable", func() (bool, string) {
+	eventuallyIn(t, tutorialOperatorNamespace, 2*time.Minute, "the gateway ProxyGroup to be addressable", func() (bool, string) {
 		var group spawneryv1alpha1.ProxyGroup
 		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}, &group); err != nil {
 			return false, err.Error()
@@ -90,7 +99,7 @@ func TestTutorialPath(t *testing.T) {
 		t.Fatalf("start spawnery-join: %v", err)
 	}
 
-	eventually(t, hold-2*time.Second, "the gateway ProxyGroup to report the joined player", func() (bool, string) {
+	eventuallyIn(t, tutorialOperatorNamespace, hold-2*time.Second, "the gateway ProxyGroup to report the joined player", func() (bool, string) {
 		var group spawneryv1alpha1.ProxyGroup
 		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}, &group); err != nil {
 			return false, err.Error()

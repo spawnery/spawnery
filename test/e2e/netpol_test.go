@@ -96,7 +96,7 @@ func theOperatorStaysReadyBehindItsOwnPolicy(t *testing.T) {
 	// that could have happened.
 	eventuallyStable(t, time.Minute, 20*time.Second,
 		"the operator ready behind its own policy", func() (bool, string) {
-			pod := operatorPod(t)
+			pod := operatorPod(t, operatorNamespace)
 			for _, c := range pod.Status.ContainerStatuses {
 				if !c.Ready {
 					return false, fmt.Sprintf("container not ready, restarts %d", c.RestartCount)

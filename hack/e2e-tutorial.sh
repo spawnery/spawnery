@@ -26,6 +26,19 @@ OPERATOR_NAMESPACE=spawnery-system
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Two runs cannot coexist: docs/tutorial/kind-config.yaml and
+# docs/tutorial/network.yaml agree on a fixed host port, and a second cluster
+# fails to bind it regardless of its own name -- deep into the run, after both
+# images are already built. Caught here instead, the failure names the actual
+# cause and costs nothing.
+tutorial_join_port=30001
+if ss -H -ltn "sport = :${tutorial_join_port}" 2>/dev/null | grep -q .; then
+	echo "port ${tutorial_join_port} is already bound -- a tutorial cluster is probably still up." >&2
+	echo "kind clusters: $(kind get clusters 2>/dev/null | tr '\n' ' ')" >&2
+	echo "only one can run at a time: delete the other first (kind delete cluster --name <name>)." >&2
+	exit 1
+fi
+
 workdir="$(mktemp -d)"
 KUBECONFIG="$workdir/kubeconfig"
 export KUBECONFIG
