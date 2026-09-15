@@ -139,7 +139,13 @@ fi
 # Set before the create, not after: a create that fails halfway leaves a
 # partial cluster of this run's own making, and that one is ours to remove.
 created_cluster=1
-kind create cluster --name "$CLUSTER" --wait 120s
+# Reaching into docs/ from hack/ looks backwards, but the config is not
+# duplicated here on purpose: it is the same file a tutorial reader applies to
+# their own kind cluster, extraPortMappings included. One file for both means
+# a port mapping that stops working for the reader stops working for this
+# suite in the same run, instead of the tutorial rotting silently while CI
+# stays green.
+kind create cluster --name "$CLUSTER" --config docs/tutorial/kind-config.yaml --wait 120s
 kind load image-archive "$archive" --name "$CLUSTER"
 
 # A first run of this script hit "namespaces \"spawnery-system\" not found":
