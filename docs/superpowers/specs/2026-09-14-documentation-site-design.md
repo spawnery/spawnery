@@ -379,6 +379,11 @@ with its frame, and `docs/history.md` brought forward over the 94 commits since
 the rollout — told as six or seven chapters (round lifecycle, server numbers,
 `/cloud`, boosts, the volume family, scheduling), not listed.
 
+>**Phases 3 to 5 below are superseded** by
+> `2026-09-15-documentation-show-before-explain-design.md`, written after the
+> site went up and its first reader found it a wall of text. Phases 1 and 2
+> stand as built.
+
 ### Which phases get an implementation plan
 
 Two of them, not five.
