@@ -56,7 +56,6 @@ func TestTutorialPath(t *testing.T) {
 	}
 
 	applyManifest(t, tutorialManifest)
-	applyForwardingSecretReader(t, tutorialNamespace)
 
 	eventuallyIn(t, tutorialOperatorNamespace, 3*time.Minute, "the lobby ServerGroup to report a Ready backend", func() (bool, string) {
 		var group spawneryv1alpha1.ServerGroup
@@ -91,10 +90,18 @@ func TestTutorialPath(t *testing.T) {
 	// an agent reports a join, so the window below must clear at least two
 	// resync passes with room left for a slow or contended kind cluster.
 	const hold = 25 * time.Second
+
+	// --timeout bounds the login rather than the whole run: internal/mcjoin
+	// replaces the connection's deadline with the end of the hold as soon as
+	// the login succeeds. Derived from hold, and only as far above it as the
+	// tool's own "--hold must fit inside --timeout" check needs -- a login the
+	// tool still accepts after the deadline below has passed is reported as a
+	// counter that never moved rather than in the join's own words.
+	timeout := hold + 5*time.Second
 	cmd := exec.Command(joinPath,
 		"--host", "127.0.0.1",
 		"--port", strconv.Itoa(tutorialJoinPort),
-		"--timeout", "45s",
+		"--timeout", timeout.String(),
 		"--hold", hold.String(),
 	)
 	var out bytes.Buffer
@@ -103,6 +110,7 @@ func TestTutorialPath(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start spawnery-join: %v", err)
 	}
+	defer func() { _ = cmd.Process.Kill() }()
 
 	// Not eventuallyIn: a join that fails rejects itself immediately rather
 	// than waiting out --timeout (internal/mcjoin's encryption-request branch
@@ -141,21 +149,5 @@ func TestTutorialPath(t *testing.T) {
 				return
 			}
 		}
-	}
-}
-
-// applyForwardingSecretReader is the one manual step per game namespace
-// README.md's Install section names: config/rbac/forwarding-secret-reader.yaml
-// carries no namespace of its own, by its own header comment, so applying it
-// is what authorises the operator to read this namespace's forwarding secret.
-// Its RoleBinding subject is hard-coded to spawnery-system, which is where
-// hack/e2e-tutorial.sh installs the chart -- the chart's own default, unlike
-// hack/e2e.sh's platform-system -- so nothing here rewrites it.
-func applyForwardingSecretReader(t *testing.T, namespace string) {
-	t.Helper()
-	cmd := exec.Command("kubectl", "apply", "-n", namespace,
-		"-f", repoRoot+"/config/rbac/forwarding-secret-reader.yaml")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("apply config/rbac/forwarding-secret-reader.yaml -n %s: %v\n%s", namespace, err, out)
 	}
 }
