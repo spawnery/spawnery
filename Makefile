@@ -439,6 +439,14 @@ publish-chart-test:
 e2e: manifests
 	hack/e2e.sh
 
+# The tutorial's own path, join included -- see hack/e2e-tutorial.sh's header
+# for why this is not e2e's job. Not part of `test` or `all`: it builds and
+# loads the real Purpur and Velocity images, which nothing else in this
+# repository's commit loop does. .github/workflows/nightly.yml runs it.
+.PHONY: e2e-tutorial
+e2e-tutorial: manifests
+	hack/e2e-tutorial.sh
+
 # --strict, inside nix/docs-site.nix's buildPhase, turns an unresolved
 # internal link or a page missing from the nav into a build failure -- the
 # only link checker this project has. Out of `test`: internal/controller

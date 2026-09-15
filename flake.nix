@@ -130,6 +130,13 @@
               jdk21_headless
               # hack/agent-test.sh asserts on the stub operator's event stream.
               jq
+              # Test-only and shipped in no image (see the package below), but
+              # test/e2e/tutorial_test.go runs it as a real subprocess against
+              # a real proxy rather than importing internal/mcjoin, the way a
+              # person following the tutorial runs it themselves -- so it
+              # needs to be on the dev shell's PATH rather than built inside
+              # the test.
+              self.packages.${pkgs.system}.spawnery-join
             ];
 
             env = {

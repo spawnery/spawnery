@@ -1,0 +1,121 @@
+//go:build e2e
+
+package e2e
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"testing"
+	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+)
+
+const (
+	tutorialNamespace   = "spawnery-tutorial"
+	tutorialManifest    = "docs/tutorial/network.yaml"
+	tutorialServerGroup = "lobby"
+	tutorialProxyGroup  = "gateway"
+
+	// tutorialJoinPort is docs/tutorial/network.yaml's fixed NodePort. It is
+	// mapped to the same number on the host by docs/tutorial/kind-config.yaml,
+	// which is the pair a tutorial reader's own client uses too.
+	tutorialJoinPort = 30001
+)
+
+// TestTutorialPath drives the tutorial's own path once, join included: apply
+// docs/tutorial/network.yaml, wait for a Ready backend and an addressable
+// proxy, then join with cmd/spawnery-join --hold so the proxy's
+// status.connectedPlayers is non-zero when the assertion reads it.
+//
+// It does not run under hack/e2e.sh. That script's own manifest
+// (test/e2e/manifests/e2e.yaml) deliberately names images that never resolve,
+// so no game or proxy process ever starts there -- and this scenario needs
+// both, for real, with a real join. Pulling it into that run would mean
+// building and loading the Purpur and Velocity images on every push, which
+// milestone 6a's design declares a non-goal. hack/e2e-tutorial.sh builds and
+// loads them instead, sets SPAWNERY_E2E_TUTORIAL=1, and runs nightly.
+func TestTutorialPath(t *testing.T) {
+	if os.Getenv("SPAWNERY_E2E_TUTORIAL") != "1" {
+		t.Skip("set SPAWNERY_E2E_TUTORIAL=1 to run the tutorial's own path; " +
+			"hack/e2e-tutorial.sh does this nightly, hack/e2e.sh does not")
+	}
+
+	applyManifest(t, tutorialManifest)
+	applyForwardingSecretReader(t, tutorialNamespace)
+
+	eventually(t, 3*time.Minute, "the lobby ServerGroup to report a Ready backend", func() (bool, string) {
+		var group spawneryv1alpha1.ServerGroup
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialServerGroup}, &group); err != nil {
+			return false, err.Error()
+		}
+		return group.Status.ReadyReplicas >= 1, fmt.Sprintf("readyReplicas=%d", group.Status.ReadyReplicas)
+	})
+
+	eventually(t, 2*time.Minute, "the gateway ProxyGroup to be addressable", func() (bool, string) {
+		var group spawneryv1alpha1.ProxyGroup
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}, &group); err != nil {
+			return false, err.Error()
+		}
+		return group.Status.Address != "", fmt.Sprintf("status.address=%q", group.Status.Address)
+	})
+
+	joinPath, err := exec.LookPath("spawnery-join")
+	if err != nil {
+		t.Fatalf("spawnery-join not on PATH (%v); the dev shell carries it, run this through nix develop", err)
+	}
+
+	// spawnery-join is the automated half of milestone 3's success criterion:
+	// it logs in far enough to be routed to a backend and answers with an
+	// exit code. --hold keeps the connection open, which is the only way the
+	// proxy's status.connectedPlayers is non-zero when the assertion below
+	// reads it -- so the process is started rather than run to completion
+	// first, and the wait below has to land inside the hold.
+	const hold = 15 * time.Second
+	cmd := exec.Command(joinPath,
+		"--host", "127.0.0.1",
+		"--port", strconv.Itoa(tutorialJoinPort),
+		"--timeout", "45s",
+		"--hold", hold.String(),
+	)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start spawnery-join: %v", err)
+	}
+
+	eventually(t, hold-2*time.Second, "the gateway ProxyGroup to report the joined player", func() (bool, string) {
+		var group spawneryv1alpha1.ProxyGroup
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}, &group); err != nil {
+			return false, err.Error()
+		}
+		return group.Status.ConnectedPlayers >= 1, fmt.Sprintf("connectedPlayers=%d", group.Status.ConnectedPlayers)
+	})
+
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("spawnery-join: %v\n%s", err, out.String())
+	}
+	t.Logf("spawnery-join: %s", out.String())
+}
+
+// applyForwardingSecretReader is the one manual step per game namespace
+// README.md's Install section names: config/rbac/forwarding-secret-reader.yaml
+// carries no namespace of its own, by its own header comment, so applying it
+// is what authorises the operator to read this namespace's forwarding secret.
+// Its RoleBinding subject is hard-coded to spawnery-system, which is where
+// hack/e2e-tutorial.sh installs the chart -- the chart's own default, unlike
+// hack/e2e.sh's platform-system -- so nothing here rewrites it.
+func applyForwardingSecretReader(t *testing.T, namespace string) {
+	t.Helper()
+	cmd := exec.Command("kubectl", "apply", "-n", namespace,
+		"-f", repoRoot+"/config/rbac/forwarding-secret-reader.yaml")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("apply config/rbac/forwarding-secret-reader.yaml -n %s: %v\n%s", namespace, err, out)
+	}
+}
