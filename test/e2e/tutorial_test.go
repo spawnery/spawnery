@@ -85,7 +85,12 @@ func TestTutorialPath(t *testing.T) {
 	// proxy's status.connectedPlayers is non-zero when the assertion below
 	// reads it -- so the process is started rather than run to completion
 	// first, and the wait below has to land inside the hold.
-	const hold = 15 * time.Second
+	//
+	// hold is sized against ProxyGroupReconciler's ResyncInterval (5s):
+	// connectedPlayers is only refreshed on reconcile, not pushed the instant
+	// an agent reports a join, so the window below must clear at least two
+	// resync passes with room left for a slow or contended kind cluster.
+	const hold = 25 * time.Second
 	cmd := exec.Command(joinPath,
 		"--host", "127.0.0.1",
 		"--port", strconv.Itoa(tutorialJoinPort),
@@ -99,18 +104,44 @@ func TestTutorialPath(t *testing.T) {
 		t.Fatalf("start spawnery-join: %v", err)
 	}
 
-	eventuallyIn(t, tutorialOperatorNamespace, hold-2*time.Second, "the gateway ProxyGroup to report the joined player", func() (bool, string) {
-		var group spawneryv1alpha1.ProxyGroup
-		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}, &group); err != nil {
-			return false, err.Error()
-		}
-		return group.Status.ConnectedPlayers >= 1, fmt.Sprintf("connectedPlayers=%d", group.Status.ConnectedPlayers)
-	})
+	// Not eventuallyIn: a join that fails rejects itself immediately rather
+	// than waiting out --timeout (internal/mcjoin's encryption-request branch
+	// returns as soon as the proxy asks for a handshake it cannot answer), so
+	// connectedPlayers would simply never reach 1 and a plain poll would
+	// report a generic timeout that names nothing about why. Racing the wait
+	// against the process exiting means a failing join is reported in its own
+	// words instead of hiding behind that timeout.
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
 
-	if err := cmd.Wait(); err != nil {
-		t.Fatalf("spawnery-join: %v\n%s", err, out.String())
+	joinDeadline := hold - 3*time.Second
+	deadline := time.After(joinDeadline)
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	last := "nothing observed yet"
+	for {
+		select {
+		case err := <-done:
+			t.Fatalf("spawnery-join exited before the gateway ProxyGroup reported the joined player (%v):\n%s", err, out.String())
+		case <-deadline:
+			t.Fatalf("timed out after %s waiting for the gateway ProxyGroup to report the joined player; last seen: %s%s",
+				joinDeadline, last, denialHint(t, tutorialOperatorNamespace))
+		case <-ticker.C:
+			var group spawneryv1alpha1.ProxyGroup
+			if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}, &group); err != nil {
+				last = err.Error()
+				continue
+			}
+			last = fmt.Sprintf("connectedPlayers=%d", group.Status.ConnectedPlayers)
+			if group.Status.ConnectedPlayers >= 1 {
+				if err := <-done; err != nil {
+					t.Fatalf("spawnery-join: %v\n%s", err, out.String())
+				}
+				t.Logf("spawnery-join: %s", out.String())
+				return
+			}
+		}
 	}
-	t.Logf("spawnery-join: %s", out.String())
 }
 
 // applyForwardingSecretReader is the one manual step per game namespace
