@@ -339,8 +339,9 @@ def main():
     out.append("")
     out.append(
         "A few fields are Kubernetes' own types, embedded by reference rather than declared in "
-        "this repository: they appear as a single row naming the type and linking to its "
-        "[Kubernetes API reference](" + K8S_API_DOC + ") instead of being expanded here."
+        "this repository: they appear as a single row naming the type and linking to "
+        "[the Go package reference for `k8s.io/api/core/v1`](" + K8S_API_DOC + ") instead of "
+        "being expanded here."
     )
     out.append("")
     out.append("- " + "\n- ".join(f"[{k}](#{k.lower()})" for k in KIND_ORDER))

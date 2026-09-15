@@ -26,11 +26,11 @@ and are therefore part of no other target, not even `make all`: `agent-deps`,
 | `make test` | Unit and envtest tests, after `manifests`, `generate`, `fmt`, `vet`, `chart-lint` and `toolchain-lint` |
 | `make lint` | `golangci-lint` — `errcheck` and `staticcheck`, uncapped |
 | `make build` | `bin/spawnery-operator` |
-| `make manifests` | CRDs, RBAC, and the chart templates generated from them |
+| `make manifests` | CRDs, RBAC, the chart templates, and the generated `docs/reference` pages |
 | `make proto` | Go code under `internal/agentpb` from the `.proto` |
 | `make agent` | Both agent plugins, with their JUnit suites as the check phase |
 | `make docs` | The site, built through Nix — `mkdocs build --strict` inside it is the project's only link checker |
-| `make docs-assets` | Vendors `docs/assets/mermaid.min.js` from `nix/mermaid.nix` — gitignored, needed once per checkout before `mkdocs serve` |
+| `make docs-assets` | Vendors `docs/assets/mermaid.min.js` and builds `docs/plugin-api/javadoc/` — both gitignored, needed once per checkout before `mkdocs serve`; the Javadoc build costs about 34s cold |
 | `make docs-serve` | `mkdocs serve` for writing, after `docs-assets` |
 | `make agent-deps` | Regenerates `agent/deps.json`. Reaches Maven Central — part of no other target |
 | `make agent-test` | Both real images against the stub operator in `cmd/spawnery-stubop` |

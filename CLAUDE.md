@@ -17,7 +17,7 @@ make build       # bin/spawnery-operator
 make agent       # nix build .#agents — both plugins and their JUnit suites
 make e2e         # kind cluster + helm install + test/e2e (minutes; not part of test/all)
 make proto       # regenerate internal/agentpb and agent/common/src/proto/java from the .proto
-make manifests   # CRDs, RBAC role, and the chart templates derived from them
+make manifests   # CRDs, RBAC role, the chart templates, and the generated docs/reference pages
 ```
 
 Single Go test:
@@ -35,7 +35,7 @@ Image targets (`image-test`, `agent-test`, `image-repro`, `*-image`) need a cont
 ## Things that bite
 
 - **Nix builds read the git index, not the working tree.** An untracked file does not exist for `nix build`. `git add` new files before `make agent` or any image build; the symptom is a compile error naming a symbol that is plainly in the file.
-- **Generated files are committed and CI diffs them.** After changing API types, kubebuilder markers or the `.proto`, run `make manifests generate proto` and commit: `config/crd/bases/`, `config/rbac/role.yaml`, `charts/spawnery/templates/{crds,rbac}.yaml` (written by `hack/chart-templates.sh`, never by hand), `zz_generated.deepcopy.go`, `internal/agentpb/`, `agent/common/src/proto/java/`.
+- **Generated files are committed and CI diffs them.** After changing API types, kubebuilder markers or the `.proto`, run `make manifests generate proto` and commit: `config/crd/bases/`, `config/rbac/role.yaml`, `charts/spawnery/templates/{crds,rbac}.yaml` (written by `hack/chart-templates.sh`, never by hand), `zz_generated.deepcopy.go`, `internal/agentpb/`, `agent/common/src/proto/java/`, and `docs/reference/{crds,chart-values,metrics-and-alerts}.md` (written by `hack/{crd,chart-values,metrics}-docs.sh`, also part of `make manifests`).
 - **Adding a `+kubebuilder:rbac` marker turns `internal/rbacaudit` red** until the matching entry is added to its hand-maintained table (`required.go`). That is intentional. Also: a marker inside a doc comment is silently ignored by controller-gen. Diff `config/rbac/role.yaml` after adding one.
 - **`go.mod` changes break the Nix build, not `make test`.** `flake.nix` carries the same `vendorHash` five times (one Go module set). After `go mod tidy`, rebuild with `nix build .#spawnery-operator --no-link`, take the `got:` hash, and replace all five. CI's e2e job is where this fails otherwise.
 - **`make agent-deps` regenerates `agent/deps.json`** and must be run whenever a `build.gradle.kts` dependency changes. It reaches Maven Central and is part of no other target. CI diffs the result.

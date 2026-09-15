@@ -75,7 +75,7 @@ vet:
 #
 # It is not a substitute for reasoning about concurrency. The peer rate limit's
 # key was wrong for a whole milestone and -race would never have said so.
-test: manifests generate fmt vet chart-lint toolchain-lint
+test: manifests generate fmt vet chart-lint toolchain-lint crd-docs-test chart-values-docs-test metrics-docs-test
 	go test -race ./... -coverprofile cover.out
 
 # The standing check docs/reference/known-issues.md has asked for since milestone 2c.
@@ -99,6 +99,32 @@ toolchain-lint:
 .PHONY: toolchain-lint-test
 toolchain-lint-test:
 	hack/toolchain-pins-agree-test.sh
+
+# hack/{crd,chart-values,metrics}-docs-test.sh each drive one of the three
+# reference-page generators against what is actually checked in -- the real
+# CRDs, the real chart schema and values, the real metrics registry and
+# PrometheusRule -- and check what came out, the way toolchain-lint checks a
+# pin drifting under everyone's nose rather than trusting that a green build
+# means nothing moved. A prerequisite of `test`, not a target beside it, for
+# the reason the -race and toolchain-lint comments above give: an unrun check
+# is indistinguishable from an absent one. `manifests` above already runs
+# every one of these generators, so the marginal cost of running them again
+# here is the assertions, not the generation -- three bash/python scripts and
+# a couple of `helm template` calls, small next to internal/controller's 85s.
+# The failure this closes: a generator tuned to reproduce exactly what is
+# committed, with the cases that would have caught a degenerate result never
+# run because nothing ran them.
+.PHONY: crd-docs-test
+crd-docs-test:
+	hack/crd-docs-test.sh
+
+.PHONY: chart-values-docs-test
+chart-values-docs-test:
+	hack/chart-values-docs-test.sh
+
+.PHONY: metrics-docs-test
+metrics-docs-test:
+	hack/metrics-docs-test.sh
 
 .PHONY: chart-lint
 chart-lint:

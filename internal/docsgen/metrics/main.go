@@ -122,8 +122,7 @@ type descInfo struct {
 // is entirely absent from Gather()'s output. Every registered collector always
 // sends its Desc through Describe() regardless, which is why this program asks
 // for that instead. Measured directly against this registry: Describe found
-// 17 spawnery_ metrics where Gather found 11; see the task report for both
-// runs.
+// 17 spawnery_ metrics where Gather found 11.
 //
 // controller-runtime's metrics.Registry is typed as RegistererGatherer, which
 // carries neither Describe nor Collect -- both exist on the concrete

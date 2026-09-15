@@ -5,7 +5,7 @@
 
 Generated from `config/crd/bases/*.yaml` -- the same schema `kubectl explain` and `kubectl apply --validate` read. Five namespaced kinds in `spawnery.cloud/v1alpha1`.
 
-A few fields are Kubernetes' own types, embedded by reference rather than declared in this repository: they appear as a single row naming the type and linking to its [Kubernetes API reference](https://pkg.go.dev/k8s.io/api/core/v1) instead of being expanded here.
+A few fields are Kubernetes' own types, embedded by reference rather than declared in this repository: they appear as a single row naming the type and linking to [the Go package reference for `k8s.io/api/core/v1`](https://pkg.go.dev/k8s.io/api/core/v1) instead of being expanded here.
 
 - [Network](#network)
 - [ServerGroup](#servergroup)
