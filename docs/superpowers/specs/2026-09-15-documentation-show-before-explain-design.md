@@ -69,14 +69,17 @@ ephemeral `ServerGroup` and one `ProxyGroup`, watch `kubectl get servergroups`
 fill in, connect a client, and watch the group notice you. Each step shows the
 command, then what comes back — the actual output, not a description of it.
 
-**Notice, not scale.** An earlier draft said the reader watches the group
-*scale* on their join, and that was written before the arithmetic. A scale-up
-needs the free-slot count to fall below `spareSlots`, which for one player
-means a group sized so small it looks contrived — and the second server it
-starts costs another 2Gi on the reader's machine, on top of the first, the
-proxy, kind, and the Minecraft client they are running to join with. That is
-more than a tutorial may ask for, and it is more than this project's own
-development VM has.
+**Notice, not scale**, and the reason is not the one an earlier draft gave.
+That draft said a scale-up would cost a second 2Gi server the reader cannot
+afford. The driven run showed otherwise: with `maxPlayers: 20` and
+`spareSlots: 5` the group runs **two** servers at rest, before anybody joins —
+`kubectl get servergroups` reads `READY 2, REPLICAS 2, PLAYERS 0, FREE SLOTS
+40`. The second server is the resting state, and its 2Gi is already being paid.
+
+So the tutorial costs about 5Gi of pod requests — two servers at 2Gi and a
+proxy at 1Gi — plus kind and the Minecraft client the reader runs to join at
+all. What a join does *not* do at these numbers is add a third server, because
+one player leaves 39 free slots against a floor of 5.
 
 So the tutorial's payoff is the counters moving: `onlinePlayers` and
 `freeSlots` on the group the reader just joined. Scaling on free slots is the
