@@ -14,6 +14,7 @@
 , stdenvNoCC
 , python3Packages
 , mermaid-js
+, agent-api-javadoc
 }:
 
 stdenvNoCC.mkDerivation {
@@ -36,9 +37,18 @@ stdenvNoCC.mkDerivation {
   # docs/assets/mermaid.min.js is gitignored -- hack/vendor-mermaid.sh writes
   # it there for `mkdocs serve` -- so the source set above never carries it,
   # even though mkdocs.yml points the mermaid2 plugin at exactly that path.
+  #
+  # The Javadoc tree goes in beside it, for the same reason: mkdocs treats a
+  # non-Markdown file under docs/ as a static asset it copies through
+  # unparsed, so the nav entry in mkdocs.yml resolves under --strict as long
+  # as the tree is here before `mkdocs build` runs, and not built from the
+  # heavier agents.nix machinery -- see nix/agent-api-javadoc.nix.
   postPatch = ''
     mkdir -p docs/assets
     install -m 644 ${mermaid-js}/mermaid.min.js docs/assets/mermaid.min.js
+
+    mkdir -p docs/plugin-api/javadoc
+    cp -r ${agent-api-javadoc}/. docs/plugin-api/javadoc/
   '';
 
   # --strict turns an unresolved internal link and a page missing from the nav

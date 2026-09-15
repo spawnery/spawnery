@@ -17,7 +17,7 @@ make build       # bin/spawnery-operator
 make agent       # nix build .#agents — both plugins and their JUnit suites
 make e2e         # kind cluster + helm install + test/e2e (minutes; not part of test/all)
 make proto       # regenerate internal/agentpb and agent/common/src/proto/java from the .proto
-make manifests   # CRDs, RBAC role, and the chart templates derived from them
+make manifests   # CRDs, RBAC role, the chart templates, and the generated docs/reference pages
 ```
 
 Single Go test:
@@ -35,7 +35,7 @@ Image targets (`image-test`, `agent-test`, `image-repro`, `*-image`) need a cont
 ## Things that bite
 
 - **Nix builds read the git index, not the working tree.** An untracked file does not exist for `nix build`. `git add` new files before `make agent` or any image build; the symptom is a compile error naming a symbol that is plainly in the file.
-- **Generated files are committed and CI diffs them.** After changing API types, kubebuilder markers or the `.proto`, run `make manifests generate proto` and commit: `config/crd/bases/`, `config/rbac/role.yaml`, `charts/spawnery/templates/{crds,rbac}.yaml` (written by `hack/chart-templates.sh`, never by hand), `zz_generated.deepcopy.go`, `internal/agentpb/`, `agent/common/src/proto/java/`.
+- **Generated files are committed and CI diffs them.** After changing API types, kubebuilder markers or the `.proto`, run `make manifests generate proto` and commit: `config/crd/bases/`, `config/rbac/role.yaml`, `charts/spawnery/templates/{crds,rbac}.yaml` (written by `hack/chart-templates.sh`, never by hand), `zz_generated.deepcopy.go`, `internal/agentpb/`, `agent/common/src/proto/java/`, and `docs/reference/{crds,chart-values,metrics-and-alerts}.md` (written by `hack/{crd,chart-values,metrics}-docs.sh`, also part of `make manifests`).
 - **Adding a `+kubebuilder:rbac` marker turns `internal/rbacaudit` red** until the matching entry is added to its hand-maintained table (`required.go`). That is intentional. Also: a marker inside a doc comment is silently ignored by controller-gen. Diff `config/rbac/role.yaml` after adding one.
 - **`go.mod` changes break the Nix build, not `make test`.** `flake.nix` carries the same `vendorHash` five times (one Go module set). After `go mod tidy`, rebuild with `nix build .#spawnery-operator --no-link`, take the `got:` hash, and replace all five. CI's e2e job is where this fails otherwise.
 - **`make agent-deps` regenerates `agent/deps.json`** and must be run whenever a `build.gradle.kts` dependency changes. It reaches Maven Central and is part of no other target. CI diffs the result.
@@ -80,6 +80,8 @@ Three numbers move independently and each is commented at length where it lives:
 - `charts/spawnery/Chart.yaml` `version` (moves whenever `charts/` does) and `appVersion` (tracks the operator).
 
 A `v*` tag runs `.github/workflows/release.yml`, which publishes only the artefacts whose tag is new and refuses to overwrite existing ones. Gaps in the sequences are deliberate. Before tagging, check CI on master: `gh run list --workflow=ci.yml --limit 3`.
+
+A chart bump also moves a generated page: `charts/spawnery/values.yaml`'s `image.tag` is rendered into `docs/reference/chart-values.md`, so `make manifests` has to run and its diff has to be committed with the bump. Forgetting fails CI at "the generated files are in step with their sources" rather than shipping a wrong number, but it fails after the push rather than before it.
 
 **Which number moves is SemVer, decided on 2026-09-08.** The release number takes a **minor** step for a change in behaviour -- a new or changed CRD field, a method added to the Java API, a decision the operator now makes differently, whether or not an installation has to do anything about it and whether or not it is visible at once. It takes a **patch** step for fixes, comments, docs and bounds. Releases up to 0.2.34 counted everything as a patch; that is not a precedent.
 

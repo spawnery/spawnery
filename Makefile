@@ -18,6 +18,9 @@ manifests:
 		output:crd:artifacts:config=config/crd/bases \
 		output:rbac:artifacts:config=config/rbac
 	./hack/chart-templates.sh
+	./hack/crd-docs.sh
+	./hack/chart-values-docs.sh
+	./hack/metrics-docs.sh
 
 .PHONY: generate
 generate:
@@ -72,7 +75,7 @@ vet:
 #
 # It is not a substitute for reasoning about concurrency. The peer rate limit's
 # key was wrong for a whole milestone and -race would never have said so.
-test: manifests generate fmt vet chart-lint toolchain-lint
+test: manifests generate fmt vet chart-lint toolchain-lint crd-docs-test chart-values-docs-test metrics-docs-test
 	go test -race ./... -coverprofile cover.out
 
 # The standing check docs/reference/known-issues.md has asked for since milestone 2c.
@@ -96,6 +99,32 @@ toolchain-lint:
 .PHONY: toolchain-lint-test
 toolchain-lint-test:
 	hack/toolchain-pins-agree-test.sh
+
+# hack/{crd,chart-values,metrics}-docs-test.sh each drive one of the three
+# reference-page generators against what is actually checked in -- the real
+# CRDs, the real chart schema and values, the real metrics registry and
+# PrometheusRule -- and check what came out, the way toolchain-lint checks a
+# pin drifting under everyone's nose rather than trusting that a green build
+# means nothing moved. A prerequisite of `test`, not a target beside it, for
+# the reason the -race and toolchain-lint comments above give: an unrun check
+# is indistinguishable from an absent one. `manifests` above already runs
+# every one of these generators, so the marginal cost of running them again
+# here is the assertions, not the generation -- three bash/python scripts and
+# a couple of `helm template` calls, small next to internal/controller's 85s.
+# The failure this closes: a generator tuned to reproduce exactly what is
+# committed, with the cases that would have caught a degenerate result never
+# run because nothing ran them.
+.PHONY: crd-docs-test
+crd-docs-test:
+	hack/crd-docs-test.sh
+
+.PHONY: chart-values-docs-test
+chart-values-docs-test:
+	hack/chart-values-docs-test.sh
+
+.PHONY: metrics-docs-test
+metrics-docs-test:
+	hack/metrics-docs-test.sh
 
 .PHONY: chart-lint
 chart-lint:
@@ -399,15 +428,25 @@ e2e: manifests
 docs:
 	nix build .#docs-site --no-link
 
-# docs/assets/mermaid.min.js, which mkdocs.yml points the mermaid2 plugin at.
-# It is gitignored -- nix/mermaid.nix pins it, hack/vendor-mermaid.sh installs
-# it -- so a fresh checkout has no such file. `docs` above never needs this:
-# nix/docs-site.nix's own postPatch does the same install inside the build.
-# `mkdocs serve` has no such step, so without this prerequisite it renders the
-# home page's diagram as nothing, with no error anywhere.
+# Two build products `mkdocs serve` needs and a fresh checkout does not have,
+# because both are gitignored and nix/docs-site.nix's own postPatch installs
+# them only inside the derivation's copy of the tree, which `mkdocs serve`
+# never runs:
+#
+#   docs/assets/mermaid.min.js       -- pinned in nix/mermaid.nix, without it
+#                                        the home page's diagram renders as
+#                                        nothing, with no error anywhere.
+#   docs/plugin-api/javadoc/         -- built by nix/agent-api-javadoc.nix,
+#                                        without it the Plugin API nav entry
+#                                        points at nothing. Unlike the
+#                                        mermaid.js lookup, this one runs
+#                                        Gradle on a cold store: about 34s,
+#                                        against the near-instant store lookup
+#                                        the mermaid vendor script costs.
 .PHONY: docs-assets
 docs-assets:
 	hack/vendor-mermaid.sh
+	hack/vendor-javadoc.sh
 
 .PHONY: docs-serve
 docs-serve: docs-assets

@@ -121,6 +121,12 @@
               python3Packages.mkdocs
               python3Packages.mkdocs-material
               python3Packages.mkdocs-mermaid2-plugin
+              # Explicit, not incidental: python3 and pyyaml are reachable
+              # through mkdocs's own closure today, and hack/crd-docs.sh would
+              # start failing on a mkdocs bump that dropped them, naming
+              # neither cause.
+              python3
+              python3Packages.pyyaml
               jdk21_headless
               # hack/agent-test.sh asserts on the stub operator's event stream.
               jq
@@ -498,9 +504,12 @@
 
           mermaid-js = pkgs.callPackage ./nix/mermaid.nix { };
 
-          # mermaid-js is a local let binding, not a pkgs attribute, so
-          # callPackage cannot fill it and it is passed explicitly.
-          docs-site = pkgs.callPackage ./nix/docs-site.nix { inherit mermaid-js; };
+          agent-api-javadoc = pkgs.callPackage ./nix/agent-api-javadoc.nix { };
+
+          # mermaid-js and agent-api-javadoc are local let bindings, not pkgs
+          # attributes, so callPackage cannot fill them and both are passed
+          # explicitly.
+          docs-site = pkgs.callPackage ./nix/docs-site.nix { inherit mermaid-js agent-api-javadoc; };
         in
         {
           # Architecture-independent (it is jars), so this stays available on
@@ -518,7 +527,7 @@
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js docs-site;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js agent-api-javadoc docs-site;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # dockerTools.buildLayeredImage packs the host's binaries under a
           # fixed "amd64" label (see nix/paper-image.nix); it does not
