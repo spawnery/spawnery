@@ -8,7 +8,7 @@ worlds. The target platform is RKE2 on bare metal, without ruling out other
 distributions.
 
 The [tutorial](tutorial/index.md) takes an empty machine to a player standing
-on a server, on a local `kind` cluster with about 7Gi of memory free — the
+on a server, on a local `kind` cluster with 7-8Gi of memory free — the
 fastest way to see it work before reading how it works.
 
 Servers are described in groups, not in pods:

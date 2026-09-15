@@ -6,8 +6,8 @@ Minecraft client is standing on one of those servers. Every command below, and
 the output shown beside most of them, comes from a real run of exactly this
 path — not a description of what one would look like.
 
-You will need `kind`, `kubectl`, `helm`, a Minecraft client, and **about 7Gi
-of memory free**. Part of that is exact, from the manifest in step 3: a Paper
+You will need `kind`, `kubectl`, `helm`, a Minecraft client, and **7-8Gi of
+memory free**. Part of that is exact, from the manifest in step 3: a Paper
 server pod requests 2Gi, the proxy requests 1Gi, and — as step 4 explains —
 you end up with two Paper servers rather than one, so the pods alone request
 5Gi. The rest is an allowance, not a measurement: roughly 1Gi for `kind`'s own
@@ -285,10 +285,11 @@ gateway   Ready   1       10.89.0.44:30001   1         104s
 ```
 
 `PLAYERS` moves the moment your client is registered by the proxy. The lobby
-`ServerGroup`'s own `onlinePlayers` follows a step later, once you are
-actually standing in the world rather than still connecting — a backend
-counts a player from that point on, not from login — so give it a moment,
-then `kubectl get servergroups` will show the same jump.
+`ServerGroup`'s own `onlinePlayers` counts you a step later: a backend counts
+a player from the moment they are standing in the world, not from login. That
+second counter is not shown here, because the tool from step 5 stops at Login
+Acknowledged and so is counted by the proxy and never by the backend, while
+your own client walks into the world and is counted by both.
 
 ## 7. Tear it down
 
