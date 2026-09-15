@@ -1,0 +1,12 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Routes the host to the proxy's NodePort (network.yaml's
+      # spec.expose.nodePort.port) so a client outside the cluster can reach
+      # it. Without this mapping the NodePort only answers inside the kind
+      # node's own network namespace.
+      - containerPort: 30001
+        hostPort: 30001
+        protocol: TCP

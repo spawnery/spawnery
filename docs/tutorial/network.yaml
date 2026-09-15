@@ -1,0 +1,85 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spawnery-tutorial
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: velocity-forwarding-secret
+  namespace: spawnery-tutorial
+stringData:
+  # This namespace is deleted at the end of the tutorial, so a fixed value is
+  # fine here. For a real network, generate one instead:
+  # head -c 32 /dev/urandom | base64
+  secret: tutorial-forwarding-secret
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: Network
+metadata:
+  name: tutorial
+  namespace: spawnery-tutorial
+spec:
+  forwardingSecretRef:
+    name: velocity-forwarding-secret
+  defaults:
+    minecraftVersion: "26.2"
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        memory: 2Gi
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: lobby
+  namespace: spawnery-tutorial
+spec:
+  networkRef:
+    name: tutorial
+  type: Ephemeral
+  image: ghcr.io/spawnery/purpur:26.2-0.2.34
+  maxPlayers: 20
+  scaling:
+    minReplicas: 1
+    maxReplicas: 3
+    spareSlots: 5
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway
+  namespace: spawnery-tutorial
+spec:
+  networkRef:
+    name: tutorial
+  replicas: 1
+  image: ghcr.io/spawnery/velocity:3.5.1-0.2.34
+  # Velocity does not need a backend's heap; overriding the Network's
+  # defaults keeps the proxy off the 2Gi a Paper server needs.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      memory: 1Gi
+  expose:
+    type: NodePort
+    nodePort:
+      # Fixed rather than left to allocate: kind-config.yaml's
+      # extraPortMappings maps one host port to this exact number, and a
+      # mapping cannot point at a port nobody can predict.
+      port: 30001
+  routing:
+    fallbackGroups:
+      - lobby
+  config:
+    # The custom resource field, not a configOverlay: internal/render
+    # reasserts the keys it owns after merging an overlay, so this is the
+    # only place online-mode can be moved from. It lets a reader's own
+    # licensed client join without a real Mojang session.
+    onlineMode: false
+    playerLimit: 50
+    motd: "Spawnery tutorial"
