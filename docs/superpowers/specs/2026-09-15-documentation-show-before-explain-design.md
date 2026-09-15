@@ -69,17 +69,27 @@ ephemeral `ServerGroup` and one `ProxyGroup`, watch `kubectl get servergroups`
 fill in, connect a client, and watch the group notice you. Each step shows the
 command, then what comes back — the actual output, not a description of it.
 
-**Notice, not scale**, and the reason is not the one an earlier draft gave.
-That draft said a scale-up would cost a second 2Gi server the reader cannot
-afford. The driven run showed otherwise: with `maxPlayers: 20` and
-`spareSlots: 5` the group runs **two** servers at rest, before anybody joins —
-`kubectl get servergroups` reads `READY 2, REPLICAS 2, PLAYERS 0, FREE SLOTS
-40`. The second server is the resting state, and its 2Gi is already being paid.
+**Notice, not scale.** Two earlier drafts got the reason wrong and it is worth
+recording what the right one is, because the page has to say it.
 
-So the tutorial costs about 5Gi of pod requests — two servers at 2Gi and a
-proxy at 1Gi — plus kind and the Minecraft client the reader runs to join at
-all. What a join does *not* do at these numbers is add a third server, because
-one player leaves 39 free slots against a floor of 5.
+The reader will see **two** servers: `kubectl get servergroups` reads
+`READY 2, REPLICAS 2, PLAYERS 0, FREE SLOTS 40`. That is not the steady state
+and it is not caused by joining. It is the over-create
+`internal/controller/scaling.go:227-241` describes in its own comment — for one
+pass after a server is created, the informer has not yet shown its pod, so
+`provisionalCapacity` credits it zero, `wanted` reads high, and the group
+builds a spare. The comment calls that the safer of the two directions on
+purpose: a server too many costs money, a server too few costs joins.
+
+It is shed again once the extra server has been empty for
+`scaleDownStabilizationSeconds`, which defaults to **300**. A tutorial runs
+well inside that window, so the reader never sees the correction. The page
+must therefore show two servers and say in one sentence why, rather than
+pretending one.
+
+So the tutorial costs about 5Gi of pod requests: two servers at 2Gi and a proxy
+at 1Gi, plus kind and the Minecraft client. And a join adds no third server,
+because one player leaves 39 free slots against a floor of 5.
 
 So the tutorial's payoff is the counters moving: `onlinePlayers` and
 `freeSlots` on the group the reader just joined. Scaling on free slots is the
