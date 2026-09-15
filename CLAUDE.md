@@ -81,6 +81,8 @@ Three numbers move independently and each is commented at length where it lives:
 
 A `v*` tag runs `.github/workflows/release.yml`, which publishes only the artefacts whose tag is new and refuses to overwrite existing ones. Gaps in the sequences are deliberate. Before tagging, check CI on master: `gh run list --workflow=ci.yml --limit 3`.
 
+A chart bump also moves a generated page: `charts/spawnery/values.yaml`'s `image.tag` is rendered into `docs/reference/chart-values.md`, so `make manifests` has to run and its diff has to be committed with the bump. Forgetting fails CI at "the generated files are in step with their sources" rather than shipping a wrong number, but it fails after the push rather than before it.
+
 **Which number moves is SemVer, decided on 2026-09-08.** The release number takes a **minor** step for a change in behaviour -- a new or changed CRD field, a method added to the Java API, a decision the operator now makes differently, whether or not an installation has to do anything about it and whether or not it is visible at once. It takes a **patch** step for fixes, comments, docs and bounds. Releases up to 0.2.34 counted everything as a patch; that is not a precedent.
 
 ## Conventions
