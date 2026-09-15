@@ -75,7 +75,7 @@ vet:
 #
 # It is not a substitute for reasoning about concurrency. The peer rate limit's
 # key was wrong for a whole milestone and -race would never have said so.
-test: manifests generate fmt vet chart-lint toolchain-lint crd-docs-test chart-values-docs-test metrics-docs-test
+test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint crd-docs-test chart-values-docs-test metrics-docs-test
 	go test -race ./... -coverprofile cover.out
 
 # The standing check docs/reference/known-issues.md has asked for since milestone 2c.
@@ -99,6 +99,26 @@ toolchain-lint:
 .PHONY: toolchain-lint-test
 toolchain-lint-test:
 	hack/toolchain-pins-agree-test.sh
+
+# Both nix/{purpur,velocity}-image.nix tag their image
+# "${upstreamVersion}-${imageVersion}", and docs/tutorial/network.yaml and
+# config/samples/network.yaml each pin that tag by hand. A `nix flake
+# update` moves neither; a release does, and the failure this prevents is
+# not loud the way toolchain-lint's is -- a `docker pull` of a stale-but-
+# still-published tag succeeds, so nothing but this check ever compares the
+# pin to the version flake.nix actually builds now. A prerequisite of `test`
+# for the reason toolchain-lint's comment gives: an unrun check is
+# indistinguishable from an absent one.
+.PHONY: image-tag-lint
+image-tag-lint:
+	hack/image-tag-pins-agree.sh
+
+# hack/image-tag-pins-agree-test.sh drives the check above through the
+# disagreements this tree does not contain, the same reason
+# toolchain-lint-test is separate from `test` and not `test`'s own target.
+.PHONY: image-tag-lint-test
+image-tag-lint-test:
+	hack/image-tag-pins-agree-test.sh
 
 # hack/{crd,chart-values,metrics}-docs-test.sh each drive one of the three
 # reference-page generators against what is actually checked in -- the real
