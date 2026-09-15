@@ -175,6 +175,12 @@ jobs:
   # A separate job and a separate label rather than folding this into
   # image-repro's: the two report unrelated failures, and image-repro's issue
   # text names a bit-identical rebuild, which a broken join is not.
+  #
+  # nightly-tutorial-red gates no release, deliberately:
+  # hack/require-no-red-nightly.sh reads nightly-red alone, and a tutorial path
+  # that broke says nothing about whether the artefact being released works --
+  # it says the page somebody follows on their own cluster no longer leads
+  # where it claims, which is fixed by editing docs, not by holding a tag.
   tutorial-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30

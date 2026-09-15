@@ -77,6 +77,19 @@ OPERATOR_NAMESPACE=platform-system
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Two of these cannot coexist, and neither can one of these and a tutorial
+# run: both create their cluster from docs/tutorial/kind-config.yaml, whose
+# fixed host port a second cluster fails to bind regardless of its own
+# CLUSTER name -- deep into the run, after the image is already built. Caught
+# here instead, the failure names the actual cause and costs nothing.
+tutorial_join_port=30001
+if ss -H -ltn "sport = :${tutorial_join_port}" 2>/dev/null | grep -q .; then
+	echo "port ${tutorial_join_port} is already bound -- an e2e or tutorial cluster is probably still up." >&2
+	echo "kind clusters: $(kind get clusters 2>/dev/null | tr '\n' ' ')" >&2
+	echo "only one can run at a time: delete the other first (kind delete cluster --name <name>)." >&2
+	exit 1
+fi
+
 workdir="$(mktemp -d)"
 KUBECONFIG="$workdir/kubeconfig"
 export KUBECONFIG

@@ -106,4 +106,12 @@ helm install spawnery charts/spawnery --namespace "$OPERATOR_NAMESPACE" --create
 
 kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --timeout="${DEADLINE}s"
 
+# The reader's own command, before the Go test issues the same objects its
+# own way: test/e2e's applyManifest splits the file and creates each document
+# through controller-runtime, which is not the single stream carrying a new
+# Namespace and its contents that the page tells a reader to apply. Nothing
+# else drives that line. The Go test's IsAlreadyExists tolerance is what lets
+# the second pass follow this one.
+kubectl apply -f docs/tutorial/network.yaml
+
 SPAWNERY_E2E_TUTORIAL=1 go test -tags e2e -count=1 -v -timeout 20m -run TestTutorialPath ./test/e2e/...

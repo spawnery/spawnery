@@ -12,6 +12,10 @@
 # network.yaml sat at 0.2.15, nineteen releases behind flake.nix's 0.2.34,
 # with nothing noticing. This is the standing check that gap asked for.
 #
+# What it does not cover: this compares the tag string against what flake.nix
+# currently builds, not against what is published, so a release that has not
+# published yet leaves the tutorial naming an image that does not exist.
+#
 # The tag's two halves are not both the same shape: purpurVersion has one
 # dot ("26.2"), velocityVersion has two ("3.5.1"). So the split point is the
 # *last* dash, not a regex assuming a fixed number of dots on either side --
