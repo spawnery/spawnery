@@ -1,5 +1,38 @@
 # Persistent storage: what an operator owns
 
+A persistent group in full — two ordinals, one 10Gi world each. It joins the
+Network of `config/samples/network.yaml`; apply that first if the namespace has
+none. Save this as `survival.yaml`:
+
+```yaml
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: survival
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  type: Persistent
+  image: ghcr.io/spawnery/purpur:26.2-0.2.34
+  maxPlayers: 20
+  replicas: 2
+  storage:
+    # May grow, never shrink, and the storage class is immutable once set.
+    # One claim per ordinal, and nothing in this operator ever deletes one.
+    size: 10Gi
+```
+
+```bash
+kubectl apply -f survival.yaml
+kubectl get servergroup survival -n minecraft
+kubectl get pvc -n minecraft
+```
+
+`PersistentServerName` is `<group>-<ordinal>` and `DataClaimName` appends
+`-data`, so the two servers are `survival-0` and `survival-1` and their claims
+are `survival-0-data` and `survival-1-data`.
+
 A `Persistent` `ServerGroup` gives each ordinal a world on a
 `PersistentVolumeClaim` of its own. Three things follow from that which nobody
 can read off the CRD, and none of them is a defect: they are consequences of
