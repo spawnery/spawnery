@@ -76,6 +76,8 @@ nav:
       - Metrics and alerts: reference/metrics-and-alerts.md
       - Known issues: reference/known-issues.md
   - Plugin API:
+      - Writing a plugin: plugin-api/index.md
+      - What a plugin can do: plugin-api/what-a-plugin-can-do.md
       - Javadoc: plugin-api/javadoc/index.html
   - Explanation:
       - Network boundaries: explanation/network-boundaries.md

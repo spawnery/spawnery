@@ -65,6 +65,8 @@ if [ "${#manifests[@]}" -eq 0 ]; then
     "$root/docs/guides/persistent-worlds.md"
     "$root/docs/guides/scaling-and-boosts.md"
     "$root/docs/guides/scheduling.md"
+    "$root/docs/plugin-api/index.md"
+    "$root/agent/api/README.md"
   )
 fi
 
@@ -90,6 +92,20 @@ for manifest in "${manifests[@]}"; do
       bad=1
     fi
   done < <(grep -oE 'ghcr\.io/spawnery/(purpur|velocity):[^[:space:]]+' "$manifest" || true)
+
+  # The Maven coordinate carries imageVersion undivided: nix/agents.nix sets
+  # the agents' version to imageVersion and passes it as -PagentVersion, which
+  # is what agent/api/build.gradle.kts publishes under. So there is no
+  # upstream half to strip here, unlike the image tags above.
+  while IFS= read -r ref; do
+    found_any=1
+    got="${ref##*:}"
+    if [ "$got" != "$image_version" ]; then
+      echo "image-tag-pins-agree: $manifest pins $ref, agent version $got;" \
+        "flake.nix currently builds $image_version" >&2
+      bad=1
+    fi
+  done < <(grep -oE 'cloud\.spawnery:spawnery-api:[0-9][^"[:space:]]*' "$manifest" || true)
 done
 
 # A manifest naming neither image would pass the loop above by having
