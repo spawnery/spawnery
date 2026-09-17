@@ -72,18 +72,26 @@ AA requiring 4.5:1:
 Catppuccin's Latte accents are drawn for surfaces, not for text. So the accent
 is two tokens:
 
-- `--accent` for decoration that carries no text: the `──` before a heading,
-  the selection, the focus ring, the dashed rule after a section title.
-- `--accent-text` for everything read: links, buttons, the active workspace.
-  Text on a surface filled with it is `--accent-contrast`.
+- `--accent` for decoration that carries no text and marks no state: the `──`
+  before a heading. Nothing else.
+- `--accent-text` for everything read or relied on: links, buttons, the active
+  workspace, the text selection (which carries text) and the focus ring
+  (which needs 3:1 as a non-text indicator; raw Latte Peach reaches 2.64). Text
+  on a surface filled with it is `--accent-contrast`.
 
 | | `--accent` | `--accent-text` | `--accent-contrast` |
 |---|---|---|---|
 | Mocha | `#fab387` | `#fab387` | crust `#11111b` |
-| Latte | `#fe640b` | `#bc4501` (4.65:1) | base `#eff1f5` |
+| Latte | `#fe640b` | `#b44201` | base `#eff1f5` |
 
-`#bc4501` is Latte Peach's own hue with its lightness lowered until the ratio
-reaches 4.6:1, not a different colour.
+`#b44201` is Latte Peach's own hue with its lightness lowered until it reaches
+4.6:1 against **mantle**, the darker of the two surfaces text sits on: 4.64:1
+there, 4.99:1 on base.
+
+The same rule covers every other Latte colour that carries text. Catppuccin's
+own Latte `subtext0` is 4.06:1 on mantle, and its syntax colours run down to
+2.15:1 (Yellow). Each gets a text shade by the same method, and the syntax
+colours on Mocha stay as Catppuccin defines them, all above 5.8:1.
 
 ### Everything else that has a colour
 
@@ -100,7 +108,9 @@ reaches 4.6:1, not a different colour.
 
 ## Frame and bar
 
-Template overrides live in `overrides/`, set as `theme.custom_dir`.
+Template overrides live in `overrides/`, set as `theme.custom_dir`, and are
+kept to one file: `main.html`, which adds the frame and the `theme-color`
+meta through Material's documented blocks.
 
 - **The frame** is the homepage's: a fixed mantle border around the viewport
   with four concave corners drawn as radial gradients, taken from
@@ -109,8 +119,9 @@ Template overrides live in `overrides/`, set as `theme.custom_dir`.
   mantle with the brand on the left. It replaces the frame's top edge, as on
   the desktop.
 - **The nine top-level sections become numbered workspaces 1-9** in the bar:
-  `navigation.tabs`, moved into the header by overriding `partials/header.html`
-  and `partials/tabs.html`. The active one is filled with `--accent-text`. Nine
+  `navigation.tabs` with `navigation.tabs.sticky`, which is Material's own way
+  of rendering the tabs inside `<header>`, so no partial is copied; the numbers
+  are a CSS counter. The active one is filled with `--accent-text`. Nine
   is what the nav has today: Home, Getting started, Tutorial, Guides,
   Reference, Plugin API, Explanation, Contributing, Archive. On narrow screens
   only the numbers remain, as on the homepage.
@@ -157,9 +168,10 @@ loads JetBrains Mono from the same Fontsource package.
 
 - **`mkdocs build --strict` stays the gate**, unchanged.
 - **A contrast test guards the tokens.** A Go test reads the custom properties
-  of both schemes out of `zen.css` and fails when a named text/surface pair
-  falls below 4.5:1: text on base, muted text on base, text on mantle,
-  `--accent-text` on base, `--accent-contrast` on `--accent-text`. It is a
+  of both schemes out of `zen.css` and fails when a text colour falls below
+  4.5:1 on either surface it can sit on: every text, muted, accent-text,
+  semantic and syntax token against both base and mantle, and
+  `--accent-contrast` on `--accent-text`. It is a
   source-reading test in the repository's existing habit, and it runs in
   `make test`. Without it, the Latte finding above returns the first time
   somebody adjusts a colour by eye.
