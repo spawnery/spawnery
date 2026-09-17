@@ -25,9 +25,10 @@ takes to say so.
 `NetworkPolicy` objects buy and what they do not, and what bounds the number of
 agents that may reach the operator — measured scope rather than a list of
 faults.
-[`charts/spawnery/README.md`](../getting-started/index.md) carries the manual
-grant a chart cannot make for a namespace that does not exist yet, and why the
-digest checked in at any tag describes the release before it.
+[Installing the operator](../getting-started/index.md) carries the manual grant
+a chart cannot make for a namespace that does not exist yet, and [Chart
+values](chart-values.md) why the digest checked in at any tag describes the
+release before it.
 
 **Two of the things this file used to carry were facts about one cluster rather
 than about this code, and they now live where that cluster is described** — the
