@@ -112,6 +112,12 @@
   --md-shadow-z1: none;
   --md-shadow-z2: var(--zen-shadow);
   --md-shadow-z3: var(--zen-shadow);
+  --md-mermaid-font-family: var(--md-code-font-family);
+  --md-mermaid-edge-color: var(--zen-muted);
+  --md-mermaid-label-bg-color: var(--zen-base);
+  --md-mermaid-label-fg-color: var(--zen-text);
+  --md-mermaid-node-bg-color: var(--zen-mantle);
+  --md-mermaid-node-fg-color: var(--zen-accent-text);
 }
 
 .md-code__button {
@@ -560,4 +566,29 @@ body {
   bottom: 0;
   right: 0;
   background: radial-gradient(circle at 0% 0%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}
+
+/* ── wallpaper ── */
+
+/* Only beside the page window, where there is room for it; behind long text
+   it is noise. The drawing is the homepage's ridgeline, without its moon: a
+   radius-110 circle has no margin narrow enough to sit inside and no room
+   to hide the arc it leaves at taller viewports. */
+@media screen and (min-width: 76.25em) {
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-repeat: no-repeat;
+    background-position: bottom center;
+    background-size: cover;
+  }
+  body[data-md-color-scheme="mocha"]::before {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900' preserveAspectRatio='xMidYMax slice'><path d='M0 560 L140 480 L300 545 L470 430 L640 530 L820 455 L990 540 L1160 470 L1330 550 L1470 500 L1600 555 L1600 900 L0 900 Z' fill='%231c2030' opacity='0.55'/><path d='M0 640 L180 560 L340 625 L520 540 L720 630 L900 560 L1090 645 L1280 575 L1440 640 L1600 590 L1600 900 L0 900 Z' fill='%23181d29' opacity='0.8'/><path d='M0 730 L200 655 L380 715 L580 640 L790 725 L1000 660 L1210 730 L1420 670 L1600 720 L1600 900 L0 900 Z' fill='%23131622'/><path d='M0 810 L240 750 L460 800 L700 740 L950 805 L1200 750 L1430 800 L1600 765 L1600 900 L0 900 Z' fill='%230d0d15'/></svg>");
+  }
+  body[data-md-color-scheme="latte"]::before {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900' preserveAspectRatio='xMidYMax slice'><path d='M0 560 L140 480 L300 545 L470 430 L640 530 L820 455 L990 540 L1160 470 L1330 550 L1470 500 L1600 555 L1600 900 L0 900 Z' fill='%23d4d8e1' opacity='0.7'/><path d='M0 640 L180 560 L340 625 L520 540 L720 630 L900 560 L1090 645 L1280 575 L1440 640 L1600 590 L1600 900 L0 900 Z' fill='%23cbd0da' opacity='0.85'/><path d='M0 730 L200 655 L380 715 L580 640 L790 725 L1000 660 L1210 730 L1420 670 L1600 720 L1600 900 L0 900 Z' fill='%23c2c7d2'/><path d='M0 810 L240 750 L460 800 L700 740 L950 805 L1200 750 L1430 800 L1600 765 L1600 900 L0 900 Z' fill='%23b9bfcb'/></svg>");
+  }
 }
