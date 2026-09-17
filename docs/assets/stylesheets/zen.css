@@ -377,3 +377,162 @@ body {
 .md-footer {
   border-radius: 0;
 }
+
+/* ── bar and frame ── */
+
+:root {
+  --zen-frame: 10px;
+  --zen-bar-h: 44px;
+  --zen-vr: 16px;
+}
+
+.md-header {
+  display: flex;
+  align-items: center;
+  height: var(--zen-bar-h);
+  background: var(--zen-mantle);
+  color: var(--zen-text);
+  box-shadow: none;
+}
+
+/* Material renders the tabs as the header's second child. Dissolving the
+   inner nav's box puts its buttons and the tabs into one row. */
+.md-header__inner {
+  display: contents;
+}
+.md-header__inner > * {
+  order: 3;
+}
+.md-header .md-logo,
+.md-header__button[for="__drawer"],
+.md-header__title {
+  order: 1;
+}
+.md-header .md-tabs {
+  order: 2;
+}
+
+.md-header__title {
+  flex-grow: 0;
+  margin-inline: 0.6rem 1rem;
+  font-weight: 700;
+}
+.md-header__title .md-header__topic + .md-header__topic {
+  display: none;
+}
+.md-header__title--active .md-header__topic {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  z-index: auto;
+}
+
+@media screen and (min-width: 76.25em) {
+  .md-header .md-logo {
+    display: none;
+  }
+}
+
+.md-tabs {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  color: var(--zen-muted);
+}
+.md-tabs .md-grid {
+  max-width: none;
+  margin: 0;
+}
+.md-tabs__list {
+  counter-reset: ws;
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  contain: none;
+}
+.md-tabs__item {
+  counter-increment: ws;
+  display: block;
+  height: auto;
+  padding: 0;
+}
+.md-tabs__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0.15rem 0.45rem;
+  border-radius: 8px;
+  font-size: 0.64rem;
+  color: var(--zen-muted);
+  opacity: 1;
+  transition: background-color 200ms cubic-bezier(0.45, 0, 0.55, 1);
+}
+.md-tabs__link::before {
+  content: counter(ws);
+}
+.md-tabs__link:hover,
+.md-tabs__link:focus-visible {
+  background: var(--zen-surface0);
+  color: var(--zen-text);
+}
+.md-tabs__item--active .md-tabs__link,
+.md-tabs__item--active .md-tabs__link:hover {
+  background: var(--zen-accent-text);
+  color: var(--zen-accent-contrast);
+}
+
+@media screen and (max-width: 76.234375em) {
+  .md-tabs {
+    display: block;
+  }
+  .md-tabs__link {
+    font-size: 0;
+    gap: 0;
+  }
+  .md-tabs__link::before {
+    font-size: 0.64rem;
+  }
+}
+
+.md-container {
+  padding-inline: var(--zen-frame);
+  padding-bottom: var(--zen-frame);
+}
+
+.zen-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  border: solid var(--zen-mantle);
+  border-width: var(--zen-bar-h) var(--zen-frame) var(--zen-frame);
+}
+.zen-frame i {
+  position: absolute;
+  width: var(--zen-vr);
+  height: var(--zen-vr);
+}
+.zen-frame i:nth-child(1) {
+  top: 0;
+  left: 0;
+  background: radial-gradient(circle at 100% 100%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}
+.zen-frame i:nth-child(2) {
+  top: 0;
+  right: 0;
+  background: radial-gradient(circle at 0% 100%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}
+.zen-frame i:nth-child(3) {
+  bottom: 0;
+  left: 0;
+  background: radial-gradient(circle at 100% 0%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}
+.zen-frame i:nth-child(4) {
+  bottom: 0;
+  right: 0;
+  background: radial-gradient(circle at 0% 0%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}

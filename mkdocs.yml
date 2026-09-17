@@ -6,6 +6,8 @@ edit_uri: edit/master/docs/
 
 theme:
   name: material
+  custom_dir: overrides
+  favicon: assets/favicon.svg
   palette:
     - media: "(prefers-color-scheme: dark)"
       scheme: mocha
@@ -23,6 +25,8 @@ theme:
         name: Switch to Mocha
   font: false
   features:
+    - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
     - navigation.top
     - content.code.copy

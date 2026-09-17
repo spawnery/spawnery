@@ -2,9 +2,9 @@
 #
 # The source set is narrow deliberately. Every image derivation in this tree
 # takes the whole working tree as its src, so a line changed under internal/
-# moves all three hashes; this one reads docs/ and mkdocs.yml alone, which is
-# what keeps `make image-repro` from rebuilding a game image because a
-# sentence moved.
+# moves all three hashes; this one reads docs/, mkdocs.yml and overrides/
+# alone, which is what keeps `make image-repro` from rebuilding a game image
+# because a sentence moved.
 #
 # docs/superpowers/ is excluded from that too: mkdocs.yml's exclude_docs
 # already keeps its 88 dated specs and plans out of the built nav, so leaving
@@ -25,7 +25,7 @@ stdenvNoCC.mkDerivation {
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.difference
-      (lib.fileset.unions [ ../docs ../mkdocs.yml ])
+      (lib.fileset.unions [ ../docs ../mkdocs.yml ../overrides ])
       ../docs/superpowers;
   };
 

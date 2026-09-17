@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+
+{% block extrahead %}
+  <meta name="theme-color" content="#181825" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#e6e9ef" media="(prefers-color-scheme: light)">
+{% endblock %}
+
+{% block footer %}
+  {{ super() }}
+  <div class="zen-frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+{% endblock %}
