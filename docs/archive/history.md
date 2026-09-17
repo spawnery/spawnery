@@ -295,8 +295,7 @@ disconnecting players. Adding the role term closed it in the reconciler, but
 one copy is out of reach: a `ServerGroup` last reconciled by pre-4c-3 code
 left a budget at its own bare name, which nothing renames or deletes, carrying
 a frozen `minAvailable` and a frozen copy of the broken selector. Delete it by
-hand — [`docs/upgrading.md`](../guides/upgrading.md) has the `kubectl` to find
-it. `docs/known-issues.md` also leaves
+hand — [Release notes](release-notes.md) has the `kubectl` to find it. `docs/known-issues.md` also leaves
 open that an operator running cluster-autoscaler must pass
 `-drain-taint ToBeDeletedByClusterAutoscaler` by hand: that autoscaler taints
 without cordoning, and an unset flag looks exactly like a quiet node.
@@ -699,8 +698,11 @@ and then a steady widening of what a plugin may know and ask for. Ninety-six
 
 Two notes on reading it. Paths written `docs/known-issues.md` and
 `docs/upgrading.md` are where those files were at the time; they are now
-[Known issues](../reference/known-issues.md) and
-[Upgrading](../guides/upgrading.md). And the chapters overlap in time — they
+[Known issues](../reference/known-issues.md), and — since the release-by-release
+notes moved out of the guide on 2026-09-17 — either
+[Upgrading](../guides/upgrading.md) or [Release notes](release-notes.md),
+depending on whether the passage is about any upgrade or about one version.
+And the chapters overlap in time — they
 are arcs, not a chronology.
 
 ### The drain learns to wait
@@ -727,8 +729,9 @@ followed by one `DrainPlayers` per draining server, so the messages after a
 gone within one further resync. It also stops a drain sending players onto
 another draining server, which the single-name exclusion could not see.
 
-That is the proxy image `0.2.2`, and `docs/upgrading.md` says why it rolls the
-Paper fleet too and why nothing has to be upgraded in any particular order.
+That is the proxy image `0.2.2`, and [Release notes](release-notes.md) says
+why it rolls the Paper fleet too and why nothing has to be upgraded in any
+particular order.
 The operator's half stays open in `docs/known-issues.md`: `Occupied()` still
 reads only the backend's count.
 
