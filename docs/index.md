@@ -49,9 +49,9 @@ put two of anything in one.
 ```mermaid
 flowchart LR
   subgraph ns["one namespace = one Network"]
-    proxy["ProxyGroup<br/>Velocity proxies"]
-    lobby["ServerGroup: lobby<br/>Ephemeral"]
-    surv["ServerGroup: survival<br/>Persistent, on a PVC"]
+    proxy["ProxyGroup\nVelocity proxies"]
+    lobby["ServerGroup: lobby\nEphemeral"]
+    surv["ServerGroup: survival\nPersistent, on a PVC"]
     proxy --> lobby
     proxy --> surv
   end
