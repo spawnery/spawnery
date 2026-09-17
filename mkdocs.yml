@@ -43,6 +43,13 @@ markdown_extensions:
   - toc:
       permalink: true
 
+# --strict turns these into errors. Without the anchor rule it checks that a
+# linked file exists and not that the heading it jumps to does, so a renamed
+# heading silently strips the fragment instead of failing the build.
+validation:
+  links:
+    anchors: warn
+
 nav:
   - Home: index.md
   - Getting started:
@@ -50,6 +57,11 @@ nav:
   - Tutorial:
       - From an empty machine to a player: tutorial/index.md
   - Guides:
+      - How players reach the proxies: guides/expose-strategies.md
+      - Scaling and boosts: guides/scaling-and-boosts.md
+      - Updates and drain: guides/updates-and-drain.md
+      - Scheduling: guides/scheduling.md
+      - The /cloud command: guides/cloud-command.md
       - Upgrading: guides/upgrading.md
       - Persistent worlds: guides/persistent-worlds.md
       - Plugins from a volume: guides/plugins-from-a-volume.md
