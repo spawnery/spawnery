@@ -14,6 +14,7 @@
 , stdenvNoCC
 , python3Packages
 , mermaid-js
+, docs-fonts
 , agent-api-javadoc
 }:
 
@@ -34,9 +35,10 @@ stdenvNoCC.mkDerivation {
     mkdocs-mermaid2-plugin
   ];
 
-  # docs/assets/mermaid.min.js is gitignored -- hack/vendor-mermaid.sh writes
-  # it there for `mkdocs serve` -- so the source set above never carries it,
-  # even though mkdocs.yml points the mermaid2 plugin at exactly that path.
+  # docs/assets/mermaid.min.js and docs/assets/fonts/ are gitignored --
+  # hack/vendor-mermaid.sh and hack/vendor-fonts.sh write them there for
+  # `mkdocs serve` -- so the source set above never carries them, even though
+  # mkdocs.yml and the stylesheet point at exactly those paths.
   #
   # The Javadoc tree goes in beside it, for the same reason: mkdocs treats a
   # non-Markdown file under docs/ as a static asset it copies through
@@ -46,6 +48,9 @@ stdenvNoCC.mkDerivation {
   postPatch = ''
     mkdir -p docs/assets
     install -m 644 ${mermaid-js}/mermaid.min.js docs/assets/mermaid.min.js
+
+    mkdir -p docs/assets/fonts
+    install -m 644 ${docs-fonts}/*.woff2 docs/assets/fonts/
 
     mkdir -p docs/plugin-api/javadoc
     cp -r ${agent-api-javadoc}/. docs/plugin-api/javadoc/

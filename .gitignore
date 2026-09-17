@@ -19,6 +19,9 @@ agent/**/build/
 # Vendored by hack/vendor-mermaid.sh from the pin in nix/mermaid.nix.
 docs/assets/mermaid.min.js
 
+# Vendored by hack/vendor-fonts.sh from the pins in nix/fonts.nix.
+docs/assets/fonts/
+
 # Vendored by hack/vendor-javadoc.sh from nix/agent-api-javadoc.nix.
 docs/plugin-api/javadoc/
 
