@@ -1,0 +1,139 @@
+# Rolling a group, and what happens to the players on it
+
+Editing a `ServerGroup` or `ProxyGroup` replaces its servers. This page is
+about what that costs the people standing on them — which, most of the time
+and by design, is nothing.
+
+If a roll is happening right now, this is the command that tells you where it
+has got to and whether anybody is being moved:
+
+```bash
+kubectl get servers -n minecraft
+```
+
+`PHASE` is the answer. `Retiring` means players are being left alone;
+`Draining` means they are being moved. `PLAYERS` next to it says how many are
+still there. And to see which pods are old and which are new:
+
+```bash
+kubectl get pods -n minecraft -l spawnery.cloud/role=server \
+  -L spawnery.cloud/pod-hash
+```
+
+Two distinct hashes inside one group means that group is mid-roll; one value
+everywhere means done or never started.
+
+## `Retiring` is not `Draining`, and the difference is the whole point
+
+These are two different phases with two different promises, and confusing them
+is how people talk themselves into believing a rolling update disconnects
+players.
+
+**`Retiring` — soft drain.** This is what a rolling update puts a stale server
+into. The server is deregistered from the proxies, so it takes no new joins,
+and **its existing players are left alone until they leave of their own
+accord**. `spec.drain.timeoutSeconds` does not hang over it at all. A busy
+lobby can legitimately sit in `Retiring` for hours, and that is correct
+behaviour, not a stuck roll.
+
+**`Draining` — the players are moved.** The server is deregistered *and* the
+proxies are asked to move its players onto a fallback. There is no way back to
+`Ready` from here. This is the phase `spec.drain.timeoutSeconds` bounds.
+
+So a group whose servers sit at `Retiring` with `PLAYERS` above zero is not
+stalled. It is waiting, which is what you asked it to do.
+
+## Bounding the wait
+
+If waiting for hours is not acceptable, say so — nothing else will:
+
+```yaml
+spec:
+  update:
+    # At most this many servers draining or terminating at once because of a
+    # generation change. Default 1.
+    maxUnavailable: 1
+    # After this long in Retiring, empty the server actively instead of
+    # waiting. 0, the default, means never.
+    maxStaleSeconds: 1800
+  drain:
+    # The upper bound once a drain has actually started.
+    timeoutSeconds: 120
+```
+
+`maxStaleSeconds` is the only thing that turns a patient `Retiring` into an
+active `Draining`, and it is off by default. A group that never seems to
+finish rolling is usually a group with players who never leave and a
+`maxStaleSeconds` of `0`.
+
+`maxUnavailable` defaults to `1`: one server at a time, so capacity dips by
+one server rather than by the fleet. Raising it rolls faster and costs more
+capacity while it does.
+
+## What actually makes a group roll
+
+The operator compares each server against a hash of the whole desired pod plus
+the rendered configuration files. Anything that changes either one makes every
+existing server stale, and the group replaces them.
+
+That is a wide net, and deliberately so — it is easier to reason about "the
+pod would come out different, so the pod is replaced" than about a
+hand-maintained list of which fields matter. Two consequences are worth
+knowing:
+
+- **A change to the group's image, resources, environment or rendered config
+  rolls the whole group.** So does a change to the `Network` defaults those
+  inherit from.
+- **A change to `spec.scaling` does not.** Scaling numbers are not part of a
+  pod, so editing `minReplicas`, `maxReplicas` or `spareSlots` changes how
+  many servers exist without replacing the ones that already do.
+
+One exclusion is deliberate and easy to be surprised by from the other side:
+the forwarding-secret hash is removed from the digest on purpose, so
+**rotating the forwarding secret does not make every server stale at once**.
+That rotation has its own ordered procedure in [Rotating the forwarding
+secret](rotating-the-forwarding-secret.md), and the reason it needs one is
+precisely that the ordinary roll is not doing the work for it.
+
+Changing the hash inputs is not a thing to do casually on a live network: it
+means every existing server is replaced on the next pass. The repository
+treats that as a deliberate act, and so should you.
+
+## When it is the node leaving, not the group
+
+A server is also moved off a node that is on its way out. The operator treats
+a node as departing in two cases:
+
+- **`spec.unschedulable`** — what `kubectl cordon` and `kubectl drain` set.
+  This is hardwired and not configurable.
+- **A taint whose key is in the operator's `--drain-taint` list**, for
+  autoscalers that taint before they cordon. Only the effects that actually
+  repel a pod count: a `PreferNoSchedule` taint is ignored, because the
+  scheduler would happily put the replacement back on the same node and the
+  group would rotate for as long as the taint stood.
+
+There is no default list, and that is on purpose: reacting to another
+project's taint key by default would tie this operator to a vocabulary that
+project is free to rename. If you run an autoscaler, you must pass the flag.
+
+The operator does warn rather than leave you guessing. It knows the keys
+cluster-autoscaler and Karpenter use, and when a node turns up carrying one
+that is *not* in the list it was given, it logs that — naming the node, the
+project and the flag. It never acts on it. A warning that stops appearing
+costs a warning; a drain that stops working costs a node's worth of players.
+
+```bash
+kubectl logs -n spawnery-system deployment/spawnery-operator | grep drain-taint
+```
+
+## This page and `upgrading.md`
+
+[Upgrading](upgrading.md) is about moving between releases: which version
+changed what, and what each one costs an installation. This page is about the
+mechanism underneath — what makes any group roll, and what a roll does to
+players. If you are asking "what does 0.2.33 do to me", that is the other
+page.
+
+Every field named here is in the generated [custom resource
+reference](../reference/crds.md#servergroup), and `--drain-taint` is in
+[Operator flags](../reference/operator-flags.md).
