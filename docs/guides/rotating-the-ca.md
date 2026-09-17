@@ -145,7 +145,11 @@ cleared `ca-previous.crt` while `switched` **completes the irreversible drop,
 within one 30-second tick**: those bytes are what a `rollback` would have
 signed with, so a slipped paste leaves about one tick in which to put them
 back. `spawnery.cloud/ca-rotation-discarded` is the durable record — slot,
-parse error, outcome and time. `internal/certs/rotation.go` carries the rest.
+parse error, outcome and time. It is cleared only by the next accepted
+`start`, so a record sitting on a secret with no phase describes the last
+thing that happened to a slot and not necessarily the rotation that just
+finished: read its timestamp before reading it as news.
+`internal/certs/rotation.go` carries the rest.
 
 ## Nothing starts this on its own
 

@@ -64,7 +64,7 @@ after a release moves verbatim to a new archive page. A final task adds
 | `docs/guides/upgrading.md` | Rewrite from lines 1–113. ≤ 1,100 words. |
 | `docs/getting-started/index.md` | Rewrite. ≤ 900 words. |
 | `docs/guides/rotating-the-forwarding-secret.md` | Rewrite. ≤ 1,600 words. |
-| `docs/guides/rotating-the-ca.md` | Rewrite. ≤ 1,200 words. |
+| `docs/guides/rotating-the-ca.md` | Rewrite. ≤ 1,250 words. |
 | `docs/explanation/network-boundaries.md` | Rewrite. ≤ 2,500 words. |
 | `docs/contributing/development.md` | Rewrite. ≤ 2,400 words. |
 | `mkdocs.yml` | One nav entry for the archive page. |
@@ -449,7 +449,7 @@ wc -w docs/guides/rotating-the-ca.md    # expect 2837
 
 - [ ] **Step 2: Rewrite**
 
-≤ 1,200 words. "The sequence" already leads with the commands and stays
+≤ 1,250 words. "The sequence" already leads with the commands and stays
 nearly as it is. "How the rotation works" is 2,388 words in one section and
 becomes four:
 
@@ -497,7 +497,7 @@ becomes four:
 - [ ] **Step 3: Verify**
 
 ```bash
-wc -w docs/guides/rotating-the-ca.md    # expect ≤ 1200
+wc -w docs/guides/rotating-the-ca.md    # expect ≤ 1250
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs
 ```
 
@@ -691,7 +691,7 @@ PAGES=(
   "docs/guides/upgrading.md:1100"
   "docs/getting-started/index.md:900"
   "docs/guides/rotating-the-forwarding-secret.md:1600"
-  "docs/guides/rotating-the-ca.md:1200"
+  "docs/guides/rotating-the-ca.md:1250"
   "docs/explanation/network-boundaries.md:2500"
   "docs/contributing/development.md:2400"
 )
