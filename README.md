@@ -91,8 +91,9 @@ The backend image is [Purpur](https://purpurmc.org) as of v0.2.15 —
 `ghcr.io/spawnery/purpur`, a fork of Paper running the same agent, the same
 entrypoint and the same Java runtime. `ghcr.io/spawnery/paper` is deprecated
 and still published; nothing moves until a `ServerGroup`'s `spec.image` is
-edited, and [`docs/guides/upgrading.md`](docs/guides/upgrading.md) carries what
-that costs.
+edited, and the [release
+notes](docs/archive/release-notes.md#0215-purpur-is-the-backend-image-and-paper-is-deprecated)
+carry what that costs.
 
 Whatever is open right now is in
 [`docs/reference/known-issues.md`](docs/reference/known-issues.md) — an entry

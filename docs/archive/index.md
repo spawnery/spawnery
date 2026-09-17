@@ -1,12 +1,18 @@
 # Archive
 
-Two different things live here, and they are not read the same way.
+Three different things live here, and they are not read the same way.
 
 **[How it was built](history.md)** is a written history, kept current. It is
 the one page in this section that is brought forward: seven milestones and
 then, since the rollout, seven chapters of what a running system grew into.
 Read it to find out why something is the way it is, or when a decision was
 made and what it was weighed against.
+
+**[Release notes](release-notes.md)** are the upgrade notes release by
+release, one section each, which were `guides/upgrading.md` until 2026-09-17.
+What is true of *any* upgrade is in [Upgrading](../guides/upgrading.md); these
+are what a particular release cost, kept because an installation older than any
+that exists today would still meet them.
 
 **The handover notes and runbook evidence** are the rest, written during
 specific milestones. Each was accurate on the date it was written and **none

@@ -9,9 +9,10 @@ rule.
 
 Things that are not open problems live elsewhere, and on 2026-08-27 four of
 them moved out of this file to where they belong.
-[`upgrading.md`](../guides/upgrading.md) carries what strands an object or rolls a fleet
-when an installation crosses a release — real work for whoever is upgrading
-one, and nothing at all for anyone else.
+[`upgrading.md`](../guides/upgrading.md) carries what rolls a fleet when an installation
+crosses a release, and [`release-notes.md`](../archive/release-notes.md) carries what
+strands an object — real work for whoever is upgrading one, and nothing at all
+for anyone else.
 [`ca-rotation.md`](../guides/rotating-the-ca.md) carries the CA rotation procedure, which is
 a thing a human drives rather than a thing that is wrong — including that
 nothing schedules one, which is a decision and not an omission, and where the

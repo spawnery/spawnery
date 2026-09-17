@@ -96,4 +96,4 @@ before an event, without being given a kubeconfig and the cluster access that
 comes with it.
 
 The upgrade note for when this command first appeared is in
-[Upgrading](upgrading.md#the-agents-gain-a-cloud-command-granted-to-nobody).
+[Release notes](../archive/release-notes.md#the-agents-gain-a-cloud-command-granted-to-nobody).

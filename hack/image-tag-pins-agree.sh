@@ -9,8 +9,8 @@
 # imageVersion.
 #
 # Deliberately not listed: docs/archive/ and docs/superpowers/, where an old
-# tag records what was true then and freezing it is the point, and
-# docs/guides/upgrading.md, whose version notes name old tags on purpose.
+# tag records what was true then and freezing it is the point -- which covers
+# docs/archive/release-notes.md, whose version notes name old tags on purpose.
 # A new guide that pins a tag belongs in the list; one that quotes history
 # does not. A `docker pull` only catches a
 # tag that has been deleted; a stale tag that still exists in the registry

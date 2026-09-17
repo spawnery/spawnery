@@ -97,9 +97,10 @@ script would have been the same script with a different name; if the two ever
 diverge enough for that to stop being true, that run is what fails and says so.
 
 Purpur is the backend image going forward and the Paper image is deprecated.
-Both are built, tested and published; see [`upgrading.md`](../guides/upgrading.md) for
-what an installation does about it and `nix/paper-image.nix` for why nothing is
-being removed.
+Both are built, tested and published; see the
+[release notes](../archive/release-notes.md#0215-purpur-is-the-backend-image-and-paper-is-deprecated)
+for what an installation does about it and `nix/paper-image.nix` for why
+nothing is being removed.
 
 `make agent-test` still drives the **Paper** image, and that is not an
 oversight. What it exercises is the agent — a real gRPC session against
