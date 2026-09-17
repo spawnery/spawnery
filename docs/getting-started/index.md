@@ -33,14 +33,12 @@ access to that network, by two routes that do not depend on each other: they
 may mount the `Network`'s forwarding secret, because any pod may mount any
 Secret in its own namespace, and they may wear the labels the operator's
 `NetworkPolicy` admits, because a pod's labels are chosen by whoever creates
-it. Both were measured on 2026-08-21 against a real CNI — a pod labelled as a
+it. Both were measured on 2026-08-21 against Cilium — a pod labelled as a
 proxy reached a backend on 25565, and an unlabelled pod read the secret.
 
-No policy the operator could write would close that. Vanilla NetworkPolicy
-selects peers by pod labels, namespace or CIDR, and inside one namespace none
-of those tells a real proxy from an invented one. What it does defend against
-is the co-tenant that cannot create pods: a compromised workload cannot
-relabel itself, and that half of the measurement is a timeout.
+No policy the operator could write would close that, and [Network
+boundaries](../explanation/network-boundaries.md#what-the-policy-defends-and-what-it-does-not)
+carries why, along with what the policy does defend.
 
 So: **do not share a game namespace with workloads you would not trust with
 that network.** Give each `Network` a namespace of its own, and treat the right
@@ -67,8 +65,8 @@ subject in the release's own namespace. It renders nothing by default, so a
 namespace nobody listed still needs the manual step. `helm install` prints
 that reminder from `NOTES.txt`; nothing checks the grant was ever applied.
 
-**Its RoleBinding hard-codes this chart's documented default namespace,
-`spawnery-system`, at line 65:**
+**The RoleBinding in `config/rbac/forwarding-secret-reader.yaml` hard-codes
+this chart's documented default namespace, `spawnery-system`, as its subject:**
 
 ```yaml
 subjects:
@@ -77,8 +75,8 @@ subjects:
   namespace: spawnery-system
 ```
 
-**Installed into any namespace other than `spawnery-system`, that line has to
-be changed to the real one before the file is applied.** Get it wrong and the
+**Installed into any namespace other than `spawnery-system`, that `namespace`
+has to be changed to the real one before the file is applied.** Get it wrong and the
 failure will not say "namespace": the `Network` reports that it could not read
 its forwarding secret and names the *secret* and the `kubectl apply` line
 above, never the RoleBinding subject that is wrong. The operator logs the API

@@ -21,10 +21,11 @@ cost is the rollout, not any player's session. The alternative is two agent
 versions to keep straight against one operator, and that trade was made
 deliberately; the reasoning sits beside `imageVersion` itself.
 
-**The operator moves to 0.2.2 too, and rolls nothing by itself.** The section
-at the top of this page explains that an operator upgrade *can* roll every
-proxy in the cluster, because the pod hash is a digest of the rendered pod and
-a change in the rendering code moves it. This release does not change that
+**The operator moves to 0.2.2 too, and rolls nothing by itself.**
+[Upgrading](../guides/upgrading.md#what-an-upgrade-rolls-with-no-spec-edited)
+explains that an operator upgrade *can* roll every proxy in the cluster,
+because the pod hash is a digest of the rendered pod and a change in the
+rendering code moves it. This release does not change that
 rendering: `internal/podspec`'s golden hash test
 (`internal/podspec/hash_golden_test.go`) still passes unchanged, which is the
 check that would fail if either `DesiredServerHash` or `DesiredProxyHash` had
@@ -37,7 +38,7 @@ So the only rolling this release causes is the one a `Network` asks for by
 naming the new image, and that is the paragraph above.
 
 **No ordering requirement in either direction**, unlike the `SetReady` case
-above. Nothing new is on the wire: the change is entirely inside the proxy
+in [Upgrading](../guides/upgrading.md#upgrade-the-proxy-images-before-the-operator). Nothing new is on the wire: the change is entirely inside the proxy
 agent's own reaction to a `DrainPlayers` message it has understood since
 milestone 3c. An old proxy image against any operator behaves as it always
 did — it misses the late arrival, which is the defect, not a new failure — and

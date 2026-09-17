@@ -99,8 +99,8 @@ unless a `false` was asserted.
 ## Older installations
 
 [Release notes](../archive/release-notes.md) carries the notes release by
-release: what each one rolled, what it left behind, and the three objects that
-changed name during development. The operator renames nothing -- it writes the
-new name and leaves whatever the old code wrote sitting there -- so an
-installation created before v0.1.0 still carries all three under their old
-names.
+release: what each one rolled, and what it left stranded. The operator renames
+nothing -- it writes the new name and leaves whatever the old code wrote
+sitting there -- so an installation created before v0.1.0 still carries a
+PodDisruptionBudget and a ConfigMap under their old names, and a `Ready: False`
+condition nothing republishes.

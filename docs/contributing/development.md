@@ -23,7 +23,7 @@ and are therefore part of no other target, not even `make all`: `agent-deps`,
 
 | Target | What it does |
 |---|---|
-| `make test` | Unit and envtest tests, after `manifests`, `generate`, `fmt`, `vet`, `chart-lint` and `toolchain-lint` |
+| `make test` | Unit and envtest tests, after `manifests`, `generate`, `fmt`, `vet` and the linters that guard what a compiler cannot — `chart-lint`, `toolchain-lint`, `image-tag-lint`, `docs-length-lint` and the three generated-docs checks |
 | `make lint` | `golangci-lint` — `errcheck` and `staticcheck`, uncapped |
 | `make build` | `bin/spawnery-operator` |
 | `make manifests` | CRDs, RBAC, the chart templates, and the generated `docs/reference` pages |

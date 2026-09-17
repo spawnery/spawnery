@@ -11,7 +11,7 @@ A Kubernetes operator (Go, controller-runtime) plus two JVM agent plugins (Kotli
 Everything runs inside the Nix dev shell. Prefix every command with `nix develop -c` (or enter the shell once). The shell sets `KUBEBUILDER_ASSETS` for envtest.
 
 ```bash
-make test        # manifests generate fmt vet chart-lint toolchain-lint, then go test -race ./...
+make test        # manifests generate fmt vet + the pin/length/docs linters, then go test -race ./...
 make lint        # golangci-lint: errcheck + staticcheck only, uncapped, with the e2e build tag
 make build       # bin/spawnery-operator
 make agent       # nix build .#agents — both plugins and their JUnit suites

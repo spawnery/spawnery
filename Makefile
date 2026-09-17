@@ -120,10 +120,8 @@ image-tag-lint:
 image-tag-lint-test:
 	hack/image-tag-pins-agree-test.sh
 
-# The six pages hack/docs-length.sh checks were 25,829 words before
-# docs/superpowers/specs/2026-09-17-docs-shortening-design.md and 10,740
-# after; they had grown back once already, which is why this stays a
-# prerequisite of `test` rather than a note in a review checklist -- the
+# hack/docs-length.sh's header says which pages and why those ceilings. It is
+# a prerequisite of `test` rather than a note in a review checklist for the
 # reason the -race and toolchain-lint comments above give: an unrun check is
 # indistinguishable from an absent one.
 .PHONY: docs-length-lint
