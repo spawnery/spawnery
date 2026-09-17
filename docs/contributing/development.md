@@ -67,24 +67,19 @@ reaches Maven Central, and a Nix build must never depend on the network.
 `cmd/spawnery-stubop` and checks the handshake, the authorization header, the
 player reports, the overlapping renewal and the bound on a session the operator
 never answers — and, for the Velocity image, that its readiness port stays
-closed until a server list has arrived and opens once one does. It needs a
-container runtime and only works on `x86_64-linux`.
+closed until a server list has arrived and opens once one does.
 
 ## The images
 
 `make image-test` runs all three game images — Paper, Purpur and Velocity —
 offline under the same constraints the podspec imposes, loading each first so
-the target needs no separate build step of its own. `make purpur-image` and
-`make velocity-image`, with their own `-load` and `-test` siblings, scope that
-same build/load/test triple to one image, for when a change is known to touch
-nothing on the others.
+the target needs no separate build step of its own.
 
 **Purpur goes through `hack/image-test.sh` unchanged**, the same script the
-Paper image does: the script asserts on Paper's behaviour — that Paper rewrote
-`/data/config/paper-global.yml`, that the agent plugin loaded, that nothing was
-downloaded at start — and Purpur is a Paper fork that does all of it. If the two
-ever diverge enough for that to stop being true, that run is what fails and says
-so.
+Paper image does: its assertions are Paper's behaviour — config rewritten,
+plugin loaded, nothing downloaded at start — and Purpur is a Paper fork that
+does all of it. If they ever diverge enough for that to stop being true, that
+run fails and says so.
 
 Purpur is the backend image going forward and the Paper image is deprecated.
 Both are built, tested and published; see the
@@ -92,10 +87,8 @@ Both are built, tested and published; see the
 for what an installation does about it and `nix/paper-image.nix` for why
 nothing is being removed.
 
-`make agent-test` still drives the **Paper** image, and that is not an
-oversight: what it exercises is the agent, and the agent jar in the two images
-is the same file. `make image-test` covers the Purpur side, booting that image
-and asserting the plugin loaded and its classes linked.
+`make agent-test` still drives the **Paper** image because the agent jar in the
+two images is the same file; `make image-test` covers the Purpur side.
 
 ### Reproducibility
 
@@ -113,24 +106,21 @@ empties the store of them.
 
 ### The operator's image
 
-`make operator-image` builds the operator's own image, `make operator-image-load`
-hands it to the local container runtime, and `make operator-image-test` runs it
-under the constraints `charts/spawnery/templates/deployment.yaml` imposes —
-non-root and a read-only root filesystem — rather than more comfortable ones,
-plus `--network none`, which is the script's own choice and not the
-Deployment's, and cheap here because the run only asks the binary to print its
-usage. `make image-repro` covers this image beside the other two and the agent
-jars.
+`make operator-image-test` runs the operator image under the constraints
+`charts/spawnery/templates/deployment.yaml` imposes — non-root and a read-only
+root filesystem — rather than more comfortable ones, plus `--network none`,
+which is the script's own choice and not the Deployment's, and cheap here
+because the run only asks the binary to print its usage. `make image-repro`
+covers this image beside the other two and the agent jars.
 
 ## Publishing
 
-Five artefacts, three scripts, all of which contact a registry or Maven Central
-and are therefore part of no other target.
+Five artefacts, three scripts, none of them part of another target.
 
 `make publish` (`hack/publish.sh`) copies the three images from their Nix
-archives straight to `ghcr.io/spawnery/` with `skopeo`, so what reaches the
-registry is what the flake describes rather than what a previous `podman load`
-left in a local store. It needs a GitHub token with `write:packages`.
+archives straight to `ghcr.io/spawnery/` with `skopeo`, so the registry gets
+what the flake describes, not what a previous `podman load` left in a local
+store. It needs a GitHub token with `write:packages`.
 `DRY_RUN=1` still builds every image it was asked for — on a machine without
 them cached that is the expensive part — then prints what it would copy where,
 needing no credential. `FORCE=1` overwrites a tag that already exists, which it
@@ -138,38 +128,36 @@ otherwise refuses to do with exit 3. `WRITE_DIGEST=1` writes the digest `skopeo
 copy` reported into `charts/spawnery/values.yaml`'s `image.digest` key — the
 chart is the only installation form, so the only place a digest means anything.
 
-`make publish IMAGES=operator-image` publishes one image rather than all three,
-and that is the ordinary case: `flake.nix` keeps `operatorVersion` apart from
-`imageVersion`, so after a reconciler fix exactly one tag is new. Asking for all
-three stops, correctly, at the first tag already published and never reaches the
-one that changed, and `FORCE=1` would get past that only by re-pushing about
-1.4 GB over tags that were already right.
-`.github/workflows/release.yml` invokes the script once per image on a `v*`
-tag, which is what lets a release move one version and not the others.
+`make publish IMAGES=operator-image` publishes one image, the ordinary case:
+`flake.nix` keeps `operatorVersion` apart from `imageVersion`, so a reconciler
+fix makes exactly one tag new. Asking for all three stops at the first tag
+already published and never reaches it; `FORCE=1` gets past that only by
+re-pushing about 1.4 GB over tags that were right.
+`.github/workflows/release.yml` therefore invokes the script once per image on
+a `v*` tag.
 
 `make publish-chart` (`hack/publish-chart.sh`) pushes the chart to
-`oci://ghcr.io/spawnery/charts/spawnery`. It packages from `git archive HEAD`
-and not from the working tree, because on the release runner those two stop
-being the same file: `WRITE_DIGEST=1` rewrites `charts/spawnery/values.yaml` in
-place minutes before the chart step runs, and archiving `HEAD` makes the
-ordering irrelevant instead of a comment somebody has to keep obeying. It also
-refuses, with no `FORCE=1` escape, to publish a chart whose *committed*
-`image.digest` is non-empty — the one state nothing else catches, because
-`internal/rbacaudit`'s `TestTheOperatorImageIsNotAMutableTag` returns early when
-a digest is set instead of failing. Its "already there" refusal is exit 3 too,
-and here that is the ordinary outcome: most tags change nothing under `charts/`.
+`oci://ghcr.io/spawnery/charts/spawnery`. It packages from `git archive HEAD`,
+not the working tree, because on the release runner those two stop being the
+same file: `WRITE_DIGEST=1` rewrites `charts/spawnery/values.yaml` minutes
+before the chart step runs, and archiving `HEAD` makes the ordering irrelevant
+instead of a comment somebody must keep obeying. It also refuses, with no
+`FORCE=1` escape, to publish a chart whose *committed* `image.digest` is
+non-empty — the one state nothing else catches, because `internal/rbacaudit`'s
+`TestTheOperatorImageIsNotAMutableTag` returns early when a digest is set
+instead of failing. Its "already there" refusal is exit 3 too, the ordinary
+outcome here since most tags change nothing under `charts/`.
 `make publish-chart-test` drives nine cases past it, none against a registry.
 
-`hack/publish-api.sh` publishes the only artefact that is not a container,
-`cloud.spawnery:spawnery-api` on Maven Central, so a plugin can compile against
-the API without a checkout. It is a script rather than a Gradle plugin because
-every plugin that speaks the Central Portal's HTTP API is third-party and would
-enter `agent/deps.json`, a cost every build of this repository would pay forever
-to save one `curl`. **Two of its inputs are secrets nobody can grant from inside
-a workflow**: a Central Portal token pair and an
+`hack/publish-api.sh` publishes `cloud.spawnery:spawnery-api` to Maven Central,
+the only artefact that is not a container, so a plugin can compile against the
+API without a checkout. It is a script rather than a Gradle plugin because any
+plugin speaking the Central Portal's HTTP API is third-party and would enter
+`agent/deps.json`, to save one `curl`. **Two of its inputs are secrets nobody
+can grant from inside a workflow**: a Central Portal token pair and an
 ASCII-armoured signing key, both belonging to a person. `release.yml` therefore
 skips this step rather than failing it when they are absent, and says which
-artefact it left out — a hard failure would make every image and the chart
+artefact it left out — a hard failure would hold every image and the chart
 hostage to a secret that has nothing to do with them. `DRY_RUN=1` builds the
 bundle, prints what would go where, and needs neither.
 
@@ -179,20 +167,19 @@ miscount**: `imageVersion` reads `0.2.5, 0.2.7, 0.2.9, 0.2.10, 0.2.12, 0.2.13`,
 `operatorVersion` reads `…, 0.2.9, 0.2.11, 0.2.12`, and the chart's own
 `version` tracks neither — it moves whenever anything under `charts/` does,
 while its `appVersion` stays with the operator it deploys. A missing number is
-the record of a release that built nothing on that side; giving an artefact a
-number from a release it was not in would be the lie. A local `make publish` is
-for the case a tag cannot cover.
+the record of a release that built nothing on that side. A local `make publish`
+is for the case a tag cannot cover.
 
 ## The end-to-end run
 
 `make e2e` (`hack/e2e.sh`) installs `charts/spawnery` with `helm install
 --create-namespace` — which is also where the CRDs come from, so there is no
-separate apply — into a namespace, `platform-system`, that shares nothing with
-the chart's own documented default, `spawnery-system`. The Go test package drives
-the operator under its own ServiceAccount, then reads its whole log and fails on
-`is forbidden:`. The operator runs *in* the cluster here, from its own image, so
-nothing hand-builds a `Service` — the difference between this and the local flow
-below. On a machine where `kind` runs under rootless Podman, the invocation is:
+separate apply — into `platform-system`, a namespace sharing nothing with the
+chart's documented default, `spawnery-system`. Its Go test package drives the
+operator under its own ServiceAccount, then reads the whole operator log and
+fails on `is forbidden:`. The operator runs *in* the cluster here, from its own
+image, so nothing hand-builds a `Service` — the difference between this and the
+local flow below. Under rootless Podman the invocation is:
 
 ```bash
 systemd-run --scope --user --property=Delegate=yes -- \
@@ -209,39 +196,33 @@ writes `eula=true`, because Paper does not start otherwise.
 
 ## Trying it locally against kind
 
-This is the hand-driven flow, and it runs the operator **outside** the cluster
-through `go run`. `make e2e` above needs none of the workarounds below — its
-`Service` has a selector, because there is a pod for it to select. What this
-flow gives that `make e2e` does not is a real Paper image, a server that reaches
-`Ready`, and an agent that reports players.
+This is the hand-driven flow, running the operator **outside** the cluster
+through `go run`. It gives what `make e2e` does not — a real Paper image, a
+server that reaches `Ready`, an agent that reports players — at the price of the
+workarounds below, which `make e2e` avoids because its `Service` has a selector.
 
 Under rootless Podman (measured with 5.8.4) `k3d` cannot bring up a cluster at
-all: its tools node always bind-mounts the runtime socket to
-`/var/run/docker.sock` inside itself, and rootless Podman refuses to create that
-mount point (`mkdir /var/run/docker.sock: permission denied`) — no `DOCKER_HOST`
-value fixes it, since the failure is in the tools node's own container creation,
-not in the client reaching the socket. `kind` under
-`KIND_EXPERIMENTAL_PROVIDER=podman` does work against the same rootless socket,
-and is what the flow below uses. Anyone with a real Docker daemon (or a rootful
-Podman socket) can use `k3d` the same way instead — the manifests and the
-operator invocation are identical either way.
+all: its tools node bind-mounts the runtime socket to `/var/run/docker.sock`
+inside itself, and rootless Podman refuses to create that mount point (`mkdir
+/var/run/docker.sock: permission denied`); no `DOCKER_HOST` fixes it, the
+failure being in the tools node's own container creation rather than in the
+client reaching the socket. The flow below uses `kind` under
+`KIND_EXPERIMENTAL_PROVIDER=podman`, which works against the same socket.
 
-kind additionally needs cgroup delegation to run under systemd as a regular
-user, hence the `systemd-run --scope --user --property=Delegate=yes` wrapper
-around every kind command below: without it kind refuses with a `Delegate=yes`
-error even when that property is already set on the user's systemd service —
-the scope is what its check actually looks for.
+kind needs cgroup delegation under systemd as a regular user, hence the
+`systemd-run --scope --user --property=Delegate=yes` wrapper around every kind
+command below: without it kind refuses with a `Delegate=yes` error even when
+that property is already set on the user's systemd service — the scope is what
+its check looks for.
 
-The operator runs through `go run` outside the cluster, so without
-`POD_NAMESPACE` from the downward API. `--operator-namespace` therefore has to
-be set explicitly; without the flag the process refuses to start (see
-`validateAgentFlags`), because the serving certificate would otherwise carry the
-wrong SANs.
+Running through `go run` there is no `POD_NAMESPACE` from the downward API, so
+`--operator-namespace` has to be set explicitly; without it the process refuses
+to start (see `validateAgentFlags`), because the serving certificate would
+otherwise carry the wrong SANs.
 
-One gap this flow has to close by hand is the difference between a `Server` that
-reaches `Ready` and one that does not. The pod dials
-`spawnery-operator.<ns>.svc:9443` and nothing creates that Service, since the
-operator is not in the cluster and no selector could find it. A selector-less
+One gap decides whether a `Server` reaches `Ready`: the pod dials
+`spawnery-operator.<ns>.svc:9443` and nothing creates that Service, the operator
+being outside the cluster where no selector could find it. A selector-less
 `Service` with a hand-written `Endpoints` pointing at the host closes it — the
 serving certificate already carries that DNS name, so TLS verifies against the
 CA the pod was given.
@@ -312,16 +293,15 @@ sleep 90
 nix develop -c kubectl get networks,servergroups,servers,pods -n minecraft
 ```
 
-The image only needs a rootfs for the relay, which is why the Paper image
-stands in for one; `socat` itself comes out of the mounted Nix store.
+The relay needs only a rootfs, which is why the Paper image stands in for one;
+`socat` comes out of the mounted Nix store.
 
-The first server can take a good half minute to appear: if the ServerGroup
-meets its network before the Network controller has accepted it, it tries again
-only after `networkRetryInterval` (30 seconds). The 90 seconds above also cover
-Paper's own start — about seven seconds to a first answered ping — and the
-agent's handshake after it. Loading the image into the cluster beforehand is
-its own wait: at 26.2-0.2.1 the Paper image is 372 MB as a tarball and the
-Velocity one 170 MB. They were 735 MB and 533 MB until 2026-08-25, when both
+The first server can take a good half minute: if the ServerGroup meets its
+network before the Network controller has accepted it, it retries only after
+`networkRetryInterval` (30 seconds). The 90 seconds also cover Paper's own start
+— about seven seconds to a first answered ping — and the agent's handshake.
+Loading the image beforehand is its own wait: at 26.2-0.2.1 the Paper image is
+372 MB as a tarball and the Velocity one 170 MB. They were 735 MB and 533 MB until 2026-08-25, when both
 stopped shipping a whole headless JDK and started shipping a runtime jlink'd
 to the modules each actually resolves — see `nix/paper-jre.nix` and
 `nix/velocity-jre.nix`.
@@ -336,18 +316,16 @@ Podman:
   a real server list ping to a real Paper process,
 - a `server lobby-xxxx` in phase `Ready` with `SLOTS 100`, `PLAYERS 0` and
   `REGISTERED true`. `SLOTS` is what the agent reported from
-  `SPAWNERY_MAX_PLAYERS`, `PLAYERS` what it counted on the running server —
-  zero, because nobody can join yet.
+  `SPAWNERY_MAX_PLAYERS`, `PLAYERS` what it counted — zero, because nobody can
+  join yet.
 
-If the `Server` stops in `Starting` instead, the agent cannot reach the
-operator: `kubectl logs` on the pod shows the reason, and it has so far always
-been the `Service`/`Endpoints` pair above, not the agent.
+If the `Server` stops in `Starting`, the agent cannot reach the operator;
+`kubectl logs` on the pod shows the reason, so far always the
+`Service`/`Endpoints` pair above rather than the agent.
 
-Leaving it running for a quarter of an hour shows the other half of what the
-agent is for. The session renews after eight minutes
-(`--agent-session-renew-after`), and if the replacement stream did not overlap
-the outgoing one, the server would drop out of `Ready` on that rhythm. Measured
-over thirteen minutes:
+The session renews after eight minutes (`--agent-session-renew-after`), and if
+the replacement stream did not overlap the outgoing one, the server would drop
+out of `Ready` on that rhythm. Measured over thirteen minutes:
 
 ```bash
 nix develop -c kubectl get server lobby-xxxx -n minecraft \
