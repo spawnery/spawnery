@@ -18,7 +18,7 @@ everywhere means done or never started.
 old pod is withdrawn, so `readyReplicas` holds at `replicas` and the phase
 reads `Ready` throughout, exactly as when nothing is happening.
 
-## What makes a fleet roll
+## What an upgrade rolls, with no spec edited
 
 Nobody has to edit a spec. A proxy pod is stale when its
 `spawnery.cloud/pod-hash` label differs from a digest of the pod the operator
