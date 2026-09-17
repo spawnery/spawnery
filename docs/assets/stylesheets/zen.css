@@ -116,7 +116,9 @@
   --md-mermaid-edge-color: var(--zen-muted);
   --md-mermaid-label-bg-color: var(--zen-base);
   --md-mermaid-label-fg-color: var(--zen-text);
-  --md-mermaid-node-bg-color: var(--zen-mantle);
+  /* The strongest accent tint that keeps node labels at AA inside the
+     namespace box, which sits on surface0. */
+  --md-mermaid-node-bg-color: color-mix(in srgb, var(--zen-accent-text) 10%, transparent);
   --md-mermaid-node-fg-color: var(--zen-accent-text);
 }
 
