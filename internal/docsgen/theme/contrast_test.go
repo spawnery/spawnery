@@ -92,15 +92,23 @@ func TestZenTokensMeetAA(t *testing.T) {
 	}
 
 	schemes := map[string]map[string]string{}
+	inBlocks := 0
 	for _, block := range schemeBlock.FindAllStringSubmatch(string(css), -1) {
 		if _, seen := schemes[block[1]]; seen {
 			t.Fatalf("zen.css declares the %q token block twice", block[1])
 		}
 		tokens := map[string]string{}
-		for _, decl := range tokenDecl.FindAllStringSubmatch(block[2], -1) {
+		decls := tokenDecl.FindAllStringSubmatch(block[2], -1)
+		inBlocks += len(decls)
+		for _, decl := range decls {
 			tokens[decl[1]] = decl[2]
 		}
 		schemes[block[1]] = tokens
+	}
+
+	total := len(tokenDecl.FindAllStringSubmatch(string(css), -1))
+	if total != inBlocks {
+		t.Errorf("zen.css has %d --zen-*: #rrggbb declarations but only %d are inside the two scheme token blocks; %d stray outside them", total, inBlocks, total-inBlocks)
 	}
 
 	for _, scheme := range []string{"mocha", "latte"} {
@@ -133,6 +141,17 @@ func TestZenTokensMeetAA(t *testing.T) {
 		if okFill && okOn {
 			if r := contrast(on, fill); r < minRatio {
 				t.Errorf("%s: --zen-accent-contrast %s on --zen-accent-text %s is %.2f:1, below %.1f:1", scheme, on, fill, r, minRatio)
+			}
+		}
+
+		// The workspace hover state and the diagram's cluster label put text
+		// on surface0, which the general text-on-surface loop above does not
+		// cover.
+		text, okText := lookup("text")
+		surface0, okSurface0 := lookup("surface0")
+		if okText && okSurface0 {
+			if r := contrast(text, surface0); r < minRatio {
+				t.Errorf("%s: --zen-text %s on --zen-surface0 %s is %.2f:1, below %.1f:1", scheme, text, surface0, r, minRatio)
 			}
 		}
 	}

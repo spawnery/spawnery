@@ -304,15 +304,15 @@ body {
   max-width: 70ch;
 }
 
-/* Inline rather than flex: a flex heading drops the spaces around inline code,
-   which 53 headings here contain. The rule is 100vw wide with an equal
+/* Inline rather than flex: a flex heading drops the spaces around inline
+   code, which headings here contain. The rule is 100vw wide with an equal
    negative margin, so it takes no room on the line and is clipped at the
    heading's edge. */
 .md-typeset h2 {
   overflow: hidden;
 }
 .md-typeset h2::before {
-  content: "──";
+  content: "──" / "";
   color: var(--zen-accent);
   font-weight: 400;
   margin-right: 0.6rem;
@@ -378,6 +378,14 @@ body {
 .md-nav__link--active,
 .md-nav__link:hover {
   color: var(--zen-accent-text);
+}
+
+/* Material fills both with --md-default-fg-color--lightest (surface0) and
+   sets muted text on it, which fails AA; mantle is the surface muted text is
+   measured against. */
+.md-search-result__meta,
+.md-nav--primary .md-nav__title {
+  background-color: var(--zen-mantle);
 }
 
 .md-footer {
@@ -482,6 +490,7 @@ body {
   font-size: 0;
   color: var(--zen-muted);
   opacity: 1;
+  text-transform: lowercase;
   transition: background-color 200ms cubic-bezier(0.45, 0, 0.55, 1);
 }
 .md-tabs__link::before {
@@ -501,6 +510,14 @@ body {
 .md-tabs__item--active .md-tabs__link {
   font-size: 0.64rem;
   gap: 0.35rem;
+}
+
+/* Material fixes this to #00000042 (hover #ffffff1f) from 60em up, which
+   under Latte reads as muted text on near-black instead of on the scheme's
+   own base. */
+.md-search__form,
+.md-search__form:hover {
+  background-color: var(--zen-base);
 }
 
 /* Measured on the built site: the ninth label ("Archive") starts clipping

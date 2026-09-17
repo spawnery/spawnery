@@ -20,9 +20,11 @@ on:
     paths:
       - 'docs/**'
       - 'mkdocs.yml'
+      - 'overrides/**'
       - 'nix/docs-site.nix'
       - 'nix/docs-image.nix'
       - 'nix/mermaid.nix'
+      - 'nix/fonts.nix'
       # docs/superpowers/ is already excluded from the built site
       # (mkdocs.yml's exclude_docs) and from the Nix source set
       # (nix/docs-site.nix's fileset difference). Without this line, editing

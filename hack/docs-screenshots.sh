@@ -6,10 +6,14 @@
 # A page is a site path such as "tutorial/"; "" is the home page.
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
-
 out="${1:?usage: hack/docs-screenshots.sh <out-dir> [page ...]}"
+case "$out" in
+  /*) ;;
+  *) out="$PWD/$out" ;;
+esac
 shift
+
+cd "$(dirname "$0")/.."
 pages=("$@")
 [ "${#pages[@]}" -gt 0 ] || pages=("" "tutorial/" "guides/scaling-and-boosts/" "reference/crds/")
 
