@@ -75,7 +75,7 @@ vet:
 #
 # It is not a substitute for reasoning about concurrency. The peer rate limit's
 # key was wrong for a whole milestone and -race would never have said so.
-test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint crd-docs-test chart-values-docs-test metrics-docs-test
+test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test metrics-docs-test
 	go test -race ./... -coverprofile cover.out
 
 # The standing check docs/reference/known-issues.md has asked for since milestone 2c.
@@ -119,6 +119,24 @@ image-tag-lint:
 .PHONY: image-tag-lint-test
 image-tag-lint-test:
 	hack/image-tag-pins-agree-test.sh
+
+# The six pages hack/docs-length.sh checks were 25,829 words before
+# docs/superpowers/specs/2026-09-17-docs-shortening-design.md and 10,740
+# after; they had grown back once already, which is why this stays a
+# prerequisite of `test` rather than a note in a review checklist -- the
+# reason the -race and toolchain-lint comments above give: an unrun check is
+# indistinguishable from an absent one.
+.PHONY: docs-length-lint
+docs-length-lint:
+	hack/docs-length.sh
+
+# hack/docs-length-test.sh drives the check above through the failures this
+# tree does not contain. Out of `test` for the same reason toolchain-lint-test
+# is: it is about the check, not about the documentation, and `test` exercises
+# the check itself on every run.
+.PHONY: docs-length-lint-test
+docs-length-lint-test:
+	hack/docs-length-test.sh
 
 # hack/{crd,chart-values,metrics}-docs-test.sh each drive one of the three
 # reference-page generators against what is actually checked in -- the real
