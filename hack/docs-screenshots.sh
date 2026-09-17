@@ -17,10 +17,23 @@ site="$(nix build --no-link --print-out-paths .#docs-site)"
 chromium="$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#chromium)/bin/chromium"
 
 port=8317
+if curl -fsS "http://127.0.0.1:$port/" >/dev/null 2>&1; then
+  echo "hack/docs-screenshots.sh: something already answers on 127.0.0.1:$port; stop it first" >&2
+  exit 1
+fi
+
 python3 -m http.server --bind 127.0.0.1 --directory "$site" "$port" >/dev/null 2>&1 &
 server=$!
-trap 'kill "$server"' EXIT
-until curl -fsS "http://127.0.0.1:$port/" >/dev/null 2>&1; do sleep 0.2; done
+trap 'kill "$server" 2>/dev/null || true' EXIT
+
+deadline=$((SECONDS + 10))
+until curl -fsS "http://127.0.0.1:$port/" >/dev/null 2>&1; do
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    echo "hack/docs-screenshots.sh: server on 127.0.0.1:$port did not come up within 10s" >&2
+    exit 1
+  fi
+  sleep 0.2
+done
 
 mkdir -p "$out"
 for page in "${pages[@]}"; do

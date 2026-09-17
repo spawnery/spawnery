@@ -114,6 +114,26 @@
   --md-shadow-z3: var(--zen-shadow);
 }
 
+.md-code__button {
+  color: var(--zen-muted);
+}
+
+.md-code__button:hover,
+.md-code__button:focus-visible {
+  color: var(--zen-accent-text);
+}
+
+.md-typeset .md-button {
+  color: var(--zen-accent-text);
+  border-color: var(--zen-accent-text);
+}
+
+.md-typeset .md-button--primary {
+  background-color: var(--zen-accent-text);
+  border-color: var(--zen-accent-text);
+  color: var(--zen-accent-contrast);
+}
+
 :root {
   --md-text-font: "IBM Plex Sans";
   --md-code-font: "JetBrains Mono";
