@@ -456,14 +456,17 @@ e2e-tutorial: manifests
 docs:
 	nix build .#docs-site --no-link
 
-# Two build products `mkdocs serve` needs and a fresh checkout does not have,
-# because both are gitignored and nix/docs-site.nix's own postPatch installs
-# them only inside the derivation's copy of the tree, which `mkdocs serve`
-# never runs:
+# Three build products `mkdocs serve` needs and a fresh checkout does not
+# have, because all three are gitignored and nix/docs-site.nix's own postPatch
+# installs them only inside the derivation's copy of the tree, which
+# `mkdocs serve` never runs:
 #
 #   docs/assets/mermaid.min.js       -- pinned in nix/mermaid.nix, without it
 #                                        the home page's diagram renders as
 #                                        nothing, with no error anywhere.
+#   docs/assets/fonts/               -- pinned in nix/fonts.nix, without them
+#                                        the site falls back to system fonts
+#                                        silently.
 #   docs/plugin-api/javadoc/         -- built by nix/agent-api-javadoc.nix,
 #                                        without it the Plugin API nav entry
 #                                        points at nothing. Unlike the
@@ -474,6 +477,7 @@ docs:
 .PHONY: docs-assets
 docs-assets:
 	hack/vendor-mermaid.sh
+	hack/vendor-fonts.sh
 	hack/vendor-javadoc.sh
 
 .PHONY: docs-serve

@@ -1,0 +1,613 @@
+/* ── tokens ── */
+
+[data-md-color-scheme="mocha"] {
+  color-scheme: dark;
+  --zen-crust: #11111b;
+  --zen-mantle: #181825;
+  --zen-base: #1e1e2e;
+  --zen-surface0: #313244;
+  --zen-surface1: #45475a;
+  --zen-text: #cdd6f4;
+  --zen-muted: #9399b2;
+  --zen-accent: #fab387;
+  --zen-accent-text: #fab387;
+  --zen-accent-contrast: #11111b;
+  --zen-green: #a6e3a1;
+  --zen-yellow: #f9e2af;
+  --zen-red: #f38ba8;
+  --zen-syn-keyword: #cba6f7;
+  --zen-syn-string: #a6e3a1;
+  --zen-syn-number: #fab387;
+  --zen-syn-comment: #9399b2;
+  --zen-syn-function: #89b4fa;
+  --zen-syn-name: #f9e2af;
+  --zen-syn-variable: #eba0ac;
+  --zen-syn-operator: #89dceb;
+  --zen-syn-special: #f5c2e7;
+  --zen-syn-generic: #f38ba8;
+  --zen-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.55);
+}
+
+/* Latte's text colours are Catppuccin's hues darkened until each reaches
+   4.6:1 on mantle; the raw Latte palette is drawn for surfaces and fails AA
+   as text. */
+[data-md-color-scheme="latte"] {
+  color-scheme: light;
+  --zen-crust: #dce0e8;
+  --zen-mantle: #e6e9ef;
+  --zen-base: #eff1f5;
+  --zen-surface0: #ccd0da;
+  --zen-surface1: #bcc0cc;
+  --zen-text: #4c4f69;
+  --zen-muted: #63667a;
+  --zen-accent: #fe640b;
+  --zen-accent-text: #b44201;
+  --zen-accent-contrast: #eff1f5;
+  --zen-green: #2f7620;
+  --zen-yellow: #905c13;
+  --zen-red: #cd0f38;
+  --zen-syn-keyword: #8534ef;
+  --zen-syn-string: #2f7620;
+  --zen-syn-number: #b44201;
+  --zen-syn-comment: #636679;
+  --zen-syn-function: #0b59f4;
+  --zen-syn-name: #905c13;
+  --zen-syn-variable: #cb1b2b;
+  --zen-syn-operator: #036f9a;
+  --zen-syn-special: #bc1d91;
+  --zen-syn-generic: #cd0f38;
+  --zen-shadow: 0 10px 30px -14px rgba(76, 79, 105, 0.35);
+}
+
+/* ── material ── */
+
+[data-md-color-scheme="mocha"], [data-md-color-scheme="latte"] {
+  --md-default-bg-color: var(--zen-base);
+  --md-default-bg-color--light: var(--zen-mantle);
+  --md-default-bg-color--lighter: var(--zen-surface0);
+  --md-default-bg-color--lightest: var(--zen-surface1);
+  --md-default-fg-color: var(--zen-text);
+  --md-default-fg-color--light: var(--zen-muted);
+  --md-default-fg-color--lighter: var(--zen-surface1);
+  --md-default-fg-color--lightest: var(--zen-surface0);
+  --md-primary-fg-color: var(--zen-mantle);
+  --md-primary-fg-color--light: var(--zen-mantle);
+  --md-primary-fg-color--dark: var(--zen-mantle);
+  --md-primary-bg-color: var(--zen-text);
+  --md-primary-bg-color--light: var(--zen-muted);
+  --md-accent-fg-color: var(--zen-accent-text);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--zen-accent-text) 12%, transparent);
+  --md-accent-bg-color: var(--zen-accent-contrast);
+  --md-accent-bg-color--light: var(--zen-accent-contrast);
+  --md-typeset-color: var(--zen-text);
+  --md-typeset-a-color: var(--zen-accent-text);
+  --md-typeset-mark-color: color-mix(in srgb, var(--zen-accent-text) 22%, transparent);
+  --md-typeset-table-color: var(--zen-surface0);
+  --md-typeset-table-color--light: var(--zen-mantle);
+  --md-code-fg-color: var(--zen-text);
+  --md-code-bg-color: var(--zen-mantle);
+  --md-code-bg-color--light: var(--zen-mantle);
+  --md-code-bg-color--lighter: var(--zen-surface0);
+  --md-code-hl-color: color-mix(in srgb, var(--zen-accent-text) 18%, transparent);
+  --md-code-hl-color--light: color-mix(in srgb, var(--zen-accent-text) 10%, transparent);
+  --md-code-hl-number-color: var(--zen-syn-number);
+  --md-code-hl-special-color: var(--zen-syn-special);
+  --md-code-hl-function-color: var(--zen-syn-function);
+  --md-code-hl-constant-color: var(--zen-syn-number);
+  --md-code-hl-keyword-color: var(--zen-syn-keyword);
+  --md-code-hl-string-color: var(--zen-syn-string);
+  --md-code-hl-name-color: var(--zen-syn-name);
+  --md-code-hl-operator-color: var(--zen-syn-operator);
+  --md-code-hl-punctuation-color: var(--zen-syn-comment);
+  --md-code-hl-comment-color: var(--zen-syn-comment);
+  --md-code-hl-generic-color: var(--zen-syn-generic);
+  --md-code-hl-variable-color: var(--zen-syn-variable);
+  --md-footer-fg-color: var(--zen-text);
+  --md-footer-fg-color--light: var(--zen-muted);
+  --md-footer-fg-color--lighter: var(--zen-muted);
+  --md-footer-bg-color: var(--zen-mantle);
+  --md-footer-bg-color--dark: var(--zen-mantle);
+  --md-admonition-fg-color: var(--zen-text);
+  --md-admonition-bg-color: var(--zen-base);
+  --md-shadow-z1: none;
+  --md-shadow-z2: var(--zen-shadow);
+  --md-shadow-z3: var(--zen-shadow);
+  --md-mermaid-font-family: var(--md-code-font-family);
+  --md-mermaid-edge-color: var(--zen-muted);
+  --md-mermaid-label-bg-color: var(--zen-base);
+  --md-mermaid-label-fg-color: var(--zen-text);
+  /* The strongest accent tint that keeps node labels at AA inside the
+     namespace box, which sits on surface0. */
+  --md-mermaid-node-bg-color: color-mix(in srgb, var(--zen-accent-text) 10%, transparent);
+  --md-mermaid-node-fg-color: var(--zen-accent-text);
+}
+
+.md-code__button {
+  color: var(--zen-muted);
+}
+
+.md-code__button:hover,
+.md-code__button:focus-visible {
+  color: var(--zen-accent-text);
+}
+
+.md-typeset .md-button {
+  color: var(--zen-accent-text);
+  border-color: var(--zen-accent-text);
+}
+
+.md-typeset .md-button--primary {
+  background-color: var(--zen-accent-text);
+  border-color: var(--zen-accent-text);
+  color: var(--zen-accent-contrast);
+}
+
+:root {
+  --md-text-font: "IBM Plex Sans";
+  --md-code-font: "JetBrains Mono";
+}
+
+::selection {
+  background: var(--zen-accent-text);
+  color: var(--zen-accent-contrast);
+}
+
+:focus-visible {
+  outline: 2px solid var(--zen-accent-text);
+  outline-offset: 2px;
+}
+
+/* ── fonts ── */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-wght-italic.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-ext-wght-italic.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../fonts/ibm-plex-sans-latin-ext-400-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../fonts/ibm-plex-sans-latin-400-italic.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../fonts/ibm-plex-sans-latin-ext-400-italic.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("../fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("../fonts/ibm-plex-sans-latin-ext-500-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url("../fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url("../fonts/ibm-plex-sans-latin-ext-600-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ── surfaces and type ── */
+
+body {
+  background: var(--zen-crust);
+}
+
+.md-container,
+.md-main {
+  background: transparent;
+}
+
+.md-main__inner {
+  background: var(--zen-base);
+  border-radius: 16px;
+  box-shadow: var(--zen-shadow);
+  margin-block: 1.2rem;
+}
+
+.md-header,
+.md-tabs,
+.md-nav,
+.md-footer,
+.md-search__form,
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-typeset .admonition-title,
+.md-typeset summary,
+.md-typeset table:not([class]) th {
+  font-family: var(--md-code-font-family);
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  color: var(--zen-text);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.md-typeset > p,
+.md-typeset > ul,
+.md-typeset > ol,
+.md-typeset > blockquote {
+  max-width: 70ch;
+}
+
+/* Inline rather than flex: a flex heading drops the spaces around inline
+   code, which headings here contain. The rule is 100vw wide with an equal
+   negative margin, so it takes no room on the line and is clipped at the
+   heading's edge. */
+.md-typeset h2 {
+  overflow: hidden;
+}
+.md-typeset h2::before {
+  content: "──" / "";
+  color: var(--zen-accent);
+  font-weight: 400;
+  margin-right: 0.6rem;
+}
+.md-typeset h2::after {
+  content: "";
+  display: inline-block;
+  vertical-align: middle;
+  width: 100vw;
+  height: 2px;
+  margin-left: 0.6rem;
+  margin-right: -100vw;
+  background: repeating-linear-gradient(90deg, var(--zen-surface0) 0 14px, transparent 14px 22px);
+}
+
+.md-typeset code {
+  border-radius: 6px;
+}
+.md-typeset pre > code,
+.md-typeset .highlight {
+  border-radius: 10px;
+}
+
+.md-typeset table:not([class]) {
+  border: 0;
+  border-radius: 10px;
+  box-shadow: none;
+  overflow: hidden;
+}
+.md-typeset table:not([class]) th {
+  background: var(--zen-mantle);
+  color: var(--zen-text);
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  --zen-adm: var(--zen-accent-text);
+  border: 0;
+  border-radius: 10px;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--zen-adm) 6%, var(--zen-base));
+}
+.md-typeset .tip, .md-typeset .hint, .md-typeset .success, .md-typeset .check, .md-typeset .done {
+  --zen-adm: var(--zen-green);
+}
+.md-typeset .warning, .md-typeset .caution, .md-typeset .attention {
+  --zen-adm: var(--zen-yellow);
+}
+.md-typeset .danger, .md-typeset .error, .md-typeset .failure, .md-typeset .fail, .md-typeset .missing, .md-typeset .bug {
+  --zen-adm: var(--zen-red);
+}
+.md-typeset .admonition > .admonition-title,
+.md-typeset details > summary {
+  background: transparent;
+  color: var(--zen-adm);
+  border: 0;
+}
+.md-typeset .admonition > .admonition-title::before,
+.md-typeset details > summary::before {
+  background-color: var(--zen-adm);
+}
+
+.md-nav__link--active,
+.md-nav__link:hover {
+  color: var(--zen-accent-text);
+}
+
+/* Material fills both with --md-default-fg-color--lightest (surface0) and
+   sets muted text on it, which fails AA; mantle is the surface muted text is
+   measured against. */
+.md-search-result__meta,
+.md-nav--primary .md-nav__title {
+  background-color: var(--zen-mantle);
+}
+
+.md-footer {
+  border-radius: 0;
+}
+
+/* ── bar and frame ── */
+
+:root {
+  --zen-frame: 10px;
+  --zen-bar-h: 44px;
+  --zen-vr: 16px;
+}
+
+.md-header {
+  display: flex;
+  align-items: center;
+  height: var(--zen-bar-h);
+  background: var(--zen-mantle);
+  color: var(--zen-text);
+  box-shadow: none;
+}
+
+/* Material renders the tabs as the header's second child. Dissolving the
+   inner nav's box puts its buttons and the tabs into one row. */
+.md-header__inner {
+  display: contents;
+}
+.md-header__inner > * {
+  order: 3;
+}
+.md-header .md-logo,
+.md-header__button[for="__drawer"],
+.md-header__title {
+  order: 1;
+}
+.md-header .md-tabs {
+  order: 2;
+}
+
+.md-header__title {
+  display: none;
+  flex: 0 0 auto;
+  margin-inline: 0.6rem 1rem;
+  font-weight: 700;
+}
+.md-header__title .md-header__topic {
+  position: static;
+}
+.md-header__title .md-header__topic + .md-header__topic {
+  display: none;
+}
+.md-header__title--active .md-header__topic {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+  z-index: auto;
+}
+
+@media screen and (min-width: 76.25em) {
+  .md-header .md-logo {
+    display: none;
+  }
+  .md-header__title {
+    display: block;
+  }
+}
+
+.md-tabs {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  color: var(--zen-muted);
+}
+.md-tabs .md-grid {
+  max-width: none;
+  margin: 0;
+}
+.md-tabs__list {
+  counter-reset: ws;
+  display: flex;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  contain: none;
+}
+.md-tabs__item {
+  counter-increment: ws;
+  display: block;
+  height: auto;
+  padding: 0;
+}
+.md-tabs__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  margin: 0;
+  padding: 0.15rem 0.45rem;
+  border-radius: 8px;
+  font-size: 0;
+  color: var(--zen-muted);
+  opacity: 1;
+  text-transform: lowercase;
+  transition: background-color 200ms cubic-bezier(0.45, 0, 0.55, 1);
+}
+.md-tabs__link::before {
+  content: counter(ws);
+  font-size: 0.64rem;
+}
+.md-tabs__link:hover,
+.md-tabs__link:focus-visible {
+  background: var(--zen-surface0);
+  color: var(--zen-text);
+}
+.md-tabs__item--active .md-tabs__link,
+.md-tabs__item--active .md-tabs__link:hover {
+  background: var(--zen-accent-text);
+  color: var(--zen-accent-contrast);
+}
+.md-tabs__item--active .md-tabs__link {
+  font-size: 0.64rem;
+  gap: 0.35rem;
+}
+
+/* Material fixes this to #00000042 (hover #ffffff1f) from 60em up, which
+   under Latte reads as muted text on near-black instead of on the scheme's
+   own base. */
+.md-search__form,
+.md-search__form:hover {
+  background-color: var(--zen-base);
+}
+
+/* Measured on the built site: the ninth label ("Archive") starts clipping
+   below 1765px with title, toggle, search and the GitHub widget all present;
+   112.5em (1800px) keeps a safety margin above that. */
+@media screen and (min-width: 112.5em) {
+  .md-tabs__link {
+    font-size: 0.64rem;
+    gap: 0.35rem;
+  }
+}
+
+@media screen and (max-width: 76.234375em) {
+  .md-tabs {
+    display: block;
+  }
+  .md-tabs__item--active .md-tabs__link {
+    font-size: 0;
+    gap: 0;
+  }
+  .md-tabs__list {
+    gap: 2px;
+  }
+  .md-tabs__link {
+    padding: 0.15rem 0.3rem;
+  }
+}
+
+.md-container {
+  padding-inline: var(--zen-frame);
+  padding-bottom: var(--zen-frame);
+}
+
+.zen-frame {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  pointer-events: none;
+  border: solid var(--zen-mantle);
+  border-width: var(--zen-bar-h) var(--zen-frame) var(--zen-frame);
+}
+.zen-frame i {
+  position: absolute;
+  width: var(--zen-vr);
+  height: var(--zen-vr);
+}
+.zen-frame i:nth-child(1) {
+  top: 0;
+  left: 0;
+  background: radial-gradient(circle at 100% 100%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}
+.zen-frame i:nth-child(2) {
+  top: 0;
+  right: 0;
+  background: radial-gradient(circle at 0% 100%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}
+.zen-frame i:nth-child(3) {
+  bottom: 0;
+  left: 0;
+  background: radial-gradient(circle at 100% 0%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}
+.zen-frame i:nth-child(4) {
+  bottom: 0;
+  right: 0;
+  background: radial-gradient(circle at 0% 0%, transparent calc(var(--zen-vr) - 0.5px), var(--zen-mantle) var(--zen-vr));
+}
+
+/* ── wallpaper ── */
+
+/* Only beside the page window, where there is room for it; behind long text
+   it is noise. The drawing is the homepage's ridgeline, without its moon: a
+   radius-110 circle has no margin narrow enough to sit inside and no room
+   to hide the arc it leaves at taller viewports. */
+@media screen and (min-width: 76.25em) {
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background-repeat: no-repeat;
+    background-position: bottom center;
+    background-size: cover;
+  }
+  body[data-md-color-scheme="mocha"]::before {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900' preserveAspectRatio='xMidYMax slice'><path d='M0 560 L140 480 L300 545 L470 430 L640 530 L820 455 L990 540 L1160 470 L1330 550 L1470 500 L1600 555 L1600 900 L0 900 Z' fill='%231c2030' opacity='0.55'/><path d='M0 640 L180 560 L340 625 L520 540 L720 630 L900 560 L1090 645 L1280 575 L1440 640 L1600 590 L1600 900 L0 900 Z' fill='%23181d29' opacity='0.8'/><path d='M0 730 L200 655 L380 715 L580 640 L790 725 L1000 660 L1210 730 L1420 670 L1600 720 L1600 900 L0 900 Z' fill='%23131622'/><path d='M0 810 L240 750 L460 800 L700 740 L950 805 L1200 750 L1430 800 L1600 765 L1600 900 L0 900 Z' fill='%230d0d15'/></svg>");
+  }
+  body[data-md-color-scheme="latte"]::before {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1600 900' preserveAspectRatio='xMidYMax slice'><path d='M0 560 L140 480 L300 545 L470 430 L640 530 L820 455 L990 540 L1160 470 L1330 550 L1470 500 L1600 555 L1600 900 L0 900 Z' fill='%23d4d8e1' opacity='0.7'/><path d='M0 640 L180 560 L340 625 L520 540 L720 630 L900 560 L1090 645 L1280 575 L1440 640 L1600 590 L1600 900 L0 900 Z' fill='%23cbd0da' opacity='0.85'/><path d='M0 730 L200 655 L380 715 L580 640 L790 725 L1000 660 L1210 730 L1420 670 L1600 720 L1600 900 L0 900 Z' fill='%23c2c7d2'/><path d='M0 810 L240 750 L460 800 L700 740 L950 805 L1200 750 L1430 800 L1600 765 L1600 900 L0 900 Z' fill='%23b9bfcb'/></svg>");
+  }
+}
