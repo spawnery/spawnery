@@ -7,19 +7,29 @@ edit_uri: edit/master/docs/
 theme:
   name: material
   palette:
-    - scheme: default
-      toggle:
-        icon: material/weather-night
-        name: Dark mode
-    - scheme: slate
+    - media: "(prefers-color-scheme: dark)"
+      scheme: mocha
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-sunny
-        name: Light mode
+        name: Switch to Latte
+    - media: "(prefers-color-scheme: light)"
+      scheme: latte
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to Mocha
+  font: false
   features:
     - navigation.sections
     - navigation.top
     - content.code.copy
     - search.suggest
+
+extra_css:
+  - assets/stylesheets/zen.css
 
 # The design record: dated specs and plans, written for the person building
 # the thing rather than the person running it. Kept in the repository, kept

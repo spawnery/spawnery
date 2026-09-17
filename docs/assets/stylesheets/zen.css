@@ -1,0 +1,229 @@
+/* ── tokens ── */
+
+[data-md-color-scheme="mocha"] {
+  color-scheme: dark;
+  --zen-crust: #11111b;
+  --zen-mantle: #181825;
+  --zen-base: #1e1e2e;
+  --zen-surface0: #313244;
+  --zen-surface1: #45475a;
+  --zen-text: #cdd6f4;
+  --zen-muted: #9399b2;
+  --zen-accent: #fab387;
+  --zen-accent-text: #fab387;
+  --zen-accent-contrast: #11111b;
+  --zen-green: #a6e3a1;
+  --zen-yellow: #f9e2af;
+  --zen-red: #f38ba8;
+  --zen-syn-keyword: #cba6f7;
+  --zen-syn-string: #a6e3a1;
+  --zen-syn-number: #fab387;
+  --zen-syn-comment: #9399b2;
+  --zen-syn-function: #89b4fa;
+  --zen-syn-name: #f9e2af;
+  --zen-syn-variable: #eba0ac;
+  --zen-syn-operator: #89dceb;
+  --zen-syn-special: #f5c2e7;
+  --zen-syn-generic: #f38ba8;
+  --zen-shadow: 0 10px 30px -12px rgba(0, 0, 0, 0.55);
+}
+
+/* Latte's text colours are Catppuccin's hues darkened until each reaches
+   4.6:1 on mantle; the raw Latte palette is drawn for surfaces and fails AA
+   as text. */
+[data-md-color-scheme="latte"] {
+  color-scheme: light;
+  --zen-crust: #dce0e8;
+  --zen-mantle: #e6e9ef;
+  --zen-base: #eff1f5;
+  --zen-surface0: #ccd0da;
+  --zen-surface1: #bcc0cc;
+  --zen-text: #4c4f69;
+  --zen-muted: #63667a;
+  --zen-accent: #fe640b;
+  --zen-accent-text: #b44201;
+  --zen-accent-contrast: #eff1f5;
+  --zen-green: #2f7620;
+  --zen-yellow: #905c13;
+  --zen-red: #cd0f38;
+  --zen-syn-keyword: #8534ef;
+  --zen-syn-string: #2f7620;
+  --zen-syn-number: #b44201;
+  --zen-syn-comment: #636679;
+  --zen-syn-function: #0b59f4;
+  --zen-syn-name: #905c13;
+  --zen-syn-variable: #cb1b2b;
+  --zen-syn-operator: #036f9a;
+  --zen-syn-special: #bc1d91;
+  --zen-syn-generic: #cd0f38;
+  --zen-shadow: 0 10px 30px -14px rgba(76, 79, 105, 0.35);
+}
+
+/* ── material ── */
+
+[data-md-color-scheme="mocha"], [data-md-color-scheme="latte"] {
+  --md-default-bg-color: var(--zen-base);
+  --md-default-bg-color--light: var(--zen-mantle);
+  --md-default-bg-color--lighter: var(--zen-surface0);
+  --md-default-bg-color--lightest: var(--zen-surface1);
+  --md-default-fg-color: var(--zen-text);
+  --md-default-fg-color--light: var(--zen-muted);
+  --md-default-fg-color--lighter: var(--zen-surface1);
+  --md-default-fg-color--lightest: var(--zen-surface0);
+  --md-primary-fg-color: var(--zen-mantle);
+  --md-primary-fg-color--light: var(--zen-mantle);
+  --md-primary-fg-color--dark: var(--zen-mantle);
+  --md-primary-bg-color: var(--zen-text);
+  --md-primary-bg-color--light: var(--zen-muted);
+  --md-accent-fg-color: var(--zen-accent-text);
+  --md-accent-fg-color--transparent: color-mix(in srgb, var(--zen-accent-text) 12%, transparent);
+  --md-accent-bg-color: var(--zen-accent-contrast);
+  --md-accent-bg-color--light: var(--zen-accent-contrast);
+  --md-typeset-color: var(--zen-text);
+  --md-typeset-a-color: var(--zen-accent-text);
+  --md-typeset-mark-color: color-mix(in srgb, var(--zen-accent-text) 22%, transparent);
+  --md-typeset-table-color: var(--zen-surface0);
+  --md-typeset-table-color--light: var(--zen-mantle);
+  --md-code-fg-color: var(--zen-text);
+  --md-code-bg-color: var(--zen-mantle);
+  --md-code-bg-color--light: var(--zen-mantle);
+  --md-code-bg-color--lighter: var(--zen-surface0);
+  --md-code-hl-color: color-mix(in srgb, var(--zen-accent-text) 18%, transparent);
+  --md-code-hl-color--light: color-mix(in srgb, var(--zen-accent-text) 10%, transparent);
+  --md-code-hl-number-color: var(--zen-syn-number);
+  --md-code-hl-special-color: var(--zen-syn-special);
+  --md-code-hl-function-color: var(--zen-syn-function);
+  --md-code-hl-constant-color: var(--zen-syn-number);
+  --md-code-hl-keyword-color: var(--zen-syn-keyword);
+  --md-code-hl-string-color: var(--zen-syn-string);
+  --md-code-hl-name-color: var(--zen-syn-name);
+  --md-code-hl-operator-color: var(--zen-syn-operator);
+  --md-code-hl-punctuation-color: var(--zen-syn-comment);
+  --md-code-hl-comment-color: var(--zen-syn-comment);
+  --md-code-hl-generic-color: var(--zen-syn-generic);
+  --md-code-hl-variable-color: var(--zen-syn-variable);
+  --md-footer-fg-color: var(--zen-text);
+  --md-footer-fg-color--light: var(--zen-muted);
+  --md-footer-fg-color--lighter: var(--zen-muted);
+  --md-footer-bg-color: var(--zen-mantle);
+  --md-footer-bg-color--dark: var(--zen-mantle);
+  --md-admonition-fg-color: var(--zen-text);
+  --md-admonition-bg-color: var(--zen-base);
+  --md-shadow-z1: none;
+  --md-shadow-z2: var(--zen-shadow);
+  --md-shadow-z3: var(--zen-shadow);
+}
+
+:root {
+  --md-text-font: "IBM Plex Sans";
+  --md-code-font: "JetBrains Mono";
+}
+
+::selection {
+  background: var(--zen-accent-text);
+  color: var(--zen-accent-contrast);
+}
+
+:focus-visible {
+  outline: 2px solid var(--zen-accent-text);
+  outline-offset: 2px;
+}
+
+/* ── fonts ── */
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-wght-italic.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 100 800;
+  src: url("../fonts/jetbrains-mono-latin-ext-wght-italic.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../fonts/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../fonts/ibm-plex-sans-latin-ext-400-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../fonts/ibm-plex-sans-latin-400-italic.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: italic;
+  font-display: swap;
+  font-weight: 400;
+  src: url("../fonts/ibm-plex-sans-latin-ext-400-italic.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("../fonts/ibm-plex-sans-latin-500-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url("../fonts/ibm-plex-sans-latin-ext-500-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url("../fonts/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url("../fonts/ibm-plex-sans-latin-ext-600-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
