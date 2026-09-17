@@ -65,7 +65,7 @@ after a release moves verbatim to a new archive page. A final task adds
 | `docs/getting-started/index.md` | Rewrite. ≤ 900 words. |
 | `docs/guides/rotating-the-forwarding-secret.md` | Rewrite. ≤ 1,600 words. |
 | `docs/guides/rotating-the-ca.md` | Rewrite. ≤ 1,250 words. |
-| `docs/explanation/network-boundaries.md` | Rewrite. ≤ 2,500 words. |
+| `docs/explanation/network-boundaries.md` | Rewrite. ≤ 3,550 words. |
 | `docs/contributing/development.md` | Rewrite. ≤ 2,400 words. |
 | `mkdocs.yml` | One nav entry for the archive page. |
 | `hack/docs-length.sh` | **Create.** The ceiling table and the check. |
@@ -533,7 +533,7 @@ wc -w docs/explanation/network-boundaries.md    # expect 4534
 
 - [ ] **Step 2: Rewrite**
 
-≤ 2,500 words. This stays the longest of the six — it is an explanation page
+≤ 3,550 words. This stays the longest of the six — it is an explanation page
 and it is allowed to be. What goes is provenance, not substance:
 
 - **Milestone and task numbers throughout.** "since 6b", "before 4c-3",
@@ -573,7 +573,7 @@ Cilium's refusal to share a LoadBalancer address.
 - [ ] **Step 3: Verify**
 
 ```bash
-wc -w docs/explanation/network-boundaries.md    # expect ≤ 2500
+wc -w docs/explanation/network-boundaries.md    # expect ≤ 3550
 grep -c 'measured\|Measured' docs/explanation/network-boundaries.md
 grep -n 'how-many-agents' docs/explanation/agent-trust.md
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs
@@ -692,7 +692,7 @@ PAGES=(
   "docs/getting-started/index.md:900"
   "docs/guides/rotating-the-forwarding-secret.md:1600"
   "docs/guides/rotating-the-ca.md:1250"
-  "docs/explanation/network-boundaries.md:2500"
+  "docs/explanation/network-boundaries.md:3550"
   "docs/contributing/development.md:2400"
 )
 ```

@@ -3,9 +3,8 @@
 Spawnery writes a `NetworkPolicy` per accepted `Network`, into that network's
 own namespace, selecting its server pods; one beside the operator, selecting the
 operator pod; and one per `ProxyGroup`. This page is what they are worth —
-measured scope rather than a list of faults, which is why none of it is in
-[`known-issues.md`](../reference/known-issues.md). A security feature whose
-limits are not written down is read as covering more than it does.
+measured scope rather than a list of faults. A security feature whose limits
+are not written down is read as covering more than it does.
 
 **The one sentence to read first: whether any of this refuses anything is a
 property of the cluster's CNI, and this repository's own end-to-end harness runs
@@ -170,18 +169,16 @@ network is one pod. A legitimate agent's peak is 2, measured over roughly
 seventy renewals across four paths; the bound is 8, and the slack is deliberate
 because being too low costs a working agent its session.
 
-The fleet bound is that slack's answer, and has closed it since 2026-08-26 —
-before which a set of compromised pods was simply a multiple of the one-pod
-bound, since eight per pod is a factor nobody would grant a fleet in aggregate.
-What closes it is a number the operator already had: the count of pods it
-manages, exported as `spawnery_agents_expected`. Above four times that many
+The fleet bound is that slack's answer, closed since 2026-08-26: eight per pod
+is a factor nobody would grant a fleet in aggregate. What closes it is a number
+the operator already had: the count of pods it manages, exported as
+`spawnery_agents_expected`. Above four times that many
 connections open in total, every peer's bound drops to
 `FleetConnectionsPerAgent` (4, twice the measured peak, so no working agent is
 refused anything it would have asked for); above eight times, connections are
 refused whatever peer they came from. Both are multiples of the fleet's own size
 rather than fixed numbers: a fixed ceiling is one legitimate growth eventually
-reaches, and the agent it refused that day would be whoever asked next, turning
-one namespace's traffic into another namespace's outage.
+reaches, and the agent it refused that day would be whoever asked next.
 
 **What is still not bounded is the number of peers.** A pod in none of the
 operator's caches still gets its own allowance until the fleet ceiling binds,
@@ -294,8 +291,7 @@ would turn a live figure into whatever the monitoring stack's retention is. The
 one log line that can mention a roster is the refusal at `V(1)`, carrying the
 reason and no player. It expires on its own, too: a roster older than twice the
 report interval is skipped, and a proxy whose stream is gone contributes
-nothing, so an operator that stops hearing from a proxy stops claiming to know
-who is online rather than serving a frozen list.
+nothing, so an operator that stops hearing from a proxy serves no frozen list.
 
 **Every agent in the namespace receives it** — every Velocity proxy and every
 Paper backend gets every player in that namespace, by name and UUID, on connect
@@ -359,10 +355,7 @@ source, so a permission is expressible there. It carries three —
 cosmetic: reading the network is what a moderator gets, and adding servers
 spends money.
 
-**That gate binds a person, not a pod.** A plugin calling `SpawneryApi` directly
-is behind the boundary above and no permission is checked, because there is
-nobody to check one against. The operator's own bounds hold there instead — a
-ceiling a boost cannot lift, a duration it cannot exceed, and a namespace it
-structurally cannot leave — and they apply to the command too, underneath its
-permission. A permission decides who may ask; the operator decides what may be
-asked for.
+**That gate binds a person, not a pod.** A permission decides who may ask; the
+operator's own bounds — a ceiling a boost cannot lift, a duration it cannot
+exceed, a namespace it structurally cannot leave — decide what may be asked
+for, and they hold underneath the command as well as behind it.
