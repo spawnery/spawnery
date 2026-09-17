@@ -3,10 +3,16 @@
 # one flake.nix currently builds.
 #
 # nix/{purpur,velocity}-image.nix tag their images
-# "${upstreamVersion}-${imageVersion}", and two manifests pin that tag by
-# hand: docs/tutorial/network.yaml, which a reader actually runs, and
-# config/samples/network.yaml, the example shipped beside the CRDs. Nothing
-# else compares either one to imageVersion. A `docker pull` only catches a
+# "${upstreamVersion}-${imageVersion}", and the manifests below pin that tag
+# by hand: the two a reader actually runs or copies, plus every guide that
+# opens with a pastable manifest. Nothing else compares any of them to
+# imageVersion.
+#
+# Deliberately not listed: docs/archive/ and docs/superpowers/, where an old
+# tag records what was true then and freezing it is the point, and
+# docs/guides/upgrading.md, whose version notes name old tags on purpose.
+# A new guide that pins a tag belongs in the list; one that quotes history
+# does not. A `docker pull` only catches a
 # tag that has been deleted; a stale tag that still exists in the registry
 # pulls cleanly forever, which is the actual failure -- config/samples/
 # network.yaml sat at 0.2.15, nineteen releases behind flake.nix's 0.2.34,
@@ -53,7 +59,11 @@ done
 if [ "${#manifests[@]}" -eq 0 ]; then
   manifests=(
     "$root/docs/tutorial/network.yaml"
+    "$root/docs/tutorial/index.md"
     "$root/config/samples/network.yaml"
+    "$root/docs/guides/expose-strategies.md"
+    "$root/docs/guides/persistent-worlds.md"
+    "$root/docs/guides/scaling-and-boosts.md"
   )
 fi
 
