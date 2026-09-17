@@ -454,9 +454,8 @@ operator to treat as one trust domain.
 The `/cloud` command is the different case and does gate. A command has a
 source, so a permission is expressible there, and that is where it belongs. It
 carries three — `spawnery.cloud.read`, `.retire` and `.scale`, listed with what
-each costs in
-[`charts/spawnery/README.md`](../getting-started/index.md#the-cloud-permissions)
-— and the split is not cosmetic: reading the network is what a moderator gets,
+each costs in [The `/cloud` command](../guides/cloud-command.md) — and the
+split is not cosmetic: reading the network is what a moderator gets,
 and adding servers spends money.
 
 **That gate binds a person, not a pod.** A plugin calling `SpawneryApi`
