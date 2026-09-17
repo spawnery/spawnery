@@ -21,3 +21,6 @@ docs/assets/mermaid.min.js
 
 # Vendored by hack/vendor-javadoc.sh from nix/agent-api-javadoc.nix.
 docs/plugin-api/javadoc/
+
+# mkdocs build output; mkdocs.yml sets no site_dir, so this is its default.
+site/

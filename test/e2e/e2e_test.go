@@ -141,7 +141,7 @@ func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 // theOperatorIsUp checks the pod the whole run depends on. A crash loop here
 // reads as every later scenario timing out, which says nothing about the cause.
 func theOperatorIsUp(t *testing.T) {
-	pod := operatorPod(t)
+	pod := operatorPod(t, operatorNamespace)
 
 	ready := false
 	for _, c := range pod.Status.ContainerStatuses {
@@ -226,7 +226,7 @@ func denialsIn(log string) []string {
 }
 
 func theOperatorWasNeverDenied(t *testing.T) {
-	log, restarts := operatorLog(t)
+	log, restarts := operatorLog(t, operatorNamespace)
 	if restarts > 0 {
 		t.Errorf("the operator container has restarted %d time(s) during the run. The "+
 			"log below covers the current process and, where the API server still "+
@@ -245,12 +245,18 @@ func theOperatorWasNeverDenied(t *testing.T) {
 	}
 }
 
-// operatorPod returns the single operator pod, or fails.
-func operatorPod(t *testing.T) *corev1.Pod {
+// operatorPod returns the single operator pod in namespace, or fails.
+//
+// namespace is a parameter rather than a read of operatorNamespace because
+// this package now watches the operator in two different namespaces: the
+// main suite's platform-system, and the tutorial's spawnery-system (the
+// chart's own default, which is what README.md actually tells a reader to
+// install into). A caller names which one it means.
+func operatorPod(t *testing.T, namespace string) *corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
 	err := k8s.List(ctx, &pods,
-		client.InNamespace(operatorNamespace),
+		client.InNamespace(namespace),
 		client.MatchingLabels{
 			"app.kubernetes.io/name":      "spawnery",
 			"app.kubernetes.io/component": "operator",
@@ -259,7 +265,7 @@ func operatorPod(t *testing.T) *corev1.Pod {
 		t.Fatalf("list operator pods: %v", err)
 	}
 	if len(pods.Items) != 1 {
-		t.Fatalf("got %d operator pods, want exactly one", len(pods.Items))
+		t.Fatalf("got %d operator pods in %s, want exactly one", len(pods.Items), namespace)
 	}
 	return &pods.Items[0]
 }
@@ -275,9 +281,9 @@ func operatorPod(t *testing.T) *corev1.Pod {
 // claim, is true for the common single-restart case. The restart count comes
 // back with it because beyond one restart it is not true, and the caller has
 // to say so rather than quietly assert over a hole.
-func operatorLog(t *testing.T) (string, int32) {
+func operatorLog(t *testing.T, namespace string) (string, int32) {
 	t.Helper()
-	pod := operatorPod(t)
+	pod := operatorPod(t, namespace)
 
 	var restarts int32
 	for _, c := range pod.Status.ContainerStatuses {
@@ -289,7 +295,7 @@ func operatorLog(t *testing.T) (string, int32) {
 		// Best effort: the previous container's log is gone if the kubelet has
 		// already rotated it away, and a Fatal here would turn a diagnostic
 		// into the failure.
-		if prev, err := readPodLog(pod.Name, &corev1.PodLogOptions{Previous: true}); err == nil {
+		if prev, err := readPodLog(namespace, pod.Name, &corev1.PodLogOptions{Previous: true}); err == nil {
 			b.WriteString(prev)
 			b.WriteString("\n")
 		} else {
@@ -298,7 +304,7 @@ func operatorLog(t *testing.T) (string, int32) {
 		}
 	}
 
-	body, err := readPodLog(pod.Name, &corev1.PodLogOptions{})
+	body, err := readPodLog(namespace, pod.Name, &corev1.PodLogOptions{})
 	switch {
 	case err == nil:
 		b.WriteString(body)
@@ -315,9 +321,9 @@ func operatorLog(t *testing.T) (string, int32) {
 	return b.String(), restarts
 }
 
-// readPodLog streams one container log of a pod in the operator's namespace.
-func readPodLog(name string, opts *corev1.PodLogOptions) (string, error) {
-	stream, err := clientset.CoreV1().Pods(operatorNamespace).GetLogs(name, opts).Stream(ctx)
+// readPodLog streams one container log of a pod in namespace.
+func readPodLog(namespace, name string, opts *corev1.PodLogOptions) (string, error) {
+	stream, err := clientset.CoreV1().Pods(namespace).GetLogs(name, opts).Stream(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -338,7 +344,18 @@ func readPodLog(name string, opts *corev1.PodLogOptions) (string, error) {
 // is §4 of the 2026-08-07 E2E design, kept. eventuallyStable is its sibling,
 // for the one assertion that needs a condition to hold rather than merely to
 // have occurred.
+//
+// It reads the main suite's own operator, in operatorNamespace. A caller
+// whose cluster installs the chart somewhere else -- the tutorial scenario,
+// into spawnery-system -- uses eventuallyIn instead, so a timeout's denial
+// hint looks at the operator that could actually have caused it.
 func eventually(t *testing.T, deadline time.Duration, what string, cond func() (bool, string)) {
+	t.Helper()
+	eventuallyIn(t, operatorNamespace, deadline, what, cond)
+}
+
+// eventuallyIn is eventually with the operator's namespace made explicit.
+func eventuallyIn(t *testing.T, operatorNS string, deadline time.Duration, what string, cond func() (bool, string)) {
 	t.Helper()
 	stop := time.Now().Add(deadline)
 	last := "nothing observed yet"
@@ -350,7 +367,7 @@ func eventually(t *testing.T, deadline time.Duration, what string, cond func() (
 		last = detail
 		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatalf("timed out after %s waiting for %s; last seen: %s%s", deadline, what, last, denialHint(t))
+	t.Fatalf("timed out after %s waiting for %s; last seen: %s%s", deadline, what, last, denialHint(t, operatorNS))
 }
 
 // denialHint is what a timed-out wait adds to its own failure.
@@ -363,9 +380,9 @@ func eventually(t *testing.T, deadline time.Duration, what string, cond func() (
 //
 // Best-effort by construction: a log that cannot be read adds nothing rather
 // than replacing a real timeout with a complaint about kubectl.
-func denialHint(t *testing.T) string {
+func denialHint(t *testing.T, namespace string) string {
 	t.Helper()
-	log, _ := operatorLog(t)
+	log, _ := operatorLog(t, namespace)
 	offenders := denialsIn(log)
 	if len(offenders) == 0 {
 		return ""

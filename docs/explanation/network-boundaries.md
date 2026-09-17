@@ -20,6 +20,8 @@ Paths written `config/deploy/` are where a file was in milestone 6b. Milestone
 6d moved that directory into `charts/spawnery/templates/`; the old paths are
 left where they date a measurement.
 
+## The harness's CNI enforces nothing, and that was measured
+
 **kindnet, the CNI the end-to-end harness runs on, was measured not to enforce
 a NetworkPolicy ingress rule — and measured is the operative word.** Task 3
 deleted the peerless kubelet-probe rule from `config/deploy/networkpolicy.yaml`,
@@ -50,6 +52,8 @@ documentation agree, and neither of them has been extended to egress here. The
 practical difference is nil: on this harness nothing 6b writes has been shown
 to refuse anything, in either direction.
 
+## What the policy does and does not defend against
+
 **The policy defends against a co-tenant that cannot create pods, and against
 nothing else.** Its ingress peer is a podSelector over labels a pod's own
 creator chooses, so anyone who may create a pod in a game namespace can wear
@@ -66,6 +70,8 @@ runbook). What it is written against is the invariant open since 3b — a Paper
 server runs `online-mode=false`, authenticates nobody, and trusts whatever
 completes the modern-forwarding handshake with the right secret.
 
+## Why no policy selects the proxy pods
+
 **Proxy pods are selected by no policy 6b writes, and the reason is an
 asymmetry in how the two pod classes are probed.** A server's readiness probe
 is an `exec` of `spawnery-slp` against `127.0.0.1:25565`
@@ -80,6 +86,8 @@ may open a TCP connection to a proxy's 25565 from inside the cluster.** The
 proxy is the public front door — it sits behind a NodePort with
 `externalTrafficPolicy: Local` — so a rule there would have to admit the world
 on that port anyway, and unlike a backend it authenticates its players.
+
+## A game namespace is one trust domain
 
 **A game namespace is one trust domain, and the per-`Network` policy is not a
 boundary inside it.** This entry used to read "an unlabelled pod in a game
@@ -114,6 +122,8 @@ second brings certificates and a failure mode to an operator that has no
 webhooks. The boundary is the namespace, and `charts/spawnery/README.md` now
 says so where an administrator chooses one.
 
+## Proxy egress, written per group since 0.2.33
+
 **Proxy egress is written against per group, since 0.2.33.** Each
 `ProxyGroup` owns an egress-only policy (`<group>-proxies`) admitting cluster
 DNS, the operator's agent port and the backends of its own network on 25565.
@@ -139,6 +149,8 @@ reachable — the server still reaches `Done` and answers a ping. Nothing has
 observed it failing *this* way, through a policy, because nothing here enforces
 one.
 
+## Whether a pod-selector egress rule survives Service DNAT
+
 **Whether a pod-selector egress rule survives Service DNAT is settled for
 Cilium and for no other CNI.** Two of the per-`Network` policy's egress rules
 name a pod or namespace selector while what the pod actually dials is a
@@ -163,6 +175,8 @@ diverge and the misleading one comes first — the operator hop failing looks
 like agents that never register, DNS failing looks like nothing resolving at
 all *including* the operator's name, so agents failing to register is the
 downstream effect and checking that first leads away from the cause.
+
+## The peerless rule, and the one test that guards it
 
 **The peerless rule is the widest-open thing 6b writes, and one unit test is
 all that stands behind it.** The operator's own `NetworkPolicy` (`config/deploy/networkpolicy.yaml`

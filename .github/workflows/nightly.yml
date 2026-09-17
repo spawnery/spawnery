@@ -164,3 +164,102 @@ jobs:
           gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
             --comment "Closed by the nightly run that passed: ${RUN_URL}"
           echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"
+
+  # The tutorial's own path, join included -- test/e2e/tutorial_test.go, gated
+  # behind SPAWNERY_E2E_TUTORIAL so hack/e2e.sh's own run never reaches it. A
+  # real Purpur and Velocity image are built and loaded here, for the same
+  # reason image-repro builds them, which is why this lives beside it rather
+  # than in ci.yml: the per-push suite's declared non-goal is exactly what
+  # this job pays for, on a schedule instead of on every commit.
+  #
+  # A separate job and a separate label rather than folding this into
+  # image-repro's: the two report unrelated failures, and image-repro's issue
+  # text names a bit-identical rebuild, which a broken join is not.
+  #
+  # nightly-tutorial-red gates no release, deliberately:
+  # hack/require-no-red-nightly.sh reads nightly-red alone, and a tutorial path
+  # that broke says nothing about whether the artefact being released works --
+  # it says the page somebody follows on their own cluster no longer leads
+  # where it claims, which is fixed by editing docs, not by holding a tag.
+  tutorial-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NIGHTLY_LABEL: nightly-tutorial-red
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: make e2e-tutorial
+        run: nix develop -c make e2e-tutorial
+
+      - name: Report the failure where somebody will meet it
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          gh label create "${NIGHTLY_LABEL}" \
+            --color b60205 \
+            --description "The tutorial's own end-to-end path (hack/e2e-tutorial.sh) is failing. Closing this is how you say the cause is fixed." \
+            2>/dev/null || true
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty')"
+
+          cat >/tmp/nightly-tutorial-body.md <<EOF
+          \`make e2e-tutorial\` failed on the nightly run.
+
+          | | |
+          |---|---|
+          | latest failing run | ${RUN_URL} |
+          | commit | \`${GITHUB_SHA}\` |
+          | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
+
+          This job builds and loads the real Purpur and Velocity images and
+          drives \`test/e2e/tutorial_test.go\`'s \`TestTutorialPath\`: apply
+          \`docs/tutorial/network.yaml\`, wait for a Ready backend and an
+          addressable proxy, join with \`cmd/spawnery-join --hold\`, and check
+          the proxy's \`status.connectedPlayers\`. It is the only thing in this
+          repository that drives that join, so a regression here is invisible
+          to \`ci.yml\`'s e2e job, which builds only \`.#operator-image\`.
+
+          Opened automatically by \`.github/workflows/nightly.yml\`.
+          EOF
+
+          if [ -n "${existing}" ]; then
+            gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
+              --body-file /tmp/nightly-tutorial-body.md
+            echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "Nightly: the tutorial's path failed" \
+              --label "${NIGHTLY_LABEL}" \
+              --body-file /tmp/nightly-tutorial-body.md
+          fi
+
+      - name: Close the report if there is one
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty' 2>/dev/null || true)"
+
+          if [ -z "${existing}" ]; then
+            exit 0
+          fi
+
+          gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
+            --comment "Closed by the nightly run that passed: ${RUN_URL}"
+          echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"

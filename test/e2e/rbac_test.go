@@ -163,7 +163,7 @@ func operatorSubject(t *testing.T) string {
 // silently, and to an error the code handles well enough to phrase itself.
 // A SelfSubjectAccessReview is blind to neither.
 func theOperatorCheckedItsOwnPermissions(t *testing.T) {
-	log, _ := operatorLog(t)
+	log, _ := operatorLog(t, operatorNamespace)
 
 	if strings.Contains(log, "is missing permissions it needs") {
 		t.Errorf("the operator reports permissions it does not have. Its own lines say which:\n%s",

@@ -77,6 +77,19 @@ OPERATOR_NAMESPACE=platform-system
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Two of these cannot coexist, and neither can one of these and a tutorial
+# run: both create their cluster from docs/tutorial/kind-config.yaml, whose
+# fixed host port a second cluster fails to bind regardless of its own
+# CLUSTER name -- deep into the run, after the image is already built. Caught
+# here instead, the failure names the actual cause and costs nothing.
+tutorial_join_port=30001
+if ss -H -ltn "sport = :${tutorial_join_port}" 2>/dev/null | grep -q .; then
+	echo "port ${tutorial_join_port} is already bound -- an e2e or tutorial cluster is probably still up." >&2
+	echo "kind clusters: $(kind get clusters 2>/dev/null | tr '\n' ' ')" >&2
+	echo "only one can run at a time: delete the other first (kind delete cluster --name <name>)." >&2
+	exit 1
+fi
+
 workdir="$(mktemp -d)"
 KUBECONFIG="$workdir/kubeconfig"
 export KUBECONFIG
@@ -139,7 +152,13 @@ fi
 # Set before the create, not after: a create that fails halfway leaves a
 # partial cluster of this run's own making, and that one is ours to remove.
 created_cluster=1
-kind create cluster --name "$CLUSTER" --wait 120s
+# Reaching into docs/ from hack/ looks backwards, but the config is not
+# duplicated here on purpose: it is the same file a tutorial reader applies to
+# their own kind cluster, extraPortMappings included. One file for both means
+# a port mapping that stops working for the reader stops working for this
+# suite in the same run, instead of the tutorial rotting silently while CI
+# stays green.
+kind create cluster --name "$CLUSTER" --config docs/tutorial/kind-config.yaml --wait 120s
 kind load image-archive "$archive" --name "$CLUSTER"
 
 # A first run of this script hit "namespaces \"spawnery-system\" not found":

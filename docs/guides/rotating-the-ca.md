@@ -1,5 +1,78 @@
 # Rotating the agent channel's CA
 
+Putting a new CA behind the agent channel takes no agent down and no pod
+restart, and it is a human's to drive: the operator waits between the steps
+rather than taking them all at once. It is driven one annotation at a time on
+the operator's own TLS secret, `spawnery-agent-tls`, in the namespace the
+chart was installed into — `spawnery-system` in
+[Getting started](../getting-started/index.md). Three requests and one read
+are the whole of the interface (`internal/certs/rotation.go`).
+
+## The sequence
+
+Ask for a rotation. A second CA is minted and published beside the one that is
+still signing, and the phase becomes `distributing`:
+
+```bash
+kubectl -n spawnery-system annotate secret spawnery-agent-tls \
+  spawnery.cloud/rotate-ca=start --overwrite
+```
+
+Read where the procedure has got to. The operator answers in annotations on
+that same secret, and this prints all of them at once:
+
+```bash
+kubectl -n spawnery-system get secret spawnery-agent-tls \
+  -o jsonpath='{.metadata.annotations}'
+```
+
+- `spawnery.cloud/ca-rotation-phase` reads `distributing`, then `switched`
+  once the operator has switched on its own, then goes away.
+- `spawnery.cloud/ca-rotation-blocked-on` names the namespaces that have not
+  taken the new CA yet.
+- `spawnery.cloud/ca-rotation-since` is stamped when the wait for those
+  namespaces ended; after the switch it reads as how long the outgoing CA has
+  been waiting for a human.
+- `spawnery.cloud/ca-rotation-discarded` appears only if a rotation slot was
+  hand-edited into something that would not parse.
+
+**Nothing here happens quickly.** On an idle cluster `start` can sit for up to
+an hour before it is picked up, and the switch follows roughly a quarter of an
+hour after the last namespace has caught up. Both waits are what makes the
+rotation safe, and both are explained below.
+
+A request the operator will not carry out — a `drop-old` sent before the phase
+reads `switched`, most of all — is consumed without changing anything, and
+leaves an event as its only trace:
+
+```bash
+kubectl -n spawnery-system get events \
+  --field-selector involvedObject.name=spawnery-agent-tls
+```
+
+Once the phase reads `switched`, drop the CA that was replaced. This is the
+step that ends the rotation, and it is the one that cannot be undone:
+
+```bash
+kubectl -n spawnery-system annotate secret spawnery-agent-tls \
+  spawnery.cloud/rotate-ca=drop-old --overwrite
+```
+
+To abandon the rotation instead, from either phase and any time before
+`drop-old`: out of `distributing` this discards the incoming CA, and out of
+`switched` it signs the serving certificate back under the old one.
+
+```bash
+kubectl -n spawnery-system annotate secret spawnery-agent-tls \
+  spawnery.cloud/rotate-ca=rollback --overwrite
+```
+
+There is no fourth request and no step in between: from `start` to `switched`
+the operator drives itself. The rest of this page is what it is waiting for,
+what it refuses, and when to start.
+
+## How the rotation works
+
 The operator issues one CA and serves one certificate from it. Replacing that
 CA without restarting a single agent is a procedure a human drives, and this
 page is it.

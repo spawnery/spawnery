@@ -11,6 +11,24 @@ Nothing here is an open defect. `docs/reference/known-issues.md` carries those.
 
 ## An operator upgrade can roll every proxy in the cluster
 
+**The group's status will not tell you.** The surge pod comes up before any
+old pod is withdrawn, so `readyReplicas` holds at `replicas` and the phase
+reads `Ready` throughout, exactly as when nothing is happening. The pod label
+is what says so:
+
+```bash
+kubectl get pods -n <ns> -l spawnery.cloud/role=proxy -L spawnery.cloud/pod-hash
+```
+
+Two distinct values inside one group means that group is mid-roll; one value
+everywhere means done or never started. Every group starts within a reconcile
+of the new operator coming up, one pod at a time per group but all groups at
+once -- nothing serialises across groups. Each replaced pod runs the ordinary
+drain, so players keep playing and are disconnected only if still there when
+`spec.drain.timeoutSeconds` elapses, with one `Warning ProxyDrainTimeout` per
+pod naming what it cost. A busy fleet upgraded at peak disconnects, per group,
+whoever is still on each proxy at each deadline.
+
 Nobody has to edit a spec. A proxy pod is stale when its
 `spawnery.cloud/pod-hash` label differs from a digest of the pod the operator
 *would* render for its group right now, and that digest is taken over the
@@ -33,24 +51,6 @@ This is an accepted cost rather than a defect. The alternative is milestone
 for a proxy group that is worse, because `replicas` is the routine edit there
 and a generation rule would make every scale-up and scale-down a full
 replacement, each pod waiting out an attrition-bound drain.
-
-**The group's status will not tell you.** The surge pod comes up before any
-old pod is withdrawn, so `readyReplicas` holds at `replicas` and the phase
-reads `Ready` throughout, exactly as when nothing is happening. The pod label
-is what says so:
-
-```bash
-kubectl get pods -n <ns> -l spawnery.cloud/role=proxy -L spawnery.cloud/pod-hash
-```
-
-Two distinct values inside one group means that group is mid-roll; one value
-everywhere means done or never started. Every group starts within a reconcile
-of the new operator coming up, one pod at a time per group but all groups at
-once -- nothing serialises across groups. Each replaced pod runs the ordinary
-drain, so players keep playing and are disconnected only if still there when
-`spec.drain.timeoutSeconds` elapses, with one `Warning ProxyDrainTimeout` per
-pod naming what it cost. A busy fleet upgraded at peak disconnects, per group,
-whoever is still on each proxy at each deadline.
 
 **Finding out before you upgrade.** The code trigger now answers for itself:
 `internal/podspec/hash_golden_test.go` pins `DesiredProxyHash` and

@@ -25,7 +25,8 @@ the current release does, read the [README](https://github.com/spawnery/spawnery
 - [Milestone 4](#milestone-4) — scaling, rolling updates and drains
 - [Milestone 5](#milestone-5) — persistent worlds and secret rotation
 - [Milestone 6](#milestone-6) — running in a real cluster
-- [Since the rollout](#since-the-rollout) — the connection bound and the in-flight player
+- [Since the rollout](#since-the-rollout) — seven chapters, from the drain's last gap
+  to the Network as a boundary
 - [Handovers](#handovers) — where to start reading
 
 ## Milestone 1
@@ -691,36 +692,23 @@ the occupied label. All three unblock together.
 
 ## Since the rollout
 
-Since the rollout, one thing has been closed that predates every milestone
-above it: **milestone 2a promised that a compromised game server pod cannot
-harm any other, and the availability half of that promise had no bound at
-all.** 6b gave the channel `MaxConcurrentStreams`, an idle reaper and a
-`TokenReview` cache, and none of the three reaches the actual attack — a pod
-opening connections without limit, each carrying a valid token and a live
-stream, so that the idle reaper never fires and the rate limit never misses its
-cache. `internal/agentserver` now bounds connections per peer address on the
-listener itself, which is before the TLS handshake and therefore before the
-expensive half of a connection is paid for.
+Six milestones got a network running. What follows is what happened after it
+was running, which is a different kind of work: the gaps the milestones left,
+and then a steady widening of what a plugin may know and ask for. Ninety-six
+`feat` commits and twenty releases, told as seven chapters rather than listed.
 
-The number is measured rather than chosen. A legitimate agent's peak is 2,
-because renewal is make-before-break and each attempt builds its own channel;
-`cmd/spawnery-stubop` counts connections for exactly this, and the high-water
-mark was 2 in every run across the plain renewal, the operator-supersede path,
-the give-up path and the Velocity agent — roughly seventy renewals, never a
-third connection. The bound is 8, four times that, and
-`hack/agent-test.sh` now asserts the peak against it, so an agent change that
-needs more fails there rather than by being refused in a cluster.
-`spawnery_agent_open_connections` and
-`spawnery_agent_connections_refused_total` publish both halves, and the chart's
-`PrometheusRule` alerts on the second.
+Two notes on reading it. Paths written `docs/known-issues.md` and
+`docs/upgrading.md` are where those files were at the time; they are now
+[Known issues](../reference/known-issues.md) and
+[Upgrading](../guides/upgrading.md). And the chapters overlap in time — they
+are arcs, not a chronology.
 
-What that does not close is in `docs/known-issues.md` unchanged: the bound is
-per peer, so a *set* of compromised pods is bounded only by their number.
+### The drain learns to wait
 
-The second thing closed since the rollout is half of the drain's oldest gap,
-and the measurement is the interesting part. **A player whose connection to a
-draining server is still in flight is counted by nobody**, so `DrainPlayers`
-moved everyone except them and the operator then read an empty server. The
+Half of the drain's oldest gap was closed here, and the measurement is the
+interesting part. **A player whose connection to a draining server is still in
+flight is counted by nobody**, so `DrainPlayers` moved everyone except them and
+the operator then read an empty server. The
 obvious fix — have the proxy report its own `playersConnected` — would not
 have worked: disassembling velocity 3.5.1 build 615,
 `VelocityRegisteredServer.addPlayer` is called from exactly one place, the
@@ -743,6 +731,135 @@ That is the proxy image `0.2.2`, and `docs/upgrading.md` says why it rolls the
 Paper fleet too and why nothing has to be upgraded in any particular order.
 The operator's half stays open in `docs/known-issues.md`: `Occupied()` still
 reads only the backend's count.
+
+### One picture, and an API to read it
+
+Until now an agent knew what the operator chose to tell it, message by
+message. `internal/netstate` replaced that with one builder producing the whole
+picture of a namespace, and both agent kinds receive it from the same source --
+so a proxy and a backend cannot hold two versions of the truth that are merely
+meant to agree. The agent applies it by replacing its mirror whole rather than
+patching it, which is what makes a resync a correction rather than a merge.
+
+On top of that sits the thing a plugin author actually touches:
+`cloud.spawnery:spawnery-api`, a Java module with one `SpawneryApi`
+implementation serving both platforms, published to Maven Central so a plugin
+needs no checkout. The proxy learned to report *who* is online and not only how
+many, which is what makes `player(uuid)` answerable at all.
+
+A plugin can also hold a server back from readiness now: a hold is taken and
+released, and the server does not tell the proxies it is ready until every
+plugin has let go. A world that must finish generating before anybody arrives
+is the case this exists for.
+
+### The channel answers back, and `/cloud` starts asking
+
+For its first six milestones the channel carried reports up and state down, and
+nothing was ever asked. Requests changed that, with bounds from the start:
+outstanding requests survive a renewal, and the operator answers within limits
+rather than however long it takes.
+
+`connect` was the first request a plugin could make, and it is honest about
+what it promises -- the move is *ordered*, not completed, because waiting on
+the backend's own future would block a network callback. `/cloud retire` was
+the first request that writes.
+
+The in-game command grew from there: `list` and `info` written once for both
+platforms, then `retire`, then `start` and `stop`, each behind its own
+permission. Alongside it a cloud event feed, derived from the events `kubectl`
+already shows, delivered only where somebody is reading and collapsed by a pure
+function over one window -- ten `Ready` transitions become one line for a
+player, while a plugin subscribing to `EventBus` gets all ten.
+
+### Capacity you can ask for
+
+A `ScaleBoost` is extra capacity that is not an edit to the group, and the
+distinction is the point: the operator holds no write on `servergroups` at all,
+so on a GitOps cluster a floor raised in a spec would be reverted at the next
+reconciliation. A boost is its own object, it raises a group's floor and never
+its ceiling, and it expires by itself. The group reports how much of its floor
+is a boost, and a sweep removes the expired ones.
+
+Boosts add rather than replace, which makes "somebody else already boosted
+this" a non-event instead of a race between two people typing.
+
+### A group can be handed a filesystem
+
+Three claim-backed sources arrived in turn -- `extraPlugins`, `extraFiles`, and
+claim mounts -- and each got its own operator flag rather than sharing one:
+`--allow-plugin-volumes`, `--allow-file-volumes`, `--allow-mount-volumes`. An
+administrator who wants one does not get the other two.
+
+The ordering in the entrypoints is what keeps the three writers apart, and a
+group whose volume would collide with a file the renderer writes is refused up
+front rather than producing a server that starts and is subtly wrong. A group
+may also set its own environment, and the JVM's flags through it.
+
+### A server can speak for itself
+
+The operator's account of a server is its phase, and a phase is a lifecycle. It
+could never say what was happening *inside* `READY`, which is the only window
+anybody actually watches.
+
+So a server can now announce what it is doing, and every other agent reads it
+back. The cloud carries that description and never reads it -- nothing the
+operator decides looks at a word of it, which is what makes it safe to put
+anything in. A server can also close its own door without retiring, and open it
+again; the phase does not change, because shutting a door is not a lifecycle
+event.
+
+Two more identities arrived beside it. An incarnation token distinguishes one
+run of a server from the next, which a name cannot do for a persistent group
+whose name *is* its world. And a server number, reserved with the name and
+handed out lowest-free, gives people something to say out loud.
+
+A round that ends is now `Finished` rather than `Failed`: a plugin says so, the
+end is stamped once, and the pod stays stopped. It is terminal like a failure
+and counted like nothing at all -- no backoff, no `Degraded`, and its own short
+retention.
+
+### The Network holds the boundary
+
+The last chapter is the one that took something away.
+
+A group could ask the scheduler for anything its author could type -- a
+toleration onto a control-plane node, a selector onto somebody else's
+hardware -- and a namespace was the boundary that author was otherwise held to.
+Since 0.2.33 a group's scheduling needs the Network's permission, as plain
+allowlists where absent means nothing rather than everything. `HostPort` goes
+through the same gate, because binding a node's port is a scheduling question.
+
+Every `ProxyGroup` also owns an egress policy now, which is what separated the
+proxies from the databases on a cluster that enforces policy.
+
+And one boundary was closed that predates every milestone above it.
+
+#### The connection bound
+
+**Milestone 2a promised that a compromised game server pod cannot harm any
+other, and the availability half of that promise had no bound at all.** 6b gave
+the channel `MaxConcurrentStreams`, an idle reaper and a
+`TokenReview` cache, and none of the three reaches the actual attack — a pod
+opening connections without limit, each carrying a valid token and a live
+stream, so that the idle reaper never fires and the rate limit never misses its
+cache. `internal/agentserver` now bounds connections per peer address on the
+listener itself, which is before the TLS handshake and therefore before the
+expensive half of a connection is paid for.
+
+The number is measured rather than chosen. A legitimate agent's peak is 2,
+because renewal is make-before-break and each attempt builds its own channel;
+`cmd/spawnery-stubop` counts connections for exactly this, and the high-water
+mark was 2 in every run across the plain renewal, the operator-supersede path,
+the give-up path and the Velocity agent — roughly seventy renewals, never a
+third connection. The bound is 8, four times that, and
+`hack/agent-test.sh` now asserts the peak against it, so an agent change that
+needs more fails there rather than by being refused in a cluster.
+`spawnery_agent_open_connections` and
+`spawnery_agent_connections_refused_total` publish both halves, and the chart's
+`PrometheusRule` alerts on the second.
+
+What that does not close is in `docs/known-issues.md` unchanged: the bound is
+per peer, so a *set* of compromised pods is bounded only by their number.
 
 ## Handovers
 

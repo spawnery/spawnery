@@ -10,62 +10,13 @@ report a rotation; every restart below is still a human's to perform.
 Throughout, `<ns>` is the namespace holding the Network, `<net>` the Network's
 name and `<secret>` the Secret named by `spec.forwardingSecretRef.name`.
 
----
-
-## 1. What this is for, and when it applies
-
-Rotating the Velocity modern forwarding secret of one Network: the value the
-proxies present and the backends check when a player is handed from one to the
-other. It is the Secret named by `spec.forwardingSecretRef`, under the key
-`secret` (`internal/podspec/server.go:121`, `podspec.ForwardingSecretKey`).
-
-**The rotation is manual, and the master design fixed that in
-`docs/superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md` §6.5.**
-Neither Velocity nor Paper accepts two forwarding secrets at once, and neither
-re-reads the file once its process has started. So there is necessarily a
-window in which one layer holds the new value and the other still holds the
-old, and a join or a transfer across that boundary fails with *"Unable to
-verify player details"*. §6.5 also gives the reason automatic orchestration is
-deferred rather than merely unbuilt: in exactly that window an automatic drain
-would want to move players onto fallback backends it can no longer reach, so
-closing the window automatically needs registration to become
-generation-aware. Until that exists, the operator detects the change and
-reports it; the restarts follow this document.
-
-The operator therefore never restarts anything on its own account here. A
-rotation moves no pod hash: `DesiredServerHash` and `DesiredProxyHash` delete
-`spawnery.cloud/forwarding-hash` before digesting
-(`internal/podspec/hash.go:76` and `:137`), so nothing about a rotation makes a
-pod stale in the sense that 4c's rolling updates or 5b's takedown rule act on.
+You are replacing the value in one Network's forwarding Secret and restarting
+every pod that reads it: the server groups first, the proxy groups last. §1 to
+§3 are the procedure; §4 and §5 are why it is done in that order.
 
 ---
 
-## 2. Why the server groups go first
-
-Not an arbitrary order. A proxy holding the old secret and a backend holding
-the new one reject each other, so from the first restart until the last the two
-layers disagree and every join across the boundary fails. The order decides
-what that window costs.
-
-**Roll the proxies first** and every connected player is thrown out in the same
-second — a proxy restart drops its connections — *and* lands in a network where
-no backend is reachable, because every backend still holds the old secret. The
-outage lasts until the last server group has been rolled.
-
-**Roll the server groups first** and the proxies stay up with their players
-still connected. Unreachability grows group by group as each group crosses
-over, and only the groups already rolled are unreachable. The one hard cut then
-stays at the end, where it lasts as long as a proxy restart rather than as long
-as the whole rotation.
-
-The condition's own message is written in this order — the stale server groups
-before the stale proxy groups (`staleSummary`,
-`internal/controller/forwardingsecret.go:197`) — so the message reads in the
-order the work is done.
-
----
-
-## 3. Prerequisite: the reader Role, once per namespace
+## 1. Prerequisite: the reader Role, once per namespace
 
 The operator reads the Secret with a namespaced grant that is not part of
 `config/deploy/`. Without it the operator cannot read the Secret at all and
@@ -96,7 +47,7 @@ below step 3 will ever confirm.
 
 ---
 
-## 4. The progress command
+## 2. The progress command
 
 A pod the operator creates while it has a digest recorded carries that digest
 in the label `spawnery.cloud/forwarding-hash`
@@ -115,7 +66,7 @@ stamp at all. An empty column means *unknown*, not *stale* — see §8.
 
 ---
 
-## 5. The steps
+## 3. The steps
 
 ### Step 1 — write down what is there now
 
@@ -179,7 +130,7 @@ network whose pods all predate this operator version, the second command reads
 `Unknown PodsPredateTracking` instead while the rotation is genuinely pending —
 that is not a sign the rotation did not land, and the first command plus the
 digest above are what confirm it did. Roll everything anyway; the empty column
-of the §4 command is what tells you which pods are still to go.
+of the §2 command is what tells you which pods are still to go.
 
 The event, emitted once on the transition rather than once per resync:
 
@@ -306,6 +257,59 @@ ForwardingSecretInSync` once the last unstamped pod has been replaced.
 
 ---
 
+## 4. What this is for, and when it applies
+
+Rotating the Velocity modern forwarding secret of one Network: the value the
+proxies present and the backends check when a player is handed from one to the
+other. It is the Secret named by `spec.forwardingSecretRef`, under the key
+`secret` (`internal/podspec/server.go:121`, `podspec.ForwardingSecretKey`).
+
+**The rotation is manual, and the master design fixed that in
+`docs/superpowers/specs/2026-08-07-minecraft-cloud-operator-design.md` §6.5.**
+Neither Velocity nor Paper accepts two forwarding secrets at once, and neither
+re-reads the file once its process has started. So there is necessarily a
+window in which one layer holds the new value and the other still holds the
+old, and a join or a transfer across that boundary fails with *"Unable to
+verify player details"*. §6.5 also gives the reason automatic orchestration is
+deferred rather than merely unbuilt: in exactly that window an automatic drain
+would want to move players onto fallback backends it can no longer reach, so
+closing the window automatically needs registration to become
+generation-aware. Until that exists, the operator detects the change and
+reports it; the restarts follow this document.
+
+The operator therefore never restarts anything on its own account here. A
+rotation moves no pod hash: `DesiredServerHash` and `DesiredProxyHash` delete
+`spawnery.cloud/forwarding-hash` before digesting
+(`internal/podspec/hash.go:76` and `:137`), so nothing about a rotation makes a
+pod stale in the sense that 4c's rolling updates or 5b's takedown rule act on.
+
+---
+
+## 5. Why the server groups go first
+
+Not an arbitrary order. A proxy holding the old secret and a backend holding
+the new one reject each other, so from the first restart until the last the two
+layers disagree and every join across the boundary fails. The order decides
+what that window costs.
+
+**Roll the proxies first** and every connected player is thrown out in the same
+second — a proxy restart drops its connections — *and* lands in a network where
+no backend is reachable, because every backend still holds the old secret. The
+outage lasts until the last server group has been rolled.
+
+**Roll the server groups first** and the proxies stay up with their players
+still connected. Unreachability grows group by group as each group crosses
+over, and only the groups already rolled are unreachable. The one hard cut then
+stays at the end, where it lasts as long as a proxy restart rather than as long
+as the whole rotation.
+
+The condition's own message is written in this order — the stale server groups
+before the stale proxy groups (`staleSummary`,
+`internal/controller/forwardingsecret.go:197`) — so the message reads in the
+order the work is done.
+
+---
+
 ## 6. Two warnings
 
 **`kubectl delete pod` bypasses the PodDisruptionBudget, and the players on
@@ -369,9 +373,9 @@ unstamped one.
 
 | Status | Reason | What it means | What to do |
 |---|---|---|---|
-| `True` | `RotationPending` | at least one pod runs on a digest other than the current one; the message names each as `role/group=count` | run this runbook: server groups first (§5 step 4), then proxy groups (§5 step 6) |
+| `True` | `RotationPending` | at least one pod runs on a digest other than the current one; the message names each as `role/group=count` | run this runbook: server groups first (§3 step 4), then proxy groups (§3 step 6) |
 | `False` | `ForwardingSecretInSync` | every pod carries the current digest and none is unstamped. A network with no pods at all reads this too, vacuously | nothing |
-| `Unknown` | `PodsPredateTracking` | no pod is stale, but at least one carries no stamp — see below | **outside a rotation:** nothing, it clears as pods turn over. **During one (§5 step 7):** the unstamped pods have not been rolled — find them by the empty column of the §4 command and roll them |
+| `Unknown` | `PodsPredateTracking` | no pod is stale, but at least one carries no stamp — see below | **outside a rotation:** nothing, it clears as pods turn over. **During one (§3 step 7):** the unstamped pods have not been rolled — find them by the empty column of the §2 command and roll them |
 | `Unknown` | `SecretUnresolved` | the secret could not be read, so no comparison is possible; the message carries the `ForwardingSecretResolved` message inside it | fix the read first — the table below |
 
 **`PodsPredateTracking` needs its own paragraph, because it looks like a
@@ -393,7 +397,7 @@ Positive polarity: `True` is healthy.
 | `True` | `SecretResolved` | the Secret exists and its `secret` key holds a non-empty value | nothing |
 | `False` | `SecretNotFound` | the `GET` returned NotFound: `spec.forwardingSecretRef` names a Secret that does not exist in this namespace | fix the name, or create the Secret. Pods of this network hang in `ContainerCreating` until it exists, because the projected volume cannot mount |
 | `False` | `SecretKeyMissing` | the Secret exists but has no `secret` key, or an empty one | put the forwarding secret under the key `secret` |
-| `Unknown` | `SecretReadForbidden` | the `GET` was denied: the reader Role of §3 was never applied to this namespace. Forbidden arrives before the operator can learn whether the Secret exists, so it may be present and pods may still start, or it may be missing and they hang in `ContainerCreating` — see the note below before rotating in this state | `kubectl apply -n <ns> -f config/rbac/forwarding-secret-reader.yaml` |
+| `Unknown` | `SecretReadForbidden` | the `GET` was denied: the reader Role of §1 was never applied to this namespace. Forbidden arrives before the operator can learn whether the Secret exists, so it may be present and pods may still start, or it may be missing and they hang in `ContainerCreating` — see the note below before rotating in this state | `kubectl apply -n <ns> -f config/rbac/forwarding-secret-reader.yaml` |
 | `Unknown` | `SecretReadFailed` | any other error — the API server was unreachable, for instance. Nobody's typo and nothing to edit. Same caveat as the row above, and the kubelet projects the Secret through that same API server, so an unreachable one stops pods starting for its own reason | look at the message and at the operator's logs; it clears when the read succeeds |
 
 `SecretNotFound` is also the one reported as an event,

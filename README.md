@@ -102,6 +102,10 @@ here, milestone by milestone and with the measurement each claim rests on, is
 
 ## Install
 
+The [tutorial](docs/tutorial/index.md) runs this same install on a local
+`kind` cluster and ends with a player joining a server — start there if this
+is your first run. To install directly:
+
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
   --version 0.2.34 \
