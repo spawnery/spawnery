@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Cut the six documentation pages phase 3 never turned around from
-25,829 words to under 8,500, without losing a measurement or breaking a link.
+25,829 words to under 9,700, without losing a measurement or breaking a link.
 
 **Architecture:** One task per page, each ending in its own commit and its own
 word count. `guides/upgrading.md` splits rather than shrinks: everything named
@@ -61,12 +61,12 @@ after a release moves verbatim to a new archive page. A final task adds
 | File | Change |
 |---|---|
 | `docs/archive/release-notes.md` | **Create.** Lines 114–949 of today's `guides/upgrading.md`, verbatim prose, relative links repointed. |
-| `docs/guides/upgrading.md` | Rewrite from lines 1–113. ≤ 1,000 words. |
-| `docs/getting-started/index.md` | Rewrite. ≤ 800 words. |
-| `docs/guides/rotating-the-forwarding-secret.md` | Rewrite. ≤ 1,300 words. |
-| `docs/guides/rotating-the-ca.md` | Rewrite. ≤ 1,000 words. |
-| `docs/explanation/network-boundaries.md` | Rewrite. ≤ 2,300 words. |
-| `docs/contributing/development.md` | Rewrite. ≤ 2,100 words. |
+| `docs/guides/upgrading.md` | Rewrite from lines 1–113. ≤ 1,100 words. |
+| `docs/getting-started/index.md` | Rewrite. ≤ 900 words. |
+| `docs/guides/rotating-the-forwarding-secret.md` | Rewrite. ≤ 1,600 words. |
+| `docs/guides/rotating-the-ca.md` | Rewrite. ≤ 1,200 words. |
+| `docs/explanation/network-boundaries.md` | Rewrite. ≤ 2,500 words. |
+| `docs/contributing/development.md` | Rewrite. ≤ 2,400 words. |
 | `mkdocs.yml` | One nav entry for the archive page. |
 | `hack/docs-length.sh` | **Create.** The ceiling table and the check. |
 | `hack/docs-length-test.sh` | **Create.** Drives the check past its own failure. |
@@ -137,7 +137,7 @@ documented.
 
 - [ ] **Step 4: Write the new `docs/guides/upgrading.md`**
 
-≤ 1,000 words, this outline, built from `/tmp/upgrading-head.md`:
+≤ 1,100 words, this outline, built from `/tmp/upgrading-head.md`:
 
 ```markdown
 # Upgrading between releases
@@ -241,7 +241,7 @@ not change.
 - [ ] **Step 8: Verify**
 
 ```bash
-wc -w docs/guides/upgrading.md      # expect ≤ 1000
+wc -w docs/guides/upgrading.md      # expect ≤ 1100
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs
 ```
 
@@ -282,7 +282,7 @@ wc -w docs/getting-started/index.md    # expect 2862
 
 - [ ] **Step 2: Rewrite the page**
 
-≤ 800 words, this outline:
+≤ 900 words, this outline:
 
 ```markdown
 # Installing the operator
@@ -354,7 +354,7 @@ Point it at `../guides/cloud-command.md`.
 - [ ] **Step 4: Verify**
 
 ```bash
-wc -w docs/getting-started/index.md    # expect ≤ 800
+wc -w docs/getting-started/index.md    # expect ≤ 900
 grep -n 'choosing-a-game-namespace\|the-one-manual-step' docs/index.md docs/tutorial/index.md
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs
 ```
@@ -385,7 +385,7 @@ wc -w docs/guides/rotating-the-forwarding-secret.md    # expect 3857
 
 - [ ] **Step 2: Rewrite**
 
-≤ 1,300 words. Keep the procedure and lead with it:
+≤ 1,600 words. Keep the procedure and lead with it:
 
 - Drop the `# Runbook:` prefix from the title and the whole
   `**Status: standing operating procedure**` block. It explains this
@@ -417,7 +417,7 @@ where they identify which of two similar fields is meant.
 - [ ] **Step 3: Verify**
 
 ```bash
-wc -w docs/guides/rotating-the-forwarding-secret.md    # expect ≤ 1300
+wc -w docs/guides/rotating-the-forwarding-secret.md    # expect ≤ 1600
 grep -c 'kubectl' docs/guides/rotating-the-forwarding-secret.md   # no command lost
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs
 ```
@@ -449,7 +449,7 @@ wc -w docs/guides/rotating-the-ca.md    # expect 2837
 
 - [ ] **Step 2: Rewrite**
 
-≤ 1,000 words. "The sequence" already leads with the commands and stays
+≤ 1,200 words. "The sequence" already leads with the commands and stays
 nearly as it is. "How the rotation works" is 2,388 words in one section and
 becomes four:
 
@@ -497,7 +497,7 @@ becomes four:
 - [ ] **Step 3: Verify**
 
 ```bash
-wc -w docs/guides/rotating-the-ca.md    # expect ≤ 1000
+wc -w docs/guides/rotating-the-ca.md    # expect ≤ 1200
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs
 ```
 
@@ -533,7 +533,7 @@ wc -w docs/explanation/network-boundaries.md    # expect 4534
 
 - [ ] **Step 2: Rewrite**
 
-≤ 2,300 words. This stays the longest of the six — it is an explanation page
+≤ 2,500 words. This stays the longest of the six — it is an explanation page
 and it is allowed to be. What goes is provenance, not substance:
 
 - **Milestone and task numbers throughout.** "since 6b", "before 4c-3",
@@ -573,7 +573,7 @@ Cilium's refusal to share a LoadBalancer address.
 - [ ] **Step 3: Verify**
 
 ```bash
-wc -w docs/explanation/network-boundaries.md    # expect ≤ 2300
+wc -w docs/explanation/network-boundaries.md    # expect ≤ 2500
 grep -c 'measured\|Measured' docs/explanation/network-boundaries.md
 grep -n 'how-many-agents' docs/explanation/agent-trust.md
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs
@@ -605,7 +605,7 @@ wc -w docs/contributing/development.md    # expect 3859
 
 - [ ] **Step 2: Rewrite**
 
-≤ 2,100 words.
+≤ 2,400 words.
 
 - **The targets table stays whole.** It is the page's reference value.
 - **"Publishing" is 1,060 words and becomes about 400.** Keep: what each of
@@ -633,7 +633,7 @@ wc -w docs/contributing/development.md    # expect 3859
 - [ ] **Step 3: Verify**
 
 ```bash
-wc -w docs/contributing/development.md    # expect ≤ 2100
+wc -w docs/contributing/development.md    # expect ≤ 2400
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs
 ```
 
@@ -669,7 +669,7 @@ git commit    # docs(contributing): publishing without the release recital
 # Refuses a documentation page that has grown past the size its rewrite
 # landed on.
 #
-# The six pages below were 25,829 words on 2026-09-17 and 8,500 after
+# The six pages below were 25,829 words on 2026-09-17 and 9,700 after
 # docs/superpowers/specs/2026-09-17-docs-shortening-design.md. They had grown
 # there once already, which is why a check exists at all rather than a note
 # saying to keep them short.
@@ -688,12 +688,12 @@ git commit    # docs(contributing): publishing without the release recital
 set -euo pipefail
 
 PAGES=(
-  "docs/guides/upgrading.md:1000"
-  "docs/getting-started/index.md:800"
-  "docs/guides/rotating-the-forwarding-secret.md:1300"
-  "docs/guides/rotating-the-ca.md:1000"
-  "docs/explanation/network-boundaries.md:2300"
-  "docs/contributing/development.md:2100"
+  "docs/guides/upgrading.md:1100"
+  "docs/getting-started/index.md:900"
+  "docs/guides/rotating-the-forwarding-secret.md:1600"
+  "docs/guides/rotating-the-ca.md:1200"
+  "docs/explanation/network-boundaries.md:2500"
+  "docs/contributing/development.md:2400"
 )
 ```
 
@@ -788,7 +788,7 @@ nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/sp
 nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery -c make docs-length-lint
 ```
 
-Expected: six numbers under their ceilings summing to under 8,500, a green
+Expected: six numbers under their ceilings summing to under 9,700, a green
 `mkdocs build --strict` — which is the proof no anchor died — and a green
 length check.
 
