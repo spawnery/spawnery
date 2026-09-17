@@ -247,3 +247,133 @@
   src: url("../fonts/ibm-plex-sans-latin-ext-600-normal.woff2") format("woff2");
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
+
+/* ── surfaces and type ── */
+
+body {
+  background: var(--zen-crust);
+}
+
+.md-container,
+.md-main {
+  background: transparent;
+}
+
+.md-main__inner {
+  background: var(--zen-base);
+  border-radius: 16px;
+  box-shadow: var(--zen-shadow);
+  margin-block: 1.2rem;
+}
+
+.md-header,
+.md-tabs,
+.md-nav,
+.md-footer,
+.md-search__form,
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-typeset .admonition-title,
+.md-typeset summary,
+.md-typeset table:not([class]) th {
+  font-family: var(--md-code-font-family);
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  color: var(--zen-text);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+}
+
+.md-typeset > p,
+.md-typeset > ul,
+.md-typeset > ol,
+.md-typeset > blockquote {
+  max-width: 70ch;
+}
+
+/* Inline rather than flex: a flex heading drops the spaces around inline code,
+   which 53 headings here contain. The rule is 100vw wide with an equal
+   negative margin, so it takes no room on the line and is clipped at the
+   heading's edge. */
+.md-typeset h2 {
+  overflow: hidden;
+}
+.md-typeset h2::before {
+  content: "──";
+  color: var(--zen-accent);
+  font-weight: 400;
+  margin-right: 0.6rem;
+}
+.md-typeset h2::after {
+  content: "";
+  display: inline-block;
+  vertical-align: middle;
+  width: 100vw;
+  height: 2px;
+  margin-left: 0.6rem;
+  margin-right: -100vw;
+  background: repeating-linear-gradient(90deg, var(--zen-surface0) 0 14px, transparent 14px 22px);
+}
+
+.md-typeset code {
+  border-radius: 6px;
+}
+.md-typeset pre > code,
+.md-typeset .highlight {
+  border-radius: 10px;
+}
+
+.md-typeset table:not([class]) {
+  border: 0;
+  border-radius: 10px;
+  box-shadow: none;
+  overflow: hidden;
+}
+.md-typeset table:not([class]) th {
+  background: var(--zen-mantle);
+  color: var(--zen-text);
+}
+
+.md-typeset .admonition,
+.md-typeset details {
+  --zen-adm: var(--zen-accent-text);
+  border: 0;
+  border-radius: 10px;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--zen-adm) 6%, var(--zen-base));
+}
+.md-typeset .tip, .md-typeset .hint, .md-typeset .success, .md-typeset .check, .md-typeset .done {
+  --zen-adm: var(--zen-green);
+}
+.md-typeset .warning, .md-typeset .caution, .md-typeset .attention {
+  --zen-adm: var(--zen-yellow);
+}
+.md-typeset .danger, .md-typeset .error, .md-typeset .failure, .md-typeset .fail, .md-typeset .missing, .md-typeset .bug {
+  --zen-adm: var(--zen-red);
+}
+.md-typeset .admonition > .admonition-title,
+.md-typeset details > summary {
+  background: transparent;
+  color: var(--zen-adm);
+  border: 0;
+}
+.md-typeset .admonition > .admonition-title::before,
+.md-typeset details > summary::before {
+  background-color: var(--zen-adm);
+}
+
+.md-nav__link--active,
+.md-nav__link:hover {
+  color: var(--zen-accent-text);
+}
+
+.md-footer {
+  border-radius: 0;
+}
