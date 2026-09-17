@@ -80,6 +80,8 @@ nav:
       - What a plugin can do: plugin-api/what-a-plugin-can-do.md
       - Javadoc: plugin-api/javadoc/index.html
   - Explanation:
+      - Why game pods never read the Kubernetes API: explanation/architecture.md
+      - What a compromised game server can do: explanation/agent-trust.md
       - Network boundaries: explanation/network-boundaries.md
   - Contributing:
       - Development: contributing/development.md
