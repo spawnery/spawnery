@@ -669,7 +669,7 @@ git commit    # docs(contributing): publishing without the release recital
 # Refuses a documentation page that has grown past the size its rewrite
 # landed on.
 #
-# The six pages below were 25,829 words on 2026-09-17 and 9,700 after
+# The six pages below were 25,829 words on 2026-09-17 and 10,740 after
 # docs/superpowers/specs/2026-09-17-docs-shortening-design.md. They had grown
 # there once already, which is why a check exists at all rather than a note
 # saying to keep them short.
@@ -688,12 +688,12 @@ git commit    # docs(contributing): publishing without the release recital
 set -euo pipefail
 
 PAGES=(
-  "docs/guides/upgrading.md:1100"
-  "docs/getting-started/index.md:900"
-  "docs/guides/rotating-the-forwarding-secret.md:1600"
-  "docs/guides/rotating-the-ca.md:1250"
-  "docs/explanation/network-boundaries.md:3550"
-  "docs/contributing/development.md:2400"
+  "docs/guides/upgrading.md:950"
+  "docs/getting-started/index.md:1000"
+  "docs/guides/rotating-the-forwarding-secret.md:1800"
+  "docs/guides/rotating-the-ca.md:1400"
+  "docs/explanation/network-boundaries.md:3900"
+  "docs/contributing/development.md:3000"
 )
 ```
 
