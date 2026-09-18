@@ -382,6 +382,11 @@
   "net/java#jvnet-parent/3": {
    "pom": "sha256-MPV4nvo53b+WCVqto/wSYMRWH68vcUaGcXyy3FBJR1o="
   },
+  "net/luckperms#api/5.5": {
+   "jar": "sha256-zZEPk2rcTe53BftRzClAH95PKaum7nOmR1o6BRX2KU8=",
+   "module": "sha256-Ykzd1lJK95eBPRJmJuwAiDO6sB1ZQjNAydKN7J7Oq6k=",
+   "pom": "sha256-awlMqQMk4z/NFbjyTrRr+MwSwsyKx8/E/Qqg42vY4ZU="
+  },
   "org/apiguardian#apiguardian-api/1.1.2": {
    "jar": "sha256-tQlEisUG1gcxnxglN/CzXXEAdYLsdBgyofER5bW3Czg=",
    "module": "sha256-4IAoExN1s1fR0oc06aT7QhbahLJAZByz7358fWKCI/w=",

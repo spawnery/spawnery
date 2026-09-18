@@ -4,7 +4,9 @@ import cloud.spawnery.agent.api.ProxySelf
 import cloud.spawnery.agent.api.ServerSelf
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 
 private fun backend(
     pod: String = "lobby-7f3a",
@@ -73,5 +75,21 @@ class LuckPermsContextsTest {
         )
 
         assertEquals(mapOf("server" to "lobby-7f3a", "environment" to "paper"), contexts)
+    }
+
+    @Test
+    fun `a pod without LuckPerms is silence and not a crash`() {
+        // The precondition is asserted rather than assumed: this test proves
+        // the absent path only while LuckPerms is off the test classpath, and
+        // adding it as a test dependency would otherwise turn this green for
+        // the opposite reason.
+        assertFailsWith<ClassNotFoundException> {
+            Class.forName("net.luckperms.api.LuckPermsProvider")
+        }
+        val said = mutableListOf<String>()
+
+        LuckPermsContexts.registerIfPresent(backend(), said::add)
+
+        assertTrue(said.isEmpty(), "it spoke without LuckPerms: $said")
     }
 }
