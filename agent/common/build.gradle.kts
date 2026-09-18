@@ -98,6 +98,11 @@ dependencies {
     // agent must not meet it. See OperatorChannel.
     implementation("io.grpc:grpc-okhttp:1.83.1")
 
+    // compileOnly and deliberately not on the test classpath: the plugin is
+    // optional at runtime, and a test that calls registerIfPresent with no
+    // LuckPerms to find is the only thing that proves the guard.
+    compileOnly("net.luckperms:api:5.5")
+
     testImplementation(kotlin("test"))
     // The BOM, not just the aggregate artifact: junit-jupiter alone does not
     // constrain junit-platform-launcher, and Gradle refuses a dependency with

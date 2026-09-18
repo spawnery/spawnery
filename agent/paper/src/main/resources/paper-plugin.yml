@@ -4,3 +4,8 @@ main: cloud.spawnery.agent.paper.AgentPlugin
 api-version: '26.2'
 authors: [paulwtf]
 description: Reports readiness and player counts to the Spawnery operator.
+dependencies:
+  server:
+    LuckPerms:
+      load: BEFORE
+      required: false

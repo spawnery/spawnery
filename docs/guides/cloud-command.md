@@ -49,6 +49,34 @@ somebody granted only `spawnery.cloud.retire`, and hide it in the worst
 possible way. The branches still gate themselves, so this widens what is
 visible and nothing else.
 
+## Where a permission applies
+
+Every Spawnery pod tells LuckPerms what it is, so a rule can name a place:
+
+| Context | Value |
+|---|---|
+| `group` | the `ServerGroup` or `ProxyGroup` |
+| `network` | the `Network` |
+| `environment` | `paper` on a backend, `velocity` on a proxy |
+| `server` | the pod's own name |
+
+So the moderators above can be given the reading half on the lobbies alone:
+
+```text
+/lp group moderator permission set spawnery.cloud.read true group=lobby
+```
+
+`group` is the one to reach for — and the `group=` at the end of that line is
+the Spawnery group, not the LuckPerms group the command names first. `server`
+is a pod name and changes every time a server is replaced, so it says where a
+player is rather than granting anything. A pod fills it in only when LuckPerms
+reported no server name of its own as the server started; set one in LuckPerms'
+config afterwards and the servers have to restart before they stop filling it
+in.
+
+Nothing has to be switched on. The contexts appear when LuckPerms is installed
+and nothing happens when it is not.
+
 ## What each branch does
 
 **`/cloud list` and `/cloud info <name>`** are lookups in the agent's local
