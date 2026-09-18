@@ -126,13 +126,13 @@ costs a warning; a drain that stops working costs a node's worth of players.
 kubectl logs -n spawnery-system deployment/spawnery-operator | grep drain-taint
 ```
 
-## This page and `upgrading.md`
+## This page and the other two
 
-[Upgrading](upgrading.md) is about moving between releases: which version
-changed what, and what each one costs an installation. This page is about the
-mechanism underneath — what makes any group roll, and what a roll does to
-players. If you are asking "what does 0.2.33 do to me", that is the other
-page.
+This page is about what *your own* edit rolls, and what that costs the people
+standing on the servers. [Upgrading](upgrading.md) is the other direction:
+what a *release* rolls when nobody has edited anything, because the operator's
+rendering code moved underneath every group. If you are asking "what did
+0.2.33 do to me", that is [Release notes](../archive/release-notes.md).
 
 Every field named here is in the generated [custom resource
 reference](../reference/crds.md#servergroup), and `--drain-taint` is in

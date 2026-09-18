@@ -9,9 +9,10 @@ rule.
 
 Things that are not open problems live elsewhere, and on 2026-08-27 four of
 them moved out of this file to where they belong.
-[`upgrading.md`](../guides/upgrading.md) carries what strands an object or rolls a fleet
-when an installation crosses a release — real work for whoever is upgrading
-one, and nothing at all for anyone else.
+[`upgrading.md`](../guides/upgrading.md) carries what rolls a fleet when an installation
+crosses a release, and [`release-notes.md`](../archive/release-notes.md) carries what
+strands an object — real work for whoever is upgrading one, and nothing at all
+for anyone else.
 [`ca-rotation.md`](../guides/rotating-the-ca.md) carries the CA rotation procedure, which is
 a thing a human drives rather than a thing that is wrong — including that
 nothing schedules one, which is a decision and not an omission, and where the
@@ -24,9 +25,10 @@ takes to say so.
 `NetworkPolicy` objects buy and what they do not, and what bounds the number of
 agents that may reach the operator — measured scope rather than a list of
 faults.
-[`charts/spawnery/README.md`](../getting-started/index.md) carries the manual
-grant a chart cannot make for a namespace that does not exist yet, and why the
-digest checked in at any tag describes the release before it.
+[Installing the operator](../getting-started/index.md) carries the manual grant
+a chart cannot make for a namespace that does not exist yet, and [Chart
+values](chart-values.md) why the digest checked in at any tag describes the
+release before it.
 
 **Two of the things this file used to carry were facts about one cluster rather
 than about this code, and they now live where that cluster is described** — the

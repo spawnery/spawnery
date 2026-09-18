@@ -149,7 +149,7 @@ do not shortcut each other.
 
 This gate arrived in 0.2.33. A group that set `spec.scheduling` before that
 version and kept working can stop being accepted on upgrade, if its Network
-never gained a matching policy. [Upgrading](upgrading.md#0233-a-groups-scheduling-needs-the-networks-permission)
+never gained a matching policy. [Release notes](../archive/release-notes.md#0233-a-groups-scheduling-needs-the-networks-permission)
 carries what that upgrade costs and what to do about it; this page is about
 the model itself.
 

@@ -101,6 +101,7 @@ nav:
       - Development: contributing/development.md
   - Archive:
       - What this is: archive/index.md
+      - Release notes: archive/release-notes.md
       - How it was built: archive/history.md
       - Handovers:
           - 6e: archive/handovers/handover-milestone-6e.md
