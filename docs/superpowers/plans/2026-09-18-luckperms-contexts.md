@@ -605,7 +605,7 @@ it. Place it where the reading flows; the text below is what it says.
 
 - [ ] **Step 2: Write the section**
 
-```markdown
+````markdown
 ## Where a permission applies
 
 Every Spawnery pod tells LuckPerms what it is, so a rule can name a place:
@@ -630,7 +630,7 @@ server is replaced, so it says where a player is rather than granting anything
 
 Nothing has to be switched on. The contexts appear when LuckPerms is installed
 and nothing happens when it is not.
-```
+````
 
 - [ ] **Step 3: Check the page against the documentation guards**
 
