@@ -65,13 +65,16 @@ object LuckPermsContexts {
     /**
      * Registers this pod's contexts with LuckPerms, if there is a LuckPerms.
      *
-     * Probed rather than caught. Without the plugin the class below cannot
-     * resolve, and the NoClassDefFoundError would leave `onEnable` through
-     * Paper's plugin manager, which disables the agent -- so a server with no
-     * permission plugin would lose the cloud over a permission feature.
+     * Probed rather than caught for the absent case: without the plugin the
+     * class below cannot resolve, and the NoClassDefFoundError would leave
+     * `onEnable` through Paper's plugin manager, which disables the agent --
+     * so a server with no permission plugin would lose the cloud over a
+     * permission feature. A present LuckPerms is handed to [registerSurviving]
+     * for the case where it is there but not usable.
      *
-     * @param log where to say what was registered. Nothing is said when there
-     *   is no LuckPerms, which is the ordinary case.
+     * @param log where to say what was registered, or that registration
+     *   failed. Nothing is said when there is no LuckPerms, which is the
+     *   ordinary case.
      */
     fun registerIfPresent(self: Self, log: (String) -> Unit) {
         try {
@@ -79,7 +82,23 @@ object LuckPermsContexts {
         } catch (_: ClassNotFoundException) {
             return
         }
-        register(self, log)
+        registerSurviving(log) { register(self, log) }
+    }
+
+    /**
+     * [LuckPermsProvider.get] throws `LuckPermsProvider.NotLoadedException`,
+     * an [IllegalStateException], whenever the LuckPerms jar is present but
+     * its own enable has not finished or has since failed -- for instance a
+     * database that is not up yet on a cold namespace start. The agent's
+     * gRPC session must outlive that, so whatever [registration] throws is
+     * reported through [log] instead of propagating.
+     */
+    internal fun registerSurviving(log: (String) -> Unit, registration: () -> Unit) {
+        try {
+            registration()
+        } catch (e: Throwable) {
+            log("spawnery LuckPerms contexts: registration failed, continuing without them: $e")
+        }
     }
 
     private fun register(self: Self, log: (String) -> Unit) {

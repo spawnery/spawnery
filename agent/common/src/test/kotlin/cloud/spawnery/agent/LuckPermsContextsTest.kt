@@ -2,6 +2,7 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.ProxySelf
 import cloud.spawnery.agent.api.ServerSelf
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -91,5 +92,37 @@ class LuckPermsContextsTest {
         LuckPermsContexts.registerIfPresent(backend(), said::add)
 
         assertTrue(said.isEmpty(), "it spoke without LuckPerms: $said")
+    }
+
+    @Test
+    fun `a registration that throws is reported through log, not left to propagate`() {
+        val said = mutableListOf<String>()
+        val failure = IllegalStateException("LuckPerms API is not loaded.")
+
+        LuckPermsContexts.registerSurviving(said::add) { throw failure }
+
+        assertEquals(1, said.size, "expected exactly one message, got: $said")
+        assertTrue(
+            said.single().contains(failure.message!!),
+            "the reported message does not mention the failure: ${said.single()}",
+        )
+    }
+
+    @Test
+    fun `the probed class name matches an import`() {
+        val source = File("src/main/kotlin/cloud/spawnery/agent/LuckPermsContexts.kt").readText()
+
+        val probed = Regex("""Class\.forName\("([^"]+)"\)""").find(source)?.groupValues?.get(1)
+        assertTrue(probed != null, "no Class.forName(\"...\") literal found in $source")
+
+        val imports = Regex("""^import (net\.luckperms\.\S+)$""", RegexOption.MULTILINE)
+            .findAll(source)
+            .map { it.groupValues[1] }
+            .toList()
+
+        assertTrue(
+            probed in imports,
+            "Class.forName probes \"$probed\", which none of these imports name: $imports",
+        )
     }
 }
