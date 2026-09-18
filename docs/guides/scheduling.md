@@ -38,7 +38,7 @@ spec:
   networkRef:
     name: production
   type: Ephemeral
-  image: ghcr.io/spawnery/purpur:26.2-0.2.34
+  image: ghcr.io/spawnery/purpur:26.2-0.3.0
   maxPlayers: 50
   scaling:
     minReplicas: 1

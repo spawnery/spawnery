@@ -303,7 +303,15 @@
           # host's. The published API is identical to 0.2.30's and is
           # republished under this number for the reason the 0.2.21
           # paragraph gives.
-          imageVersion = "0.2.34";
+          #
+          # 0.3.0 moves it because the agents changed: every pod now registers
+          # a LuckPerms context calculator reporting its own name, group,
+          # network and platform, so a permission rule can name a place. A
+          # minor step and not a patch -- a pod behaves differently where it
+          # did nothing before. The published API is identical to 0.2.34's and
+          # is republished under this number for the reason the 0.2.21
+          # paragraph gives.
+          imageVersion = "0.3.0";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
