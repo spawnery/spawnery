@@ -252,10 +252,13 @@ git add agent/common/src/main/kotlin/cloud/spawnery/agent/LuckPermsContexts.kt \
 git commit -F - <<'EOF'
 feat(agent): the contexts a pod reports about itself
 
-Four keys, built from the Self the agent already holds rather than from a
+Four keys, built from the Self the agent already holds rather than
+from a
 second reading of the pod's environment: server, group, network and the
-platform. The server key is LuckPerms' own, so it is filled in only while
-LuckPerms still reports the unconfigured name -- an administrator who set
+platform. The server key is LuckPerms' own, so it is filled in only
+while
+LuckPerms still reports the unconfigured name -- an administrator who
+set
 one would otherwise find two values under it and both rules matching.
 
 A pure function, deliberately: it names no LuckPerms type, so the part
@@ -442,13 +445,16 @@ git commit -F - <<'EOF'
 feat(agent): hand the contexts to LuckPerms when there is a LuckPerms
 
 A StaticContextCalculator over the map from the previous commit, and a
-class probe in front of it. The probe is the substance: without LuckPerms
-the API cannot resolve, and the NoClassDefFoundError would leave onEnable
+class probe in front of it. The probe is the substance: without
+LuckPerms
+the API cannot resolve, and the NoClassDefFoundError would leave
+onEnable
 through Paper's plugin manager and disable the agent -- a server with no
 permission plugin would lose the cloud over a permission feature.
 
 The API is compileOnly, so nothing of it is bundled and
-hack/agent-jar-check.sh stays green. It is kept off the test classpath on
+hack/agent-jar-check.sh stays green. It is kept off the test classpath
+on
 purpose: the new test calls the registration with no LuckPerms to find,
 which is the only thing that can prove the probe.
 
@@ -651,8 +657,10 @@ git add docs/guides/cloud-command.md
 git commit -F - <<'EOF'
 docs(guides): where a permission applies
 
-The page already meets LuckPerms -- it is where the /lp line granting the
-read node lives -- so the contexts belong beside it rather than on a page
+The page already meets LuckPerms -- it is where the /lp line granting
+the
+read node lives -- so the contexts belong beside it rather than on a
+page
 of their own.
 
 It says to reach for group and not for server, because the second is a
