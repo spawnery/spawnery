@@ -66,10 +66,13 @@ So the moderators above can be given the reading half on the lobbies alone:
 /lp group moderator permission set spawnery.cloud.read true group=lobby
 ```
 
-`group` is the one to reach for. `server` is a pod name and changes every time a
-server is replaced, so it says where a player is rather than granting anything
-— and it is filled in only while LuckPerms' own config still says
-`server: global`.
+`group` is the one to reach for — and the `group=` at the end of that line is
+the Spawnery group, not the LuckPerms group the command names first. `server`
+is a pod name and changes every time a server is replaced, so it says where a
+player is rather than granting anything. A pod fills it in only when LuckPerms
+reported no server name of its own as the server started; set one in LuckPerms'
+config afterwards and the servers have to restart before they stop filling it
+in.
 
 Nothing has to be switched on. The contexts appear when LuckPerms is installed
 and nothing happens when it is not.
