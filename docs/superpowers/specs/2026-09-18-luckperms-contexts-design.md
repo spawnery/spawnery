@@ -96,17 +96,35 @@ version to move — for about sixty lines.
 
 The split is the one the rest of the agent uses:
 
-- **`agent/common`** gets the key building as a pure function: environment
-  lookup, platform, and LuckPerms' configured server name in, pairs out. It
+- **`agent/common`** gets the key building as a pure function: the `Self` the
+  agent already built and LuckPerms' configured server name in, pairs out. It
   names no LuckPerms type and needs no server to test.
-- **`agent/paper` and `agent/velocity`** each get one thin class that
-  implements `StaticContextCalculator` over that function and registers it.
+
+  It takes `Self` rather than reading the environment a second time, which also
+  settles `environment`: `Self` is sealed on exactly `ServerSelf` and
+  `ProxySelf`, so the value is derived from which shape this is and cannot
+  disagree with the side it is running on.
+- **`agent/common`** also gets the calculator and the registration, and this is
+  the one place the design differs from CloudNet's. Nothing about either is
+  per-platform — the calculator names only LuckPerms types, and
+  `LuckPermsProvider.get().getContextManager().registerCalculator(…)` is the
+  same call on both sides. Two copies of it would be two copies that can drift.
+- **`agent/paper` and `agent/velocity`** each get one call and one descriptor
+  entry. No new class on either side.
 
 Registration happens in the `Environment.Configured` branch of `onEnable`,
 where the API is installed today. That gives one property for free: **a dormant
 agent registers nothing.** A pod that is not a Spawnery pod has no endpoint,
 takes the `Dormant` branch, and never reaches the registration — no separate
 check, and no chance of the two disagreeing.
+
+**A class probe in front of the registration, and it is not belt-and-braces.**
+Without LuckPerms the API cannot resolve, and the resulting
+`NoClassDefFoundError` would leave `onEnable` through Paper's plugin manager,
+which disables the plugin that threw it. A server running no permission plugin
+would lose its cloud connection over a permission feature it never asked for.
+The probe is also what the unit tests can reach: the API is kept off the test
+classpath, so a test that calls the registration exercises exactly that path.
 
 **The descriptors carry the optionality, not the code.** `paper-plugin.yml`
 gains `dependencies.server.LuckPerms` with `required: false` and
@@ -131,10 +149,9 @@ does not run LuckPerms sees no difference.
 - **`net.luckperms:api` is `compileOnly`**, so it is not bundled and
   `hack/agent-jar-check.sh` — which fails on any class outside
   `cloud/spawnery/agent/` — stays green.
-- **`agent/deps.json` has to be regenerated.** Both plugin subprojects take
-  their platform API from a local jar today (`paperLibraries`, `velocityJar`),
-  so this is their first Maven dependency. `make agent-deps` reaches Maven
-  Central, is part of no other target, and CI diffs the result.
+- **`agent/deps.json` has to be regenerated.** It is the Maven lockfile the Nix
+  build reads, and `make agent-deps` is the only thing that writes it: it
+  reaches Maven Central, is part of no other target, and CI diffs the result.
 - **`imageVersion` in `flake.nix` moves**, `operatorVersion` does not. The
   chart's `image.tag` follows, so `make manifests` runs and its diff on
   `docs/reference/chart-values.md` is committed with the bump.
