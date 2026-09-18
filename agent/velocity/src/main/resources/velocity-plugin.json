@@ -4,6 +4,11 @@
   "version": "${version}",
   "description": "Connects this proxy to the Spawnery operator",
   "authors": ["paulwtf"],
-  "dependencies": [],
+  "dependencies": [
+    {
+      "id": "luckperms",
+      "optional": true
+    }
+  ],
   "main": "cloud.spawnery.agent.velocity.AgentPlugin"
 }

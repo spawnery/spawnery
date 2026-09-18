@@ -13,6 +13,7 @@ import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.Environment
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.FeedState
+import cloud.spawnery.agent.LuckPermsContexts
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
@@ -136,6 +137,10 @@ class AgentPlugin : JavaPlugin(), Listener {
                 logger.info(
                     "spawnery API installed for network ${self.network()} group ${self.group()}",
                 )
+                // In this branch and not beside it: a dormant agent is a pod
+                // that is not ours, and it should not be labelling anybody's
+                // permissions.
+                LuckPermsContexts.registerIfPresent(self, logger::info)
 
                 scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
                     Thread(runnable, "spawnery-agent").apply { isDaemon = true }

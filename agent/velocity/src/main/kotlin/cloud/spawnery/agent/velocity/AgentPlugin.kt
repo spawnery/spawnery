@@ -5,6 +5,7 @@ import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.FeedState
+import cloud.spawnery.agent.LuckPermsContexts
 import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
@@ -256,6 +257,7 @@ class AgentPlugin @Inject constructor(
         // holdReadiness refuses here rather than pretending. See ProxyState.
         val api = MirrorApi(mirror, self, connector, events)
         Spawnery.install(api)
+        LuckPermsContexts.registerIfPresent(self, logger::info)
         // Velocity takes the node whenever, so this sits next to the install
         // rather than in an event handler -- the one shape difference from the
         // Paper agent, and it is Velocity's, not ours. The meta is built the
