@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	ctrlreconcile "sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -1862,11 +1863,44 @@ func TestAPersistentServerGetsItsClaimBeforeItsPod(t *testing.T) {
 // deletion timestamp, which is the last step of a termination and the one step
 // envtest cannot take on its own: with no kubelet, a pod that was bound to a
 // node keeps its timestamp and answers Get for the rest of the test. A force
-// delete does what the kubelet's confirmation would.
+// delete does what the kubelet's confirmation would, once holdPodOnDelete's
+// finalizer is gone.
 func (f *fixture) retirePodTheWayAKubeletWould(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
-	if err := f.c.Delete(f.ctx, pod, client.GracePeriodSeconds(0)); err != nil {
+	current := &corev1.Pod{}
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(pod), current); err != nil {
+		t.Fatalf("get pod %s: %v", pod.Name, err)
+	}
+	if controllerutil.RemoveFinalizer(current, testPodHold) {
+		if err := f.c.Update(f.ctx, current); err != nil {
+			t.Fatalf("release pod %s: %v", pod.Name, err)
+		}
+	}
+	if err := f.c.Delete(f.ctx, pod, client.GracePeriodSeconds(0)); err != nil && !apierrors.IsNotFound(err) {
 		t.Fatalf("force delete pod %s: %v", pod.Name, err)
+	}
+}
+
+const testPodHold = "spawnery.cloud/test-hold"
+
+// holdPodOnDelete keeps a pod in the API server once it is deleted, the way a
+// bound pod waits for a kubelet that never answers.
+//
+// Binding alone does not guarantee that. Under load the API server has been
+// seen to decide a delete's grace period on the pod as it was before the
+// binding, pick 0 for an unscheduled pod, and remove it outright; the audit
+// log showed a DeleteOptions without gracePeriodSeconds answered with
+// deletionGracePeriodSeconds 0 on a pod bound a millisecond earlier, about
+// once in 2,700 runs with 16 to 24 test binaries in parallel.
+func (f *fixture) holdPodOnDelete(t *testing.T, pod *corev1.Pod) {
+	t.Helper()
+	current := &corev1.Pod{}
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(pod), current); err != nil {
+		t.Fatalf("get pod %s: %v", pod.Name, err)
+	}
+	controllerutil.AddFinalizer(current, testPodHold)
+	if err := f.c.Update(f.ctx, current); err != nil {
+		t.Fatalf("hold pod %s: %v", pod.Name, err)
 	}
 }
 
@@ -1878,12 +1912,13 @@ func (f *fixture) retirePodTheWayAKubeletWould(t *testing.T, pod *corev1.Pod) {
 // ordinal and reused across every generation of the Server object, so the
 // group's replacement meets its predecessor's pod under the identical name.
 //
-// The pod is bound to a node before it is deleted, and that step is the
-// mechanism rather than scenery: the API server force-deletes an *unscheduled*
-// pod outright, because no kubelet owes it a confirmation. Once a pod is bound
-// it waits for one, and envtest runs no kubelet to send it — so the deleted pod
-// keeps its deletion timestamp for the rest of the test, which is what a node
-// gone NotReady looks like on a real cluster.
+// The pod is bound to a node before it is deleted: the API server
+// force-deletes an *unscheduled* pod outright, because no kubelet owes it a
+// confirmation. Once a pod is bound it waits for one, and envtest runs no
+// kubelet to send it — so the deleted pod keeps its deletion timestamp for the
+// rest of the test, which is what a node gone NotReady looks like on a real
+// cluster. holdPodOnDelete makes that hold every time rather than almost
+// every time.
 //
 // It returns the terminating pod so a test can finish the termination.
 func recreateOrdinalOverATerminatingPod(t *testing.T, f *fixture) *corev1.Pod {
@@ -1897,6 +1932,7 @@ func recreateOrdinalOverATerminatingPod(t *testing.T, f *fixture) *corev1.Pod {
 		t.Fatal("no pod for the first server, so there is no name for the second one to collide with")
 	}
 	f.bindPodToNode(t, pod, f.ensureNode(t, "node-holding-"+f.ns, false).Name)
+	f.holdPodOnDelete(t, pod)
 	if err := f.c.Delete(f.ctx, pod); err != nil {
 		t.Fatalf("delete pod: %v", err)
 	}

@@ -46,6 +46,46 @@ printf 'eula=true\n' >eula.txt
 # it below.
 spawnery-config --flavor paper
 
+# A read-only spec.mounts entry under /data is a writer the scans below cannot
+# see: a copy onto it dies with a bare "Read-only file system". mountinfo writes
+# a space in a path as \040, which printf %b turns back.
+MOUNTINFO="${SPAWNERY_MOUNTINFO:-/proc/self/mountinfo}"
+readonly_mounts_below_here() {
+	[ -r "$MOUNTINFO" ] || return 0
+	here=$(pwd -P)
+	while read -r _ _ _ _ point options _; do
+		case "$options" in
+		ro | ro,*) ;;
+		*) continue ;;
+		esac
+		point=$(printf '%b' "$point")
+		case "$point" in
+		"$here"/*) printf '%s\n' "${point#"$here"/}" ;;
+		esac
+	done <"$MOUNTINFO"
+}
+
+# refuse_mounted SOURCE DEST FIELD refuses the start when SOURCE carries a path
+# that a read-only mount already holds under DEST.
+refuse_mounted() {
+	readonly_mounts_below_here | while IFS= read -r mounted; do
+		case "$2" in
+		.) carried=$mounted ;;
+		*)
+			case "$mounted" in
+			"$2"/*) carried=${mounted#"$2"/} ;;
+			*) continue ;;
+			esac
+			;;
+		esac
+		if [ -e "$1/$carried" ] || [ -L "$1/$carried" ]; then
+			echo "spawnery: spec.$3 carries $carried, and a spec.mounts entry holds $(pwd -P)/$mounted read-only." >&2
+			echo "spawnery: point the mount and the claim at different paths. Refusing to start." >&2
+			exit 1
+		fi
+	done
+}
+
 # Files an administrator put on a volume, copied into the working directory.
 #
 # **The scan runs before the copy, and that is the whole safety property.**
@@ -87,6 +127,8 @@ if [ -d "$FILE_SOURCE" ]; then
 			exit 1
 		fi
 	done
+
+	refuse_mounted "$FILE_SOURCE" . extraFiles || exit 1
 
 	for entry in "$FILE_SOURCE"/* "$FILE_SOURCE"/.[!.]*; do
 		[ -e "$entry" ] || continue
@@ -141,6 +183,7 @@ fi
 # with every object in the cluster saying the right thing.
 PLUGIN_SOURCE="${SPAWNERY_PLUGIN_SOURCE:-/var/run/spawnery/plugins}"
 if [ -d "$PLUGIN_SOURCE" ]; then
+	refuse_mounted "$PLUGIN_SOURCE" plugins extraPlugins || exit 1
 	mkdir -p plugins
 	# cp -R and not cp -a, and lost+found skipped by name. Both were measured
 	# on a live Longhorn claim on 2026-08-29, and either one alone kills the
@@ -182,9 +225,8 @@ fi
 # run - so pointing --plugins at a read-only directory takes Paper's own
 # bundled plugins down with it.
 #
-# A read-only mount at /data/plugins therefore breaks the start here, with a
-# bare cp error. Mounts below /data are allowed by internal/podspec, so this is
-# reachable; see docs/reference/known-issues.md.
+# A read-only mount at /data/plugins would break the copy, which is why
+# internal/podspec refuses one.
 if [ -f "$PAPER_HOME/agent/spawnery-agent.jar" ]; then
 	mkdir -p plugins
 	cp -f "$PAPER_HOME/agent/spawnery-agent.jar" plugins/spawnery-agent.jar

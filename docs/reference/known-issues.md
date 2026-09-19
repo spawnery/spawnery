@@ -49,44 +49,6 @@ The design decisions live in
 `superpowers/specs/2026-08-10-velocity-image-design.md` and in
 `superpowers/specs/2026-08-11-velocity-agent-design.md`.
 
-## A `spec.mounts` entry under `/data` is a fourth writer into it
-
-`extraFiles` reasons about three things writing into a server's working
-directory on a start — the renderer, the `extraFiles` copy and the
-`extraPlugins` copy — and makes their paths disjoint by refusing a claim that
-carries a path one of the others owns. A claim-backed or `ConfigMap`-backed
-`spec.mounts` entry nested under `/data` is a fourth, and no scan knows about
-it.
-
-A group with a `ConfigMap` mounted at `/data/mods` and an `extraFiles` claim
-carrying a top-level `mods/` dies on the copy, because every mount this
-operator renders is read-only:
-
-```
-cp: can't create 'mods/pack.jar': Read-only file system
-```
-
-Under `set -eu` that ends the start, and the message names neither the mount
-nor the claim.
-
-**Documented rather than fixed, because it mirrors an accepted risk this code
-already carries.** The `chmod` in `image/entrypoint.sh` narrows itself to the
-entries it just copied, rather than running `chmod -R u+w .`, for exactly this
-reason: a read-only mount somewhere else under `/data` would make the wider
-version die the same way — and since 0.2.34 it stops at filesystem boundaries
-(`find -xdev`), so a mount nested *inside* a copied directory no longer kills
-the start on the chmod either. What remains is the `cp` itself: the
-entrypoint cannot tell a read-only mount from a read-only file without probing
-every destination before copying, and the operator cannot know what a claim
-holds when it admits the group. What it could do is refuse a `spec.mounts`
-path under `/data` when the group also names `extraFiles` — which would refuse
-the many groups where the two do not overlap at all, to catch the few where
-they do.
-
-The remedy is the ordinary one: a mount and an `extraFiles` claim should not
-aim at the same directory. Found by reading the design against the collision
-check, not by a failure.
-
 ## `TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone` failed once and was never reproduced
 
 The test (`internal/controller/server_controller_test.go`) recreates an
@@ -99,6 +61,16 @@ One thing is ruled out rather than assumed: it is not cache lag.
 `internal/testenv`'s client is `client.New`, a direct client with no informer
 behind it, so the hypothesis anyone reaches for first with envtest cannot be
 the mechanism.
+
+Measured 2026-09-19 on paul-desktop, with 16 to 24 test binaries running the
+test in parallel beside full package runs: it did not recur in about 26,000
+runs. The same runs found a sibling failure in the fixture, about once in
+2,700: the API server decided the predecessor's delete on the pod as it was
+before its binding and removed it outright, shown by an audit log of the
+failing run. The fixture now holds the pod with a finalizer instead. If this
+entry's failure is the same stale read in the other direction, the
+controller reading the predecessor after the force delete, that would explain
+an empty `status.podName` with `PodNameTerminating`; it is not shown.
 
 The assertion prints what a second occurrence needs and the first did not
 have: the `Accepted` condition, every pod in the namespace with its deletion
