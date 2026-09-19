@@ -145,6 +145,16 @@ One thing is ruled out rather than assumed: it is not cache lag.
 behind it, so the hypothesis anyone reaches for first with envtest cannot be
 the mechanism.
 
+Measured 2026-09-19 on paul-desktop, with 16 to 24 test binaries running the
+test in parallel beside full package runs: it did not recur in about 26,000
+runs. The same runs found a sibling failure in the fixture, about once in
+2,700: the API server decided the predecessor's delete on the pod as it was
+before its binding and removed it outright, shown by an audit log of the
+failing run. The fixture now holds the pod with a finalizer instead. If this
+entry's failure is the same stale read in the other direction, the
+controller reading the predecessor after the force delete, that would explain
+an empty `status.podName` with `PodNameTerminating`; it is not shown.
+
 The assertion prints what a second occurrence needs and the first did not
 have: the `Accepted` condition, every pod in the namespace with its deletion
 timestamp and node, and whether the pod under the name is still the
