@@ -2567,7 +2567,7 @@ func TestGroupStillRetiresWhileItBacksOff(t *testing.T) {
 	// The failure has to be newer than lobby-current's readySince or it is
 	// not a failure since the last success and the streak never starts — see
 	// CountFailures and the identical comment on TestGroupStillSheds above.
-	// ofGeneration excludes the stale server from the count entirely, so only
+	// ofAttempt excludes the stale server from the count entirely, so only
 	// this watermark matters here.
 	f.clock.Advance(time.Second)
 	broken := "lobby-broken"
@@ -2584,10 +2584,10 @@ func TestGroupStillRetiresWhileItBacksOff(t *testing.T) {
 	}
 }
 
-// TestGenerationChangeClearsTheBackoff pins the way out. A spec change is the
-// operator's answer to whatever broke, so the streak it caused is over and the
-// next attempt is immediate.
-func TestGenerationChangeClearsTheBackoff(t *testing.T) {
+// TestAPodSpecChangeClearsTheBackoff pins the way out. A change to what the
+// servers start with is the operator's answer to whatever broke, so the streak
+// it caused is over and the next attempt is immediate.
+func TestAPodSpecChangeClearsTheBackoff(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.setMinReplicas(t, 1)
@@ -2606,8 +2606,10 @@ func TestGenerationChangeClearsTheBackoff(t *testing.T) {
 	if g.Status.ConsecutiveFailures != 0 {
 		t.Errorf("consecutiveFailures = %d after a spec change, want 0", g.Status.ConsecutiveFailures)
 	}
-	if g.Status.LastFailureAt != nil {
-		t.Error("lastFailureAt survived a spec change")
+	// Kept as the watermark: it is what stops the previous attempt's corpse
+	// being counted into the new streak.
+	if g.Status.LastFailureAt == nil {
+		t.Error("lastFailureAt was cleared by the reset")
 	}
 	// A cleared counter means no window, so the group builds at once rather
 	// than serving out the wait the old spec earned.
@@ -2687,16 +2689,11 @@ func TestGroupGivesUpAndSaysSo(t *testing.T) {
 	if c.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
 		t.Errorf("reason = %q, want CrashLoopBackoff rather than an all-clear", c.Reason)
 	}
-	// The message has to name the way out, and "change the group's spec" is
-	// not one. The group most likely to latch is the one whose spec.overlay
-	// ConfigMap was wrong, and correcting a ConfigMap moves no generation, so
-	// the reader who has already fixed the real fault is the reader this
-	// message leaves stuck. spec.attributes is the edit that clears the streak
-	// without replacing anything running, and it is not discoverable from the
+	// The message has to name the way out for a cause outside the group,
+	// which moves nothing the operator reads and is not discoverable from the
 	// field list.
-	if !strings.Contains(c.Message, "spec.attributes") {
-		t.Errorf("message = %q, want it to name spec.attributes as the edit that "+
-			"clears the streak without rolling the group", c.Message)
+	if !strings.Contains(c.Message, spawneryv1alpha1.AnnotationRetry) {
+		t.Errorf("message = %q, want it to name the %s annotation", c.Message, spawneryv1alpha1.AnnotationRetry)
 	}
 
 	// The terminal proof, stated as an absolute count rather than a delta.
@@ -2965,13 +2962,10 @@ func TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened(t *testing.T
 	}
 }
 
-// TestGenerationChangeClearsAGaveUpGroupsConditions closes out the carried
-// finding that the generation-change RemoveStatusCondition calls were
-// completely untested: until this task nothing ever set either condition, so
-// the removal had nothing to prove. Driving a real give-up first, then a real
-// spec change, is what makes this a test of the clear rather than of two
-// conditions that were already absent.
-func TestGenerationChangeClearsAGaveUpGroupsConditions(t *testing.T) {
+// TestAPodSpecChangeClearsAGaveUpGroupsConditions drives a real give-up
+// first, then a real pod spec change, which is what makes this a test of the
+// clear rather than of two conditions that were already absent.
+func TestAPodSpecChangeClearsAGaveUpGroupsConditions(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.setMinReplicas(t, 1)
@@ -2986,7 +2980,7 @@ func TestGenerationChangeClearsAGaveUpGroupsConditions(t *testing.T) {
 	f.reconcileGroup(t, r)
 
 	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
-		t.Fatalf("Degraded is not true after %d failures; the generation change below would prove nothing", backoffGiveUpAt)
+		t.Fatalf("Degraded is not true after %d failures; the pod spec change below would prove nothing", backoffGiveUpAt)
 	}
 
 	// The operator's answer to whatever failed.
@@ -3912,10 +3906,9 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 	}
 }
 
-// TestAPersistentGroupCountsAFailureAfterItsGenerationMoves pins why
-// ofGeneration is ephemeral-only. Built for the ephemeral count, where a
-// generation change really does replace the population, it is the wrong filter
-// for a persistent group: spec.groupGeneration is
+// TestAPersistentGroupCountsAFailureAfterItsGenerationMoves pins why the
+// count's filter is ephemeral-only. A generation filter would be the wrong
+// one for a persistent group: spec.groupGeneration is
 // stamped on a Server once at creation and never updated afterwards, so any
 // edit to a persistent group's spec moves group.Generation out from under
 // every ordinal it already has. Filtered by that, CountFailures would see an
@@ -3941,11 +3934,7 @@ func TestAPersistentGroupCountsAFailureAfterItsGenerationMoves(t *testing.T) {
 	if err := f.c.Update(f.ctx, group); err != nil {
 		t.Fatalf("update group: %v", err)
 	}
-	// Observes the new generation with no failure yet on either side of it,
-	// so the deliberate reset at a generation change (ConsecutiveFailures to
-	// 0 -- a real feature, not what this test is about) has already happened
-	// before the round below, and cannot be mistaken for what it is
-	// checking.
+	// Observes the new generation with no failure yet on either side of it.
 	f.reconcilePersistentGroup(t, r, "outpost")
 
 	f.failServerNeverReady(t, "outpost-0")
@@ -4264,10 +4253,10 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 	degraded := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
 	if degraded == nil || degraded.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
 		t.Fatalf("Degraded = %+v, want reason %s. The give-up outlives the Network problem "+
-			"and needs a spec edit; the Network's own trouble is on Accepted",
+			"and needs a retry; the Network's own trouble is on Accepted",
 			degraded, spawneryv1alpha1.ReasonCrashLoopBackoff)
 	}
-	if !strings.Contains(degraded.Message, "change the group's spec") {
+	if !strings.Contains(degraded.Message, spawneryv1alpha1.AnnotationRetry) {
 		t.Errorf("message = %q, want it to name the remedy the operator actually has to apply",
 			degraded.Message)
 	}

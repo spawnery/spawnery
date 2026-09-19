@@ -35,6 +35,12 @@ const (
 	ServerGroupPersistent ServerGroupType = "Persistent"
 )
 
+// AnnotationRetry on a ServerGroup resets its failure streak whenever its
+// value changes. It is the way to retry after fixing a cause outside the
+// group, such as a Secret or a registry, which moves nothing the operator
+// reads.
+const AnnotationRetry = "spawnery.cloud/retry"
+
 // ScalingSpec drives slot-based scaling of ephemeral groups.
 type ScalingSpec struct {
 	// MinReplicas is the number of servers kept running at all times.
@@ -388,6 +394,14 @@ type ServerGroupStatus struct {
 	// backoff window runs from.
 	// +optional
 	LastFailureAt *metav1.Time `json:"lastFailureAt,omitempty"`
+
+	// FailureStreakKey identifies what the servers counted in
+	// consecutiveFailures started with: the desired pod hash, the
+	// configOverlay ConfigMap's resourceVersion and the spawnery.cloud/retry
+	// annotation. The streak is reset when any of them moves, and by nothing
+	// else. Opaque; compare it, never parse it.
+	// +optional
+	FailureStreakKey string `json:"failureStreakKey,omitempty"`
 
 	// Conditions follow the standard Kubernetes condition contract.
 	// +optional

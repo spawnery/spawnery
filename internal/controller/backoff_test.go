@@ -370,19 +370,11 @@ func TestBackoffDelayIsCapped(t *testing.T) {
 	}
 }
 
-// TestAGenerationResetLeavesOneRoundNotOnePerCorpse pins how much of the reset
-// a persistent group actually gets.
-//
-// The reset in servergroup_controller.go zeroes the count whenever
-// metadata.generation moves, because a spec edit is the operator's answer to
-// whatever broke. For a persistent group the same pass then counts over the
-// *unfiltered* views — ofGeneration is ephemeral-only — so stale-generation
-// corpses still holding their ordinals are counted straight back in on the
-// same reconcile. It returns to one, because the corpses are one round however
-// many of them there are: the group does not pretend they are absent, since a
-// spec edit does not heal a broken ordinal, but it starts from one round of
-// penalty rather than from four.
-func TestAGenerationResetLeavesOneRoundNotOnePerCorpse(t *testing.T) {
+// TestCorpsesFirstSeenTogetherAreOneRound: a persistent group counts over
+// every ordinal, so a pass can meet several corpses no count has seen yet --
+// the first pass after an operator restart with an empty status, say. They
+// are one round however many of them there are.
+func TestCorpsesFirstSeenTogetherAreOneRound(t *testing.T) {
 	base := time.Now()
 	corpses := []ServerView{
 		failedAt("lobby-0", base),
@@ -391,13 +383,9 @@ func TestAGenerationResetLeavesOneRoundNotOnePerCorpse(t *testing.T) {
 		failedAt("lobby-3", base.Add(3*time.Second)),
 	}
 
-	// prev = 0 and since = zero: exactly what the generation reset leaves
-	// behind, a moment before the same pass counts.
 	got, _ := CountFailures(corpses, 0, time.Time{}, 4)
 	if got != 1 {
-		t.Errorf("count = %d immediately after a generation reset with four corpses held, "+
-			"want 1. They are one round however many of them there are; returning four "+
-			"spends most of the budget on servers the operator has just answered for", got)
+		t.Errorf("count = %d for four corpses first seen in one pass, want 1", got)
 	}
 }
 
