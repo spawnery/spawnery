@@ -311,7 +311,14 @@
           # did nothing before. The published API is identical to 0.2.34's and
           # is republished under this number for the reason the 0.2.21
           # paragraph gives.
-          imageVersion = "0.3.0";
+          #
+          # 0.4.0 moves it because the entrypoints changed: a claim that carries
+          # a path a read-only spec.mounts entry already holds under /data is
+          # refused at start with a message naming both, instead of dying on a
+          # bare cp. The published API is identical to 0.3.0's and is
+          # republished under this number for the reason the 0.2.21 paragraph
+          # gives.
+          imageVersion = "0.4.0";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -440,7 +447,14 @@
           # ProxyGroup, keeps the budget and a departing node ahead of the
           # ConfigMap and claim gates, and bounds every send in a session
           # loop. docs/guides/upgrading.md carries the two notes. No image moves.
-          operatorVersion = "0.2.33";
+          #
+          # 0.4.0 moves it with the chart and the images. A ServerGroup's
+          # failure streak is reset when what its servers start with moves --
+          # the pod hash, the configOverlay ConfigMap, the new
+          # spawnery.cloud/retry annotation -- and no longer by a capacity or
+          # attributes edit. One optional status field, failureStreakKey, is
+          # added to the CRD. The pod hash is untouched, so nothing rolls.
+          operatorVersion = "0.4.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

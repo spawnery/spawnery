@@ -48,7 +48,7 @@ kind create cluster --name spawnery-tutorial --config kind-config.yaml
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.3.0 \
+  --version 0.4.0 \
   --namespace spawnery-system --create-namespace
 ```
 
@@ -61,7 +61,7 @@ REVISION: 1
 DESCRIPTION: Install complete
 TEST SUITE: None
 NOTES:
-spawnery 0.2.33 installed as release spawnery in namespace spawnery-system.
+spawnery 0.4.0 installed as release spawnery in namespace spawnery-system.
 
   kubectl -n spawnery-system rollout status deployment/spawnery-operator
 
@@ -148,7 +148,7 @@ spec:
   networkRef:
     name: tutorial
   type: Ephemeral
-  image: ghcr.io/spawnery/purpur:26.2-0.3.0
+  image: ghcr.io/spawnery/purpur:26.2-0.4.0
   maxPlayers: 20
   scaling:
     minReplicas: 1
@@ -164,7 +164,7 @@ spec:
   networkRef:
     name: tutorial
   replicas: 1
-  image: ghcr.io/spawnery/velocity:3.5.1-0.3.0
+  image: ghcr.io/spawnery/velocity:3.5.1-0.4.0
   # Velocity does not need a backend's heap; overriding the Network's
   # defaults keeps the proxy off the 2Gi a Paper server needs.
   resources:
