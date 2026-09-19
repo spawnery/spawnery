@@ -137,9 +137,9 @@ as it stands rather than repeated from memory:
   roughly an hour later at the CRD default, not where it begins. The claim and
   the world on it are untouched throughout — nothing in this operator can
   delete a claim, and its one write grows a claim's size, per the RBAC point
-  above — and a spec change (any
-  edit that moves `metadata.generation`) resets the counter and brings the
-  ordinal back.
+  above. Fixing the storage changes nothing the servers start with, so it
+  does not reset the counter by itself: a new value on the group's
+  `spawnery.cloud/retry` annotation does, and brings the ordinal back.
 
 Stalling is the right outcome rather than a tolerated one. A persistent world
 lives on one claim and nothing else can serve it, so a rebuild only ever meets

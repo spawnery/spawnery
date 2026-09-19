@@ -158,8 +158,8 @@ type BackoffDecision struct {
 	// MayCreate is false while a window is open and false once the group has
 	// given up. Deletions, retirements and drains are never gated by it.
 	MayCreate bool
-	// GaveUp is true past the threshold. Nothing is created until the group's
-	// spec changes.
+	// GaveUp is true past the threshold. Nothing is created until what the
+	// servers start with changes (see attemptKey).
 	GaveUp bool
 	// RetryAfter is how long until the window closes, for the condition's
 	// message. Zero when MayCreate or GaveUp.

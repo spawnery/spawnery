@@ -315,82 +315,6 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// that is two facts -- networkUsable, settled above, and backoff.MayCreate,
 	// settled by DecideBackoff further down. See blockedReplacement.
 
-	// The counter and the two conditions belong to the spec that produced the
-	// failures. A generation change is the operator's answer to whatever broke,
-	// so the streak it caused is over and the next attempt is immediate.
-	//
-	// For a persistent group the reset is partly undone on the same pass, and
-	// that is worth knowing before reading the number. CountFailures counts
-	// over the unfiltered view list for a persistent group -- ofGeneration is
-	// ephemeral-only -- so a stale-generation Failed corpse still holding its
-	// ordinal is counted straight back in, and the count returns to 1 rather
-	// than to 0.
-	//
-	// One, however many corpses there are: counting servers would put a group
-	// with four held ordinals four sixths of the way to a terminal give-up on
-	// the very pass an operator's spec edit was meant to answer for them.
-	// TestAGenerationResetLeavesOneRoundNotOnePerCorpse pins it.
-	if group.Generation != group.Status.ObservedGeneration {
-		group.Status.ConsecutiveFailures = 0
-		group.Status.LastFailureAt = nil
-		// The two conditions need no explicit removal: the BackingOff/Degraded
-		// switch below (the one with the "!sized" case) republishes both with
-		// meta.SetStatusCondition unconditionally on every pass, for a group
-		// of either type, including the case where nothing was decided — so a
-		// Remove here would be overwritten before it could ever be observed.
-		//
-		// "Either type" is newer than the sentence above it and is what makes
-		// it true. While the two conditions were published only inside an
-		// `if group.IsEphemeral()` block, the sentence held for a persistent
-		// group only by accident: nothing published them there, so this reset
-		// had nothing to overwrite and equally nothing to remove. Now they are
-		// published for both, and the republishing below is what carries the
-		// reset onto the status of either — so if either condition is ever put
-		// back behind a type test, this reset needs a Remove of its own.
-	}
-
-	var lastFailure time.Time
-	if group.Status.LastFailureAt != nil {
-		lastFailure = group.Status.LastFailureAt.Time
-	}
-	// countViews and requiredOrdinals are chosen by type rather than read off
-	// group.DesiredReplicas(): that accessor returns spec.scaling.minReplicas
-	// for an ephemeral group, not the zero CountFailures needs to select its
-	// maximum-of-all-views rule.
-	countViews, requiredOrdinals := views, group.DesiredReplicas()
-	if group.IsEphemeral() {
-		countViews, requiredOrdinals = ofGeneration(views, group.Generation), 0
-	}
-	failures, newestFailure := CountFailures(countViews,
-		group.Status.ConsecutiveFailures, lastFailure, requiredOrdinals)
-	group.Status.ConsecutiveFailures = failures
-	// Only written when this pass actually counted something. CountFailures
-	// returns the timestamp it counted from unchanged when it counted nothing,
-	// including when a success reset the streak to zero — so what stays on the
-	// status is the watermark of the newest failure already counted, which is
-	// what keeps the count idempotent across a five-second resync. Clearing it
-	// on a reset would be the opposite of durable: the next pass would count
-	// from the zero time and every retained corpse again with it. Moving it
-	// forward to the success instead would be durable, but it would write a
-	// time at which nothing failed into a status field an operator reads as
-	// lastFailureAt. The residual edge — a corpse older than a success that has
-	// since left the views being counted once more — is bounded by how many
-	// corpses the group can be holding at all, and that number differs by
-	// type. For an ephemeral group it is what pruneFailed retains, which is
-	// one. pruneFailed does not run for a persistent group: there each corpse
-	// keeps its ordinal until its own failed retention elapses and the Server
-	// controller removes it, so the bound is one per ordinal, up to
-	// spec.replicas.
-	if !newestFailure.IsZero() {
-		stamped := metav1.NewTime(newestFailure)
-		group.Status.LastFailureAt = &stamped
-	}
-	backoff := DecideBackoff(BackoffInputs{
-		ConsecutiveFailures: failures,
-		LastFailureAt:       newestFailure,
-		Now:                 r.Clock(),
-	})
-
 	// The Network gate, and the rule for deciding which side of it a step
 	// belongs on. The next person adding a step here needs the rule, not just
 	// the list.
@@ -441,34 +365,6 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// change nothing it does.
 	mayResize := networkUsable && volumesOK && schedulingOK && !foreignConfigMap
 
-	// The NodeDraining condition, with what stops this group rebuilding what
-	// it is about to condemn.
-	//
-	// Condemnation is not gated on either of these -- deliberately, and the
-	// ruling holds: the players on a departing node are evicted off it
-	// whatever this group decides, so moving them to a fallback beats being
-	// kicked with nowhere chosen. What the ruling costs is capacity that
-	// cannot be rebuilt, and until now that cost was readable only by putting
-	// two conditions together.
-	//
-	// The Network is named first when both apply: it is the unbounded one, and
-	// a backoff window that will lift on its own is not the thing to report to
-	// somebody who has an unbounded wait as well.
-	blocked := blockedReplacement{}
-	switch {
-	case !networkUsable:
-		blocked = blockedReplacement{Reason: "its Network is missing or not accepted"}
-	case !volumesOK:
-		blocked = blockedReplacement{Reason: "a claim it mounts cannot be served; see its Accepted condition"}
-	case !backoff.MayCreate:
-		blocked = blockedReplacement{
-			Reason:  "its servers are failing to start and it is backing off",
-			Bounded: true,
-		}
-	}
-	meta.SetStatusCondition(&group.Status.Conditions,
-		drainingConditionBlocked(drainingNodes, blocked))
-
 	// Gated the same as sizing, on mayResize rather than a check of its own:
 	// BuildServerPod reads net.Spec.Defaults, and when the Network was never
 	// found net is the zero value, so a hash computed from it would not
@@ -506,6 +402,105 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 	}
+
+	// The streak belongs to the attempt -- what this group's servers start
+	// with, see attemptKey -- and is reset when that moves, by nothing else.
+	// lastFailureAt survives the reset: it is the watermark that keeps the
+	// previous attempt's corpse from being counted into the new streak.
+	var lastFailure time.Time
+	if group.Status.LastFailureAt != nil {
+		lastFailure = group.Status.LastFailureAt.Time
+	}
+	streakKey := group.Status.FailureStreakKey
+	var currentKey string
+	if podHash != "" && group.Status.ConsecutiveFailures > 0 {
+		currentKey, err = r.attemptKey(ctx, group, podHash)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if streakKey != "" && streakKey != currentKey {
+			group.Status.ConsecutiveFailures = 0
+			streakKey = ""
+		}
+	}
+	countViews, requiredOrdinals := views, group.DesiredReplicas()
+	if group.IsEphemeral() {
+		attemptHash := podHash
+		if attemptHash == "" {
+			attemptHash = hashOfAttempt(streakKey)
+		}
+		countViews, requiredOrdinals = ofAttempt(views, attemptHash), 0
+	}
+	failures, newestFailure := CountFailures(countViews,
+		group.Status.ConsecutiveFailures, lastFailure, requiredOrdinals)
+	group.Status.ConsecutiveFailures = failures
+	switch {
+	case failures == 0:
+		streakKey = ""
+	case streakKey == "" && podHash != "":
+		if currentKey == "" {
+			currentKey, err = r.attemptKey(ctx, group, podHash)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		streakKey = currentKey
+	}
+	group.Status.FailureStreakKey = streakKey
+	// Only written when this pass actually counted something. CountFailures
+	// returns the timestamp it counted from unchanged when it counted nothing,
+	// including when a success reset the streak to zero — so what stays on the
+	// status is the watermark of the newest failure already counted, which is
+	// what keeps the count idempotent across a five-second resync. Clearing it
+	// on a reset would be the opposite of durable: the next pass would count
+	// from the zero time and every retained corpse again with it. Moving it
+	// forward to the success instead would be durable, but it would write a
+	// time at which nothing failed into a status field an operator reads as
+	// lastFailureAt. The residual edge — a corpse older than a success that has
+	// since left the views being counted once more — is bounded by how many
+	// corpses the group can be holding at all, and that number differs by
+	// type. For an ephemeral group it is what pruneFailed retains, which is
+	// one. pruneFailed does not run for a persistent group: there each corpse
+	// keeps its ordinal until its own failed retention elapses and the Server
+	// controller removes it, so the bound is one per ordinal, up to
+	// spec.replicas.
+	if !newestFailure.IsZero() {
+		stamped := metav1.NewTime(newestFailure)
+		group.Status.LastFailureAt = &stamped
+	}
+	backoff := DecideBackoff(BackoffInputs{
+		ConsecutiveFailures: failures,
+		LastFailureAt:       newestFailure,
+		Now:                 r.Clock(),
+	})
+
+	// The NodeDraining condition, with what stops this group rebuilding what
+	// it is about to condemn.
+	//
+	// Condemnation is not gated on either of these -- deliberately, and the
+	// ruling holds: the players on a departing node are evicted off it
+	// whatever this group decides, so moving them to a fallback beats being
+	// kicked with nowhere chosen. What the ruling costs is capacity that
+	// cannot be rebuilt, and until now that cost was readable only by putting
+	// two conditions together.
+	//
+	// The Network is named first when both apply: it is the unbounded one, and
+	// a backoff window that will lift on its own is not the thing to report to
+	// somebody who has an unbounded wait as well.
+	blocked := blockedReplacement{}
+	switch {
+	case !networkUsable:
+		blocked = blockedReplacement{Reason: "its Network is missing or not accepted"}
+	case !volumesOK:
+		blocked = blockedReplacement{Reason: "a claim it mounts cannot be served; see its Accepted condition"}
+	case !backoff.MayCreate:
+		blocked = blockedReplacement{
+			Reason:  "its servers are failing to start and it is backing off",
+			Bounded: true,
+		}
+	}
+	meta.SetStatusCondition(&group.Status.Conditions,
+		drainingConditionBlocked(drainingNodes, blocked))
 
 	// Live boosts. Computed here rather than inside size() because two things
 	// read it: the sizing rule, and the status field that explains the number
@@ -691,19 +686,11 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		// No pending retry, so BackingOff is false — but an all-clear
 		// reason here would be a lie, so it carries the real one.
 		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
-		// The advice names a field rather than saying "the spec", because the
-		// group most likely to be reading this has already fixed what was
-		// wrong. A bad spec.configOverlay kills every server it starts, and
-		// correcting the ConfigMap moves neither the overlay into the pod hash
-		// nor the group's generation -- so the one edit that removed the cause
-		// is the one edit that cannot lift the latch. spec.attributes shapes
-		// no pod and is in no hash, so editing it starts the retry and
-		// replaces nothing that is running.
 		backingOff.Message = fmt.Sprintf(
-			"not retrying: %d rounds of server starts failed in a row; change the group's spec to try again "+
-				"— any edit to it clears the streak, and spec.attributes shapes no pod, so editing that one "+
-				"retries without replacing a running server",
-			group.Status.ConsecutiveFailures)
+			"not retrying: %d rounds of server starts failed in a row; a change to what the servers start "+
+				"with (the pod spec or the configOverlay ConfigMap) retries, and so does a new value on the "+
+				"%s annotation once a cause outside the group is fixed",
+			group.Status.ConsecutiveFailures, spawneryv1alpha1.AnnotationRetry)
 		degraded.Status = metav1.ConditionTrue
 		degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
 		degraded.Message = backingOff.Message
@@ -812,48 +799,57 @@ func networkNotAcceptedMessage(network *spawneryv1alpha1.Network) string {
 	return fmt.Sprintf("network %q has not been accepted yet", network.Name)
 }
 
-// ofGeneration narrows the views to the servers the group's current spec
-// produced. The call site below uses it for an ephemeral group's failure
-// count only: a persistent group's ordinals outlive a generation change by
-// design, so filtering here would empty every view CountFailures sees on the
-// very next spec edit and freeze status.consecutiveFailures wherever it
-// stood. requiredOrdinals is what keeps a persistent group's count
-// generation-blind instead, and it does so a different way — by ordinal, not
-// by spec — which is covered where that parameter is declared.
+// ofAttempt narrows the views to the servers started with podHash, for an
+// ephemeral group's failure count only: a previous spec's server going Ready
+// says nothing about this one. A server with no hash yet is adopted into the
+// current one on this same pass (adoptServers), so it counts as current.
 //
-// A streak belongs to the spec that caused it, for the ephemeral group this
-// still governs. The previous generation's corpse says nothing about the new
-// image — selectFailedForPruning already keeps the newest generation's
-// failure for exactly that reason — and a previous generation's server going
-// Ready says nothing about it either.
-//
-// It is also what makes the clear above mean anything. Without it the reset
-// would be undone on the very pass that performs it: the counter goes to zero
-// and lastFailureAt to nil, and the retained corpse of the spec just replaced,
-// now newer than a zero watermark, is counted straight back into it. A group
-// that had given up would come back with one failure already against it and a
-// window it did not earn, and the "the next attempt is immediate" this whole
-// branch exists for would be false.
-//
-// A later reader will arrive believing the generation is forbidden anywhere
-// near this code, so: the standing constraint is that the *capacity
-// arithmetic* stays generation-blind. ScalingInputs carries the reason — a
-// generation filter in provisionalCapacity or readyFree makes every running
-// server stop counting the instant any field of the spec changes, so the group
-// orders a full replacement set up to maxReplicas: runaway creates, which is
-// the failure that disconnects players.
-//
-// This is a filter on *counting failures*, and it runs in the other direction.
-// The strictest thing it can do is hold a create back. It cannot order one, and
-// it never reaches DecideSize at all. Different direction, different rule.
-func ofGeneration(views []ServerView, generation int64) []ServerView {
+// The capacity arithmetic stays hash- and generation-blind. ScalingInputs
+// carries the reason: a filter there makes every running server stop counting
+// the instant the spec changes, and the group orders a full replacement set.
+// This filter can only hold a create back, never order one.
+func ofAttempt(views []ServerView, podHash string) []ServerView {
+	if podHash == "" {
+		return views
+	}
 	out := make([]ServerView, 0, len(views))
 	for _, v := range views {
-		if v.Generation == generation {
+		if v.PodHash == podHash || v.PodHash == "" {
 			out = append(out, v)
 		}
 	}
 	return out
+}
+
+// attemptKey is what a group's servers start with: the desired pod hash, the
+// configOverlay ConfigMap's resourceVersion, which reaches no hash because the
+// operator mounts it unread, and the retry annotation. The overlay is read
+// uncached, and only while a streak runs, because the manager's ConfigMap
+// cache holds only the operator's own.
+func (r *ServerGroupReconciler) attemptKey(
+	ctx context.Context,
+	group *spawneryv1alpha1.ServerGroup,
+	podHash string,
+) (string, error) {
+	var overlay string
+	if ref := group.Spec.ConfigOverlay; ref != nil {
+		cm := &corev1.ConfigMap{}
+		err := r.ClaimReader.Get(ctx, types.NamespacedName{Namespace: group.Namespace, Name: ref.Name}, cm)
+		switch {
+		case apierrors.IsNotFound(err):
+			overlay = "missing"
+		case err != nil:
+			return "", fmt.Errorf("read configOverlay %s: %w", ref.Name, err)
+		default:
+			overlay = cm.ResourceVersion
+		}
+	}
+	return podHash + "/" + overlay + "/" + group.Annotations[spawneryv1alpha1.AnnotationRetry], nil
+}
+
+func hashOfAttempt(key string) string {
+	hash, _, _ := strings.Cut(key, "/")
+	return hash
 }
 
 // size brings the group to the size its own rule asks for and reports that
