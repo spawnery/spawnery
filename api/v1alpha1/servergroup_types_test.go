@@ -3,6 +3,8 @@ package v1alpha1
 import (
 	"testing"
 	"time"
+
+	"k8s.io/utils/ptr"
 )
 
 func TestFinishedRetentionIsSecondsNotTheFailedOne(t *testing.T) {
@@ -20,7 +22,7 @@ func TestFinishedRetentionIsSecondsNotTheFailedOne(t *testing.T) {
 
 func TestDesiredReplicasIsZeroForOnDemand(t *testing.T) {
 	g := &ServerGroup{
-		Spec: ServerGroupSpec{Type: ServerGroupOnDemand},
+		Spec: ServerGroupSpec{Type: ServerGroupOnDemand, Replicas: ptr.To[int32](3)},
 	}
 	if got := g.DesiredReplicas(); got != 0 {
 		t.Fatalf("DesiredReplicas() = %d, want 0", got)
