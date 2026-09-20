@@ -20,6 +20,40 @@
 # operator namespace, so test/e2e's own helpers keep reading the operator they
 # already know how to find, and the same per-namespace forwarding-secret grant,
 # for the same reason.
+#
+# # What this run needs
+#
+# A container runtime kind will take, and on paul-desktop that is not the one
+# the name suggests: `docker` there is podman's shim, so kind detects podman,
+# takes its rootless path and refuses without a delegated systemd scope. The
+# first run of this script died on exactly that. The invocation is hack/e2e.sh's:
+#
+#   systemd-run --scope --user --property=Delegate=yes -- \
+#     nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e-ondemand
+#
+# It needs more of the machine than hack/e2e.sh does, and knowing where that
+# goes is worth a line: a real JVM with a 2 GiB limit, from
+# test/e2e/manifests/ondemand.yaml's Network defaults. That limit is not
+# decoration -- the image sizes its heap with MaxRAMPercentage, so a server with
+# no limit takes three quarters of whatever machine it lands on, which on a
+# GitHub runner is more than the runner has.
+#
+# # What a green run does not prove
+#
+# **Nothing about the consumer.** The plugin that starts and stops private
+# servers lives in another repository; this run mints a proxy token and speaks
+# the agent protocol itself. What it establishes is that the operator's side of
+# those two requests works against a real cluster, not that anybody's plugin
+# calls it correctly.
+#
+# **Nothing about a join.** No proxy process runs here -- the ProxyGroup's image
+# never resolves on purpose, because a proxy pod is needed only as something to
+# bind a token to. A player actually reaching a private server through a proxy
+# is out of reach, and hack/e2e-tutorial.sh is the run that drives a join.
+#
+# **Nothing about a second player.** One key, started twice. Two members at once
+# and spec.maxInstances are the envtest suites' (internal/agentserver), which can
+# make a hundred without waiting for a JVM.
 set -euo pipefail
 
 CLUSTER="${CLUSTER:-spawnery-e2e-ondemand}"

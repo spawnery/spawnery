@@ -1791,7 +1791,9 @@ git commit -m "docs(guides): private servers, and the numbers that carry them"
 ### Task 10: One private server, end to end
 
 **Files:**
-- Create: `test/e2e/ondemand_test.go` (build tag `e2e`)
+- Create: `test/e2e/ondemand_test.go` (build tag `e2e`),
+  `test/e2e/manifests/ondemand.yaml`, `hack/e2e-ondemand.sh`
+- Edit: `Makefile` (`e2e-ondemand`), `.github/workflows/nightly.yml`
 
 **Interfaces:**
 - Consumes: everything above.
@@ -1820,15 +1822,24 @@ a world survives a stop, and it is the promise the feature is for.
 
 - [ ] **Step 2: Run it**
 
-Run: `nix develop -c make e2e`
-Expected: PASS. It takes minutes and builds a kind cluster. `E2E_KEEP=1`
+Not `make e2e`. That run's manifest names images which never resolve and
+installs the chart with a 20-second startup deadline, so nothing there reaches
+`Ready` -- which needs both a live server-list ping and the agent's own report
+-- and nothing there has a world to write a marker into. This scenario needs a
+real game image and the chart's own 5m deadline, so it gets a run of its own:
+`hack/e2e-ondemand.sh`, loading the `.#purpur-image` that
+`config/samples/ondemand.yaml` names.
+
+Run: `nix develop -c make e2e-ondemand`
+Expected: PASS. It builds a kind cluster and takes minutes. `E2E_KEEP=1`
 keeps the cluster and prints its `KUBECONFIG` if it fails. Under rootless
-Podman, the invocation is the one in `CLAUDE.md`.
+Podman, the invocation is the one in `CLAUDE.md` -- and `docker` on
+`paul-desktop` is podman's shim, so that is every run on that machine.
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add test/e2e
+git add test/e2e hack/e2e-ondemand.sh Makefile .github/workflows/nightly.yml
 git commit -m "test(e2e): a world survives the stop of its server"
 ```
 
