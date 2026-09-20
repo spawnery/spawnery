@@ -1822,13 +1822,13 @@ a world survives a stop, and it is the promise the feature is for.
 
 - [ ] **Step 2: Run it**
 
-Not `make e2e`. That run's manifest names images which never resolve and
-installs the chart with a 20-second startup deadline, so nothing there reaches
-`Ready` -- which needs both a live server-list ping and the agent's own report
--- and nothing there has a world to write a marker into. This scenario needs a
-real game image and the chart's own 5m deadline, so it gets a run of its own:
-`hack/e2e-ondemand.sh`, loading the `.#purpur-image` that
-`config/samples/ondemand.yaml` names.
+Not `make e2e`. That run's manifest names images which never resolve, so
+nothing there reaches `Ready` -- which needs both a live server-list ping and
+the agent's own report -- and nothing there has a world to write a marker into;
+and its 20-second startup deadline would fail a real server even if one were
+loaded. This scenario needs a real game image and the chart's own 5m deadline,
+so it gets a run of its own: `hack/e2e-ondemand.sh`, loading the
+`.#purpur-image` that `config/samples/ondemand.yaml` names.
 
 Run: `nix develop -c make e2e-ondemand`
 Expected: PASS. It builds a kind cluster and takes minutes. `E2E_KEEP=1`
