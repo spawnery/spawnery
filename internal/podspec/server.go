@@ -589,8 +589,17 @@ func restartPolicy(group *spawneryv1alpha1.ServerGroup) corev1.RestartPolicy {
 	return corev1.RestartPolicyNever
 }
 
+// keepsWorld reports whether a server of this group has a world that outlives
+// its pod. Persistent servers and on-demand members both do, and they are
+// otherwise nothing alike: one is an ordinal a person wrote down, the other a
+// key somebody asked for.
+func keepsWorld(group *spawneryv1alpha1.ServerGroup) bool {
+	return group.Spec.Type == spawneryv1alpha1.ServerGroupPersistent ||
+		group.Spec.Type == spawneryv1alpha1.ServerGroupOnDemand
+}
+
 func dataVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Server) corev1.Volume {
-	if group.Spec.Type == spawneryv1alpha1.ServerGroupPersistent {
+	if keepsWorld(group) {
 		return corev1.Volume{
 			Name: DataVolumeName,
 			VolumeSource: corev1.VolumeSource{
