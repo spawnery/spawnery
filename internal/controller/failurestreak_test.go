@@ -180,9 +180,9 @@ func TestAPersistentGroupsRetryLandsAtZero(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "outpost", 1)
-	f.reconcilePersistentGroup(t, r, "outpost")
+	f.reconcileNamedGroup(t, r, "outpost")
 	f.failServerNeverReady(t, "outpost-0")
-	f.reconcilePersistentGroup(t, r, "outpost")
+	f.reconcileNamedGroup(t, r, "outpost")
 	if got := f.persistentGroup(t, "outpost").Status.ConsecutiveFailures; got != 1 {
 		t.Fatalf("consecutiveFailures = %d, want 1 to start from", got)
 	}
@@ -192,7 +192,7 @@ func TestAPersistentGroupsRetryLandsAtZero(t *testing.T) {
 	if err := f.c.Update(f.ctx, group); err != nil {
 		t.Fatalf("annotate: %v", err)
 	}
-	f.reconcilePersistentGroup(t, r, "outpost")
+	f.reconcileNamedGroup(t, r, "outpost")
 
 	if got := f.persistentGroup(t, "outpost").Status.ConsecutiveFailures; got != 0 {
 		t.Errorf("consecutiveFailures = %d after the retry, want 0", got)

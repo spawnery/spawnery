@@ -171,7 +171,7 @@ func TestAPersistentServersNumberIsItsOrdinal(t *testing.T) {
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 2)
 
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	servers := f.listServers(t)
 	byName := map[string]spawneryv1alpha1.Server{}

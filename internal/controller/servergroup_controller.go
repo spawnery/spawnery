@@ -748,8 +748,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		r.Recorder.Eventf(group, nil, eventType, degraded.Reason, actionSyncStatus, "%s", degraded.Message)
 	}
 
-	if group.IsEphemeral() {
+	if group.IsEphemeral() || group.IsOnDemand() {
 		if err := r.pruneFailed(ctx, group, views, servers); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	if group.IsOnDemand() {
+		if err := r.sweepOnDemand(ctx, group, views, servers); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -914,6 +919,16 @@ func (r *ServerGroupReconciler) size(
 				PendingRetires: pendingRetires,
 			})
 		}
+	case group.IsOnDemand():
+		// No size is decided and none can be: the members of this group exist
+		// because somebody asked for them by name, and every rule below
+		// computes "how many", which for this group is a question with no
+		// answer rather than one whose answer is zero. Falling through to the
+		// persistent path would read spec.replicas -- nil here -- as zero
+		// servers wanted; the only thing that would then keep it from
+		// condemning every world running is DecidePersistentSize skipping the
+		// views that carry no spec.ordinal, which is a rule about adopted
+		// persistent servers and no promise made to this type.
 	default:
 		decision = DecidePersistentSize(PersistentInputs{
 			Group:          group.Name,
