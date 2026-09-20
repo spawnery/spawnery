@@ -24,7 +24,9 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/grpcauth"
@@ -393,8 +395,10 @@ func (s *Server) answerStopBoost(
 // picture leaves out private servers, so a backend cannot send a player to one
 // either: naming a target would otherwise be a way to reach what its plugins
 // are not shown, and would commit that reach for good the way showing them
-// would. It is answered NOT_FOUND, as any name the caller's network does not
-// have is. A proxy resolves against everything.
+// would. It is refused, and says so: NOT_FOUND would tell whoever meets it
+// that a server which is running fine does not exist. Any other name the
+// caller's network does not have is NOT_FOUND, as before. A proxy resolves
+// against everything.
 //
 // # What it promises
 //
@@ -435,6 +439,10 @@ func (s *Server) answerConnect(
 
 	target, ok := resolveTarget(state, req)
 	if !ok {
+		if id.Role != agent.RoleProxy && s.namesAPrivateServer(ctx, id.Namespace, req) {
+			return refuse(reqID, agentpb.RequestError_REFUSED,
+				"a private server is addressed through a proxy, not from a backend")
+		}
 		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
 			"no server or group by that name is on this network")
 	}
@@ -478,6 +486,32 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 		}
 	}
 	return "", false
+}
+
+// namesAPrivateServer reports whether the server a request names is a member
+// of an on-demand group.
+//
+// This is a deliberate hole in the boundary answerConnect draws around a
+// backend's picture, and it is only there to word a refusal. It looks at
+// exactly the one name the caller itself supplied, in the caller's own
+// namespace, and the single bit it returns is all that travels back: nothing
+// is resolved from it, no move follows from it, and no field of the server
+// is read but its key. A group name, a typo and another namespace's server
+// all answer false, so they stay NOT_FOUND.
+//
+// A read of the one object and not a second Build, because this is the failure
+// path of a verb a pod may repeat, and a list of the namespace to learn one
+// bit is the expensive way to ask.
+func (s *Server) namesAPrivateServer(ctx context.Context, namespace string, req *agentpb.ConnectRequest) bool {
+	name := req.GetServer()
+	if name == "" {
+		return false
+	}
+	var srv spawneryv1alpha1.Server
+	if err := s.opts.State.Reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
+		return false
+	}
+	return srv.Spec.Key != ""
 }
 
 // refuse builds an error answer and counts it.

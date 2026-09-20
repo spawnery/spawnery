@@ -59,9 +59,9 @@ func TestATargetThisNetworkDoesNotHaveIsNotFound(t *testing.T) {
 
 func TestAConnectResolvesAgainstThePictureOfWhoAsked(t *testing.T) {
 	// A proxy routes to a private server and a backend is not shown one, so a
-	// backend that names one is answered as for any name its network does not
-	// have. Both halves matter: without the second, naming a target is a way
-	// to reach what the backend's plugins were deliberately not shown.
+	// backend that names one is refused. Both halves matter: without the
+	// second, naming a target is a way to reach what the backend's plugins
+	// were deliberately not shown.
 	scheme := runtime.NewScheme()
 	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
@@ -81,6 +81,27 @@ func TestAConnectResolvesAgainstThePictureOfWhoAsked(t *testing.T) {
 		},
 		Status: spawneryv1alpha1.ServerStatus{Phase: "Ready", Slots: 4, Registered: true},
 	}
+	elsewhere := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-secret", Namespace: "other"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "secret",
+		},
+		Status: spawneryv1alpha1.ServerStatus{Phase: "Ready", Slots: 4, Registered: true},
+	}
+	starting := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-d00d", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "d00d",
+		},
+		Status: spawneryv1alpha1.ServerStatus{Phase: "Starting", Slots: 4, Registered: false},
+	}
+	ordinary := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-b", Namespace: "ns"},
+		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
+		Status:     spawneryv1alpha1.ServerStatus{Phase: "Ready", Slots: 100, Registered: false},
+	}
 	registry := agent.New(time.Now, time.Minute, time.Now())
 	registry.Connect("proxy-a", agent.RoleProxy)
 	if err := registry.ReportRoster("proxy-a", "ns", []agent.RosterEntry{
@@ -95,30 +116,60 @@ func TestAConnectResolvesAgainstThePictureOfWhoAsked(t *testing.T) {
 			State: netstate.Source{
 				Reader: fake.NewClientBuilder().WithScheme(scheme).
 					WithStatusSubresource(&spawneryv1alpha1.Server{}).
-					WithObjects(group, member).Build(),
+					WithObjects(group, member, starting, elsewhere, ordinary).Build(),
 				Agents: registry,
 			},
 		},
 		requestRate: newRequestLimiter(time.Now),
 	}
-	ask := func(id grpcauth.Identity) *agentpb.CloudResponse {
+	ask := func(id grpcauth.Identity, target *agentpb.ConnectRequest) *agentpb.CloudResponse {
+		target.PlayerUuid = "u-alice"
 		return s.answerCloudRequest(context.Background(), logr.Discard(), id, &agentpb.CloudRequest{
-			Id: 1,
-			Request: &agentpb.CloudRequest_Connect{Connect: &agentpb.ConnectRequest{
-				PlayerUuid: "u-alice",
-				Target:     &agentpb.ConnectRequest_Server{Server: "private-servers-c0ffee"},
-			}},
+			Id:      1,
+			Request: &agentpb.CloudRequest_Connect{Connect: target},
 		})
 	}
+	named := func(server string) *agentpb.ConnectRequest {
+		return &agentpb.ConnectRequest{Target: &agentpb.ConnectRequest_Server{Server: server}}
+	}
+	proxy := grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy}
+	backend := grpcauth.Identity{Namespace: "ns", PodName: "lobby-a", PodUID: "pod-a", Role: agent.RoleServer}
 
-	fromProxy := ask(grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy})
-	if !fromProxy.GetConnect().GetOrdered() {
-		t.Errorf("proxy's response = %+v, want the move ordered", fromProxy)
+	if got := ask(proxy, named("private-servers-c0ffee")); !got.GetConnect().GetOrdered() {
+		t.Errorf("proxy's response = %+v, want the move ordered", got)
 	}
 
-	fromServer := ask(grpcauth.Identity{Namespace: "ns", PodName: "lobby-a", PodUID: "pod-a", Role: agent.RoleServer})
-	if fromServer.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
-		t.Errorf("backend's response = %+v, want NOT_FOUND: it is not shown this server", fromServer)
+	// The refusal is for a backend. A proxy that cannot route to a private
+	// server yet is told what any caller is told about a server it cannot
+	// route to, not to go and use a proxy.
+	if got := ask(proxy, named("private-servers-d00d")); got.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
+		t.Errorf("proxy naming a private server not yet registered: response = %+v, want NOT_FOUND", got)
+	}
+
+	// Refused and not NOT_FOUND: the server is running, and a caller told it
+	// does not exist would go looking for a fault that is not there.
+	got := ask(backend, named("private-servers-c0ffee"))
+	if got.GetError().GetReason() != agentpb.RequestError_REFUSED {
+		t.Errorf("backend naming a private server: response = %+v, want REFUSED", got)
+	}
+	if !strings.Contains(got.GetError().GetMessage(), "proxy") {
+		t.Errorf("message = %q, want it to say a private server is addressed through a proxy",
+			got.GetError().GetMessage())
+	}
+
+	// Everything else the backend's picture lacks stays NOT_FOUND. Each case
+	// is one way the refusal above could leak onto a name that is not a
+	// private server, and none of them may confirm that anything exists.
+	for name, target := range map[string]*agentpb.ConnectRequest{
+		"a server that does not exist":        named("private-servers-nobody"),
+		"the on-demand group's own name":      {Target: &agentpb.ConnectRequest_Group{Group: "private-servers"}},
+		"a private server of another network": named("other-secret"),
+		"an ordinary server, unregistered":    named("lobby-b"),
+	} {
+		got := ask(backend, target)
+		if got.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
+			t.Errorf("backend naming %s: response = %+v, want NOT_FOUND", name, got)
+		}
 	}
 }
 
