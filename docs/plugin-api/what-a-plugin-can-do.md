@@ -80,8 +80,10 @@ name cannot take down a lobby. Who may call is who may install a plugin in the
 namespace, as for every call on this page; the group's `maxInstances` bounds how
 many there can be.
 
-Both fail with a reason — `REFUSED`, `NOT_FOUND`, and `UNAVAILABLE` for a
-request that succeeds once a server that is stopping has gone — and the
+Each fails with a reason. `startServer` says `REFUSED`, `NOT_FOUND`, or
+`UNAVAILABLE` for a request that succeeds once a server that is stopping has
+gone. `stopServer` says `REFUSED` or `NOT_FOUND`, and `UNAVAILABLE` only when
+the operator could not act at all just now. The
 [private servers guide](../guides/on-demand-servers.md) has the table.
 
 ## Telling one run of a server from the next
