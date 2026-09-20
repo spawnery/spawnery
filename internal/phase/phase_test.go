@@ -970,7 +970,7 @@ func TestRetiringWinsOverRegistering(t *testing.T) {
 // here would simply be absent from it and pass. Read from the source instead,
 // an addition fails this test until somebody decides whether the new phase
 // ends a server's run -- which is the decision callers elsewhere are relying
-// on having been made.
+// on having been made. What declaredPhases can and cannot see is written on it.
 func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
 	terminal := map[Phase]bool{
 		Pending:     false,
@@ -1005,6 +1005,14 @@ func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
 // go/parser and not reflection, because a constant leaves nothing behind at
 // run time to enumerate. The whole directory rather than phase.go alone, so
 // that a phase declared in a file added later is still seen.
+//
+// It finds the one shape this package declares phases in: a constant with an
+// explicit Phase type and a plain string literal, `Name Phase = "Name"`. It
+// does not find a constant whose type is left to the block (`Name = "Name"`),
+// nor one whose value is not a plain double-quoted literal (`Phase(x)`, a
+// concatenation, a backtick string). A phase added in one of those shapes
+// passes this test unnoticed, so put it in the table above yourself or
+// declare it the way the others are.
 func declaredPhases(t *testing.T) []Phase {
 	t.Helper()
 	fset := token.NewFileSet()
