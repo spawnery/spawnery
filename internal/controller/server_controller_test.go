@@ -2539,7 +2539,7 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 			Ordinal:  ptr.To[int32](0),
 		},
 	}
-	if got := fallbackGroup(persistent); got.IsEphemeral() {
+	if got := fallbackGroup(persistent); got.Spec.Type != spawneryv1alpha1.ServerGroupPersistent {
 		t.Errorf("a Server carrying spec.ordinal falls back to %q, want Persistent. "+
 			"createPersistentServer is the only thing that sets that field, so it is "+
 			"what identifies the type of a group that is no longer there to ask",
@@ -2549,7 +2549,8 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 	// Ordinal 0 is the one that matters: a value check rather than a nil check
 	// would read the first ordinal of every persistent group as ephemeral, and
 	// ordinal 0 is the one that exists in every persistent group there is.
-	if got := fallbackGroup(persistent); *persistent.Spec.Ordinal != 0 || got.IsEphemeral() {
+	if got := fallbackGroup(persistent); *persistent.Spec.Ordinal != 0 ||
+		got.Spec.Type != spawneryv1alpha1.ServerGroupPersistent {
 		t.Errorf("ordinal 0 read as ephemeral: %q", got.Spec.Type)
 	}
 
@@ -2578,6 +2579,29 @@ func TestTheFallbackGroupOfAnOnDemandMemberIsOnDemand(t *testing.T) {
 	}
 	if got.IsEphemeral() {
 		t.Error("an on-demand member's fallback group reports itself ephemeral")
+	}
+}
+
+// Every group type, and the marker that identifies a Server of it without
+// its group. A marker fallbackGroup does not read fails here instead of
+// falling back to Ephemeral, which is what the third type did until it was
+// given an arm of its own. The table is written by hand: a type added to the
+// enum needs its row added here.
+func TestTheFallbackGroupCoversEveryType(t *testing.T) {
+	marker := map[spawneryv1alpha1.ServerGroupType]func(*spawneryv1alpha1.Server){
+		spawneryv1alpha1.ServerGroupEphemeral:  func(*spawneryv1alpha1.Server) {},
+		spawneryv1alpha1.ServerGroupPersistent: func(s *spawneryv1alpha1.Server) { s.Spec.Ordinal = ptr.To[int32](0) },
+		spawneryv1alpha1.ServerGroupOnDemand:   func(s *spawneryv1alpha1.Server) { s.Spec.Key = "c0ffee" },
+	}
+	for want, mark := range marker {
+		srv := &spawneryv1alpha1.Server{
+			ObjectMeta: metav1.ObjectMeta{Name: "lobby-x7k2", Namespace: "minecraft"},
+			Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
+		}
+		mark(srv)
+		if got := fallbackGroup(srv).Spec.Type; got != want {
+			t.Errorf("a Server marked for %s falls back to %q", want, got)
+		}
 	}
 }
 
