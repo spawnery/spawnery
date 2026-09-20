@@ -169,7 +169,7 @@ warns only for a small set of taints other autoscalers are known to use
 simply absent from the cluster cannot be told from a typo by anything here.
 
 **What condemning a server actually does depends on whether its group is
-ephemeral or persistent, and this is the flag's real edge.** An ephemeral
+ephemeral, persistent or on-demand, and this is the flag's real edge.** An ephemeral
 group treats a condemned server exactly like a stale one: a replacement is
 created before the condemned server is removed, so the group never drops
 below its target count. A persistent group cannot do that. Its ordinal is
@@ -179,7 +179,9 @@ so the replacement for a persistent ordinal waits for the condemned server's
 drain to finish, bounded by `spec.drain.timeoutSeconds`. Draining a node that
 holds a persistent world is a real, bounded gap for that world, not a hot
 changeover: the group cannot replace what it condemns until it has finished
-condemning it.
+condemning it. An on-demand group's member is simply removed, players moved
+first: nothing replaces it and nothing waits on it, because its world is on its
+claim and its key is free for its owner to start again.
 
 ## Claim-backed sources
 

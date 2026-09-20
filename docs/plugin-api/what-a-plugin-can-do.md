@@ -32,10 +32,11 @@ routable yet. Handle it as a normal outcome rather than as a bug.
 
 ## Changing the fleet
 
-Four calls write, and all are round trips through the operator on either
-platform — nothing local can answer them. The first two are about a fleet's
-capacity, and `stopBoosts` is counted with `boost` because it only undoes it;
-the last two, further down, are about one player's private server.
+Five calls write, and all are round trips through the operator on either
+platform — nothing local can answer them. The first three are about the servers
+a group already has and how many it tries for: `retire`, `boost` and
+`stopBoosts`. The last two, further down, are about one player's private
+server.
 
 `retire(server)` asks one server to stop taking joins and empty out. **It is
 not a stop.** Nobody is moved and nobody is kicked; the players on it finish in
@@ -58,7 +59,7 @@ Boosts add rather than replace: two calls make two boosts, which is what makes
 `stopBoosts(group)` ends all of them and reports how many there were. Zero is
 an ordinary answer, not a failure.
 
-**Neither of those can change what a group is.** A boost expires; a group that
+**None of those can change what a group is.** A boost expires; a group that
 needs to be permanently bigger needs its `ServerGroup` edited by a person, and
 this API deliberately cannot do that — the operator holds no write on
 `servergroups` at all. [Scaling and boosts](../guides/scaling-and-boosts.md)
@@ -73,7 +74,7 @@ asked for and nothing about its being ready.
 `stopServer(server)` **deletes a server.** The players on it are moved through
 the proxies, the pod goes, and the world stays on its claim, where the next
 `startServer` of the same key finds it. It is the only call here that deletes
-anything, and what bounds it is the key check: a server that carries no key —
+a server, and what bounds it is the key check: a server that carries no key —
 every one in an `Ephemeral` or `Persistent` group — is refused, so a mistyped
 name cannot take down a lobby. Who may call is who may install a plugin in the
 namespace, as for every call on this page; the group's `maxInstances` bounds how
