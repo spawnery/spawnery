@@ -809,6 +809,59 @@ func TestAJoiningProxyIsSentTheNetworkStateAfterItsFullSync(t *testing.T) {
 	}
 }
 
+// Routing lives on the proxy and so does the plugin that asks for a private
+// server, which is why this is the one picture that carries them: the mirror a
+// proxy is sent is the whole namespace.
+func TestAJoiningProxyIsSentPrivateServersAndTheirGroup(t *testing.T) {
+	maxInstances := int32(300)
+	private := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers", Namespace: ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			Type: spawneryv1alpha1.ServerGroupOnDemand, MaxInstances: &maxInstances,
+		},
+	}
+	member := registered("private-servers-c0ffee", "10.0.0.2:25565")
+	member.Spec.GroupRef.Name = "private-servers"
+	member.Spec.Key = "c0ffee"
+	start := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	reader := newReader(t, proxyGroup(), private, member)
+	f := proxyreg.New(proxyreg.Options{
+		Reader: reader,
+		State: netstate.Source{
+			Reader: reader,
+			Agents: agent.New(func() time.Time { return start }, 5*time.Second, start),
+		},
+	})
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "proxy-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+
+	var state *agentpb.NetworkState
+	for len(outbox) > 0 {
+		if s := (<-outbox).GetNetworkState(); s != nil {
+			state = s
+		}
+	}
+	if state == nil {
+		t.Fatal("no NetworkState was sent")
+	}
+	if len(state.GetServers()) != 1 || state.GetServers()[0].GetName() != "private-servers-c0ffee" {
+		t.Errorf("servers = %v, want the private server", state.GetServers())
+	}
+	var kind agentpb.GroupState_Kind
+	for _, g := range state.GetGroups() {
+		if g.GetName() == "private-servers" {
+			kind = g.GetKind()
+		}
+	}
+	if kind != agentpb.GroupState_ON_DEMAND {
+		t.Errorf("private-servers kind = %v, want ON_DEMAND (groups: %v)", kind, state.GetGroups())
+	}
+}
+
 // The interest state, tested on its own rather than assumed from serverreg's.
 //
 // The two fan-outs carry different session structs over different message
