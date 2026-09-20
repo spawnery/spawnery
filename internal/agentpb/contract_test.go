@@ -69,3 +69,18 @@ func TestServerMessageRoundTrip(t *testing.T) {
 		t.Errorf("got %d/%d, want 7/100", got.PlayerCount.GetPlayers(), got.PlayerCount.GetSlots())
 	}
 }
+
+func TestOnDemandRequestsAreOnTheWire(t *testing.T) {
+	req := &agentpb.CloudRequest{
+		Id: 1,
+		Request: &agentpb.CloudRequest_StartServer{
+			StartServer: &agentpb.StartServerRequest{Group: "private-servers", Key: "c0ffee"},
+		},
+	}
+	if req.GetStartServer().GetKey() != "c0ffee" {
+		t.Fatal("the key does not survive the round trip through the oneof")
+	}
+	if agentpb.GroupState_ON_DEMAND == agentpb.GroupState_KIND_UNSPECIFIED {
+		t.Fatal("ON_DEMAND must be its own value, not the unspecified one")
+	}
+}

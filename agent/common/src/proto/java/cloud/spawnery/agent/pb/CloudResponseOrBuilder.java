@@ -121,5 +121,35 @@ public interface CloudResponseOrBuilder extends
    */
   cloud.spawnery.agent.pb.AcceptJoinsResultOrBuilder getAcceptJoinsOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+   * @return Whether the startServer field is set.
+   */
+  boolean hasStartServer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+   * @return The startServer.
+   */
+  cloud.spawnery.agent.pb.StartServerResult getStartServer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+   */
+  cloud.spawnery.agent.pb.StartServerResultOrBuilder getStartServerOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+   * @return Whether the stopServer field is set.
+   */
+  boolean hasStopServer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+   * @return The stopServer.
+   */
+  cloud.spawnery.agent.pb.StopServerResult getStopServer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+   */
+  cloud.spawnery.agent.pb.StopServerResultOrBuilder getStopServerOrBuilder();
+
   cloud.spawnery.agent.pb.CloudResponse.ResultCase getResultCase();
 }
