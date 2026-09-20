@@ -2563,6 +2563,24 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 	}
 }
 
+func TestTheFallbackGroupOfAnOnDemandMemberIsOnDemand(t *testing.T) {
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-c0ffee", Namespace: "mc"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "c0ffee",
+		},
+	}
+	got := fallbackGroup(srv)
+	if got.Spec.Type != spawneryv1alpha1.ServerGroupOnDemand {
+		t.Fatalf("type = %q, want OnDemand: a member whose group is gone must not read as ephemeral, "+
+			"or its claim is skipped", got.Spec.Type)
+	}
+	if got.IsEphemeral() {
+		t.Error("an on-demand member's fallback group reports itself ephemeral")
+	}
+}
+
 // The other half of a refused pod: after the report comes the reclaim.
 //
 // A Server whose pod the API server refuses has an empty status.podName, so

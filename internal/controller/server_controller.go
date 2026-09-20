@@ -845,20 +845,26 @@ func stampRoundEnd(srv *spawneryv1alpha1.Server, snap agent.Snapshot, now time.T
 // defaults, so a Server that outlives its group still drains and cleans up on
 // sane timings instead of freezing. It is never used to build a pod.
 func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
-	// The type is read off the Server rather than assumed. spec.ordinal is set
-	// by createPersistentServer and by nothing else, and Server's own API doc
-	// says it is unset for ephemeral servers, so the ordinal is what identifies
-	// the type of a group that is no longer there to ask.
+	// The type is read off the Server rather than assumed, and each of the
+	// three has its own marker: spec.ordinal is set by createPersistentServer
+	// and by nothing else, spec.key by the on-demand create and by nothing
+	// else, and a Server with neither is ephemeral. No Server carries both, so
+	// the order of the arms decides nothing; the exhaustiveness does. An
+	// on-demand member read as ephemeral is the one wrong answer about its
+	// world, because it loses the !IsEphemeral() branch in Reconcile, which is
+	// the one that grows its claim.
 	//
 	// The deadlines do not depend on it: DrainTimeout, FailedRetention and
 	// UpdateMaxStale all read fields this function fills with the CRD's own
-	// defaults. What the type decides on this path is the !IsEphemeral()
-	// branch in Reconcile, which refreshes status.storageResizeError -- and
-	// growClaim returns on nil storage anyway, so a truthful answer breaks
-	// nothing here.
+	// defaults. On this path that branch only refreshes
+	// status.storageResizeError -- growClaim returns on nil storage anyway --
+	// so a truthful answer breaks nothing here.
 	groupType := spawneryv1alpha1.ServerGroupEphemeral
-	if srv.Spec.Ordinal != nil {
+	switch {
+	case srv.Spec.Ordinal != nil:
 		groupType = spawneryv1alpha1.ServerGroupPersistent
+	case srv.Spec.Key != "":
+		groupType = spawneryv1alpha1.ServerGroupOnDemand
 	}
 	return &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{
