@@ -349,6 +349,45 @@ func TestStartBehindALingeringCorpseIsUnavailable(t *testing.T) {
 	}
 }
 
+// Two group names and two keys can compose one server name: on-demand group
+// "a" with key "b-xyz" composes exactly what ephemeral group "a-b" calls its
+// member "a-b-xyz". No race is needed, and the answer must not be
+// already_running -- a plugin told that sends its player to a server that is
+// not theirs, which here is a lobby.
+func TestStartRefusesANameAnotherGroupsServerAlreadyHas(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "a", 2)
+	makeEphemeralGroup(t, f, "a-b")
+	lobby := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "a-b-xyz", Namespace: f.ns},
+		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "a-b"}},
+	}
+	if err := f.c.Create(f.ctx, lobby); err != nil {
+		t.Fatalf("create the other group's server: %v", err)
+	}
+
+	pod := f.proxyPod("gateway-aaaa")
+
+	resp := startOverTheWire(t, f, pod, "a", "b-xyz")
+	if got := resp.GetError().GetReason(); got != agentpb.RequestError_REFUSED {
+		t.Fatalf("reason = %v (%s), want REFUSED for a name another group already has",
+			got, resp.GetError().GetMessage())
+	}
+	if resp.GetStartServer() != nil {
+		t.Fatalf("answered with a server: %+v", resp.GetStartServer())
+	}
+
+	// And the other group's server is untouched: neither adopted nor deleted.
+	held := member(t, f, "a-b-xyz")
+	if held.Spec.GroupRef.Name != "a-b" || held.Spec.Key != "" {
+		t.Errorf("the lobby server was rewritten: groupRef=%q key=%q",
+			held.Spec.GroupRef.Name, held.Spec.Key)
+	}
+	if !held.DeletionTimestamp.IsZero() {
+		t.Error("the lobby server was asked to go by a refused request")
+	}
+}
+
 func TestStartRefusesAGroupThatIsNotOnDemand(t *testing.T) {
 	f := newServerFixture(t)
 	makeEphemeralGroup(t, f, "lobby")

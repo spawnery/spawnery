@@ -73,6 +73,18 @@ var ErrNotAnInstance = errors.New("that server is not an on-demand member")
 // that is about to stop.
 var ErrInstanceStopping = errors.New("that member is still stopping")
 
+// ErrNameTaken is a start whose composed name belongs to a server of another
+// group.
+//
+// Not a race and not rare: group "a" with key "b-xyz" composes the name that
+// group "a-b" gives its member "xyz". Answering AlreadyRunning for it would
+// hand a plugin the name of somebody else's server -- a lobby, in the case
+// that costs the most -- and the plugin would send its player there. The
+// caller can only fix it by choosing another key, or by the two groups being
+// named so that they cannot collide, which is why it is bad input rather than
+// a bound.
+var ErrNameTaken = errors.New("that name belongs to a server of another group")
+
 // ClusterWriter is every change a plugin's request is allowed to make.
 //
 // Deliberately one method wide, in the shape ProxyFleet uses and for the same
@@ -119,7 +131,7 @@ type ClusterWriter interface {
 	//
 	// Reports AlreadyRunning for a member that was already there, which is a
 	// success: what the caller asked for is the case. It returns
-	// ErrNoSuchGroup, ErrGroupNotOnDemand, ErrTooManyInstances,
+	// ErrNoSuchGroup, ErrGroupNotOnDemand, ErrTooManyInstances, ErrNameTaken,
 	// instance.ErrBadKey for a key no name can be built from, and
 	// ErrInstanceStopping for a key whose member is still going.
 	StartServer(ctx context.Context, namespace, group, key string) (StartedServer, error)
@@ -324,13 +336,23 @@ func (w KubeWriter) StopBoosts(ctx context.Context, namespace, group string) (in
 // players' servers ended.
 //
 // The create is what decides the race between two callers asking for the same
-// key: AlreadyExists comes back to exactly one of them, and it is the answer
-// rather than an error -- which is why nothing here takes a lock and why the
-// read above it is an optimisation and not the bound. The one AlreadyExists
-// that is not that race is the one after a terminal member was deleted: there
-// the object that is in the way is the corpse, held by its own drain
-// finalizer, and the caller is told to ask again rather than told their
-// server is up.
+// key: AlreadyExists comes back to exactly one of them, which is why nothing
+// here takes a lock and why the list above is an optimisation and not the
+// bound. What AlreadyExists means, though, is not something the list can say
+// -- it is by then a picture of a moment that has passed, and the object in
+// the way may be a corpse the delete above has not finished removing, a
+// member another caller created in between, or a server of an entirely
+// different group whose name happens to compose the same. So the answer comes
+// from reading that object rather than from remembering what was listed; see
+// occupant.
+//
+// What remains best-effort is the list and nothing else. The ceiling is
+// counted from it, so a create that lands in the same instant as another can
+// put a group one over its ceiling until the next start is refused, and a
+// member that appears between the list and the create is classified by
+// occupant rather than by the terminal branch. Both self-correct: every
+// answer this can give wrongly is one the same request, asked again, gives
+// rightly.
 func (w KubeWriter) StartServer(
 	ctx context.Context, namespace, group, key string,
 ) (StartedServer, error) {
@@ -354,7 +376,7 @@ func (w KubeWriter) StartServer(
 	if err := w.Client.List(ctx, &members, client.InNamespace(namespace)); err != nil {
 		return StartedServer{}, err
 	}
-	live, replacing := 0, false
+	live := 0
 	for i := range members.Items {
 		m := &members.Items[i]
 		if m.Spec.GroupRef.Name != group || m.Spec.Key == "" {
@@ -372,7 +394,6 @@ func (w KubeWriter) StartServer(
 				if err := w.Client.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {
 					return StartedServer{}, err
 				}
-				replacing = true
 				continue
 			}
 			return StartedServer{Name: name, AlreadyRunning: true}, nil
@@ -403,14 +424,43 @@ func (w KubeWriter) StartServer(
 	}
 	if err := w.Client.Create(ctx, srv); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			if replacing {
-				return StartedServer{}, ErrInstanceStopping
-			}
-			return StartedServer{Name: name, AlreadyRunning: true}, nil
+			return w.occupant(ctx, namespace, name, group, key)
 		}
 		return StartedServer{}, err
 	}
 	return StartedServer{Name: name}, nil
+}
+
+// occupant says what the object already holding name means for this caller.
+//
+// Read rather than assumed, because the three things AlreadyExists can mean
+// call for three different answers and only the object itself distinguishes
+// them. A member of this group carrying this key is the caller's own and is
+// reported as already running. A server of another group is a name collision
+// the caller has to resolve, and calling it theirs would hand them somebody
+// else's server. And an object on its way out -- the corpse the delete above
+// left behind, still held by its drain finalizer -- is neither: the same
+// request works once it is gone.
+//
+// Not found here means it went in the instant between the create and this
+// read, which is the retryable case for the same reason.
+func (w KubeWriter) occupant(
+	ctx context.Context, namespace, name, group, key string,
+) (StartedServer, error) {
+	var existing spawneryv1alpha1.Server
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			return StartedServer{}, ErrInstanceStopping
+		}
+		return StartedServer{}, err
+	}
+	if existing.Spec.GroupRef.Name != group || existing.Spec.Key != key {
+		return StartedServer{}, ErrNameTaken
+	}
+	if !existing.DeletionTimestamp.IsZero() || phase.Terminal(phase.Phase(existing.Status.Phase)) {
+		return StartedServer{}, ErrInstanceStopping
+	}
+	return StartedServer{Name: name, AlreadyRunning: true}, nil
 }
 
 // StopServer deletes one member.

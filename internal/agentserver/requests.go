@@ -683,6 +683,10 @@ func (s *Server) answerStartServer(
 	case errors.Is(err, ErrTooManyInstances):
 		return refuse(reqID, agentpb.RequestError_REFUSED,
 			"that group is at spec.maxInstances")
+	case errors.Is(err, ErrNameTaken):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"a server of another group already has the name that group and key compose; "+
+				"another key, or group names that cannot run together, is what fixes it")
 	case errors.Is(err, instance.ErrBadKey):
 		return refuse(reqID, agentpb.RequestError_REFUSED, err.Error())
 	case errors.Is(err, ErrInstanceStopping):
