@@ -400,6 +400,14 @@ func (s *Server) answerStopBoost(
 // caller's network does not have is NOT_FOUND, as before. A proxy resolves
 // against everything.
 //
+// # A group is never a way into a private server
+//
+// Naming a group leaves the choice of member to the operator, which picks by
+// free slots. For an on-demand group that would put the player into whichever
+// stranger's world has room, so a group target naming one is refused for both
+// kinds of session. It comes before resolution and not after: a proxy is
+// shown the members, and would resolve to one.
+//
 // # What it promises
 //
 // Nothing about the player arriving. The proxy that carries the move does not
@@ -437,11 +445,16 @@ func (s *Server) answerConnect(
 			"no player with that id is on this network")
 	}
 
+	if s.namesAnOnDemandGroup(ctx, id.Namespace, req) {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"the members of an on-demand group are addressed by name, because each one belongs to somebody")
+	}
+
 	target, ok := resolveTarget(state, req)
 	if !ok {
 		if id.Role != agent.RoleProxy && s.namesAPrivateServer(ctx, id.Namespace, req) {
 			return refuse(reqID, agentpb.RequestError_REFUSED,
-				"a private server is addressed through a proxy, not from a backend")
+				"a private server is addressed through a proxy, not from a backend, and only once it is running")
 		}
 		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
 			"no server or group by that name is on this network")
@@ -496,8 +509,8 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 // exactly the one name the caller itself supplied, in the caller's own
 // namespace, and the single bit it returns is all that travels back: nothing
 // is resolved from it, no move follows from it, and no field of the server
-// is read but its key. A group name, a typo and another namespace's server
-// all answer false, so they stay NOT_FOUND.
+// is read but what netstate.IsPrivateServer asks. A group name, a typo and
+// another namespace's server all answer false, so they stay NOT_FOUND.
 //
 // A read of the one object and not a second Build, because this is the failure
 // path of a verb a pod may repeat, and a list of the namespace to learn one
@@ -511,7 +524,26 @@ func (s *Server) namesAPrivateServer(ctx context.Context, namespace string, req 
 	if err := s.opts.State.Reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
 		return false
 	}
-	return srv.Spec.Key != ""
+	return netstate.IsPrivateServer(&srv)
+}
+
+// namesAnOnDemandGroup reports whether the group a request names is an
+// on-demand one.
+//
+// It is the same kind of hole as namesAPrivateServer, for the same reason and
+// as narrow: one name the caller supplied, in its own namespace, one bit back.
+// A backend is not shown these groups either, and learns no more than that
+// the name it typed is one. Nothing is resolved from the group.
+func (s *Server) namesAnOnDemandGroup(ctx context.Context, namespace string, req *agentpb.ConnectRequest) bool {
+	name := req.GetGroup()
+	if name == "" {
+		return false
+	}
+	var group spawneryv1alpha1.ServerGroup
+	if err := s.opts.State.Reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &group); err != nil {
+		return false
+	}
+	return group.IsOnDemand()
 }
 
 // refuse builds an error answer and counts it.

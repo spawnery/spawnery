@@ -60,6 +60,17 @@ const (
 	ForServers
 )
 
+// IsPrivateServer reports whether a server is a member of an on-demand group.
+//
+// The one place that says so, for everything that treats such a server
+// differently: the filter in Build, and the answer a backend is given when it
+// names one. The marker is the member's own key rather than its group's type,
+// because a Server carries it so that nothing has to fetch the group to know
+// (see ServerSpec.Key) -- and it is a marker that has moved once already.
+func IsPrivateServer(srv *spawneryv1alpha1.Server) bool {
+	return srv.Spec.Key != ""
+}
+
 // AudienceOf is the picture an agent in this role is sent, and the one a
 // request from it is resolved against.
 //
@@ -185,10 +196,7 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 	}
 	for i := range servers.Items {
 		srv := &servers.Items[i]
-		// By the member's own key rather than its group's type: a Server
-		// carries that marker so that nothing has to fetch the group to know
-		// (see ServerSpec.Key).
-		if audience == ForServers && srv.Spec.Key != "" {
+		if audience == ForServers && IsPrivateServer(srv) {
 			continue
 		}
 		announced := announcements[srv.Name]

@@ -449,6 +449,15 @@ func TestOnDemandMembersReachProxiesOnly(t *testing.T) {
 	}
 }
 
+func TestOnlyAMemberOfAnOnDemandGroupIsAPrivateServer(t *testing.T) {
+	if !netstate.IsPrivateServer(onDemandMember("ns", "private-servers", "c0ffee")) {
+		t.Error("a member carrying a key was not a private server")
+	}
+	if netstate.IsPrivateServer(readyServer("ns", "lobby-a", "lobby", 0, 100)) {
+		t.Error("an ordinary server was a private server")
+	}
+}
+
 func TestAudienceOfSendsOnlyProxiesTheWholePicture(t *testing.T) {
 	if netstate.AudienceOf(agent.RoleProxy) != netstate.ForProxies {
 		t.Error("a proxy was given the narrower picture, and cannot route to a private server")
