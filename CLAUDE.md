@@ -52,7 +52,7 @@ Read `internal/controller/setup.go` (`Options`, `SetupAll`) to see how the piece
 
 - `internal/agentserver` is the gRPC endpoint agents dial. `internal/grpcauth` turns the bearer token (a pod-bound ServiceAccount token, via TokenReview) into exactly one pod identity. Identity never comes from the message.
 - `internal/agent` is what the gRPC server writes and the controllers read: in-memory player counts and readiness. The CR status is for observers, not for the control loop.
-- `internal/proxyreg` (proxies) and `internal/serverreg` (backends) are the reverse: what the controllers write and the gRPC server sends down. Both build their view of the namespace through `internal/netstate`, so both agent kinds see one identical network picture.
+- `internal/proxyreg` (proxies) and `internal/serverreg` (backends) are the reverse: what the controllers write and the gRPC server sends down. Both build their view of the namespace through `internal/netstate`, so both agent kinds see one network picture, except that on-demand groups and their members are in the proxies' and not the backends' (`netstate.Audience`).
 - `internal/certs`: the operator is its own CA for the agent channel and pins the bundle into the pods it creates.
 
 **Pure cores, thin controllers.**

@@ -29,6 +29,7 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/grpcauth"
 	"github.com/spawnery/spawnery/internal/instance"
+	"github.com/spawnery/spawnery/internal/netstate"
 )
 
 const (
@@ -386,6 +387,15 @@ func (s *Server) answerStopBoost(
 // is not among them: it lives in answerCloudRequest, so that every verb has it
 // whether or not its author remembered.
 //
+// # What it resolves against
+//
+// The picture of the pod that asked, not the whole namespace. A backend's own
+// picture leaves out private servers, so a backend cannot send a player to one
+// either: naming a target would otherwise be a way to reach what its plugins
+// are not shown, and would commit that reach for good the way showing them
+// would. It is answered NOT_FOUND, as any name the caller's network does not
+// have is. A proxy resolves against everything.
+//
 // # What it promises
 //
 // Nothing about the player arriving. The proxy that carries the move does not
@@ -400,7 +410,7 @@ func (s *Server) answerConnect(
 ) *agentpb.CloudResponse {
 	// The namespace is the token's, never the message's. Everything below
 	// resolves inside it, which is the whole of the cross-network bound.
-	state, err := s.opts.State.Build(ctx, id.Namespace)
+	state, err := s.opts.State.Build(ctx, id.Namespace, netstate.AudienceOf(id.Role))
 	if err != nil {
 		logger.V(1).Info("could not read the network for a connect request", "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,

@@ -17,13 +17,14 @@ limitations under the License.
 // Package netstate builds the picture of a namespace that both agent kinds
 // receive.
 //
-// It exists so that there is exactly one of them. The two channels have two
+// It exists so that there is exactly one builder. The two channels have two
 // fan-outs -- internal/proxyreg for proxies, internal/serverreg for backends,
 // and internal/serverreg's own comment argues why they are two -- but the
 // question "what does this network look like right now" has to have one
 // answer. The plugin API's whole premise is that the same call returns the
 // same thing on either side of the proxy, and two builders would eventually
-// make that false in a way no test on either side could see.
+// make that false in a way no test on either side could see. The one place
+// the two pictures differ is named, and is an Audience.
 package netstate
 
 import (
@@ -38,6 +39,39 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 )
 
+// Audience is which kind of agent a picture is for.
+//
+// A network with three hundred private servers running would hand every lobby
+// three hundred entries, and a fresh picture on every start and stop, for
+// servers no lobby will ever send anyone to. Proxies need them -- that is
+// where routing is, and where the consumer's plugin runs -- and backends need
+// neither the members nor their group.
+//
+// The split is by audience and not by a flag on the group. A backend that
+// could opt in would be a backend whose plugins start reading these entries,
+// and taking them out again would then be a breaking change to somebody's
+// code; narrower now is the only direction that can still be widened later.
+type Audience int
+
+const (
+	// ForProxies is the whole namespace.
+	ForProxies Audience = iota
+	// ForServers leaves out on-demand groups and their members.
+	ForServers
+)
+
+// AudienceOf is the picture an agent in this role is sent, and the one a
+// request from it is resolved against.
+//
+// Anything but a proxy gets the narrower picture, so a role added later is
+// shown too little until somebody decides otherwise rather than too much.
+func AudienceOf(role agent.Role) Audience {
+	if role == agent.RoleProxy {
+		return ForProxies
+	}
+	return ForServers
+}
+
 // Source is what a NetworkState is built from: the objects, and the players.
 //
 // The split is not incidental. Groups and servers are custom resources and
@@ -51,13 +85,13 @@ type Source struct {
 	Agents *agent.Registry
 }
 
-// Build describes one namespace.
+// Build describes one namespace to one kind of agent.
 //
 // Every slice it returns is sorted. A message assembled from map iteration
 // differs between two identical states, and every consumer here wants the
 // opposite: a test that asserts a list, a reader comparing two resyncs, and
 // anything that might later skip a resend because nothing changed.
-func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkState, error) {
+func (s Source) Build(ctx context.Context, namespace string, audience Audience) (*agentpb.NetworkState, error) {
 	state := &agentpb.NetworkState{}
 
 	// The chat feed's format, from whichever Network this namespace holds.
@@ -87,6 +121,9 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 	}
 	for i := range serverGroups.Items {
 		g := &serverGroups.Items[i]
+		if audience == ForServers && g.IsOnDemand() {
+			continue
+		}
 		state.Groups = append(state.Groups, &agentpb.GroupState{
 			Name:          g.Name,
 			Kind:          serverGroupKind(g),
@@ -148,6 +185,12 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 	}
 	for i := range servers.Items {
 		srv := &servers.Items[i]
+		// By the member's own key rather than its group's type: a Server
+		// carries that marker so that nothing has to fetch the group to know
+		// (see ServerSpec.Key).
+		if audience == ForServers && srv.Spec.Key != "" {
+			continue
+		}
 		announced := announcements[srv.Name]
 		state.Servers = append(state.Servers, &agentpb.ServerState{
 			Name:  srv.Name,
@@ -192,7 +235,7 @@ func (s Source) Build(ctx context.Context, namespace string) (*agentpb.NetworkSt
 // serverGroupKind maps a ServerGroup's own type onto the wire enum.
 //
 // A type this build does not recognise becomes KIND_UNSPECIFIED rather than a
-// guess. The CRD's validation makes a third value impossible today; the point
+// guess. The CRD's validation makes a fourth value impossible today; the point
 // is that adding one later reaches an old agent as "unknown" rather than as
 // whichever kind happened to be the default.
 func serverGroupKind(g *spawneryv1alpha1.ServerGroup) agentpb.GroupState_Kind {
@@ -201,6 +244,8 @@ func serverGroupKind(g *spawneryv1alpha1.ServerGroup) agentpb.GroupState_Kind {
 		return agentpb.GroupState_EPHEMERAL
 	case spawneryv1alpha1.ServerGroupPersistent:
 		return agentpb.GroupState_PERSISTENT
+	case spawneryv1alpha1.ServerGroupOnDemand:
+		return agentpb.GroupState_ON_DEMAND
 	default:
 		return agentpb.GroupState_KIND_UNSPECIFIED
 	}
