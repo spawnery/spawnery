@@ -28,6 +28,7 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/boost"
 	"github.com/spawnery/spawnery/internal/instance"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
@@ -60,6 +61,15 @@ var ErrGroupNotOnDemand = errors.New("that group is not on-demand")
 
 // ErrTooManyInstances is the group's own ceiling, reached.
 var ErrTooManyInstances = errors.New("that group is at spec.maxInstances")
+
+// ErrNoCeiling is an on-demand group with no spec.maxInstances at all.
+//
+// Not reachable through the API server, which requires the field for this
+// type, and kept because the alternative reading of a nil -- unlimited -- is
+// the one the field's own documentation argues against. It is its own error
+// rather than ErrTooManyInstances because the two send an admin to opposite
+// places: one group is full, this one was never bounded.
+var ErrNoCeiling = errors.New("that group has no spec.maxInstances")
 
 // ErrNotAnInstance is a stop aimed at a server that no key names.
 var ErrNotAnInstance = errors.New("that server is not an on-demand member")
@@ -141,9 +151,9 @@ type ClusterWriter interface {
 	//
 	// Reports AlreadyRunning for a member that was already there, which is a
 	// success: what the caller asked for is the case. It returns
-	// ErrNoSuchGroup, ErrGroupNotOnDemand, ErrTooManyInstances, ErrNameTaken,
-	// instance.ErrBadKey for a key no name can be built from, and
-	// ErrInstanceStopping or ErrInstancesDraining for the two states that
+	// ErrNoSuchGroup, ErrGroupNotOnDemand, ErrTooManyInstances, ErrNoCeiling,
+	// ErrNameTaken, instance.ErrBadKey for a key no name can be built from,
+	// and ErrInstanceStopping or ErrInstancesDraining for the two states that
 	// clear on their own.
 	StartServer(ctx context.Context, namespace, group, key string) (StartedServer, error)
 
@@ -390,7 +400,7 @@ func (w KubeWriter) StartServer(
 	live, going := 0, 0
 	for i := range members.Items {
 		m := &members.Items[i]
-		if m.Spec.GroupRef.Name != group || m.Spec.Key == "" {
+		if m.Spec.GroupRef.Name != group || !netstate.IsPrivateServer(m) {
 			continue
 		}
 		// Name and key together, which is the question occupant asks of the
@@ -429,7 +439,15 @@ func (w KubeWriter) StartServer(
 			going++
 		}
 	}
-	if g.Spec.MaxInstances != nil && int32(live) >= *g.Spec.MaxInstances {
+	// The CRD makes spec.maxInstances required for this type, so a nil here is
+	// a group that reached etcd around that rule. Refusing rather than reading
+	// it as unlimited: the field is required because a ceiling nobody chose is
+	// one nobody thought about, and waving such a group through is the one
+	// outcome that rule exists to prevent.
+	if g.Spec.MaxInstances == nil {
+		return StartedServer{}, ErrNoCeiling
+	}
+	if int32(live) >= *g.Spec.MaxInstances {
 		if going > 0 {
 			return StartedServer{}, ErrInstancesDraining
 		}
@@ -511,7 +529,7 @@ func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) erro
 		}
 		return err
 	}
-	if srv.Spec.Key == "" {
+	if !netstate.IsPrivateServer(&srv) {
 		return ErrNotAnInstance
 	}
 	if err := w.Client.Delete(ctx, &srv); err != nil && !apierrors.IsNotFound(err) {

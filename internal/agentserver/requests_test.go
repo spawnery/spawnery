@@ -18,6 +18,7 @@ package agentserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -26,6 +27,7 @@ import (
 	"github.com/go-logr/logr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -544,5 +546,51 @@ func TestAProxyIsRefusedADoor(t *testing.T) {
 	if response.GetError() == nil ||
 		response.GetError().GetReason() != agentpb.RequestError_REFUSED {
 		t.Fatalf("response = %+v, want a refusal with a reason", response)
+	}
+}
+
+// A nil spec.maxInstances is refused rather than read as unlimited.
+//
+// The CRD requires the field for this type, so nothing reaching the API
+// server gets here -- but the field is required precisely because a ceiling
+// nobody chose is one nobody thought about, and the other reading of a nil
+// would start members for exactly that group without bound.
+func TestStartRefusesAnOnDemandGroupWithNoCeiling(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	unbounded := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers", Namespace: "ns"},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{Type: spawneryv1alpha1.ServerGroupOnDemand},
+	}
+	w := KubeWriter{
+		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(unbounded).Build(),
+		Clock:  time.Now,
+	}
+
+	_, err := w.StartServer(context.Background(), "ns", "private-servers", "c0ffee")
+	if !errors.Is(err, ErrNoCeiling) {
+		t.Fatalf("err = %v, want ErrNoCeiling: an unbounded group started a member", err)
+	}
+	// And nothing was created on the way to the refusal.
+	var srv spawneryv1alpha1.Server
+	if err := w.Client.Get(context.Background(),
+		client.ObjectKey{Namespace: "ns", Name: "private-servers-c0ffee"}, &srv); err == nil {
+		t.Fatal("the member of an unbounded group was created anyway")
+	}
+
+	// The caller is told which of the two it is: this group was never
+	// bounded, rather than being full.
+	s := &Server{opts: Options{Writer: w}, requestRate: newRequestLimiter(time.Now)}
+	resp := s.answerStartServer(context.Background(), logr.Discard(),
+		grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy},
+		7, &agentpb.StartServerRequest{Group: "private-servers", Key: "c0ffee"})
+	if resp.GetError().GetReason() != agentpb.RequestError_REFUSED {
+		t.Fatalf("reason = %v, want REFUSED", resp.GetError().GetReason())
+	}
+	if !strings.Contains(resp.GetError().GetMessage(), "no spec.maxInstances") {
+		t.Errorf("message = %q, which does not say the group has no ceiling",
+			resp.GetError().GetMessage())
 	}
 }

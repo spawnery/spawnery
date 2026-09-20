@@ -760,6 +760,10 @@ func (s *Server) answerStartServer(
 	case errors.Is(err, ErrTooManyInstances):
 		return refuse(reqID, agentpb.RequestError_REFUSED,
 			"that group is at spec.maxInstances")
+	case errors.Is(err, ErrNoCeiling):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group has no spec.maxInstances, so nothing bounds how many members it could have; "+
+				"an admin has to set one before it can start any")
 	case errors.Is(err, ErrNameTaken):
 		return refuse(reqID, agentpb.RequestError_REFUSED,
 			"a server of another group already has the name that group and key compose; "+
