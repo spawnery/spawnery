@@ -171,10 +171,12 @@ public interface SpawneryApi {
      * <p><b>How it fails.</b> When the operator answers no, the stage fails
      * with an {@link IllegalStateException} whose message is
      * {@code <REASON>: <message>} -- the operator's reason, then its own
-     * sentence. Through a dependent stage ({@code thenApply}, {@code handle})
-     * that exception arrives wrapped in a {@code CompletionException}, and
-     * through {@code get()} in an {@code ExecutionException}; read
-     * {@code getCause()}. The reasons:
+     * sentence. {@code handle}, {@code exceptionally} and {@code whenComplete}
+     * called directly on this stage receive that exception itself. A stage
+     * derived from it with {@code thenApply} or {@code thenCompose} delivers
+     * it wrapped in a {@code CompletionException}, and {@code get()} wraps it
+     * in an {@code ExecutionException}; unwrap with {@code getCause()} only
+     * when what you caught is one of those wrappers. The reasons:
      * <ul>
      *   <li>{@code REFUSED} for a key that cannot be part of a name, for a name
      *       longer than 63 characters once the group and the key are composed,

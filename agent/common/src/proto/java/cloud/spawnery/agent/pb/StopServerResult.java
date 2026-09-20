@@ -13,6 +13,9 @@ package cloud.spawnery.agent.pb;
  * the name. RetireResult refuses the same repetition because an admin who
  * types the command twice needs to learn it did nothing the first time; the
  * caller here is a plugin, and "it is going" is exactly what it asked for.
+ *
+ * Once the member is gone the same request is answered NOT_FOUND: there is no
+ * server by that name left to match.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StopServerResult}
@@ -275,6 +278,9 @@ private static final long serialVersionUID = 0L;
    * the name. RetireResult refuses the same repetition because an admin who
    * types the command twice needs to learn it did nothing the first time; the
    * caller here is a plugin, and "it is going" is exactly what it asked for.
+   *
+   * Once the member is gone the same request is answered NOT_FOUND: there is no
+   * server by that name left to match.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StopServerResult}

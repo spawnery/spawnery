@@ -1804,6 +1804,9 @@ func (x *StopServerRequest) GetServer() string {
 // the name. RetireResult refuses the same repetition because an admin who
 // types the command twice needs to learn it did nothing the first time; the
 // caller here is a plugin, and "it is going" is exactly what it asked for.
+//
+// Once the member is gone the same request is answered NOT_FOUND: there is no
+// server by that name left to match.
 type StopServerResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The server that is going, echoed so a caller sees what the operator

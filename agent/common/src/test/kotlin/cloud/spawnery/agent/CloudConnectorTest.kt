@@ -5,6 +5,7 @@ import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.RequestError
 import cloud.spawnery.agent.pb.StartServerResult
 import cloud.spawnery.agent.pb.StopServerResult
+import java.util.concurrent.CompletionException
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
@@ -288,5 +289,49 @@ class CloudConnectorTest {
             "REFUSED: that server is not a member of an on-demand group",
             failure.cause!!.message,
         )
+    }
+
+    // The Javadoc on startServer tells plugin authors when to unwrap, so the
+    // shape it describes is pinned here rather than inferred.
+    private fun refusedStart(): java.util.concurrent.CompletionStage<cloud.spawnery.agent.api.StartedServer> {
+        val connector = connector()
+        val stage = connector.startServer("lobby", "c0ffee")
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.last().id)
+                .setError(
+                    RequestError.newBuilder()
+                        .setReason(RequestError.Reason.REFUSED)
+                        .setMessage("that group is at spec.maxInstances"),
+                )
+                .build(),
+        )
+        return stage
+    }
+
+    @Test
+    fun `handle, exceptionally and whenComplete on the stage itself see the bare exception`() {
+        var byHandle: Throwable? = null
+        var byExceptionally: Throwable? = null
+        var byWhenComplete: Throwable? = null
+        refusedStart().handle { _, failure -> byHandle = failure }
+        refusedStart().exceptionally { failure -> byExceptionally = failure; null }
+        refusedStart().whenComplete { _, failure -> byWhenComplete = failure }
+
+        for (seen in listOf(byHandle, byExceptionally, byWhenComplete)) {
+            assertTrue(seen is IllegalStateException, "$seen")
+            assertEquals(null, seen.cause)
+        }
+    }
+
+    @Test
+    fun `a dependent stage sees the exception wrapped in a CompletionException`() {
+        val seen = refusedStart()
+            .thenApply { it.name() }
+            .handle { _, failure -> failure }
+            .toCompletableFuture().get(1, TimeUnit.SECONDS)
+
+        assertTrue(seen is CompletionException, "$seen")
+        assertTrue(seen.cause is IllegalStateException, "${seen.cause}")
     }
 }
