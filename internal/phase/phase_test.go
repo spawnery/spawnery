@@ -17,6 +17,9 @@ limitations under the License.
 package phase
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -959,9 +962,15 @@ func TestRetiringWinsOverRegistering(t *testing.T) {
 	}
 }
 
-// Every phase, named one by one rather than asserted about two: the set is
-// what callers elsewhere depend on, and a phase added to the state machine
-// without a decision about this one is the case this test is here to catch.
+// Every phase, named one by one rather than asserted about two, and the
+// table checked against the phases the package actually declares.
+//
+// The second half is what makes the first half hold: a hand-written table is
+// a list somebody has to remember to extend, and a Phase added without a line
+// here would simply be absent from it and pass. Read from the source instead,
+// an addition fails this test until somebody decides whether the new phase
+// ends a server's run -- which is the decision callers elsewhere are relying
+// on having been made.
 func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
 	terminal := map[Phase]bool{
 		Pending:     false,
@@ -981,4 +990,59 @@ func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
 	if Terminal("") {
 		t.Error("a server with no phase yet counts as one whose run is over")
 	}
+
+	for _, p := range declaredPhases(t) {
+		if _, listed := terminal[p]; !listed {
+			t.Errorf("phase %q is declared and this test says nothing about it: "+
+				"decide whether it ends a server's run and add it above", p)
+		}
+	}
+}
+
+// declaredPhases is every Phase constant this package declares, read from its
+// own source.
+//
+// go/parser and not reflection, because a constant leaves nothing behind at
+// run time to enumerate. The whole directory rather than phase.go alone, so
+// that a phase declared in a file added later is still seen.
+func declaredPhases(t *testing.T) []Phase {
+	t.Helper()
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(f os.FileInfo) bool {
+		return !strings.HasSuffix(f.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse this package: %v", err)
+	}
+	var declared []Phase
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			for _, decl := range file.Decls {
+				gen, ok := decl.(*ast.GenDecl)
+				if !ok || gen.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range gen.Specs {
+					value, ok := spec.(*ast.ValueSpec)
+					if !ok {
+						continue
+					}
+					if name, ok := value.Type.(*ast.Ident); !ok || name.Name != "Phase" {
+						continue
+					}
+					for _, v := range value.Values {
+						lit, ok := v.(*ast.BasicLit)
+						if !ok {
+							continue
+						}
+						declared = append(declared, Phase(strings.Trim(lit.Value, `"`)))
+					}
+				}
+			}
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("no Phase constants found, so this test would pass whatever Terminal did")
+	}
+	return declared
 }
