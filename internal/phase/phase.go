@@ -114,6 +114,22 @@ func RescueWindow(reportInterval, readTimeout time.Duration) time.Duration {
 	return readTimeout - 2*reportInterval
 }
 
+// Terminal reports whether a phase is the end of a server's run.
+//
+// Failed and Finished, and what separates them is only why the object is kept
+// -- an hour for diagnosis, a short retention for a round that ended. What
+// they share is everything a caller of this asks about: no player can join
+// such a server, it holds no slot in a group's size, and its object may be
+// replaced by a fresh one of the same name.
+//
+// A phase that joins that set joins it here. The callers sit in the
+// controllers and in the request endpoint, and each of them spelling the
+// disjunction for itself is precisely how a two-valued assumption absorbs a
+// third value without anything failing to compile.
+func Terminal(p Phase) bool {
+	return p == Failed || p == Finished
+}
+
 // MaxReadinessLosses is the number of readiness losses after which a server is
 // considered broken rather than flapping.
 const MaxReadinessLosses int32 = 3

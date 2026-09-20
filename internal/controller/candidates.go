@@ -315,7 +315,7 @@ func (v ServerView) leaving() bool {
 // rather than for diagnosis — and that difference has no bearing on whether it
 // still occupies a floor slot. It does not.
 func (v ServerView) countsTowardSize() bool {
-	return !v.leaving() && v.Phase != phase.Failed && v.Phase != phase.Finished
+	return !v.leaving() && !phase.Terminal(v.Phase)
 }
 
 // tookPlayers reports whether the server was ever able to hold players. That

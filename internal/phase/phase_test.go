@@ -958,3 +958,27 @@ func TestRetiringWinsOverRegistering(t *testing.T) {
 		t.Errorf("got %+v, want a retiring server to be deregistered and stay retiring", got)
 	}
 }
+
+// Every phase, named one by one rather than asserted about two: the set is
+// what callers elsewhere depend on, and a phase added to the state machine
+// without a decision about this one is the case this test is here to catch.
+func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
+	terminal := map[Phase]bool{
+		Pending:     false,
+		Starting:    false,
+		Ready:       false,
+		Retiring:    false,
+		Draining:    false,
+		Terminating: false,
+		Failed:      true,
+		Finished:    true,
+	}
+	for p, want := range terminal {
+		if got := Terminal(p); got != want {
+			t.Errorf("Terminal(%s) = %v, want %v", p, got, want)
+		}
+	}
+	if Terminal("") {
+		t.Error("a server with no phase yet counts as one whose run is over")
+	}
+}

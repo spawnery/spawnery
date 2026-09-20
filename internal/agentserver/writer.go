@@ -368,7 +368,7 @@ func (w KubeWriter) StartServer(
 			// reported: its world is on the claim, the object is a corpse,
 			// and refusing here would leave the owner waiting out a
 			// retention they cannot see.
-			if isTerminal(m.Status.Phase) {
+			if phase.Terminal(phase.Phase(m.Status.Phase)) {
 				if err := w.Client.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {
 					return StartedServer{}, err
 				}
@@ -377,7 +377,7 @@ func (w KubeWriter) StartServer(
 			}
 			return StartedServer{Name: name, AlreadyRunning: true}, nil
 		}
-		if !isTerminal(m.Status.Phase) {
+		if !phase.Terminal(phase.Phase(m.Status.Phase)) {
 			live++
 		}
 	}
@@ -433,10 +433,4 @@ func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) erro
 		return err
 	}
 	return nil
-}
-
-// isTerminal is whether a member's run is over: its object may be replaced
-// and it counts against no ceiling.
-func isTerminal(p string) bool {
-	return p == string(phase.Failed) || p == string(phase.Finished)
 }
