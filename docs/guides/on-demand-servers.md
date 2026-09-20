@@ -146,6 +146,22 @@ because RBAC selects by name and these names are minted at runtime.
   claim, so the key is free and its owner starts it again as they did the
   first time.
 
+**And one way a member does not end: being left alone.** There is no idle
+timeout here, and nothing reaps a member because it is empty. A world whose
+owner closed the game without typing `/stop` keeps running, and keeps its slot
+against `spec.maxInstances`, for as long as nobody asks it to stop. This is the
+same line the rest of the type is drawn on — the operator does not decide that
+somebody is finished playing — but it is the first thing a network meets once
+it has more players than slots, because a handful of forgotten worlds is a
+ceiling that never comes back on its own.
+
+Whether a player is finished is a question about that player, and the system
+that knows them is the one that can answer it: a plugin watching its own
+sessions, an idle check of your own, a nightly job. Whatever decides calls
+`stopServer` with the member's name, and that ends the member the way its
+owner's own `/stop` would have — the players are drained, the claim stays, and
+the next start mounts the same world.
+
 ## Nothing rolls
 
 A spec edit does not touch a running member. It carries the spec it started with
