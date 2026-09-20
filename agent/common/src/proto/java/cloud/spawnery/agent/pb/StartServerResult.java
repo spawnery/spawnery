@@ -20,10 +20,11 @@ package cloud.spawnery.agent.pb;
  * **A member that is stopping is not already running.** A stop deletes the
  * member, but it lingers while its players are moved, for up to the group's
  * drain timeout, and answering "already running" for it would send a player to
- * a server that is about to go. A start on such a key is refused, with
- * REFUSED, and the message says the server is still stopping and can be
- * started again once it is gone. Nothing in the request waits for that: a
- * caller told to try again in a moment can do exactly that.
+ * a server that is about to go. A start on such a key is answered
+ * UNAVAILABLE and not REFUSED, because the reason is what a caller branches on
+ * and this is the one case where the same request succeeds a moment later:
+ * once the member is gone it starts a fresh one. Nothing in the request waits
+ * for that; a caller told to try again shortly can do exactly that.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StartServerResult}
@@ -322,10 +323,11 @@ private static final long serialVersionUID = 0L;
    * **A member that is stopping is not already running.** A stop deletes the
    * member, but it lingers while its players are moved, for up to the group's
    * drain timeout, and answering "already running" for it would send a player to
-   * a server that is about to go. A start on such a key is refused, with
-   * REFUSED, and the message says the server is still stopping and can be
-   * started again once it is gone. Nothing in the request waits for that: a
-   * caller told to try again in a moment can do exactly that.
+   * a server that is about to go. A start on such a key is answered
+   * UNAVAILABLE and not REFUSED, because the reason is what a caller branches on
+   * and this is the one case where the same request succeeds a moment later:
+   * once the member is gone it starts a fresh one. Nothing in the request waits
+   * for that; a caller told to try again shortly can do exactly that.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StartServerResult}

@@ -79,7 +79,7 @@ func TestOnDemandRequestsAreOnTheWire(t *testing.T) {
 		},
 	}
 	if req.GetStartServer().GetKey() != "c0ffee" {
-		t.Fatal("the key does not survive the round trip through the oneof")
+		t.Fatal("the start_server arm does not carry the key")
 	}
 	if agentpb.GroupState_ON_DEMAND == agentpb.GroupState_KIND_UNSPECIFIED {
 		t.Fatal("ON_DEMAND must be its own value, not the unspecified one")

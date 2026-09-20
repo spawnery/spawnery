@@ -88,7 +88,11 @@ private static final long serialVersionUID = 0L;
     NOT_FOUND(1),
     /**
      * <pre>
-     * The operator understood and declined -- a bound, not a mistake.
+     * The operator understood and declined, and asking again unchanged will be
+     * declined again: the request met a bound, or it is itself wrong -- a
+     * replica count below one, a name that is not a DNS label, a server that is
+     * not of the kind the verb acts on. There is no reason of its own for bad
+     * input; a boost for fewer than one replica was already refused this way.
      * </pre>
      *
      * <code>REFUSED = 2;</code>
@@ -139,7 +143,11 @@ private static final long serialVersionUID = 0L;
     public static final int NOT_FOUND_VALUE = 1;
     /**
      * <pre>
-     * The operator understood and declined -- a bound, not a mistake.
+     * The operator understood and declined, and asking again unchanged will be
+     * declined again: the request met a bound, or it is itself wrong -- a
+     * replica count below one, a name that is not a DNS label, a server that is
+     * not of the kind the verb acts on. There is no reason of its own for bad
+     * input; a boost for fewer than one replica was already refused this way.
      * </pre>
      *
      * <code>REFUSED = 2;</code>

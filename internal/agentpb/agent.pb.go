@@ -47,7 +47,11 @@ const (
 	// gets for a player who logged out between the call and the request, which
 	// is ordinary rather than exceptional.
 	RequestError_NOT_FOUND RequestError_Reason = 1
-	// The operator understood and declined -- a bound, not a mistake.
+	// The operator understood and declined, and asking again unchanged will be
+	// declined again: the request met a bound, or it is itself wrong -- a
+	// replica count below one, a name that is not a DNS label, a server that is
+	// not of the kind the verb acts on. There is no reason of its own for bad
+	// input; a boost for fewer than one replica was already refused this way.
 	RequestError_REFUSED RequestError_Reason = 2
 	// This pod has asked too often. See the operator's own bound.
 	RequestError_RATE_LIMITED RequestError_Reason = 3
@@ -1670,10 +1674,11 @@ func (x *StartServerRequest) GetKey() string {
 // **A member that is stopping is not already running.** A stop deletes the
 // member, but it lingers while its players are moved, for up to the group's
 // drain timeout, and answering "already running" for it would send a player to
-// a server that is about to go. A start on such a key is refused, with
-// REFUSED, and the message says the server is still stopping and can be
-// started again once it is gone. Nothing in the request waits for that: a
-// caller told to try again in a moment can do exactly that.
+// a server that is about to go. A start on such a key is answered
+// UNAVAILABLE and not REFUSED, because the reason is what a caller branches on
+// and this is the one case where the same request succeeds a moment later:
+// once the member is gone it starts a fresh one. Nothing in the request waits
+// for that; a caller told to try again shortly can do exactly that.
 type StartServerResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The server the operator composed, echoed so a caller that built the key

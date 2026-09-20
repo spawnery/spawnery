@@ -392,10 +392,11 @@ message StartServerRequest {
 // **A member that is stopping is not already running.** A stop deletes the
 // member, but it lingers while its players are moved, for up to the group's
 // drain timeout, and answering "already running" for it would send a player to
-// a server that is about to go. A start on such a key is refused, with
-// REFUSED, and the message says the server is still stopping and can be
-// started again once it is gone. Nothing in the request waits for that: a
-// caller told to try again in a moment can do exactly that.
+// a server that is about to go. A start on such a key is answered
+// UNAVAILABLE and not REFUSED, because the reason is what a caller branches on
+// and this is the one case where the same request succeeds a moment later:
+// once the member is gone it starts a fresh one. Nothing in the request waits
+// for that; a caller told to try again shortly can do exactly that.
 message StartServerResult {
   // The server the operator composed, echoed so a caller that built the key
   // from a UUID sees the name players and logs will use.
@@ -506,7 +507,11 @@ message RequestError {
     // gets for a player who logged out between the call and the request, which
     // is ordinary rather than exceptional.
     NOT_FOUND = 1;
-    // The operator understood and declined -- a bound, not a mistake.
+    // The operator understood and declined, and asking again unchanged will be
+    // declined again: the request met a bound, or it is itself wrong -- a
+    // replica count below one, a name that is not a DNS label, a server that is
+    // not of the kind the verb acts on. There is no reason of its own for bad
+    // input; a boost for fewer than one replica was already refused this way.
     REFUSED = 2;
     // This pod has asked too often. See the operator's own bound.
     RATE_LIMITED = 3;
