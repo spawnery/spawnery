@@ -1,8 +1,16 @@
 package cloud.spawnery.agent
 
 import cloud.spawnery.agent.pb.CloudRequest
+import cloud.spawnery.agent.pb.CloudResponse
+import cloud.spawnery.agent.pb.RequestError
+import cloud.spawnery.agent.pb.StartServerResult
+import cloud.spawnery.agent.pb.StopServerResult
+import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -166,5 +174,168 @@ class CloudConnectorTest {
         reconnected.onStreamChanged()
 
         assertEquals(1, sent.size)
+    }
+
+    @Test
+    fun `a start is sent with the group and the key`() {
+        val connector = connector()
+
+        connector.startServer("private-servers", "c0ffee")
+
+        assertEquals("private-servers", requested.single().startServer.group)
+        assertEquals("c0ffee", requested.single().startServer.key)
+    }
+
+    @Test
+    fun `a start answer completes with the composed name`() {
+        val connector = connector()
+        val future = connector.startServer("private-servers", "c0ffee")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setStartServer(
+                    StartServerResult.newBuilder()
+                        .setServer("private-servers-c0ffee")
+                        .setAlreadyRunning(true),
+                )
+                .build(),
+        )
+
+        val started = future.toCompletableFuture().get(1, TimeUnit.SECONDS)
+        assertEquals("private-servers-c0ffee", started.name())
+        assertTrue(started.alreadyRunning())
+    }
+
+    @Test
+    fun `a start that made the server says it was not already running`() {
+        val connector = connector()
+        val future = connector.startServer("private-servers", "c0ffee")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setStartServer(StartServerResult.newBuilder().setServer("private-servers-c0ffee"))
+                .build(),
+        )
+
+        assertEquals(false, future.toCompletableFuture().get(1, TimeUnit.SECONDS).alreadyRunning())
+    }
+
+    @Test
+    fun `a stop is sent with the server's name`() {
+        val connector = connector()
+
+        connector.stopServer("private-servers-c0ffee")
+
+        assertEquals("private-servers-c0ffee", requested.single().stopServer.server)
+    }
+
+    @Test
+    fun `a stop answer completes with no value`() {
+        val connector = connector()
+        val future = connector.stopServer("private-servers-c0ffee")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setStopServer(StopServerResult.newBuilder().setServer("private-servers-c0ffee"))
+                .build(),
+        )
+
+        assertEquals(null, future.toCompletableFuture().get(1, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun `a refused start fails the stage with the reason and the operator's words`() {
+        val connector = connector()
+        val future = connector.startServer("lobby", "c0ffee")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setError(
+                    RequestError.newBuilder()
+                        .setReason(RequestError.Reason.REFUSED)
+                        .setMessage("that group is at spec.maxInstances"),
+                )
+                .build(),
+        )
+
+        val failure = assertFailsWith<ExecutionException> { future.toCompletableFuture().get(1, TimeUnit.SECONDS) }
+        assertTrue(failure.cause is IllegalStateException, "${failure.cause}")
+        assertEquals("REFUSED: that group is at spec.maxInstances", failure.cause!!.message)
+    }
+
+    @Test
+    fun `a refused stop fails the stage with the reason and the operator's words`() {
+        val connector = connector()
+        val future = connector.stopServer("lobby-a")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setError(
+                    RequestError.newBuilder()
+                        .setReason(RequestError.Reason.REFUSED)
+                        .setMessage("that server is not a member of an on-demand group"),
+                )
+                .build(),
+        )
+
+        val failure = assertFailsWith<ExecutionException> { future.toCompletableFuture().get(1, TimeUnit.SECONDS) }
+        assertTrue(failure.cause is IllegalStateException, "${failure.cause}")
+        assertEquals(
+            "REFUSED: that server is not a member of an on-demand group",
+            failure.cause!!.message,
+        )
+    }
+
+    // The Javadoc on startServer tells plugin authors when to unwrap, so the
+    // shape it describes is pinned here rather than inferred.
+    private fun refusedStart(): java.util.concurrent.CompletionStage<cloud.spawnery.agent.api.StartedServer> {
+        val connector = connector()
+        val stage = connector.startServer("lobby", "c0ffee")
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.last().id)
+                .setError(
+                    RequestError.newBuilder()
+                        .setReason(RequestError.Reason.REFUSED)
+                        .setMessage("that group is at spec.maxInstances"),
+                )
+                .build(),
+        )
+        return stage
+    }
+
+    @Test
+    fun `handle, exceptionally and whenComplete on the stage itself see the bare exception`() {
+        var byHandle: Throwable? = null
+        var byExceptionally: Throwable? = null
+        var byWhenComplete: Throwable? = null
+        refusedStart().handle { _, failure -> byHandle = failure }
+        refusedStart().exceptionally { failure -> byExceptionally = failure; null }
+        refusedStart().whenComplete { _, failure -> byWhenComplete = failure }
+
+        for (seen in listOf(byHandle, byExceptionally, byWhenComplete)) {
+            assertTrue(seen is IllegalStateException, "$seen")
+            assertEquals(null, seen.cause)
+        }
+    }
+
+    // The wrapping is the JDK's, so this cannot go red short of a JDK change --
+    // and that is its subject. SpawneryApi.startServer's javadoc tells plugin
+    // authors to call getCause() on a derived stage, and this is the only place
+    // that advice meets a real JDK rather than being asserted in prose.
+    @Test
+    fun `a dependent stage sees the exception wrapped in a CompletionException`() {
+        val seen = refusedStart()
+            .thenApply { it.name() }
+            .handle { _, failure -> failure }
+            .toCompletableFuture().get(1, TimeUnit.SECONDS)
+
+        assertTrue(seen is CompletionException, "$seen")
+        assertTrue(seen.cause is IllegalStateException, "${seen.cause}")
     }
 }

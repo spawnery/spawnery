@@ -6,7 +6,7 @@ The Helm chart is the only way the operator installs.
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.4.0 --namespace spawnery-system --create-namespace
+  --version 0.5.0 --namespace spawnery-system --create-namespace
 ```
 
 The chart is an OCI artefact, so there is no `helm repo add`: an OCI

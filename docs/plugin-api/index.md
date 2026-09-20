@@ -8,7 +8,7 @@ agent, and the calls themselves.
 
 ```kotlin title="build.gradle.kts"
 dependencies {
-    compileOnly("cloud.spawnery:spawnery-api:0.4.0")
+    compileOnly("cloud.spawnery:spawnery-api:0.5.0")
 }
 ```
 
@@ -87,6 +87,13 @@ is no call that reaches another network, and that is structural rather than a
 check: the agent's own credentials are a pod-bound ServiceAccount token, so
 there is nothing to widen.
 
+**A backend's mirror leaves out the private servers of an on-demand group, and
+the group itself.** A plugin on a proxy sees them; one on a backend does not,
+because routing lives on the proxies and a backend would otherwise carry an
+entry, and a fresh picture on every start and stop, for servers nobody sends
+anyone to. [Private servers](../guides/on-demand-servers.md#who-sees-them) says
+what that changes for `connect`.
+
 Reads need no permission, and there is no way to require one: Bukkit and
 Velocity attach permissions to a player or the console, never to a plugin, so
 a plugin calling this API presents no identity to check. A plugin already
@@ -125,6 +132,7 @@ double, say — is the one thing that has to be rebuilt when they do.
 ---
 
 [What a plugin can do](what-a-plugin-can-do.md) covers the calls that change
-something: moving a player, retiring a server, boosting a group, closing a
-door, describing a round, and reading the event feed. Every type and method is
+something: moving a player, retiring a server, boosting a group, starting and
+stopping a private server, closing a door, describing a round, and reading the
+event feed. Every type and method is
 in the [Javadoc](javadoc/index.html).

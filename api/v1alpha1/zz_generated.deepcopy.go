@@ -858,6 +858,11 @@ func (in *ServerGroupSpec) DeepCopyInto(out *ServerGroupSpec) {
 		*out = new(int32)
 		**out = **in
 	}
+	if in.MaxInstances != nil {
+		in, out := &in.MaxInstances, &out.MaxInstances
+		*out = new(int32)
+		**out = **in
+	}
 	if in.Resources != nil {
 		in, out := &in.Resources, &out.Resources
 		*out = new(v1.ResourceRequirements)

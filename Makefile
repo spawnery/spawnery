@@ -463,6 +463,13 @@ e2e: manifests
 e2e-tutorial: manifests
 	hack/e2e-tutorial.sh
 
+# One private server, asked for by name and found again with its world -- see
+# hack/e2e-ondemand.sh's header for why this is not e2e's job either. Like the
+# tutorial's run it loads a real game image, and like it, nightly.yml runs it.
+.PHONY: e2e-ondemand
+e2e-ondemand: manifests
+	hack/e2e-ondemand.sh
+
 # --strict, inside nix/docs-site.nix's buildPhase, turns an unresolved
 # internal link or a page missing from the nav into a build failure -- the
 # only link checker this project has. Out of `test`: internal/controller

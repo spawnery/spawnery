@@ -3809,6 +3809,21 @@ spec:
                   recommended.
                 minLength: 1
                 type: string
+              maxInstances:
+                description: |-
+                  MaxInstances is how many members this group may have at once.
+
+                  A fleet ceiling and not a per-player quota: who may have how many
+                  private servers is a question about a player, a purchase and a ban,
+                  and the system that knows those three is the one that answers it.
+
+                  Zero is legal and means the group is closed -- new starts are refused
+                  and every world stays where it is, which is the state an incident wants
+                  and a deletion would not give. Required rather than defaulted: a
+                  ceiling nobody chose is a ceiling nobody thought about.
+                format: int32
+                minimum: 0
+                type: integer
               maxPlayers:
                 description: MaxPlayers is the player capacity of a single server
                   of this group.
@@ -5129,7 +5144,7 @@ spec:
                     type: array
                 type: object
               storage:
-                description: Storage configures the PVC. Persistent only.
+                description: Storage configures the PVC. Persistent and OnDemand only.
                 properties:
                   accessModes:
                     default:
@@ -5161,10 +5176,12 @@ spec:
                 minimum: 1
                 type: integer
               type:
-                description: Type selects ephemeral or persistent operation. Immutable.
+                description: Type selects ephemeral, persistent or on-demand operation.
+                  Immutable.
                 enum:
                 - Ephemeral
                 - Persistent
+                - OnDemand
                 type: string
               update:
                 description: Update configures the rolling update. Ephemeral only.
@@ -5209,6 +5226,18 @@ spec:
               rule: self.type != 'Persistent' || has(self.storage)
             - message: spec.replicas is required for type Persistent
               rule: self.type != 'Persistent' || has(self.replicas)
+            - message: spec.scaling is not allowed for type OnDemand
+              rule: self.type != 'OnDemand' || !has(self.scaling)
+            - message: spec.replicas is not allowed for type OnDemand
+              rule: self.type != 'OnDemand' || !has(self.replicas)
+            - message: spec.update is not allowed for type OnDemand
+              rule: self.type != 'OnDemand' || !has(self.update)
+            - message: spec.storage is required for type OnDemand
+              rule: self.type != 'OnDemand' || has(self.storage)
+            - message: spec.maxInstances is required for type OnDemand
+              rule: self.type != 'OnDemand' || has(self.maxInstances)
+            - message: spec.maxInstances is only allowed for type OnDemand
+              rule: self.type == 'OnDemand' || !has(self.maxInstances)
             - message: scaling.minReplicas must not exceed scaling.maxReplicas
               rule: '!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas'
             - message: storage.storageClassName is immutable
@@ -5462,6 +5491,18 @@ spec:
                 required:
                 - name
                 type: object
+              key:
+                description: |-
+                  Key is the caller's name for the world this member carries, and it is
+                  set for a member of an OnDemand group and for no other server.
+
+                  It is here for the reason Ordinal is: a Server has to be able to say
+                  what kind of member it is without its group, and the Server controller
+                  reconstructs a synthetic group from this object alone when the real one
+                  is gone. An inference from Ordinal alone was exhaustive while there were
+                  two types; with three, a member with neither marker would read as
+                  ephemeral, which is the one answer that is wrong about its world.
+                type: string
               number:
                 description: |-
                   Number is which of its group's servers this is, counted the way a

@@ -1,0 +1,109 @@
+# The manifest of the on-demand run. Not test/e2e/manifests/e2e.yaml, and the
+# difference is the one thing this file exists for: that manifest names images
+# that never resolve, by its own decision, so nothing there ever runs a game
+# process. A world that survives can only be shown by a server that actually
+# wrote one, so the group below names the real Purpur image -- the same tag
+# config/samples/ondemand.yaml names -- and hack/e2e-ondemand.sh builds it,
+# loads it into the node and checks that this file names what it loaded.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: minecraft
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: velocity-forwarding-secret
+  namespace: minecraft
+stringData:
+  secret: e2e-forwarding-secret
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: Network
+metadata:
+  name: production
+  namespace: minecraft
+spec:
+  forwardingSecretRef:
+    name: velocity-forwarding-secret
+  defaults:
+    minecraftVersion: "26.2"
+    # docs/tutorial/network.yaml's own numbers, and they are load-bearing here
+    # rather than decoration. The image sizes the heap with MaxRAMPercentage,
+    # so a server with no memory limit takes three quarters of whatever machine
+    # it lands on -- 70 GiB on the workstation this was written on, and more
+    # than a GitHub runner has on the runner nightly.yml gives it.
+    resources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        memory: 2Gi
+---
+# The proxy this run asks on. Its image never resolves and that is enough: the
+# test authenticates as this pod to open its session, and grpcauth checks the
+# pod's UID and its managed-by and role labels, none of which needs a container
+# that started. A real Velocity here would cost another image in the run and
+# prove nothing further, because the plugin that would send the request is the
+# consumer's and lives in another repository.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ProxyGroup
+metadata:
+  name: gateway
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  replicas: 1
+  image: ghcr.io/spawnery/velocity:e2e-no-such-tag
+  expose:
+    type: ClusterIP
+    clusterIP:
+      address: mc.e2e.test
+  routing:
+    # A lobby rather than private-servers: a proxy's fallback list is where
+    # players land when they have nowhere else to go, and a group of private
+    # worlds is the one thing that must never be that. The list may not be
+    # empty, so the group below exists to be named here.
+    fallbackGroups:
+      - lobby
+---
+# Named by the proxy's fallback list and nothing else. minReplicas 0 with no
+# spare slots keeps it at zero servers: a server here could never start -- its
+# image does not resolve -- and each one that tried would spend the run cycling
+# through Failed and leaving denial-shaped noise in the log this package reads.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: lobby
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  type: Ephemeral
+  image: ghcr.io/spawnery/paper:e2e-no-such-tag
+  maxPlayers: 20
+  scaling:
+    minReplicas: 0
+    maxReplicas: 1
+    spareSlots: 0
+---
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: private-servers
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  type: OnDemand
+  image: ghcr.io/spawnery/purpur:26.2-0.5.0
+  maxPlayers: 10
+  maxInstances: 4
+  storage:
+    # kind's default class is rancher.io/local-path, which binds on the first
+    # pod scheduled to consume the claim. 1Gi rather than the sample's 2Gi:
+    # local-path hands out a directory on the node's filesystem and the size is
+    # not enforced, so this number buys nothing but the time a bigger one would
+    # cost if the class ever changed.
+    size: 1Gi

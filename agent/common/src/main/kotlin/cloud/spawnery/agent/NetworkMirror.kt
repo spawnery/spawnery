@@ -121,6 +121,7 @@ class NetworkMirror {
             GroupState.Kind.EPHEMERAL -> Group.Kind.EPHEMERAL
             GroupState.Kind.PERSISTENT -> Group.Kind.PERSISTENT
             GroupState.Kind.PROXY -> Group.Kind.PROXY
+            GroupState.Kind.ON_DEMAND -> Group.Kind.ON_DEMAND
             // Both the operator's explicit "I do not know" and what proto3
             // hands an agent older than a value it was sent.
             else -> Group.Kind.UNKNOWN

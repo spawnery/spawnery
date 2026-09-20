@@ -1,0 +1,18 @@
+# One player's private server per key, asked for by name over the agent
+# channel. It joins the Network of network.yaml; apply that first.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: private-servers
+  namespace: minecraft
+spec:
+  networkRef:
+    name: production
+  type: OnDemand
+  image: ghcr.io/spawnery/purpur:26.2-0.5.0
+  maxPlayers: 10
+  # A fleet ceiling, not a per-player quota: who may have one is a question
+  # about a player, and the system that knows the player answers it.
+  maxInstances: 200
+  storage:
+    size: 2Gi

@@ -27,6 +27,9 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/boost"
+	"github.com/spawnery/spawnery/internal/instance"
+	"github.com/spawnery/spawnery/internal/netstate"
+	"github.com/spawnery/spawnery/internal/phase"
 )
 
 // ErrNoSuchServer is what a ClusterWriter reports for a server that is not
@@ -49,6 +52,58 @@ var ErrNoSuchGroup = errors.New("no such group")
 // nothing. That is worse than a refusal: the object exists, the status agrees
 // it exists, and the group is the size it always was.
 var ErrGroupNotScalable = errors.New("that group is not sized by scaling")
+
+// ErrGroupNotOnDemand is what a start gets for a group whose members are
+// counted rather than named. Creating a Server in one by hand would make the
+// group's own sizing pass condemn it on the next reconcile, which reads from
+// outside as a server that started and vanished.
+var ErrGroupNotOnDemand = errors.New("that group is not on-demand")
+
+// ErrTooManyInstances is the group's own ceiling, reached.
+var ErrTooManyInstances = errors.New("that group is at spec.maxInstances")
+
+// ErrNoCeiling is an on-demand group with no spec.maxInstances at all.
+//
+// Not reachable through the API server, which requires the field for this
+// type, and kept because the alternative reading of a nil -- unlimited -- is
+// the one the field's own documentation argues against. It is its own error
+// rather than ErrTooManyInstances because the two send an admin to opposite
+// places: one group is full, this one was never bounded.
+var ErrNoCeiling = errors.New("that group has no spec.maxInstances")
+
+// ErrNotAnInstance is a stop aimed at a server that no key names.
+var ErrNotAnInstance = errors.New("that server is not an on-demand member")
+
+// ErrInstanceStopping is a start on a key whose member is on its way out.
+//
+// Distinct from "already running" and from every refusal, because it is the
+// one state a caller should wait through rather than act on: the member is
+// draining its players and the same request starts a fresh one once it is
+// gone. Answering AlreadyRunning here would send the next player to a server
+// that is about to stop.
+var ErrInstanceStopping = errors.New("that member is still stopping")
+
+// ErrInstancesDraining is the ceiling, met, by members of which at least one
+// is already leaving.
+//
+// Separate from ErrTooManyInstances because the two mean opposite things to
+// the caller. A full group is a bound that stands until somebody stops a
+// server; this one clears by itself inside the group's drain timeout. Told
+// REFUSED, a plugin stops asking, and asking again shortly is exactly what
+// works here.
+var ErrInstancesDraining = errors.New("that group is at spec.maxInstances and a member is stopping")
+
+// ErrNameTaken is a start whose composed name belongs to a server of another
+// group.
+//
+// Not a race and not rare: group "a" with key "b-xyz" composes the name that
+// group "a-b" gives its member "xyz". Answering AlreadyRunning for it would
+// hand a plugin the name of somebody else's server -- a lobby, in the case
+// that costs the most -- and the plugin would send its player there. The
+// caller can only fix it by choosing another key, or by the two groups being
+// named so that they cannot collide, which is why it is bad input rather than
+// a bound.
+var ErrNameTaken = errors.New("that name belongs to a server of another group")
 
 // ClusterWriter is every change a plugin's request is allowed to make.
 //
@@ -91,6 +146,29 @@ type ClusterWriter interface {
 	// different expiries is arithmetic nobody asked for. Zero is an ordinary
 	// answer.
 	StopBoosts(ctx context.Context, namespace, group string) (int, error)
+
+	// StartServer creates the member of an OnDemand group that carries key.
+	//
+	// Reports AlreadyRunning for a member that was already there, which is a
+	// success: what the caller asked for is the case. It returns
+	// ErrNoSuchGroup, ErrGroupNotOnDemand, ErrTooManyInstances, ErrNoCeiling,
+	// ErrNameTaken, instance.ErrBadKey for a key no name can be built from,
+	// and ErrInstanceStopping or ErrInstancesDraining for the two states that
+	// clear on their own.
+	StartServer(ctx context.Context, namespace, group, key string) (StartedServer, error)
+
+	// StopServer deletes one member of an OnDemand group.
+	//
+	// It returns ErrNoSuchServer for a name this namespace does not have and
+	// ErrNotAnInstance for a server that is not a member of such a group --
+	// the refusal that keeps a mistyped name from deleting a lobby.
+	StopServer(ctx context.Context, namespace, name string) error
+}
+
+// StartedServer is the member a start request produced.
+type StartedServer struct {
+	Name           string
+	AlreadyRunning bool
 }
 
 // Headroom is what a group's own spec leaves for a boost to ask for.
@@ -269,4 +347,193 @@ func (w KubeWriter) StopBoosts(ctx context.Context, namespace, group string) (in
 		removed++
 	}
 	return removed, nil
+}
+
+// StartServer creates the member, or reports the one that is already there.
+//
+// The count that bounds it is of members that are not terminal. A failed
+// world is kept for diagnosis and a finished one is swept within a pass, and
+// counting either against the ceiling would make a group drift closed as its
+// players' servers ended.
+//
+// The create is what decides the race between two callers asking for the same
+// key: AlreadyExists comes back to exactly one of them, which is why nothing
+// here takes a lock and why the list above is an optimisation and not the
+// bound. What AlreadyExists means, though, is not something the list can say
+// -- it is by then a picture of a moment that has passed, and the object in
+// the way may be a corpse the delete above has not finished removing, a
+// member another caller created in between, or a server of an entirely
+// different group whose name happens to compose the same. So the answer comes
+// from reading that object rather than from remembering what was listed; see
+// occupant.
+//
+// What remains best-effort is the list and nothing else. The ceiling is
+// counted from it, so a create that lands in the same instant as another can
+// put a group one over its ceiling until the next start is refused, and a
+// member that appears between the list and the create is classified by
+// occupant rather than by the terminal branch. Both self-correct: every
+// answer this can give wrongly is one the same request, asked again, gives
+// rightly.
+func (w KubeWriter) StartServer(
+	ctx context.Context, namespace, group, key string,
+) (StartedServer, error) {
+	name, err := instance.Name(group, key)
+	if err != nil {
+		return StartedServer{}, err
+	}
+
+	var g spawneryv1alpha1.ServerGroup
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: group}, &g); err != nil {
+		if apierrors.IsNotFound(err) {
+			return StartedServer{}, ErrNoSuchGroup
+		}
+		return StartedServer{}, err
+	}
+	if !g.IsOnDemand() {
+		return StartedServer{}, ErrGroupNotOnDemand
+	}
+
+	var members spawneryv1alpha1.ServerList
+	if err := w.Client.List(ctx, &members, client.InNamespace(namespace)); err != nil {
+		return StartedServer{}, err
+	}
+	live, going := 0, 0
+	for i := range members.Items {
+		m := &members.Items[i]
+		if m.Spec.GroupRef.Name != group || !netstate.IsPrivateServer(m) {
+			continue
+		}
+		// Name and key together, which is the question occupant asks of the
+		// object a create finds in the way. Asking less here would let an
+		// object whose key does not compose its own name be the caller's
+		// member on this path and somebody else's on that one; nothing this
+		// operator writes is in that state, and one question with two
+		// answers is what this branch exists to remove. Such an object falls
+		// through to the create, where occupant refuses it by name.
+		if m.Name == name && m.Spec.Key == key {
+			if !m.DeletionTimestamp.IsZero() {
+				return StartedServer{}, ErrInstanceStopping
+			}
+			// A terminal run of this very key is replaced rather than
+			// reported: its world is on the claim, the object is a corpse,
+			// and refusing here would leave the owner waiting out a
+			// retention they cannot see.
+			if phase.Terminal(phase.Phase(m.Status.Phase)) {
+				if err := w.Client.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {
+					return StartedServer{}, err
+				}
+				continue
+			}
+			return StartedServer{Name: name, AlreadyRunning: true}, nil
+		}
+		if phase.Terminal(phase.Phase(m.Status.Phase)) {
+			continue
+		}
+		// A member that is draining still exists, and the ceiling is about
+		// how many may exist at once -- so it holds its slot. It is counted
+		// apart as well, because a ceiling held by servers that are leaving
+		// is a different answer from a ceiling held by servers that are
+		// staying.
+		live++
+		if !m.DeletionTimestamp.IsZero() {
+			going++
+		}
+	}
+	// The CRD makes spec.maxInstances required for this type, so a nil here is
+	// a group that reached etcd around that rule. Refusing rather than reading
+	// it as unlimited: the field is required because a ceiling nobody chose is
+	// one nobody thought about, and waving such a group through is the one
+	// outcome that rule exists to prevent.
+	if g.Spec.MaxInstances == nil {
+		return StartedServer{}, ErrNoCeiling
+	}
+	if int32(live) >= *g.Spec.MaxInstances {
+		if going > 0 {
+			return StartedServer{}, ErrInstancesDraining
+		}
+		return StartedServer{}, ErrTooManyInstances
+	}
+
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: spawneryv1alpha1.GroupVersion.String(),
+				Kind:       "ServerGroup",
+				Name:       g.Name,
+				UID:        g.UID,
+			}},
+		},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: group},
+			Key:      key,
+		},
+	}
+	if err := w.Client.Create(ctx, srv); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return w.occupant(ctx, namespace, name, group, key)
+		}
+		return StartedServer{}, err
+	}
+	return StartedServer{Name: name}, nil
+}
+
+// occupant says what the object already holding name means for this caller.
+//
+// Read rather than assumed, because the three things AlreadyExists can mean
+// call for three different answers and only the object itself distinguishes
+// them. A member of this group carrying this key is the caller's own and is
+// reported as already running. A server of another group is a name collision
+// the caller has to resolve, and calling it theirs would hand them somebody
+// else's server. And an object on its way out -- the corpse the delete above
+// left behind, still held by its drain finalizer -- is neither: the same
+// request works once it is gone.
+//
+// Not found here means it went in the instant between the create and this
+// read, which is the retryable case for the same reason.
+func (w KubeWriter) occupant(
+	ctx context.Context, namespace, name, group, key string,
+) (StartedServer, error) {
+	var existing spawneryv1alpha1.Server
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			return StartedServer{}, ErrInstanceStopping
+		}
+		return StartedServer{}, err
+	}
+	if existing.Spec.GroupRef.Name != group || existing.Spec.Key != key {
+		return StartedServer{}, ErrNameTaken
+	}
+	if !existing.DeletionTimestamp.IsZero() || phase.Terminal(phase.Phase(existing.Status.Phase)) {
+		return StartedServer{}, ErrInstanceStopping
+	}
+	return StartedServer{Name: name, AlreadyRunning: true}, nil
+}
+
+// StopServer deletes one member.
+//
+// The key check is the bound and not a courtesy: this is the only verb on
+// this channel that deletes a server outright, and a name that belongs to a
+// lobby has to fail rather than work.
+//
+// A non-empty spec.key is what marks an on-demand member throughout this
+// operator -- see ServerSpec.Key and the controller's fallbackGroup -- so the
+// object says which kind it is and its group's type does not have to be
+// fetched to find out.
+func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) error {
+	var srv spawneryv1alpha1.Server
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ErrNoSuchServer
+		}
+		return err
+	}
+	if !netstate.IsPrivateServer(&srv) {
+		return ErrNotAnInstance
+	}
+	if err := w.Client.Delete(ctx, &srv); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
 }

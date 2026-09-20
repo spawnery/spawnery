@@ -27,7 +27,9 @@ import java.util.UUID;
  *     login handshake, and between one backend and the next. It is not an
  *     error and a plugin must handle it -- a player in flight is exactly the
  *     player a drain is about, and this project's own drain gap was a player
- *     nobody counted.
+ *     nobody counted. On a backend it is also empty for a player on an
+ *     on-demand server, which a backend is never told the name of; a proxy
+ *     sees that name, which is where routing is.
  */
 public record CloudPlayer(UUID id, String name, Optional<String> server) {
     public CloudPlayer {

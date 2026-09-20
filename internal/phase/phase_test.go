@@ -17,6 +17,9 @@ limitations under the License.
 package phase
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -957,4 +960,100 @@ func TestRetiringWinsOverRegistering(t *testing.T) {
 	if got.Next != Retiring || !got.Deregister {
 		t.Errorf("got %+v, want a retiring server to be deregistered and stay retiring", got)
 	}
+}
+
+// Every phase, named one by one rather than asserted about two, and the
+// table checked against the phases the package actually declares.
+//
+// The second half is what makes the first half hold: a hand-written table is
+// a list somebody has to remember to extend, and a Phase added without a line
+// here would simply be absent from it and pass. Read from the source instead,
+// an addition fails this test until somebody decides whether the new phase
+// ends a server's run -- which is the decision callers elsewhere are relying
+// on having been made. What declaredPhases can and cannot see is written on it.
+func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
+	terminal := map[Phase]bool{
+		Pending:     false,
+		Starting:    false,
+		Ready:       false,
+		Retiring:    false,
+		Draining:    false,
+		Terminating: false,
+		Failed:      true,
+		Finished:    true,
+	}
+	for p, want := range terminal {
+		if got := Terminal(p); got != want {
+			t.Errorf("Terminal(%s) = %v, want %v", p, got, want)
+		}
+	}
+	if Terminal("") {
+		t.Error("a server with no phase yet counts as one whose run is over")
+	}
+
+	for _, p := range declaredPhases(t) {
+		if _, listed := terminal[p]; !listed {
+			t.Errorf("phase %q is declared and this test says nothing about it: "+
+				"decide whether it ends a server's run and add it above", p)
+		}
+	}
+}
+
+// declaredPhases is every Phase constant this package declares, read from its
+// own source.
+//
+// go/parser and not reflection, because a constant leaves nothing behind at
+// run time to enumerate. The whole directory rather than phase.go alone, so
+// that a phase declared in a file added later is still seen.
+//
+// It finds the one shape this package declares phases in: a constant with an
+// explicit Phase type and a plain string literal, `Name Phase = "Name"`. It
+// does not find a constant whose type is left to the block (`Name = "Name"`),
+// nor one whose value is not a plain double-quoted literal (`Phase(x)`, a
+// concatenation, a backtick string). A phase added in one of those shapes
+// passes this test unnoticed, so put it in the table above yourself or
+// declare it the way the others are.
+func declaredPhases(t *testing.T) []Phase {
+	t.Helper()
+	sources, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatalf("list this package: %v", err)
+	}
+	fset := token.NewFileSet()
+	var declared []Phase
+	for _, source := range sources {
+		if strings.HasSuffix(source, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, source, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", source, err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
+					continue
+				}
+				if name, ok := value.Type.(*ast.Ident); !ok || name.Name != "Phase" {
+					continue
+				}
+				for _, v := range value.Values {
+					lit, ok := v.(*ast.BasicLit)
+					if !ok {
+						continue
+					}
+					declared = append(declared, Phase(strings.Trim(lit.Value, `"`)))
+				}
+			}
+		}
+	}
+	if len(declared) == 0 {
+		t.Fatal("no Phase constants found, so this test would pass whatever Terminal did")
+	}
+	return declared
 }

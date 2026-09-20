@@ -615,6 +615,35 @@ func TestPersistentGroupMountsItsPVC(t *testing.T) {
 	t.Errorf("volumes = %+v, want a %s volume", pod.Spec.Volumes, DataVolumeName)
 }
 
+func TestOnDemandServerMountsItsOwnClaim(t *testing.T) {
+	network, group, srv := testNetwork(), testGroup(), testServer()
+	group.Spec.Type = spawneryv1alpha1.ServerGroupOnDemand
+	group.Spec.Storage = &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("2Gi")}
+	srv.Name = "private-servers-c0ffee"
+	srv.Spec.Key = "c0ffee"
+
+	pod, err := BuildServerPod(network, group, srv, testEndpoint)
+	if err != nil {
+		t.Fatalf("BuildServerPod: %v", err)
+	}
+
+	data := findVolume(pod, DataVolumeName)
+	if data == nil {
+		t.Fatal("the pod has no data volume")
+	}
+	if data.PersistentVolumeClaim == nil {
+		t.Fatal("an on-demand member got an emptyDir, so its world would not survive a stop")
+	}
+	if got, want := data.PersistentVolumeClaim.ClaimName, DataClaimName(srv.Name); got != want {
+		t.Errorf("claim = %q, want %q", got, want)
+	}
+	// Never, not Always: a player typing /stop is a player stopping their
+	// server, and Always cannot tell that from a crash.
+	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
+		t.Errorf("RestartPolicy = %q, want Never", pod.Spec.RestartPolicy)
+	}
+}
+
 func TestAnEphemeralPodIsNotLiftedAgainByKubelet(t *testing.T) {
 	// RestartPolicyAlways restarts the container inside the same pod, and an
 	// ephemeral server's /data is an emptyDir -- so the same world comes back

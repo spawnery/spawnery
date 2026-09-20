@@ -113,6 +113,8 @@ message CloudRequest {
     StopBoostRequest stop_boost = 5;
     AnnounceRequest announce = 6;
     AcceptJoinsRequest accept_joins = 7;
+    StartServerRequest start_server = 8;
+    StopServerRequest stop_server = 9;
   }
 }
 
@@ -132,6 +134,8 @@ message CloudResponse {
     StopBoostResult stop_boost = 6;
     AnnounceResult announce = 7;
     AcceptJoinsResult accept_joins = 8;
+    StartServerResult start_server = 9;
+    StopServerResult stop_server = 10;
   }
 }
 
@@ -352,6 +356,90 @@ message AnnounceRequest {
 // of two things happened -- it was accepted, or it was refused with a reason.
 message AnnounceResult {}
 
+// StartServerRequest asks for the member of an OnDemand group that carries
+// this key.
+//
+// It carries no namespace, for the reason RetireRequest carries none: the
+// group is resolved inside the namespace the pod's own token authenticated.
+//
+// The key is the caller's name for a world, not a name for a server: the
+// operator composes "<group>-<key>" and that server is where this key's world
+// is, this time and every later time. Asking twice while it runs is answered
+// rather than refused -- see already_running -- because a caller that has to
+// take a lock to ask a question is a caller that will forget to.
+//
+// **The key is a DNS label, and the name built from it has to be one too.**
+// "<group>-<key>" becomes a server and a pod name, so it is at most 63
+// characters: a key that is a UUID takes 36 of them and the joining hyphen one
+// more, which leaves a group name of at most 26. The operator refuses a key or
+// a group that does not fit, with REFUSED, rather than shortening either --
+// a name trimmed to fit is a name two different keys can end up sharing.
+message StartServerRequest {
+  string group = 1;
+  string key = 2;
+}
+
+// StartServerResult says the member has been asked for, which is not the same
+// as being able to join it.
+//
+// **`already_running` and not `ready`, for the reason ConnectResult says
+// `ordered` and not `moved`.** The operator's answer is about the Server it
+// holds, not about the pod behind it: whether that pod is up and registered
+// shows up in the next NetworkState, in the server's phase and `registered`,
+// which is what the mirror is for. A caller that means to send somebody there
+// waits for that and does not read more into this than it says.
+//
+// **A member that is stopping is not already running.** A stop deletes the
+// member, but it lingers while its players are moved, for up to the group's
+// drain timeout, and answering "already running" for it would send a player to
+// a server that is about to go. A start on such a key is answered
+// UNAVAILABLE and not REFUSED, because the reason is what a caller branches on
+// and this is the one case where the same request succeeds a moment later:
+// once the member is gone it starts a fresh one. Nothing in the request waits
+// for that; a caller told to try again shortly can do exactly that.
+message StartServerResult {
+  // The server the operator composed, echoed so a caller that built the key
+  // from a UUID sees the name players and logs will use.
+  string server = 1;
+  // True when the member was already there and not stopping, which is a
+  // success and not a refusal: what the caller asked for is the case. It says
+  // nothing about the member being ready.
+  bool already_running = 2;
+}
+
+// StopServerRequest deletes one member of an OnDemand group.
+//
+// It carries no namespace, for the reason RetireRequest carries none: the
+// server is resolved inside the namespace the pod's own token authenticated.
+//
+// **A stop and not a retire.** Retiring closes a server's door and waits for
+// it to empty in its own time; this says the owner is done with it, so the
+// players on it are moved through the proxies inside the group's own drain
+// timeout and the pod goes. The world is untouched: it is on a claim this
+// operator never deletes, and the next start of the same key finds it.
+//
+// It refuses, with REFUSED, a server that is not a member of an OnDemand
+// group. A caller naming an ordinary backend here has made a mistake that
+// would otherwise delete a lobby.
+message StopServerRequest {
+  string server = 1;
+}
+
+// StopServerResult says the member is going.
+//
+// A second stop on a member that is already being deleted succeeds and echoes
+// the name. RetireResult refuses the same repetition because an admin who
+// types the command twice needs to learn it did nothing the first time; the
+// caller here is a plugin, and "it is going" is exactly what it asked for.
+//
+// Once the member is gone the same request is answered NOT_FOUND: there is no
+// server by that name left to match.
+message StopServerResult {
+  // The server that is going, echoed so a caller sees what the operator
+  // matched.
+  string server = 1;
+}
+
 // CloudEvent is something that happened, on its way to somebody's chat.
 //
 // **A feed and not a ledger.** An agent that was disconnected missed what
@@ -422,7 +510,15 @@ message RequestError {
     // gets for a player who logged out between the call and the request, which
     // is ordinary rather than exceptional.
     NOT_FOUND = 1;
-    // The operator understood and declined -- a bound, not a mistake.
+    // The operator understood and declined, and asking again unchanged will be
+    // declined again while the same state holds: the request met a bound, or
+    // it is itself wrong -- a replica count below one, a name that is not a
+    // DNS label, a server that is not of the kind the verb acts on. A bound
+    // that can clear is refused this way too, and the clause above is why the
+    // promise is no stronger: a group at its instance ceiling and one with no
+    // boost headroom both answer the same request differently once capacity
+    // frees. There is no reason of its own for bad input; a boost for fewer
+    // than one replica was already refused this way.
     REFUSED = 2;
     // This pod has asked too often. See the operator's own bound.
     RATE_LIMITED = 3;
@@ -562,6 +658,18 @@ message NetworkState {
   // Every player on this network, aggregated across the proxies. Empty when
   // no proxy has reported recently -- which is a real state and not an error,
   // and is why the API documents an empty list as ordinary.
+  //
+  // Every player, in both pictures. The audience split above leaves on-demand
+  // groups and their members out of a backend's, and a player is not left out
+  // with them: dropping one would take somebody off players() while they are
+  // still on the network. The entry's server is what is withheld instead --
+  // blank for a player on a private server, the same blank a player between
+  // two backends already has -- so no NetworkState names a server it does not
+  // itself list.
+  //
+  // That bound is this message's and not the whole channel's: CloudEvent
+  // carries a subject and a group, and the event path has no audience, so a
+  // backend that asked for events still meets a private member's name there.
   repeated RosterEntry players = 3;
   // The line a cloud event becomes in chat, from the Network's own spec.
   //
@@ -588,6 +696,7 @@ message GroupState {
     EPHEMERAL = 1;
     PERSISTENT = 2;
     PROXY = 3;
+    ON_DEMAND = 4;
   }
 
   string name = 1;

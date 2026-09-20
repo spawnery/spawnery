@@ -285,7 +285,7 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 	// the snapshot. Routing is what keeps players connected and the mirror is
 	// what a plugin reads; losing the second must not cost the first.
 	if f.opts.State.Reader != nil {
-		state, err := f.opts.State.Build(ctx, namespace)
+		state, err := f.opts.State.Build(ctx, namespace, netstate.ForProxies)
 		if err != nil {
 			log.FromContext(ctx).V(1).Info("skipped a proxy's network state",
 				"namespace", namespace, "reason", err.Error())

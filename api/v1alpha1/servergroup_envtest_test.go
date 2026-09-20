@@ -63,6 +63,102 @@ func persistentGroup(ns, name string) *spawneryv1alpha1.ServerGroup {
 	}
 }
 
+func onDemandGroup(ns, name string) *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:   spawneryv1alpha1.ObjectRef{Name: "production"},
+			Type:         spawneryv1alpha1.ServerGroupOnDemand,
+			Image:        "ghcr.io/spawnery/paper:1.21.4-0.1.0",
+			MaxPlayers:   10,
+			MaxInstances: ptr.To[int32](50),
+			Storage: &spawneryv1alpha1.StorageSpec{
+				Size:             resource.MustParse("2Gi"),
+				StorageClassName: ptr.To("longhorn"),
+				AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			},
+		},
+	}
+}
+
+func TestServerGroupOnDemandAccepted(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	if err := c.Create(ctx, onDemandGroup(ns, "private-servers")); err != nil {
+		t.Fatalf("create on-demand group: %v", err)
+	}
+}
+
+func TestServerGroupOnDemandRefusesSizingFields(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	tests := map[string]func(*spawneryv1alpha1.ServerGroup){
+		"scaling": func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.Scaling = &spawneryv1alpha1.ScalingSpec{MinReplicas: 1, MaxReplicas: 2, SpareSlots: 1}
+		},
+		"replicas": func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.Replicas = ptr.To[int32](1)
+		},
+		"update": func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxUnavailable: 1}
+		},
+	}
+	for field, mutate := range tests {
+		t.Run(field, func(t *testing.T) {
+			g := onDemandGroup(ns, "refuses-"+field)
+			mutate(g)
+			if err := c.Create(ctx, g); err == nil {
+				t.Fatalf("spec.%s was accepted for type OnDemand", field)
+			}
+		})
+	}
+}
+
+func TestServerGroupOnDemandRequiresStorageAndCeiling(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	noStorage := onDemandGroup(ns, "no-storage")
+	noStorage.Spec.Storage = nil
+	if err := c.Create(ctx, noStorage); err == nil {
+		t.Fatal("an on-demand group without spec.storage was accepted")
+	}
+
+	noCeiling := onDemandGroup(ns, "no-ceiling")
+	noCeiling.Spec.MaxInstances = nil
+	if err := c.Create(ctx, noCeiling); err == nil {
+		t.Fatal("an on-demand group without spec.maxInstances was accepted")
+	}
+}
+
+func TestMaxInstancesIsOnDemandOnly(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	g := ephemeralGroup(ns, "lobby-with-ceiling")
+	g.Spec.MaxInstances = ptr.To[int32](5)
+	if err := c.Create(ctx, g); err == nil {
+		t.Fatal("spec.maxInstances was accepted on an ephemeral group")
+	}
+}
+
+func TestMaxInstancesZeroIsLegalAndNegativeIsNot(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	closed := onDemandGroup(ns, "closed")
+	closed.Spec.MaxInstances = ptr.To[int32](0)
+	if err := c.Create(ctx, closed); err != nil {
+		t.Fatalf("maxInstances: 0 was refused, so a group cannot be closed without deleting it: %v", err)
+	}
+
+	negative := onDemandGroup(ns, "negative")
+	negative.Spec.MaxInstances = ptr.To[int32](-1)
+	if err := c.Create(ctx, negative); err == nil {
+		t.Fatal("maxInstances: -1 was accepted")
+	}
+}
+
 func persistentGroupNoStorageClass(ns, name string) *spawneryv1alpha1.ServerGroup {
 	return &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},

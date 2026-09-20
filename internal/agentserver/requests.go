@@ -24,10 +24,14 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/instance"
+	"github.com/spawnery/spawnery/internal/netstate"
 )
 
 const (
@@ -192,6 +196,10 @@ func (s *Server) answerCloudRequest(
 		return s.answerAnnounce(logger, id, req.GetId(), req.GetAnnounce())
 	case req.GetAcceptJoins() != nil:
 		return s.answerAcceptJoins(logger, id, req.GetId(), req.GetAcceptJoins())
+	case req.GetStartServer() != nil:
+		return s.answerStartServer(ctx, logger, id, req.GetId(), req.GetStartServer())
+	case req.GetStopServer() != nil:
+		return s.answerStopServer(ctx, logger, id, req.GetId(), req.GetStopServer())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")
@@ -381,6 +389,25 @@ func (s *Server) answerStopBoost(
 // is not among them: it lives in answerCloudRequest, so that every verb has it
 // whether or not its author remembered.
 //
+// # What it resolves against
+//
+// The picture of the pod that asked, not the whole namespace. A backend's own
+// picture leaves out private servers, so a backend cannot send a player to one
+// either: naming a target would otherwise be a way to reach what its plugins
+// are not shown, and would commit that reach for good the way showing them
+// would. It is refused, and says so: NOT_FOUND would tell whoever meets it
+// that a server which is running fine does not exist. Any other name the
+// caller's network does not have is NOT_FOUND, as before. A proxy resolves
+// against everything.
+//
+// # A group is never a way into a private server
+//
+// Naming a group leaves the choice of member to the operator, which picks by
+// free slots. For an on-demand group that would put the player into whichever
+// stranger's world has room, so a group target naming one is refused for both
+// kinds of session. It comes before resolution and not after: a proxy is
+// shown the members, and would resolve to one.
+//
 // # What it promises
 //
 // Nothing about the player arriving. The proxy that carries the move does not
@@ -395,7 +422,7 @@ func (s *Server) answerConnect(
 ) *agentpb.CloudResponse {
 	// The namespace is the token's, never the message's. Everything below
 	// resolves inside it, which is the whole of the cross-network bound.
-	state, err := s.opts.State.Build(ctx, id.Namespace)
+	state, err := s.opts.State.Build(ctx, id.Namespace, netstate.AudienceOf(id.Role))
 	if err != nil {
 		logger.V(1).Info("could not read the network for a connect request", "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
@@ -418,8 +445,17 @@ func (s *Server) answerConnect(
 			"no player with that id is on this network")
 	}
 
+	if s.namesAnOnDemandGroup(ctx, id.Namespace, req) {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"the members of an on-demand group are addressed by name, because each one belongs to somebody")
+	}
+
 	target, ok := resolveTarget(state, req)
 	if !ok {
+		if id.Role != agent.RoleProxy && s.namesAPrivateServer(ctx, id.Namespace, req) {
+			return refuse(reqID, agentpb.RequestError_REFUSED,
+				"a private server is addressed through a proxy, not from a backend, and only once it is running")
+		}
 		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
 			"no server or group by that name is on this network")
 	}
@@ -463,6 +499,51 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 		}
 	}
 	return "", false
+}
+
+// namesAPrivateServer reports whether the server a request names is a member
+// of an on-demand group.
+//
+// This is a deliberate hole in the boundary answerConnect draws around a
+// backend's picture, and it is only there to word a refusal. It looks at
+// exactly the one name the caller itself supplied, in the caller's own
+// namespace, and the single bit it returns is all that travels back: nothing
+// is resolved from it, no move follows from it, and no field of the server
+// is read but what netstate.IsPrivateServer asks. A group name, a typo and
+// another namespace's server all answer false, so they stay NOT_FOUND.
+//
+// A read of the one object and not a second Build, because this is the failure
+// path of a verb a pod may repeat, and a list of the namespace to learn one
+// bit is the expensive way to ask.
+func (s *Server) namesAPrivateServer(ctx context.Context, namespace string, req *agentpb.ConnectRequest) bool {
+	name := req.GetServer()
+	if name == "" {
+		return false
+	}
+	var srv spawneryv1alpha1.Server
+	if err := s.opts.State.Reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
+		return false
+	}
+	return netstate.IsPrivateServer(&srv)
+}
+
+// namesAnOnDemandGroup reports whether the group a request names is an
+// on-demand one.
+//
+// It is the same kind of hole as namesAPrivateServer, for the same reason and
+// as narrow: one name the caller supplied, in its own namespace, one bit back.
+// A backend is not shown these groups either, and learns no more than that
+// the name it typed is one. Nothing is resolved from the group.
+func (s *Server) namesAnOnDemandGroup(ctx context.Context, namespace string, req *agentpb.ConnectRequest) bool {
+	name := req.GetGroup()
+	if name == "" {
+		return false
+	}
+	var group spawneryv1alpha1.ServerGroup
+	if err := s.opts.State.Reader.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &group); err != nil {
+		return false
+	}
+	return group.IsOnDemand()
 }
 
 // refuse builds an error answer and counts it.
@@ -625,4 +706,115 @@ func connected(reqID uint64, result *agentpb.ConnectResult) *agentpb.CloudRespon
 		Id:     reqID,
 		Result: &agentpb.CloudResponse_Connect{Connect: result},
 	}
+}
+
+// startedServer wraps a successful start answer.
+func startedServer(reqID uint64, result *agentpb.StartServerResult) *agentpb.CloudResponse {
+	return &agentpb.CloudResponse{
+		Id:     reqID,
+		Result: &agentpb.CloudResponse_StartServer{StartServer: result},
+	}
+}
+
+// stoppedServer wraps a successful stop answer.
+func stoppedServer(reqID uint64, result *agentpb.StopServerResult) *agentpb.CloudResponse {
+	return &agentpb.CloudResponse{
+		Id:     reqID,
+		Result: &agentpb.CloudResponse_StopServer{StopServer: result},
+	}
+}
+
+// answerStartServer creates the member of an on-demand group that carries a
+// key.
+//
+// The namespace bound is structural, as it is for retire and boost: the group
+// is resolved under id.Namespace and the request has no field that could name
+// another network's.
+//
+// Asking for a key that is already running is answered and not refused, which
+// is the one place this verb differs from every other writing verb here. The
+// difference is in who asks: retire and boost are typed by an admin, for whom
+// "somebody already did this" is news, while this is called by a plugin
+// reacting to a player pressing a button twice.
+//
+// Two answers here are neither a success nor a bound: a member that is
+// stopping, and a ceiling held by members of which one is already leaving.
+// Both are UNAVAILABLE, because the same request succeeds once the cluster
+// has caught up with a deletion that is already under way, and a caller can
+// tell them from a refusal by the reason alone and simply ask again.
+func (s *Server) answerStartServer(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.StartServerRequest,
+) *agentpb.CloudResponse {
+	member, err := s.opts.Writer.StartServer(ctx, id.Namespace, req.GetGroup(), req.GetKey())
+	switch {
+	case errors.Is(err, ErrNoSuchGroup):
+		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+			"no group by that name is on this network")
+	case errors.Is(err, ErrGroupNotOnDemand):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group's servers are counted rather than named, so it has no member to ask for")
+	case errors.Is(err, ErrTooManyInstances):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group is at spec.maxInstances")
+	case errors.Is(err, ErrNoCeiling):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group has no spec.maxInstances, so nothing bounds how many members it could have; "+
+				"an admin has to set one before it can start any")
+	case errors.Is(err, ErrNameTaken):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"a server of another group already has the name that group and key compose; "+
+				"another key, or group names that cannot run together, is what fixes it")
+	case errors.Is(err, ErrInstancesDraining):
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"that group is at spec.maxInstances right now and one of its members is stopping; "+
+				"the same request fits once that one is gone")
+	case errors.Is(err, instance.ErrBadKey):
+		return refuse(reqID, agentpb.RequestError_REFUSED, err.Error())
+	case errors.Is(err, ErrInstanceStopping):
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"that member is still stopping; the same request starts a fresh one once it is gone")
+	case err != nil:
+		logger.V(1).Info("could not start an on-demand server", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not write that just now")
+	}
+
+	return startedServer(reqID, &agentpb.StartServerResult{
+		Server:         member.Name,
+		AlreadyRunning: member.AlreadyRunning,
+	})
+}
+
+// answerStopServer deletes one member.
+//
+// The refusal for a server that no key names is the bound that matters here.
+// This is the only request on this channel that deletes a server outright,
+// and a mistyped name that happened to be a lobby's would otherwise take the
+// lobby down with every player on it.
+func (s *Server) answerStopServer(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.StopServerRequest,
+) *agentpb.CloudResponse {
+	err := s.opts.Writer.StopServer(ctx, id.Namespace, req.GetServer())
+	switch {
+	case errors.Is(err, ErrNoSuchServer):
+		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+			"no server by that name is on this network")
+	case errors.Is(err, ErrNotAnInstance):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that server is not a member of an on-demand group")
+	case err != nil:
+		logger.V(1).Info("could not stop an on-demand server", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not write that just now")
+	}
+
+	return stoppedServer(reqID, &agentpb.StopServerResult{Server: req.GetServer()})
 }

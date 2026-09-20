@@ -66,6 +66,8 @@ public record Group(
         PERSISTENT,
         /** A group of proxies. */
         PROXY,
+        /** Servers asked for by name, one key each; see {@link SpawneryApi#startServer}. */
+        ON_DEMAND,
         /** A kind this jar predates. See {@link ServerPhase#UNKNOWN}. */
         UNKNOWN
     }

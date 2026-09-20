@@ -18,16 +18,23 @@ package agentserver
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/netstate"
 )
 
 // One test per bound, and each asserting the reason rather than merely that
@@ -49,6 +56,187 @@ func TestATargetThisNetworkDoesNotHaveIsNotFound(t *testing.T) {
 		Target: &agentpb.ConnectRequest_Server{Server: "somebody-elses-server"},
 	}); ok {
 		t.Error("a server this network does not have resolved anyway")
+	}
+}
+
+// connectFixture is a namespace with an on-demand group and three of its
+// members -- one running, one still starting, one in another namespace -- next
+// to an ordinary group, and a player on a proxy's roster.
+func connectFixture(t *testing.T) (
+	ask func(grpcauth.Identity, *agentpb.ConnectRequest) *agentpb.CloudResponse,
+	named func(string) *agentpb.ConnectRequest,
+	proxy, backend grpcauth.Identity,
+) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	maxInstances := int32(10)
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			Type: spawneryv1alpha1.ServerGroupOnDemand, MaxInstances: &maxInstances,
+		},
+	}
+	member := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-c0ffee", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "c0ffee",
+		},
+		Status: spawneryv1alpha1.ServerStatus{Phase: "Ready", Slots: 4, Registered: true},
+	}
+	elsewhere := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-secret", Namespace: "other"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "secret",
+		},
+		Status: spawneryv1alpha1.ServerStatus{Phase: "Ready", Slots: 4, Registered: true},
+	}
+	starting := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-d00d", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "d00d",
+		},
+		Status: spawneryv1alpha1.ServerStatus{Phase: "Starting", Slots: 4, Registered: false},
+	}
+	lobby := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: "ns"},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{Type: spawneryv1alpha1.ServerGroupEphemeral},
+	}
+	lobbyC := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-c", Namespace: "ns"},
+		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
+		Status:     spawneryv1alpha1.ServerStatus{Phase: "Ready", Slots: 100, Registered: true},
+	}
+	ordinary := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-b", Namespace: "ns"},
+		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
+		Status:     spawneryv1alpha1.ServerStatus{Phase: "Ready", Slots: 100, Registered: false},
+	}
+	registry := agent.New(time.Now, time.Minute, time.Now())
+	registry.Connect("proxy-a", agent.RoleProxy)
+	if err := registry.ReportRoster("proxy-a", "ns", []agent.RosterEntry{
+		{UUID: "u-alice", Name: "alice", Server: "lobby-a"},
+	}); err != nil {
+		t.Fatalf("ReportRoster: %v", err)
+	}
+	s := &Server{
+		opts: Options{
+			Agents:  registry,
+			Proxies: stubFleet{},
+			State: netstate.Source{
+				Reader: fake.NewClientBuilder().WithScheme(scheme).
+					WithStatusSubresource(&spawneryv1alpha1.Server{}).
+					WithObjects(group, member, starting, elsewhere, lobby, lobbyC, ordinary).Build(),
+				Agents: registry,
+			},
+		},
+		requestRate: newRequestLimiter(time.Now),
+	}
+	ask = func(id grpcauth.Identity, target *agentpb.ConnectRequest) *agentpb.CloudResponse {
+		target.PlayerUuid = "u-alice"
+		return s.answerCloudRequest(context.Background(), logr.Discard(), id, &agentpb.CloudRequest{
+			Id:      1,
+			Request: &agentpb.CloudRequest_Connect{Connect: target},
+		})
+	}
+	named = func(server string) *agentpb.ConnectRequest {
+		return &agentpb.ConnectRequest{Target: &agentpb.ConnectRequest_Server{Server: server}}
+	}
+	proxy = grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy}
+	backend = grpcauth.Identity{Namespace: "ns", PodName: "lobby-a", PodUID: "pod-a", Role: agent.RoleServer}
+	return
+}
+
+func TestAConnectResolvesAgainstThePictureOfWhoAsked(t *testing.T) {
+	// A proxy routes to a private server and a backend is not shown one, so a
+	// backend that names one is refused. Both halves matter: without the
+	// second, naming a target is a way to reach what the backend's plugins
+	// were deliberately not shown.
+	ask, named, proxy, backend := connectFixture(t)
+
+	if got := ask(proxy, named("private-servers-c0ffee")); !got.GetConnect().GetOrdered() {
+		t.Errorf("proxy's response = %+v, want the move ordered", got)
+	}
+
+	// Refused and not NOT_FOUND: the server is running, and a caller told it
+	// does not exist would go looking for a fault that is not there.
+	got := ask(backend, named("private-servers-c0ffee"))
+	if got.GetError().GetReason() != agentpb.RequestError_REFUSED {
+		t.Errorf("backend naming a private server: response = %+v, want REFUSED", got)
+	}
+	if !strings.Contains(got.GetError().GetMessage(), "proxy") {
+		t.Errorf("message = %q, want it to say a private server is addressed through a proxy",
+			got.GetError().GetMessage())
+	}
+
+	// Everything else the backend's picture lacks stays NOT_FOUND. Each case
+	// is one way the refusal above could leak onto a name that is not a
+	// private server, and none of them may confirm that anything exists.
+	for name, target := range map[string]*agentpb.ConnectRequest{
+		"a server that does not exist":        named("private-servers-nobody"),
+		"a group that does not exist":         {Target: &agentpb.ConnectRequest_Group{Group: "nobody"}},
+		"a private server of another network": named("other-secret"),
+		"an ordinary server, unregistered":    named("lobby-b"),
+	} {
+		got := ask(backend, target)
+		if got.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
+			t.Errorf("backend naming %s: response = %+v, want NOT_FOUND", name, got)
+		}
+	}
+}
+
+func TestAPrivateServerNotYetRunningIsStillAddressedThroughAProxy(t *testing.T) {
+	// No proxy can route to it yet either, so "use a proxy" is only true with
+	// the rest of the sentence, and the message has to carry it.
+	ask, named, proxy, backend := connectFixture(t)
+
+	// The refusal is for a backend. A proxy that cannot route to it yet is
+	// told what any caller is told about a server it cannot route to.
+	if got := ask(proxy, named("private-servers-d00d")); got.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
+		t.Errorf("proxy naming a private server not yet registered: response = %+v, want NOT_FOUND", got)
+	}
+
+	got := ask(backend, named("private-servers-d00d"))
+	if got.GetError().GetReason() != agentpb.RequestError_REFUSED {
+		t.Fatalf("backend naming a private server not yet registered: response = %+v, want REFUSED", got)
+	}
+	for _, want := range []string{"proxy", "running"} {
+		if !strings.Contains(got.GetError().GetMessage(), want) {
+			t.Errorf("message = %q, want it to mention %q", got.GetError().GetMessage(), want)
+		}
+	}
+}
+
+func TestAGroupTargetNeverOpensAPrivateServer(t *testing.T) {
+	// Naming a group leaves the member to the operator, which picks the one
+	// with the most room. For an on-demand group that is somebody's own world,
+	// and a proxy is shown the members, so it would resolve to one. Both kinds
+	// of session are refused.
+	ask, _, proxy, backend := connectFixture(t)
+	onDemand := &agentpb.ConnectRequest{Target: &agentpb.ConnectRequest_Group{Group: "private-servers"}}
+
+	for name, id := range map[string]grpcauth.Identity{"proxy": proxy, "backend": backend} {
+		got := ask(id, onDemand)
+		if got.GetError().GetReason() != agentpb.RequestError_REFUSED {
+			t.Errorf("%s naming an on-demand group: response = %+v, want REFUSED", name, got)
+			continue
+		}
+		if !strings.Contains(got.GetError().GetMessage(), "by name") {
+			t.Errorf("%s: message = %q, want it to say the members are addressed by name",
+				name, got.GetError().GetMessage())
+		}
+	}
+
+	// The refusal is for the one type. An ordinary group still resolves to the
+	// member with room.
+	got := ask(proxy, &agentpb.ConnectRequest{Target: &agentpb.ConnectRequest_Group{Group: "lobby"}})
+	if !got.GetConnect().GetOrdered() || got.GetConnect().GetTarget() != "lobby-c" {
+		t.Errorf("proxy naming an ordinary group: response = %+v, want a move to lobby-c", got)
 	}
 }
 
@@ -358,5 +546,51 @@ func TestAProxyIsRefusedADoor(t *testing.T) {
 	if response.GetError() == nil ||
 		response.GetError().GetReason() != agentpb.RequestError_REFUSED {
 		t.Fatalf("response = %+v, want a refusal with a reason", response)
+	}
+}
+
+// A nil spec.maxInstances is refused rather than read as unlimited.
+//
+// The CRD requires the field for this type, so nothing reaching the API
+// server gets here -- but the field is required precisely because a ceiling
+// nobody chose is one nobody thought about, and the other reading of a nil
+// would start members for exactly that group without bound.
+func TestStartRefusesAnOnDemandGroupWithNoCeiling(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	unbounded := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers", Namespace: "ns"},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{Type: spawneryv1alpha1.ServerGroupOnDemand},
+	}
+	w := KubeWriter{
+		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(unbounded).Build(),
+		Clock:  time.Now,
+	}
+
+	_, err := w.StartServer(context.Background(), "ns", "private-servers", "c0ffee")
+	if !errors.Is(err, ErrNoCeiling) {
+		t.Fatalf("err = %v, want ErrNoCeiling: an unbounded group started a member", err)
+	}
+	// And nothing was created on the way to the refusal.
+	var srv spawneryv1alpha1.Server
+	if err := w.Client.Get(context.Background(),
+		client.ObjectKey{Namespace: "ns", Name: "private-servers-c0ffee"}, &srv); err == nil {
+		t.Fatal("the member of an unbounded group was created anyway")
+	}
+
+	// The caller is told which of the two it is: this group was never
+	// bounded, rather than being full.
+	s := &Server{opts: Options{Writer: w}, requestRate: newRequestLimiter(time.Now)}
+	resp := s.answerStartServer(context.Background(), logr.Discard(),
+		grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy},
+		7, &agentpb.StartServerRequest{Group: "private-servers", Key: "c0ffee"})
+	if resp.GetError().GetReason() != agentpb.RequestError_REFUSED {
+		t.Fatalf("reason = %v, want REFUSED", resp.GetError().GetReason())
+	}
+	if !strings.Contains(resp.GetError().GetMessage(), "no spec.maxInstances") {
+		t.Errorf("message = %q, which does not say the group has no ceiling",
+			resp.GetError().GetMessage())
 	}
 }

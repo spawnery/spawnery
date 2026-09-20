@@ -318,7 +318,15 @@
           # bare cp. The published API is identical to 0.3.0's and is
           # republished under this number for the reason the 0.2.21 paragraph
           # gives.
-          imageVersion = "0.4.0";
+          #
+          # 0.5.0 moves it because the agents changed: SpawneryApi gains
+          # startServer and stopServer, a server's network picture no longer
+          # carries the private servers of an on-demand group -- a backend
+          # sees none, a proxy sees all -- and Group.Kind gains ON_DEMAND. A
+          # minor step: two methods are added to the published API, which is
+          # otherwise the one 0.4.0 published, and it is republished under
+          # this number for the reason the 0.2.21 paragraph gives.
+          imageVersion = "0.5.0";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -454,7 +462,16 @@
           # spawnery.cloud/retry annotation -- and no longer by a capacity or
           # attributes edit. One optional status field, failureStreakKey, is
           # added to the CRD. The pod hash is untouched, so nothing rolls.
-          operatorVersion = "0.4.0";
+          #
+          # 0.5.0 moves it with the chart and the images. ServerGroup gains a
+          # third type, OnDemand, and with it spec.maxInstances and
+          # Server.spec.key on the CRDs: a member is a Server named
+          # <group>-<key>, asked for over the agent channel and stopped the
+          # same way, with a claim of its own that nothing here deletes. The
+          # controller sweeps a member whose run has ended, and the network
+          # picture is now built per audience. A group without the new type
+          # is unchanged and no server rolls.
+          operatorVersion = "0.5.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

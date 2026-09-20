@@ -2539,7 +2539,7 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 			Ordinal:  ptr.To[int32](0),
 		},
 	}
-	if got := fallbackGroup(persistent); got.IsEphemeral() {
+	if got := fallbackGroup(persistent); got.Spec.Type != spawneryv1alpha1.ServerGroupPersistent {
 		t.Errorf("a Server carrying spec.ordinal falls back to %q, want Persistent. "+
 			"createPersistentServer is the only thing that sets that field, so it is "+
 			"what identifies the type of a group that is no longer there to ask",
@@ -2549,7 +2549,8 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 	// Ordinal 0 is the one that matters: a value check rather than a nil check
 	// would read the first ordinal of every persistent group as ephemeral, and
 	// ordinal 0 is the one that exists in every persistent group there is.
-	if got := fallbackGroup(persistent); *persistent.Spec.Ordinal != 0 || got.IsEphemeral() {
+	if got := fallbackGroup(persistent); *persistent.Spec.Ordinal != 0 ||
+		got.Spec.Type != spawneryv1alpha1.ServerGroupPersistent {
 		t.Errorf("ordinal 0 read as ephemeral: %q", got.Spec.Type)
 	}
 
@@ -2560,6 +2561,47 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 		t.Errorf("the fallback timings differ by type: ephemeral %v/%v/%v, persistent %v/%v/%v",
 			a.DrainTimeout(), a.FailedRetention(), a.UpdateMaxStale(),
 			b.DrainTimeout(), b.FailedRetention(), b.UpdateMaxStale())
+	}
+}
+
+func TestTheFallbackGroupOfAnOnDemandMemberIsOnDemand(t *testing.T) {
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-c0ffee", Namespace: "mc"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "c0ffee",
+		},
+	}
+	got := fallbackGroup(srv)
+	if got.Spec.Type != spawneryv1alpha1.ServerGroupOnDemand {
+		t.Fatalf("type = %q, want OnDemand: a member whose group is gone must not read as ephemeral, "+
+			"or its claim is skipped", got.Spec.Type)
+	}
+	if got.IsEphemeral() {
+		t.Error("an on-demand member's fallback group reports itself ephemeral")
+	}
+}
+
+// Every group type, and the marker that identifies a Server of it without
+// its group. fallbackGroup must read each marker back as its own type, so a
+// type whose marker it ignores fails here rather than reading as Ephemeral.
+// The table is written by hand: a type added to the enum needs its row added
+// here.
+func TestTheFallbackGroupCoversEveryType(t *testing.T) {
+	marker := map[spawneryv1alpha1.ServerGroupType]func(*spawneryv1alpha1.Server){
+		spawneryv1alpha1.ServerGroupEphemeral:  func(*spawneryv1alpha1.Server) {},
+		spawneryv1alpha1.ServerGroupPersistent: func(s *spawneryv1alpha1.Server) { s.Spec.Ordinal = ptr.To[int32](0) },
+		spawneryv1alpha1.ServerGroupOnDemand:   func(s *spawneryv1alpha1.Server) { s.Spec.Key = "c0ffee" },
+	}
+	for want, mark := range marker {
+		srv := &spawneryv1alpha1.Server{
+			ObjectMeta: metav1.ObjectMeta{Name: "lobby-x7k2", Namespace: "minecraft"},
+			Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
+		}
+		mark(srv)
+		if got := fallbackGroup(srv).Spec.Type; got != want {
+			t.Errorf("a Server marked for %s falls back to %q", want, got)
+		}
 	}
 }
 

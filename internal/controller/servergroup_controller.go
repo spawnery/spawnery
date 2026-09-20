@@ -748,8 +748,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		r.Recorder.Eventf(group, nil, eventType, degraded.Reason, actionSyncStatus, "%s", degraded.Message)
 	}
 
-	if group.IsEphemeral() {
+	if group.IsEphemeral() || group.IsOnDemand() {
 		if err := r.pruneFailed(ctx, group, views, servers); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	if group.IsOnDemand() {
+		if err := r.sweepOnDemand(ctx, group, views, servers); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -914,6 +919,16 @@ func (r *ServerGroupReconciler) size(
 				PendingRetires: pendingRetires,
 			})
 		}
+	case group.IsOnDemand():
+		// No size is decided and none can be: the members of this group exist
+		// because somebody asked for them by name, and every rule below
+		// computes "how many", which for this group is a question with no
+		// answer rather than one whose answer is zero. Falling through to the
+		// persistent path would read spec.replicas -- nil here -- as zero
+		// servers wanted; the only thing that would then keep it from
+		// condemning every world running is DecidePersistentSize skipping the
+		// views that carry no spec.ordinal, which is a rule about adopted
+		// persistent servers and no promise made to this type.
 	default:
 		decision = DecidePersistentSize(PersistentInputs{
 			Group:          group.Name,
@@ -1237,12 +1252,25 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 	// Named and not counted, because the remedy is per server -- delete it and
 	// the slot comes back at once -- and a count would leave an operator
 	// listing every server to find which.
+	//
+	// It stays empty for an on-demand group without an exception of its own:
+	// spec.retire is the update budget's signal, and no budget reaches a member
+	// nothing ever retires.
 	var stuck []string
 	for _, v := range views {
 		if v.Retire && v.Phase == phase.Failed {
 			stuck = append(stuck, v.Name)
 		}
-		if staleSpec(v, podHash) {
+		// An on-demand member of an earlier spec is not a replacement in
+		// flight: nothing rolls, so an image bump reaches a world the next time
+		// its owner starts it, and until then carrying the older render is the
+		// group's ordinary and permanent state. Counting it as older would hold
+		// this condition True for as long as somebody keeps playing, which
+		// teaches whoever watches Progressing to stop reading it. So the phase
+		// is the whole question for this type: a member is coming up or it is
+		// not, and the count below sees it either way rather than skipping it
+		// here for carrying a hash nothing will replace.
+		if !group.IsOnDemand() && staleSpec(v, podHash) {
 			older++
 			continue
 		}
@@ -1282,6 +1310,13 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = spawneryv1alpha1.ReasonAtDesiredState
 		condition.Message = "every server is of the group's current spec and ready"
+		// The loop above declines to ask whether an on-demand member carries
+		// the current spec, so this line must not answer it either. It is what
+		// an admin reads right after an image bump has not reached a running
+		// world, and the sentence above would tell them it had.
+		if group.IsOnDemand() {
+			condition.Message = "no member is starting; each carries the spec it started with"
+		}
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, condition)
 }

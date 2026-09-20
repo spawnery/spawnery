@@ -70,6 +70,8 @@ private static final long serialVersionUID = 0L;
     STOP_BOOST(6),
     ANNOUNCE(7),
     ACCEPT_JOINS(8),
+    START_SERVER(9),
+    STOP_SERVER(10),
     RESULT_NOT_SET(0);
     private final int value;
     private ResultCase(int value) {
@@ -94,6 +96,8 @@ private static final long serialVersionUID = 0L;
         case 6: return STOP_BOOST;
         case 7: return ANNOUNCE;
         case 8: return ACCEPT_JOINS;
+        case 9: return START_SERVER;
+        case 10: return STOP_SERVER;
         case 0: return RESULT_NOT_SET;
         default: return null;
       }
@@ -337,6 +341,68 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.AcceptJoinsResult.getDefaultInstance();
   }
 
+  public static final int START_SERVER_FIELD_NUMBER = 9;
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+   * @return Whether the startServer field is set.
+   */
+  @java.lang.Override
+  public boolean hasStartServer() {
+    return resultCase_ == 9;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+   * @return The startServer.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StartServerResult getStartServer() {
+    if (resultCase_ == 9) {
+       return (cloud.spawnery.agent.pb.StartServerResult) result_;
+    }
+    return cloud.spawnery.agent.pb.StartServerResult.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StartServerResultOrBuilder getStartServerOrBuilder() {
+    if (resultCase_ == 9) {
+       return (cloud.spawnery.agent.pb.StartServerResult) result_;
+    }
+    return cloud.spawnery.agent.pb.StartServerResult.getDefaultInstance();
+  }
+
+  public static final int STOP_SERVER_FIELD_NUMBER = 10;
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+   * @return Whether the stopServer field is set.
+   */
+  @java.lang.Override
+  public boolean hasStopServer() {
+    return resultCase_ == 10;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+   * @return The stopServer.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StopServerResult getStopServer() {
+    if (resultCase_ == 10) {
+       return (cloud.spawnery.agent.pb.StopServerResult) result_;
+    }
+    return cloud.spawnery.agent.pb.StopServerResult.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StopServerResultOrBuilder getStopServerOrBuilder() {
+    if (resultCase_ == 10) {
+       return (cloud.spawnery.agent.pb.StopServerResult) result_;
+    }
+    return cloud.spawnery.agent.pb.StopServerResult.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -375,6 +441,12 @@ private static final long serialVersionUID = 0L;
     if (resultCase_ == 8) {
       output.writeMessage(8, (cloud.spawnery.agent.pb.AcceptJoinsResult) result_);
     }
+    if (resultCase_ == 9) {
+      output.writeMessage(9, (cloud.spawnery.agent.pb.StartServerResult) result_);
+    }
+    if (resultCase_ == 10) {
+      output.writeMessage(10, (cloud.spawnery.agent.pb.StopServerResult) result_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -410,6 +482,14 @@ private static final long serialVersionUID = 0L;
     if (resultCase_ == 8) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(8, (cloud.spawnery.agent.pb.AcceptJoinsResult) result_);
+    }
+    if (resultCase_ == 9) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(9, (cloud.spawnery.agent.pb.StartServerResult) result_);
+    }
+    if (resultCase_ == 10) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(10, (cloud.spawnery.agent.pb.StopServerResult) result_);
     }
     return size;
   }
@@ -467,6 +547,14 @@ private static final long serialVersionUID = 0L;
         if (!getAcceptJoins()
             .equals(other.getAcceptJoins())) return false;
         break;
+      case 9:
+        if (!getStartServer()
+            .equals(other.getStartServer())) return false;
+        break;
+      case 10:
+        if (!getStopServer()
+            .equals(other.getStopServer())) return false;
+        break;
       case 0:
       default:
     }
@@ -512,6 +600,14 @@ private static final long serialVersionUID = 0L;
       case 8:
         hash = (37 * hash) + ACCEPT_JOINS_FIELD_NUMBER;
         hash = (53 * hash) + getAcceptJoins().hashCode();
+        break;
+      case 9:
+        hash = (37 * hash) + START_SERVER_FIELD_NUMBER;
+        hash = (53 * hash) + getStartServer().hashCode();
+        break;
+      case 10:
+        hash = (37 * hash) + STOP_SERVER_FIELD_NUMBER;
+        hash = (53 * hash) + getStopServer().hashCode();
         break;
       case 0:
       default:
@@ -678,6 +774,12 @@ private static final long serialVersionUID = 0L;
       if (acceptJoinsBuilder_ != null) {
         acceptJoinsBuilder_.clear();
       }
+      if (startServerBuilder_ != null) {
+        startServerBuilder_.clear();
+      }
+      if (stopServerBuilder_ != null) {
+        stopServerBuilder_.clear();
+      }
       resultCase_ = 0;
       result_ = null;
       return this;
@@ -750,6 +852,14 @@ private static final long serialVersionUID = 0L;
           acceptJoinsBuilder_ != null) {
         result.result_ = acceptJoinsBuilder_.build();
       }
+      if (resultCase_ == 9 &&
+          startServerBuilder_ != null) {
+        result.result_ = startServerBuilder_.build();
+      }
+      if (resultCase_ == 10 &&
+          stopServerBuilder_ != null) {
+        result.result_ = stopServerBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -794,6 +904,14 @@ private static final long serialVersionUID = 0L;
         }
         case ACCEPT_JOINS: {
           mergeAcceptJoins(other.getAcceptJoins());
+          break;
+        }
+        case START_SERVER: {
+          mergeStartServer(other.getStartServer());
+          break;
+        }
+        case STOP_SERVER: {
+          mergeStopServer(other.getStopServer());
           break;
         }
         case RESULT_NOT_SET: {
@@ -880,6 +998,20 @@ private static final long serialVersionUID = 0L;
               resultCase_ = 8;
               break;
             } // case 66
+            case 74: {
+              input.readMessage(
+                  internalGetStartServerFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              resultCase_ = 9;
+              break;
+            } // case 74
+            case 82: {
+              input.readMessage(
+                  internalGetStopServerFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              resultCase_ = 10;
+              break;
+            } // case 82
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1936,6 +2068,290 @@ private static final long serialVersionUID = 0L;
       resultCase_ = 8;
       onChanged();
       return acceptJoinsBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StartServerResult, cloud.spawnery.agent.pb.StartServerResult.Builder, cloud.spawnery.agent.pb.StartServerResultOrBuilder> startServerBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     * @return Whether the startServer field is set.
+     */
+    @java.lang.Override
+    public boolean hasStartServer() {
+      return resultCase_ == 9;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     * @return The startServer.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.StartServerResult getStartServer() {
+      if (startServerBuilder_ == null) {
+        if (resultCase_ == 9) {
+          return (cloud.spawnery.agent.pb.StartServerResult) result_;
+        }
+        return cloud.spawnery.agent.pb.StartServerResult.getDefaultInstance();
+      } else {
+        if (resultCase_ == 9) {
+          return startServerBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.StartServerResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     */
+    public Builder setStartServer(cloud.spawnery.agent.pb.StartServerResult value) {
+      if (startServerBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        result_ = value;
+        onChanged();
+      } else {
+        startServerBuilder_.setMessage(value);
+      }
+      resultCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     */
+    public Builder setStartServer(
+        cloud.spawnery.agent.pb.StartServerResult.Builder builderForValue) {
+      if (startServerBuilder_ == null) {
+        result_ = builderForValue.build();
+        onChanged();
+      } else {
+        startServerBuilder_.setMessage(builderForValue.build());
+      }
+      resultCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     */
+    public Builder mergeStartServer(cloud.spawnery.agent.pb.StartServerResult value) {
+      if (startServerBuilder_ == null) {
+        if (resultCase_ == 9 &&
+            result_ != cloud.spawnery.agent.pb.StartServerResult.getDefaultInstance()) {
+          result_ = cloud.spawnery.agent.pb.StartServerResult.newBuilder((cloud.spawnery.agent.pb.StartServerResult) result_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          result_ = value;
+        }
+        onChanged();
+      } else {
+        if (resultCase_ == 9) {
+          startServerBuilder_.mergeFrom(value);
+        } else {
+          startServerBuilder_.setMessage(value);
+        }
+      }
+      resultCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     */
+    public Builder clearStartServer() {
+      if (startServerBuilder_ == null) {
+        if (resultCase_ == 9) {
+          resultCase_ = 0;
+          result_ = null;
+          onChanged();
+        }
+      } else {
+        if (resultCase_ == 9) {
+          resultCase_ = 0;
+          result_ = null;
+        }
+        startServerBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     */
+    public cloud.spawnery.agent.pb.StartServerResult.Builder getStartServerBuilder() {
+      return internalGetStartServerFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.StartServerResultOrBuilder getStartServerOrBuilder() {
+      if ((resultCase_ == 9) && (startServerBuilder_ != null)) {
+        return startServerBuilder_.getMessageOrBuilder();
+      } else {
+        if (resultCase_ == 9) {
+          return (cloud.spawnery.agent.pb.StartServerResult) result_;
+        }
+        return cloud.spawnery.agent.pb.StartServerResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartServerResult start_server = 9;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StartServerResult, cloud.spawnery.agent.pb.StartServerResult.Builder, cloud.spawnery.agent.pb.StartServerResultOrBuilder> 
+        internalGetStartServerFieldBuilder() {
+      if (startServerBuilder_ == null) {
+        if (!(resultCase_ == 9)) {
+          result_ = cloud.spawnery.agent.pb.StartServerResult.getDefaultInstance();
+        }
+        startServerBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.StartServerResult, cloud.spawnery.agent.pb.StartServerResult.Builder, cloud.spawnery.agent.pb.StartServerResultOrBuilder>(
+                (cloud.spawnery.agent.pb.StartServerResult) result_,
+                getParentForChildren(),
+                isClean());
+        result_ = null;
+      }
+      resultCase_ = 9;
+      onChanged();
+      return startServerBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StopServerResult, cloud.spawnery.agent.pb.StopServerResult.Builder, cloud.spawnery.agent.pb.StopServerResultOrBuilder> stopServerBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     * @return Whether the stopServer field is set.
+     */
+    @java.lang.Override
+    public boolean hasStopServer() {
+      return resultCase_ == 10;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     * @return The stopServer.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.StopServerResult getStopServer() {
+      if (stopServerBuilder_ == null) {
+        if (resultCase_ == 10) {
+          return (cloud.spawnery.agent.pb.StopServerResult) result_;
+        }
+        return cloud.spawnery.agent.pb.StopServerResult.getDefaultInstance();
+      } else {
+        if (resultCase_ == 10) {
+          return stopServerBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.StopServerResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     */
+    public Builder setStopServer(cloud.spawnery.agent.pb.StopServerResult value) {
+      if (stopServerBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        result_ = value;
+        onChanged();
+      } else {
+        stopServerBuilder_.setMessage(value);
+      }
+      resultCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     */
+    public Builder setStopServer(
+        cloud.spawnery.agent.pb.StopServerResult.Builder builderForValue) {
+      if (stopServerBuilder_ == null) {
+        result_ = builderForValue.build();
+        onChanged();
+      } else {
+        stopServerBuilder_.setMessage(builderForValue.build());
+      }
+      resultCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     */
+    public Builder mergeStopServer(cloud.spawnery.agent.pb.StopServerResult value) {
+      if (stopServerBuilder_ == null) {
+        if (resultCase_ == 10 &&
+            result_ != cloud.spawnery.agent.pb.StopServerResult.getDefaultInstance()) {
+          result_ = cloud.spawnery.agent.pb.StopServerResult.newBuilder((cloud.spawnery.agent.pb.StopServerResult) result_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          result_ = value;
+        }
+        onChanged();
+      } else {
+        if (resultCase_ == 10) {
+          stopServerBuilder_.mergeFrom(value);
+        } else {
+          stopServerBuilder_.setMessage(value);
+        }
+      }
+      resultCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     */
+    public Builder clearStopServer() {
+      if (stopServerBuilder_ == null) {
+        if (resultCase_ == 10) {
+          resultCase_ = 0;
+          result_ = null;
+          onChanged();
+        }
+      } else {
+        if (resultCase_ == 10) {
+          resultCase_ = 0;
+          result_ = null;
+        }
+        stopServerBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     */
+    public cloud.spawnery.agent.pb.StopServerResult.Builder getStopServerBuilder() {
+      return internalGetStopServerFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.StopServerResultOrBuilder getStopServerOrBuilder() {
+      if ((resultCase_ == 10) && (stopServerBuilder_ != null)) {
+        return stopServerBuilder_.getMessageOrBuilder();
+      } else {
+        if (resultCase_ == 10) {
+          return (cloud.spawnery.agent.pb.StopServerResult) result_;
+        }
+        return cloud.spawnery.agent.pb.StopServerResult.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StopServerResult stop_server = 10;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StopServerResult, cloud.spawnery.agent.pb.StopServerResult.Builder, cloud.spawnery.agent.pb.StopServerResultOrBuilder> 
+        internalGetStopServerFieldBuilder() {
+      if (stopServerBuilder_ == null) {
+        if (!(resultCase_ == 10)) {
+          result_ = cloud.spawnery.agent.pb.StopServerResult.getDefaultInstance();
+        }
+        stopServerBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.StopServerResult, cloud.spawnery.agent.pb.StopServerResult.Builder, cloud.spawnery.agent.pb.StopServerResultOrBuilder>(
+                (cloud.spawnery.agent.pb.StopServerResult) result_,
+                getParentForChildren(),
+                isClean());
+        result_ = null;
+      }
+      resultCase_ = 10;
+      onChanged();
+      return stopServerBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudResponse)

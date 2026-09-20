@@ -3449,9 +3449,9 @@ func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int3
 	return group
 }
 
-// reconcilePersistentGroup runs the group reconciler once against a group
+// reconcileNamedGroup runs the group reconciler once against a group
 // named here, rather than against the fixture's own.
-func (f *fixture) reconcilePersistentGroup(t *testing.T, r *ServerGroupReconciler, name string) {
+func (f *fixture) reconcileNamedGroup(t *testing.T, r *ServerGroupReconciler, name string) {
 	t.Helper()
 	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
 		NamespacedName: types.NamespacedName{Name: name, Namespace: f.ns},
@@ -3508,7 +3508,7 @@ func TestAPersistentGroupBuildsItsOrdinals(t *testing.T) {
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 2)
 
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	names := f.serverNamesOfGroup(t, "survival")
 	if len(names) != 2 || names[0] != "survival-0" || names[1] != "survival-1" {
@@ -3534,7 +3534,7 @@ func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 3)
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 	if got := len(f.serverNamesOfGroup(t, "survival")); got != 3 {
 		t.Fatalf("servers = %d, want 3", got)
 	}
@@ -3548,7 +3548,7 @@ func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
 	r.Recorder = rec
 
 	f.setPersistentReplicas(t, "survival", 2)
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	if _, present := f.serverIfPresent("survival-2"); present {
 		t.Error("survival-2 is still here; the highest ordinal is the one that goes")
@@ -3598,8 +3598,8 @@ func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 	}
 
 	// The failure this pins is the reconcile erroring out, which
-	// reconcilePersistentGroup reports.
-	f.reconcilePersistentGroup(t, r, "survival")
+	// reconcileNamedGroup reports.
+	f.reconcileNamedGroup(t, r, "survival")
 
 	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 1 || names[0] != "survival-0" {
 		t.Errorf("servers = %v, want [survival-0]", names)
@@ -3629,7 +3629,7 @@ func TestAPersistentServerIsCreatedCarryingItsRenderHash(t *testing.T) {
 	r := groupReconciler(f)
 	group := f.createPersistentGroup(t, "survival", 1)
 
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	srv := f.server("survival-0")
 	if srv.Spec.PodHash == "" {
@@ -3656,7 +3656,7 @@ func TestAServerWithNoHashIsAdoptedRatherThanReplaced(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 1)
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	// Blanked to simulate a server that predates spec.podHash.
 	srv := f.server("survival-0")
@@ -3666,7 +3666,7 @@ func TestAServerWithNoHashIsAdoptedRatherThanReplaced(t *testing.T) {
 		t.Fatalf("blank the hash: %v", err)
 	}
 
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	after := f.server("survival-0")
 	if after.UID != uidBefore {
@@ -3693,7 +3693,7 @@ func TestAPersistentServerOnACordonedNodeIsCondemned(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 1)
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	srv := f.server("survival-0")
 	f.markReady(t, srv.Name)
@@ -3705,7 +3705,7 @@ func TestAPersistentServerOnACordonedNodeIsCondemned(t *testing.T) {
 	f.bindPodToNode(t, pod, node.Name)
 	f.ensureNode(t, node.Name, true)
 
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	condemned, present := f.serverIfPresent("survival-0")
 	if !present {
@@ -3732,7 +3732,7 @@ func TestAPersistentGroupPublishesTheReadinessItsPodsSupport(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 1)
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 	f.markReady(t, "survival-0")
 
 	res, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
@@ -3836,17 +3836,17 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 2)
 
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 	// Brought up once and never touched again -- see the function doc for why.
 	bringUpNamed(t, f, "survival-1")
 
 	for i := int32(0); i < backoffGiveUpAt; i++ {
-		f.reconcilePersistentGroup(t, r, "survival")
+		f.reconcileNamedGroup(t, r, "survival")
 		if _, present := f.serverIfPresent("survival-0"); !present {
 			t.Fatalf("round %d: the group did not rebuild its ordinal, so it stopped creating early", i+1)
 		}
 		f.failServerNeverReady(t, "survival-0")
-		f.reconcilePersistentGroup(t, r, "survival")
+		f.reconcileNamedGroup(t, r, "survival")
 
 		if i == 0 {
 			// The waiting half, taken on the flank rather than after the loop:
@@ -3867,7 +3867,7 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 		// window is still open.
 		f.clearFailedOrdinal(t, "survival-0")
 	}
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	g := f.persistentGroup(t, "survival")
 	if got := g.Status.ConsecutiveFailures; got != backoffGiveUpAt {
@@ -3924,7 +3924,7 @@ func TestAPersistentGroupCountsAFailureAfterItsGenerationMoves(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "outpost", 1)
-	f.reconcilePersistentGroup(t, r, "outpost")
+	f.reconcileNamedGroup(t, r, "outpost")
 	if _, present := f.serverIfPresent("outpost-0"); !present {
 		t.Fatalf("the group did not create its ordinal")
 	}
@@ -3935,10 +3935,10 @@ func TestAPersistentGroupCountsAFailureAfterItsGenerationMoves(t *testing.T) {
 		t.Fatalf("update group: %v", err)
 	}
 	// Observes the new generation with no failure yet on either side of it.
-	f.reconcilePersistentGroup(t, r, "outpost")
+	f.reconcileNamedGroup(t, r, "outpost")
 
 	f.failServerNeverReady(t, "outpost-0")
-	f.reconcilePersistentGroup(t, r, "outpost")
+	f.reconcileNamedGroup(t, r, "outpost")
 
 	g := f.persistentGroup(t, "outpost")
 	if got := g.Status.ConsecutiveFailures; got != 1 {
@@ -3970,7 +3970,7 @@ func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 2)
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 	f.markReady(t, "survival-0")
 	f.markReady(t, "survival-1")
 
@@ -3986,7 +3986,7 @@ func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
 	// reconciler is what actually creates a fresh ordinal's pod and what
 	// carries a draining one's finalizer removal forward one step.
 	reconcileGroupOnce := func() {
-		f.reconcilePersistentGroup(t, r, "survival")
+		f.reconcileNamedGroup(t, r, "survival")
 		for _, name := range f.serverNamesOfGroup(t, "survival") {
 			f.reconcile(name)
 		}
@@ -4133,7 +4133,7 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 		t.Fatalf("create persistent ServerGroup: %v", err)
 	}
 
-	f.reconcilePersistentGroup(t, r, "g")
+	f.reconcileNamedGroup(t, r, "g")
 	f.reconcile("g-0")
 
 	claim := f.claim("g-0-data")
@@ -4156,7 +4156,7 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 	// refusal; the group reconciler that follows is the one that reads
 	// status.storageResizeError back into the condition under test.
 	f.reconcile("g-0")
-	f.reconcilePersistentGroup(t, r, "g")
+	f.reconcileNamedGroup(t, r, "g")
 
 	got := f.persistentGroup(t, "g")
 	cond := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionStorageResize)
@@ -4283,7 +4283,7 @@ func TestAParkedPersistentGroupIsReadyRatherThanPending(t *testing.T) {
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "parked", 0)
 
-	f.reconcilePersistentGroup(t, r, "parked")
+	f.reconcileNamedGroup(t, r, "parked")
 
 	got := &spawneryv1alpha1.ServerGroup{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "parked", Namespace: f.ns}, got); err != nil {
@@ -4309,7 +4309,7 @@ func TestAGroupShortOfItsTargetIsStillPending(t *testing.T) {
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "wanting", 2)
 
-	f.reconcilePersistentGroup(t, r, "wanting")
+	f.reconcileNamedGroup(t, r, "wanting")
 
 	got := &spawneryv1alpha1.ServerGroup{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "wanting", Namespace: f.ns}, got); err != nil {
@@ -4355,7 +4355,7 @@ func TestASquatterOnAnOrdinalNameSaysSoOnTheGroup(t *testing.T) {
 	}
 	f.createPersistentGroup(t, "held", 1)
 
-	f.reconcilePersistentGroup(t, r, "held")
+	f.reconcileNamedGroup(t, r, "held")
 
 	got := &spawneryv1alpha1.ServerGroup{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "held", Namespace: f.ns}, got); err != nil {
@@ -4386,7 +4386,7 @@ func TestAGroupWithNoSquatterSaysTheOrdinalsAreAvailable(t *testing.T) {
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "clear", 1)
 
-	f.reconcilePersistentGroup(t, r, "clear")
+	f.reconcileNamedGroup(t, r, "clear")
 
 	got := &spawneryv1alpha1.ServerGroup{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "clear", Namespace: f.ns}, got); err != nil {
@@ -4743,7 +4743,7 @@ func TestADuplicatedOrdinalReachesTheGroupsConditions(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 2)
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	// A second server carrying ordinal 1, under a name this operator would
 	// never choose -- restored from a backup, or copied. It is a member of the
@@ -4759,7 +4759,7 @@ func TestADuplicatedOrdinalReachesTheGroupsConditions(t *testing.T) {
 		t.Fatalf("create the duplicate: %v", err)
 	}
 
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	group := &spawneryv1alpha1.ServerGroup{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "survival", Namespace: f.ns}, group); err != nil {
@@ -4795,7 +4795,7 @@ func TestTheOrdinalConditionClearsWhenTheDuplicateGoes(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 2)
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	copied := f.server("survival-1").DeepCopy()
 	dup := &spawneryv1alpha1.Server{
@@ -4807,12 +4807,12 @@ func TestTheOrdinalConditionClearsWhenTheDuplicateGoes(t *testing.T) {
 	if err := f.c.Create(f.ctx, dup); err != nil {
 		t.Fatalf("create the duplicate: %v", err)
 	}
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 	if err := f.c.Delete(f.ctx, dup); err != nil {
 		t.Fatalf("delete the duplicate: %v", err)
 	}
 
-	f.reconcilePersistentGroup(t, r, "survival")
+	f.reconcileNamedGroup(t, r, "survival")
 
 	group := &spawneryv1alpha1.ServerGroup{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "survival", Namespace: f.ns}, group); err != nil {

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Kubernetes operator (Go, controller-runtime) plus two JVM agent plugins (Kotlin, Gradle) that run Paper/Purpur game servers behind Velocity proxies. Four namespaced CRDs in `spawnery.cloud/v1alpha1`: `Network`, `ServerGroup`, `ProxyGroup`, `Server` (plus `ScaleBoost`). Game pods never talk to the Kubernetes API; each agent opens one authenticated gRPC stream to the operator, which is how player counts flow up and server lists / drain orders flow down.
+A Kubernetes operator (Go, controller-runtime) plus two JVM agent plugins (Kotlin, Gradle) that run Paper/Purpur game servers behind Velocity proxies. Four namespaced CRDs in `spawnery.cloud/v1alpha1`: `Network`, `ServerGroup` (`Ephemeral`, sized by free slots; `Persistent`, by ordinal on a claim; `OnDemand`, members asked for by name over the agent channel, each with its own claim), `ProxyGroup`, `Server` (plus `ScaleBoost`). Game pods never talk to the Kubernetes API; each agent opens one authenticated gRPC stream to the operator, which is how player counts flow up and server lists / drain orders flow down.
 
 ## Commands
 
@@ -52,7 +52,7 @@ Read `internal/controller/setup.go` (`Options`, `SetupAll`) to see how the piece
 
 - `internal/agentserver` is the gRPC endpoint agents dial. `internal/grpcauth` turns the bearer token (a pod-bound ServiceAccount token, via TokenReview) into exactly one pod identity. Identity never comes from the message.
 - `internal/agent` is what the gRPC server writes and the controllers read: in-memory player counts and readiness. The CR status is for observers, not for the control loop.
-- `internal/proxyreg` (proxies) and `internal/serverreg` (backends) are the reverse: what the controllers write and the gRPC server sends down. Both build their view of the namespace through `internal/netstate`, so both agent kinds see one identical network picture.
+- `internal/proxyreg` (proxies) and `internal/serverreg` (backends) are the reverse: what the controllers write and the gRPC server sends down. Both build their view of the namespace through `internal/netstate`, so both agent kinds see one network picture, except that on-demand groups and their members are in the proxies' and not the backends' (`netstate.Audience`).
 - `internal/certs`: the operator is its own CA for the agent channel and pins the bundle into the pods it creates.
 
 **Pure cores, thin controllers.**

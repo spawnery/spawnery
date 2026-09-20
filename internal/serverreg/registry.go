@@ -30,7 +30,8 @@ limitations under the License.
 // What is genuinely shared is the picture, and the picture *is* shared: both
 // packages build theirs through netstate.Source, so the two cannot come to
 // disagree about what a network looks like -- which is the promise the plugin
-// API makes and the only one a divergence here would break.
+// API makes and the only one a divergence here would break. The one difference
+// is the filter netstate.Audience names, applied there and not here.
 //
 // The two rules that matter in the eighty lines below are stated in both
 // places on purpose, because they are the ones a reader has to get right:
@@ -131,7 +132,7 @@ func (r *Registry) Join(ctx context.Context, namespace, podUID string) (<-chan *
 		return nil, nil, err
 	}
 
-	state, err := r.opts.State.Build(ctx, namespace)
+	state, err := r.opts.State.Build(ctx, namespace, netstate.ForServers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -278,7 +279,7 @@ func (r *Registry) Resync(ctx context.Context) {
 		state, ok := built[s.namespace]
 		if !ok {
 			var err error
-			state, err = r.opts.State.Build(ctx, s.namespace)
+			state, err = r.opts.State.Build(ctx, s.namespace, netstate.ForServers)
 			if err != nil {
 				// One unreadable namespace must not stop the others. The next
 				// tick tries again and the session keeps its last known state

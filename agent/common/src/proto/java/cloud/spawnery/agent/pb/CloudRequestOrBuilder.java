@@ -106,5 +106,35 @@ public interface CloudRequestOrBuilder extends
    */
   cloud.spawnery.agent.pb.AcceptJoinsRequestOrBuilder getAcceptJoinsOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerRequest start_server = 8;</code>
+   * @return Whether the startServer field is set.
+   */
+  boolean hasStartServer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerRequest start_server = 8;</code>
+   * @return The startServer.
+   */
+  cloud.spawnery.agent.pb.StartServerRequest getStartServer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartServerRequest start_server = 8;</code>
+   */
+  cloud.spawnery.agent.pb.StartServerRequestOrBuilder getStartServerOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerRequest stop_server = 9;</code>
+   * @return Whether the stopServer field is set.
+   */
+  boolean hasStopServer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerRequest stop_server = 9;</code>
+   * @return The stopServer.
+   */
+  cloud.spawnery.agent.pb.StopServerRequest getStopServer();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StopServerRequest stop_server = 9;</code>
+   */
+  cloud.spawnery.agent.pb.StopServerRequestOrBuilder getStopServerOrBuilder();
+
   cloud.spawnery.agent.pb.CloudRequest.RequestCase getRequestCase();
 }

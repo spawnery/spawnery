@@ -80,6 +80,49 @@ func TestAJoiningServerIsSentTheStateFirst(t *testing.T) {
 	}
 }
 
+// The picture a backend is sent leaves out private servers, on both paths that
+// build one: the state a session opens with, and the one every resync repeats.
+// They are two call sites of Build, and a test through only one leaves the
+// other free to hand a lobby three hundred entries.
+func TestABackendIsNeverSentPrivateServers(t *testing.T) {
+	maxInstances := int32(300)
+	private := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			Type: spawneryv1alpha1.ServerGroupOnDemand, MaxInstances: &maxInstances,
+		},
+	}
+	member := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-c0ffee", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "c0ffee",
+		},
+		Status: spawneryv1alpha1.ServerStatus{Phase: "Ready", Registered: true},
+	}
+	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"), private, member)
+
+	outbox, leave, err := r.Join(context.Background(), "ns", "pod-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	r.Resync(context.Background())
+
+	for _, when := range []string{"on join", "on resync"} {
+		state := (<-outbox).GetNetworkState()
+		if state == nil {
+			t.Fatalf("no network state %s", when)
+		}
+		if len(state.GetServers()) != 0 {
+			t.Errorf("%s: servers = %v, want no private server", when, state.GetServers())
+		}
+		if len(state.GetGroups()) != 1 || state.GetGroups()[0].GetName() != "lobby" {
+			t.Errorf("%s: groups = %v, want lobby alone", when, state.GetGroups())
+		}
+	}
+}
+
 func TestASessionThatFallsBehindIsCutRatherThanSilentlyStale(t *testing.T) {
 	// Dropping the message instead would leave the agent serving a mirror it
 	// has no way of knowing is stale, looking healthy the whole time.

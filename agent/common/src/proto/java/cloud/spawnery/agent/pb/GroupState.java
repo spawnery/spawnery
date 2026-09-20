@@ -97,6 +97,10 @@ private static final long serialVersionUID = 0L;
      * <code>PROXY = 3;</code>
      */
     PROXY(3),
+    /**
+     * <code>ON_DEMAND = 4;</code>
+     */
+    ON_DEMAND(4),
     UNRECOGNIZED(-1),
     ;
 
@@ -125,6 +129,10 @@ private static final long serialVersionUID = 0L;
      * <code>PROXY = 3;</code>
      */
     public static final int PROXY_VALUE = 3;
+    /**
+     * <code>ON_DEMAND = 4;</code>
+     */
+    public static final int ON_DEMAND_VALUE = 4;
 
 
     public final int getNumber() {
@@ -155,6 +163,7 @@ private static final long serialVersionUID = 0L;
         case 1: return EPHEMERAL;
         case 2: return PERSISTENT;
         case 3: return PROXY;
+        case 4: return ON_DEMAND;
         default: return null;
       }
     }

@@ -26,11 +26,14 @@ import java.util.concurrent.CompletionStage;
 /**
  * What a plugin can ask the cloud, from either side of the proxy.
  *
- * <p><b>Every method here is a local read.</b> The operator keeps a mirror
- * current in each agent, so none of these calls crosses a network, blocks, or
- * fails -- there is no timeout and no exception to handle. What they return is
- * the last thing the operator said, which during a reconnect may be a few
- * seconds old and is never wrong about a moment that happened.
+ * <p><b>The methods that return a {@link CompletionStage} ask the operator, and
+ * can fail; every other method is answered locally.</b> The operator keeps a
+ * mirror current in each agent, so a read -- {@link #self()} through
+ * {@link #player} -- never crosses a network, blocks, or fails: there is no
+ * timeout and no exception to handle. What it returns is the last thing the
+ * operator said, which during a reconnect may be a few seconds old and is
+ * never wrong about a moment that happened. Each stage-returning method says
+ * how it can fail; {@link #holdReadiness} is local and throws on a proxy.
  *
  * <p><b>Consume this interface; do not implement it.</b> Methods are added
  * here as later milestones land -- events, moving a player, starting a server
@@ -146,6 +149,80 @@ public interface SpawneryApi {
      * caller who expected some needs to be able to tell.
      */
     CompletionStage<Integer> stopBoosts(String group);
+
+    /**
+     * Asks for the private server that carries this key.
+     *
+     * <p>The key names a world and not a server: the operator composes the
+     * server's name from the group and the key, and the same key later finds
+     * the same world. Only a group of type {@code OnDemand} has members to
+     * ask for; anything else fails.
+     *
+     * <p><b>The stage completing means the server was asked for, not that it
+     * can take players.</b> It starts out as any server does; watch
+     * {@link ServerInfo#phase()} or the events for {@link ServerPhase#READY}
+     * before sending anybody there.
+     *
+     * <p>Asking for one that is already running succeeds with
+     * {@link StartedServer#alreadyRunning()} set, so a player pressing a
+     * button twice needs no lock on your side. That flag says the server
+     * exists and nothing about its being ready.
+     *
+     * <p><b>How it fails.</b> When the operator answers no, the stage fails
+     * with an {@link IllegalStateException} whose message is
+     * {@code <REASON>: <message>} -- the operator's reason, then its own
+     * sentence. {@code handle}, {@code exceptionally} and {@code whenComplete}
+     * called directly on this stage receive that exception itself. A stage
+     * derived from it with {@code thenApply} or {@code thenCompose} delivers
+     * it wrapped in a {@code CompletionException}, and {@code get()} wraps it
+     * in an {@code ExecutionException}; unwrap with {@code getCause()} only
+     * when what you caught is one of those wrappers. The reasons:
+     * <ul>
+     *   <li>{@code REFUSED} for a key that cannot be part of a name, for a name
+     *       longer than 63 characters once the group and the key are composed,
+     *       for a group that is not on-demand, for a name that another group's
+     *       server already has, and for a group that is genuinely at its
+     *       {@code spec.maxInstances}.</li>
+     *   <li>{@code NOT_FOUND} for a group this network does not have.</li>
+     *   <li>{@code UNAVAILABLE} for a member of that key that is still
+     *       stopping, and for a group that is at its {@code maxInstances}
+     *       only because one of its members is stopping. Neither is a refusal:
+     *       the same request succeeds once that member is gone, so ask
+     *       again.</li>
+     * </ul>
+     *
+     * <p>Two failures are not the operator's answer and carry no reason: the
+     * stage fails with a {@link java.util.concurrent.TimeoutException} when no
+     * answer arrives within ten seconds, and with an
+     * {@link IllegalStateException} when the stream was renewed while the
+     * request was in flight, which is failed rather than retried because only
+     * you know whether asking twice is safe. For a start it is: one that was in
+     * fact carried out is answered {@code alreadyRunning} the second time.
+     */
+    CompletionStage<StartedServer> startServer(String group, String key);
+
+    /**
+     * Stops one private server and leaves its world where it is.
+     *
+     * <p>Not {@link #retire}: retiring closes a server's door and lets it
+     * empty in its own time, while this says its owner is done with it — the
+     * players on it are moved through the proxies and the pod goes. The world
+     * is on a claim nothing deletes, so the next {@link #startServer} of the
+     * same key finds it.
+     *
+     * <p>The stage completes with no value. Stopping a server that is already
+     * on its way out succeeds too, so a second press of the same button is not
+     * an error.
+     *
+     * <p>It fails with {@code REFUSED} for a server that is not a member of an
+     * on-demand group, which is what keeps a wrong name from taking down a
+     * lobby, and with {@code NOT_FOUND} for a name this network does not have.
+     * The failure has the shape {@link #startServer} describes, the timeout and
+     * the renewed stream included. Asking again after either is safe, but a
+     * stop that was in fact carried out may answer {@code NOT_FOUND} the second
+     * time, once the server is gone.
+     */
+    CompletionStage<Void> stopServer(String server);
 
     /**
      * Opens or closes this server's own door.

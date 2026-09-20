@@ -263,3 +263,98 @@ jobs:
           gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
             --comment "Closed by the nightly run that passed: ${RUN_URL}"
           echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"
+
+  # The on-demand path, which needs a real game image for the same reason the
+  # job above does and is out of ci.yml's e2e for the same reason: that run
+  # builds .#operator-image alone and its manifest names images that never
+  # resolve, so nothing there ever writes a world.
+  #
+  # Its own label rather than nightly-tutorial-red: the two fail over different
+  # things, and an issue saying the tutorial's page no longer leads where it
+  # claims is the wrong text to reopen when what broke is a player's world.
+  # Like that one it gates no release, for the same reason --
+  # hack/require-no-red-nightly.sh reads nightly-red alone.
+  ondemand-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NIGHTLY_LABEL: nightly-ondemand-red
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: make e2e-ondemand
+        run: nix develop -c make e2e-ondemand
+
+      - name: Report the failure where somebody will meet it
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          gh label create "${NIGHTLY_LABEL}" \
+            --color b60205 \
+            --description "The on-demand end-to-end path (hack/e2e-ondemand.sh) is failing. Closing this is how you say the cause is fixed." \
+            2>/dev/null || true
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty')"
+
+          cat >/tmp/nightly-ondemand-body.md <<EOF
+          \`make e2e-ondemand\` failed on the nightly run.
+
+          | | |
+          |---|---|
+          | latest failing run | ${RUN_URL} |
+          | commit | \`${GITHUB_SHA}\` |
+          | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
+
+          This job builds and loads the real Purpur image and drives
+          \`test/e2e/ondemand_test.go\`'s
+          \`TestAPrivateServersWorldOutlivesItsServer\`: ask for a private
+          server over a real proxy agent session, write a marker into the world
+          it generates, stop it, and find that marker in the pod of the next
+          start. It is the only thing in this repository that shows a world
+          outliving its server, so a regression here is invisible to every
+          other suite -- the envtest ones read objects back and no object says
+          whether a player's world is still there.
+
+          Opened automatically by \`.github/workflows/nightly.yml\`.
+          EOF
+
+          if [ -n "${existing}" ]; then
+            gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
+              --body-file /tmp/nightly-ondemand-body.md
+            echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "Nightly: a private server's world did not survive" \
+              --label "${NIGHTLY_LABEL}" \
+              --body-file /tmp/nightly-ondemand-body.md
+          fi
+
+      - name: Close the report if there is one
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty' 2>/dev/null || true)"
+
+          if [ -z "${existing}" ]; then
+            exit 0
+          fi
+
+          gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
+            --comment "Closed by the nightly run that passed: ${RUN_URL}"
+          echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"

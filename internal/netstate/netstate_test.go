@@ -90,6 +90,44 @@ func readyServer(ns, name, group string, players, slots int32) *spawneryv1alpha1
 	return serverInPhase(ns, name, group, "Ready", players, slots)
 }
 
+func onDemandGroup(ns, name string) *spawneryv1alpha1.ServerGroup {
+	maxInstances := int32(300)
+	return &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef:   spawneryv1alpha1.ObjectRef{Name: "production"},
+			Type:         spawneryv1alpha1.ServerGroupOnDemand,
+			Image:        "example/paper:1",
+			MaxPlayers:   4,
+			MaxInstances: &maxInstances,
+		},
+	}
+}
+
+func onDemandMember(ns, group, key string) *spawneryv1alpha1.Server {
+	srv := readyServer(ns, group+"-"+key, group, 0, 4)
+	srv.Spec.Key = key
+	return srv
+}
+
+func hasServer(state *agentpb.NetworkState, name string) bool {
+	for _, srv := range state.GetServers() {
+		if srv.GetName() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func hasGroup(state *agentpb.NetworkState, name string) bool {
+	for _, g := range state.GetGroups() {
+		if g.GetName() == name {
+			return true
+		}
+	}
+	return false
+}
+
 func TestBuildDescribesEveryGroupAndServerInTheNamespace(t *testing.T) {
 	src, _ := source(t,
 		ephemeralGroup("ns", "lobby"),
@@ -98,7 +136,7 @@ func TestBuildDescribesEveryGroupAndServerInTheNamespace(t *testing.T) {
 		readyServer("ns", "lobby-b", "lobby", 0, 100),
 	)
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -136,7 +174,7 @@ func TestBuildIsScopedToOneNamespace(t *testing.T) {
 		readyServer("other", "secret-a", "secret", 0, 100),
 	)
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -164,7 +202,7 @@ func TestBuildCarriesTheRoster(t *testing.T) {
 		t.Fatalf("ReportRoster: %v", err)
 	}
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -179,7 +217,7 @@ func TestBuildSurvivesANetworkWithNoProxyReports(t *testing.T) {
 	// ordinary rather than as a failure a plugin has to handle.
 	src, _ := source(t, ephemeralGroup("ns", "lobby"))
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build with no proxy reports: %v", err)
 	}
@@ -197,7 +235,7 @@ func TestAServersPhaseTravelsAsTheOperatorSpellsIt(t *testing.T) {
 		serverInPhase("ns", "lobby-a", "lobby", "Retiring", 0, 100),
 	)
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -224,7 +262,7 @@ func TestBuildCarriesWhatAServerSaysAboutItself(t *testing.T) {
 		t.Fatalf("ReportAnnouncement: %v", err)
 	}
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -253,7 +291,7 @@ func TestAServerThatAnnouncedNothingIsDescribedAsNothing(t *testing.T) {
 		readyServer("ns", "lobby-a", "lobby", 0, 100),
 	)
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -272,7 +310,7 @@ func TestBuildCarriesWhatSomebodyWroteDownAboutAGroup(t *testing.T) {
 	proxy.Spec.Attributes = map[string]string{"region": "eu"}
 	src, _ := source(t, group, proxy)
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -296,7 +334,7 @@ func TestBuildSaysWhichRunOfAServerThisIs(t *testing.T) {
 	srv.Status.PodUID = "pod-7c3f"
 	src, _ := source(t, ephemeralGroup("ns", "survival"), srv)
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -315,7 +353,7 @@ func TestBuildCarriesAGroupsDisplayName(t *testing.T) {
 	proxy.Spec.DisplayName = "Gateway"
 	src, _ := source(t, group, proxy)
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -335,7 +373,7 @@ func TestAGroupWithoutADisplayNameTravelsWithAnEmptyOne(t *testing.T) {
 	// a different one from the operator would have nothing to notice it by.
 	src, _ := source(t, ephemeralGroup("ns", "lobby"))
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -354,7 +392,7 @@ func TestBuildCarriesAServersNumber(t *testing.T) {
 	old := readyServer("ns", "hub-old1", "hub", 0, 100)
 	src, _ := source(t, ephemeralGroup("ns", "hub"), numbered, old)
 
-	got, err := src.Build(context.Background(), "ns")
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
@@ -368,5 +406,115 @@ func TestBuildCarriesAServersNumber(t *testing.T) {
 	}
 	if numbers["hub-old1"] != 0 {
 		t.Errorf("hub-old1 = %d, want 0", numbers["hub-old1"])
+	}
+}
+
+func TestOnDemandMembersReachProxiesOnly(t *testing.T) {
+	src, _ := source(t,
+		onDemandGroup("ns", "private-servers"),
+		onDemandMember("ns", "private-servers", "c0ffee"),
+		ephemeralGroup("ns", "lobby"),
+		readyServer("ns", "lobby-abc", "lobby", 0, 100),
+	)
+
+	forProxies, err := src.Build(context.Background(), "ns", netstate.ForProxies)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if !hasServer(forProxies, "private-servers-c0ffee") {
+		t.Error("a proxy cannot route to a private server it cannot see")
+	}
+	if !hasGroup(forProxies, "private-servers") {
+		t.Fatal("the on-demand group is missing from the proxies' picture")
+	}
+	for _, g := range forProxies.GetGroups() {
+		if g.GetName() == "private-servers" && g.GetKind() != agentpb.GroupState_ON_DEMAND {
+			t.Errorf("kind = %v, want ON_DEMAND: an agent cannot read a group as unspecified "+
+				"when this build knows the type", g.GetKind())
+		}
+	}
+
+	forServers, err := src.Build(context.Background(), "ns", netstate.ForServers)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if hasServer(forServers, "private-servers-c0ffee") {
+		t.Error("every lobby is carrying an entry for a server nobody will be sent to")
+	}
+	if hasGroup(forServers, "private-servers") {
+		t.Error("the on-demand group itself reached a backend's picture")
+	}
+	if !hasServer(forServers, "lobby-abc") || !hasGroup(forServers, "lobby") {
+		t.Error("an ordinary group or server fell out of the backends' picture")
+	}
+}
+
+func TestABackendIsToldAPlayerIsOnlineAndNotThatTheyAreOnAPrivateServer(t *testing.T) {
+	src, reg := source(t,
+		onDemandGroup("ns", "private-servers"),
+		onDemandMember("ns", "private-servers", "c0ffee"),
+		ephemeralGroup("ns", "lobby"),
+		readyServer("ns", "lobby-abc", "lobby", 0, 100),
+	)
+	reg.Connect("proxy-a", agent.RoleProxy)
+	if err := reg.ReportRoster("proxy-a", "ns", []agent.RosterEntry{
+		{UUID: "u-alice", Name: "alice", Server: "private-servers-c0ffee"},
+		{UUID: "u-bob", Name: "bob", Server: "lobby-abc"},
+	}); err != nil {
+		t.Fatalf("ReportRoster: %v", err)
+	}
+
+	forServers, err := src.Build(context.Background(), "ns", netstate.ForServers)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	where := map[string]string{}
+	for _, p := range forServers.GetPlayers() {
+		where[p.GetUuid()] = p.GetServer()
+	}
+	if len(where) != 2 {
+		t.Fatalf("players = %v, want both: a player on a private server is still on the network",
+			forServers.GetPlayers())
+	}
+	if where["u-alice"] != "" {
+		t.Errorf("alice is on %q in a backend's picture, which its own servers() does not list -- "+
+			"and stopServer takes that name", where["u-alice"])
+	}
+	if where["u-bob"] != "lobby-abc" {
+		t.Errorf("bob is on %q, want lobby-abc", where["u-bob"])
+	}
+
+	forProxies, err := src.Build(context.Background(), "ns", netstate.ForProxies)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, p := range forProxies.GetPlayers() {
+		if p.GetUuid() == "u-alice" && p.GetServer() != "private-servers-c0ffee" {
+			t.Errorf("alice is on %q in the proxies' picture, which is the one that routes",
+				p.GetServer())
+		}
+	}
+}
+
+func TestOnlyAMemberOfAnOnDemandGroupIsAPrivateServer(t *testing.T) {
+	if !netstate.IsPrivateServer(onDemandMember("ns", "private-servers", "c0ffee")) {
+		t.Error("a member carrying a key was not a private server")
+	}
+	if netstate.IsPrivateServer(readyServer("ns", "lobby-a", "lobby", 0, 100)) {
+		t.Error("an ordinary server was a private server")
+	}
+}
+
+func TestAudienceOfSendsOnlyProxiesTheWholePicture(t *testing.T) {
+	if netstate.AudienceOf(agent.RoleProxy) != netstate.ForProxies {
+		t.Error("a proxy was given the narrower picture, and cannot route to a private server")
+	}
+	if netstate.AudienceOf(agent.RoleServer) != netstate.ForServers {
+		t.Error("a backend was given the whole picture")
+	}
+	// The default is the narrow one: a role nobody has decided about is shown
+	// too little, and widening later is not a breaking change.
+	if netstate.AudienceOf(agent.Role("something-new")) != netstate.ForServers {
+		t.Error("an unknown role was given the whole picture")
 	}
 }
