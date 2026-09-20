@@ -324,6 +324,10 @@ class CloudConnectorTest {
         }
     }
 
+    // The wrapping is the JDK's, so this cannot go red short of a JDK change --
+    // and that is its subject. SpawneryApi.startServer's javadoc tells plugin
+    // authors to call getCause() on a derived stage, and this is the only place
+    // that advice meets a real JDK rather than being asserted in prose.
     @Test
     fun `a dependent stage sees the exception wrapped in a CompletionException`() {
         val seen = refusedStart()
