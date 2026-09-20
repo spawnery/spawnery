@@ -216,9 +216,13 @@ defaulted: a group whose ceiling nobody chose is one nobody thought about.
 The `ServerGroup` reconciler learns the type and then declines most of its own
 work for it:
 
-- **No sizing.** `size()` is not consulted; the group creates no server and
-  condemns none. The existing surplus path must not see these members: §3.7
-  says what a fallthrough there costs today and what it may cost later.
+- **No sizing.** The sizing rule is skipped for this type: the group creates no
+  server and condemns none as surplus. `size()` itself still runs on every
+  pass, and the switch inside it has an arm for this type that decides nothing;
+  condemnation is attached after that switch for every path out of it, which is
+  what removes a member from a departing node (below). The surplus path must
+  not see these members: §3.7 says what a fallthrough there costs today and
+  what it may cost later.
 - **No rolling update.** A spec edit does not make a running member stale.
   The pod hash is still stamped at creation and still tells a reader which
   spec a member started with, but nothing acts on a difference: a member
