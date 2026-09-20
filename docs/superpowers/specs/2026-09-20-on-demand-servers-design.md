@@ -108,7 +108,7 @@ writer rather than discovered by a pod that never schedules:
   since the failure lands on a player's start rather than on the admin's
   `kubectl apply`.
 
-A second start on a key whose server exists collides on the name. That is the
+A second start on a key whose server is running collides on the name. That is the
 answer, not an accident to paper over: the operator returns `already_running`
 with the server's name, and no caller needs a lock to ask twice.
 
@@ -177,9 +177,25 @@ In Java, `SpawneryApi` gains `startServer(String group, String key)` returning
 the server's name and `stopServer(String server)`, both `CompletionStage` on
 both platforms, both round trips.
 
-A create is refused, as a `RequestError` with `REFUSED` and the operator's own
-sentence, when: the group does not exist, the group is not `OnDemand`, the key
-is not a label or the name would not fit, or `maxInstances` is reached.
+Every answer that is not a success is a `RequestError` with the operator's own
+sentence, and the reason says what a caller does about it:
+
+- `REFUSED` for a bound that stands until somebody changes something: the group
+  is not `OnDemand`, the key is not a label or the composed name would not fit,
+  the name is one another group's server holds (group `a` with key `b-xyz` and
+  group `a-b` with key `xyz` compose the same name), or `maxInstances` is
+  reached by members that are staying.
+- `UNAVAILABLE` for a state the same request passes once it has gone: the
+  member of that key is still stopping, or `maxInstances` is met only because a
+  member is draining. Neither is a refusal, and a caller asks again.
+- `NOT_FOUND` for a group this network does not have.
+
+`stopServer` answers `REFUSED` for a server that carries no key — the check
+that keeps a wrong name from taking down a lobby — and `NOT_FOUND` for a name
+this network does not have, which is also what a stop answers when the member
+is already gone. A start on a key that is already running is not an answer of
+this kind: it succeeds with `already_running` and says nothing about
+readiness.
 
 `stopServer` deletes the `Server`. Everything after that is the path a
 scale-down already takes: the players on it are moved through the proxies
