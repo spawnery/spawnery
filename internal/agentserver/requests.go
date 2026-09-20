@@ -661,10 +661,11 @@ func stoppedServer(reqID uint64, result *agentpb.StopServerResult) *agentpb.Clou
 // "somebody already did this" is news, while this is called by a plugin
 // reacting to a player pressing a button twice.
 //
-// A member that is stopping is the one answer here that is neither. It is
-// UNAVAILABLE, because the same request succeeds once the member is gone --
-// the only refusal on this channel of which that is true by construction, and
-// the reason a caller can branch on it and simply ask again.
+// Two answers here are neither a success nor a bound: a member that is
+// stopping, and a ceiling held by members of which one is already leaving.
+// Both are UNAVAILABLE, because the same request succeeds once the cluster
+// has caught up with a deletion that is already under way, and a caller can
+// tell them from a refusal by the reason alone and simply ask again.
 func (s *Server) answerStartServer(
 	ctx context.Context,
 	logger logr.Logger,
@@ -687,6 +688,10 @@ func (s *Server) answerStartServer(
 		return refuse(reqID, agentpb.RequestError_REFUSED,
 			"a server of another group already has the name that group and key compose; "+
 				"another key, or group names that cannot run together, is what fixes it")
+	case errors.Is(err, ErrInstancesDraining):
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"that group is at spec.maxInstances right now and one of its members is stopping; "+
+				"the same request fits once that one is gone")
 	case errors.Is(err, instance.ErrBadKey):
 		return refuse(reqID, agentpb.RequestError_REFUSED, err.Error())
 	case errors.Is(err, ErrInstanceStopping):

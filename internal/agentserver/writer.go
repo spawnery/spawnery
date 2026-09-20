@@ -73,6 +73,16 @@ var ErrNotAnInstance = errors.New("that server is not an on-demand member")
 // that is about to stop.
 var ErrInstanceStopping = errors.New("that member is still stopping")
 
+// ErrInstancesDraining is the ceiling, met, by members of which at least one
+// is already leaving.
+//
+// Separate from ErrTooManyInstances because the two mean opposite things to
+// the caller. A full group is a bound that stands until somebody stops a
+// server; this one clears by itself inside the group's drain timeout. Told
+// REFUSED, a plugin stops asking, and asking again shortly is exactly what
+// works here.
+var ErrInstancesDraining = errors.New("that group is at spec.maxInstances and a member is stopping")
+
 // ErrNameTaken is a start whose composed name belongs to a server of another
 // group.
 //
@@ -133,7 +143,8 @@ type ClusterWriter interface {
 	// success: what the caller asked for is the case. It returns
 	// ErrNoSuchGroup, ErrGroupNotOnDemand, ErrTooManyInstances, ErrNameTaken,
 	// instance.ErrBadKey for a key no name can be built from, and
-	// ErrInstanceStopping for a key whose member is still going.
+	// ErrInstanceStopping or ErrInstancesDraining for the two states that
+	// clear on their own.
 	StartServer(ctx context.Context, namespace, group, key string) (StartedServer, error)
 
 	// StopServer deletes one member of an OnDemand group.
@@ -376,7 +387,7 @@ func (w KubeWriter) StartServer(
 	if err := w.Client.List(ctx, &members, client.InNamespace(namespace)); err != nil {
 		return StartedServer{}, err
 	}
-	live := 0
+	live, going := 0, 0
 	for i := range members.Items {
 		m := &members.Items[i]
 		if m.Spec.GroupRef.Name != group || m.Spec.Key == "" {
@@ -398,11 +409,23 @@ func (w KubeWriter) StartServer(
 			}
 			return StartedServer{Name: name, AlreadyRunning: true}, nil
 		}
-		if !phase.Terminal(phase.Phase(m.Status.Phase)) {
-			live++
+		if phase.Terminal(phase.Phase(m.Status.Phase)) {
+			continue
+		}
+		// A member that is draining still exists, and the ceiling is about
+		// how many may exist at once -- so it holds its slot. It is counted
+		// apart as well, because a ceiling held by servers that are leaving
+		// is a different answer from a ceiling held by servers that are
+		// staying.
+		live++
+		if !m.DeletionTimestamp.IsZero() {
+			going++
 		}
 	}
 	if g.Spec.MaxInstances != nil && int32(live) >= *g.Spec.MaxInstances {
+		if going > 0 {
+			return StartedServer{}, ErrInstancesDraining
+		}
 		return StartedServer{}, ErrTooManyInstances
 	}
 

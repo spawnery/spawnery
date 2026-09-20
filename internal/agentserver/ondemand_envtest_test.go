@@ -388,6 +388,29 @@ func TestStartRefusesANameAnotherGroupsServerAlreadyHas(t *testing.T) {
 	}
 }
 
+// A ceiling held by a member that is already leaving is a bound that clears
+// by itself, so it is UNAVAILABLE and not REFUSED. REFUSED tells a plugin not
+// to send the same request again, and here asking again shortly is exactly
+// what works.
+func TestStartIsUnavailableWhileTheCeilingIsHeldByAMemberThatIsGoing(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 1)
+	pod := f.proxyPod("gateway-aaaa")
+
+	startOverTheWire(t, f, pod, "private-servers", "one")
+	holdWhileStopping(t, f, "private-servers-one")
+	stopOverTheWire(t, f, pod, "private-servers-one")
+	if member(t, f, "private-servers-one").DeletionTimestamp.IsZero() {
+		t.Fatal("the member is not going, so this test would assert nothing")
+	}
+
+	resp := startOverTheWire(t, f, pod, "private-servers", "two")
+	if got := resp.GetError().GetReason(); got != agentpb.RequestError_UNAVAILABLE {
+		t.Fatalf("reason = %v (%s), want UNAVAILABLE while the only slot is held by a member that is going",
+			got, resp.GetError().GetMessage())
+	}
+}
+
 func TestStartRefusesAGroupThatIsNotOnDemand(t *testing.T) {
 	f := newServerFixture(t)
 	makeEphemeralGroup(t, f, "lobby")
