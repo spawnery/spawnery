@@ -1310,6 +1310,13 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = spawneryv1alpha1.ReasonAtDesiredState
 		condition.Message = "every server is of the group's current spec and ready"
+		// The loop above declines to ask whether an on-demand member carries
+		// the current spec, so this line must not answer it either. It is what
+		// an admin reads right after an image bump has not reached a running
+		// world, and the sentence above would tell them it had.
+		if group.IsOnDemand() {
+			condition.Message = "no member is starting; each carries the spec it started with"
+		}
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, condition)
 }

@@ -205,9 +205,21 @@ func TestOnDemandProgressingIgnoresAnEarlierSpec(t *testing.T) {
 	f.bumpOnDemandImage(t, group)
 	f.reconcileNamedGroup(t, r, group.Name)
 
-	if cond := f.progressing(t, group.Name); cond.Status == metav1.ConditionTrue {
+	settled := f.progressing(t, group.Name)
+	if settled.Status == metav1.ConditionTrue {
 		t.Fatalf("Progressing = True (%s) for a group that replaces nothing: %s",
-			cond.Reason, cond.Message)
+			settled.Reason, settled.Message)
+	}
+	// c0ffee is a bump behind, and this line is what an admin reads when they
+	// go looking for why their new image is not running. It has to report the
+	// half that was checked -- the phase -- and not the half the loop above
+	// declined to check.
+	if strings.Contains(settled.Message, "current spec") {
+		t.Fatalf("Progressing says every member carries the current spec, and c0ffee does not: %s",
+			settled.Message)
+	}
+	if !strings.Contains(settled.Message, "the spec it started with") {
+		t.Fatalf("Progressing does not say what it did check: %s", settled.Message)
 	}
 
 	// And a member that is coming up is progress, whatever render it carries.
