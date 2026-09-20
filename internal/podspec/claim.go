@@ -23,8 +23,8 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// BuildDataClaim renders the PersistentVolumeClaim a persistent server's world
-// lives on.
+// BuildDataClaim renders the PersistentVolumeClaim a persistent server's or an
+// on-demand member's world lives on.
 //
 // It carries no owner reference, and that is the load-bearing property rather
 // than an omission. The claim outlives its server -- which is the whole point,
