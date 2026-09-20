@@ -1015,36 +1015,39 @@ func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
 // declare it the way the others are.
 func declaredPhases(t *testing.T) []Phase {
 	t.Helper()
-	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", func(f os.FileInfo) bool {
-		return !strings.HasSuffix(f.Name(), "_test.go")
-	}, 0)
+	sources, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("parse this package: %v", err)
+		t.Fatalf("list this package: %v", err)
 	}
+	fset := token.NewFileSet()
 	var declared []Phase
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			for _, decl := range file.Decls {
-				gen, ok := decl.(*ast.GenDecl)
-				if !ok || gen.Tok != token.CONST {
+	for _, source := range sources {
+		if strings.HasSuffix(source, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(fset, source, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", source, err)
+		}
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.CONST {
+				continue
+			}
+			for _, spec := range gen.Specs {
+				value, ok := spec.(*ast.ValueSpec)
+				if !ok {
 					continue
 				}
-				for _, spec := range gen.Specs {
-					value, ok := spec.(*ast.ValueSpec)
+				if name, ok := value.Type.(*ast.Ident); !ok || name.Name != "Phase" {
+					continue
+				}
+				for _, v := range value.Values {
+					lit, ok := v.(*ast.BasicLit)
 					if !ok {
 						continue
 					}
-					if name, ok := value.Type.(*ast.Ident); !ok || name.Name != "Phase" {
-						continue
-					}
-					for _, v := range value.Values {
-						lit, ok := v.(*ast.BasicLit)
-						if !ok {
-							continue
-						}
-						declared = append(declared, Phase(strings.Trim(lit.Value, `"`)))
-					}
+					declared = append(declared, Phase(strings.Trim(lit.Value, `"`)))
 				}
 			}
 		}
