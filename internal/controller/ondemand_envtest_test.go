@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -170,16 +171,21 @@ func TestOnDemandFailedMembersArePrunedPastTheCap(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
-	kept := f.createOnDemandMember(t, group, "c0ffee")
-	pruned := f.createOnDemandMember(t, group, "decaf")
-	f.setPhase(t, kept, phase.Failed)
-	f.setPhase(t, pruned, phase.Failed)
+	// The survivor is created first and fails first, so that the rule -- the
+	// earliest failure of the newest generation, the one that says what broke
+	// -- and the alphabetical last resort disagree about it. Spelling alone
+	// would keep c0ffee.
+	kept := f.createOnDemandMember(t, group, "decaf")
+	pruned := f.createOnDemandMember(t, group, "c0ffee")
+	f.failMember(t, kept, f.clock.Now())
+	f.failMember(t, pruned, f.clock.Now().Add(time.Minute))
 
 	f.reconcileNamedGroup(t, r, group.Name)
 
 	names := f.serverNamesOfGroup(t, group.Name)
 	if len(names) != 1 || names[0] != kept.Name {
-		t.Fatalf("servers = %v, want [%s]", names, kept.Name)
+		t.Fatalf("servers = %v, want [%s]: the earliest failure is the one kept, and %s failed a minute later",
+			names, kept.Name, pruned.Name)
 	}
 }
 
@@ -272,6 +278,21 @@ func (f *fixture) createOnDemandMemberWithOrdinal(
 		t.Fatalf("give member %s an ordinal: %v", srv.Name, err)
 	}
 	return srv
+}
+
+// failMember puts a member in phase Failed at a time of the caller's choosing.
+// The time is not decoration: selectFailedForPruning orders failures of one
+// generation by creationTimestamp and then by status.failedAt, and a
+// creationTimestamp has second resolution, so for members created in one breath
+// this is the field that decides which corpse is kept.
+func (f *fixture) failMember(t *testing.T, srv *spawneryv1alpha1.Server, at time.Time) {
+	t.Helper()
+	srv.Status.Phase = string(phase.Failed)
+	stamped := metav1.NewTime(at)
+	srv.Status.FailedAt = &stamped
+	if err := f.c.Status().Update(f.ctx, srv); err != nil {
+		t.Fatalf("fail member %s: %v", srv.Name, err)
+	}
 }
 
 func (f *fixture) setPhase(t *testing.T, srv *spawneryv1alpha1.Server, p phase.Phase) {
