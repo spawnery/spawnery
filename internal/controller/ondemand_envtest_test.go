@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,6 +31,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/phase"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 // The group must not size its own members. Every other group type answers
@@ -41,6 +43,12 @@ func TestOnDemandGroupCreatesAndDeletesNothing(t *testing.T) {
 	r := groupReconciler(f)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
 	member := f.createOnDemandMember(t, group, "c0ffee")
+	// And one carrying an ordinal beside its key. The persistent rule skips
+	// the views that have none, so a group of ordinary members alone would
+	// survive that rule being reached and hold nothing about the switch at
+	// all; this is the member it does see, and at spec.replicas nil the
+	// ordinal it reads is surplus.
+	stray := f.createOnDemandMemberWithOrdinal(t, group, "decaf", 0)
 
 	for i := 0; i < 3; i++ {
 		f.reconcileNamedGroup(t, r, group.Name)
@@ -50,15 +58,45 @@ func TestOnDemandGroupCreatesAndDeletesNothing(t *testing.T) {
 	if err := f.c.List(f.ctx, &servers, client.InNamespace(f.ns)); err != nil {
 		t.Fatalf("list servers: %v", err)
 	}
-	if len(servers.Items) != 1 {
-		t.Fatalf("after three passes the group has %d servers, want exactly the one that was asked for",
-			len(servers.Items))
+	if got, want := f.serverNamesOfGroup(t, group.Name), []string{member.Name, stray.Name}; !slices.Equal(got, want) {
+		t.Fatalf("servers = %v, want %v: the group built or removed a member nobody asked it about", got, want)
 	}
-	if servers.Items[0].Name != member.Name {
-		t.Fatalf("server = %q, want %q", servers.Items[0].Name, member.Name)
+	for _, srv := range servers.Items {
+		if !srv.DeletionTimestamp.IsZero() {
+			t.Fatalf("the group condemned %s, a member nobody asked it to remove", srv.Name)
+		}
 	}
-	if !servers.Items[0].DeletionTimestamp.IsZero() {
-		t.Fatal("the group condemned a member nobody asked it to remove")
+}
+
+// A departing node takes a private world's server with it, like any other
+// server on that node -- and leaves the world itself alone, which is what makes
+// the removal survivable: the key is free and its owner starts it again.
+func TestOnDemandMemberOnADepartingNodeGoesWithoutItsWorld(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	group := f.createOnDemandGroup(t, "private-servers", 50)
+	member := f.createOnDemandMember(t, group, "c0ffee")
+	// The Server controller is what gives the member its claim and its pod.
+	f.reconcile(member.Name)
+	claim := podspec.DataClaimName(member.Name)
+	if f.claim(claim) == nil {
+		t.Fatalf("the member has no claim %s to keep its world on", claim)
+	}
+	pod, ok := f.pod(f.server(member.Name).Status.PodName)
+	if !ok {
+		t.Fatalf("pod of %s not found", member.Name)
+	}
+	node := f.ensureNode(t, "node-going-"+f.ns, false)
+	f.bindPodToNode(t, pod, node.Name)
+	f.ensureNode(t, node.Name, true)
+
+	f.reconcileNamedGroup(t, r, group.Name)
+
+	if got, ok := f.serverIfPresent(member.Name); ok && got.DeletionTimestamp.IsZero() {
+		t.Error("the member on the cordoned node was kept; its players will be evicted instead of moved")
+	}
+	if f.claim(claim) == nil {
+		t.Fatal("the world went with the member, so its owner has nothing to start again")
 	}
 }
 
@@ -211,6 +249,27 @@ func (f *fixture) createOnDemandMember(t *testing.T, g *spawneryv1alpha1.ServerG
 	}
 	if err := f.c.Create(f.ctx, srv); err != nil {
 		t.Fatalf("create member: %v", err)
+	}
+	return srv
+}
+
+// createOnDemandMemberWithOrdinal builds the member no rule forbids: one
+// carrying spec.ordinal as well as its key, which a restored object or a
+// hand-written one can be, since nothing cross-checks the two fields against
+// the group's type. It is the shape that makes the persistent sizing rule see
+// an on-demand member at all.
+func (f *fixture) createOnDemandMemberWithOrdinal(
+	t *testing.T,
+	g *spawneryv1alpha1.ServerGroup,
+	key string,
+	ordinal int32,
+) *spawneryv1alpha1.Server {
+	t.Helper()
+	srv := f.createOnDemandMember(t, g, key)
+	patch := client.MergeFrom(srv.DeepCopy())
+	srv.Spec.Ordinal = ptr.To(ordinal)
+	if err := f.c.Patch(f.ctx, srv, patch); err != nil {
+		t.Fatalf("give member %s an ordinal: %v", srv.Name, err)
 	}
 	return srv
 }

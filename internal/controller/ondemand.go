@@ -34,6 +34,13 @@ import (
 // the newest of them and no more. What stops a corpse from blocking a restart
 // is the start request, which replaces a terminal member of the key it was
 // asked for.
+//
+// A node that is leaving takes a member with it, and that removal is not this
+// one: size() condemns every server on a departing node whatever its type or
+// phase, because one left there loses its pod when the node goes and drops its
+// players where a condemnation moves them through the proxies first. Nothing
+// recreates it and nothing has to -- the world is on its claim, so the key is
+// free and its owner starts it again the way they started it the first time.
 func (r *ServerGroupReconciler) sweepOnDemand(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
