@@ -388,6 +388,41 @@ func TestStartRefusesANameAnotherGroupsServerAlreadyHas(t *testing.T) {
 	}
 }
 
+// A server of this group whose key does not compose its own name is not the
+// member the caller asked for, however its name reads. No operator write
+// produces one; an admin or another controller can.
+func TestStartRefusesAMemberOfThisGroupWhoseKeyDoesNotComposeItsName(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 2)
+	odd := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-c0ffee", Namespace: f.ns},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "tea",
+		},
+	}
+	if err := f.c.Create(f.ctx, odd); err != nil {
+		t.Fatalf("create the server: %v", err)
+	}
+
+	pod := f.proxyPod("gateway-aaaa")
+
+	resp := startOverTheWire(t, f, pod, "private-servers", "c0ffee")
+	if got := resp.GetError().GetReason(); got != agentpb.RequestError_REFUSED {
+		t.Fatalf("reason = %v (%s), want REFUSED for a name whose holder has another key",
+			got, resp.GetError().GetMessage())
+	}
+	if resp.GetStartServer() != nil {
+		t.Fatalf("answered with a server: %+v", resp.GetStartServer())
+	}
+
+	held := member(t, f, "private-servers-c0ffee")
+	if held.Spec.Key != "tea" || !held.DeletionTimestamp.IsZero() {
+		t.Errorf("the server was touched by a refused request: key=%q deleted=%v",
+			held.Spec.Key, !held.DeletionTimestamp.IsZero())
+	}
+}
+
 // A ceiling held by a member that is already leaving is a bound that clears
 // by itself, so it is UNAVAILABLE and not REFUSED. REFUSED tells a plugin not
 // to send the same request again, and here asking again shortly is exactly
