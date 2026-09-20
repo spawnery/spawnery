@@ -27,6 +27,8 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/boost"
+	"github.com/spawnery/spawnery/internal/instance"
+	"github.com/spawnery/spawnery/internal/phase"
 )
 
 // ErrNoSuchServer is what a ClusterWriter reports for a server that is not
@@ -49,6 +51,27 @@ var ErrNoSuchGroup = errors.New("no such group")
 // nothing. That is worse than a refusal: the object exists, the status agrees
 // it exists, and the group is the size it always was.
 var ErrGroupNotScalable = errors.New("that group is not sized by scaling")
+
+// ErrGroupNotOnDemand is what a start gets for a group whose members are
+// counted rather than named. Creating a Server in one by hand would make the
+// group's own sizing pass condemn it on the next reconcile, which reads from
+// outside as a server that started and vanished.
+var ErrGroupNotOnDemand = errors.New("that group is not on-demand")
+
+// ErrTooManyInstances is the group's own ceiling, reached.
+var ErrTooManyInstances = errors.New("that group is at spec.maxInstances")
+
+// ErrNotAnInstance is a stop aimed at a server that no key names.
+var ErrNotAnInstance = errors.New("that server is not an on-demand member")
+
+// ErrInstanceStopping is a start on a key whose member is on its way out.
+//
+// Distinct from "already running" and from every refusal, because it is the
+// one state a caller should wait through rather than act on: the member is
+// draining its players and the same request starts a fresh one once it is
+// gone. Answering AlreadyRunning here would send the next player to a server
+// that is about to stop.
+var ErrInstanceStopping = errors.New("that member is still stopping")
 
 // ClusterWriter is every change a plugin's request is allowed to make.
 //
@@ -91,6 +114,28 @@ type ClusterWriter interface {
 	// different expiries is arithmetic nobody asked for. Zero is an ordinary
 	// answer.
 	StopBoosts(ctx context.Context, namespace, group string) (int, error)
+
+	// StartServer creates the member of an OnDemand group that carries key.
+	//
+	// Reports AlreadyRunning for a member that was already there, which is a
+	// success: what the caller asked for is the case. It returns
+	// ErrNoSuchGroup, ErrGroupNotOnDemand, ErrTooManyInstances,
+	// instance.ErrBadKey for a key no name can be built from, and
+	// ErrInstanceStopping for a key whose member is still going.
+	StartServer(ctx context.Context, namespace, group, key string) (StartedServer, error)
+
+	// StopServer deletes one member of an OnDemand group.
+	//
+	// It returns ErrNoSuchServer for a name this namespace does not have and
+	// ErrNotAnInstance for a server that is not a member of such a group --
+	// the refusal that keeps a mistyped name from deleting a lobby.
+	StopServer(ctx context.Context, namespace, name string) error
+}
+
+// StartedServer is the member a start request produced.
+type StartedServer struct {
+	Name           string
+	AlreadyRunning bool
 }
 
 // Headroom is what a group's own spec leaves for a boost to ask for.
@@ -269,4 +314,129 @@ func (w KubeWriter) StopBoosts(ctx context.Context, namespace, group string) (in
 		removed++
 	}
 	return removed, nil
+}
+
+// StartServer creates the member, or reports the one that is already there.
+//
+// The count that bounds it is of members that are not terminal. A failed
+// world is kept for diagnosis and a finished one is swept within a pass, and
+// counting either against the ceiling would make a group drift closed as its
+// players' servers ended.
+//
+// The create is what decides the race between two callers asking for the same
+// key: AlreadyExists comes back to exactly one of them, and it is the answer
+// rather than an error -- which is why nothing here takes a lock and why the
+// read above it is an optimisation and not the bound. The one AlreadyExists
+// that is not that race is the one after a terminal member was deleted: there
+// the object that is in the way is the corpse, held by its own drain
+// finalizer, and the caller is told to ask again rather than told their
+// server is up.
+func (w KubeWriter) StartServer(
+	ctx context.Context, namespace, group, key string,
+) (StartedServer, error) {
+	name, err := instance.Name(group, key)
+	if err != nil {
+		return StartedServer{}, err
+	}
+
+	var g spawneryv1alpha1.ServerGroup
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: group}, &g); err != nil {
+		if apierrors.IsNotFound(err) {
+			return StartedServer{}, ErrNoSuchGroup
+		}
+		return StartedServer{}, err
+	}
+	if !g.IsOnDemand() {
+		return StartedServer{}, ErrGroupNotOnDemand
+	}
+
+	var members spawneryv1alpha1.ServerList
+	if err := w.Client.List(ctx, &members, client.InNamespace(namespace)); err != nil {
+		return StartedServer{}, err
+	}
+	live, replacing := 0, false
+	for i := range members.Items {
+		m := &members.Items[i]
+		if m.Spec.GroupRef.Name != group || m.Spec.Key == "" {
+			continue
+		}
+		if m.Name == name {
+			if !m.DeletionTimestamp.IsZero() {
+				return StartedServer{}, ErrInstanceStopping
+			}
+			// A terminal run of this very key is replaced rather than
+			// reported: its world is on the claim, the object is a corpse,
+			// and refusing here would leave the owner waiting out a
+			// retention they cannot see.
+			if isTerminal(m.Status.Phase) {
+				if err := w.Client.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {
+					return StartedServer{}, err
+				}
+				replacing = true
+				continue
+			}
+			return StartedServer{Name: name, AlreadyRunning: true}, nil
+		}
+		if !isTerminal(m.Status.Phase) {
+			live++
+		}
+	}
+	if g.Spec.MaxInstances != nil && int32(live) >= *g.Spec.MaxInstances {
+		return StartedServer{}, ErrTooManyInstances
+	}
+
+	srv := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: spawneryv1alpha1.GroupVersion.String(),
+				Kind:       "ServerGroup",
+				Name:       g.Name,
+				UID:        g.UID,
+			}},
+		},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: group},
+			Key:      key,
+		},
+	}
+	if err := w.Client.Create(ctx, srv); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			if replacing {
+				return StartedServer{}, ErrInstanceStopping
+			}
+			return StartedServer{Name: name, AlreadyRunning: true}, nil
+		}
+		return StartedServer{}, err
+	}
+	return StartedServer{Name: name}, nil
+}
+
+// StopServer deletes one member.
+//
+// The key check is the bound and not a courtesy: this is the only verb on
+// this channel that deletes a server outright, and a name that belongs to a
+// lobby has to fail rather than work.
+func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) error {
+	var srv spawneryv1alpha1.Server
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ErrNoSuchServer
+		}
+		return err
+	}
+	if srv.Spec.Key == "" {
+		return ErrNotAnInstance
+	}
+	if err := w.Client.Delete(ctx, &srv); err != nil && !apierrors.IsNotFound(err) {
+		return err
+	}
+	return nil
+}
+
+// isTerminal is whether a member's run is over: its object may be replaced
+// and it counts against no ceiling.
+func isTerminal(p string) bool {
+	return p == string(phase.Failed) || p == string(phase.Finished)
 }

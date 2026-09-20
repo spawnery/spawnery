@@ -28,6 +28,7 @@ import (
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/instance"
 )
 
 const (
@@ -192,6 +193,10 @@ func (s *Server) answerCloudRequest(
 		return s.answerAnnounce(logger, id, req.GetId(), req.GetAnnounce())
 	case req.GetAcceptJoins() != nil:
 		return s.answerAcceptJoins(logger, id, req.GetId(), req.GetAcceptJoins())
+	case req.GetStartServer() != nil:
+		return s.answerStartServer(ctx, logger, id, req.GetId(), req.GetStartServer())
+	case req.GetStopServer() != nil:
+		return s.answerStopServer(ctx, logger, id, req.GetId(), req.GetStopServer())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")
@@ -625,4 +630,102 @@ func connected(reqID uint64, result *agentpb.ConnectResult) *agentpb.CloudRespon
 		Id:     reqID,
 		Result: &agentpb.CloudResponse_Connect{Connect: result},
 	}
+}
+
+// startedServer wraps a successful start answer.
+func startedServer(reqID uint64, result *agentpb.StartServerResult) *agentpb.CloudResponse {
+	return &agentpb.CloudResponse{
+		Id:     reqID,
+		Result: &agentpb.CloudResponse_StartServer{StartServer: result},
+	}
+}
+
+// stoppedServer wraps a successful stop answer.
+func stoppedServer(reqID uint64, result *agentpb.StopServerResult) *agentpb.CloudResponse {
+	return &agentpb.CloudResponse{
+		Id:     reqID,
+		Result: &agentpb.CloudResponse_StopServer{StopServer: result},
+	}
+}
+
+// answerStartServer creates the member of an on-demand group that carries a
+// key.
+//
+// The namespace bound is structural, as it is for retire and boost: the group
+// is resolved under id.Namespace and the request has no field that could name
+// another network's.
+//
+// Asking for a key that is already running is answered and not refused, which
+// is the one place this verb differs from every other writing verb here. The
+// difference is in who asks: retire and boost are typed by an admin, for whom
+// "somebody already did this" is news, while this is called by a plugin
+// reacting to a player pressing a button twice.
+//
+// A member that is stopping is the one answer here that is neither. It is
+// UNAVAILABLE, because the same request succeeds once the member is gone --
+// the only refusal on this channel of which that is true by construction, and
+// the reason a caller can branch on it and simply ask again.
+func (s *Server) answerStartServer(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.StartServerRequest,
+) *agentpb.CloudResponse {
+	member, err := s.opts.Writer.StartServer(ctx, id.Namespace, req.GetGroup(), req.GetKey())
+	switch {
+	case errors.Is(err, ErrNoSuchGroup):
+		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+			"no group by that name is on this network")
+	case errors.Is(err, ErrGroupNotOnDemand):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group's servers are counted rather than named, so it has no member to ask for")
+	case errors.Is(err, ErrTooManyInstances):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group is at spec.maxInstances")
+	case errors.Is(err, instance.ErrBadKey):
+		return refuse(reqID, agentpb.RequestError_REFUSED, err.Error())
+	case errors.Is(err, ErrInstanceStopping):
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"that member is still stopping; the same request starts a fresh one once it is gone")
+	case err != nil:
+		logger.V(1).Info("could not start an on-demand server", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not write that just now")
+	}
+
+	return startedServer(reqID, &agentpb.StartServerResult{
+		Server:         member.Name,
+		AlreadyRunning: member.AlreadyRunning,
+	})
+}
+
+// answerStopServer deletes one member.
+//
+// The refusal for a server that no key names is the bound that matters here.
+// This is the only request on this channel that deletes a server outright,
+// and a mistyped name that happened to be a lobby's would otherwise take the
+// lobby down with every player on it.
+func (s *Server) answerStopServer(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.StopServerRequest,
+) *agentpb.CloudResponse {
+	err := s.opts.Writer.StopServer(ctx, id.Namespace, req.GetServer())
+	switch {
+	case errors.Is(err, ErrNoSuchServer):
+		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+			"no server by that name is on this network")
+	case errors.Is(err, ErrNotAnInstance):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that server is not a member of an on-demand group")
+	case err != nil:
+		logger.V(1).Info("could not stop an on-demand server", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not write that just now")
+	}
+
+	return stoppedServer(reqID, &agentpb.StopServerResult{Server: req.GetServer()})
 }
