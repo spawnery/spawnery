@@ -2691,8 +2691,12 @@ type NetworkState struct {
 	// with them: dropping one would take somebody off players() while they are
 	// still on the network. The entry's server is what is withheld instead --
 	// blank for a player on a private server, the same blank a player between
-	// two backends already has -- so no picture names a server it does not
+	// two backends already has -- so no NetworkState names a server it does not
 	// itself list.
+	//
+	// That bound is this message's and not the whole channel's: CloudEvent
+	// carries a subject and a group, and the event path has no audience, so a
+	// backend that asked for events still meets a private member's name there.
 	Players []*RosterEntry `protobuf:"bytes,3,rep,name=players,proto3" json:"players,omitempty"`
 	// The line a cloud event becomes in chat, from the Network's own spec.
 	//

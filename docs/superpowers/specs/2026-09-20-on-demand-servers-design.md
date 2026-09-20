@@ -276,9 +276,17 @@ they are still online would break a count nobody expected to break — and it is
 the *address* that is withheld: a roster entry whose server is a private one
 reaches a backend with that field empty, which the entry already documents as
 "on no backend right now". A backend therefore learns that the player is
-online and not where they are, and never a name its own `servers()` does not
-carry. That name matters beyond tidiness: `stopServer` and `retire` each act
-on a server name a backend supplies.
+online and not where they are, and no `NetworkState` it receives carries a
+name its own `servers()` does not. That name matters beyond tidiness:
+`stopServer` and `retire` each act on a server name a backend supplies.
+
+The bound is the network picture's alone. The event feed is not split the
+same way — `cloudevent.Derive` names its subject and group whatever the
+server is, and `serverreg` fans every event in the namespace to every backend
+that asked for them — so a backend can still meet a private member's name in
+its lifecycle events. That is a pre-existing gap in this boundary rather than
+something this change introduces, and closing it is a change to the event
+path rather than to this type.
 
 **This is the only contract in this design that gets narrower**, and it is
 deliberately done now rather than later: once a plugin on a game server can

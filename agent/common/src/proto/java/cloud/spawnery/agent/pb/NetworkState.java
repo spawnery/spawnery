@@ -167,8 +167,12 @@ private static final long serialVersionUID = 0L;
    * with them: dropping one would take somebody off players() while they are
    * still on the network. The entry's server is what is withheld instead --
    * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no picture names a server it does not
+   * two backends already has -- so no NetworkState names a server it does not
    * itself list.
+   *
+   * That bound is this message's and not the whole channel's: CloudEvent
+   * carries a subject and a group, and the event path has no audience, so a
+   * backend that asked for events still meets a private member's name there.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -188,8 +192,12 @@ private static final long serialVersionUID = 0L;
    * with them: dropping one would take somebody off players() while they are
    * still on the network. The entry's server is what is withheld instead --
    * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no picture names a server it does not
+   * two backends already has -- so no NetworkState names a server it does not
    * itself list.
+   *
+   * That bound is this message's and not the whole channel's: CloudEvent
+   * carries a subject and a group, and the event path has no audience, so a
+   * backend that asked for events still meets a private member's name there.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -210,8 +218,12 @@ private static final long serialVersionUID = 0L;
    * with them: dropping one would take somebody off players() while they are
    * still on the network. The entry's server is what is withheld instead --
    * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no picture names a server it does not
+   * two backends already has -- so no NetworkState names a server it does not
    * itself list.
+   *
+   * That bound is this message's and not the whole channel's: CloudEvent
+   * carries a subject and a group, and the event path has no audience, so a
+   * backend that asked for events still meets a private member's name there.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -231,8 +243,12 @@ private static final long serialVersionUID = 0L;
    * with them: dropping one would take somebody off players() while they are
    * still on the network. The entry's server is what is withheld instead --
    * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no picture names a server it does not
+   * two backends already has -- so no NetworkState names a server it does not
    * itself list.
+   *
+   * That bound is this message's and not the whole channel's: CloudEvent
+   * carries a subject and a group, and the event path has no audience, so a
+   * backend that asked for events still meets a private member's name there.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -252,8 +268,12 @@ private static final long serialVersionUID = 0L;
    * with them: dropping one would take somebody off players() while they are
    * still on the network. The entry's server is what is withheld instead --
    * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no picture names a server it does not
+   * two backends already has -- so no NetworkState names a server it does not
    * itself list.
+   *
+   * That bound is this message's and not the whole channel's: CloudEvent
+   * carries a subject and a group, and the event path has no audience, so a
+   * backend that asked for events still meets a private member's name there.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1370,8 +1390,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1394,8 +1418,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1418,8 +1446,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1442,8 +1474,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1473,8 +1509,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1501,8 +1541,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1531,8 +1575,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1562,8 +1610,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1590,8 +1642,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1618,8 +1674,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1647,8 +1707,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1674,8 +1738,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1701,8 +1769,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1722,8 +1794,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1746,8 +1822,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1771,8 +1851,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1792,8 +1876,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1814,8 +1902,12 @@ private static final long serialVersionUID = 0L;
      * with them: dropping one would take somebody off players() while they are
      * still on the network. The entry's server is what is withheld instead --
      * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no picture names a server it does not
+     * two backends already has -- so no NetworkState names a server it does not
      * itself list.
+     *
+     * That bound is this message's and not the whole channel's: CloudEvent
+     * carries a subject and a group, and the event path has no audience, so a
+     * backend that asked for events still meets a private member's name there.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
