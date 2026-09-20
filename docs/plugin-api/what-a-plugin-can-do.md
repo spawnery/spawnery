@@ -32,8 +32,10 @@ routable yet. Handle it as a normal outcome rather than as a bug.
 
 ## Changing the fleet
 
-Two calls write, and both are round trips through the operator on either
-platform — nothing local can answer them.
+Four calls write, and all are round trips through the operator on either
+platform — nothing local can answer them. The first two are about a fleet's
+capacity, and `stopBoosts` is counted with `boost` because it only undoes it;
+the last two, further down, are about one player's private server.
 
 `retire(server)` asks one server to stop taking joins and empty out. **It is
 not a stop.** Nobody is moved and nobody is kicked; the players on it finish in
@@ -56,11 +58,30 @@ Boosts add rather than replace: two calls make two boosts, which is what makes
 `stopBoosts(group)` ends all of them and reports how many there were. Zero is
 an ordinary answer, not a failure.
 
-**Neither call can change what a group is.** A boost expires; a group that
+**Neither of those can change what a group is.** A boost expires; a group that
 needs to be permanently bigger needs its `ServerGroup` edited by a person, and
 this API deliberately cannot do that — the operator holds no write on
 `servergroups` at all. [Scaling and boosts](../guides/scaling-and-boosts.md)
 is the same machinery seen from the cluster side.
+
+`startServer(group, key)` asks for one player's private server: a member of a
+group of type `OnDemand`, named `<group>-<key>`, whose world is a claim of its
+own. It answers a `StartedServer` — the name, and whether it was already there,
+which is a success and not a refusal. The stage completing says the server was
+asked for and nothing about its being ready.
+
+`stopServer(server)` **deletes a server.** The players on it are moved through
+the proxies, the pod goes, and the world stays on its claim, where the next
+`startServer` of the same key finds it. It is the only call here that deletes
+anything, and what bounds it is the key check: a server that carries no key —
+every one in an `Ephemeral` or `Persistent` group — is refused, so a mistyped
+name cannot take down a lobby. Who may call is who may install a plugin in the
+namespace, as for every call on this page; the group's `maxInstances` bounds how
+many there can be.
+
+Both fail with a reason — `REFUSED`, `NOT_FOUND`, and `UNAVAILABLE` for a
+request that succeeds once a server that is stopping has gone — and the
+[private servers guide](../guides/on-demand-servers.md) has the table.
 
 ## Telling one run of a server from the next
 

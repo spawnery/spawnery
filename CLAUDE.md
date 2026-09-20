@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A Kubernetes operator (Go, controller-runtime) plus two JVM agent plugins (Kotlin, Gradle) that run Paper/Purpur game servers behind Velocity proxies. Four namespaced CRDs in `spawnery.cloud/v1alpha1`: `Network`, `ServerGroup`, `ProxyGroup`, `Server` (plus `ScaleBoost`). Game pods never talk to the Kubernetes API; each agent opens one authenticated gRPC stream to the operator, which is how player counts flow up and server lists / drain orders flow down.
+A Kubernetes operator (Go, controller-runtime) plus two JVM agent plugins (Kotlin, Gradle) that run Paper/Purpur game servers behind Velocity proxies. Four namespaced CRDs in `spawnery.cloud/v1alpha1`: `Network`, `ServerGroup` (`Ephemeral`, sized by free slots; `Persistent`, by ordinal on a claim; `OnDemand`, members asked for by name over the agent channel, each with its own claim), `ProxyGroup`, `Server` (plus `ScaleBoost`). Game pods never talk to the Kubernetes API; each agent opens one authenticated gRPC stream to the operator, which is how player counts flow up and server lists / drain orders flow down.
 
 ## Commands
 

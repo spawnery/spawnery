@@ -125,6 +125,7 @@ double, say — is the one thing that has to be rebuilt when they do.
 ---
 
 [What a plugin can do](what-a-plugin-can-do.md) covers the calls that change
-something: moving a player, retiring a server, boosting a group, closing a
-door, describing a round, and reading the event feed. Every type and method is
+something: moving a player, retiring a server, boosting a group, starting and
+stopping a private server, closing a door, describing a round, and reading the
+event feed. Every type and method is
 in the [Javadoc](javadoc/index.html).

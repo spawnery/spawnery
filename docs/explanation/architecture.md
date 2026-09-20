@@ -89,8 +89,10 @@ the control loop. A reconciler that scaled on what it had last written to
 
 What goes **down** is built by `internal/proxyreg` for proxies and
 `internal/serverreg` for backends, written by the controllers and sent by the
-gRPC server. Both build their view through `internal/netstate`, so a proxy and
-a backend see one identical picture of the network rather than two that are
+gRPC server. Both build their view through `internal/netstate`, which serves one
+picture per audience: a proxy and a backend see the same network, except that
+on-demand groups and their members are in the proxies' picture and not the
+backends'. What differs is a filter in one place rather than two views that are
 meant to agree.
 
 ## Pure cores, thin controllers

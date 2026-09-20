@@ -42,7 +42,7 @@ put two of anything in one.
 | Kind | What it is |
 |---|---|
 | `Network` | One Minecraft network. Holds the Velocity forwarding secret and the defaults every group below it inherits. Exactly one per namespace. |
-| `ServerGroup` | A set of Paper backends. `Ephemeral` ones scale on free player slots; `Persistent` ones are addressed by ordinal and keep their world on a PVC. |
+| `ServerGroup` | A set of Paper backends. `Ephemeral` ones scale on free player slots; `Persistent` ones are addressed by ordinal and keep their world on a PVC; `OnDemand` ones start nothing by themselves and are asked for by name, one player's private server each, with its own world on a PVC. |
 | `ProxyGroup` | The Velocity proxies players connect to. Carries the expose strategy — `NodePort`, `LoadBalancer`, `HostPort` or `ClusterIP` — and the fallback groups a player is routed to. |
 | `Server` | One backend, created by its group. You do not write these; you read them. |
 
