@@ -1598,6 +1598,13 @@ func (*AnnounceResult) Descriptor() ([]byte, []int) {
 // is, this time and every later time. Asking twice while it runs is answered
 // rather than refused -- see already_running -- because a caller that has to
 // take a lock to ask a question is a caller that will forget to.
+//
+// **The key is a DNS label, and the name built from it has to be one too.**
+// "<group>-<key>" becomes a server and a pod name, so it is at most 63
+// characters: a key that is a UUID takes 36 of them and the joining hyphen one
+// more, which leaves a group name of at most 26. The operator refuses a key or
+// a group that does not fit, with REFUSED, rather than shortening either --
+// a name trimmed to fit is a name two different keys can end up sharing.
 type StartServerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Group         string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
@@ -1650,14 +1657,31 @@ func (x *StartServerRequest) GetKey() string {
 	return ""
 }
 
-// StartServerResult is the member that now exists.
+// StartServerResult says the member has been asked for, which is not the same
+// as being able to join it.
+//
+// **`already_running` and not `ready`, for the reason ConnectResult says
+// `ordered` and not `moved`.** The operator's answer is about the Server it
+// holds, not about the pod behind it: whether that pod is up and registered
+// shows up in the next NetworkState, in the server's phase and `registered`,
+// which is what the mirror is for. A caller that means to send somebody there
+// waits for that and does not read more into this than it says.
+//
+// **A member that is stopping is not already running.** A stop deletes the
+// member, but it lingers while its players are moved, for up to the group's
+// drain timeout, and answering "already running" for it would send a player to
+// a server that is about to go. A start on such a key is refused, with
+// REFUSED, and the message says the server is still stopping and can be
+// started again once it is gone. Nothing in the request waits for that: a
+// caller told to try again in a moment can do exactly that.
 type StartServerResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The server the operator composed, echoed so a caller that built the key
 	// from a UUID sees the name players and logs will use.
 	Server string `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
-	// True when the member was already there, which is a success and not a
-	// refusal: what the caller asked for is the case.
+	// True when the member was already there and not stopping, which is a
+	// success and not a refusal: what the caller asked for is the case. It says
+	// nothing about the member being ready.
 	AlreadyRunning bool `protobuf:"varint,2,opt,name=already_running,json=alreadyRunning,proto3" json:"already_running,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -1709,15 +1733,18 @@ func (x *StartServerResult) GetAlreadyRunning() bool {
 
 // StopServerRequest deletes one member of an OnDemand group.
 //
+// It carries no namespace, for the reason RetireRequest carries none: the
+// server is resolved inside the namespace the pod's own token authenticated.
+//
 // **A stop and not a retire.** Retiring closes a server's door and waits for
 // it to empty in its own time; this says the owner is done with it, so the
 // players on it are moved through the proxies inside the group's own drain
 // timeout and the pod goes. The world is untouched: it is on a claim this
 // operator never deletes, and the next start of the same key finds it.
 //
-// It refuses a server that is not a member of an OnDemand group. A caller
-// naming an ordinary backend here has made a mistake that would otherwise
-// delete a lobby.
+// It refuses, with REFUSED, a server that is not a member of an OnDemand
+// group. A caller naming an ordinary backend here has made a mistake that
+// would otherwise delete a lobby.
 type StopServerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Server        string                 `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
@@ -1763,9 +1790,16 @@ func (x *StopServerRequest) GetServer() string {
 }
 
 // StopServerResult says the member is going.
+//
+// A second stop on a member that is already being deleted succeeds and echoes
+// the name. RetireResult refuses the same repetition because an admin who
+// types the command twice needs to learn it did nothing the first time; the
+// caller here is a plugin, and "it is going" is exactly what it asked for.
 type StopServerResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Server        string                 `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The server that is going, echoed so a caller sees what the operator
+	// matched.
+	Server        string `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

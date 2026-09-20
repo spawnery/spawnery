@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 
 	"github.com/spawnery/spawnery/internal/agentpb"
 )
@@ -82,5 +83,41 @@ func TestOnDemandRequestsAreOnTheWire(t *testing.T) {
 	}
 	if agentpb.GroupState_ON_DEMAND == agentpb.GroupState_KIND_UNSPECIFIED {
 		t.Fatal("ON_DEMAND must be its own value, not the unspecified one")
+	}
+}
+
+// Generated code is regenerated from the .proto on both sides, so an encoder
+// and a decoder always agree with each other; only a number written down here
+// notices one that moved.
+func TestOnDemandFieldNumbersAreFixed(t *testing.T) {
+	for _, c := range []struct {
+		msg   proto.Message
+		field protoreflect.Name
+		want  protoreflect.FieldNumber
+	}{
+		{&agentpb.CloudRequest{}, "start_server", 8},
+		{&agentpb.CloudRequest{}, "stop_server", 9},
+		{&agentpb.CloudResponse{}, "start_server", 9},
+		{&agentpb.CloudResponse{}, "stop_server", 10},
+		{&agentpb.StartServerRequest{}, "group", 1},
+		{&agentpb.StartServerRequest{}, "key", 2},
+		{&agentpb.StartServerResult{}, "server", 1},
+		{&agentpb.StartServerResult{}, "already_running", 2},
+		{&agentpb.StopServerRequest{}, "server", 1},
+		{&agentpb.StopServerResult{}, "server", 1},
+	} {
+		md := c.msg.ProtoReflect().Descriptor()
+		fd := md.Fields().ByName(c.field)
+		if fd == nil {
+			t.Errorf("%s has no field %s", md.Name(), c.field)
+			continue
+		}
+		if fd.Number() != c.want {
+			t.Errorf("%s.%s is field %d, want %d: a renumbered field is a silent wire break",
+				md.Name(), c.field, fd.Number(), c.want)
+		}
+	}
+	if got := agentpb.GroupState_ON_DEMAND.Number(); got != 4 {
+		t.Errorf("GroupState.ON_DEMAND is %d, want 4: a renumbered value is a silent wire break", got)
 	}
 }

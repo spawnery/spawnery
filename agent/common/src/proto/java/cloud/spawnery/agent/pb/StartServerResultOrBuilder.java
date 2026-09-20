@@ -34,8 +34,9 @@ public interface StartServerResultOrBuilder extends
 
   /**
    * <pre>
-   * True when the member was already there, which is a success and not a
-   * refusal: what the caller asked for is the case.
+   * True when the member was already there and not stopping, which is a
+   * success and not a refusal: what the caller asked for is the case. It says
+   * nothing about the member being ready.
    * </pre>
    *
    * <code>bool already_running = 2;</code>

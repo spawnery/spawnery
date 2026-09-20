@@ -8,6 +8,11 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * StopServerResult says the member is going.
+ *
+ * A second stop on a member that is already being deleted succeeds and echoes
+ * the name. RetireResult refuses the same repetition because an admin who
+ * types the command twice needs to learn it did nothing the first time; the
+ * caller here is a plugin, and "it is going" is exactly what it asked for.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StopServerResult}
@@ -57,6 +62,11 @@ private static final long serialVersionUID = 0L;
   @SuppressWarnings("serial")
   private volatile java.lang.Object server_ = "";
   /**
+   * <pre>
+   * The server that is going, echoed so a caller sees what the operator
+   * matched.
+   * </pre>
+   *
    * <code>string server = 1;</code>
    * @return The server.
    */
@@ -74,6 +84,11 @@ private static final long serialVersionUID = 0L;
     }
   }
   /**
+   * <pre>
+   * The server that is going, echoed so a caller sees what the operator
+   * matched.
+   * </pre>
+   *
    * <code>string server = 1;</code>
    * @return The bytes for server.
    */
@@ -255,6 +270,11 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * StopServerResult says the member is going.
+   *
+   * A second stop on a member that is already being deleted succeeds and echoes
+   * the name. RetireResult refuses the same repetition because an admin who
+   * types the command twice needs to learn it did nothing the first time; the
+   * caller here is a plugin, and "it is going" is exactly what it asked for.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StopServerResult}
@@ -396,6 +416,11 @@ private static final long serialVersionUID = 0L;
 
     private java.lang.Object server_ = "";
     /**
+     * <pre>
+     * The server that is going, echoed so a caller sees what the operator
+     * matched.
+     * </pre>
+     *
      * <code>string server = 1;</code>
      * @return The server.
      */
@@ -412,6 +437,11 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * The server that is going, echoed so a caller sees what the operator
+     * matched.
+     * </pre>
+     *
      * <code>string server = 1;</code>
      * @return The bytes for server.
      */
@@ -429,6 +459,11 @@ private static final long serialVersionUID = 0L;
       }
     }
     /**
+     * <pre>
+     * The server that is going, echoed so a caller sees what the operator
+     * matched.
+     * </pre>
+     *
      * <code>string server = 1;</code>
      * @param value The server to set.
      * @return This builder for chaining.
@@ -442,6 +477,11 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * The server that is going, echoed so a caller sees what the operator
+     * matched.
+     * </pre>
+     *
      * <code>string server = 1;</code>
      * @return This builder for chaining.
      */
@@ -452,6 +492,11 @@ private static final long serialVersionUID = 0L;
       return this;
     }
     /**
+     * <pre>
+     * The server that is going, echoed so a caller sees what the operator
+     * matched.
+     * </pre>
+     *
      * <code>string server = 1;</code>
      * @param value The bytes for server to set.
      * @return This builder for chaining.

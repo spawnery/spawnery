@@ -11,11 +11,21 @@ public interface StopServerResultOrBuilder extends
     com.google.protobuf.MessageOrBuilder {
 
   /**
+   * <pre>
+   * The server that is going, echoed so a caller sees what the operator
+   * matched.
+   * </pre>
+   *
    * <code>string server = 1;</code>
    * @return The server.
    */
   java.lang.String getServer();
   /**
+   * <pre>
+   * The server that is going, echoed so a caller sees what the operator
+   * matched.
+   * </pre>
+   *
    * <code>string server = 1;</code>
    * @return The bytes for server.
    */

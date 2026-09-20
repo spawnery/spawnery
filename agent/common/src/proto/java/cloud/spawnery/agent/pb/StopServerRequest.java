@@ -9,15 +9,18 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * StopServerRequest deletes one member of an OnDemand group.
  *
+ * It carries no namespace, for the reason RetireRequest carries none: the
+ * server is resolved inside the namespace the pod's own token authenticated.
+ *
  * **A stop and not a retire.** Retiring closes a server's door and waits for
  * it to empty in its own time; this says the owner is done with it, so the
  * players on it are moved through the proxies inside the group's own drain
  * timeout and the pod goes. The world is untouched: it is on a claim this
  * operator never deletes, and the next start of the same key finds it.
  *
- * It refuses a server that is not a member of an OnDemand group. A caller
- * naming an ordinary backend here has made a mistake that would otherwise
- * delete a lobby.
+ * It refuses, with REFUSED, a server that is not a member of an OnDemand
+ * group. A caller naming an ordinary backend here has made a mistake that
+ * would otherwise delete a lobby.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StopServerRequest}
@@ -266,15 +269,18 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * StopServerRequest deletes one member of an OnDemand group.
    *
+   * It carries no namespace, for the reason RetireRequest carries none: the
+   * server is resolved inside the namespace the pod's own token authenticated.
+   *
    * **A stop and not a retire.** Retiring closes a server's door and waits for
    * it to empty in its own time; this says the owner is done with it, so the
    * players on it are moved through the proxies inside the group's own drain
    * timeout and the pod goes. The world is untouched: it is on a claim this
    * operator never deletes, and the next start of the same key finds it.
    *
-   * It refuses a server that is not a member of an OnDemand group. A caller
-   * naming an ordinary backend here has made a mistake that would otherwise
-   * delete a lobby.
+   * It refuses, with REFUSED, a server that is not a member of an OnDemand
+   * group. A caller naming an ordinary backend here has made a mistake that
+   * would otherwise delete a lobby.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StopServerRequest}

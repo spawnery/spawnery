@@ -7,7 +7,23 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * StartServerResult is the member that now exists.
+ * StartServerResult says the member has been asked for, which is not the same
+ * as being able to join it.
+ *
+ * **`already_running` and not `ready`, for the reason ConnectResult says
+ * `ordered` and not `moved`.** The operator's answer is about the Server it
+ * holds, not about the pod behind it: whether that pod is up and registered
+ * shows up in the next NetworkState, in the server's phase and `registered`,
+ * which is what the mirror is for. A caller that means to send somebody there
+ * waits for that and does not read more into this than it says.
+ *
+ * **A member that is stopping is not already running.** A stop deletes the
+ * member, but it lingers while its players are moved, for up to the group's
+ * drain timeout, and answering "already running" for it would send a player to
+ * a server that is about to go. A start on such a key is refused, with
+ * REFUSED, and the message says the server is still stopping and can be
+ * started again once it is gone. Nothing in the request waits for that: a
+ * caller told to try again in a moment can do exactly that.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StartServerResult}
@@ -106,8 +122,9 @@ private static final long serialVersionUID = 0L;
   private boolean alreadyRunning_ = false;
   /**
    * <pre>
-   * True when the member was already there, which is a success and not a
-   * refusal: what the caller asked for is the case.
+   * True when the member was already there and not stopping, which is a
+   * success and not a refusal: what the caller asked for is the case. It says
+   * nothing about the member being ready.
    * </pre>
    *
    * <code>bool already_running = 2;</code>
@@ -292,7 +309,23 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * StartServerResult is the member that now exists.
+   * StartServerResult says the member has been asked for, which is not the same
+   * as being able to join it.
+   *
+   * **`already_running` and not `ready`, for the reason ConnectResult says
+   * `ordered` and not `moved`.** The operator's answer is about the Server it
+   * holds, not about the pod behind it: whether that pod is up and registered
+   * shows up in the next NetworkState, in the server's phase and `registered`,
+   * which is what the mirror is for. A caller that means to send somebody there
+   * waits for that and does not read more into this than it says.
+   *
+   * **A member that is stopping is not already running.** A stop deletes the
+   * member, but it lingers while its players are moved, for up to the group's
+   * drain timeout, and answering "already running" for it would send a player to
+   * a server that is about to go. A start on such a key is refused, with
+   * REFUSED, and the message says the server is still stopping and can be
+   * started again once it is gone. Nothing in the request waits for that: a
+   * caller told to try again in a moment can do exactly that.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StartServerResult}
@@ -544,8 +577,9 @@ private static final long serialVersionUID = 0L;
     private boolean alreadyRunning_ ;
     /**
      * <pre>
-     * True when the member was already there, which is a success and not a
-     * refusal: what the caller asked for is the case.
+     * True when the member was already there and not stopping, which is a
+     * success and not a refusal: what the caller asked for is the case. It says
+     * nothing about the member being ready.
      * </pre>
      *
      * <code>bool already_running = 2;</code>
@@ -557,8 +591,9 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * True when the member was already there, which is a success and not a
-     * refusal: what the caller asked for is the case.
+     * True when the member was already there and not stopping, which is a
+     * success and not a refusal: what the caller asked for is the case. It says
+     * nothing about the member being ready.
      * </pre>
      *
      * <code>bool already_running = 2;</code>
@@ -574,8 +609,9 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * True when the member was already there, which is a success and not a
-     * refusal: what the caller asked for is the case.
+     * True when the member was already there and not stopping, which is a
+     * success and not a refusal: what the caller asked for is the case. It says
+     * nothing about the member being ready.
      * </pre>
      *
      * <code>bool already_running = 2;</code>

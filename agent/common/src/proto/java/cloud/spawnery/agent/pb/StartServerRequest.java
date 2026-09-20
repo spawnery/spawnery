@@ -18,6 +18,13 @@ package cloud.spawnery.agent.pb;
  * is, this time and every later time. Asking twice while it runs is answered
  * rather than refused -- see already_running -- because a caller that has to
  * take a lock to ask a question is a caller that will forget to.
+ *
+ * **The key is a DNS label, and the name built from it has to be one too.**
+ * "&lt;group&gt;-&lt;key&gt;" becomes a server and a pod name, so it is at most 63
+ * characters: a key that is a UUID takes 36 of them and the joining hyphen one
+ * more, which leaves a group name of at most 26. The operator refuses a key or
+ * a group that does not fit, with REFUSED, rather than shortening either --
+ * a name trimmed to fit is a name two different keys can end up sharing.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StartServerRequest}
@@ -325,6 +332,13 @@ private static final long serialVersionUID = 0L;
    * is, this time and every later time. Asking twice while it runs is answered
    * rather than refused -- see already_running -- because a caller that has to
    * take a lock to ask a question is a caller that will forget to.
+   *
+   * **The key is a DNS label, and the name built from it has to be one too.**
+   * "&lt;group&gt;-&lt;key&gt;" becomes a server and a pod name, so it is at most 63
+   * characters: a key that is a UUID takes 36 of them and the joining hyphen one
+   * more, which leaves a group name of at most 26. The operator refuses a key or
+   * a group that does not fit, with REFUSED, rather than shortening either --
+   * a name trimmed to fit is a name two different keys can end up sharing.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StartServerRequest}
