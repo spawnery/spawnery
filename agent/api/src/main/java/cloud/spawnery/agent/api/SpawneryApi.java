@@ -26,11 +26,14 @@ import java.util.concurrent.CompletionStage;
 /**
  * What a plugin can ask the cloud, from either side of the proxy.
  *
- * <p><b>Every method here is a local read.</b> The operator keeps a mirror
- * current in each agent, so none of these calls crosses a network, blocks, or
- * fails -- there is no timeout and no exception to handle. What they return is
- * the last thing the operator said, which during a reconnect may be a few
- * seconds old and is never wrong about a moment that happened.
+ * <p><b>The methods that return a {@link CompletionStage} ask the operator, and
+ * can fail; every other method is answered locally.</b> The operator keeps a
+ * mirror current in each agent, so a read -- {@link #self()} through
+ * {@link #player} -- never crosses a network, blocks, or fails: there is no
+ * timeout and no exception to handle. What it returns is the last thing the
+ * operator said, which during a reconnect may be a few seconds old and is
+ * never wrong about a moment that happened. Each stage-returning method says
+ * how it can fail; {@link #holdReadiness} is local and throws on a proxy.
  *
  * <p><b>Consume this interface; do not implement it.</b> Methods are added
  * here as later milestones land -- events, moving a player, starting a server
@@ -165,7 +168,13 @@ public interface SpawneryApi {
      * button twice needs no lock on your side. That flag says the server
      * exists and nothing about its being ready.
      *
-     * <p>The stage fails, and its message begins with the operator's reason:
+     * <p><b>How it fails.</b> When the operator answers no, the stage fails
+     * with an {@link IllegalStateException} whose message is
+     * {@code <REASON>: <message>} -- the operator's reason, then its own
+     * sentence. Through a dependent stage ({@code thenApply}, {@code handle})
+     * that exception arrives wrapped in a {@code CompletionException}, and
+     * through {@code get()} in an {@code ExecutionException}; read
+     * {@code getCause()}. The reasons:
      * <ul>
      *   <li>{@code REFUSED} for a key that cannot be part of a name, for a name
      *       longer than 63 characters once the group and the key are composed,
@@ -179,6 +188,14 @@ public interface SpawneryApi {
      *       the same request succeeds once that member is gone, so ask
      *       again.</li>
      * </ul>
+     *
+     * <p>Two failures are not the operator's answer and carry no reason: the
+     * stage fails with a {@link java.util.concurrent.TimeoutException} when no
+     * answer arrives within ten seconds, and with an
+     * {@link IllegalStateException} when the stream was renewed while the
+     * request was in flight, which is failed rather than retried because only
+     * you know whether asking twice is safe. For a start it is: one that was in
+     * fact carried out is answered {@code alreadyRunning} the second time.
      */
     CompletionStage<StartedServer> startServer(String group, String key);
 
@@ -198,6 +215,10 @@ public interface SpawneryApi {
      * <p>It fails with {@code REFUSED} for a server that is not a member of an
      * on-demand group, which is what keeps a wrong name from taking down a
      * lobby, and with {@code NOT_FOUND} for a name this network does not have.
+     * The failure has the shape {@link #startServer} describes, the timeout and
+     * the renewed stream included. Asking again after either is safe, but a
+     * stop that was in fact carried out may answer {@code NOT_FOUND} the second
+     * time, once the server is gone.
      */
     CompletionStage<Void> stopServer(String server);
 

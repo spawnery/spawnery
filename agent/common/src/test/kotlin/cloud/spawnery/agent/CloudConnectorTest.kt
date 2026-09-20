@@ -2,11 +2,14 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
+import cloud.spawnery.agent.pb.RequestError
 import cloud.spawnery.agent.pb.StartServerResult
 import cloud.spawnery.agent.pb.StopServerResult
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 
 /**
@@ -240,5 +243,50 @@ class CloudConnectorTest {
         )
 
         assertEquals(null, future.toCompletableFuture().get(1, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun `a refused start fails the stage with the reason and the operator's words`() {
+        val connector = connector()
+        val future = connector.startServer("lobby", "c0ffee")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setError(
+                    RequestError.newBuilder()
+                        .setReason(RequestError.Reason.REFUSED)
+                        .setMessage("that group is at spec.maxInstances"),
+                )
+                .build(),
+        )
+
+        val failure = assertFailsWith<ExecutionException> { future.toCompletableFuture().get(1, TimeUnit.SECONDS) }
+        assertTrue(failure.cause is IllegalStateException, "${failure.cause}")
+        assertEquals("REFUSED: that group is at spec.maxInstances", failure.cause!!.message)
+    }
+
+    @Test
+    fun `a refused stop fails the stage with the reason and the operator's words`() {
+        val connector = connector()
+        val future = connector.stopServer("lobby-a")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setError(
+                    RequestError.newBuilder()
+                        .setReason(RequestError.Reason.REFUSED)
+                        .setMessage("that server is not a member of an on-demand group"),
+                )
+                .build(),
+        )
+
+        val failure = assertFailsWith<ExecutionException> { future.toCompletableFuture().get(1, TimeUnit.SECONDS) }
+        assertTrue(failure.cause is IllegalStateException, "${failure.cause}")
+        assertEquals(
+            "REFUSED: that server is not a member of an on-demand group",
+            failure.cause!!.message,
+        )
     }
 }
