@@ -142,6 +142,23 @@ func TestMaxInstancesIsOnDemandOnly(t *testing.T) {
 	}
 }
 
+func TestMaxInstancesZeroIsLegalAndNegativeIsNot(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	closed := onDemandGroup(ns, "closed")
+	closed.Spec.MaxInstances = ptr.To[int32](0)
+	if err := c.Create(ctx, closed); err != nil {
+		t.Fatalf("maxInstances: 0 was refused, so a group cannot be closed without deleting it: %v", err)
+	}
+
+	negative := onDemandGroup(ns, "negative")
+	negative.Spec.MaxInstances = ptr.To[int32](-1)
+	if err := c.Create(ctx, negative); err == nil {
+		t.Fatal("maxInstances: -1 was accepted")
+	}
+}
+
 func persistentGroupNoStorageClass(ns, name string) *spawneryv1alpha1.ServerGroup {
 	return &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},

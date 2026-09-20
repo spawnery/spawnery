@@ -5144,7 +5144,7 @@ spec:
                     type: array
                 type: object
               storage:
-                description: Storage configures the PVC. Persistent only.
+                description: Storage configures the PVC. Persistent and OnDemand only.
                 properties:
                   accessModes:
                     default:
@@ -5176,7 +5176,8 @@ spec:
                 minimum: 1
                 type: integer
               type:
-                description: Type selects ephemeral or persistent operation. Immutable.
+                description: Type selects ephemeral, persistent or on-demand operation.
+                  Immutable.
                 enum:
                 - Ephemeral
                 - Persistent

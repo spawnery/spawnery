@@ -91,7 +91,7 @@ type DrainSpec struct {
 	TimeoutSeconds int32 `json:"timeoutSeconds"`
 }
 
-// StorageSpec describes the PVC of a persistent group.
+// StorageSpec describes the PVC of a persistent or on-demand group.
 type StorageSpec struct {
 	// Size of the volume. May grow, never shrink; actual expansion requires
 	// allowVolumeExpansion on the StorageClass.
@@ -130,7 +130,7 @@ type ServerGroupSpec struct {
 	// NetworkRef names the Network this group belongs to.
 	NetworkRef ObjectRef `json:"networkRef"`
 
-	// Type selects ephemeral or persistent operation. Immutable.
+	// Type selects ephemeral, persistent or on-demand operation. Immutable.
 	Type ServerGroupType `json:"type"`
 
 	// Image is the Paper base image. A digest reference is recommended.
@@ -309,7 +309,7 @@ type ServerGroupSpec struct {
 	// +optional
 	Update *UpdateSpec `json:"update,omitempty"`
 
-	// Storage configures the PVC. Persistent only.
+	// Storage configures the PVC. Persistent and OnDemand only.
 	// +optional
 	Storage *StorageSpec `json:"storage,omitempty"`
 
